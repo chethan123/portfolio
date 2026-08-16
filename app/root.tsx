@@ -7,9 +7,37 @@ import {
   ScrollRestoration,
   isRouteErrorResponse,
   useRouteError,
+  useRouteLoaderData,
 } from "react-router";
 
+import { OpenInstanceBanner } from "~/components/open-instance-banner";
+import { authGate } from "~/lib/auth.server";
+
+import type { Route } from "./+types/root";
+
 import "./app.css";
+
+/**
+ * The login gate, DESIGN.md §10 — one middleware, on the route every other
+ * route descends from.
+ *
+ * This is the whole enforcement point. It is deny-by-default: it refuses any
+ * request without a session except the handful of paths `auth.server.ts` lists
+ * as open, so a route added by a later slice needs nothing done to it to be
+ * protected. With `AUTH_PASSWORD` unset the gate lets everything through and
+ * the banner below says so.
+ */
+export const middleware: Route.MiddlewareFunction[] = [
+  async ({ request }, next) => {
+    await authGate().requireSession(request);
+    return next();
+  },
+];
+
+/** Whether the instance is password protected, for the warning banner. */
+export function loader() {
+  return { authConfigured: authGate().enabled };
+}
 
 /** DESIGN.md §8.4 — ordered by how often each page is opened. */
 const NAVIGATION = [
@@ -21,6 +49,12 @@ const NAVIGATION = [
 ] as const;
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  // Read from the root loader rather than taken as a prop, because `Layout`
+  // wraps error boundaries too, where there is no loader data at all. The
+  // banner is placed here rather than on a page so that every route — including
+  // ones that do not exist yet — carries it.
+  const rootData = useRouteLoaderData<typeof loader>("root");
+
   return (
     <html lang="en">
       <head>
@@ -50,6 +84,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               ))}
             </nav>
           </header>
+          {rootData?.authConfigured === false ? <OpenInstanceBanner /> : null}
           <main className="app-main">{children}</main>
         </div>
         <ScrollRestoration />

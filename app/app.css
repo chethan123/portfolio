@@ -101,3 +101,73 @@ body {
   max-width: 46rem;
 }
 
+
+/* The open-instance warning (DESIGN.md §10). Loud, permanent, undismissable:
+   it is the only thing standing between an open instance and a surprise. */
+.open-instance-banner {
+  --warning: #8a5300;
+  --warning-surface: #fff4d6;
+
+  padding: 0.7rem 1.25rem;
+  background: var(--warning-surface);
+  color: var(--warning);
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  font-size: 0.925rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .open-instance-banner {
+    --warning: #ffcf70;
+    --warning-surface: #3a2b06;
+  }
+}
+
+.open-instance-banner code {
+  font-size: 0.875em;
+}
+
+.login-form {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 22rem;
+  margin-top: 1.5rem;
+}
+
+.login-label {
+  font-size: 0.925rem;
+  color: var(--text-muted);
+}
+
+.login-form input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.login-form button {
+  justify-self: start;
+  margin-top: 0.25rem;
+  padding: 0.5rem 1.1rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--surface);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.login-error {
+  margin: 0;
+  color: #b3261e;
+  font-size: 0.925rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .login-error {
+    color: #ff9a91;
+  }
+}

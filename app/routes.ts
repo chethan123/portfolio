@@ -12,6 +12,10 @@ export default [
   route("upload", "routes/upload.tsx"),
   route("settings", "routes/settings.tsx"),
 
+  // The optional login gate's one page (DESIGN.md §10). It renders only while
+  // AUTH_PASSWORD is set; with the gate off it redirects to the overview.
+  route("login", "routes/login.tsx"),
+
   // Resource route, no UI. Kept in the router rather than in a server wrapper
   // so it behaves identically in dev and in the container.
   route("healthz", "routes/healthz.ts"),
