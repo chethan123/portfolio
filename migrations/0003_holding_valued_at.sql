@@ -112,8 +112,8 @@ as $$
   ) money
 
   -- `closed_at` is a timestamptz and `d` a date; the comparison promotes `d` to
-  -- midnight, so an account closed at any time on `d` is already excluded on
-  -- `d` and included on the day before.
+  -- midnight, so an account closed at any time during `d` is still counted on
+  -- `d` (it was held for part of that day) and excluded from `d + 1` onward.
   where a.closed_at is null
      or a.closed_at > d;
 $$;
