@@ -59,6 +59,31 @@ export interface Holding {
   quantity: Numeric;
 }
 
+export interface HoldingValued {
+  account_id: Int8 | null;
+  account_kind: string | null;
+  account_name: string | null;
+  asset_class: string | null;
+  classification: string | null;
+  cost_basis: Numeric | null;
+  cost_basis_per_share: Numeric | null;
+  institution: string | null;
+  instrument_id: Int8 | null;
+  instrument_name: string | null;
+  is_priced: boolean | null;
+  is_stale: boolean | null;
+  owner_id: Int8 | null;
+  owner_name: string | null;
+  price: Numeric | null;
+  price_source: string | null;
+  quantity: Numeric | null;
+  quote_type: string | null;
+  symbol: string | null;
+  tax_treatment: string | null;
+  unrealized: Numeric | null;
+  value: Numeric | null;
+}
+
 export interface Instrument {
   classification_id: Int8;
   id: Generated<Int8>;
@@ -75,7 +100,7 @@ export interface InstrumentAlias {
 
 export interface ManualNetworth {
   amount: Numeric;
-  date: Timestamp;
+  date: string;
 }
 
 export interface Person {
@@ -85,7 +110,7 @@ export interface Person {
 
 export interface PositionSet {
   account_id: Int8;
-  as_of_date: Timestamp;
+  as_of_date: string;
   created_at: Generated<Timestamp>;
   id: Generated<Int8>;
   raw_file: Buffer | null;
@@ -95,7 +120,7 @@ export interface PositionSet {
 
 export interface PriceDaily {
   close: Numeric;
-  date: Timestamp;
+  date: string;
   instrument_id: Int8;
 }
 
@@ -118,6 +143,7 @@ export interface DB {
   classification: Classification;
   column_mapping: ColumnMapping;
   holding: Holding;
+  holding_valued: HoldingValued;
   instrument: Instrument;
   instrument_alias: InstrumentAlias;
   manual_networth: ManualNetworth;

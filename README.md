@@ -46,6 +46,29 @@ npm test
 docker compose -f compose.test.yaml down -v
 ```
 
+Integration tests seed through the fixture builder in [`tests/support/fixtures.ts`](tests/support/fixtures.ts) —
+`seedPerson`, `seedAccount`, `seedPositionSet`, `seedQuote` — and run inside a transaction that is
+always rolled back, so no test can see another's rows and ordering never matters. Wrap a test body
+in `withDatabase` to get both. Raw `INSERT` statements belong in the builder and nowhere else; that
+is what keeps a schema change from rewriting every test.
+
+## Reading what is held
+
+[`app/lib/valuation.server.ts`](app/lib/valuation.server.ts) is the only thing that reads the
+`holding_valued` view, and it is the seam every screen reads through:
+
+```ts
+currentHoldings()   // every holding held right now, valued
+netWorth()          // one SUM, plus how many holdings it was computed from
+```
+
+DESIGN.md §8.2 names three dashboards drifting on the definition of "current holdings" as the
+weakest point in the design; the view and this one module over it are the mitigation. A screen that
+writes its own join over `holding` has left it. Partial data is reported as partial — an unpriced
+holding still appears with `isPriced: false`, is left out of the total, and is counted in the
+total's `coverage`, so a figure can be labelled "based on 8 of 12 holdings" rather than quietly
+understated.
+
 ## Migrations and database types
 
 The database is the source of truth. A migration is a plain `.sql` file in [`migrations/`](migrations),
@@ -88,3 +111,8 @@ The Postgres driver is configured to return `numeric` as **strings**, because it
 coerce them into JavaScript numbers, which silently rounds. Every money and quantity value therefore
 crosses the application boundary as a decimal string. Do the arithmetic in SQL, or in a decimal
 library — never `Number()`, `parseFloat`, or a JSON round trip as a number.
+
+`date` is returned as a `YYYY-MM-DD` string for the same reason: the driver's default parses a
+calendar date into a `Date` at *local* midnight, so formatting it back west of UTC gives the
+previous day — and a statement's as-of date shifting by a day selects the wrong position set.
+`timestamptz` is left alone; `created_at`, `closed_at` and `quote.as_of` are genuine instants.

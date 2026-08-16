@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "node ./server/migrate.ts",
-    "db:types": "kysely-codegen --dialect postgres --numeric-parser string --out-file app/lib/database.generated.ts --url ${DATABASE_URL:-postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test}"
+    "db:types": "kysely-codegen --dialect postgres --numeric-parser string --date-parser string --out-file app/lib/database.generated.ts --url ${DATABASE_URL:-postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test}"
   },
   "dependencies": {
     "@react-router/node": "^7.18.2",

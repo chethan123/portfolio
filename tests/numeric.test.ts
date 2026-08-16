@@ -28,6 +28,22 @@ describe("numeric type parsing", () => {
       "9007199254740993",
     );
   });
+
+  it("registers a string parser for date, which the default parses at local midnight", () => {
+    // 1082 is `date`. A calendar date is not an instant: the default parser
+    // builds a JS Date at *local* midnight, so formatting it back anywhere west
+    // of UTC yields the previous day — and a statement's as-of date shifting by
+    // one day selects the wrong position set.
+    expect(pg.types.getTypeParser(pg.types.builtins.DATE)("2026-01-31")).toBe("2026-01-31");
+  });
+
+  it("leaves timestamptz alone, since those are genuine instants", () => {
+    // `created_at`, `closed_at` and `quote.as_of` are moments in time, compared
+    // in SQL. A Date is the right shape for them.
+    expect(typeof pg.types.getTypeParser(pg.types.builtins.TIMESTAMPTZ)("2026-01-31 12:00:00+00")).not.toBe(
+      "string",
+    );
+  });
 });
 
 describe("numeric values crossing the database boundary", () => {
@@ -124,6 +140,25 @@ describe("numeric values crossing the database boundary", () => {
     );
 
     expect(result.rows[0]?.total).toBe("1");
+  });
+
+  it("returns a date as the calendar date Postgres sent, not a Date at local midnight", async () => {
+    // Through a real `date` column, so this covers the driver's behaviour on
+    // the column type `position_set.as_of_date` and `price_daily.date` use.
+    const asOf = await db.transaction().execute(async (trx) => {
+      await sql`
+        create temporary table date_round_trip (as_of_date date not null) on commit drop
+      `.execute(trx);
+      await sql`insert into date_round_trip (as_of_date) values (date '2026-01-31')`.execute(trx);
+
+      const result = await sql<{ as_of_date: string }>`
+        select as_of_date from date_round_trip
+      `.execute(trx);
+
+      return result.rows[0]?.as_of_date;
+    });
+
+    expect(asOf).toBe("2026-01-31");
   });
 
   it("connects with the session time zone set to UTC", async () => {

@@ -29,10 +29,21 @@ import pg from "pg";
  *   a string, but stating it makes the guarantee explicit rather than inherited.
  *   Every surrogate key in the schema is a bigint, so this is also why ids cross
  *   the boundary as strings.
+ * - 1082 `date` — a calendar date, not an instant. `pg` parses it into a JS
+ *   `Date` at *local* midnight, so formatting it back in any timezone west of
+ *   UTC yields the previous day. That is the same class of silent bug as the
+ *   numeric coercion above: `position_set.as_of_date` shifting by a day would
+ *   select the wrong position set in an as-of query, with no error anywhere.
+ *   A date crosses the boundary as the `YYYY-MM-DD` string Postgres sent.
+ *
+ * `timestamp` (1114) and `timestamptz` (1184) are deliberately left alone.
+ * `created_at`, `closed_at` and `quote.as_of` are genuine instants, are compared
+ * in SQL rather than in JavaScript, and a `Date` is the right shape for them.
  */
 const STRING_TYPE_OIDS = [
   pg.types.builtins.NUMERIC,
   pg.types.builtins.INT8,
+  pg.types.builtins.DATE,
 ] as const;
 
 const asString = (value: string): string => value;
