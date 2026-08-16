@@ -1,0 +1,21 @@
+# Nothing here reaches the build context unless the Dockerfile asks for it, but
+# an explicit list keeps the context small and makes accidental secret or
+# node_modules inclusion impossible.
+.git
+.github
+.claude
+.remember
+node_modules
+build
+.react-router
+coverage
+docs
+tests
+scripts
+*.md
+LICENSE
+.env
+.env.*
+compose.yaml
+compose.test.yaml
+vitest.config.ts

@@ -1,0 +1,41 @@
+# A throwaway Postgres for the test suite, published on the host so `npm test`
+# can reach it. Separate from compose.yaml on purpose: the deployment Compose
+# file must never publish a database port, and tests must never run against an
+# instance holding real data.
+#
+#   docker compose -f compose.test.yaml up -d --wait
+#   npm test
+#   docker compose -f compose.test.yaml down -v
+#
+# The default TEST_DATABASE_URL in the test suite matches what this publishes.
+
+name: portfolio-test
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: portfolio
+      POSTGRES_DB: portfolio_test
+      TZ: UTC
+      PGTZ: UTC
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+    ports:
+      - "55432:5432"
+    # In-memory: the whole point is that nothing here survives.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s

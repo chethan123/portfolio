@@ -1,0 +1,84 @@
+# Two services, no more — DESIGN.md §10.1. The price poller runs in-process
+# inside `app`, which is why there is no third service: a separate worker would
+# mean two images, two deployments and two places to read logs.
+#
+#   docker compose up -d
+#
+# on a fresh machine with an empty volume produces a working instance with no
+# manual steps. Copy .env.example to .env first only if you want to change
+# something; every setting has a working default except the ones with none.
+
+name: portfolio
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      # Reachable only on the Compose network — the port below is deliberately
+      # not published, so these credentials are not exposed to your LAN. If you
+      # change them, change DATABASE_URL to match.
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}
+      POSTGRES_DB: portfolio
+      # Timestamps are stored UTC regardless; this makes the server's own logs
+      # and any `now()` default agree with that.
+      TZ: UTC
+      PGTZ: UTC
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=UTC
+    volumes:
+      # The one named volume. All persistent state lives here, so there is
+      # exactly one backup target (DESIGN.md §10, `pg_dump`).
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    # No `ports:` by design. The app reaches Postgres over the Compose network;
+    # publishing it would put the database on the host's network for nothing.
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: portfolio-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        # A cold boot must not fail on a startup race.
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      PORT: ${PORT:-3000}
+      PRICE_POLL_INTERVAL_MINUTES: ${PRICE_POLL_INTERVAL_MINUTES:-15}
+      MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    # The container writes nothing to its own filesystem, so it can be destroyed
+    # and recreated freely. Enforced rather than merely intended.
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  db-data:
