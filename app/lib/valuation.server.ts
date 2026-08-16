@@ -1,5 +1,6 @@
 /**
- * The only thing in the application that reads `holding_valued`.
+ * The only thing in the application that reads `holding_valued` and
+ * `holding_valued_at`.
  *
  * DESIGN.md §8.2 names three hand-rolled dashboard queries disagreeing as the
  * weakest point in the whole design. The mitigation is one SQL view and this
@@ -20,7 +21,7 @@ import { sql } from "kysely";
 
 import { getDb, type Database } from "./db.server.ts";
 
-import type { Kysely, Selectable } from "kysely";
+import type { AliasedRawBuilder, Kysely, Selectable } from "kysely";
 
 /** `account.kind`, constrained by a check constraint in the schema. */
 export type AccountKind = "brokerage" | "401k" | "ira" | "bank" | "liability";
@@ -128,21 +129,44 @@ function toValuedHolding(row: HoldingValuedRow): ValuedHolding {
 }
 
 /**
- * Every holding currently held, valued.
+ * A calendar date, `YYYY-MM-DD`.
  *
- * "Currently" is the view's business: the newest position set per account,
- * tie-broken deterministically, with closed accounts excluded. A holding whose
- * instrument has never been priced is here too, carrying `isPriced: false` —
- * dropping it would understate every total silently.
- *
- * The ordering is for determinism, not for display; a screen sorts as it likes.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
+ * A date crosses this boundary as a string in both directions: `pg` parses
+ * Postgres `date` into a JavaScript `Date` at *local* midnight by default, so a
+ * round trip west of UTC lands on the previous day — the same class of silent
+ * bug as the numeric coercion, and one that would select the wrong position set
+ * with no error anywhere. `server/db.ts` registers the parser that prevents it.
  */
-export async function currentHoldings(db: Kysely<Database> = getDb()): Promise<ValuedHolding[]> {
+export type IsoDate = string;
+
+/**
+ * Where a read gets its rows: the view for "now", the function for a date.
+ *
+ * One type covers both because the function returns the view's row type —
+ * `returns setof holding_valued` in the migration, not a re-listed set of
+ * columns — so everything below this line is written once and reads either.
+ * Aliasing both to `holding_valued` is what lets the column names below be the
+ * same names in both cases.
+ */
+type ValuedSource = AliasedRawBuilder<HoldingValuedRow, "holding_valued">;
+
+/** What is held right now. */
+const valuedNow = (): ValuedSource =>
+  sql.table<HoldingValuedRow>("holding_valued").as("holding_valued");
+
+/** What was held on `date`, priced at that date's carried-forward close. */
+const valuedAt = (date: IsoDate): ValuedSource =>
+  sql<HoldingValuedRow>`holding_valued_at(${date}::date)`.as("holding_valued");
+
+/**
+ * The ordering is for determinism, not for display; a screen sorts as it likes.
+ */
+async function readHoldings(
+  db: Kysely<Database>,
+  source: ValuedSource,
+): Promise<ValuedHolding[]> {
   const rows = await db
-    .selectFrom("holding_valued")
+    .selectFrom(source)
     .selectAll()
     .orderBy("account_name")
     .orderBy("instrument_name")
@@ -153,20 +177,17 @@ export async function currentHoldings(db: Kysely<Database> = getDb()): Promise<V
 }
 
 /**
- * Net worth: one `SUM` over `value`, with no branch for cash or debt.
+ * One `SUM` over `value`, with no branch for cash or debt.
  *
  * Summed in SQL, in `numeric`, so no float ever touches it. Unpriced holdings
  * contribute nothing to `amount` and are counted in `coverage.total`, so a
  * partial answer is labelled partial rather than reported as complete — a zero
  * substituted for an unknown price would be indistinguishable from a genuinely
  * empty account.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
-export async function netWorth(db: Kysely<Database> = getDb()): Promise<Total> {
+async function readTotal(db: Kysely<Database>, source: ValuedSource): Promise<Total> {
   const row = await db
-    .selectFrom("holding_valued")
+    .selectFrom(source)
     .select([
       // `value` is null exactly when the holding is unpriced, and SUM skips
       // nulls — so "sums only priced holdings" needs no filter to say it.
@@ -183,4 +204,77 @@ export async function netWorth(db: Kysely<Database> = getDb()): Promise<Total> {
     // could not reach the precision limit if every row were a separate fund.
     coverage: { known: Number(row.known), total: Number(row.total) },
   };
+}
+
+/**
+ * Every holding currently held, valued.
+ *
+ * "Currently" is the view's business: the newest position set per account,
+ * tie-broken deterministically, with closed accounts excluded. A holding whose
+ * instrument has never been priced is here too, carrying `isPriced: false` —
+ * dropping it would understate every total silently.
+ *
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function currentHoldings(db: Kysely<Database> = getDb()): Promise<ValuedHolding[]> {
+  return readHoldings(db, valuedNow());
+}
+
+/**
+ * Net worth right now, and how much of it is known.
+ *
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function netWorth(db: Kysely<Database> = getDb()): Promise<Total> {
+  return readTotal(db, valuedNow());
+}
+
+/**
+ * Every holding held on a past date, valued at that date's close.
+ *
+ * Positions are constant between uploads by construction, so this is that
+ * date's position sets priced at that date's close, with the last close carried
+ * forward — a Saturday equals the preceding Friday, and so does a market
+ * holiday, with no calendar anywhere.
+ *
+ * What it deliberately does not do is invent a past. An account whose first
+ * upload is after `date` contributes no rows rather than a zero, so the earliest
+ * date with any value is the first upload (DESIGN.md §7); the period before that
+ * belongs to the hand-typed `manual_networth` series, not here. An account
+ * closed after `date` is included, because it was open then.
+ *
+ * `isStale` is always false: staleness is a property of a live quote that failed
+ * to refresh, and a historical close is simply the close.
+ *
+ * @param date `YYYY-MM-DD`. Any date, including one before the app existed —
+ *             cash and debt still price at 1.00 there, through the same
+ *             carry-forward and with no special case.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function holdingsAt(
+  date: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<ValuedHolding[]> {
+  return readHoldings(db, valuedAt(date));
+}
+
+/**
+ * Net worth on a past date, on the same terms as {@link netWorth}.
+ *
+ * A date before the first upload is `0.0000` over a coverage of zero rows —
+ * "nothing was recorded yet", which is a different statement from "the household
+ * had nothing", and the coverage count is what lets a chart say so.
+ *
+ * @param date `YYYY-MM-DD`.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function netWorthAt(
+  date: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<Total> {
+  return readTotal(db, valuedAt(date));
 }

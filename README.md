@@ -47,7 +47,7 @@ docker compose -f compose.test.yaml down -v
 ```
 
 Integration tests seed through the fixture builder in [`tests/support/fixtures.ts`](tests/support/fixtures.ts) —
-`seedPerson`, `seedAccount`, `seedPositionSet`, `seedQuote` — and run inside a transaction that is
+`seedPerson`, `seedAccount`, `seedPositionSet`, `seedQuote`, `seedDailyClose` — and run inside a transaction that is
 always rolled back, so no test can see another's rows and ordering never matters. Wrap a test body
 in `withDatabase` to get both. Raw `INSERT` statements belong in the builder and nowhere else; that
 is what keeps a schema change from rewriting every test.
@@ -55,11 +55,14 @@ is what keeps a schema change from rewriting every test.
 ## Reading what is held
 
 [`app/lib/valuation.server.ts`](app/lib/valuation.server.ts) is the only thing that reads the
-`holding_valued` view, and it is the seam every screen reads through:
+`holding_valued` view and its as-of companion `holding_valued_at(d date)`, and it is the seam every
+screen reads through:
 
 ```ts
-currentHoldings()   // every holding held right now, valued
-netWorth()          // one SUM, plus how many holdings it was computed from
+currentHoldings()          // every holding held right now, valued
+netWorth()                 // one SUM, plus how many holdings it was computed from
+holdingsAt('2026-02-14')   // the same, for any past date
+netWorthAt('2026-02-14')   // dates are 'YYYY-MM-DD' strings, both directions
 ```
 
 DESIGN.md §8.2 names three dashboards drifting on the definition of "current holdings" as the
@@ -68,6 +71,15 @@ writes its own join over `holding` has left it. Partial data is reported as part
 holding still appears with `isPriced: false`, is left out of the total, and is counted in the
 total's `coverage`, so a figure can be labelled "based on 8 of 12 holdings" rather than quietly
 understated.
+
+The as-of pair is not a second definition: `holding_valued_at` is declared `returns setof
+holding_valued`, so it has the view's row type, and both resolve "which position set" through the
+same `latest_position_set` function. It varies only what must vary — the position set is the newest
+at or before the date, an account counts until its `closed_at`, and the price is the last
+`price_daily` close at or before the date rather than the live quote. That carry-forward is why a
+Saturday is worth what Friday closed at, and why cash prices at 1.00 on any date at all. An account
+with no upload at or before the date contributes no rows rather than a zero: history starts at the
+first upload (DESIGN.md §7).
 
 ## Migrations and database types
 

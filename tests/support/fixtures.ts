@@ -13,9 +13,6 @@
  * cross the driver boundary in the other direction. A test that writes
  * `quantity: 0.1` would be introducing the float this design spent a migration
  * and a type-parser override keeping out, so the types here refuse it.
- *
- * Ticket 04 extends this with `seedDailyClose({ instrument, date, close })` for
- * the as-of function's carry-forward; it slots in beside `seedQuote`.
  */
 import type { Kysely } from "kysely";
 
@@ -91,6 +88,21 @@ export type Fixtures = {
     asOf?: Date | string;
     yieldPct?: string;
     annualDividendPerShare?: string;
+  }): Promise<void>;
+
+  /**
+   * A row on the immutable daily spine — what the as-of reads price from.
+   *
+   * Deliberately one row per call and never generated in a range: a weekend or
+   * a market holiday is represented by the *absence* of a row (DESIGN.md §6.2),
+   * so a test asks for a Saturday by seeding Friday and nothing else.
+   */
+  seedDailyClose(options: {
+    instrument: SeededInstrument;
+    /** `YYYY-MM-DD`. The trading day, never the day it was fetched. */
+    date: string;
+    /** Decimal string. Always positive — a liability is negative quantity. */
+    close: string;
   }): Promise<void>;
 
   /**
@@ -248,6 +260,19 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .execute();
   };
 
+  const seedDailyClose: Fixtures["seedDailyClose"] = async ({ instrument, date, close }) => {
+    const values = { instrument_id: instrument.id, date, close };
+
+    // Upsert for symmetry with `seedQuote`, and because `USD` already carries a
+    // 1970-01-01 row from the initial migration — the one a test re-prices when
+    // it wants cash to be something other than a dollar.
+    await db
+      .insertInto("price_daily")
+      .values(values)
+      .onConflict((conflict) => conflict.columns(["instrument_id", "date"]).doUpdateSet(values))
+      .execute();
+  };
+
   const usdInstrument: Fixtures["usdInstrument"] = async () => {
     const row = await db
       .selectFrom("instrument")
@@ -264,6 +289,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedInstrument,
     seedPositionSet,
     seedQuote,
+    seedDailyClose,
     usdInstrument,
   };
 }
