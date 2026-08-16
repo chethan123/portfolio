@@ -36,10 +36,25 @@ jobs:
       - name: Start the test database
         run: docker compose -f compose.test.yaml up -d --wait
 
+      # Explicit rather than implicit: the suite applies migrations itself, but
+      # the type verification below needs a migrated database to compare against.
+      - name: Apply migrations
+        run: npm run migrate
+        env:
+          DATABASE_URL: postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test
+
       - name: Test
         run: npm test
         env:
           TEST_DATABASE_URL: postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test
+
+      # The committed types are derived from the live database, so a migration
+      # landing without a regeneration would silently leave every query typed
+      # against the old schema. This is what makes the README step mandatory.
+      - name: Verify the committed database types match the schema
+        run: npm run db:types -- --verify
+        env:
+          DATABASE_URL: postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test
 
       - name: Stop the test database
         if: always()

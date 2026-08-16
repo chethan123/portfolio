@@ -55,11 +55,43 @@ log "Waiting for the app healthcheck"
 wait_for_healthy
 expect_status 200
 
+# --- Migrations ran before the server started ---------------------------------
+# The instance is healthy, and /healthz is a non-200 while any migration on disk
+# is unrecorded — so a 200 above is already proof the schema is current. This
+# checks the other half: that the runner is what made it so, rather than the app
+# having started against whatever happened to be there.
+log "Checking migrations ran at startup"
+# Captured into a variable rather than piped: `grep -q` exits at the first match
+# and the SIGPIPE that gives the producer would trip `pipefail`.
+app_logs() { docker compose logs --no-color app 2>/dev/null; }
+
+logs="$(app_logs)"
+[[ "$logs" == *"Applying migrations from"* ]] || fail "the entrypoint did not run migrations"
+[[ "$logs" == *"Migrations OK"* ]] || fail "migrations did not complete"
+printf 'migrations applied at startup\n'
+
 # --- A restart is always safe -------------------------------------------------
+# This is what proves migrations are idempotent: the second boot re-runs the
+# runner against a database that already has the schema, and a non-zero exit
+# there would stop the server and never reach healthy.
 log "Restarting the app container"
 docker compose restart app
 wait_for_healthy
 expect_status 200
+
+logs="$(app_logs)"
+[[ "$logs" == *"already applied"* ]] ||
+  fail "the restarted container did not skip already-applied migrations"
+printf 'restart skipped applied migrations\n'
+
+# Running the runner a third time, inside the real image against the real
+# database, must exit 0 and apply nothing.
+log "Re-running the migration runner inside the container"
+migrate_output="$(docker compose exec -T app node ./server/migrate.ts)" ||
+  fail "re-running migrations exited non-zero"
+printf '%s\n' "$migrate_output"
+[[ "$migrate_output" == *"nothing pending"* ]] ||
+  fail "re-running migrations was not a no-op"
 
 # --- The image is what it is specified to be ----------------------------------
 log "Inspecting the runtime image"
@@ -80,6 +112,16 @@ for path in /app/app /app/tests /app/vite.config.ts /app/react-router.config.ts;
   run_in_image "test ! -e $path" || fail "source tree leaked into the runtime image: $path"
 done
 printf 'no source tree\n'
+
+# The database is the source of truth, so the .sql files are part of the image.
+# Without them a fresh volume would come up with no schema at all.
+migration_count="$(run_in_image 'ls /app/migrations/*.sql 2>/dev/null | wc -l' | tr -d '[:space:]')"
+[[ "$migration_count" -gt 0 ]] || fail "the runtime image contains no migration .sql files"
+printf 'migration .sql files in the image: %s\n' "$migration_count"
+
+run_in_image 'test -f /app/server/migrate.ts' ||
+  fail "the migration runner is missing from the runtime image"
+printf 'migration runner in the image\n'
 
 for pkg in vitest vite typescript @react-router/dev @types/react; do
   run_in_image "test ! -e /app/node_modules/$pkg" || fail "dev dependency in the runtime image: $pkg"

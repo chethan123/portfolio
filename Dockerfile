@@ -59,8 +59,21 @@ COPY --from=build --chown=node:node /app/build ./build
 COPY --from=build --chown=node:node /app/package.json ./package.json
 
 # Operational scripts run under Node's type stripping — no build step for them
-# (DESIGN.md §9). This is the config gate; the migration runner joins it here.
-COPY --chown=node:node server/config.ts server/validate-config.ts ./server/
+# (DESIGN.md §9): the config gate, the pool construction site they share with
+# the app, and the migration runner.
+COPY --chown=node:node \
+  server/config.ts \
+  server/validate-config.ts \
+  server/db.ts \
+  server/migrations.ts \
+  server/migrate.ts \
+  ./server/
+
+# The database is the source of truth, so the `.sql` files ship with the image
+# and the entrypoint applies them. Without this the container starts against
+# whatever schema happens to be there; the smoke test asserts they are present.
+COPY --chown=node:node migrations ./migrations
+
 COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 

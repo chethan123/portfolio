@@ -1,8 +1,15 @@
-import { isDatabaseReachable } from "~/lib/db.server";
+import { checkHealth } from "~/lib/db.server";
 
 /**
  * `GET /healthz` — 200 while the instance is genuinely serving, non-200
  * otherwise. Compose, a reverse proxy and any monitoring read this.
+ *
+ * It answers two questions, both of which have to be yes:
+ *
+ * - Is the database reachable?
+ * - Is every migration present on disk recorded as applied? A pending one means
+ *   the image and the database disagree, so the instance is serving pages
+ *   against a schema older than the code reading it.
  *
  * Two deliberate non-goals:
  *
@@ -10,17 +17,19 @@ import { isDatabaseReachable } from "~/lib/db.server";
  *   third-party outage would make Compose restart a perfectly healthy app.
  * - It never requires authentication, so monitoring needs no credentials. The
  *   optional login gate must exempt this path.
- *
- * Today it checks database reachability only; the migrations slice extends it
- * to assert that every migration on disk is recorded as applied.
  */
 export async function loader() {
-  const databaseReachable = await isDatabaseReachable();
+  const health = await checkHealth();
 
   return Response.json(
-    { status: databaseReachable ? "ok" : "unhealthy", database: databaseReachable },
     {
-      status: databaseReachable ? 200 : 503,
+      status: health.healthy ? "ok" : "unhealthy",
+      database: health.database,
+      migrations: health.pendingMigrations.length === 0 ? "current" : "pending",
+      pendingMigrations: health.pendingMigrations,
+    },
+    {
+      status: health.healthy ? 200 : 503,
       headers: { "Cache-Control": "no-store" },
     },
   );

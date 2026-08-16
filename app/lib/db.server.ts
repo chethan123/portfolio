@@ -1,86 +1,84 @@
 /**
- * The one place a Postgres connection pool is constructed.
+ * The application's handle on the database.
  *
- * It is deliberately the only place, because of the type-parser override below:
- * `node-postgres` parses `numeric` into a JavaScript number by default, which
- * silently rounds. A six-figure balance then surfaces later as two dashboards
- * disagreeing by cents, with no error anywhere (DESIGN.md §4.1). Registering
- * the override anywhere other than at pool construction would leave a code path
- * that gets numbers.
+ * The pool itself is constructed in `server/db.ts` — the single construction
+ * site, because that is where the `numeric`/`int8` type-parser override is
+ * registered and a second site would leave a code path that gets JavaScript
+ * numbers. It lives under `server/` rather than here because the migration
+ * runner needs it too, from a runtime image that contains no source tree.
  *
- * Consequence for every caller: money and quantity values cross the application
- * boundary as decimal strings. Never `Number()`, `parseFloat` or JSON
+ * Consequence for every caller: money, quantity and id values cross the
+ * application boundary as strings. Never `Number()`, `parseFloat` or JSON
  * round-trip them as numbers; do the arithmetic in SQL, or in a decimal library.
  */
 import { Kysely, PostgresDialect, sql } from "kysely";
-import pg from "pg";
+import type pg from "pg";
 
 import { getConfig } from "../../server/config.ts";
-
-/**
- * Postgres type OIDs whose default `pg` parser loses information.
- *
- * - 1700 `numeric` — parsed to a float by default, which rounds.
- * - 20 `int8` — outside `Number.MAX_SAFE_INTEGER`. `pg` already returns this as
- *   a string, but stating it makes the guarantee explicit rather than inherited.
- */
-const STRING_TYPE_OIDS = [
-  pg.types.builtins.NUMERIC,
-  pg.types.builtins.INT8,
-] as const;
-
-const asString = (value: string): string => value;
-
-for (const oid of STRING_TYPE_OIDS) {
-  pg.types.setTypeParser(oid, asString);
-}
+import { createPool } from "../../server/db.ts";
+import { pendingMigrations } from "../../server/migrations.ts";
+import type { DB } from "./database.generated.ts";
 
 /**
  * The database shape Kysely is typed against.
  *
- * Empty until the schema slice lands; `kysely-codegen` will generate this from
- * the live database (including views, so `holding_valued` is typed like a
- * table) once there is a schema to generate from.
+ * Generated from the live database by `npm run db:types` (kysely-codegen),
+ * including views — so `holding_valued` will be typed like a table by
+ * everything that reads it. Regenerating is a required step after any
+ * migration; see the README.
  */
-export interface Database {}
+export type Database = DB;
+
+/** A Kysely instance over an existing pool. */
+function kyselyOver(pool: pg.Pool): Kysely<Database> {
+  return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
+}
 
 /**
- * Construct a pool with the numeric guarantee applied.
+ * A pool and a Kysely instance over it, for a connection string.
  *
  * Exported so tests can point one at a throwaway database without reaching for
  * a second construction site.
  */
-export function createPool(connectionString: string): pg.Pool {
-  return new pg.Pool({
-    connectionString,
-    // Bounded so `/healthz` reports unreachable rather than hanging until the
-    // Compose healthcheck times out.
-    connectionTimeoutMillis: 5_000,
-    // The database stores UTC regardless of the container clock (DESIGN.md §10).
-    options: "-c timezone=UTC",
-  });
-}
-
-/** A Kysely instance over a pool built by {@link createPool}. */
 export function createDatabase(connectionString: string): Kysely<Database> {
-  return new Kysely<Database>({
-    dialect: new PostgresDialect({ pool: createPool(connectionString) }),
-  });
+  return kyselyOver(createPool(connectionString));
 }
 
+let pool: pg.Pool | undefined;
 let instance: Kysely<Database> | undefined;
+
+/**
+ * The process-wide pool, opened on first use.
+ *
+ * Exported for the things that speak `pg` rather than Kysely — the migration
+ * ledger below is the only one today.
+ */
+export function getPool(): pg.Pool {
+  pool ??= createPool(getConfig().DATABASE_URL);
+  return pool;
+}
 
 /** The process-wide database handle, opened on first use. */
 export function getDb(): Kysely<Database> {
-  instance ??= createDatabase(getConfig().DATABASE_URL);
+  instance ??= kyselyOver(getPool());
   return instance;
 }
+
+/** What `/healthz` reports. */
+export type HealthReport = {
+  /** Is the database reachable at all? */
+  database: boolean;
+  /** Migrations on disk that are not recorded as applied. */
+  pendingMigrations: string[];
+  /** True when the database is reachable and every migration is recorded. */
+  healthy: boolean;
+};
 
 /**
  * Is the database reachable?
  *
- * Reachability only — this slice has no schema. The migrations slice extends
- * `/healthz` to also assert that every migration on disk is recorded as applied.
+ * Reachability only — {@link checkHealth} is the one that also asks whether the
+ * schema is current.
  */
 export async function isDatabaseReachable(): Promise<boolean> {
   try {
@@ -89,5 +87,27 @@ export async function isDatabaseReachable(): Promise<boolean> {
   } catch (error) {
     console.error("Database health check failed:", error);
     return false;
+  }
+}
+
+/**
+ * Reachability plus schema currency.
+ *
+ * A migration sitting on disk that the database has no record of means the
+ * image and the database disagree. That is a non-200: the instance is running,
+ * but it is not the instance the operator deployed, and the pages it serves are
+ * backed by a schema older than the code reading it.
+ */
+export async function checkHealth(): Promise<HealthReport> {
+  if (!(await isDatabaseReachable())) {
+    return { database: false, pendingMigrations: [], healthy: false };
+  }
+
+  try {
+    const pending = await pendingMigrations(getPool());
+    return { database: true, pendingMigrations: pending, healthy: pending.length === 0 };
+  } catch (error) {
+    console.error("Migration status check failed:", error);
+    return { database: true, pendingMigrations: [], healthy: false };
   }
 }
