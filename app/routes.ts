@@ -17,6 +17,8 @@ export default [
   route("settings", "routes/settings.tsx", [
     index("routes/settings/index.tsx"),
     route("people", "routes/settings/people.tsx"),
+    route("accounts", "routes/settings/accounts.tsx"),
+    route("accounts/:accountId", "routes/settings/account.tsx"),
   ]),
 
   // The optional login gate's one page (DESIGN.md §10). It renders only while

@@ -11,7 +11,10 @@ import { NavLink, Outlet } from "react-router";
  * are named on the index page as what they will be, because a tab that renders
  * an apology is worse than a tab that is not there yet.
  */
-const TABS = [{ to: "/settings/people", label: "People" }] as const;
+const TABS = [
+  { to: "/settings/people", label: "People" },
+  { to: "/settings/accounts", label: "Accounts" },
+] as const;
 
 export default function SettingsLayout() {
   return (

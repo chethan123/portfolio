@@ -27,7 +27,7 @@ export default function SettingsIndex() {
         <dd>Who is in the household. Every account belongs to exactly one of them.</dd>
 
         <dt>
-          Accounts
+          <Link to="/settings/accounts">Accounts</Link>
         </dt>
         <dd>
           Brokerage, workplace plan, IRA, bank and loan accounts — with an owner, a tax

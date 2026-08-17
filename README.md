@@ -23,7 +23,10 @@ container immediately with a message naming the variable.
 which includes the case where the database is reachable but a migration shipped in the image has
 never been applied. It never requires authentication, so monitoring needs no credentials.
 
-The app serves plain HTTP. TLS termination is your reverse proxy's job.
+The app serves plain HTTP and trusts `X-Forwarded-*`, so TLS termination is your reverse proxy's
+job. [`docs/operating.md`](docs/operating.md) has the proxy configuration, the `pg_dump` backup and
+restore procedure, the full environment table, and why a phone will not install the app from a LAN
+address.
 
 ## Working on it
 
@@ -80,6 +83,31 @@ at or before the date, an account counts until its `closed_at`, and the price is
 Saturday is worth what Friday closed at, and why cash prices at 1.00 on any date at all. An account
 with no upload at or before the date contributes no rows rather than a zero: history starts at the
 first upload (DESIGN.md §7).
+
+## Recording people and accounts
+
+Settings → People and Settings → Accounts write through
+[`app/lib/people.server.ts`](app/lib/people.server.ts) and
+[`app/lib/accounts.server.ts`](app/lib/accounts.server.ts), which are also what read them. The
+routes above are thin: they turn a form into raw fields, call in here, and render what comes back.
+Every rule — what a name is, which fields a figure cannot be computed without, why a person cannot
+be removed — lives in the module, so a second caller cannot get a different answer than the screen
+does.
+
+Refusals are ordinary outcomes rather than 500s. A `ValidationError` carries a message per form
+field, so the form re-renders with the message beside the box that caused it and every other box
+still holding what was typed. `NotFoundError` is separate because it becomes a different response:
+a 404 rather than a re-rendered form.
+
+Two rules are worth knowing before touching either module:
+
+- **Nothing is ever deleted.** `closeAccount` sets `closed_at` and is the only retirement there is;
+  there is no delete function and no delete affordance anywhere. A closed account stops counting
+  toward current net worth and keeps counting on every date before it closed, which is the view's
+  business rather than the module's — see `holding_valued` and `holding_valued_at`.
+- **A person who owns accounts cannot be removed.** `account.owner_id` is `on delete restrict`, so
+  the database refuses it anyway; `removePerson` reads the accounts first and turns that into a
+  sentence naming them, closed ones included. The way out is to change the owner on those accounts.
 
 ## Migrations and database types
 
