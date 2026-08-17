@@ -406,6 +406,41 @@ button {
   color: var(--text-muted);
 }
 
+/* --- First run and empty dashboards -------------------------------------- */
+
+/* The single setup pointer (DESIGN.md §8.4). Distinct from the open-instance
+   warning above it: that one is a risk, this one is an instruction. */
+.first-run {
+  margin: 0 0 1.5rem;
+  padding: 0.9rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  max-width: 46rem;
+}
+
+/* No figure, no axis, no chart frame — a zero and an empty instance must never
+   look alike in a finance app. */
+.empty-state {
+  margin-top: 1.5rem;
+  padding: 2rem 1.5rem;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  max-width: 46rem;
+}
+
+.empty-state-headline {
+  margin: 0 0 0.4rem;
+  font-weight: 600;
+}
+
+.empty-state-detail {
+  margin: 0;
+  color: var(--text-muted);
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

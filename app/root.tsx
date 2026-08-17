@@ -6,12 +6,15 @@ import {
   Scripts,
   ScrollRestoration,
   isRouteErrorResponse,
+  useLocation,
   useRouteError,
   useRouteLoaderData,
 } from "react-router";
 
+import { FirstRunPrompt } from "~/components/first-run-prompt";
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { authGate } from "~/lib/auth.server";
+import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
 
 import type { Route } from "./+types/root";
 
@@ -34,9 +37,26 @@ export const middleware: Route.MiddlewareFunction[] = [
   },
 ];
 
-/** Whether the instance is password protected, for the warning banner. */
-export function loader() {
-  return { authConfigured: authGate().enabled };
+/**
+ * What the shell around every page needs: whether the instance is password
+ * protected, and whether it has been set up yet.
+ *
+ * The first-run read is deliberately failure-tolerant. It is a hint, not data —
+ * so a database that is down produces a page without a prompt rather than an
+ * error page, and in particular leaves the login page working when the database
+ * is unreachable. `/healthz` is what reports the database being down, and it
+ * reports it without needing credentials.
+ */
+export async function loader() {
+  let firstRun: FirstRunStep = null;
+
+  try {
+    firstRun = await firstRunStep();
+  } catch (error) {
+    console.error("First-run check failed; continuing without the prompt:", error);
+  }
+
+  return { authConfigured: authGate().enabled, firstRun };
 }
 
 /** DESIGN.md §8.4 — ordered by how often each page is opened. */
@@ -54,6 +74,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // banner is placed here rather than on a page so that every route — including
   // ones that do not exist yet — carries it.
   const rootData = useRouteLoaderData<typeof loader>("root");
+  const { pathname } = useLocation();
+
+  // The prompt is suppressed inside Settings, which is the one place it would
+  // be telling someone to go where they already are. Everywhere else it is the
+  // single pointer at the next step (DESIGN.md §8.4).
+  const firstRun =
+    rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
   return (
     <html lang="en">
@@ -85,7 +112,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </nav>
           </header>
           {rootData?.authConfigured === false ? <OpenInstanceBanner /> : null}
-          <main className="app-main">{children}</main>
+          <main className="app-main">
+            {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
+            {children}
+          </main>
         </div>
         <ScrollRestoration />
         <Scripts />
