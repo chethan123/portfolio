@@ -1,4 +1,5 @@
-import { Form, Link } from "react-router";
+import { useEffect, useRef } from "react";
+import { Form, Link, useNavigation } from "react-router";
 
 import { AccountFields } from "~/components/account-fields";
 import { createAccount, listAccounts } from "~/lib/accounts.server";
@@ -45,6 +46,17 @@ const closedOn = (closedAt: Date | null): string | null =>
 
 export default function Accounts({ loaderData, actionData }: Route.ComponentProps) {
   const { accounts, people } = loaderData;
+
+  // Empty the add form once an account has actually been created — see the same
+  // effect in `people.tsx`. It matters more here: six fields left holding the
+  // account just added is a duplicate waiting for one more click, and two
+  // identical accounts are two sets of positions in every later figure.
+  const addForm = useRef<HTMLFormElement>(null);
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    if (navigation.state === "idle" && actionData === null) addForm.current?.reset();
+  }, [navigation.state, actionData]);
 
   return (
     <>
@@ -95,7 +107,7 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
           belongs to exactly one person.
         </p>
       ) : (
-        <Form method="post" className="panel-form">
+        <Form method="post" className="panel-form" ref={addForm}>
           <h2>Add an account</h2>
 
           <AccountFields

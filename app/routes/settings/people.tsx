@@ -1,4 +1,5 @@
-import { Form } from "react-router";
+import { useEffect, useRef } from "react";
+import { Form, useNavigation } from "react-router";
 
 import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { createPerson, listPeople, removePerson, renamePerson } from "~/lib/people.server";
@@ -41,8 +42,8 @@ export async function action({ request }: Route.ActionArgs) {
     }
 
     // No payload: the loader re-runs on its own after an action, so the list
-    // below is the confirmation. Clearing the returned values is also what
-    // empties the add box on success.
+    // below is the confirmation. Null is also the signal the component resets
+    // the add form on — success, as opposed to the object a refusal returns.
     return null;
   } catch (error) {
     // A refusal is an ordinary outcome of a form submission. It comes back with
@@ -70,6 +71,24 @@ export async function action({ request }: Route.ActionArgs) {
 
 export default function People({ loaderData, actionData }: Route.ComponentProps) {
   const { people } = loaderData;
+
+  // Clear the add box once a person has actually been added.
+  //
+  // The input is uncontrolled, so without this it keeps what was typed: the
+  // server renders an empty `defaultValue` on the next pass, but React does not
+  // push that onto a mounted input, and the component does not remount because
+  // the route did not change. A form still holding a name that has already been
+  // added invites a second click and a duplicate person.
+  //
+  // A refusal must NOT clear it — that is the case where what was typed has to
+  // survive — which is exactly what distinguishes the two: the action returns
+  // null on success and an object carrying the messages on a refusal.
+  const addForm = useRef<HTMLFormElement>(null);
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    if (navigation.state === "idle" && actionData === null) addForm.current?.reset();
+  }, [navigation.state, actionData]);
 
   /** The messages for one row's rename form, or for the add form. */
   const errorsFor = (intent: string, personId: string | null = null) =>
@@ -152,7 +171,7 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
         </ul>
       )}
 
-      <Form method="post" className="panel-form">
+      <Form method="post" className="panel-form" ref={addForm}>
         <h2>Add a person</h2>
 
         <label htmlFor="new-person-name">Name</label>
