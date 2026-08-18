@@ -2,15 +2,24 @@ import { type RouteConfig, index, route } from "@react-router/dev/routes";
 
 /**
  * Navigation order is DESIGN.md §8.4: ordered by how often a page is opened,
- * so the daily pages come first and Settings is last. The three dashboards and
- * Upload are stubs in this slice; their content is other slices.
+ * so the daily pages come first and Settings is last. The three dashboards
+ * carry empty states and Upload is a placeholder in this slice; their content
+ * is other slices.
  */
 export default [
   index("routes/overview.tsx"),
   route("holdings", "routes/holdings.tsx"),
   route("income", "routes/income.tsx"),
   route("upload", "routes/upload.tsx"),
-  route("settings", "routes/settings.tsx"),
+
+  // Settings is a section, not a page: `settings.tsx` is the tab strip and
+  // everything that writes hangs off it (DESIGN.md §8.4).
+  route("settings", "routes/settings.tsx", [
+    index("routes/settings/index.tsx"),
+    route("people", "routes/settings/people.tsx"),
+    route("accounts", "routes/settings/accounts.tsx"),
+    route("accounts/:accountId", "routes/settings/account.tsx"),
+  ]),
 
   // The optional login gate's one page (DESIGN.md §10). It renders only while
   // AUTH_PASSWORD is set; with the gate off it redirects to the overview.

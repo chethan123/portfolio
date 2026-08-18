@@ -34,9 +34,13 @@ export async function action({ request }: Route.ActionArgs) {
   const password = form.get("password");
   const next = form.get("next");
 
+  // The request goes with it: behind a TLS-terminating reverse proxy it is what
+  // tells the gate the visitor's connection was encrypted, so the cookie is
+  // issued `Secure` (DESIGN.md §10.1, `forwarded.server.ts`).
   const result = await gate.logIn(
     typeof password === "string" ? password : "",
     typeof next === "string" ? next : null,
+    request,
   );
 
   // A successful login is a redirect carrying the cookie; a failed one re-renders

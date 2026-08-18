@@ -23,6 +23,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createCookieSessionStorage, redirect } from "react-router";
 
 import { getConfig } from "../../server/config.ts";
+import { clientAddress, isSecureRequest } from "./forwarded.server.ts";
 
 /** The one login page. Reachable without credentials, or nobody could log in. */
 export const LOGIN_PATH = "/login";
@@ -41,18 +42,19 @@ const OPEN_PATHS: ReadonlySet<string> = new Set([HEALTH_PATH, LOGIN_PATH]);
 /**
  * The cookie. This object is the single place cookie attributes are decided.
  *
- * `secure` is off because the app serves plain HTTP and TLS termination is the
- * operator's reverse proxy (DESIGN.md §10) — a `Secure` cookie would simply be
- * dropped on a LAN instance reached over http. Making it depend on the proxy's
- * `X-Forwarded-Proto` is the proxy-trust slice's job, and this constant is the
- * only thing it has to change.
+ * Everything except `secure` is fixed. `secure` is per-request, because the app
+ * serves plain HTTP either way and only the browser's own connection settles
+ * the question: `Secure` on an instance genuinely reached over http would have
+ * the browser drop the cookie and nobody could stay logged in, and its absence
+ * behind a TLS-terminating proxy would let the cookie travel in the clear if
+ * the origin were ever reached over http. `forwarded.server.ts` is what turns
+ * the proxy's `X-Forwarded-Proto` into that answer.
  */
 const SESSION_COOKIE = {
   name: "__portfolio_session",
   path: "/",
   httpOnly: true,
   sameSite: "lax",
-  secure: false,
   /** A month. Long enough that a family instance is not a daily login. */
   maxAge: 60 * 60 * 24 * 30,
 } as const;
@@ -86,8 +88,21 @@ export type AuthGate = {
    * proceed. Returns normally when it may.
    */
   requireSession(request: Request): Promise<void>;
-  /** Verify a submitted password and, if it is right, issue the cookie. */
-  logIn(password: string, redirectTo?: string | null): Promise<LoginResult>;
+  /**
+   * Verify a submitted password and, if it is right, issue the cookie.
+   *
+   * @param request the login submission, read only for how it reached us: the
+   *        forwarded scheme decides whether the cookie is issued `Secure`, and
+   *        the forwarded address is what a failed attempt is logged against.
+   *        Omitting it issues a cookie without `Secure`, which is the right
+   *        answer for a caller that has no request — there is no proxy to
+   *        believe, so there is no evidence of TLS.
+   */
+  logIn(
+    password: string,
+    redirectTo?: string | null,
+    request?: Request,
+  ): Promise<LoginResult>;
 };
 
 const sha256 = (value: string): Buffer => createHash("sha256").update(value, "utf8").digest();
@@ -173,9 +188,26 @@ export function createAuthGate(config: AuthConfig): AuthGate {
     );
   }
 
-  const storage = createCookieSessionStorage<SessionData>({
-    cookie: { ...SESSION_COOKIE, secrets: [config.SESSION_SECRET] },
-  });
+  const secret = config.SESSION_SECRET;
+
+  /**
+   * Two storages over one cookie name, differing only in `Secure`.
+   *
+   * Built once each rather than per request. Reading never consults `Secure` —
+   * it is an instruction to the browser about when to send the cookie, not part
+   * of the signature — so either storage parses what the other issued, and only
+   * the issuing side has to pick.
+   */
+  const storages = {
+    secure: createCookieSessionStorage<SessionData>({
+      cookie: { ...SESSION_COOKIE, secure: true, secrets: [secret] },
+    }),
+    insecure: createCookieSessionStorage<SessionData>({
+      cookie: { ...SESSION_COOKIE, secure: false, secrets: [secret] },
+    }),
+  };
+
+  const storage = storages.insecure;
 
   /**
    * Sessions are pinned to the password that issued them, so changing
@@ -206,20 +238,30 @@ export function createAuthGate(config: AuthConfig): AuthGate {
       );
     },
 
-    async logIn(submitted, redirectTo) {
+    async logIn(submitted, redirectTo, request) {
       if (!passwordMatches(submitted, password)) {
+        // Logged, because a self-hoster with no user table has nothing else to
+        // notice an attempt with. The address is the forwarded one, which is
+        // the only address that means anything behind a proxy.
+        const from = request ? clientAddress(request) : null;
+        console.warn(`Failed login attempt${from === null ? "" : ` from ${from}`}.`);
+
         // Says nothing about the password it was compared against. That there
         // is one is already obvious from the login page existing.
         return { ok: false, message: "Incorrect password." };
       }
 
-      const session = await storage.getSession();
+      // The browser's own scheme, not ours: behind a TLS-terminating proxy the
+      // request reaches us over plain http and the cookie must still be Secure.
+      const issuer = request && isSecureRequest(request) ? storages.secure : storages.insecure;
+
+      const session = await issuer.getSession();
       session.set("credential", credential);
 
       return {
         ok: true,
         response: redirect(safeRedirectTarget(redirectTo), {
-          headers: { "Set-Cookie": await storage.commitSession(session) },
+          headers: { "Set-Cookie": await issuer.commitSession(session) },
         }),
       };
     },
