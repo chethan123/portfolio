@@ -1,27 +1,133 @@
+/* Portfolio Tracker — the whole stylesheet.
+ *
+ * Tokens are DESIGN.md §13, extracted from the Stitch "Portfolio Dashboard"
+ * screen. The brief is a financial terminal: no shadow, no gradient, no radius,
+ * two typefaces split by whether a thing is data or is *about* data.
+ *
+ * Nothing below hardcodes a colour. Charts included — §12 requires them to
+ * resolve from the same custom properties as everything else, which is what
+ * makes a theme change re-colour the trend line for free.
+ */
+
+/* --- Fonts ---------------------------------------------------------------
+ * Self-hosted, latin subset, variable weight (DESIGN.md §13.3). Not the CDN
+ * the mock used: this is an offline-capable PWA holding a household's
+ * finances, and a per-visit third-party request fails both of those.
+ */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/inter-latin-var.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-var.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* --- Tokens --------------------------------------------------------------
+ * The three-block structure is DESIGN.md §12, kept exactly so the cookie-backed
+ * toggle drops in later without touching a token. The `:not([data-theme=
+ * "light"])` guard is what lets an explicit light choice beat a dark OS
+ * setting — without it the toggle only ever works in one direction.
+ */
+
 :root {
   color-scheme: light dark;
 
-  --surface: #ffffff;
-  --surface-sunken: #f5f6f8;
-  --border: #dfe2e8;
-  --text: #16181d;
-  --text-muted: #616570;
-  --accent: #1f5eff;
+  /* Light palette — derived (§13.1). Not an inversion of the dark one. */
+  --background: #f7faf3;
+  --surface: #f7faf3;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f1f5ec;
+  --surface-container: #ebf0e6;
+  --surface-container-high: #e3e9dd;
+  --surface-container-highest: #dbe2d5;
+  --on-surface: #17210f;
+  --on-surface-variant: #444e3e;
+  --outline: #74806e;
+  --outline-variant: #b4c0ad;
+  --accent: #00701c;
+  --on-accent: #ffffff;
+  --gain: #00701c;
+  --loss: #b3261e;
+  --warning: #8a5300;
+  --warning-surface: #fff4d6;
 
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.5;
+  /* Type (§13.3). Two families, split by data vs. about-data. */
+  --font-ui: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Space and shape (§13.4). 4px baseline; radius is 0 everywhere. */
+  --unit: 4px;
+  --gutter: 8px;
+  --container-padding: 12px;
+  --margin-sm: 16px;
+  --margin-lg: 24px;
+  --rail: 200px;
+  --control-h: 32px;
+
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 20px;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --surface: #14161a;
-    --surface-sunken: #0d0f12;
-    --border: #2a2e36;
-    --text: #e9eaee;
-    --text-muted: #9aa0ac;
-    --accent: #7ea2ff;
+  :root:not([data-theme="light"]) {
+    /* Stitch verbatim (§13.2). */
+    --background: #0c160a;
+    --surface: #0c160a;
+    --surface-container-lowest: #071106;
+    --surface-container-low: #141e12;
+    --surface-container: #182216;
+    --surface-container-high: #222d20;
+    --surface-container-highest: #2d382a;
+    --on-surface: #dae6d2;
+    --on-surface-variant: #b9ccb2;
+    --outline: #84967e;
+    --outline-variant: #3b4b37;
+    --accent: #00ff41;
+    --on-accent: #0c160a;
+    --gain: #00ff41;
+    --loss: #ff5449;
+    --warning: #ffcf70;
+    --warning-surface: #3a2b06;
   }
 }
+
+:root[data-theme="dark"] {
+  --background: #0c160a;
+  --surface: #0c160a;
+  --surface-container-lowest: #071106;
+  --surface-container-low: #141e12;
+  --surface-container: #182216;
+  --surface-container-high: #222d20;
+  --surface-container-highest: #2d382a;
+  --on-surface: #dae6d2;
+  --on-surface-variant: #b9ccb2;
+  --outline: #84967e;
+  --outline-variant: #3b4b37;
+  --accent: #00ff41;
+  --on-accent: #0c160a;
+  --gain: #00ff41;
+  --loss: #ff5449;
+  --warning: #ffcf70;
+  --warning-surface: #3a2b06;
+}
+
+/* --- Base ---------------------------------------------------------------- */
 
 * {
   box-sizing: border-box;
@@ -29,339 +135,819 @@
 
 body {
   margin: 0;
-  background: var(--surface-sunken);
-  color: var(--text);
+  background: var(--background);
+  color: var(--on-surface);
+  -webkit-font-smoothing: antialiased;
 }
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Every figure in the app routes through this: monospaced and tabular, so
+ * columns of money align for vertical scanning (§13.3). */
+.u-data {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.u-label {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant);
+}
+
+/* --- Shell ---------------------------------------------------------------
+ * A fixed 200px rail, from the mock (§13.1). The nav *items* are §8.4's five,
+ * ordered by frequency of use.
+ */
 
 .app {
   min-height: 100vh;
+}
+
+.app-rail {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: var(--rail);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  padding: var(--margin-lg) 0;
+  background: var(--surface);
+  border-right: 1px solid var(--outline-variant);
+}
+
+.app-brand {
+  display: block;
+  padding: 0 var(--margin-sm);
+  margin-bottom: var(--margin-lg);
+  color: var(--on-surface);
+  text-decoration: none;
+}
+
+.app-brand-mark {
+  display: block;
+  font-family: var(--font-data);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+}
+
+.app-brand-meta {
+  display: block;
+  margin-top: var(--unit);
+}
+
+.app-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--unit);
+  flex: 1;
+}
+
+.app-nav--footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+
+.app-nav-link {
+  display: flex;
+  align-items: center;
+  gap: var(--margin-sm);
+  padding: var(--unit) var(--margin-sm);
+  border-left: 2px solid transparent;
+  color: var(--on-surface-variant);
+  text-decoration: none;
+  transition: color 150ms, background-color 150ms;
+}
+
+.app-nav-link:hover {
+  color: var(--on-surface);
+  background: var(--surface-container-high);
+}
+
+/* The active marker from the mock: a 2px accent stroke on the leading edge. */
+.app-nav-link--active {
+  border-left-color: var(--accent);
+  background: var(--surface-container);
+  color: var(--on-surface);
+  font-weight: 700;
+}
+
+.app-nav-link--active .app-nav-icon {
+  color: var(--accent);
+}
+
+.app-nav-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+/* The margin lives here rather than on `.app-main` so the open-instance banner
+ * clears the rail too — it is a sibling of the page, not part of it. */
+.app-canvas {
+  margin-left: var(--rail);
+}
+
+.app-main {
+  padding: var(--margin-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gutter);
+  max-width: 80rem;
+}
+
+/* Mobile: the rail unpins to a scrolling top bar. Reading is what the phone is
+ * for (§11), so the nav gets out of the way rather than overlaying content. */
+@media (max-width: 767px) {
+  .app-rail {
+    position: static;
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--margin-sm);
+    padding: var(--gutter) var(--container-padding);
+    border-right: 0;
+    border-bottom: 1px solid var(--outline-variant);
+    overflow-x: auto;
+  }
+
+  .app-brand {
+    margin-bottom: 0;
+    padding: 0;
+    flex: none;
+  }
+
+  .app-brand-meta {
+    display: none;
+  }
+
+  .app-nav {
+    flex-direction: row;
+    flex: 0 0 auto;
+  }
+
+  .app-nav--footer {
+    margin-top: 0;
+  }
+
+  .app-nav-link {
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+  }
+
+  .app-nav-link--active {
+    border-left: 0;
+    border-bottom-color: var(--accent);
+  }
+
+  .app-canvas {
+    margin-left: 0;
+  }
+
+  .app-main {
+    padding: var(--container-padding);
+  }
+}
+
+/* --- Panels --------------------------------------------------------------
+ * Depth is tonal layers plus a 1px border. No shadow anywhere (§13.4).
+ */
+
+.panel {
+  background: var(--surface-container);
+  border: 1px solid var(--outline-variant);
   display: flex;
   flex-direction: column;
 }
 
-.app-header {
+.panel-header {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
-  flex-wrap: wrap;
-  padding: 0.75rem 1.25rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  justify-content: space-between;
+  gap: var(--margin-sm);
+  padding: var(--unit) var(--margin-sm);
+  background: var(--surface-container-high);
+  border-bottom: 1px solid var(--outline-variant);
 }
 
-.app-brand {
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.app-nav {
+.panel-title {
   display: flex;
-  gap: 0.25rem;
+  align-items: center;
+  gap: var(--unit);
+  margin: 0;
+  color: var(--on-surface);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.panel-title svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.panel-count {
+  font-family: var(--font-data);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
+}
+
+/* --- Net worth headline --------------------------------------------------- */
+
+.kpi {
+  display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--margin-sm);
+  padding: var(--margin-sm);
+  background: var(--surface-container-low);
+  border-bottom: 1px solid var(--outline-variant);
 }
 
-.app-nav-link {
-  padding: 0.35rem 0.7rem;
-  border-radius: 6px;
-  color: var(--text-muted);
+.kpi-figure {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--margin-sm);
+  margin: var(--unit) 0 0;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 32px;
+  line-height: 40px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--on-surface);
+}
+
+/* Sign and arrow, never colour alone (§12). The hue is the redundant channel
+ * here, not the carrier. */
+.delta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--unit);
+  padding: 2px var(--unit);
+  border: 1px solid;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.delta svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.delta--gain {
+  color: var(--gain);
+  border-color: color-mix(in srgb, var(--gain) 30%, transparent);
+  background: color-mix(in srgb, var(--gain) 10%, transparent);
+}
+
+.delta--loss {
+  color: var(--loss);
+  border-color: color-mix(in srgb, var(--loss) 30%, transparent);
+  background: color-mix(in srgb, var(--loss) 10%, transparent);
+}
+
+/* --- Segmented range control ---------------------------------------------- */
+
+/* Anchors, not buttons. The range is a URL, so the control works with no
+ * JavaScript and a chosen range survives a reload and can be bookmarked. */
+.segmented {
+  display: flex;
+  height: var(--control-h);
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container-highest);
+}
+
+.segmented a {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-right: 1px solid var(--outline-variant);
+  color: var(--on-surface-variant);
   text-decoration: none;
-  font-size: 0.95rem;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  transition: color 150ms, background-color 150ms;
 }
 
-.app-nav-link:hover {
-  background: var(--surface-sunken);
-  color: var(--text);
+.segmented a:last-child {
+  border-right: 0;
 }
 
-.app-nav-link--active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  font-weight: 550;
+.segmented a:hover {
+  color: var(--on-surface);
+  background: var(--surface-container-high);
 }
 
-.app-main {
-  flex: 1;
+.segmented a[aria-current="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+}
+
+/* --- Trend chart ----------------------------------------------------------
+ * §12: every stroke and fill resolves from a custom property, so a theme change
+ * re-colours the chart with no JS and nothing to re-resolve on the client.
+ */
+
+.chart {
+  position: relative;
+  display: flex;
+  padding: var(--margin-sm);
+  height: 20rem;
+}
+
+@media (max-width: 767px) {
+  .chart {
+    height: 16rem;
+  }
+}
+
+.chart-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(var(--outline-variant) 1px, transparent 1px),
+    linear-gradient(90deg, var(--outline-variant) 1px, transparent 1px);
+  background-size: 100% 25%, 10% 100%;
+  opacity: 0.35;
+}
+
+.chart-axis {
+  position: absolute;
+  inset: var(--margin-sm) auto var(--margin-sm) var(--margin-sm);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
+  opacity: 0.6;
+}
+
+.chart-svg {
   width: 100%;
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 2rem 1.25rem;
+  height: 100%;
+  overflow: visible;
 }
+
+.chart-baseline {
+  stroke: var(--outline-variant);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+/* 1.5px, no area fill — the brief's chart rule (§13). */
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+/* The pre-day-zero hand-typed series is dashed, the computed part solid (§8.1). */
+.chart-line--manual {
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+
+.chart-point {
+  fill: var(--background);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.chart-halo {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.3;
+}
+
+/* --- Accounts table -------------------------------------------------------
+ * No vertical rules. Horizontal hairlines between rows, header filled a tone up
+ * (§13.4). Hover lifts a 2px accent edge on the leading cell.
+ */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.data-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.data-table th {
+  padding: var(--unit) var(--margin-sm);
+  border-bottom: 1px solid var(--outline-variant);
+  background: var(--surface-container-low);
+  color: var(--on-surface-variant);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.data-table td {
+  padding: var(--unit) var(--margin-sm);
+  border-bottom: 1px solid var(--outline-variant);
+  vertical-align: middle;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table tbody tr {
+  transition: background-color 150ms;
+}
+
+.data-table tbody tr:hover {
+  background: var(--surface-container-high);
+}
+
+.data-table td:first-child {
+  border-left: 2px solid transparent;
+}
+
+.data-table tbody tr:hover td:first-child {
+  border-left-color: var(--accent);
+}
+
+/* Cells only. A column header is a label, not data, so it stays in Inter at
+ * label-caps size like every other header — the two typefaces divide on what a
+ * thing *is*, not on which column it sits in (§13.3). */
+.data-table td.is-numeric {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.data-table th.is-numeric,
+.data-table td.is-numeric {
+  text-align: right;
+}
+
+.account-name {
+  color: var(--on-surface);
+}
+
+.account-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
+}
+
+.account-owner {
+  color: var(--on-surface);
+}
+
+/* On a phone the owner folds under the account rather than scrolling sideways
+ * (§8.1 — thirteen columns on a phone is a scroll nobody uses). */
+.account-owner--inline {
+  display: none;
+  margin-top: var(--unit);
+}
+
+@media (max-width: 767px) {
+  .data-table .is-owner {
+    display: none;
+  }
+
+  .account-owner--inline {
+    display: block;
+  }
+
+  .data-table td {
+    padding: 12px var(--container-padding);
+  }
+}
+
+/* A liability reads as a liability without relying on the minus alone. */
+.is-negative {
+  color: var(--loss);
+}
+
+.coverage-note {
+  margin: var(--unit) 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
+}
+
+/* --- Page ---------------------------------------------------------------- */
 
 .page h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.5rem;
-  letter-spacing: -0.01em;
+  margin: 0 0 var(--gutter);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
 }
 
 .page-lede {
   margin: 0;
-  color: var(--text-muted);
+  color: var(--on-surface-variant);
   max-width: 46rem;
 }
 
+/* --- Banners --------------------------------------------------------------
+ * The open-instance warning (DESIGN.md §10). Loud, permanent, undismissable:
+ * it is the only thing standing between an open instance and a surprise.
+ */
 
-/* The open-instance warning (DESIGN.md §10). Loud, permanent, undismissable:
-   it is the only thing standing between an open instance and a surprise. */
 .open-instance-banner {
-  --warning: #8a5300;
-  --warning-surface: #fff4d6;
-
-  padding: 0.7rem 1.25rem;
+  padding: 0.7rem var(--margin-lg);
   background: var(--warning-surface);
   color: var(--warning);
   border-bottom: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-  font-size: 0.925rem;
-}
-
-@media (prefers-color-scheme: dark) {
-  .open-instance-banner {
-    --warning: #ffcf70;
-    --warning-surface: #3a2b06;
-  }
 }
 
 .open-instance-banner code {
+  font-family: var(--font-data);
   font-size: 0.875em;
 }
 
+/* The single setup pointer (DESIGN.md §8.4). Distinct from the open-instance
+ * warning above it: that one is a risk, this one is an instruction. */
+.first-run {
+  margin: 0 0 var(--margin-sm);
+  padding: 0.9rem 1.1rem;
+  background: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  border-left: 2px solid var(--accent);
+  max-width: 46rem;
+}
+
+/* No figure, no axis, no chart frame — a zero and an empty instance must never
+ * look alike in a finance app. */
+.empty-state {
+  margin-top: var(--margin-sm);
+  padding: 2rem 1.5rem;
+  background: var(--surface-container);
+  border: 1px dashed var(--outline-variant);
+  max-width: 46rem;
+}
+
+.empty-state-headline {
+  margin: 0 0 var(--unit);
+  font-weight: 600;
+}
+
+.empty-state-detail {
+  margin: 0;
+  color: var(--on-surface-variant);
+}
+
+/* --- Controls ------------------------------------------------------------- */
+
+button {
+  height: var(--control-h);
+  padding: 0 var(--margin-sm);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover {
+  background: color-mix(in srgb, var(--accent) 85%, var(--background));
+}
+
+.button--quiet {
+  background: transparent;
+  color: var(--on-surface-variant);
+  border-color: var(--outline);
+  font-weight: 400;
+}
+
+.button--quiet:hover {
+  background: transparent;
+  color: var(--loss);
+  border-color: var(--loss);
+}
+
+input,
+select {
+  height: var(--control-h);
+  padding: 0 var(--gutter);
+  border: 1px solid var(--outline);
+  border-radius: 0;
+  background: var(--surface-container-lowest);
+  color: var(--on-surface);
+  font: inherit;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"] {
+  border-color: var(--loss);
+}
+
+/* --- Login ---------------------------------------------------------------- */
+
 .login-form {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--gutter);
   max-width: 22rem;
-  margin-top: 1.5rem;
+  margin-top: var(--margin-lg);
 }
 
 .login-label {
-  font-size: 0.925rem;
-  color: var(--text-muted);
-}
-
-.login-form input {
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
+  color: var(--on-surface-variant);
 }
 
 .login-form button {
   justify-self: start;
-  margin-top: 0.25rem;
-  padding: 0.5rem 1.1rem;
-  border: 0;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--surface);
-  font: inherit;
-  font-weight: 550;
-  cursor: pointer;
+  margin-top: var(--unit);
 }
 
 .login-error {
   margin: 0;
-  color: #b3261e;
-  font-size: 0.925rem;
+  color: var(--loss);
 }
 
-@media (prefers-color-scheme: dark) {
-  .login-error {
-    color: #ff9a91;
-  }
-}
-
-
-/* --- Settings ------------------------------------------------------------ */
+/* --- Settings ------------------------------------------------------------- */
 
 .settings-tabs {
   display: flex;
-  gap: 0.25rem;
   flex-wrap: wrap;
-  margin-bottom: 1.5rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.5rem;
+  margin-bottom: var(--margin-lg);
+  border-bottom: 1px solid var(--outline-variant);
 }
 
 .settings-tab {
-  padding: 0.3rem 0.7rem;
-  border-radius: 6px;
-  color: var(--text-muted);
+  padding: var(--gutter) var(--margin-sm);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--on-surface-variant);
   text-decoration: none;
-  font-size: 0.95rem;
 }
 
 .settings-tab:hover {
-  background: var(--surface);
-  color: var(--text);
+  background: var(--surface-container);
+  color: var(--on-surface);
 }
 
 .settings-tab--active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  font-weight: 550;
+  border-bottom-color: var(--accent);
+  color: var(--on-surface);
+  font-weight: 700;
 }
 
 .settings-summary {
-  margin: 1.5rem 0 0;
+  margin: var(--margin-lg) 0 0;
   max-width: 46rem;
 }
 
 .settings-summary dt {
   font-weight: 600;
-  margin-top: 1rem;
+  margin-top: var(--margin-sm);
 }
 
 .settings-summary dd {
-  margin: 0.2rem 0 0;
-  color: var(--text-muted);
+  margin: var(--unit) 0 0;
+  color: var(--on-surface-variant);
 }
 
 .breadcrumb {
-  margin: 0 0 0.75rem;
-  font-size: 0.925rem;
+  margin: 0 0 var(--gutter);
+  color: var(--on-surface-variant);
 }
 
-/* --- Forms and records --------------------------------------------------- */
+/* --- Forms and records ---------------------------------------------------- */
 
 .panel-form,
 .danger-zone {
   display: grid;
-  gap: 0.4rem;
+  gap: var(--unit);
   max-width: 30rem;
-  margin-top: 2rem;
-  padding: 1.25rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  margin-top: var(--margin-lg);
+  padding: var(--margin-sm);
+  background: var(--surface-container);
+  border: 1px solid var(--outline-variant);
 }
 
 .panel-form h2,
 .danger-zone h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1.05rem;
+  margin: 0 0 var(--gutter);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
 }
 
 .panel-form label {
-  font-size: 0.925rem;
-  color: var(--text-muted);
-  margin-top: 0.4rem;
-}
-
-.panel-form input,
-.panel-form select,
-.record-form input {
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.panel-form input[aria-invalid="true"],
-.panel-form select[aria-invalid="true"],
-.record-form input[aria-invalid="true"] {
-  border-color: #b3261e;
-}
-
-button {
-  padding: 0.45rem 1rem;
-  border: 0;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--surface);
-  font: inherit;
-  font-weight: 550;
-  cursor: pointer;
+  color: var(--on-surface-variant);
+  margin-top: var(--unit);
 }
 
 .panel-form button {
   justify-self: start;
-  margin-top: 0.9rem;
-}
-
-.button--quiet {
-  background: transparent;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-}
-
-.button--quiet:hover {
-  color: #b3261e;
-  border-color: #b3261e;
+  margin-top: var(--gutter);
 }
 
 .danger-zone {
-  border-color: color-mix(in srgb, #b3261e 35%, var(--border));
+  border-color: color-mix(in srgb, var(--loss) 40%, var(--outline-variant));
 }
 
 .danger-zone p {
   margin: 0;
-  color: var(--text-muted);
-  font-size: 0.925rem;
+  color: var(--on-surface-variant);
 }
 
 .danger-zone button {
   justify-self: start;
-  margin-top: 0.6rem;
+  margin-top: var(--gutter);
 }
 
 .field-note {
   margin: 0;
-  font-size: 0.85rem;
-  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
 }
 
 .field-error,
 .form-error {
   margin: 0;
-  color: #b3261e;
-  font-size: 0.9rem;
+  color: var(--loss);
 }
 
 .form-error {
-  margin: 1rem 0;
+  margin: var(--margin-sm) 0;
   padding: 0.7rem 0.9rem;
-  border: 1px solid color-mix(in srgb, #b3261e 40%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, #b3261e 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--loss) 40%, transparent);
+  background: color-mix(in srgb, var(--loss) 8%, transparent);
   max-width: 46rem;
 }
 
 .form-note {
-  margin: 1rem 0 0;
-  color: var(--text-muted);
-  font-size: 0.925rem;
-}
-
-@media (prefers-color-scheme: dark) {
-  .field-error,
-  .form-error {
-    color: #ff9a91;
-  }
+  margin: var(--margin-sm) 0 0;
+  color: var(--on-surface-variant);
 }
 
 .record-list {
   list-style: none;
-  margin: 1.5rem 0 0;
+  margin: var(--margin-lg) 0 0;
   padding: 0;
   display: grid;
-  gap: 0.5rem;
+  gap: var(--gutter);
   max-width: 46rem;
 }
 
 .record {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.6rem 0.75rem;
+  background: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  padding: var(--gutter) var(--margin-sm);
 }
 
 .record-form {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--gutter);
   align-items: center;
   flex-wrap: wrap;
 }
@@ -373,72 +959,40 @@ button {
 .record-note {
   margin: 0;
   flex-basis: 100%;
-  font-size: 0.85rem;
-  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
 }
 
 .record-table {
   width: 100%;
-  margin-top: 1.5rem;
+  margin-top: var(--margin-lg);
   border-collapse: collapse;
-  font-size: 0.95rem;
 }
 
 .record-table th,
 .record-table td {
   text-align: left;
-  padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid var(--border);
+  padding: var(--gutter) var(--margin-sm);
+  border-bottom: 1px solid var(--outline-variant);
 }
 
 .record-table th {
-  color: var(--text-muted);
-  font-weight: 550;
-  font-size: 0.85rem;
+  color: var(--on-surface-variant);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .record-row--closed td {
-  color: var(--text-muted);
+  color: var(--on-surface-variant);
 }
 
 .empty-note {
-  margin: 1.5rem 0 0;
-  color: var(--text-muted);
-}
-
-/* --- First run and empty dashboards -------------------------------------- */
-
-/* The single setup pointer (DESIGN.md §8.4). Distinct from the open-instance
-   warning above it: that one is a risk, this one is an instruction. */
-.first-run {
-  margin: 0 0 1.5rem;
-  padding: 0.9rem 1.1rem;
-  background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
-  border-left: 3px solid var(--accent);
-  border-radius: 8px;
-  max-width: 46rem;
-}
-
-/* No figure, no axis, no chart frame — a zero and an empty instance must never
-   look alike in a finance app. */
-.empty-state {
-  margin-top: 1.5rem;
-  padding: 2rem 1.5rem;
-  background: var(--surface);
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  max-width: 46rem;
-}
-
-.empty-state-headline {
-  margin: 0 0 0.4rem;
-  font-weight: 600;
-}
-
-.empty-state-detail {
-  margin: 0;
-  color: var(--text-muted);
+  margin: var(--margin-lg) 0 0;
+  color: var(--on-surface-variant);
 }
 
 .visually-hidden {

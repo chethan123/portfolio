@@ -688,7 +688,146 @@ The toggle lives in the header, persistent across all three pages.
 
 ---
 
-## 13. Accepted limitations
+## 13. Design tokens
+
+Extracted from the Stitch project **Portfolio Net Worth Tracker**
+(`projects/6282864270794825736`), screen **Portfolio Dashboard**
+(`1b75e26256fa422a95910089e3486e63`) — the screen whose own sidebar marks the active tab `Home`.
+The design system attached to that project is named *Portfolio Core*.
+
+The brief is a financial terminal: maximum information density, no shadows, no gradients, no
+rounded corners, and a hard split between interface type and data type. The interface recedes; the
+numbers are the only thing with colour.
+
+### 13.1 Three places the mock and this document disagreed
+
+Recorded because each was a decision, not a transcription.
+
+**The mock is dark-only; §12 requires `light`, `dark` and `system`.** Stitch supplied one palette.
+Rather than reopen §12, the Stitch values are used **verbatim as the dark palette** and a light
+counterpart is derived for every token. The derivation is not an inversion — §12 already says
+gain/loss are two palettes rather than one palette with the background flipped, and the same is
+true of the accent: `#00ff41` carries 1.4:1 against white and is unusable as light-theme text, so
+light uses `#00701c` (6.3:1). The hue family is preserved; the luminance is re-derived per theme.
+
+**The mock's nav is three items (Home / Views / Settings); §8.4's is five.** §8.4 wins — it is
+ordered by frequency of use and the routes already exist. What is taken from the mock is the
+*shape*: a fixed 200px left rail with a 2px accent stroke marking the active item, replacing the
+horizontal header nav.
+
+**The theme's generic `borderRadius` scale is unused.** Stitch emitted a `0.25rem / 0.5rem /
+0.75rem` ramp, but the written brief specifies sharp 0px corners for every element and the rendered
+screen uses no radius class anywhere. Sharp wins; the ramp is noise from the theme generator. The
+one exception the brief allows is circular marks inside data visualisations.
+
+### 13.2 Colour
+
+Dark is Stitch verbatim. Light is derived.
+
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| `--background` | `#f7faf3` | `#0c160a` | The canvas |
+| `--surface` | `#f7faf3` | `#0c160a` | Alias of canvas; the rail sits on it |
+| `--surface-container-lowest` | `#ffffff` | `#071106` | Deepest well |
+| `--surface-container-low` | `#f1f5ec` | `#141e12` | Panel headers |
+| `--surface-container` | `#ebf0e6` | `#182216` | Panel body — the default card |
+| `--surface-container-high` | `#e3e9dd` | `#222d20` | Table headers, row hover |
+| `--surface-container-highest` | `#dbe2d5` | `#2d382a` | Pressed, and the segmented control track |
+| `--on-surface` | `#17210f` | `#dae6d2` | Primary text |
+| `--on-surface-variant` | `#444e3e` | `#b9ccb2` | Labels, secondary text |
+| `--outline` | `#74806e` | `#84967e` | Borders that must be *seen* (≥3:1) |
+| `--outline-variant` | `#b4c0ad` | `#3b4b37` | The 1px structural hairline |
+| `--accent` | `#00701c` | `#00ff41` | Active state, primary fill, the data line |
+| `--on-accent` | `#ffffff` | `#0c160a` | Text on a solid accent fill |
+| `--gain` | `#00701c` | `#00ff41` | Positive movement |
+| `--loss` | `#b3261e` | `#ff5449` | Negative movement |
+
+Two borders, deliberately. `--outline-variant` is the structural hairline that divides rows and
+frames panels — it sits near 1.8:1 in both themes and is *felt*, not read. `--outline` clears 3:1
+and is what an input, a control boundary, or a focus ring uses, where a border that cannot be
+perceived is an accessibility defect rather than a stylistic choice.
+
+**Gain and loss are the only saturated colour in the interface.** Everything else is a green-tinted
+neutral. Per §12 the pair is never load-bearing alone: every figure carries its sign and a direction
+arrow, so it reads without perceiving hue at all.
+
+### 13.3 Typography
+
+Two families, split by what they carry. This is the load-bearing rule of the whole system.
+
+- **Inter** — navigation, labels, descriptive text. Everything that is *about* the data.
+- **JetBrains Mono** — every figure, currency symbol, percentage, ticker and timestamp. Tabular by
+  construction, so columns of money align for vertical scanning.
+
+Both are **self-hosted** (`public/fonts/`, latin subset, variable weight — 78KB total). Not the
+Google CDN the mock used: this is an offline-capable PWA (§11) for a household's finances, and a
+per-visit request to a third party is both a privacy leak and an offline failure.
+
+| Token | Family | Size / line | Weight | Tracking |
+|---|---|---|---|---|
+| `--type-display-data` | JetBrains Mono | 32px / 40px | 700 | −0.02em |
+| `--type-headline-sm` | Inter | 18px / 24px | 600 | — |
+| `--type-body-md` | Inter | 14px / 20px | 400 | — |
+| `--type-data-lg` | JetBrains Mono | 16px / 24px | 500 | — |
+| `--type-data-sm` | JetBrains Mono | 12px / 16px | 400 | — |
+| `--type-label-caps` | Inter | 11px / 16px | 700 | 0.05em, uppercase |
+
+### 13.4 Spacing, shape, elevation
+
+4px baseline grid. Density is the point — spacing is tighter than a general web app.
+
+| Token | Value |
+|---|---|
+| `--unit` | 4px |
+| `--gutter` | 8px (between panels) |
+| `--container-padding` | 12px (mobile) |
+| `--margin-sm` | 16px |
+| `--margin-lg` | 24px (desktop canvas) |
+| `--rail` | 200px (fixed sidebar) |
+| `--control-h` | 32px (every input and small button) |
+
+**Radius is 0 everywhere.** **Shadow is `none` everywhere.** Depth is tonal layers plus 1px borders:
+canvas → `surface-container` panel → `surface-container-high` header. Hover lifts the border from
+`--outline-variant` to `--outline` (or to `--accent` on an interactive row) rather than raising the
+element.
+
+Uniform `--control-h` is what lets controls in different columns line up across a dashboard, which
+is the actual reason it is a token rather than a per-component value.
+
+### 13.5 What the mock supplied that is not implemented
+
+The screen was populated with fabricated data, and some of it describes a different product.
+
+- **A "Crypto" account.** Out of scope per §1. The accounts table renders whatever `account.kind`
+  the database holds; the mock's row set is not seeded anywhere.
+- **Every figure on the screen** — `$1,248,392.14`, `+1.2%`, the polyline's eleven points. All of it
+  is loader data now. In particular the empty case still renders **no figure at all** (§8.4, and the
+  `EmptyState` component): a zero and an empty instance must not look alike.
+- **Material Symbols icons via CDN.** Replaced with inline SVG, for the same offline and privacy
+  reasons as the fonts.
+The one thing the mock supplied that grew rather than shrank is the **1M / 3M / 1Y / All range
+control**. It is rendered as links against a `?range=` parameter rather than as buttons, so it works
+with JavaScript disabled and a chosen range survives a reload and can be bookmarked.
+
+### 13.6 Not in this change
+
+The **cookie-backed three-state toggle** of §12 is not built. The token structure here is exactly
+what §12 prescribes —
+
+```css
+:root                             { /* light */ }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { /* dark  */ }
+}
+:root[data-theme="dark"]          { /* dark  */ }
+```
+
+— so both themes are live today via the OS setting, and the toggle slice adds the cookie, the
+control and the client listener without touching a single token.
+
+---
+
+## 14. Accepted limitations
 
 Recorded so they are revisited deliberately rather than discovered under deadline.
 

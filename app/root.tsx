@@ -12,6 +12,13 @@ import {
 } from "react-router";
 
 import { FirstRunPrompt } from "~/components/first-run-prompt";
+import {
+  DashboardIcon,
+  HoldingsIcon,
+  IncomeIcon,
+  SettingsIcon,
+  UploadIcon,
+} from "~/components/icons";
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { authGate } from "~/lib/auth.server";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
@@ -59,14 +66,48 @@ export async function loader() {
   return { authConfigured: authGate().enabled, firstRun };
 }
 
-/** DESIGN.md §8.4 — ordered by how often each page is opened. */
+/**
+ * DESIGN.md §8.4 — ordered by how often each page is opened.
+ *
+ * The rail's *shape* is the Stitch screen's (§13.1): fixed 200px, a 2px accent
+ * stroke on the active item's leading edge. Its *contents* are §8.4's five
+ * items rather than the mock's three, because the ordering there is a decision
+ * about frequency of use and the routes it names already exist.
+ */
 const NAVIGATION = [
-  { to: "/", label: "Overview", end: true },
-  { to: "/holdings", label: "Holdings", end: false },
-  { to: "/income", label: "Income", end: false },
-  { to: "/upload", label: "Upload", end: false },
-  { to: "/settings", label: "Settings", end: false },
+  { to: "/", label: "Overview", end: true, Icon: DashboardIcon },
+  { to: "/holdings", label: "Holdings", end: false, Icon: HoldingsIcon },
+  { to: "/income", label: "Income", end: false, Icon: IncomeIcon },
+  { to: "/upload", label: "Upload", end: false, Icon: UploadIcon },
 ] as const;
+
+/** Settings sits at the foot of the rail: a few times ever, not daily (§8.4). */
+const FOOTER_NAVIGATION = [
+  { to: "/settings", label: "Settings", end: false, Icon: SettingsIcon },
+] as const;
+
+type NavItem = (typeof NAVIGATION)[number] | (typeof FOOTER_NAVIGATION)[number];
+
+function NavItems({ items }: { items: readonly NavItem[] }) {
+  return (
+    <>
+      {items.map(({ to, label, end, Icon }) => (
+        <li key={to}>
+          <NavLink
+            to={to}
+            end={end}
+            className={({ isActive }) =>
+              isActive ? "app-nav-link app-nav-link--active" : "app-nav-link"
+            }
+          >
+            <Icon className="app-nav-icon" />
+            <span>{label}</span>
+          </NavLink>
+        </li>
+      ))}
+    </>
+  );
+}
 
 export function Layout({ children }: { children: React.ReactNode }) {
   // Read from the root loader rather than taken as a prop, because `Layout`
@@ -92,30 +133,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <div className="app">
-          <header className="app-header">
+          <nav className="app-rail" aria-label="Primary">
             <a className="app-brand" href="/">
-              Portfolio
+              <span className="app-brand-mark">PORTFOLIO</span>
+              <span className="app-brand-meta u-label">Self-hosted</span>
             </a>
-            <nav className="app-nav" aria-label="Primary">
-              {NAVIGATION.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  className={({ isActive }) =>
-                    isActive ? "app-nav-link app-nav-link--active" : "app-nav-link"
-                  }
-                >
-                  {item.label}
-                </NavLink>
-              ))}
-            </nav>
-          </header>
-          {rootData?.authConfigured === false ? <OpenInstanceBanner /> : null}
-          <main className="app-main">
-            {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
-            {children}
-          </main>
+            <ul className="app-nav">
+              <NavItems items={NAVIGATION} />
+            </ul>
+            <ul className="app-nav app-nav--footer">
+              <NavItems items={FOOTER_NAVIGATION} />
+            </ul>
+          </nav>
+          <div className="app-canvas">
+            {rootData?.authConfigured === false ? <OpenInstanceBanner /> : null}
+            <main className="app-main">
+              {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
+              {children}
+            </main>
+          </div>
         </div>
         <ScrollRestoration />
         <Scripts />

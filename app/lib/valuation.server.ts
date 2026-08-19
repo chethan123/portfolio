@@ -278,3 +278,237 @@ export async function netWorthAt(
 ): Promise<Total> {
   return readTotal(db, valuedAt(date));
 }
+
+/**
+ * One account's holdings, rolled up.
+ *
+ * Grouped in SQL for the same reason {@link readTotal} sums in SQL: the
+ * alternative is adding decimal strings in JavaScript, which is either wrong
+ * (via `Number`) or a decimal library doing what `numeric` already does
+ * exactly. It reads the same view as everything else, so an account's total
+ * here and the net worth headline above it cannot disagree (DESIGN.md §8.2).
+ */
+export type AccountTotal = {
+  accountId: string;
+  accountName: string;
+  institution: string;
+  accountKind: AccountKind;
+  ownerName: string;
+  /** Decimal string. Negative for a liability account — the sign lives in it. */
+  amount: string;
+  coverage: Coverage;
+};
+
+/** One point on the computed net worth line. */
+export type NetWorthPoint = { date: IsoDate; amount: string; coverage: Coverage };
+
+/** One hand-typed point from the pre-day-zero series (DESIGN.md §7). */
+export type ManualPoint = { date: IsoDate; amount: string };
+
+/**
+ * Every open account with its current value, largest first.
+ *
+ * A liability account sorts to the bottom by construction rather than by a
+ * branch, because its positions sum negative (DESIGN.md §2).
+ *
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function accountTotals(
+  db: Kysely<Database> = getDb(),
+): Promise<AccountTotal[]> {
+  const rows = await db
+    .selectFrom(valuedNow())
+    .select([
+      "account_id",
+      "account_name",
+      "institution",
+      "account_kind",
+      "owner_name",
+      sql<string>`cast(coalesce(sum(value), 0) as numeric(20, 4))`.as("amount"),
+      sql<string>`count(*) filter (where is_priced)`.as("known"),
+      sql<string>`count(*)`.as("total"),
+    ])
+    .groupBy(["account_id", "account_name", "institution", "account_kind", "owner_name"])
+    // `sum(value)` again rather than the aliased `amount`: an alias is not in
+    // scope in ORDER BY across every Postgres version this may meet.
+    .orderBy(sql`coalesce(sum(value), 0)`, "desc")
+    .orderBy("account_name")
+    .execute();
+
+  return rows.map((row) => ({
+    accountId: required(row.account_id, "account_id"),
+    accountName: required(row.account_name, "account_name"),
+    institution: required(row.institution, "institution"),
+    accountKind: required(row.account_kind, "account_kind") as AccountKind,
+    ownerName: required(row.owner_name, "owner_name"),
+    amount: row.amount,
+    coverage: { known: Number(row.known), total: Number(row.total) },
+  }));
+}
+
+/**
+ * Net worth at each of `dates`, in a single round trip.
+ *
+ * The obvious implementation is {@link netWorthAt} in a loop, which is one
+ * query per point and re-plans `holding_valued_at` every time. A lateral join
+ * over the date array evaluates the same function once per date inside one
+ * statement, which is the difference between twenty-five round trips and one.
+ *
+ * A date before the first upload contributes `0.0000` over a coverage of zero
+ * rows — "nothing was recorded yet", which the caller must not draw as a real
+ * zero (DESIGN.md §7). {@link netWorthSeries} callers use `coverage.total` to
+ * find where the computed line actually starts.
+ *
+ * @param dates `YYYY-MM-DD`, in any order; the result comes back sorted.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function netWorthSeries(
+  dates: IsoDate[],
+  db: Kysely<Database> = getDb(),
+): Promise<NetWorthPoint[]> {
+  if (dates.length === 0) return [];
+
+  const rows = await db
+    .selectFrom(sql<{ date: string }>`unnest(cast(${dates} as date[]))`.as("d"))
+    // LEFT, not INNER. A date before the first upload has no rows to join, and
+    // an inner join drops that date from the result entirely — the chart would
+    // then skip it silently rather than report it as uncovered, which is the
+    // difference between "nothing was recorded" and "we did not mention it".
+    .leftJoinLateral(
+      (join) => join.selectFrom(sql`holding_valued_at(d.date)`.as("v")).selectAll().as("v"),
+      (join) => join.onTrue(),
+    )
+    .select([
+      sql<string>`cast(d.date as text)`.as("date"),
+      sql<string>`cast(coalesce(sum(v.value), 0) as numeric(20, 4))`.as("amount"),
+      sql<string>`count(*) filter (where v.is_priced)`.as("known"),
+      // Counts the joined column, not the row: the left join manufactures one
+      // all-null row per uncovered date, and `count(*)` would score it as 1.
+      sql<string>`count(v.instrument_id)`.as("total"),
+    ])
+    .groupBy(sql`d.date`)
+    .orderBy(sql`d.date`)
+    .execute();
+
+  return rows.map((row) => ({
+    date: row.date,
+    amount: row.amount,
+    coverage: { known: Number(row.known), total: Number(row.total) },
+  }));
+}
+
+/**
+ * The hand-typed series that prefixes the chart (DESIGN.md §7).
+ *
+ * Returned raw and unmerged. Merging is the caller's, because rule 2 —
+ * computed wins on overlapping dates, manual only fills gaps — is a display
+ * rule about two lines, not a fact about either one.
+ *
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function manualNetWorth(
+  db: Kysely<Database> = getDb(),
+): Promise<ManualPoint[]> {
+  const rows = await db
+    .selectFrom("manual_networth")
+    .select([sql<string>`cast(date as text)`.as("date"), "amount"])
+    .orderBy("date")
+    .execute();
+
+  return rows.map((row) => ({ date: row.date, amount: String(row.amount) }));
+}
+
+/**
+ * Net worth now, net worth then, and the movement between them.
+ *
+ * The headline's "+$14,921.00 / +1.2%" pair. Both figures are computed in SQL
+ * in `numeric` for the reason §4.1 gives: a difference of two six-figure
+ * balances is exactly where float drift becomes visible, and the percentage
+ * derived from it inherits the error. Nothing here crosses into JavaScript as
+ * anything but a decimal string.
+ *
+ * The percentage divides by `abs(previous)` rather than `previous`, so a
+ * household climbing out of net debt reports a rise as a rise. Dividing by a
+ * signed negative reports recovery as `-x%`, which is the wrong sign on the one
+ * figure a person reads fastest.
+ */
+export type NetWorthChange = {
+  current: string;
+  previous: string;
+  difference: string;
+  /**
+   * Null when `previous` is zero. A percentage change from nothing is
+   * undefined, not 0% and not infinite — the screen omits it rather than
+   * inventing one.
+   */
+  percent: string | null;
+};
+
+/**
+ * @param since `YYYY-MM-DD`, the start of the window being reported.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function netWorthChange(
+  since: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<NetWorthChange> {
+  const row = await db
+    .with("present", (qb) =>
+      qb
+        .selectFrom(valuedNow())
+        .select(sql<string>`coalesce(sum(value), 0)`.as("amount")),
+    )
+    .with("past", (qb) =>
+      qb
+        .selectFrom(valuedAt(since))
+        .select(sql<string>`coalesce(sum(value), 0)`.as("amount")),
+    )
+    .selectFrom(["present", "past"])
+    .select([
+      sql<string>`cast(present.amount as numeric(20, 4))`.as("current"),
+      sql<string>`cast(past.amount as numeric(20, 4))`.as("previous"),
+      sql<string>`cast(present.amount - past.amount as numeric(20, 4))`.as("difference"),
+      sql<string | null>`case
+        when past.amount = 0 then null
+        else cast((present.amount - past.amount) / abs(past.amount) * 100 as numeric(10, 4))
+      end`.as("percent"),
+    ])
+    .executeTakeFirstOrThrow();
+
+  return {
+    current: row.current,
+    previous: row.previous,
+    difference: row.difference,
+    percent: row.percent,
+  };
+}
+
+/**
+ * The earliest date any statement records, or null on an instance with none.
+ *
+ * Day zero (DESIGN.md §7). The "All" range needs it because a fixed wide window
+ * would spend most of its samples on the years before the app existed, where
+ * every point comes back uncovered and is discarded — an all-time chart drawn
+ * almost entirely from nothing.
+ *
+ * Read from `position_set` rather than from the view: this is the date history
+ * *begins*, which is a fact about what was uploaded, and it stays correct for a
+ * range whose accounts have all since been closed.
+ *
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function firstRecordedDate(
+  db: Kysely<Database> = getDb(),
+): Promise<IsoDate | null> {
+  const row = await db
+    .selectFrom("position_set")
+    .select(sql<string | null>`cast(min(as_of_date) as text)`.as("date"))
+    .executeTakeFirst();
+
+  return row?.date ?? null;
+}

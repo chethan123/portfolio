@@ -106,6 +106,19 @@ export type Fixtures = {
   }): Promise<void>;
 
   /**
+   * A hand-typed point on the pre-day-zero net worth series (DESIGN.md §7).
+   *
+   * Has no position set behind it and never gets one: the whole point of the
+   * manual series is the stretch of history where no statement exists.
+   */
+  seedManualNetWorth(options: {
+    /** `YYYY-MM-DD`. */
+    date: string;
+    /** Decimal string, as every money value crossing this boundary is. */
+    amount: string;
+  }): Promise<void>;
+
+  /**
    * The `USD` instrument seeded by the initial migration, priced at 1.00.
    *
    * Cash and debt are positions in it, which is what lets a bank balance and a
@@ -273,6 +286,16 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .execute();
   };
 
+  const seedManualNetWorth: Fixtures["seedManualNetWorth"] = async ({ date, amount }) => {
+    const values = { date, amount };
+
+    await db
+      .insertInto("manual_networth")
+      .values(values)
+      .onConflict((conflict) => conflict.column("date").doUpdateSet(values))
+      .execute();
+  };
+
   const usdInstrument: Fixtures["usdInstrument"] = async () => {
     const row = await db
       .selectFrom("instrument")
@@ -290,6 +313,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedPositionSet,
     seedQuote,
     seedDailyClose,
+    seedManualNetWorth,
     usdInstrument,
   };
 }
