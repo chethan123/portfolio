@@ -20,15 +20,31 @@ afterAll(closeTestDatabase);
 
 const NEW_YORK = "America/New_York";
 
-/** A provider that returns exactly what a test says, and records what it was asked. */
+/**
+ * A provider that returns exactly what a test says, and records what it was asked.
+ *
+ * Returns the quotes verbatim rather than filtering them to the requested
+ * symbols. An earlier version filtered — which quietly made the
+ * unrequested-symbol test unfailable, because the surprise quote never reached
+ * the code that is supposed to ignore it. A fake that corrects the test's
+ * fixture cannot test what the caller does with a bad one.
+ */
 function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[][] } {
   const asked: string[][] = [];
   return {
     asked,
     async getQuotes(symbols) {
       asked.push([...symbols]);
-      // Only answer for symbols actually requested, as a real batch endpoint does.
-      return quotes.filter((quote) => symbols.includes(quote.symbol));
+      return quotes;
+    },
+  };
+}
+
+/** A provider that fails the way a rate limit or a shape change fails. */
+function brokenProvider(message = "429 Too Many Requests"): PriceProvider {
+  return {
+    async getQuotes() {
+      throw new Error(message);
     },
   };
 }
@@ -294,10 +310,92 @@ describe("a symbol that does not come back", () => {
         db,
       );
 
+      // The fake hands back both; only the requested one has an instrument to
+      // belong to, so only it is written.
       expect(report.priced).toBe(1);
       const rows = await db.selectFrom("price_daily").selectAll().execute();
-      // The USD seed row plus the one instrument we hold.
       expect(rows.filter((row) => row.close === "100.0000")).toHaveLength(1);
+    }),
+  );
+});
+
+describe("a provider that fails outright", () => {
+  it(
+    "marks every selected instrument stale rather than leaving yesterday's prices looking current",
+    withDatabase(async ({ db, seedInstrument, seedQuote }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedQuote({ instrument: vti, price: "271.5000", isStale: false });
+
+      const report = await refreshQuotes(brokenProvider(), NEW_YORK, db);
+
+      const stored = await db
+        .selectFrom("quote")
+        .selectAll()
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+
+      // The price is kept and used; the flag is what changes.
+      expect(stored.price).toBe("271.5000");
+      expect(stored.is_stale).toBe(true);
+      expect(report.stale).toBe(1);
+      expect(report.priced).toBe(0);
+    }),
+  );
+
+  it(
+    "does not propagate the failure to its caller",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      // A poll is a background concern; a provider outage is the expected case
+      // §6.1 plans for, not an exception for the poller to catch.
+      await expect(refreshQuotes(brokenProvider(), NEW_YORK, db)).resolves.toMatchObject({
+        priced: 0,
+        stale: 1,
+      });
+    }),
+  );
+
+  it(
+    "writes no price when the provider fails",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      await refreshQuotes(brokenProvider(), NEW_YORK, db);
+
+      const closes = await db
+        .selectFrom("price_daily")
+        .selectAll()
+        .where("instrument_id", "=", vti.id)
+        .execute();
+
+      expect(closes).toEqual([]);
+    }),
+  );
+});
+
+describe("matching a quote to an instrument", () => {
+  it(
+    "matches regardless of the case the symbol was typed in",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // Yahoo answers in its own canonical case. An instrument stored as `vti`
+      // would otherwise never match, and would mark itself stale on every run
+      // forever with nothing in the log naming it.
+      const lower = await seedInstrument({ symbol: "vti", priceSource: "feed" });
+
+      const report = await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "271.5000" })]),
+        NEW_YORK,
+        db,
+      );
+
+      expect(report.priced).toBe(1);
+      const stored = await db
+        .selectFrom("quote")
+        .select("price")
+        .where("instrument_id", "=", lower.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.price).toBe("271.5000");
     }),
   );
 });
@@ -330,6 +428,64 @@ describe("how fresh the prices are", () => {
       expect(freshness.oldest).toEqual(week);
       expect(freshness.stale).toBe(1);
       expect(freshness.priced).toBe(2);
+    }),
+  );
+
+  it(
+    "ignores the USD row, whose timestamp is written once by the migration and never again",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote, usdInstrument }) => {
+      // Every bank and loan account holds a USD position, and the seeded USD
+      // quote's `as_of` is stamped at install and never updated. Counting it
+      // would pin the "as of" line to the install date for the life of the
+      // instance — a banner that never moves is worse than no banner.
+      const usd = await usdInstrument();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const priced = new Date("2030-06-05T20:00:00Z");
+      await seedQuote({ instrument: vti, price: "271.5000", asOf: priced });
+
+      const bank = await seedAccount({ kind: "bank" });
+      await seedPositionSet({
+        account: bank,
+        asOf: "2030-06-05",
+        holdings: [{ instrument: usd, quantity: "5000" }],
+      });
+
+      const brokerage = await seedAccount({ kind: "brokerage" });
+      await seedPositionSet({
+        account: brokerage,
+        asOf: "2030-06-05",
+        holdings: [{ instrument: vti, quantity: "10" }],
+      });
+
+      const freshness = await priceFreshness(db);
+
+      expect(freshness.oldest).toEqual(priced);
+      expect(freshness.priced).toBe(1);
+    }),
+  );
+
+  it(
+    "counts an instrument once however many accounts hold it",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedQuote({ instrument: vti, price: "271.5000", isStale: true });
+
+      for (const kind of ["brokerage", "ira"] as const) {
+        const account = await seedAccount({ kind });
+        await seedPositionSet({
+          account,
+          asOf: "2030-06-05",
+          holdings: [{ instrument: vti, quantity: "10" }],
+        });
+      }
+
+      const freshness = await priceFreshness(db);
+
+      // One fund that is stale, not two — the figure is read as "1 of 1 prices
+      // is stale", and holdings are not prices.
+      expect(freshness.stale).toBe(1);
+      expect(freshness.priced).toBe(1);
     }),
   );
 

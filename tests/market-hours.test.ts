@@ -37,8 +37,12 @@ describe("the trading date a quote belongs to", () => {
     // 2026-11-01 is the US fall-back. 04:30 UTC is 00:30 EDT on the 1st; a
     // fixed -5 offset would say 23:30 on October the 31st.
     expect(marketDateOf(at("2026-11-01T04:30:00Z"), NEW_YORK)).toBe("2026-11-01");
-    // And in March, 06:30 UTC on the 8th is 01:30 EST, still the 8th.
-    expect(marketDateOf(at("2026-03-08T06:30:00Z"), NEW_YORK)).toBe("2026-03-08");
+    // And in March, after the spring-forward: 2026-03-08 07:30 UTC is 03:30 EDT
+    // on the 8th under the real rules, but 02:30 EST under a fixed -5 — both
+    // still the 8th, so the discriminating case is the hour, not the date.
+    // 2026-03-09T04:30Z is 00:30 EDT on the 9th, and 23:30 on the 8th under a
+    // fixed -5. That one tells the two apart.
+    expect(marketDateOf(at("2026-03-09T04:30:00Z"), NEW_YORK)).toBe("2026-03-09");
   });
 
   it("answers in the zone it is given, not a hardcoded one", () => {
@@ -57,6 +61,11 @@ describe("whether the session is running", () => {
     expect(isMarketOpen(at("2026-06-05T13:29:00Z"), NEW_YORK)).toBe(false);
     // 20:00 UTC = 16:00 EDT. The close is the end of the session, not part of it.
     expect(isMarketOpen(at("2026-06-05T20:00:00Z"), NEW_YORK)).toBe(false);
+  });
+
+  it("is open at the opening bell itself", () => {
+    // 13:30 UTC = 09:30 EDT exactly — the `>=` boundary, which a `>` would miss.
+    expect(isMarketOpen(at("2026-06-05T13:30:00Z"), NEW_YORK)).toBe(true);
   });
 
   it("is shut in the small hours", () => {

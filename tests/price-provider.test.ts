@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { CurrencyRefused, toProviderQuote } from "~/lib/price-provider.server";
+import { CurrencyRefused, toProviderQuote, yahooClient } from "~/lib/price-provider.server";
 
 /** The fetch time, for the fallback path. Fixed so assertions can name it. */
 const FETCHED_AT = new Date("2026-06-05T18:00:00Z");
@@ -93,6 +93,50 @@ describe("the yield unit hazard", () => {
     expect(quote).toBeNull();
   });
 
+  it("prefers dividendYield when both yield fields disagree", () => {
+    // The fixture the whole hazard is about: both present, mutually
+    // inconsistent, and only one of them right. A future edit reaching for the
+    // fraction gets 0.0234 here instead of 2.34.
+    const quote = quoteFor({
+      symbol: "BOTH",
+      regularMarketPrice: 100,
+      dividendYield: 2.34,
+      trailingAnnualDividendYield: 0.0234,
+    });
+
+    expect(quote?.yieldPct).toBe("2.340000");
+  });
+
+  it("drops a derived yield too large for the column rather than losing the batch", () => {
+    // $2.50 a share against a $0.02 price is 12500%, and `yield_pct` is
+    // numeric(10,6) — max 9999.999999. Postgres answers an overflow by aborting
+    // the statement, and the statement is inside the refresh transaction, so one
+    // mispriced listing would roll back every other instrument's price and the
+    // stale-marking with it.
+    const quote = quoteFor({ symbol: "DISTRESSED", regularMarketPrice: 0.02, dividendRate: 2.5 });
+
+    expect(quote?.price).toBe("0.0200");
+    expect(quote?.yieldPct).toBeNull();
+    // The per-share amount is a real figure and stays.
+    expect(quote?.annualDividendPerShare).toBe("2.5000");
+  });
+
+  it("reads an ETF's dividend from trailingAnnualDividendRate", () => {
+    // An ETF payload carries no `dividendRate` — that field is declared on
+    // equities and mutual funds only. Reading just it leaves every ETF in a
+    // taxable brokerage account with a null annual dividend.
+    const quote = quoteFor({
+      symbol: "VTI",
+      quoteType: "ETF",
+      regularMarketPrice: 271.5,
+      trailingAnnualDividendRate: 3.39,
+    });
+
+    expect(quote?.annualDividendPerShare).toBe("3.3900");
+    // And it derives the yield from the same figure: 3.39 / 271.5 * 100.
+    expect(quote?.yieldPct).toBe("1.248619");
+  });
+
   it("reports no yield when the provider offers neither field", () => {
     // Ordinary: a growth fund pays nothing. Null, never zero — §8.2's rule is
     // to label coverage, and a zero would claim the fund pays no dividend
@@ -160,5 +204,33 @@ describe("the instant a price was struck", () => {
     });
 
     expect(quote?.asOf).toEqual(FETCHED_AT);
+  });
+});
+
+describe("the shape of the library we depend on", () => {
+  it("hands back a client whose quote method is callable", async () => {
+    // The regression test for a bug that shipped. `yahoo-finance2`'s default
+    // export is the `YahooFinance` *class*, and the class carries a static
+    // `quote` that exists, type-checks, and throws "Call `const yahooFinance =
+    // new YahooFinance()` first" the moment it runs. Calling it on the export
+    // rather than on an instance fails on the first poll and every poll after,
+    // with the poller's catch swallowing it — no price is ever fetched and
+    // nothing in a fake-driven suite notices.
+    //
+    // No network: constructing the client and reading the method off it is the
+    // whole assertion.
+    const client = await yahooClient();
+
+    expect(typeof client.quote).toBe("function");
+  });
+
+  it("refuses to be used as a bare static, which is the trap", async () => {
+    // Pinning the reason the test above exists. If a future version makes the
+    // export directly callable this fails, and the indirection can go.
+    const { default: YahooFinance } = await import("yahoo-finance2");
+
+    expect(() => (YahooFinance as unknown as { quote: () => unknown }).quote()).toThrow(
+      /new YahooFinance\(\)/,
+    );
   });
 });

@@ -122,8 +122,8 @@ nothing a sentence does not:
 Until Upload lands, positions arrive through the set-balance form or by seeding. Accounts, people
 and balances all work today.
 
-Prices now refresh on their own (below), so Income has the yield figures it needs; what it still
-lacks is the screen. The pricing slice also leaves its own UI unbuilt — the "as of" timestamp, the
+Prices refresh on their own (below), so Income has the yield figures it needs; what it still lacks
+is the screen. The pricing slice also leaves its own UI unbuilt — the "as of" timestamp, the
 stale-price treatment, a "Refresh now" control and the Settings → Instruments tab, where a
 collective investment trust gets its price typed in by hand. Those are specified in
 [`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn in
@@ -228,13 +228,17 @@ Three decisions in there are worth knowing before reading a number on a screen:
   only decides whether to spend a request; it can waste one or miss one, and it cannot corrupt the
   daily spine.
 - **Today's daily close is provisional.** It is rewritten on each poll and settles on the last price
-  of the session. Rows for past dates are never touched.
+  of the session. A past day's row is rewritten only when the provider is still reporting that day —
+  an evening fund NAV, or a Monday holiday still quoting Friday — and then with the same price it
+  already holds.
 - **A symbol that does not come back keeps its last price and is marked stale**, never zeroed and
   never nulled into a sum. One that has never been priced gets no row at all, and `holding_valued`
   reports it as unpriced rather than as worthless.
 
-Non-USD quotes are refused outright, because there is no currency column to tell two currencies
-apart once they are both in a `numeric` (DESIGN.md §14).
+A quote that names a currency other than USD is refused, because there is no currency column to
+tell two currencies apart once they are both in a `numeric` (DESIGN.md §14). A quote naming no
+currency at all is accepted: refusing it would stop pricing an instrument over a field nobody
+promised.
 
 ## Recording people and accounts
 
