@@ -32,7 +32,7 @@ import {
 } from "~/lib/holdings-view";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { MONEY_SCALE, render, toUnits } from "~/lib/money";
-import { revisePosition } from "~/lib/positions.server";
+import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import type { Route } from "./+types/holdings";
@@ -140,6 +140,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   // guarantee Account detail's `?recorded=` has for the same reason (§13.7).
   // Looked up in every holding rather than in the filtered set, so that the
   // sentence still appears if the write is confirmed from a narrowed view.
+  const open = saved === null ? editing : null;
+
   const written =
     saved === null
       ? null
@@ -170,7 +172,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     /** The canonical view, with no row open and no receipt — every Cancel goes here. */
     view,
     /** The row the editor is open on, or null. */
-    editing: saved === null && editing !== null ? rowKey(editing) : null,
+    editing: open === null ? null : rowKey(open),
     /** The row just written, as the database now reads it. */
     written:
       written === null
@@ -182,10 +184,21 @@ export async function loader({ request }: Route.LoaderArgs) {
             quantity: written.quantity,
           },
     /**
-     * Today in UTC, from the server, so the editor's note names the date the
-     * write will actually carry rather than one the reader's clock invented.
+     * The date the open row's correction will be filed under.
+     *
+     * From the server, so it is not a date the reader's clock invented — and
+     * through the same {@link effectiveDate} the write uses, so it is not
+     * merely today either. A statement may legitimately be dated tomorrow, and
+     * a correction against it carries that date instead; a note promising
+     * "dated today" would then be the screen misreporting its own effect, which
+     * is exactly the thing the note exists to prevent.
+     *
+     * One extra query, and only while a row is open.
      */
-    today: new Date().toISOString().slice(0, 10),
+    asOf:
+      open === null
+        ? null
+        : effectiveDate((await currentPosition(open.accountId, open.instrumentId))?.asOf ?? ""),
   };
 }
 
@@ -357,7 +370,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
     view,
     editing,
     written,
-    today,
+    asOf,
   } = loaderData;
 
   const query: HoldingsQuery = { filters: new Map(active), group, sort, direction };
@@ -369,7 +382,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
   const editor: Editor = {
     editing,
     written,
-    today,
+    asOf,
     view,
     errors: actionData?.errors,
     values: actionData?.values,
@@ -793,7 +806,8 @@ type Editor = {
   editing: string | null;
   /** The row a write just landed on, as the loader read it back. */
   written: Route.ComponentProps["loaderData"]["written"];
-  today: string;
+  /** The date the open row's correction will carry, or null with none open. */
+  asOf: string | null;
   /** The canonical view with no row named — where Cancel goes. */
   view: string;
   errors?: Readonly<Record<string, string>>;
@@ -1008,9 +1022,10 @@ function Row({
                   // statement dated today to appear carrying every other
                   // position in the account.
                   <p className="form-note">
-                    Saving records a new statement for {holding.accountName}, dated {editor.today},
-                    carrying every other position in it forward unchanged. The current one is kept
-                    on its own date, so nothing already recorded moves.
+                    Saving records a new statement for {holding.accountName}
+                    {editor.asOf === null ? null : <>, dated {editor.asOf},</>} carrying every
+                    other position in it forward unchanged. The current one is kept on its own
+                    date, so nothing already recorded moves.
                   </p>
                 )}
               </div>

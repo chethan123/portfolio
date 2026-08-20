@@ -639,7 +639,15 @@ from the reader's clock, so the sentence names the date the write will actually 
 then Quantity, then Cost basis. Form-level refusals are about the account rather than about the
 figures: *"Fidelity Brokerage is closed, and a closed account's history does not change."* and
 *"Fidelity Brokerage changed while this form was open, so nothing was recorded."* Per-field ones
-are about a box: *"A quantity must be a number, like 120.5 — or −8,000 for something owed."*
+are about a box: *"A quantity must be a number, like 120.5 — or −8,000 for something owed."* One is
+about the pair: a quantity and a cost basis can each be a legal figure while their product is one no
+column in this application can hold, and the refusal says so rather than letting the write succeed
+and the page break.
+
+Draw the longest one. *"That cost basis multiplied by this quantity is a larger figure than this
+application can hold. Check both boxes — a cost basis is what one share cost, not what the whole
+position did."* is three lines at this width, and the footer has to hold it without pushing Save off
+the table.
 
 **Per-field refusals go here too, not under their own box**, and the reason is the layout: the
 boxes are in table columns, and *"A quantity must be a number, like 120.5 — or −8,000 for something
@@ -884,27 +892,31 @@ desktop one. Revisit it when something else in the app forces client JS.
 18. **No dirty state, ever.** No unsaved-changes badge, no confirm-on-navigate, no Save that is
     disabled until something is typed. Every control on the screen closes the editor by design
     (§6.1), and a warning about it would be the app's first client-side state.
-19. **The editor cannot add or remove an instrument.** Which instruments an account holds is what a
+19. **Never draw a figure the application cannot hold.** A quantity and a cost basis can each be
+    legal while their product overflows the column the value is stored in, and the write refuses the
+    pair. Placeholder data must stay inside plausible household figures; a mock showing a
+    sixteen-digit cost basis is drawing a state the app refuses.
+20. **The editor cannot add or remove an instrument.** Which instruments an account holds is what a
     statement is for; adding one means resolving a name nobody has seen against the alias table,
     and that is the upload flow's job. No "Add holding" button on a row, no delete icon beside the
     pencil.
-20. **Never let a correction flip a sign.** The sign lives in the quantity, so turning something
+21. **Never let a correction flip a sign.** The sign lives in the quantity, so turning something
     held into something owed moves household net worth by twice the figure while reading as an
     ordinary correction. It is refused, with the Quantity box marked invalid and the reason in the
     line beneath the row (§6.5). Recording zero first
     and the other direction second is the deliberate two-step, and it is the only way through.
-21. **A quantity of zero is stored as zero and the row stays.** It is not dropped, greyed out or
+22. **A quantity of zero is stored as zero and the row stays.** It is not dropped, greyed out or
     struck through: a dropped row is unreachable from a table that no longer prints it, and only a
     fresh statement could bring it back.
-22. **No date field on the editor.** A correction is about now. A past date is a statement, and a
+23. **No date field on the editor.** A correction is about now. A past date is a statement, and a
     statement is the upload flow's job.
-23. **Never blank Price, Value or Unrealized while a row is open**, and never recompute them from
+24. **Never blank Price, Value or Unrealized while a row is open**, and never recompute them from
     the half-typed quantity. They are the reference the correction is being checked against.
-24. **Do not lift figures from the existing mock set.** Its numbers contradict each other screen to
+25. **Do not lift figures from the existing mock set.** Its numbers contradict each other screen to
     screen — the same ticker carries different values on desktop and mobile. Use plausible,
     internally consistent placeholder data, including at least one liability, one unpriced holding
     and one null cost basis.
-25. **No third-party fonts, icon fonts or CDN assets.** The app is offline-capable and holds a
+26. **No third-party fonts, icon fonts or CDN assets.** The app is offline-capable and holds a
     household's finances.
 
 ---

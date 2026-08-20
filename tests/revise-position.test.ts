@@ -24,7 +24,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
-import { currentPosition, revisePosition } from "~/lib/positions.server";
+import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { accountTotal, currentHoldings, netWorth, netWorthAt } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -383,6 +383,94 @@ describe("revisePosition", () => {
   );
 
   it(
+    "refuses a cost basis whose product with the quantity the view could not value",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The nastiest failure this module can produce, and it is not a bad
+      // write — it is a *successful* one that no screen can then render.
+      // `holding_valued` casts `quantity * cost_basis_per_share` to
+      // numeric(20, 4), so a product that will not round to under 10^16 makes
+      // the view raise on every request. Both operands are individually well
+      // inside their columns; only the product is not. And since Holdings is
+      // the only screen the editor is reachable from, the row that broke it
+      // could not then be corrected from the application at all.
+      const account = await seedAccount({ kind: "brokerage", name: "Fidelity Individual" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      await seedQuote({ instrument: vti, price: "250.0000" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        revisePosition(
+          account.id,
+          vti.id,
+          // Sixteen digits: inside numeric(20, 4) on its own, and 10^18 once
+          // multiplied by a hundred shares.
+          { quantity: "100", costBasisPerShare: "1234567890123456" },
+          db,
+        ),
+      );
+      expect(refusal.fieldErrors.costBasisPerShare).toMatch(/larger figure than this application/);
+
+      // The proof that the refusal was the point: the view still renders.
+      const holdings = await currentHoldings(db);
+      expect(holdings).toHaveLength(1);
+      expect(holdings[0]?.costBasisPerShare).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses a quantity whose product with the current price the view could not value",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The same overflow on the other axis. Twelve integer digits is a legal
+      // quantity and $700,000 is a real share price; the product is not.
+      const account = await seedAccount({ kind: "brokerage" });
+      const brk = await seedInstrument({ symbol: "BRK-A", name: "Berkshire Hathaway A" });
+      await seedQuote({ instrument: brk, price: "700000.0000" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: brk, quantity: "1.00000000" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        revisePosition(account.id, brk.id, { quantity: "999999999999", costBasisPerShare: "" }, db),
+      );
+      expect(refusal.fieldErrors.quantity).toMatch(/larger figure than this application/);
+
+      expect((await currentHoldings(db))[0]?.quantity).toBe("1.00000000");
+    }),
+  );
+
+  it(
+    "still accepts a large position that does fit, right up to the edge",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The guard must bound the product and nothing more: a household with a
+      // genuinely large holding is not a household with a bug.
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI" });
+      await seedQuote({ instrument: vti, price: "250.0000" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+
+      // 100 × 99,999,999,999,999 = 9.9999…×10^15, just under the ceiling.
+      const written = await revisePosition(
+        account.id,
+        vti.id,
+        { quantity: "100", costBasisPerShare: "99999999999999" },
+        db,
+      );
+      expect(written.costBasisPerShare).toBe("99999999999999");
+      expect((await currentHoldings(db))[0]?.costBasis).toBe("9999999999999900.0000");
+    }),
+  );
+
+  it(
     "raises a not-found for an account id that names nothing",
     withDatabase(async ({ db }) => {
       // Separate from a refusal because the two become different responses: a
@@ -392,6 +480,31 @@ describe("revisePosition", () => {
       ).rejects.toBeInstanceOf(NotFoundError);
     }),
   );
+});
+
+describe("effectiveDate", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+
+  it("is today for a statement already in the past", () => {
+    expect(effectiveDate("2026-06-30")).toBe(today);
+    expect(effectiveDate(yesterday)).toBe(today);
+  });
+
+  it("is the statement's own date when that is still ahead of today", () => {
+    // `recordedDate` allows exactly one day of slack, for a household east of
+    // UTC. A correction dated today would be outranked by the very sheet it
+    // corrects — a write that succeeds and changes no figure anywhere.
+    expect(effectiveDate(tomorrow)).toBe(tomorrow);
+  });
+
+  it("is the date the editor's note promises, which is why it is exported", () => {
+    // The note under an open row names this before the click. A screen that
+    // said "dated today" while the write carried tomorrow would be misreporting
+    // its own effect.
+    expect(effectiveDate(today)).toBe(today);
+  });
 });
 
 describe("currentPosition", () => {
@@ -418,6 +531,9 @@ describe("currentPosition", () => {
         quantity: "12.34567800",
         costBasisPerShare: "31.4159",
         asOf: "2026-06-30",
+        // Null rather than absent: a collective trust nobody quotes is still
+        // held, so the quote is joined left exactly as the view joins it.
+        price: null,
       });
     }),
   );

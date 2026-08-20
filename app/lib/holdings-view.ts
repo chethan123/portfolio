@@ -759,13 +759,19 @@ export function rowKey(holding: Pick<ValuedHolding, "accountId" | "instrumentId"
  * answers with `value out of range`, reaching the reader as a 500 rather than
  * as a closed editor. Ten to the eighteen is comfortably inside the type and
  * unreachably far outside anything this application will ever count to.
+ *
+ * And no leading zeros, so that the one spelling of a row is the spelling
+ * {@link rowKey} produces. `0001.0002` names the same pair as `1.2` and would
+ * otherwise pass through the loader's canonical check untouched — leaving a URL
+ * that claims an open editor beside a table where no row's key matches it, and
+ * a form target that would still have written.
  */
 export function parseRowKey(
   value: string | null,
 ): { accountId: string; instrumentId: string } | null {
   if (value === null) return null;
 
-  const match = /^(\d{1,18})\.(\d{1,18})$/.exec(value);
+  const match = /^(0|[1-9]\d{0,17})\.(0|[1-9]\d{0,17})$/.exec(value);
   if (match === null) return null;
 
   const [, accountId = "", instrumentId = ""] = match;

@@ -337,6 +337,16 @@ Recording zero first and the other direction second is the deliberate two-step, 
 way an overdrawn bank account can be entered today (§14.8 is unchanged: the set-balance form still
 cannot).
 
+**A figure the view could not value is refused.** `holding_valued` casts
+`quantity × price` and `quantity × cost_basis_per_share` to `numeric(20, 4)`, and both operands can
+sit well inside their own columns while their product does not — a twelve-digit quantity is legal,
+and so is a share priced in the hundreds of thousands. A product that will not round to under 10^16
+does not fail the write; it *succeeds*, and then makes the view raise on every subsequent request,
+taking Holdings and Analysis down together. Since Holdings is the only screen the editor is reachable
+from, the row that broke it could not then be corrected from the application at all. Bounding the
+fields cannot prevent this, so the products are checked at the moment of the write, with both
+operands in hand.
+
 **There is no date field.** A correction is about now. A past date is a statement, and a statement is
 the upload flow's job. The set is dated `greatest(today, the corrected set's date)`, because
 `recordedDate` allows a statement to be dated tomorrow for a household east of UTC and a correction

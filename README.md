@@ -71,10 +71,11 @@ A statement arrives quarterly and a position changes weekly. Rather than run the
 for "the 401k contribution added eleven units", any row on Holdings opens in place: the quantity and
 the cost basis become boxes in their own columns, and Save records it.
 
-- **It appends, it never overwrites.** Saving records a new statement dated today, carrying every
-  other position in the account forward unchanged, and the statement it corrects is kept on its own
-  date. Nothing already recorded moves — your net worth in March does not change because you fixed a
-  figure in August. Undo is a second correction.
+- **It appends, it never overwrites.** Saving records a new statement carrying every other position
+  in the account forward unchanged, and the statement it corrects is kept on its own date. Nothing
+  already recorded moves — your net worth in March does not change because you fixed a figure in
+  August. Undo is a second correction. The line under the open row names the date the new statement
+  will carry, which is today unless the statement being corrected is dated later still.
 - **The line under the row says all of that before you click it**, not after. What "edit" does here
   is not what edit usually does, and finding out afterwards is too late.
 - **It changes figures, not membership.** A correction can say "not 100 units but 120", and can say

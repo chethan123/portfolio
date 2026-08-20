@@ -55,6 +55,7 @@ import {
   signedQuantity,
 } from "./input.server.ts";
 import { getAccount } from "./accounts.server.ts";
+import { MONEY_SCALE, QUANTITY_SCALE, toUnits } from "./money.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
@@ -78,11 +79,34 @@ export type CurrentPosition = {
   costBasisPerShare: string | null;
   /** The date of the position set this reading comes from. */
   asOf: IsoDate;
+  /**
+   * What the instrument is currently quoted at, or null if it never has been.
+   *
+   * Not a fact about the statement, and here anyway: it is the other operand of
+   * a multiplication the *view* performs, and {@link revisePosition} has to
+   * know whether the figure it is about to store is one the view can express
+   * (see {@link fitsTheMoneyColumn}).
+   */
+  price: string | null;
 };
 
-/** A revision that has just been recorded, as it was stored. */
-export type RevisedPosition = CurrentPosition & {
+/**
+ * A revision that has just been recorded, as it was stored.
+ *
+ * Deliberately not `CurrentPosition & …`: a price is a market fact this write
+ * neither set nor changed, and a caller handed one here would reasonably read
+ * it as part of what was recorded.
+ */
+export type RevisedPosition = {
+  accountId: string;
   accountName: string;
+  instrumentId: string;
+  instrumentName: string;
+  /** Signed, exactly as the quantity was written: negative for something owed. */
+  quantity: string;
+  costBasisPerShare: string | null;
+  /** The date the new position set carries, which is not always today. */
+  asOf: IsoDate;
 };
 
 /**
@@ -92,10 +116,14 @@ export type RevisedPosition = CurrentPosition & {
  * `order by as_of_date desc` written here, for §8.2's reason: the tie-break
  * exists in one place and every reader goes through it.
  *
- * The editor is prefilled from this rather than from the figure already on the
- * screen, so the boxes open on what is stored at the column's own scale — a
- * quantity the table printed as `120.5` opens as `120.50000000` only if that is
- * what the database holds.
+ * Read twice per correction, and for neither of the obvious reasons. The write
+ * below reads it to decide whether the correction may be made at all — is the
+ * instrument still in the account, does the quantity still point the same way,
+ * will the products fit. The Holdings loader reads it to learn the date the
+ * correction will carry, so the note under the open row can name it before the
+ * click. What it is *not* is the source of the boxes' contents: those are the
+ * figures already on the screen, so that a row reading `120.5` opens on `120.5`
+ * rather than on the `120.50000000` the column stores.
  *
  * @returns null when the account holds no such instrument, which is also the
  *          answer for an account with no statement at all.
@@ -114,15 +142,20 @@ export async function currentPosition(
     quantity: string;
     cost_basis_per_share: string | null;
     as_of_date: string;
+    price: string | null;
   }>`
     select
-      i.name            as instrument_name,
-      h.quantity        as quantity,
+      i.name                 as instrument_name,
+      h.quantity             as quantity,
       h.cost_basis_per_share as cost_basis_per_share,
-      ps.as_of_date     as as_of_date
+      ps.as_of_date          as as_of_date,
+      q.price                as price
     from position_set ps
     join holding h    on h.position_set_id = ps.id
     join instrument i on i.id = h.instrument_id
+    -- Left, exactly as the holding_valued view joins it: an instrument nobody
+    -- can quote is still held, and is still correctable.
+    left join quote q on q.instrument_id = i.id
     where ps.id = latest_position_set(${accountId}::bigint)
       and h.instrument_id = ${instrumentId}::bigint
   `.execute(db);
@@ -137,7 +170,72 @@ export async function currentPosition(
     quantity: row.quantity,
     costBasisPerShare: row.cost_basis_per_share,
     asOf: row.as_of_date,
+    price: row.price,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  What the view can express                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `numeric(20, 4)`, as the two figures `holding_valued` derives are cast to.
+ *
+ * Not the columns' own precision — `quantity` is `numeric(20, 8)` and
+ * `cost_basis_per_share` is `numeric(20, 4)`, and a value inside both of them
+ * can still have a *product* outside this. That gap is the whole reason
+ * {@link fitsTheMoneyColumn} exists.
+ */
+const MONEY_PRECISION = 20;
+
+/**
+ * The cast's ceiling, as a scaled integer.
+ *
+ * `numeric(p, s)` must round to under `10^(p - s)`, and a figure held at scale
+ * `s` is `10^s` times its own value — so the two exponents cancel and the limit
+ * on the scaled integer is exactly `10^p`, whatever the scale happens to be.
+ */
+const MONEY_LIMIT = 10n ** BigInt(MONEY_PRECISION);
+
+/**
+ * What divides the product back down to a money figure.
+ *
+ * A quantity at scale 8 times a price at scale 4 is a product at scale 12, and
+ * the cast the view performs lands it at scale 4.
+ */
+const SCALE_GAP = 10n ** BigInt(QUANTITY_SCALE);
+
+/**
+ * Whether `quantity × perShare` is a figure this application can hold.
+ *
+ * The view computes `cast(h.quantity * q.price as numeric(20, 4))` and
+ * `cast(h.quantity * h.cost_basis_per_share as numeric(20, 4))`, and a product
+ * that will not round to under 10^16 makes that cast raise. Which is a far worse
+ * outcome than a refused form: the write succeeds, and every reader that goes
+ * through `holding_valued` — Holdings and Analysis — then throws on *every*
+ * request. Holdings is the only screen the editor is reachable from, so the row
+ * that broke it could not be corrected from the application at all; only `psql`
+ * would recover it.
+ *
+ * Bounding the fields cannot prevent it. Both are individually well inside
+ * their columns — a twelve-digit quantity is legal, and so is a share priced in
+ * the hundreds of thousands — and it is only their product that overflows. So
+ * the check is on the product, with both operands in hand, at the moment of the
+ * write.
+ *
+ * Exact, in `bigint`, and rounded the way the cast rounds before it is
+ * compared: half away from zero can carry a figure a hair under the limit up to
+ * exactly the limit, which is the one case a check on the unrounded product
+ * would wave through.
+ */
+function fitsTheMoneyColumn(quantity: string, perShare: string | null): boolean {
+  if (perShare === null) return true;
+
+  const product = toUnits(quantity, QUANTITY_SCALE) * toUnits(perShare, MONEY_SCALE);
+  const magnitude = product < 0n ? -product : product;
+  const rounded = (magnitude + SCALE_GAP / 2n) / SCALE_GAP;
+
+  return rounded < MONEY_LIMIT;
 }
 
 /**
@@ -208,7 +306,28 @@ export async function revisePosition(
     });
   }
 
-  const asOf = today();
+  // The two multiplications `holding_valued` is about to perform, checked
+  // before they are stored rather than discovered when a screen tries to render
+  // them. A price the household cannot influence is one of the operands, so the
+  // refusal names the figure that *was* typed.
+  if (!fitsTheMoneyColumn(input.quantity, input.costBasisPerShare)) {
+    throw new ValidationError({
+      costBasisPerShare:
+        "That cost basis multiplied by this quantity is a larger figure than this application " +
+        "can hold. Check both boxes — a cost basis is what one share cost, not what the whole " +
+        "position did.",
+    });
+  }
+
+  if (!fitsTheMoneyColumn(input.quantity, before.price)) {
+    throw new ValidationError({
+      quantity:
+        `That quantity valued at ${before.instrumentName}'s price is a larger figure than this ` +
+        "application can hold.",
+    });
+  }
+
+  const asOf = effectiveDate(before.asOf);
 
   // One statement, and every guard is in it.
   //
@@ -217,10 +336,11 @@ export async function revisePosition(
   // changed underneath the form produces no position set rather than one that
   // copied it forward and applied nothing.
   //
-  // The date is `greatest(today, …)` rather than today, because a statement may
-  // legitimately be dated tomorrow (`recordedDate` allows exactly one day of
-  // slack for a household east of UTC) and a revision filed behind the sheet it
-  // corrects is a write that appears to succeed and changes no figure anywhere.
+  // `greatest` again, having already applied {@link effectiveDate} above: the
+  // date was chosen against the set the *guard* read, and this one is evaluated
+  // against the set the write actually locks. They are the same set in every
+  // case but a race, and in that case this is what keeps the correction from
+  // landing behind the statement it corrects.
   const written = await sql<{ position_set_id: string }>`
     with source as (
       select ps.id, ps.as_of_date
@@ -272,23 +392,36 @@ export async function revisePosition(
     instrumentName: before.instrumentName,
     quantity: input.quantity,
     costBasisPerShare: input.costBasisPerShare,
-    // The same `greatest` the statement applied, computed the same way twice
-    // rather than read back out of it: `RETURNING` on an `INSERT … SELECT` sees
-    // the target table's columns and `position_set.as_of_date` is not one of
-    // `holding`'s. ISO dates compare as text exactly as they compare as dates,
-    // which is the property the whole codebase already stores them for.
-    asOf: asOf > before.asOf ? asOf : before.asOf,
+    // The same date the statement applied, computed by the same function rather
+    // than read back out of it: `RETURNING` on an `INSERT … SELECT` sees the
+    // target table's columns, and `position_set.as_of_date` is not one of
+    // `holding`'s.
+    asOf,
   };
 }
 
 /**
- * Today, in UTC, as `YYYY-MM-DD`.
+ * The date a correction against a statement of `asOf` will carry.
  *
- * Read from the server rather than from `current_date` so that one clock
- * answers the question — `latestRecordableDate` reads the same one, and a
- * database in a different timezone would otherwise let a revision be dated a
+ * Today, except where the statement being corrected is dated ahead of today —
+ * `recordedDate` allows exactly one day of slack, for a household east of UTC —
+ * because a correction filed behind the sheet it corrects is a write that
+ * appears to succeed and changes no figure anywhere. ISO dates compare as text
+ * exactly as they compare as dates, which is the property the whole codebase
+ * already stores them for.
+ *
+ * Exported because the editor says this date to the reader *before* the click,
+ * and a note naming a different day than the write carries would be the screen
+ * misreporting its own effect. The `greatest` in the statement is this same
+ * rule, applied where the row is locked rather than where it is described.
+ *
+ * Today is read from the server rather than from `current_date` so that one
+ * clock answers the question — `latestRecordableDate` reads the same one, and a
+ * database in a different timezone would otherwise let a correction be dated a
  * day the validator would have refused.
  */
-function today(): IsoDate {
-  return new Date().toISOString().slice(0, 10);
+export function effectiveDate(asOf: IsoDate): IsoDate {
+  const today = new Date().toISOString().slice(0, 10);
+
+  return today > asOf ? today : asOf;
 }

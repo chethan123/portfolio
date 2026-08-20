@@ -625,6 +625,10 @@ describe("addressing one row", () => {
     "a.b",
     "-1.7",
     "12.7 ",
+    // Leading zeros name the same pair as "1.2" and would otherwise survive the
+    // loader's canonical check while matching no row's key on the page.
+    "0001.0002",
+    "01.2",
     "9999999999999999999.7",
   ])("reads %j as no row at all", (value) => {
     // Silent about failure, the way `parseQuery` is about everything else in
