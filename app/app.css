@@ -1281,6 +1281,20 @@ a.account-row:hover {
   border-top: 1px solid var(--outline-variant);
 }
 
+/*
+ * The header's actions, side by side.
+ *
+ * `.detail-total` is a column and stays one — the figure and its coverage note
+ * belong stacked. Two buttons stacked read as two unrelated decisions, so they
+ * get a row of their own inside it, right-aligned on desktop by the column's
+ * own `align-items`.
+ */
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
 .detail-figure {
   margin: 0;
   font-size: 48px;
@@ -1650,6 +1664,30 @@ code {
   align-items: flex-end;
   gap: var(--space-md);
   padding: var(--space-lg);
+}
+
+/*
+ * A panel body that is a form's caption rather than its content.
+ *
+ * `.panel-body` is padding alone, which is right for prose and wrong for two
+ * paragraphs that must read as separate statements — an explanation and a
+ * confirmation butting together read as one run-on sentence.
+ */
+.form-intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/*
+ * A form under its own explanation.
+ *
+ * `.panel-body` and `.panel-form` each pad themselves, which is right when
+ * either is the panel's only child and doubles the gap when one follows the
+ * other. The prose is the form's caption, so the pair closes up.
+ */
+.panel-body + .panel-form {
+  padding-top: 0;
 }
 
 .danger-zone {

@@ -960,3 +960,9 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    holdings were frozen between them — quarter-end values are exact and the shape between them is
    driven by real price movement. Uploading more statements sharpens past stretches retroactively,
    with nothing to migrate.
+8. **The "set balance" form cannot record an overdrawn bank account.** Consequence of deriving the
+   sign from `account.kind` rather than accepting a typed one (§5.2): the alternative accepts `14500`
+   for a debt, which does not fail but moves net worth by twice the loan. An overdraft is recordable
+   today only as a `liability` account or through an upload. Lifting the limitation means a per-kind
+   decision about whether a negative is meaningful, not a change to the storage rule — the schema
+   already holds a negative quantity against any account.

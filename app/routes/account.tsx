@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Form, Link, redirect } from "react-router";
 
 import { EmptyState } from "~/components/empty-state";
 import {
@@ -13,7 +13,20 @@ import { NetWorthChart } from "~/components/net-worth-chart";
 import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "~/lib/account-options";
 import { getAccount } from "~/lib/accounts.server";
 import { ASSET_CLASSES } from "~/lib/allocation";
+import {
+  acceptsSetBalance,
+  isOwed,
+  lastRecorded,
+  setBalance,
+  type LastRecorded,
+} from "~/lib/balances.server";
 import { formatMoney } from "~/lib/format";
+import {
+  NotFoundError,
+  ValidationError,
+  formFields,
+  latestRecordableDate,
+} from "~/lib/input.server";
 import {
   accountHoldings,
   accountSeries,
@@ -135,7 +148,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const dates = sampleDates(await windowDays(range));
 
-  const [account, holdings, series] = await Promise.all([
+  const [account, holdings, series, recorded] = await Promise.all([
     // Read for one field: the tax treatment. `AccountTotal` carries what a
     // figure is computed from and no more, and a tax treatment is a fact about
     // the account rather than about its value (§4.5). Safe after the gate above
@@ -144,6 +157,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     getAccount(params.accountId),
     accountHoldings(params.accountId),
     accountSeries(params.accountId, dates),
+    // What the current figure was read from, so the set-balance panel can say
+    // which day it is superseding rather than asking for a correction blind.
+    lastRecorded(params.accountId),
   ]);
 
   // A date before this account's first statement sums to 0.0000 over zero rows.
@@ -154,7 +170,62 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     .filter((point) => point.coverage.total > 0)
     .map((point) => ({ date: point.date, amount: point.amount }));
 
-  return { range, total, taxTreatment: account.taxTreatment, holdings, computed };
+  return {
+    range,
+    total,
+    taxTreatment: account.taxTreatment,
+    holdings,
+    computed,
+    recorded,
+    // Whose balance is one typed number rather than a statement (§5.2). Decided
+    // in the domain module, not here: a route that knew which kinds take a
+    // typed balance would be a second answer to a question `balances.server.ts`
+    // already answers exhaustively.
+    takesBalance: acceptsSetBalance(total.accountKind),
+    owed: isOwed(total.accountKind),
+    // Today in UTC, from the server, so the box does not open on a date the
+    // reader's clock invented and the app then refuses (§4.1).
+    today: isoDate(Date.now()),
+    // The date control's ceiling, read from the validator rather than guessed,
+    // so the picker and the refusal cannot drift apart.
+    latestAsOf: latestRecordableDate(),
+    // The redirect after a write says which date it wrote, and this confirms it
+    // against the set the account is actually reading. A hand-typed `?recorded=`
+    // therefore cannot produce a confirmation for a balance nobody recorded —
+    // the figure beside it is the loader's, so the message can only ever
+    // describe what is stored (§13.7).
+    justRecorded:
+      recorded !== null && new URL(request.url).searchParams.get("recorded") === recorded.asOf,
+  };
+}
+
+/**
+ * Record a balance.
+ *
+ * Everything this does is in `balances.server.ts`; the route reads the form,
+ * hands it over, and turns the two outcomes into a message. A refusal comes
+ * back as fields to re-render — never a 500 — which is what lets the boxes keep
+ * what was typed while the message appears beside the one that was wrong.
+ */
+export async function action({ params, request }: Route.ActionArgs) {
+  const values = formFields(await request.formData());
+
+  try {
+    const written = await setBalance(params.accountId, values);
+
+    // Redirect rather than render. Three things fall out of it, and the third
+    // is the reason: a reload cannot re-submit the write, the boxes come back
+    // empty because this is a fresh GET rather than the same elements
+    // re-rendered, and the confirmation is then forced to describe what the
+    // database says instead of what the submission claimed.
+    throw redirect(`/accounts/${params.accountId}?recorded=${written.asOf}`);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return { errors: error.fieldErrors, values };
+    }
+    if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
+    throw error;
+  }
 }
 
 /**
@@ -233,8 +304,20 @@ function holdingNote(holding: Holding): string {
   return parts.join(" · ");
 }
 
-export default function Account({ loaderData }: Route.ComponentProps) {
-  const { range, total, taxTreatment, holdings, computed } = loaderData;
+export default function Account({ loaderData, actionData }: Route.ComponentProps) {
+  const {
+    range,
+    total,
+    taxTreatment,
+    holdings,
+    computed,
+    recorded,
+    takesBalance,
+    owed,
+    today,
+    latestAsOf,
+    justRecorded,
+  } = loaderData;
 
   const Tile = TILES[total.accountKind];
   const { known, total: counted } = total.coverage;
@@ -323,10 +406,24 @@ export default function Account({ loaderData }: Route.ComponentProps) {
               </p>
             )}
 
-            <Link className="button button--quiet" to={`/settings/accounts/${total.accountId}`}>
-              <EditIcon />
-              Edit details
-            </Link>
+            <div className="detail-actions">
+              {/* An anchor, not a second copy of the form. §11 makes this the
+                  one write a phone is offered, and a phone opening this page
+                  should not have to scroll a chart and a table to reach it —
+                  but two forms writing one balance is two places to fix a bug
+                  in. The panel stays where it reads in order; this jumps to it. */}
+              {takesBalance ? (
+                <a className="button button--quiet" href="#set-balance">
+                  <EditIcon />
+                  Set balance
+                </a>
+              ) : null}
+
+              <Link className="button button--quiet" to={`/settings/accounts/${total.accountId}`}>
+                <EditIcon />
+                Edit details
+              </Link>
+            </div>
           </div>
         </div>
       </section>
@@ -380,7 +477,10 @@ export default function Account({ loaderData }: Route.ComponentProps) {
       {holdings.length === 0 ? (
         <EmptyState>
           The positions this account holds are listed here, with what each is worth. Nothing has
-          been recorded for this account yet — upload a statement for it and they appear.
+          been recorded for this account yet —{" "}
+          {takesBalance
+            ? "set its balance below and it appears."
+            : "upload a statement for it and they appear."}
         </EmptyState>
       ) : (
         <section className="panel">
@@ -453,6 +553,177 @@ export default function Account({ loaderData }: Route.ComponentProps) {
           </div>
         </section>
       )}
+
+      {takesBalance ? (
+        <SetBalance
+          accountName={total.accountName}
+          owed={owed}
+          recorded={recorded}
+          today={today}
+          latestAsOf={latestAsOf}
+          errors={actionData?.errors}
+          values={actionData?.values}
+          justRecorded={justRecorded}
+          amount={total.amount}
+          valued={valued}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The one write this page offers, for the two kinds of account whose whole
+ * position is a number (§5.2).
+ *
+ * It is a form and not a button pair: the mock's "Deposit" and "Transfer" move
+ * money between accounts, which this application cannot do and has nothing to
+ * do it with. What a family actually does is read a figure off a banking app
+ * and copy it in, and the honest control for that is a box holding the figure
+ * and the date it was true on.
+ *
+ * The amount deliberately opens **empty** rather than pre-filled with the
+ * current balance. A pre-filled box turns "record today's balance" into one
+ * click on a stale number, and a balance that is silently re-asserted on a new
+ * date is indistinguishable from one that was checked. The figure it is
+ * replacing is stated beside the box instead, where reading it is the reader's
+ * decision.
+ */
+function SetBalance({
+  accountName,
+  owed,
+  recorded,
+  today,
+  latestAsOf,
+  errors,
+  values,
+  justRecorded,
+  amount,
+  valued,
+}: {
+  accountName: string;
+  /** Whether what is typed becomes a negative quantity (§2). */
+  owed: boolean;
+  recorded: LastRecorded | null;
+  today: string;
+  /** The furthest-ahead date the validator accepts. */
+  latestAsOf: string;
+  errors?: Readonly<Record<string, string>>;
+  values?: Record<string, string>;
+  /** A write on this page's own last request, confirmed against the database. */
+  justRecorded: boolean;
+  /** The account's total, from the loader — the figure the confirmation quotes. */
+  amount: string;
+  /** False when nothing is priced, in which case there is no figure to quote. */
+  valued: boolean;
+}) {
+  // What was typed wins over the default, so a refusal never costs the entry.
+  // Empty after a successful write, because that arrives as a fresh GET.
+  const typedAmount = values?.amount ?? "";
+  const asOf = values?.asOf ?? today;
+
+  return (
+    <section className="panel" id="set-balance">
+      <header className="panel-header">
+        <h2 className="panel-title">Set balance</h2>
+      </header>
+
+      <div className="panel-body form-intro">
+        <p className="form-note">
+          {owed ? (
+            <>
+              What is still owed on {accountName}, as a plain amount — it counts against the
+              household, and the minus sign is added when it is stored.
+            </>
+          ) : (
+            <>What {accountName} holds, as of the day it held it.</>
+          )}{" "}
+          {/* Said before the click, not after it. Appending rather than editing
+              is why undo is free (§5.2), and a reader who expects this box to
+              overwrite one number would not expect the old figure to keep
+              standing on its own date. */}
+          Recording a balance never overwrites an earlier one: each is kept on its own date, and
+          the most recent is the one every figure is computed from.
+        </p>
+
+        {justRecorded && recorded !== null ? (
+          <p className="form-note" role="status">
+            Recorded. {accountName} now reads{" "}
+            {valued ? <b className="u-data">{formatMoney(amount)}</b> : "no valuation"} as of{" "}
+            {recorded.asOf}.
+          </p>
+        ) : null}
+
+        {errors?.form ? (
+          <p className="field-error" role="alert">
+            {errors.form}
+          </p>
+        ) : null}
+      </div>
+
+      {/* Keyed on the position set the page is reading, which changes on every
+          write and on no refusal. That is what empties the boxes after a
+          balance lands — a client-side redirect does not remount the route, so
+          an uncontrolled input would otherwise keep the figure that was just
+          saved and offer it for a second, stale submission — while leaving them
+          untouched when the write was refused. */}
+      <Form method="post" className="panel-form" key={recorded?.id ?? "none"}>
+        <div>
+          <label htmlFor="set-balance-amount">
+            {owed ? "Amount owed" : "Balance"}
+            <input
+              id="set-balance-amount"
+              name="amount"
+              defaultValue={typedAmount}
+              // `text`, not `number`. A number input silently drops what it
+              // cannot parse, so a pasted "$14,500.00" arrives as an empty
+              // string and the family is told a balance is required. The
+              // parsing this app wants is exact and lives in `input.server`.
+              type="text"
+              inputMode="decimal"
+              placeholder="14,500.00"
+              aria-invalid={errors?.amount ? true : undefined}
+              autoComplete="off"
+            />
+          </label>
+          {errors?.amount ? (
+            <p className="field-error" role="alert">
+              {errors.amount}
+            </p>
+          ) : null}
+        </div>
+
+        <div>
+          <label htmlFor="set-balance-as-of">
+            As of
+            <input
+              id="set-balance-as-of"
+              name="asOf"
+              type="date"
+              defaultValue={asOf}
+              max={latestAsOf}
+              aria-invalid={errors?.asOf ? true : undefined}
+            />
+          </label>
+          {errors?.asOf ? (
+            <p className="field-error" role="alert">
+              {errors.asOf}
+            </p>
+          ) : (
+            <p className="form-note">
+              {recorded === null
+                ? "Nothing has been recorded for this account yet."
+                : `Currently reading the ${
+                    recorded.source === "manual" ? "balance set" : "statement"
+                  } for ${recorded.asOf}.`}
+            </p>
+          )}
+        </div>
+
+        <button type="submit" className="button">
+          Record balance
+        </button>
+      </Form>
     </section>
   );
 }
