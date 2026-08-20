@@ -12,7 +12,6 @@ import {
 import { NetWorthChart } from "~/components/net-worth-chart";
 import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "~/lib/account-options";
 import { getAccount } from "~/lib/accounts.server";
-import { ASSET_CLASSES } from "~/lib/allocation";
 import {
   acceptsSetBalance,
   isOwed,
@@ -21,6 +20,7 @@ import {
   type LastRecorded,
 } from "~/lib/balances.server";
 import { formatMoney } from "~/lib/format";
+import { holdingNote } from "~/lib/holdings-view";
 import {
   NotFoundError,
   ValidationError,
@@ -295,15 +295,6 @@ type Holding = Route.ComponentProps["loaderData"]["holdings"][number];
  * the row they apply to, because the coverage note above the table says how many
  * and this says which.
  */
-function holdingNote(holding: Holding): string {
-  const parts = [labelOf(ASSET_CLASSES, holding.assetClass)];
-
-  if (!holding.isPriced) parts.push("never priced");
-  else if (holding.isStale) parts.push("price is stale");
-
-  return parts.join(" · ");
-}
-
 export default function Account({ loaderData, actionData }: Route.ComponentProps) {
   const {
     range,

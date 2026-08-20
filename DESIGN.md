@@ -403,6 +403,21 @@ dedicated tax page (a group-by plus a chart on Overview).
 **Mobile shape matters.** The full column set is a desktop grid; thirteen columns on a phone is a
 horizontal scroll nobody uses. Mobile gets a card list with a few fields visible and tap-to-expand.
 
+**The four filter dimensions above are seven as built.** This section predates §8.3, whose `View`
+type names eight — person, account, institution, kind, tax treatment, classification, asset class,
+instrument — and `holding_valued` (§8.2) already exposes all eight, so filtering on the extra four
+costs no join and no new query. Nothing here argued against them; they simply had not been written
+down yet when this list was. What the screen does *not* offer is `instrument`: a filter over the
+very thing each row is is a search box wearing a dropdown, and that is a different control with a
+different case to make. §13.7's refusal of search over a dozen accounts stands, and is honoured as
+a rule rather than a one-off — a dimension becomes a control only once the data holds two distinct
+values for it, so a filter that could only mean "everything" is never drawn.
+
+**Tap-to-expand is not built.** The mobile card list is, by restyling the one table rather than
+rendering a second tree, and every field is visible on the card. Collapsing one needs either client
+state, of which this application has none, or a `<details>`, which cannot wrap a `<tr>`. Recorded
+as owed rather than quietly dropped.
+
 ### 8.2 Query layer
 
 Each dashboard writes its **own SQL** against the normalised tables. There is **no materialised fact

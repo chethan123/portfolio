@@ -1704,3 +1704,300 @@ code {
   padding: var(--space-lg);
   border-top: 1px solid var(--outline-variant);
 }
+
+/* --- Holdings -------------------------------------------------------------
+ * The workhorse table (DESIGN.md §8.1) and the two controls above it. Every
+ * value below resolves from a token; nothing here introduces a colour, a
+ * radius or a control height of its own.
+ */
+
+/*
+ * The filter bar.
+ *
+ * A panel that happens to be a form, so it carries the panel's ground, border
+ * and radius rather than floating on the canvas. `align-items: flex-end` is
+ * what lines the Apply button up with the boxes rather than with the captions
+ * above them, since a `label` here is a flex column and taller than its
+ * control.
+ */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  background: var(--panel);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+
+/* Pushed to the trailing edge so the actions read as the end of the bar
+ * however many filters the household's data supports. */
+.filter-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-left: auto;
+}
+
+/*
+ * Every filter the same width, whatever its longest option happens to be.
+ *
+ * A `select` sizes to its widest option, so "Tax-deferred — tax due on
+ * withdrawal (Traditional)" would otherwise make one control twice the width of
+ * the rest and, on a phone, wider than the panel holding it. The flex basis
+ * sets the width and `min-width: 0` is what lets the box shrink below its
+ * content — without it the intrinsic width wins and the bar overflows.
+ */
+.filter-bar > div {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.filter-bar select {
+  width: 100%;
+  min-width: 0;
+}
+
+/*
+ * A column heading that sorts.
+ *
+ * The link inherits the header's type entirely — it is the same label doing one
+ * more job, not a control dropped into a header — so only the pointer and the
+ * hover colour distinguish it.
+ */
+.sortable {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-decoration: none;
+}
+
+.sortable:hover {
+  color: var(--on-surface);
+}
+
+/* The caret keeps its width whether or not it is drawn, so sorting a column
+ * does not shift the heading beside it. */
+.sortable-caret {
+  display: inline-block;
+  min-width: 0.75em;
+  font-size: 10px;
+}
+
+.data-table th.is-numeric .sortable {
+  justify-content: flex-end;
+}
+
+/*
+ * Group heading, subtotal, grand total.
+ *
+ * These three `th`s sit in the table body rather than in `thead`, so the
+ * uppercase label treatment `.data-table th` applies has to be undone: a
+ * person's name is not a column heading and setting it in caps reads as one.
+ */
+.data-table .row-group th,
+.data-table .row-subtotal th,
+.data-table .row-total th {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--on-surface);
+  white-space: normal;
+}
+
+.data-table .row-group th {
+  padding: var(--space-sm) var(--space-md);
+  background: var(--panel-hover);
+  border-top: 1px solid var(--outline-variant);
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.data-table tbody:first-of-type .row-group th {
+  border-top: 0;
+}
+
+/* A subtotal is the group's last row, so it is divided from the rows above by
+ * the border every row already has, and from the next group by weight alone. */
+.data-table .row-subtotal th,
+.data-table .row-subtotal td {
+  background: var(--panel-hover);
+  border-top: 1px solid var(--outline-variant);
+}
+
+.data-table .row-total th,
+.data-table .row-total td {
+  padding: var(--space-md);
+  background: var(--surface-container-high);
+  border-top: 1px solid var(--outline);
+  font-weight: 700;
+}
+
+/*
+ * The account link in a row.
+ *
+ * Underlined only on hover: a column of permanently underlined account names
+ * competes with the figures beside it, which are what the row is for.
+ */
+.cell-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: inherit;
+  text-decoration: none;
+}
+
+.cell-link:hover {
+  text-decoration: underline;
+}
+
+.cell-link svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--on-surface-variant);
+}
+
+/*
+ * The phone (DESIGN.md §8.1, §11).
+ *
+ * "Thirteen columns on a phone is a horizontal scroll nobody uses. Mobile gets
+ * a card list." This is that card list, produced by restyling the one table
+ * rather than by rendering a second tree — a second tree is a second set of
+ * cells to keep in step, and the pair drift the first time a column is added.
+ *
+ * Each cell carries its own heading in `data-label`, so the column headings can
+ * stop being a row and become what they are on a phone: a strip of sort
+ * controls.
+ */
+@media (max-width: 767px) {
+  .data-table--holdings,
+  .data-table--holdings thead,
+  .data-table--holdings tbody,
+  .data-table--holdings tfoot,
+  .data-table--holdings tr,
+  .data-table--holdings th,
+  .data-table--holdings td {
+    display: block;
+  }
+
+  /* The headings become a wrapped strip of sort links. Dropping them would be
+   * simpler and would take sorting away from the phone entirely, which is
+   * where "what is my largest position" is most likely to be asked. */
+  .data-table--holdings thead tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-base) var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--surface-container-high);
+    border-bottom: 1px solid var(--outline-variant);
+  }
+
+  .data-table--holdings thead th {
+    padding: 0;
+    background: none;
+    border: 0;
+  }
+
+  .data-table--holdings tbody tr {
+    padding: var(--space-md);
+    border-top: 1px solid var(--outline-variant);
+  }
+
+  .data-table--holdings tbody tr:first-child {
+    border-top: 0;
+  }
+
+  .data-table--holdings tbody td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-md);
+    padding: 0;
+    border: 0;
+  }
+
+  .data-table--holdings tbody td + td {
+    margin-top: var(--space-base);
+  }
+
+  .data-table--holdings tbody td::before {
+    content: attr(data-label);
+    flex: none;
+    color: var(--on-surface-variant);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  /* The asset is the card's heading rather than one of its fields, so it keeps
+   * the full width and drops the label. */
+  .data-table--holdings tbody td[data-label="Asset"] {
+    display: block;
+    margin-bottom: var(--space-sm);
+  }
+
+  .data-table--holdings tbody td[data-label="Asset"]::before {
+    content: none;
+  }
+
+  .data-table--holdings tbody td[data-label="Account"] {
+    display: block;
+  }
+
+  .data-table--holdings tbody td[data-label="Account"]::before {
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .data-table--holdings .row-group th,
+  .data-table--holdings .row-subtotal th,
+  .data-table--holdings .row-subtotal td,
+  .data-table--holdings .row-total th,
+  .data-table--holdings .row-total td {
+    padding: var(--space-base) var(--space-md);
+  }
+
+  .data-table--holdings .row-subtotal td,
+  .data-table--holdings .row-total td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-md);
+    border: 0;
+  }
+
+  .data-table--holdings .row-subtotal td::before,
+  .data-table--holdings .row-total td::before {
+    content: attr(data-label);
+    color: var(--on-surface-variant);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .data-table--holdings .row-subtotal th,
+  .data-table--holdings .row-total th {
+    padding-bottom: var(--space-xs);
+  }
+
+  /* Two filters to a row: seven stacked controls is most of a phone screen
+   * before the table it filters has started. */
+  .filter-bar > div {
+    flex: 1 1 calc(50% - var(--space-md));
+  }
+
+  .filter-actions {
+    margin-left: 0;
+  }
+}

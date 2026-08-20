@@ -14,10 +14,12 @@
  * **Money stays a decimal string.** Nothing here calls `Number()` or
  * `parseFloat` on a value. Summing happens on the digits, as `BigInt` counts of
  * ten-thousandths — which is not the float §4.1 keeps money out of: it is exact
- * at any magnitude, and the scale it is exact at is written down below rather
- * than guessed at by a driver. `format.ts` still refuses to compute and this
- * module does not change that; the helpers are private here so that "money
- * arithmetic in JavaScript" stays exactly one module wide.
+ * at any magnitude, and the scale it is exact at is written down rather than
+ * guessed at by a driver. Those digit-level helpers used to be private to this
+ * file, so that "money arithmetic in JavaScript" stayed exactly one module
+ * wide; they now live in `money.ts` and this module is one of its two callers,
+ * which keeps the same invariant by making it structural rather than a promise.
+ * `format.ts` still refuses to compute, and that has not changed either.
  *
  * The import from `valuation.server.ts` below is a type import and nothing
  * else. A type import is erased, so this module pulls no server code into the
@@ -55,6 +57,7 @@
  *     it is, and the caller should show the amounts alone.
  */
 import { ACCOUNT_KINDS, type Option } from "./account-options.ts";
+import { MONEY_SCALE, SHARE_SCALE, divide, render, toUnits } from "./money.ts";
 
 import type { AssetClass, Coverage, ValuedHolding } from "./valuation.server.ts";
 
@@ -97,72 +100,6 @@ export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
   { value: "cash", label: "Cash" },
   { value: "other", label: "Other" },
 ];
-
-/** `numeric(20, 4)`, the scale every money column is stored at (§4.1). */
-const MONEY_SCALE = 4;
-
-/**
- * Six places on a fraction is 0.0001% as a percentage — far finer than any
- * screen renders, so rounding for display is never what made two slices look
- * equal. Wide enough, too, that the positive slices of a real portfolio still
- * sum to 1.000000 rather than to something a hair off it.
- */
-const SHARE_SCALE = 6;
-
-const FIVE = "5".charCodeAt(0);
-
-/**
- * `"-8000.5000"` at scale 4 → `-80005000n`: the value counted in units of its
- * last place, which is the form it can be added in without losing anything.
- *
- * The digits are read as digits; `BigInt` then adds them exactly however many
- * there are. A value out of the view already carries exactly `scale` places, so
- * the rounding below is for a caller that hands over something finer — half
- * away from zero, matching what `format.ts` rounds a displayed figure by, so a
- * slice and its label cannot round in two directions.
- */
-function toUnits(decimal: string, scale: number): bigint {
-  const trimmed = decimal.trim();
-  const negative = trimmed.startsWith("-");
-  const unsigned = negative || trimmed.startsWith("+") ? trimmed.slice(1) : trimmed;
-  const [int = "", frac = ""] = unsigned.split(".");
-  const digits = `${int || "0"}${frac.slice(0, scale).padEnd(scale, "0")}`;
-  const units = BigInt(digits) + (frac.charCodeAt(scale) >= FIVE ? 1n : 0n);
-
-  return negative ? -units : units;
-}
-
-/**
- * `-80005000n` → `"-8000.5000"`. The inverse, and the only place a slice's
- * digits are reassembled.
- *
- * There is no negative zero to guard against here the way `format.ts` has to:
- * `BigInt` has none, so a group that nets exactly flat renders `"0.0000"`.
- */
-function render(units: bigint, scale: number): string {
-  const negative = units < 0n;
-  const digits = (negative ? -units : units).toString().padStart(scale + 1, "0");
-  const point = digits.length - scale;
-
-  return `${negative ? "-" : ""}${digits.slice(0, point)}.${digits.slice(point)}`;
-}
-
-/**
- * `numerator / denominator`, to `scale` places, rounded half away from zero.
- *
- * Integer division that keeps the remainder rather than discarding it: the
- * comparison is `remainder * 2 >= denominator`, which is "is the part we are
- * dropping at least half a place", asked without ever forming a fraction.
- */
-function divide(numerator: bigint, denominator: bigint, scale: number): bigint {
-  const scaled = numerator * 10n ** BigInt(scale);
-  const negative = (scaled < 0n) !== (denominator < 0n);
-  const top = scaled < 0n ? -scaled : scaled;
-  const bottom = denominator < 0n ? -denominator : denominator;
-  const quotient = top / bottom + ((top % bottom) * 2n >= bottom ? 1n : 0n);
-
-  return negative ? -quotient : quotient;
-}
 
 /** What a holding is grouped under, and what that group is called. */
 type Grouping = (holding: ValuedHolding) => { key: string; label: string };

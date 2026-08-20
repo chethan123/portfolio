@@ -24,17 +24,13 @@ back rather than hardcoding: `select id, kind from account`.
 | File | Page | Which account |
 |---|---|---|
 | `overview-*.png` | `/` | — |
-| `holdings-*.png` | `/holdings` | — |
+| `holdings-*.png` | `/holdings` | — · unfiltered and ungrouped, which is the state the URL with no query string produces |
 | `analysis-*.png` | `/analysis` | — |
 | `account-detail-*.png` | `/accounts/:id` | the `brokerage` one — it holds seven positions, including a stale price |
 | `account-balance-*.png` | `/accounts/:id` | the `liability` one — it carries the set-balance form |
 | `settings-*.png` | `/settings/accounts` | — |
 | `overview-mobile-*.png` | `/` | — |
 | `analysis-mobile-*.png` | `/analysis` | — |
-
-`holdings-*.png` records a screen that is still a placeholder. It is kept so that the day Holdings
-is built, the before is on record — the root README describes that screen in words rather than
-showing it, because a screenshot of a stub sells nothing.
 
 Mobile shots (`*-mobile-*.png`) are 390×900, `isMobile`, and **not** full page. The bottom
 navigation is `position: fixed`, and a full-page capture paints it across the middle of the image

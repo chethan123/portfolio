@@ -32,6 +32,33 @@ so a chosen range survives a reload and can be bookmarked.
 - **A zero and an absence never look alike.** An account holding nothing, an account nothing can
   price, and an empty instance each get their own words instead of a `$0.00`.
 
+### Holdings — every position, sliced any way you ask
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-dark.png">
+  <img alt="Holdings: a filter bar, a group-by strip and the full table of every position with its quantity, price, value, cost basis and unrealized gain" src="docs/screenshots/holdings-light.png">
+</picture>
+
+Every position the household holds, whichever account it sits in. Filter by owner, account,
+brokerage, account type, tax treatment, classification or asset class; group by any of the same
+seven, with subtotals. "Everything Priya holds at Fidelity", "the whole taxable side", "all the
+bonds, wherever they are" — each is this table with the arguments changed rather than a screen of
+its own.
+
+- **The controls are the URL.** Filters, grouping and sort all live in the query string, so a view
+  survives a reload, can be bookmarked, and can be sent to the other person in the household. The
+  whole screen works with JavaScript turned off.
+- **A filter you cannot use is not drawn.** A dimension only becomes a dropdown once the data holds
+  two different values for it, and every option in it is a value something really has — so a
+  one-person household gets no Owner filter and no filter can ever select an empty table.
+- **Three coverages, not one.** A workplace plan reports a price and no cost basis at all, so the
+  value total can be complete while the unrealized total is short. Each figure carries its own
+  count rather than borrowing a neighbour's, because a cost basis over 11 holdings printed against
+  a value over 17 would otherwise read as a $428,000 gain nothing in the database supports.
+- **An empty filter is not an empty portfolio.** A combination nothing matches says so in those
+  words and offers to clear itself. It never borrows the first-run screen's "there is no data yet",
+  which would be false.
+
 ### Analysis — where the money actually sits
 
 <picture>
@@ -109,13 +136,12 @@ withheld on a small screen: setting a balance and the whole of Settings are reac
 
 ### Not built yet
 
-Three screens are reachable and still placeholders — two from the navigation, one from the Upload
+Two screens are reachable and still placeholders — one from the navigation, one from the Upload
 button. They are listed here rather than screenshotted, because a picture of a placeholder says
 nothing a sentence does not:
 
 | Screen | What it will do |
 |---|---|
-| **Holdings** | Every position across all accounts, filterable and groupable, with subtotals |
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment |
 | **Upload** | CSV statement import with column mapping and a diff preview before anything is applied |
 
@@ -127,7 +153,9 @@ is the screen. The pricing slice also leaves its own UI unbuilt — the "as of" 
 stale-price treatment, a "Refresh now" control and the Settings → Instruments tab, where a
 collective investment trust gets its price typed in by hand. Those are specified in
 [`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn in
-[`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md).
+[`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md). Holdings above was built the
+same way, from [`docs/specs/0003-holdings.md`](docs/specs/0003-holdings.md) and
+[`docs/design/holdings-ui-brief.md`](docs/design/holdings-ui-brief.md).
 
 ## Running an instance
 
