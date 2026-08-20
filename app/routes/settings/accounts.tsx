@@ -48,43 +48,60 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
 
   return (
     <>
-      <h1>Accounts</h1>
-      <p className="page-lede">
-        Every account the household holds — brokerage, workplace plan, IRA, bank and loan.
-        This is what an uploaded statement lands in.
-      </p>
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Accounts</h1>
+          <p className="page-subtitle">
+            Every account the household holds — brokerage, workplace plan, IRA, bank and loan.
+            This is what an uploaded statement lands in.
+          </p>
+        </div>
+      </header>
 
       {accounts.length === 0 ? (
         <p className="empty-note">No accounts are recorded yet.</p>
       ) : (
-        <table className="record-table">
-          <thead>
-            <tr>
-              <th scope="col">Account</th>
-              <th scope="col">Institution</th>
-              <th scope="col">Kind</th>
-              <th scope="col">Owner</th>
-              <th scope="col">Tax treatment</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {accounts.map((account) => (
-              <tr key={account.id} className={account.isClosed ? "record-row--closed" : undefined}>
-                <td>
-                  <Link to={`/settings/accounts/${account.id}`}>{account.name}</Link>
-                </td>
-                <td>{account.institution || "—"}</td>
-                <td>{account.kind}</td>
-                <td>{account.ownerName}</td>
-                <td>{account.taxTreatment.replace("_", "-")}</td>
-                <td>
-                  {account.isClosed ? `Closed ${closedOn(account.closedAt) ?? ""}` : "Open"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <section className="panel">
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Account</th>
+                  <th scope="col">Institution</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Owner</th>
+                  <th scope="col">Tax treatment</th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map((account) => (
+                  <tr
+                    key={account.id}
+                    className={account.isClosed ? "record-row--closed" : undefined}
+                  >
+                    <td>
+                      <Link to={`/settings/accounts/${account.id}`}>{account.name}</Link>
+                    </td>
+                    <td>{account.institution || "—"}</td>
+                    <td>{account.kind}</td>
+                    <td>{account.ownerName}</td>
+                    <td>{account.taxTreatment.replace("_", "-")}</td>
+                    <td>
+                      {account.isClosed ? (
+                        <>
+                          Closed <span className="u-data">{closedOn(account.closedAt) ?? ""}</span>
+                        </>
+                      ) : (
+                        "Open"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       {people.length === 0 ? (
@@ -95,18 +112,24 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
           belongs to exactly one person.
         </p>
       ) : (
-        <Form method="post" className="panel-form">
-          <h2>Add an account</h2>
+        <section className="panel">
+          <header className="panel-header">
+            <h2 className="panel-title">Add an account</h2>
+          </header>
 
-          <AccountFields
-            people={people}
-            values={actionData?.values}
-            errors={actionData?.errors}
-            idPrefix="new-account"
-          />
+          <Form method="post" className="panel-form">
+            <AccountFields
+              people={people}
+              values={actionData?.values}
+              errors={actionData?.errors}
+              idPrefix="new-account"
+            />
 
-          <button type="submit">Add account</button>
-        </Form>
+            <button type="submit" className="button">
+              Add account
+            </button>
+          </Form>
+        </section>
       )}
     </>
   );

@@ -21,7 +21,7 @@ import { sql } from "kysely";
 
 import { getDb, type Database } from "./db.server.ts";
 
-import type { AliasedRawBuilder, Kysely, Selectable } from "kysely";
+import type { AliasedRawBuilder, Kysely, RawBuilder, Selectable, SqlBool } from "kysely";
 
 /** `account.kind`, constrained by a check constraint in the schema. */
 export type AccountKind = "brokerage" | "401k" | "ira" | "bank" | "liability";
@@ -160,14 +160,20 @@ const valuedAt = (date: IsoDate): ValuedSource =>
 
 /**
  * The ordering is for determinism, not for display; a screen sorts as it likes.
+ *
+ * `where` narrows the same read to a subset — one account's holdings, say.
+ * Narrowing here rather than in a second function is the point: a drill-down
+ * that wrote its own join to the view would be the fourth hand-rolled query
+ * §8.2 warns about, and this one is the same rows filtered.
  */
 async function readHoldings(
   db: Kysely<Database>,
   source: ValuedSource,
+  where?: RawBuilder<SqlBool>,
 ): Promise<ValuedHolding[]> {
-  const rows = await db
-    .selectFrom(source)
-    .selectAll()
+  const all = db.selectFrom(source).selectAll();
+
+  const rows = await (where === undefined ? all : all.where(where))
     .orderBy("account_name")
     .orderBy("instrument_name")
     .orderBy("instrument_id")
@@ -306,6 +312,54 @@ export type NetWorthPoint = { date: IsoDate; amount: string; coverage: Coverage 
 export type ManualPoint = { date: IsoDate; amount: string };
 
 /**
+ * The columns an account rollup selects, under the view's names.
+ *
+ * Two queries below produce this: one grouping the view, one grouping a single
+ * account row it may have no rows for. They share the shape so that the list
+ * and the drill-down cannot describe the same account differently — the same
+ * reason the view exists (DESIGN.md §8.2).
+ */
+type AccountTotalRow = {
+  account_id: string | null;
+  account_name: string | null;
+  institution: string | null;
+  account_kind: string | null;
+  owner_name: string | null;
+  amount: string;
+  known: string;
+  total: string;
+};
+
+function toAccountTotal(row: AccountTotalRow): AccountTotal {
+  return {
+    accountId: required(row.account_id, "account_id"),
+    accountName: required(row.account_name, "account_name"),
+    institution: required(row.institution, "institution"),
+    accountKind: required(row.account_kind, "account_kind") as AccountKind,
+    ownerName: required(row.owner_name, "owner_name"),
+    amount: row.amount,
+    // Counts, not money: see {@link readTotal}.
+    coverage: { known: Number(row.known), total: Number(row.total) },
+  };
+}
+
+/**
+ * `<column> = <id>`, or a predicate matching nothing when the id cannot be one.
+ *
+ * Ids cross this boundary as strings (`server/db.ts`) and land against a
+ * `bigint` column, so an id taken from a URL path that is not digits would fail
+ * inside Postgres — a 500 where the honest answer is "no such account". Saying
+ * that in SQL rather than returning early keeps every "this account has
+ * nothing" answer coming out of the query that would have answered anyway,
+ * rather than out of a JavaScript copy of what it would have said.
+ */
+function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
+  return /^\d+$/.test(accountId)
+    ? sql<SqlBool>`${sql.ref(column)} = ${accountId}`
+    : sql<SqlBool>`false`;
+}
+
+/**
  * Every open account with its current value, largest first.
  *
  * A liability account sorts to the bottom by construction rather than by a
@@ -336,37 +390,111 @@ export async function accountTotals(
     .orderBy("account_name")
     .execute();
 
-  return rows.map((row) => ({
-    accountId: required(row.account_id, "account_id"),
-    accountName: required(row.account_name, "account_name"),
-    institution: required(row.institution, "institution"),
-    accountKind: required(row.account_kind, "account_kind") as AccountKind,
-    ownerName: required(row.owner_name, "owner_name"),
-    amount: row.amount,
-    coverage: { known: Number(row.known), total: Number(row.total) },
-  }));
+  return rows.map(toAccountTotal);
 }
 
 /**
- * Net worth at each of `dates`, in a single round trip.
+ * One account's identity and current value, or null if there is no such open
+ * account.
+ *
+ * Deliberately the same {@link AccountTotal} the list above returns rather than
+ * a second, drill-down-shaped type: the figure at the top of an account page
+ * and the figure in its row on the overview are one arithmetic over one view,
+ * and giving them separate types is how they would come to disagree.
+ *
+ * Grouped from `account` with the view LEFT joined onto it, which is the only
+ * difference that matters here: an account whose statements are all empty — a
+ * brokerage sold down to nothing, an account created before its first upload —
+ * has no rows in the view at all, and an inner join would report it as missing
+ * rather than as holding nothing. It comes back as `0.0000` over a coverage of
+ * zero rows, which says "nothing to value" and not "worth nothing".
+ *
+ * Null covers both an id that names no account and a closed one. Closed is not
+ * an error and not a zero: `holding_valued` excludes closed accounts (§8.2), so
+ * a drill-down on one would otherwise render an account page whose every figure
+ * is a blank — the caller should 404 instead.
+ *
+ * @param accountId the account's id as it arrives from a URL, digits or not.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function accountTotal(
+  accountId: string,
+  db: Kysely<Database> = getDb(),
+): Promise<AccountTotal | null> {
+  const row = await db
+    .selectFrom("account")
+    .innerJoin("person", "person.id", "account.owner_id")
+    .leftJoin("holding_valued", "holding_valued.account_id", "account.id")
+    .select([
+      "account.id as account_id",
+      "account.name as account_name",
+      "account.institution as institution",
+      "account.kind as account_kind",
+      "person.name as owner_name",
+      sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
+      // `is_priced` is null on the row the left join manufactures for an
+      // account with no holdings, and a null does not pass the filter.
+      sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
+      // Counts the joined column rather than the row, for the same reason:
+      // `count(*)` would score that manufactured row as one holding.
+      sql<string>`count(holding_valued.instrument_id)`.as("total"),
+    ])
+    .where(isAccount("account.id", accountId))
+    // The view already drops closed accounts, so this is not a second copy of
+    // that rule: it is what turns "closed" into null instead of into an
+    // account reported as holding nothing.
+    .where("account.closed_at", "is", null)
+    .groupBy([
+      "account.id",
+      "account.name",
+      "account.institution",
+      "account.kind",
+      "person.name",
+    ])
+    .executeTakeFirst();
+
+  return row === undefined ? null : toAccountTotal(row);
+}
+
+/**
+ * One account's holdings, valued, on the same terms as {@link currentHoldings}.
+ *
+ * The same rows that account contributes to the overview's total, filtered —
+ * not a second definition of what the account holds. An unpriced holding is
+ * here too, carrying `isPriced: false`, so the drill-down's table can say which
+ * line the account's total is missing.
+ *
+ * Empty for an account that holds nothing, for one that is closed, and for an
+ * id that names no account: all three hold nothing right now, and which of them
+ * it is, is {@link accountTotal}'s answer rather than this one's.
+ *
+ * @param accountId the account's id as it arrives from a URL, digits or not.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function accountHoldings(
+  accountId: string,
+  db: Kysely<Database> = getDb(),
+): Promise<ValuedHolding[]> {
+  return readHoldings(db, valuedNow(), isAccount("holding_valued.account_id", accountId));
+}
+
+/**
+ * A value at each of `dates`, over whatever `where` narrows it to, in a single
+ * round trip.
  *
  * The obvious implementation is {@link netWorthAt} in a loop, which is one
  * query per point and re-plans `holding_valued_at` every time. A lateral join
  * over the date array evaluates the same function once per date inside one
  * statement, which is the difference between twenty-five round trips and one.
  *
- * A date before the first upload contributes `0.0000` over a coverage of zero
- * rows — "nothing was recorded yet", which the caller must not draw as a real
- * zero (DESIGN.md §7). {@link netWorthSeries} callers use `coverage.total` to
- * find where the computed line actually starts.
- *
  * @param dates `YYYY-MM-DD`, in any order; the result comes back sorted.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
-export async function netWorthSeries(
+async function readSeries(
+  db: Kysely<Database>,
   dates: IsoDate[],
-  db: Kysely<Database> = getDb(),
+  where?: RawBuilder<SqlBool>,
 ): Promise<NetWorthPoint[]> {
   if (dates.length === 0) return [];
 
@@ -377,7 +505,15 @@ export async function netWorthSeries(
     // then skip it silently rather than report it as uncovered, which is the
     // difference between "nothing was recorded" and "we did not mention it".
     .leftJoinLateral(
-      (join) => join.selectFrom(sql`holding_valued_at(d.date)`.as("v")).selectAll().as("v"),
+      (join) => {
+        const held = join.selectFrom(sql`holding_valued_at(d.date)`.as("v")).selectAll();
+
+        // The narrowing goes inside the lateral, never in the outer WHERE. A
+        // WHERE out there is evaluated after the join and rejects the all-null
+        // row, which would take the uncovered date down with it — the LEFT
+        // join above undone by the filter beside it.
+        return (where === undefined ? held : held.where(where)).as("v");
+      },
       (join) => join.onTrue(),
     )
     .select([
@@ -397,6 +533,53 @@ export async function netWorthSeries(
     amount: row.amount,
     coverage: { known: Number(row.known), total: Number(row.total) },
   }));
+}
+
+/**
+ * Net worth at each of `dates`, in a single round trip.
+ *
+ * A date before the first upload contributes `0.0000` over a coverage of zero
+ * rows — "nothing was recorded yet", which the caller must not draw as a real
+ * zero (DESIGN.md §7). {@link netWorthSeries} callers use `coverage.total` to
+ * find where the computed line actually starts.
+ *
+ * @param dates `YYYY-MM-DD`, in any order; the result comes back sorted.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function netWorthSeries(
+  dates: IsoDate[],
+  db: Kysely<Database> = getDb(),
+): Promise<NetWorthPoint[]> {
+  return readSeries(db, dates);
+}
+
+/**
+ * One account's value at each of `dates`, on the same terms as
+ * {@link netWorthSeries} and in the same single round trip.
+ *
+ * The same {@link NetWorthPoint} shape, deliberately: an account's line and the
+ * household's line are the same measure over different row sets, and a chart
+ * that can draw one can draw the other with no second code path.
+ *
+ * Every date the account did not exist for is reported rather than skipped.
+ * Dates before its first statement come back as `0.0000` over a coverage of
+ * zero rows, and so do dates after it closed — an account's chart therefore
+ * starts where its history starts instead of climbing out of a fictional zero
+ * (DESIGN.md §7), as long as the caller reads `coverage.total` rather than the
+ * amount to decide where the line begins.
+ *
+ * @param accountId the account's id as it arrives from a URL, digits or not.
+ * @param dates `YYYY-MM-DD`, in any order; the result comes back sorted.
+ * @param db a handle to read through. Defaults to the process-wide one; tests
+ *           pass a transaction they roll back.
+ */
+export async function accountSeries(
+  accountId: string,
+  dates: IsoDate[],
+  db: Kysely<Database> = getDb(),
+): Promise<NetWorthPoint[]> {
+  return readSeries(db, dates, isAccount("v.account_id", accountId));
 }
 
 /**

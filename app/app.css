@@ -1,8 +1,10 @@
 /* Portfolio Tracker — the whole stylesheet.
  *
- * Tokens are DESIGN.md §13, extracted from the Stitch "Portfolio Dashboard"
- * screen. The brief is a financial terminal: no shadow, no gradient, no radius,
- * two typefaces split by whether a thing is data or is *about* data.
+ * Tokens are DESIGN.md §13, extracted from the Stitch screens (Portfolio
+ * Dashboard, Account Details, Views Analysis; desktop and mobile; light and
+ * dark). The brief is an instrument panel: unsaturated surfaces, depth from a
+ * tonal step plus a hairline, and the only saturated colour on the page
+ * carried by the data itself.
  *
  * Nothing below hardcodes a colour. Charts included — §12 requires them to
  * resolve from the same custom properties as everything else, which is what
@@ -10,9 +12,13 @@
  */
 
 /* --- Fonts ---------------------------------------------------------------
- * Self-hosted, latin subset, variable weight (DESIGN.md §13.3). Not the CDN
- * the mock used: this is an offline-capable PWA holding a household's
+ * Self-hosted, latin subset, variable weight (DESIGN.md §13.4). Not the CDN
+ * the mocks use: this is an offline-capable PWA holding a household's
  * finances, and a per-visit third-party request fails both of those.
+ *
+ * One family. The previous system split interface type from data type across
+ * Inter and JetBrains Mono; the new screens set every figure in Inter, and the
+ * alignment that mono bought is bought instead by `tabular-nums` below.
  */
 
 @font-face {
@@ -21,17 +27,6 @@
   font-weight: 400 700;
   font-display: swap;
   src: url("/fonts/inter-latin-var.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
-    U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url("/fonts/jetbrains-mono-latin-var.woff2") format("woff2");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
     U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
     U+2212, U+2215, U+FEFF, U+FFFD;
@@ -47,84 +42,150 @@
 :root {
   color-scheme: light dark;
 
-  /* Light palette — derived (§13.1). Not an inversion of the dark one. */
-  --background: #f7faf3;
-  --surface: #f7faf3;
+  /* Colour — light (DESIGN.md §13.2) */
+  --background: #f7f9fb;
   --surface-container-lowest: #ffffff;
-  --surface-container-low: #f1f5ec;
-  --surface-container: #ebf0e6;
-  --surface-container-high: #e3e9dd;
-  --surface-container-highest: #dbe2d5;
-  --on-surface: #17210f;
-  --on-surface-variant: #444e3e;
-  --outline: #74806e;
-  --outline-variant: #b4c0ad;
-  --accent: #00701c;
-  --on-accent: #ffffff;
-  --gain: #00701c;
-  --loss: #b3261e;
-  --warning: #8a5300;
-  --warning-surface: #fff4d6;
+  --surface-container-low: #f2f4f6;
+  --surface-container: #eceef0;
+  --surface-container-high: #e6e8ea;
+  --surface-container-highest: #e0e3e5;
+  --surface-bright: #f7f9fb;
+  --on-surface: #191c1e;
+  --on-surface-variant: #434656;
+  --outline: #737688;
+  --outline-variant: #c3c5d9;
+  --primary: #0041c8;
+  --primary-container: #0055ff;
+  --on-primary-container: #ffffff;
+  --secondary-container: #d0e1fb;
+  --gain: #005c3e;
+  --loss: #ba1a1a;
+  --warning: #92500e;
+  --warning-surface: #fef3c7;
 
-  /* Type (§13.3). Two families, split by data vs. about-data. */
+  /* The panel surface is a *role*, and the role resolves to a different step
+   * of the ramp per theme: light lifts a card off the canvas by going lighter,
+   * dark by going lighter too — but from opposite ends (§13.2). */
+  --panel: var(--surface-container-lowest);
+  --panel-hover: var(--surface-container-low);
+
+  /* Light is the only theme with elevation; dark is flat (§13.5). */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.05);
+
+  /* The chart's stroke is its own role: dark cannot use `--primary` (a pale
+   * #b6c4ff would vanish as a line), so both themes name the colour that
+   * actually draws well on their canvas (§13.6). */
+  --chart-line: #0041c8;
+  --chart-fill: rgb(0 65 200 / 0.25);
+
+  /* Gain and loss as a ground rather than as ink, for the delta chip. */
+  --gain-surface: rgb(0 92 62 / 0.10);
+  --loss-surface: rgb(186 26 26 / 0.10);
+
+  /* The categorical sequence (§13.3). Fills, not text — 3:1 is the bar, and
+   * the tail does not clear it, which is why legend dots carry a ring. */
+  --cat-1: #0041c8;
+  --cat-2: #007751;
+  --cat-3: #505f76;
+  --cat-4: #b6c4ff;
+  --cat-5: #c3c5d9;
+
+  /* Type (§13.4) */
   --font-ui: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-data: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* Space and shape (§13.4). 4px baseline; radius is 0 everywhere. */
-  --unit: 4px;
-  --gutter: 8px;
-  --container-padding: 12px;
-  --margin-sm: 16px;
-  --margin-lg: 24px;
-  --rail: 200px;
-  --control-h: 32px;
-
-  font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 20px;
+  /* Spacing, shape (§13.5) */
+  --space-xs: 4px;
+  --space-base: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --canvas-margin: 32px;
+  --rail: 280px;
+  --content-max: 1152px;
+  --control-h: 40px;
+  --radius: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 999px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    /* Stitch verbatim (§13.2). */
-    --background: #0c160a;
-    --surface: #0c160a;
-    --surface-container-lowest: #071106;
-    --surface-container-low: #141e12;
-    --surface-container: #182216;
-    --surface-container-high: #222d20;
-    --surface-container-highest: #2d382a;
-    --on-surface: #dae6d2;
-    --on-surface-variant: #b9ccb2;
-    --outline: #84967e;
-    --outline-variant: #3b4b37;
-    --accent: #00ff41;
-    --on-accent: #0c160a;
-    --gain: #00ff41;
-    --loss: #ff5449;
-    --warning: #ffcf70;
-    --warning-surface: #3a2b06;
+    --background: #0b1326;
+    --surface-container-lowest: #060e20;
+    --surface-container-low: #131b2e;
+    --surface-container: #1e293b;
+    --surface-container-high: #222a3d;
+    --surface-container-highest: #2d3449;
+    --surface-bright: #31394d;
+    --on-surface: #f8fafc;
+    --on-surface-variant: #c3c5d9;
+    --outline: #8d90a2;
+    --outline-variant: #434656;
+    --primary: #b6c4ff;
+    --primary-container: #0055ff;
+    --on-primary-container: #e3e6ff;
+    --secondary-container: #39485a;
+    --gain: #10b981;
+    --loss: #f87171;
+    --warning: #fbbf24;
+    --warning-surface: #33280a;
+
+    --panel: var(--surface-container);
+    --panel-hover: var(--surface-container-high);
+    --shadow-card: none;
+
+    --chart-line: #0055ff;
+    --chart-fill: rgb(0 85 255 / 0.25);
+
+    --gain-surface: rgb(16 185 129 / 0.12);
+    --loss-surface: rgb(248 113 113 / 0.12);
+
+    --cat-1: #0055ff;
+    --cat-2: #10b981;
+    --cat-3: #b6c4ff;
+    --cat-4: #ef4444;
+    --cat-5: #4edea3;
   }
 }
 
 :root[data-theme="dark"] {
-  --background: #0c160a;
-  --surface: #0c160a;
-  --surface-container-lowest: #071106;
-  --surface-container-low: #141e12;
-  --surface-container: #182216;
-  --surface-container-high: #222d20;
-  --surface-container-highest: #2d382a;
-  --on-surface: #dae6d2;
-  --on-surface-variant: #b9ccb2;
-  --outline: #84967e;
-  --outline-variant: #3b4b37;
-  --accent: #00ff41;
-  --on-accent: #0c160a;
-  --gain: #00ff41;
-  --loss: #ff5449;
-  --warning: #ffcf70;
-  --warning-surface: #3a2b06;
+  --background: #0b1326;
+  --surface-container-lowest: #060e20;
+  --surface-container-low: #131b2e;
+  --surface-container: #1e293b;
+  --surface-container-high: #222a3d;
+  --surface-container-highest: #2d3449;
+  --surface-bright: #31394d;
+  --on-surface: #f8fafc;
+  --on-surface-variant: #c3c5d9;
+  --outline: #8d90a2;
+  --outline-variant: #434656;
+  --primary: #b6c4ff;
+  --primary-container: #0055ff;
+  --on-primary-container: #e3e6ff;
+  --secondary-container: #39485a;
+  --gain: #10b981;
+  --loss: #f87171;
+  --warning: #fbbf24;
+  --warning-surface: #33280a;
+
+  --panel: var(--surface-container);
+  --panel-hover: var(--surface-container-high);
+  --shadow-card: none;
+
+  --chart-line: #0055ff;
+  --chart-fill: rgb(0 85 255 / 0.25);
+
+  --gain-surface: rgb(16 185 129 / 0.12);
+  --loss-surface: rgb(248 113 113 / 0.12);
+
+  --cat-1: #0055ff;
+  --cat-2: #10b981;
+  --cat-3: #b6c4ff;
+  --cat-4: #ef4444;
+  --cat-5: #4edea3;
 }
 
 /* --- Base ---------------------------------------------------------------- */
@@ -133,42 +194,86 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background: var(--background);
   color: var(--on-surface);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 20px;
   -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--primary-container);
+  color: var(--on-primary-container);
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius);
 }
 
-/* Every figure in the app routes through this: monospaced and tabular, so
- * columns of money align for vertical scanning (§13.3). */
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  color: var(--on-surface);
+}
+
+a {
+  color: var(--primary);
+}
+
+/* Every figure in the app routes through this. The mono family is gone
+ * (§13.4); `tabular-nums` is what now holds a column of money in line, and it
+ * is not optional — proportional digits do not align, and a figure that
+ * changes width as it updates makes the whole row twitch. */
 .u-data {
-  font-family: var(--font-data);
   font-variant-numeric: tabular-nums;
 }
 
 .u-label {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 16px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--on-surface-variant);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Used by the horizontally scrolling range strip on a phone. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* --- Shell ---------------------------------------------------------------
- * A fixed 200px rail, from the mock (§13.1). The nav *items* are §8.4's five,
- * ordered by frequency of use.
+ * A fixed 280px rail (§13.1) whose *items* are §8.4's five, ordered by how
+ * often each page is opened. Below 1024px the rail is replaced by a bottom
+ * bar, which is what all four mobile mocks do — no drawer, no hamburger.
  */
 
 .app {
@@ -182,57 +287,76 @@ body {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  padding: var(--margin-lg) 0;
-  background: var(--surface);
+  background: var(--panel);
   border-right: 1px solid var(--outline-variant);
+  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
 }
 
 .app-brand {
-  display: block;
-  padding: 0 var(--margin-sm);
-  margin-bottom: var(--margin-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+  border-bottom: 1px solid var(--outline-variant);
   color: var(--on-surface);
   text-decoration: none;
 }
 
+/* The mock's brand tile, holding this app's initial rather than a
+ * brokerage's (§13.1). */
+.app-brand-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+}
+
 .app-brand-mark {
   display: block;
-  font-family: var(--font-data);
-  font-size: 24px;
-  line-height: 32px;
+  font-size: 20px;
+  line-height: 28px;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--accent);
+  color: var(--primary);
 }
 
 .app-brand-meta {
   display: block;
-  margin-top: var(--unit);
+  margin-top: 2px;
 }
 
 .app-nav {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: var(--space-md) var(--space-sm);
   display: flex;
   flex-direction: column;
-  gap: var(--unit);
+  gap: var(--space-xs);
   flex: 1;
 }
 
 .app-nav--footer {
   flex: 0 0 auto;
-  margin-top: auto;
+  padding-top: 0;
 }
 
 .app-nav-link {
   display: flex;
   align-items: center;
-  gap: var(--margin-sm);
-  padding: var(--unit) var(--margin-sm);
-  border-left: 2px solid transparent;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 4px solid transparent;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
   color: var(--on-surface-variant);
   text-decoration: none;
+  font-size: 16px;
+  line-height: 24px;
   transition: color 150ms, background-color 150ms;
 }
 
@@ -241,165 +365,338 @@ body {
   background: var(--surface-container-high);
 }
 
-/* The active marker from the mock: a 2px accent stroke on the leading edge. */
-.app-nav-link--active {
-  border-left-color: var(--accent);
-  background: var(--surface-container);
-  color: var(--on-surface);
-  font-weight: 700;
-}
-
-.app-nav-link--active .app-nav-icon {
-  color: var(--accent);
+/* The active marker: the mock's 4px leading stroke over a
+ * `secondary-container` ground. */
+.app-nav-link--active,
+.app-nav-link--active:hover {
+  border-left-color: var(--primary);
+  background: var(--secondary-container);
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .app-nav-icon {
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
 }
 
-/* The margin lives here rather than on `.app-main` so the open-instance banner
- * clears the rail too — it is a sibling of the page, not part of it. */
+/* The rail's foot holds one filled button. The mock spends it on "Invest Now";
+ * this app has nothing to sell, so it spends it on the only action that
+ * writes (§13.1). */
+.app-rail-action {
+  margin: 0 var(--space-lg) var(--space-lg);
+}
+
 .app-canvas {
   margin-left: var(--rail);
 }
 
 .app-main {
-  padding: var(--margin-lg);
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding: var(--canvas-margin);
   display: flex;
   flex-direction: column;
-  gap: var(--gutter);
-  max-width: 80rem;
+  gap: var(--space-lg);
 }
 
-/* Mobile: the rail unpins to a scrolling top bar. Reading is what the phone is
- * for (§11), so the nav gets out of the way rather than overlaying content. */
-@media (max-width: 767px) {
+/* The mobile top bar and bottom bar exist only below 1024px; the rail is what
+ * carries the brand and the nav above it. */
+.app-topbar,
+.app-bottomnav {
+  display: none;
+}
+
+@media (max-width: 1023px) {
   .app-rail {
-    position: static;
-    width: auto;
-    flex-direction: row;
-    align-items: center;
-    gap: var(--margin-sm);
-    padding: var(--gutter) var(--container-padding);
-    border-right: 0;
-    border-bottom: 1px solid var(--outline-variant);
-    overflow-x: auto;
-  }
-
-  .app-brand {
-    margin-bottom: 0;
-    padding: 0;
-    flex: none;
-  }
-
-  .app-brand-meta {
     display: none;
-  }
-
-  .app-nav {
-    flex-direction: row;
-    flex: 0 0 auto;
-  }
-
-  .app-nav--footer {
-    margin-top: 0;
-  }
-
-  .app-nav-link {
-    border-left: 0;
-    border-bottom: 2px solid transparent;
-    white-space: nowrap;
-  }
-
-  .app-nav-link--active {
-    border-left: 0;
-    border-bottom-color: var(--accent);
   }
 
   .app-canvas {
     margin-left: 0;
+    padding-bottom: 88px;
   }
 
   .app-main {
-    padding: var(--container-padding);
+    --canvas-margin: 16px;
+  }
+
+  .app-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+    padding-inline: var(--space-md);
+    background: var(--background);
+    border-bottom: 1px solid var(--outline-variant);
+  }
+
+  .app-topbar .app-brand {
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .app-bottomnav {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 50;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: var(--space-base) var(--space-md)
+      calc(var(--space-base) + env(safe-area-inset-bottom));
+    background: var(--panel);
+    border-top: 1px solid var(--outline-variant);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+
+  /* The list markup is real for assistive technology and invisible to the
+   * layout, so the links themselves are the flex items that share the bar. */
+  .app-bottomnav .app-nav,
+  .app-bottomnav .app-nav li {
+    display: contents;
+  }
+
+  .app-bottomnav .app-nav-link {
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-xs) var(--space-base);
+    border-left: 0;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    text-align: center;
+  }
+
+  .app-bottomnav .app-nav-link--active,
+  .app-bottomnav .app-nav-link--active:hover {
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
+
+  .app-bottomnav .app-nav-icon {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+/* --- Page ---------------------------------------------------------------- */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+/* A page that has not been given the full header still gets the ramp rather
+ * than the browser's default 2em heading.
+ */
+.page > h1 {
+  font-size: 32px;
+  line-height: 40px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.page h2 {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+}
+
+/* The Analysis screen's header: a large title, a line of prose under it, and
+ * a right-hand slot for page-level actions. */
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding-bottom: var(--space-lg);
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.page-title {
+  font-size: 48px;
+  line-height: 56px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.page-subtitle,
+.page-lede {
+  margin: var(--space-xs) 0 0;
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--on-surface-variant);
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  flex: none;
+}
+
+@media (max-width: 767px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-sm);
+  }
+
+  .page-title {
+    font-size: 24px;
+    line-height: 32px;
+    letter-spacing: 0;
+  }
+
+  .page-subtitle,
+  .page-lede {
+    font-size: 14px;
+    line-height: 20px;
+  }
+}
+
+/* The dashboard's lower half: a wide panel beside a narrow one, stacked below
+ * 768px. The mock calls this its bento grid; it is two columns and a gap.
+ */
+
+.columns {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+@media (min-width: 768px) {
+  .columns--wide-narrow {
+    grid-template-columns: 2fr 1fr;
+    align-items: start;
+  }
+
+  .columns--even {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
 /* --- Panels --------------------------------------------------------------
- * Depth is tonal layers plus a 1px border. No shadow anywhere (§13.4).
+ * Depth is a tonal step plus a 1px border, and in light one hairline shadow
+ * that reads as a paper edge rather than a lift (§13.5).
  */
 
 .panel {
-  background: var(--surface-container);
+  background: var(--panel);
   border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+/* A panel that holds only prose or a chart pads itself; one that holds a table
+ * lets the table's own cells do the padding, which is why `.panel` has no
+ * padding of its own. */
+.panel-body {
+  padding: var(--space-lg);
 }
 
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--margin-sm);
-  padding: var(--unit) var(--margin-sm);
-  background: var(--surface-container-high);
+  gap: var(--space-sm);
+  padding: var(--space-lg);
   border-bottom: 1px solid var(--outline-variant);
 }
 
 .panel-title {
   display: flex;
   align-items: center;
-  gap: var(--unit);
+  gap: var(--space-base);
   margin: 0;
   color: var(--on-surface);
-  font-size: 11px;
-  line-height: 16px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
 }
 
 .panel-title svg {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex: none;
-}
-
-.panel-count {
-  font-family: var(--font-data);
-  font-size: 12px;
-  line-height: 16px;
   color: var(--on-surface-variant);
 }
 
-/* --- Net worth headline --------------------------------------------------- */
+.panel-count {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 767px) {
+  .panel-header,
+  .panel-body {
+    padding: var(--space-md);
+  }
+
+  /* Side by side, a title and the note qualifying it fight over a 390px row
+   * and both wrap. Stacked, each gets the full width and neither breaks. */
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-xs);
+  }
+}
+
+/* --- Net worth headline ---------------------------------------------------
+ * The one figure on the page allowed to be large. It sits on the canvas rather
+ * than in a panel, which is what the mock does and what keeps it from reading
+ * as one card among several.
+ */
 
 .kpi {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: var(--margin-sm);
-  padding: var(--margin-sm);
-  background: var(--surface-container-low);
-  border-bottom: 1px solid var(--outline-variant);
+  gap: var(--space-md);
+}
+
+.kpi-eyebrow {
+  margin: 0 0 var(--space-xs);
 }
 
 .kpi-figure {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: var(--margin-sm);
-  margin: var(--unit) 0 0;
-  font-family: var(--font-data);
+  gap: var(--space-sm);
+  margin: 0;
   font-variant-numeric: tabular-nums;
-  font-size: 32px;
-  line-height: 40px;
+  font-size: 48px;
+  line-height: 56px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--on-surface);
+}
+
+@media (max-width: 767px) {
+  .kpi-figure {
+    font-size: 36px;
+    line-height: 44px;
+  }
 }
 
 /* Sign and arrow, never colour alone (§12). The hue is the redundant channel
@@ -407,13 +704,15 @@ body {
 .delta {
   display: inline-flex;
   align-items: center;
-  gap: var(--unit);
-  padding: 2px var(--unit);
-  border: 1px solid;
-  font-family: var(--font-data);
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-full);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .delta svg {
@@ -424,96 +723,125 @@ body {
 
 .delta--gain {
   color: var(--gain);
-  border-color: color-mix(in srgb, var(--gain) 30%, transparent);
-  background: color-mix(in srgb, var(--gain) 10%, transparent);
+  background: var(--gain-surface);
 }
 
 .delta--loss {
   color: var(--loss);
-  border-color: color-mix(in srgb, var(--loss) 30%, transparent);
-  background: color-mix(in srgb, var(--loss) 10%, transparent);
+  background: var(--loss-surface);
 }
 
-/* --- Segmented range control ---------------------------------------------- */
+/* A delta that is not in a chip — inside a table row, where a pill per row
+ * would be noise. */
+.delta--bare {
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
 
-/* Anchors, not buttons. The range is a URL, so the control works with no
- * JavaScript and a chosen range survives a reload and can be bookmarked. */
+.delta--flat {
+  color: var(--on-surface-variant);
+}
+
+/* --- Range control --------------------------------------------------------
+ * Anchors, not buttons. The range is a URL, so the control works with no
+ * JavaScript and a chosen range survives a reload and can be bookmarked.
+ */
+
 .segmented {
   display: flex;
-  height: var(--control-h);
-  border: 1px solid var(--outline-variant);
-  background: var(--surface-container-highest);
+  gap: var(--space-base);
+  flex-wrap: wrap;
 }
 
 .segmented a {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  padding: 0 12px;
-  border-right: 1px solid var(--outline-variant);
+  height: 32px;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  background: var(--panel);
   color: var(--on-surface-variant);
   text-decoration: none;
-  font-family: var(--font-data);
-  font-variant-numeric: tabular-nums;
   font-size: 12px;
-  transition: color 150ms, background-color 150ms;
-}
-
-.segmented a:last-child {
-  border-right: 0;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+  transition: color 150ms, background-color 150ms, border-color 150ms;
 }
 
 .segmented a:hover {
   color: var(--on-surface);
-  background: var(--surface-container-high);
+  background: var(--panel-hover);
 }
 
-.segmented a[aria-current="true"] {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 700;
+.segmented a[aria-current="true"],
+.segmented a[aria-current="true"]:hover {
+  background: var(--primary-container);
+  border-color: transparent;
+  color: var(--on-primary-container);
 }
 
-/* --- Trend chart ----------------------------------------------------------
- * §12: every stroke and fill resolves from a custom property, so a theme change
- * re-colours the chart with no JS and nothing to re-resolve on the client.
+/* On a phone the strip scrolls sideways rather than wrapping to two rows. */
+@media (max-width: 767px) {
+  .segmented {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: var(--space-xs);
+  }
+
+  .segmented a {
+    flex: none;
+  }
+}
+
+/* --- Charts ---------------------------------------------------------------
+ * §12: every stroke and fill resolves from a custom property, so a theme
+ * change re-colours the chart with no JS and nothing to re-resolve on the
+ * client.
  */
 
 .chart {
   position: relative;
   display: flex;
-  padding: var(--margin-sm);
   height: 20rem;
 }
 
 @media (max-width: 767px) {
   .chart {
-    height: 16rem;
+    height: 13rem;
   }
-}
-
-.chart-grid {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: linear-gradient(var(--outline-variant) 1px, transparent 1px),
-    linear-gradient(90deg, var(--outline-variant) 1px, transparent 1px);
-  background-size: 100% 25%, 10% 100%;
-  opacity: 0.35;
 }
 
 .chart-axis {
   position: absolute;
-  inset: var(--margin-sm) auto var(--margin-sm) var(--margin-sm);
+  inset: 0 auto 0 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   pointer-events: none;
-  font-family: var(--font-data);
-  font-variant-numeric: tabular-nums;
   font-size: 12px;
   line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   color: var(--on-surface-variant);
-  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The x labels sit under the plot, not over it. */
+.chart-ticks {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-base);
+  margin-top: var(--space-base);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
 }
 
 .chart-svg {
@@ -522,42 +850,167 @@ body {
   overflow: visible;
 }
 
-.chart-baseline {
+/* Horizontal only, dashed. The mock strokes its grid in the same colour as the
+ * card it sits on, which makes it invisible; `--outline-variant` is what it
+ * meant (§13.6). */
+.chart-grid {
   stroke: var(--outline-variant);
   stroke-width: 1;
   stroke-dasharray: 4 4;
+  fill: none;
 }
 
-/* 1.5px, no area fill — the brief's chart rule (§13). */
 .chart-line {
   fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.5;
+  stroke: var(--chart-line);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-/* The pre-day-zero hand-typed series is dashed, the computed part solid (§8.1). */
+/* The pre-day-zero hand-typed series is dashed, the computed part solid (§8.1).
+ * Provenance, not decoration — no repaint changes it. */
 .chart-line--manual {
-  stroke-dasharray: 3 3;
-  opacity: 0.7;
+  stroke-dasharray: 6 5;
+  opacity: 0.75;
 }
 
-.chart-point {
-  fill: var(--background);
-  stroke: var(--accent);
-  stroke-width: 2;
+.chart-area {
+  stroke: none;
 }
 
-.chart-halo {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1;
-  opacity: 0.3;
+.chart-fill-from {
+  stop-color: var(--chart-line);
+  stop-opacity: 0.25;
 }
 
-/* --- Accounts table -------------------------------------------------------
- * No vertical rules. Horizontal hairlines between rows, header filled a tone up
- * (§13.4). Hover lifts a 2px accent edge on the leading cell.
+.chart-fill-to {
+  stop-color: var(--chart-line);
+  stop-opacity: 0;
+}
+
+/* The last point, marked. Round at every viewport — see the note at its call
+ * site for why this is not an SVG circle. */
+.chart-marker {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  border: 2px solid var(--chart-line);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--chart-line) 22%, transparent);
+  pointer-events: none;
+}
+
+/* --- Donut ----------------------------------------------------------------
+ * One ring per breakdown, drawn with dash offsets rather than arc paths: the
+ * maths is a running total times the circumference, which is far easier to get
+ * right than sweep flags (§13.3).
  */
+
+.donut {
+  position: relative;
+  flex: none;
+  width: 200px;
+  height: 200px;
+}
+
+.donut-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.donut-track {
+  fill: none;
+  stroke: var(--surface-container-high);
+}
+
+.donut-segment {
+  fill: none;
+  transition: opacity 150ms;
+}
+
+.donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.donut-total {
+  max-width: 150px;
+  overflow-wrap: anywhere;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--on-surface);
+}
+
+/* The legend dot carries a ring because the tail of the light sequence does not
+ * clear 3:1 against a white panel at 12px (§13.3). */
+.legend-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--outline-variant);
+}
+
+/* --- Breakdown panel ------------------------------------------------------
+ * Donut on the left, its table on the right, a hairline between them. Below
+ * 768px the two stack and the hairline turns horizontal.
+ */
+
+.breakdown {
+  display: flex;
+  flex-direction: column;
+}
+
+.breakdown-chart {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.breakdown-table {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (min-width: 768px) {
+  .breakdown {
+    flex-direction: row;
+    align-items: stretch;
+  }
+
+  .breakdown-chart {
+    width: 33%;
+    border-bottom: 0;
+    border-right: 1px solid var(--outline-variant);
+  }
+}
+
+/* --- Tables ---------------------------------------------------------------
+ * No vertical rules. A hairline between rows, a header a tone up, and every
+ * numeric column right-aligned so the digits stack (§13.4).
+ */
+
+.data-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
 
 .data-table {
   width: 100%;
@@ -565,346 +1018,510 @@ body {
   text-align: left;
 }
 
-.data-table-scroll {
-  width: 100%;
-  overflow-x: auto;
-}
-
 .data-table th {
-  padding: var(--unit) var(--margin-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-container-high);
   border-bottom: 1px solid var(--outline-variant);
-  background: var(--surface-container-low);
   color: var(--on-surface-variant);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 16px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .data-table td {
-  padding: var(--unit) var(--margin-sm);
-  border-bottom: 1px solid var(--outline-variant);
+  padding: var(--space-md);
+  border-top: 1px solid var(--outline-variant);
+  color: var(--on-surface);
   vertical-align: middle;
 }
 
-.data-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.data-table tbody tr {
-  transition: background-color 150ms;
+.data-table tbody tr:first-child td {
+  border-top: 0;
 }
 
 .data-table tbody tr:hover {
-  background: var(--surface-container-high);
+  background: var(--panel-hover);
 }
 
-.data-table td:first-child {
-  border-left: 2px solid transparent;
-}
-
-.data-table tbody tr:hover td:first-child {
-  border-left-color: var(--accent);
-}
-
-/* Cells only. A column header is a label, not data, so it stays in Inter at
- * label-caps size like every other header — the two typefaces divide on what a
- * thing *is*, not on which column it sits in (§13.3). */
-.data-table td.is-numeric {
-  font-family: var(--font-data);
-  font-variant-numeric: tabular-nums;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 500;
-}
-
-.data-table th.is-numeric,
-.data-table td.is-numeric {
+/* Cells only. A column header is a label, not data, so it is not tabular. */
+.data-table td.is-numeric,
+.data-table th.is-numeric {
   text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.account-name {
-  color: var(--on-surface);
+.data-table td.is-numeric {
+  font-weight: 600;
 }
 
-.account-meta {
+.cell-stack {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.cell-sub {
+  display: block;
   margin-top: 2px;
   font-size: 12px;
   line-height: 16px;
   color: var(--on-surface-variant);
 }
 
-.account-owner {
+/* The change column's arrow and figure, kept out of the `td` itself: the mock
+ * puts `display:flex` on the cell, which drops it out of the table layout and
+ * un-aligns the whole column. */
+.cell-change {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+/* --- Account rows ---------------------------------------------------------
+ * The dashboard's accounts list: a tile, a name over its institution, and the
+ * value with its delta right-aligned.
+ */
+
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border-top: 1px solid var(--outline-variant);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 150ms;
+}
+
+.account-row:first-child {
+  border-top: 0;
+}
+
+a.account-row:hover {
+  background: var(--panel-hover);
+}
+
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-width: 0;
+}
+
+.account-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-container-high);
+  color: var(--primary);
+}
+
+.account-tile svg {
+  width: 24px;
+  height: 24px;
+}
+
+.account-name {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
   color: var(--on-surface);
 }
 
-/* On a phone the owner folds under the account rather than scrolling sideways
- * (§8.1 — thirteen columns on a phone is a scroll nobody uses). */
-.account-owner--inline {
-  display: none;
-  margin-top: var(--unit);
+.account-meta {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--on-surface-variant);
+}
+
+.account-figures {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-xs);
+  text-align: right;
+  flex: none;
+}
+
+.account-amount {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--on-surface);
+}
+
+.account-owner {
+  color: var(--on-surface-variant);
 }
 
 @media (max-width: 767px) {
-  .data-table .is-owner {
-    display: none;
+  .account-tile {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-full);
   }
 
-  .account-owner--inline {
-    display: block;
-  }
-
-  .data-table td {
-    padding: 12px var(--container-padding);
+  .account-amount {
+    font-size: 16px;
+    line-height: 24px;
   }
 }
 
-/* A liability reads as a liability without relying on the minus alone. */
-.is-negative {
-  color: var(--loss);
+/* --- Allocation bars ------------------------------------------------------ */
+
+.alloc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
 }
 
-.coverage-note {
-  margin: var(--unit) 0 0;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--on-surface-variant);
+.alloc-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
 }
 
-/* --- Page ---------------------------------------------------------------- */
+.alloc-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: 14px;
+  line-height: 20px;
+}
 
-.page h1 {
-  margin: 0 0 var(--gutter);
-  font-size: 18px;
-  line-height: 24px;
+.alloc-label b {
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
-.page-lede {
-  margin: 0;
-  color: var(--on-surface-variant);
-  max-width: 46rem;
+.alloc-track {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-container-high);
+  overflow: hidden;
 }
 
-/* --- Banners --------------------------------------------------------------
- * The open-instance warning (DESIGN.md §10). Loud, permanent, undismissable:
- * it is the only thing standing between an open instance and a surprise.
+.alloc-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+}
+
+/* --- Account detail -------------------------------------------------------
+ * The header card: identity on the left, the account's own total on the right.
  */
 
-.open-instance-banner {
-  padding: 0.7rem var(--margin-lg);
-  background: var(--warning-surface);
-  color: var(--warning);
-  border-bottom: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+.detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
 }
 
-.open-instance-banner code {
-  font-family: var(--font-data);
-  font-size: 0.875em;
+.detail-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
 }
 
-/* The single setup pointer (DESIGN.md §8.4). Distinct from the open-instance
- * warning above it: that one is a risk, this one is an instruction. */
-.first-run {
-  margin: 0 0 var(--margin-sm);
-  padding: 0.9rem 1.1rem;
-  background: var(--surface-container);
-  border: 1px solid var(--outline-variant);
-  border-left: 2px solid var(--accent);
-  max-width: 46rem;
-}
-
-/* No figure, no axis, no chart frame — a zero and an empty instance must never
- * look alike in a finance app. */
-.empty-state {
-  margin-top: var(--margin-sm);
-  padding: 2rem 1.5rem;
-  background: var(--surface-container);
-  border: 1px dashed var(--outline-variant);
-  max-width: 46rem;
-}
-
-.empty-state-headline {
-  margin: 0 0 var(--unit);
+.detail-title {
+  font-size: 32px;
+  line-height: 40px;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-.empty-state-detail {
+/* Label and value differ by weight *and* colour, with the colon belonging to
+ * the label — the mock's typesetting, and the reason the pairs stay legible
+ * when they wrap. */
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-lg);
+  row-gap: var(--space-sm);
   margin: 0;
+  font-size: 14px;
+  line-height: 20px;
   color: var(--on-surface-variant);
+}
+
+.detail-meta div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.detail-meta dt {
+  font-weight: 700;
+  color: var(--on-surface);
+}
+
+.detail-meta dd {
+  margin: 0;
+}
+
+.detail-total {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--outline-variant);
+}
+
+.detail-figure {
+  margin: 0;
+  font-size: 48px;
+  line-height: 48px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 768px) {
+  .detail-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-lg);
+  }
+
+  .detail-total {
+    align-items: flex-end;
+    text-align: right;
+    padding-top: 0;
+    border-top: 0;
+    flex: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .detail-title {
+    font-size: 24px;
+    line-height: 32px;
+    letter-spacing: 0;
+  }
+
+  .detail-figure {
+    font-size: 36px;
+    line-height: 40px;
+  }
+}
+
+/* The ticker badge in a holdings row. A rounded rect rather than the mock's
+ * circle: a four-character ticker does not fit a 32px circle at 12px. */
+.badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 40px;
+  height: 32px;
+  padding-inline: var(--space-base);
+  border-radius: var(--radius);
+  background: var(--surface-container-high);
+  color: var(--primary);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 /* --- Controls ------------------------------------------------------------- */
 
-button {
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-base);
   height: var(--control-h);
-  padding: 0 var(--margin-sm);
-  border: 1px solid var(--accent);
-  border-radius: 0;
-  background: var(--accent);
-  color: var(--on-accent);
-  font: inherit;
-  font-weight: 700;
+  padding: 0 var(--space-md);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
+  transition: background-color 150ms, color 150ms, border-color 150ms;
 }
 
-button:hover {
-  background: color-mix(in srgb, var(--accent) 85%, var(--background));
+.button:hover {
+  background: color-mix(in srgb, var(--primary-container) 88%, black);
 }
 
+.button svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.button--block {
+  width: 100%;
+}
+
+/* The secondary action: outlined, never filled, so the page has one obvious
+ * primary. */
 .button--quiet {
   background: transparent;
-  color: var(--on-surface-variant);
-  border-color: var(--outline);
-  font-weight: 400;
+  border-color: var(--outline-variant);
+  color: var(--primary);
 }
 
 .button--quiet:hover {
+  background: var(--panel-hover);
+  border-color: var(--outline);
+}
+
+/* Text-only, for a card header's action. */
+.button--text {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+}
+
+.button--text:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+.button--danger {
   background: transparent;
-  color: var(--loss);
   border-color: var(--loss);
+  color: var(--loss);
+}
+
+.button--danger:hover {
+  background: var(--loss-surface);
 }
 
 input,
-select {
-  height: var(--control-h);
-  padding: 0 var(--gutter);
-  border: 1px solid var(--outline);
-  border-radius: 0;
-  background: var(--surface-container-lowest);
+select,
+textarea {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
   color: var(--on-surface);
-  font: inherit;
+  background: var(--panel);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  padding: 0 var(--space-sm);
+  height: var(--control-h);
 }
 
-input:focus,
-select:focus {
-  outline: none;
-  border-color: var(--accent);
+textarea {
+  height: auto;
+  padding: var(--space-base) var(--space-sm);
 }
 
-input[aria-invalid="true"],
-select[aria-invalid="true"] {
-  border-color: var(--loss);
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 0;
+  border-color: var(--primary);
 }
 
-/* --- Login ---------------------------------------------------------------- */
-
-.login-form {
-  display: grid;
-  gap: var(--gutter);
-  max-width: 22rem;
-  margin-top: var(--margin-lg);
+label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  font-size: 14px;
+  line-height: 20px;
 }
 
-.login-label {
-  color: var(--on-surface-variant);
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
 }
 
-.login-form button {
-  justify-self: start;
-  margin-top: var(--unit);
+/* --- Banners --------------------------------------------------------------
+ * Two, and they say different things: one is a standing fact about the
+ * instance, the other is the single pointer at the next setup step.
+ */
+
+.open-instance-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-base);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--warning-surface);
+  color: var(--warning);
+  border-bottom: 1px solid var(--outline-variant);
+  font-size: 14px;
+  line-height: 20px;
 }
 
-.login-error {
-  margin: 0;
-  color: var(--loss);
+.open-instance-banner strong {
+  color: var(--warning);
 }
 
-/* --- Settings ------------------------------------------------------------- */
-
-.settings-tabs {
+.first-run {
   display: flex;
   flex-wrap: wrap;
-  margin-bottom: var(--margin-lg);
-  border-bottom: 1px solid var(--outline-variant);
-}
-
-.settings-tab {
-  padding: var(--gutter) var(--margin-sm);
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  color: var(--on-surface-variant);
-  text-decoration: none;
-}
-
-.settings-tab:hover {
-  background: var(--surface-container);
-  color: var(--on-surface);
-}
-
-.settings-tab--active {
-  border-bottom-color: var(--accent);
-  color: var(--on-surface);
-  font-weight: 700;
-}
-
-.settings-summary {
-  margin: var(--margin-lg) 0 0;
-  max-width: 46rem;
-}
-
-.settings-summary dt {
-  font-weight: 600;
-  margin-top: var(--margin-sm);
-}
-
-.settings-summary dd {
-  margin: var(--unit) 0 0;
-  color: var(--on-surface-variant);
-}
-
-.breadcrumb {
-  margin: 0 0 var(--gutter);
-  color: var(--on-surface-variant);
-}
-
-/* --- Forms and records ---------------------------------------------------- */
-
-.panel-form,
-.danger-zone {
-  display: grid;
-  gap: var(--unit);
-  max-width: 30rem;
-  margin-top: var(--margin-lg);
-  padding: var(--margin-sm);
-  background: var(--surface-container);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--secondary-container);
   border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-xl);
 }
 
-.panel-form h2,
-.danger-zone h2 {
-  margin: 0 0 var(--gutter);
-  font-size: 18px;
-  line-height: 24px;
+.first-run p {
+  margin: 0;
+}
+
+/* --- Empty states ---------------------------------------------------------
+ * No figure, no axis, no chart frame — a zero and an empty instance must never
+ * look alike (§8.4).
+ */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+  padding: var(--space-xl) var(--space-lg);
+  background: var(--panel);
+  border: 1px dashed var(--outline-variant);
+  border-radius: var(--radius-xl);
+  text-align: center;
+  align-items: center;
+}
+
+.empty-state-headline {
+  font-size: 20px;
+  line-height: 28px;
   font-weight: 600;
 }
 
-.panel-form label {
-  color: var(--on-surface-variant);
-  margin-top: var(--unit);
-}
-
-.panel-form button {
-  justify-self: start;
-  margin-top: var(--gutter);
-}
-
-.danger-zone {
-  border-color: color-mix(in srgb, var(--loss) 40%, var(--outline-variant));
-}
-
-.danger-zone p {
+.empty-state-detail,
+.empty-note {
   margin: 0;
+  max-width: 52ch;
   color: var(--on-surface-variant);
 }
 
-.danger-zone button {
-  justify-self: start;
-  margin-top: var(--gutter);
-}
-
-.field-note {
+.coverage-note,
+.record-note,
+.field-note,
+.form-note {
   margin: 0;
   font-size: 12px;
   line-height: 16px;
@@ -912,97 +1529,135 @@ select[aria-invalid="true"] {
 }
 
 .field-error,
-.form-error {
+.form-error,
+.login-error {
   margin: 0;
+  font-size: 14px;
+  line-height: 20px;
   color: var(--loss);
 }
 
-.form-error {
-  margin: var(--margin-sm) 0;
-  padding: 0.7rem 0.9rem;
-  border: 1px solid color-mix(in srgb, var(--loss) 40%, transparent);
-  background: color-mix(in srgb, var(--loss) 8%, transparent);
-  max-width: 46rem;
-}
+/* --- Login ---------------------------------------------------------------- */
 
-.form-note {
-  margin: var(--margin-sm) 0 0;
-  color: var(--on-surface-variant);
-}
-
-.record-list {
-  list-style: none;
-  margin: var(--margin-lg) 0 0;
-  padding: 0;
+.login {
+  min-height: 100vh;
   display: grid;
-  gap: var(--gutter);
-  max-width: 46rem;
+  place-items: center;
+  padding: var(--space-lg);
 }
 
-.record {
-  background: var(--surface-container);
-  border: 1px solid var(--outline-variant);
-  padding: var(--gutter) var(--margin-sm);
-}
-
-.record-form {
-  display: flex;
-  gap: var(--gutter);
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.record-form input {
-  flex: 1 1 12rem;
-}
-
-.record-note {
-  margin: 0;
-  flex-basis: 100%;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--on-surface-variant);
-}
-
-.record-table {
+.login-form {
   width: 100%;
-  margin-top: var(--margin-lg);
-  border-collapse: collapse;
+  max-width: 22rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  background: var(--panel);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
 }
 
-.record-table th,
-.record-table td {
-  text-align: left;
-  padding: var(--gutter) var(--margin-sm);
+.login-label {
+  font-weight: 600;
+}
+
+/* --- Settings ------------------------------------------------------------- */
+
+.settings-tabs {
+  display: flex;
+  gap: var(--space-base);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-sm);
   border-bottom: 1px solid var(--outline-variant);
 }
 
-.record-table th {
+.settings-tabs a {
+  padding: var(--space-base) var(--space-md);
+  border-radius: var(--radius-lg);
   color: var(--on-surface-variant);
-  font-size: 11px;
-  line-height: 16px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  text-decoration: none;
+  font-weight: 600;
 }
 
-.record-row--closed td {
+.settings-tabs a:hover {
+  background: var(--panel-hover);
+  color: var(--on-surface);
+}
+
+.settings-tabs a[aria-current="page"] {
+  background: var(--secondary-container);
+  color: var(--primary);
+}
+
+.settings-summary {
+  margin: 0;
   color: var(--on-surface-variant);
 }
 
-.empty-note {
-  margin: var(--margin-lg) 0 0;
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-base);
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
   color: var(--on-surface-variant);
 }
 
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
+.breadcrumb a {
+  color: var(--on-surface-variant);
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+/* --- Forms and records ---------------------------------------------------- */
+
+.record-list {
+  list-style: none;
+  margin: 0;
   padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.record {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border-top: 1px solid var(--outline-variant);
+}
+
+.record:first-child {
+  border-top: 0;
+}
+
+.record-row--closed {
+  opacity: 0.6;
+}
+
+.record-form,
+.panel-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+}
+
+.danger-zone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  border-top: 1px solid var(--outline-variant);
 }

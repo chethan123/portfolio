@@ -18,7 +18,12 @@ export function meta() {
 export default function Income() {
   return (
     <section className="page">
-      <h1>Income</h1>
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Income</h1>
+          <p className="page-subtitle">What the portfolio pays out, and when.</p>
+        </div>
+      </header>
 
       <EmptyState>
         Dividend and interest income over time will appear here. Nothing records income yet —

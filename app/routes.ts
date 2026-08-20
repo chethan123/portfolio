@@ -9,8 +9,15 @@ import { type RouteConfig, index, route } from "@react-router/dev/routes";
 export default [
   index("routes/overview.tsx"),
   route("holdings", "routes/holdings.tsx"),
+  route("analysis", "routes/analysis.tsx"),
   route("income", "routes/income.tsx"),
   route("upload", "routes/upload.tsx"),
+
+  // The per-account drill-down (DESIGN.md §13.1). §8.1 had ruled it out on the
+  // grounds that a filtered Holdings table already is one; the Stitch "Account
+  // Details" screen is more than that filter, and the queries it needs are the
+  // dashboard's with one predicate added, so the exclusion was reversed.
+  route("accounts/:accountId", "routes/account.tsx"),
 
   // Settings is a section, not a page: `settings.tsx` is the tab strip and
   // everything that writes hangs off it (DESIGN.md §8.4).

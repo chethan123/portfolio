@@ -83,11 +83,16 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
 
   return (
     <>
-      <h1>People</h1>
-      <p className="page-lede">
-        Who is in the household. Every account belongs to exactly one person, so this is the
-        first thing to fill in — accounts cannot be created until someone is here to own them.
-      </p>
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">People</h1>
+          <p className="page-subtitle">
+            Who is in the household. Every account belongs to exactly one person, so this is
+            the first thing to fill in — accounts cannot be created until someone is here to
+            own them.
+          </p>
+        </div>
+      </header>
 
       {removalRefusal ? (
         <p className="form-error" role="alert">
@@ -98,82 +103,108 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
       {people.length === 0 ? (
         <p className="empty-note">Nobody is recorded yet.</p>
       ) : (
-        <ul className="record-list">
-          {people.map((person) => {
-            const errors = errorsFor("rename", person.id);
+        <section className="panel">
+          <ul className="record-list">
+            {people.map((person) => {
+              const errors = errorsFor("rename", person.id);
 
-            return (
-              <li key={person.id} className="record">
-                <Form method="post" className="record-form">
-                  <input type="hidden" name="personId" value={person.id} />
+              return (
+                <li key={person.id}>
+                  {/* The row *is* the form. `.record` and `.record-form` both
+                      pad, so nesting one in the other would inset every row
+                      twice over. */}
+                  <Form method="post" className="record record-form">
+                    <input type="hidden" name="personId" value={person.id} />
 
-                  <label className="visually-hidden" htmlFor={`name-${person.id}`}>
-                    Name
-                  </label>
-                  <input
-                    id={`name-${person.id}`}
-                    name="name"
-                    // What was typed survives a refusal; otherwise the stored
-                    // name is what the box shows.
-                    defaultValue={errors ? (actionData?.values.name ?? "") : person.name}
-                    aria-invalid={errors?.name ? true : undefined}
-                  />
+                    <label className="visually-hidden" htmlFor={`name-${person.id}`}>
+                      Name
+                    </label>
+                    <input
+                      id={`name-${person.id}`}
+                      name="name"
+                      // What was typed survives a refusal; otherwise the stored
+                      // name is what the box shows.
+                      defaultValue={errors ? (actionData?.values.name ?? "") : person.name}
+                      aria-invalid={errors?.name ? true : undefined}
+                    />
 
-                  <button type="submit" name="intent" value="rename">
-                    Save
-                  </button>
-                  <button
-                    type="submit"
-                    name="intent"
-                    value="remove"
-                    className="button--quiet"
-                    // Not disabled when they own accounts: the refusal explains
-                    // itself, and a dead button explains nothing.
-                    aria-label={`Remove ${person.name}`}
-                  >
-                    Remove
-                  </button>
+                    {errors?.name ? (
+                      <p className="field-error" role="alert">
+                        {errors.name}
+                      </p>
+                    ) : null}
 
-                  <p className="record-note">
-                    {person.accountCount === 0
-                      ? "No accounts"
-                      : `${person.accountCount} account${person.accountCount === 1 ? "" : "s"}`}
-                  </p>
-
-                  {errors?.name ? (
-                    <p className="field-error" role="alert">
-                      {errors.name}
+                    <p className="record-note">
+                      {person.accountCount === 0 ? (
+                        "No accounts"
+                      ) : (
+                        <>
+                          <span className="u-data">{person.accountCount}</span> account
+                          {person.accountCount === 1 ? "" : "s"}
+                        </>
+                      )}
                     </p>
-                  ) : null}
-                </Form>
-              </li>
-            );
-          })}
-        </ul>
+
+                    {/* Outlined, not filled: a list of five Saves would leave
+                        the page with five primary actions and no obvious one.
+                        The filled button belongs to "Add person" below. */}
+                    <button
+                      type="submit"
+                      name="intent"
+                      value="rename"
+                      className="button button--quiet"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="submit"
+                      name="intent"
+                      value="remove"
+                      className="button button--danger"
+                      // Not disabled when they own accounts: the refusal explains
+                      // itself, and a dead button explains nothing.
+                      aria-label={`Remove ${person.name}`}
+                    >
+                      Remove
+                    </button>
+                  </Form>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
 
-      <Form method="post" className="panel-form">
-        <h2>Add a person</h2>
+      <section className="panel">
+        <header className="panel-header">
+          <h2 className="panel-title">Add a person</h2>
+        </header>
 
-        <label htmlFor="new-person-name">Name</label>
-        <input
-          id="new-person-name"
-          name="name"
-          defaultValue={errorsFor("create") ? (actionData?.values.name ?? "") : ""}
-          aria-invalid={errorsFor("create")?.name ? true : undefined}
-          autoComplete="off"
-        />
+        <Form method="post" className="panel-form">
+          <div>
+            <label htmlFor="new-person-name">
+              Name
+              <input
+                id="new-person-name"
+                name="name"
+                defaultValue={errorsFor("create") ? (actionData?.values.name ?? "") : ""}
+                aria-invalid={errorsFor("create")?.name ? true : undefined}
+                autoComplete="off"
+              />
+            </label>
 
-        {errorsFor("create")?.name ? (
-          <p className="field-error" role="alert">
-            {errorsFor("create")?.name}
-          </p>
-        ) : null}
+            {errorsFor("create")?.name ? (
+              <p className="field-error" role="alert">
+                {errorsFor("create")?.name}
+              </p>
+            ) : null}
+          </div>
 
-        <button type="submit" name="intent" value="create">
-          Add person
-        </button>
-      </Form>
+          <button type="submit" name="intent" value="create" className="button">
+            Add person
+          </button>
+        </Form>
+      </section>
     </>
   );
 }

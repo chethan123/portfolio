@@ -53,23 +53,30 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Login({ loaderData, actionData }: Route.ComponentProps) {
   return (
     <section className="page login">
-      <h1>Sign in</h1>
-      <p className="page-lede">This instance is password protected.</p>
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Sign in</h1>
+          <p className="page-subtitle">This instance is password protected.</p>
+        </div>
+      </header>
 
       <Form method="post" className="login-form">
         <input type="hidden" name="next" value={loaderData.next} />
 
+        {/* The box sits inside its label: `label` is a flex column in the
+            stylesheet, so nesting is what puts the caption 4px above the box
+            rather than a form gap away from it. */}
         <label className="login-label" htmlFor="password">
           Password
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            autoFocus
+            required
+          />
         </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          autoFocus
-          required
-        />
 
         {actionData?.error ? (
           <p className="login-error" role="alert">
@@ -77,7 +84,9 @@ export default function Login({ loaderData, actionData }: Route.ComponentProps) 
           </p>
         ) : null}
 
-        <button type="submit">Sign in</button>
+        <button type="submit" className="button button--block">
+          Sign in
+        </button>
       </Form>
     </section>
   );

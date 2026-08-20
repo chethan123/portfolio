@@ -71,18 +71,21 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
         <Link to="/settings/accounts">← All accounts</Link>
       </p>
 
-      <h1>{account.name}</h1>
-
-      {account.isClosed ? (
-        <p className="page-lede">
-          This account is closed. It no longer counts toward current net worth, and it still
-          counts on every date before it closed.
-        </p>
-      ) : (
-        <p className="page-lede">
-          Correcting a tax treatment here changes every figure computed from this account.
-        </p>
-      )}
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">{account.name}</h1>
+          {account.isClosed ? (
+            <p className="page-subtitle">
+              This account is closed. It no longer counts toward current net worth, and it
+              still counts on every date before it closed.
+            </p>
+          ) : (
+            <p className="page-subtitle">
+              Correcting a tax treatment here changes every figure computed from this account.
+            </p>
+          )}
+        </div>
+      </header>
 
       {actionData?.saved ? (
         <p className="form-note" role="status">
@@ -90,30 +93,44 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
         </p>
       ) : null}
 
-      <Form method="post" className="panel-form">
-        <AccountFields
-          people={people}
-          values={values}
-          errors={actionData?.errors}
-          idPrefix={`account-${account.id}`}
-        />
+      {/* One panel, two forms. The danger zone carries the hairline that
+          separates it from the fields above, so putting it in a card of its own
+          would leave that rule floating at the top of an empty edge. */}
+      <section className="panel">
+        <Form method="post" className="panel-form">
+          <AccountFields
+            people={people}
+            values={values}
+            errors={actionData?.errors}
+            idPrefix={`account-${account.id}`}
+          />
 
-        <button type="submit">Save changes</button>
-      </Form>
-
-      {account.isClosed ? null : (
-        <Form method="post" className="danger-zone">
-          <h2>Close this account</h2>
-          <p>
-            Closing records today as its closing date. It stops counting toward current net
-            worth from then on, and every figure for a date before today keeps counting it.
-            Accounts are never deleted, so this is how one is retired.
-          </p>
-          <button type="submit" name="intent" value="close" className="button--quiet">
-            Close {account.name}
+          <button type="submit" className="button">
+            Save changes
           </button>
         </Form>
-      )}
+
+        {account.isClosed ? null : (
+          <Form method="post" className="danger-zone">
+            <div>
+              <h2 className="panel-title">Close this account</h2>
+              <p className="form-note">
+                Closing records today as its closing date. It stops counting toward current net
+                worth from then on, and every figure for a date before today keeps counting it.
+                Accounts are never deleted, so this is how one is retired.
+              </p>
+            </div>
+            <button
+              type="submit"
+              name="intent"
+              value="close"
+              className="button button--danger"
+            >
+              Close {account.name}
+            </button>
+          </Form>
+        )}
+      </section>
     </>
   );
 }

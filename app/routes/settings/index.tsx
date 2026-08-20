@@ -15,31 +15,39 @@ export function meta() {
 export default function SettingsIndex() {
   return (
     <>
-      <h1>Settings</h1>
-      <p className="page-lede">
-        Everything that changes what the app knows, other than uploading a statement.
-      </p>
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Settings</h1>
+          <p className="page-subtitle">
+            Everything that changes what the app knows, other than uploading a statement.
+          </p>
+        </div>
+      </header>
 
-      <dl className="settings-summary">
-        <dt>
-          <Link to="/settings/people">People</Link>
-        </dt>
-        <dd>Who is in the household. Every account belongs to exactly one of them.</dd>
+      <section className="panel">
+        <div className="panel-body">
+          <dl className="settings-summary">
+            <dt>
+              <Link to="/settings/people">People</Link>
+            </dt>
+            <dd>Who is in the household. Every account belongs to exactly one of them.</dd>
 
-        <dt>
-          <Link to="/settings/accounts">Accounts</Link>
-        </dt>
-        <dd>
-          Brokerage, workplace plan, IRA, bank and loan accounts — with an owner, a tax
-          treatment, and a closing date when one stops being used.
-        </dd>
+            <dt>
+              <Link to="/settings/accounts">Accounts</Link>
+            </dt>
+            <dd>
+              Brokerage, workplace plan, IRA, bank and loan accounts — with an owner, a tax
+              treatment, and a closing date when one stops being used.
+            </dd>
 
-        <dt>Classifications, Instruments and History</dt>
-        <dd>
-          Asset labels, ticker and manual-price management, and the hand-typed net worth
-          series from before this instance existed. Later slices build these.
-        </dd>
-      </dl>
+            <dt>Classifications, Instruments and History</dt>
+            <dd>
+              Asset labels, ticker and manual-price management, and the hand-typed net worth
+              series from before this instance existed. Later slices build these.
+            </dd>
+          </dl>
+        </div>
+      </section>
     </>
   );
 }

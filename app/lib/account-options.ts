@@ -49,3 +49,17 @@ export const taxTreatmentValues = TAX_TREATMENTS.map((treatment) => treatment.va
   TaxTreatment,
   ...TaxTreatment[],
 ];
+
+/**
+ * The label a stored value wears on screen.
+ *
+ * Falls back to the value itself rather than throwing: a row written before a
+ * kind was renamed should render as the raw slug, which is ugly and legible,
+ * rather than taking the page down.
+ */
+export function labelOf<Value extends string>(
+  options: ReadonlyArray<Option<Value>>,
+  value: Value,
+): string {
+  return options.find((option) => option.value === value)?.label ?? value;
+}

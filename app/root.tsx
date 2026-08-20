@@ -1,4 +1,5 @@
 import {
+  Link,
   Links,
   Meta,
   NavLink,
@@ -13,6 +14,7 @@ import {
 
 import { FirstRunPrompt } from "~/components/first-run-prompt";
 import {
+  AnalysisIcon,
   DashboardIcon,
   HoldingsIcon,
   IncomeIcon,
@@ -69,16 +71,17 @@ export async function loader() {
 /**
  * DESIGN.md §8.4 — ordered by how often each page is opened.
  *
- * The rail's *shape* is the Stitch screen's (§13.1): fixed 200px, a 2px accent
- * stroke on the active item's leading edge. Its *contents* are §8.4's five
- * items rather than the mock's three, because the ordering there is a decision
- * about frequency of use and the routes it names already exist.
+ * The rail's *shape* is the Stitch screens' (§13.1): a fixed 280px column, a
+ * brand tile at its head, a 4px accent stroke on the active item, and one
+ * filled button at its foot. Its *contents* are §8.4's items rather than the
+ * mock's three, because that ordering is a decision about frequency of use and
+ * the routes it names already exist.
  */
 const NAVIGATION = [
   { to: "/", label: "Overview", end: true, Icon: DashboardIcon },
   { to: "/holdings", label: "Holdings", end: false, Icon: HoldingsIcon },
+  { to: "/analysis", label: "Analysis", end: false, Icon: AnalysisIcon },
   { to: "/income", label: "Income", end: false, Icon: IncomeIcon },
-  { to: "/upload", label: "Upload", end: false, Icon: UploadIcon },
 ] as const;
 
 /** Settings sits at the foot of the rail: a few times ever, not daily (§8.4). */
@@ -109,6 +112,21 @@ function NavItems({ items }: { items: readonly NavItem[] }) {
   );
 }
 
+/** The mark, at both sizes it is drawn: in the rail, and in the phone's top bar. */
+function Brand() {
+  return (
+    <Link className="app-brand" to="/">
+      <span className="app-brand-tile" aria-hidden="true">
+        P
+      </span>
+      <span>
+        <span className="app-brand-mark">Portfolio</span>
+        <span className="app-brand-meta u-label">Self-hosted</span>
+      </span>
+    </Link>
+  );
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   // Read from the root loader rather than taken as a prop, because `Layout`
   // wraps error boundaries too, where there is no loader data at all. The
@@ -128,30 +146,53 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#f7f9fb" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#0b1326" media="(prefers-color-scheme: dark)" />
         <Meta />
         <Links />
       </head>
       <body>
         <div className="app">
           <nav className="app-rail" aria-label="Primary">
-            <a className="app-brand" href="/">
-              <span className="app-brand-mark">PORTFOLIO</span>
-              <span className="app-brand-meta u-label">Self-hosted</span>
-            </a>
+            <Brand />
             <ul className="app-nav">
               <NavItems items={NAVIGATION} />
             </ul>
             <ul className="app-nav app-nav--footer">
               <NavItems items={FOOTER_NAVIGATION} />
             </ul>
+            <Link className="button button--block app-rail-action" to="/upload">
+              <UploadIcon />
+              Upload statement
+            </Link>
           </nav>
+
           <div className="app-canvas">
+            {/* Below 1024px the rail is gone, so the bar carries the mark and
+             * the one action the rail's foot would have held. */}
+            <header className="app-topbar">
+              <Brand />
+              <Link className="button" to="/upload">
+                <UploadIcon />
+                Upload
+              </Link>
+            </header>
+
             {rootData?.authConfigured === false ? <OpenInstanceBanner /> : null}
             <main className="app-main">
               {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
               {children}
             </main>
           </div>
+
+          {/* The phone's nav: a bottom bar, which is what every mobile mock
+           * does — no drawer and no hamburger anywhere in the set (§13.1). */}
+          <nav className="app-bottomnav" aria-label="Primary">
+            <ul className="app-nav">
+              <NavItems items={NAVIGATION} />
+              <NavItems items={FOOTER_NAVIGATION} />
+            </ul>
+          </nav>
         </div>
         <ScrollRestoration />
         <Scripts />
@@ -178,8 +219,12 @@ export function ErrorBoundary() {
 
   return (
     <section className="page">
-      <h1>{title}</h1>
-      <p className="page-lede">{String(detail)}</p>
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">{title}</h1>
+          <p className="page-subtitle">{String(detail)}</p>
+        </div>
+      </header>
     </section>
   );
 }
