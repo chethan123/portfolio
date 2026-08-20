@@ -5,7 +5,8 @@
  * The domain modules own their own rules — `people.server.ts` decides what a
  * name is — and this module is only the shared vocabulary they express those
  * rules in: one error type carrying per-field messages, one parse helper, and
- * the two text shapes every settings form is built from.
+ * the field shapes the forms are built from — two of text, one of money and one
+ * of dates.
  *
  * It exists so that a route never has to know about Zod. A route reads the
  * form, hands the raw fields to a domain function and renders whatever comes
@@ -126,3 +127,122 @@ export function formFields(form: FormData): Record<string, string> {
   }
   return fields;
 }
+
+/**
+ * An amount of money, typed the way a person types one, as an unsigned decimal
+ * string.
+ *
+ * `$14,500.00`, `14,500`, `14500.00` and `14500` are one amount written four
+ * ways, and refusing three of them would be refusing the way statements print
+ * the number being copied. The currency mark, the thousands separators and the
+ * spaces come out; the digits and the point are all that is kept.
+ *
+ * **No sign.** The caller decides the direction from what the account *is*
+ * (DESIGN.md §2 puts the sign in quantity), so a minus typed here is refused
+ * rather than honoured — a form that accepts both a signed amount and a
+ * kind-derived sign has two sources of truth for whether money is owed, and
+ * they can disagree.
+ *
+ * **No `Number`.** The output is the digits that were typed, normalised as
+ * text, because §4.1 keeps money out of floats end to end. `z.coerce.number`
+ * would undo the whole discipline in one call.
+ *
+ * @param label how the amount is named in a refusal, e.g. "A balance".
+ * @param maxIntegerDigits digits before the point. Defaults to 12, which is
+ *        what `numeric(20, 8)` has room for once the scale is taken out.
+ */
+export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
+  z
+    .string({ message: `${label} is required.` })
+    .trim()
+    .transform((value) =>
+      value
+        .replace(/^\+/, "")
+        // U+00A0 is what a copy out of a rendered statement brings with it.
+        .replace(/[$\s ,]/g, "")
+        // ".50" and "50." are unambiguous, so they are completed rather than
+        // refused. Every other shape has to be exactly right.
+        .replace(/^\./, "0.")
+        .replace(/\.$/, ""),
+    )
+    .superRefine((value, ctx) => {
+      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
+
+      if (value === "") {
+        refuse(`${label} is required.`);
+      } else if (/^[-−]/.test(value)) {
+        refuse(
+          `${label} is entered as a plain amount, without a minus sign — ` +
+            "whether it counts for or against you follows from the kind of account it is.",
+        );
+      } else if (!/^\d+(\.\d+)?$/.test(value)) {
+        refuse(`${label} must be an amount in dollars, like 1,250.00.`);
+      } else if ((value.split(".")[1] ?? "").length > 2) {
+        refuse(`${label} is recorded to the cent, so it takes at most two decimal places.`);
+      } else if ((value.split(".")[0] ?? "").replace(/^0+/, "").length > maxIntegerDigits) {
+        refuse(`${label} is larger than this application can store.`);
+      }
+    });
+
+/**
+ * The furthest-ahead date {@link recordedDate} will accept.
+ *
+ * Exported so a date control can carry the same boundary as its `max`. The rule
+ * is stated once and read twice, rather than a hint in the markup quietly
+ * disagreeing with the refusal behind it.
+ */
+export function latestRecordableDate(): string {
+  return new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * A date something was true on, as `YYYY-MM-DD`.
+ *
+ * Two refusals, each earning its place:
+ *
+ * **A date that does not exist.** `2026-02-30` is a real thing to type and
+ * Postgres would reject it as a `date`, which reaches the family as a driver
+ * error rather than a sentence.
+ *
+ * **A date in the future.** This is the one that matters. "Latest" is
+ * `max(as_of_date)` per account (`latest_position_set`), so a year typed as
+ * 2126 does not merely record a wrong date — it pins the account to that row
+ * and no later statement can outrank it until 2126. A mistyped digit becomes a
+ * balance that cannot be corrected by recording the right one.
+ *
+ * Tomorrow is allowed, and only tomorrow. The browser's date control speaks the
+ * reader's local date while everything here speaks UTC (§4.1), so a household
+ * far enough east is on tomorrow's date honestly. One day of slack covers every
+ * real timezone; two would start covering typos.
+ *
+ * @param label how the date is named in a refusal, e.g. "The date".
+ */
+export const recordedDate = (label: string) =>
+  z
+    .string({ message: `${label} is required.` })
+    .trim()
+    .superRefine((value, ctx) => {
+      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
+
+      if (value === "") {
+        refuse(`${label} is required.`);
+        return;
+      }
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        refuse(`${label} must be written as YYYY-MM-DD.`);
+        return;
+      }
+
+      // Round-tripping is the calendar check: `2026-02-30` parses to March 2nd
+      // and serialises back as a different string.
+      const parsed = new Date(`${value}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+        refuse(`${label} is not a date on the calendar.`);
+        return;
+      }
+
+      if (value > latestRecordableDate()) {
+        refuse(`${label} is in the future, and a balance can only be recorded once it is true.`);
+      }
+    });
