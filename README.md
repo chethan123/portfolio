@@ -60,6 +60,34 @@ its own.
   words and offers to clear itself. It never borrows the first-run screen's "there is no data yet",
   which would be false.
 
+### Correcting a position — the write that lives on the table
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-edit-dark.png">
+  <img alt="One row of the Holdings table opened for correction: the quantity and cost basis have become boxes in their own columns, and the line beneath says what saving will record" src="docs/screenshots/holdings-edit-light.png">
+</picture>
+
+A statement arrives quarterly and a position changes weekly. Rather than run the four-screen upload
+for "the 401k contribution added eleven units", any row on Holdings opens in place: the quantity and
+the cost basis become boxes in their own columns, and Save records it.
+
+- **It appends, it never overwrites.** Saving records a new statement carrying every other position
+  in the account forward unchanged, and the statement it corrects is kept on its own date. Nothing
+  already recorded moves — your net worth in March does not change because you fixed a figure in
+  August. Undo is a second correction. The line under the open row names the date the new statement
+  will carry, which is today unless the statement being corrected is dated later still.
+- **The line under the row says all of that before you click it**, not after. What "edit" does here
+  is not what edit usually does, and finding out afterwards is too late.
+- **It changes figures, not membership.** A correction can say "not 100 units but 120", and can say
+  "zero", and cannot say "and also some Apple" — adding an instrument means resolving a name against
+  the alias table, which is what an upload is for. Nor can it turn something held into something
+  owed: the sign lives in the quantity, so flipping it would move net worth by twice the figure while
+  looking like an ordinary edit.
+- **It is still a URL.** The editor is `?edit=<account>.<instrument>`, so it opens exactly one row,
+  survives a reload, and closes the moment you touch a filter. Like the rest of the screen it works
+  with JavaScript turned off — with it off, Save is a plain form post and the confirmation comes back
+  on the next page.
+
 ### Analysis — where the money actually sits
 
 <picture>

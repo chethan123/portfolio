@@ -129,6 +129,31 @@ export function formFields(form: FormData): Record<string, string> {
 }
 
 /**
+ * The digits and the point, extracted from the way a person writes a figure.
+ *
+ * Shared by all three number fields — {@link moneyMagnitude},
+ * {@link signedQuantity} and {@link perShareAmount} — because all three are
+ * copied off the same statements, and a second, subtly different set of strip
+ * rules would be a second answer to "is `1 234.5` a number". It was two copies
+ * for a while, and the lone-point bug below was in both of them — which is the
+ * argument for one: a fault found in one box is fixed for every box.
+ */
+const bareDecimal = (value: string): string =>
+  value
+    .replace(/^\+/, "")
+    // U+00A0 is what a copy out of a rendered statement brings with it, and
+    // U+2009 is the thin space some brokerages group thousands with.
+    .replace(/[$\s ,]/g, "")
+    // ".50" and "50." are unambiguous, so they are completed rather than
+    // refused. Every other shape has to be exactly right — and the lookarounds
+    // are what keep a bare "." out of that generosity. Without them the two
+    // rules compose: "." becomes "0." becomes "0", and a stray keystroke is
+    // accepted as a figure of zero. On a quantity that reads as the whole
+    // position sold; on a balance it empties an account.
+    .replace(/^\.(?=\d)/, "0.")
+    .replace(/(?<=\d)\.$/, "");
+
+/**
  * An amount of money, typed the way a person types one, as an unsigned decimal
  * string.
  *
@@ -155,16 +180,10 @@ export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
   z
     .string({ message: `${label} is required.` })
     .trim()
-    .transform((value) =>
-      value
-        .replace(/^\+/, "")
-        // U+00A0 is what a copy out of a rendered statement brings with it.
-        .replace(/[$\s ,]/g, "")
-        // ".50" and "50." are unambiguous, so they are completed rather than
-        // refused. Every other shape has to be exactly right.
-        .replace(/^\./, "0.")
-        .replace(/\.$/, ""),
-    )
+    // Shared with {@link signedQuantity} and {@link perShareAmount}: three
+    // boxes copied off the same statements, and one answer to what a person is
+    // allowed to write in them.
+    .transform(bareDecimal)
     .superRefine((value, ctx) => {
       const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
 
@@ -246,3 +265,108 @@ export const recordedDate = (label: string) =>
         refuse(`${label} is in the future, and a balance can only be recorded once it is true.`);
       }
     });
+
+/** What `numeric(20, 8)` keeps after the point. */
+const QUANTITY_DECIMALS = 8;
+
+/** What `numeric(20, 4)` keeps after the point. */
+const PER_SHARE_DECIMALS = 4;
+
+/**
+ * A quantity held, as a **signed** decimal string at `numeric(20, 8)`'s scale.
+ *
+ * The opposite decision to {@link moneyMagnitude}'s, and the difference is the
+ * whole reason both exist. `moneyMagnitude` serves a form that asks "what is
+ * the balance?" of an account whose direction is known from its kind (§2), so
+ * accepting a sign there would give the app two sources of truth for whether
+ * money is owed. This one serves a box that opens *containing the quantity
+ * already on the row* — a loan reads `−8,000` in the table and reads `−8,000`
+ * in the box, and the reader edits the digits around a minus sign that was
+ * already there. Stripping the sign out to re-derive it would mean printing a
+ * number the screen has never shown.
+ *
+ * That makes round-tripping `formatQuantity`'s output a hard requirement rather
+ * than a nicety: the box is prefilled with it, so U+2212 (the true minus the
+ * table prints) and the thousands separators must both come back in.
+ *
+ * **`−0` is not a thing.** A negative zero is a debt of nothing written as
+ * though it were something, exactly as `setBalance` says of the same figure,
+ * and it would print as `−0` in the table.
+ *
+ * @param label how the quantity is named in a refusal, e.g. "A quantity".
+ * @param maxIntegerDigits digits before the point. Defaults to 12, which is
+ *        what `numeric(20, 8)` has room for once the scale is taken out.
+ */
+export const signedQuantity = (label: string, maxIntegerDigits = 12) =>
+  z
+    .string({ message: `${label} is required.` })
+    .trim()
+    // U+2212 in, ASCII out: the table prints a true minus and the driver takes
+    // a hyphen, so the conversion happens once, here, rather than at the edge
+    // of every caller.
+    .transform((value) => bareDecimal(value).replace(/^−/, "-"))
+    .superRefine((value, ctx) => {
+      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
+
+      if (value === "" || value === "-") {
+        refuse(`${label} is required.`);
+      } else if (!/^-?\d+(\.\d+)?$/.test(value)) {
+        refuse(`${label} must be a number, like 120.5 — or −8,000 for something owed.`);
+      } else if ((value.split(".")[1] ?? "").length > QUANTITY_DECIMALS) {
+        refuse(
+          `${label} is recorded to ${QUANTITY_DECIMALS} decimal places, which is finer than any ` +
+            "brokerage reports a fractional share.",
+        );
+      } else if (
+        (value.split(".")[0] ?? "").replace(/^-/, "").replace(/^0+/, "").length > maxIntegerDigits
+      ) {
+        refuse(`${label} is larger than this application can store.`);
+      }
+    })
+    // After the checks, so that "−0.00" is refused for nothing and normalised
+    // rather than being refused for its sign.
+    .transform((value) => (/^-0+(\.0+)?$/.test(value) ? value.slice(1) : value));
+
+/**
+ * What one share cost, where blank means "the statement did not say".
+ *
+ * Unsigned, because a price is a positive market fact even for a position held
+ * negative (§2) — the sign lives in the quantity it multiplies.
+ *
+ * Four decimal places rather than {@link moneyMagnitude}'s two, because
+ * `holding.cost_basis_per_share` is `numeric(20, 4)` and a box prefilled from
+ * that column must accept what it was prefilled with. A two-place rule here
+ * would refuse `31.4159` on a resubmit having just printed it.
+ *
+ * Blank becomes `null`, never `0`: a cost basis of zero claims the shares were
+ * free and prints an unrealized gain equal to the whole position, which is the
+ * exact reading `valuation.server.ts` refuses everywhere else.
+ *
+ * @param label how the figure is named in a refusal, e.g. "A cost basis".
+ */
+export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
+  z
+    .string()
+    .trim()
+    .transform(bareDecimal)
+    .superRefine((value, ctx) => {
+      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
+
+      if (value === "") return;
+
+      if (/^[-−]/.test(value)) {
+        refuse(
+          `${label} is what one share cost, which is never negative — a position held short or ` +
+            "owed carries its sign in the quantity instead.",
+        );
+      } else if (!/^\d+(\.\d+)?$/.test(value)) {
+        refuse(`${label} must be an amount in dollars, like 92.4150.`);
+      } else if ((value.split(".")[1] ?? "").length > PER_SHARE_DECIMALS) {
+        refuse(`${label} is recorded to ${PER_SHARE_DECIMALS} decimal places, and no further.`);
+      } else if ((value.split(".")[0] ?? "").replace(/^0+/, "").length > maxIntegerDigits) {
+        refuse(`${label} is larger than this application can store.`);
+      }
+    })
+    .transform((value) => (value === "" ? null : value))
+    .nullish()
+    .transform((value) => value ?? null);
