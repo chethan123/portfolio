@@ -330,7 +330,10 @@ Through the view builder:
   dimension name is ignored and the table renders unfiltered.
 - **Discrimination.** A dimension with one distinct value offers no control; the same dimension with
   two offers both; options are drawn from the loaded rows rather than from a fixed list; the option
-  set narrows as other filters narrow the rows.
+  set is drawn from the *whole* portfolio rather than from what the other filters have already left,
+  so a control cannot lose the option you would widen back through; and a selected key that no
+  holding carries still gets an option of its own, so the select cannot silently fall back to "All"
+  above an empty table.
 - **Grouping and subtotals.** Grouping by each dimension produces the expected groups; a subtotal is
   the exact decimal sum of its rows, asserted as a string, including a case where a float sum would
   drift; groups are ordered largest first with a deterministic tie-break; every row appears in

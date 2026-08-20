@@ -34,8 +34,12 @@
  * rather than argued with: {@link availableFilters} returns a dimension only if
  * the data actually holds two or more distinct values for it, so a one-person
  * household is never shown an Owner select that can only mean "everyone", and
- * every option it does show is a value some holding really has. No filter in
- * this screen can select an empty result.
+ * every option it does show is a value some holding really has — so no *single*
+ * filter can select an empty table. Two of them still can, and deliberately:
+ * the options are read from the whole portfolio rather than from what the other
+ * filters have already left, because options that vanished as you narrowed
+ * would leave no way to widen again. An empty intersection is a real answer and
+ * the screen says so in words.
  *
  * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
  * either job by hand.
@@ -117,6 +121,15 @@ type Dimension = {
   label: string;
   /** The caption above the filter's `<select>`. */
   filterLabel: string;
+  /**
+   * The chosen value as a fragment of a sentence — "at Chase", "owned by Bob".
+   *
+   * A control's caption and the same fact in prose are not the same words. The
+   * select above the box says "Brokerage" because it is labelling a field;
+   * a sentence explaining why the table is empty has to read as English, and
+   * "nothing is brokerage Chase and asset class Equity" does not.
+   */
+  phrase: (label: string) => string;
   of: (holding: ValuedHolding) => Facet;
 };
 
@@ -134,6 +147,7 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     id: "owner",
     label: "Owner",
     filterLabel: "Owner",
+    phrase: (label) => `owned by ${label}`,
     // Keyed on the owner's id rather than their name, for the reason
     // `allocationByPerson` gives: two people in one household can share a first
     // name, and a filter that merged them would be wrong invisibly.
@@ -147,6 +161,7 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     id: "account",
     label: "Account",
     filterLabel: "Account",
+    phrase: (label) => `in ${label}`,
     of: (holding) => ({
       key: holding.accountId,
       label: holding.accountName,
@@ -160,12 +175,14 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     id: "institution",
     label: "Brokerage",
     filterLabel: "Brokerage",
+    phrase: (label) => `at ${label}`,
     of: (holding) => plain(holding.institution),
   },
   {
     id: "kind",
     label: "Account type",
     filterLabel: "Account type",
+    phrase: (label) => `in a ${label.toLowerCase()} account`,
     of: (holding) => ({
       key: holding.accountKind,
       label: SHORT_KIND[holding.accountKind],
@@ -176,6 +193,7 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     id: "tax",
     label: "Tax treatment",
     filterLabel: "Tax treatment",
+    phrase: (label) => label.toLowerCase(),
     of: (holding) => ({
       key: holding.taxTreatment,
       label: SHORT_TAX[holding.taxTreatment],
@@ -186,12 +204,14 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     id: "classification",
     label: "Classification",
     filterLabel: "Classification",
+    phrase: (label) => `classified ${label}`,
     of: (holding) => plain(holding.classification),
   },
   {
     id: "assetClass",
     label: "Asset class",
     filterLabel: "Asset class",
+    phrase: (label) => label.toLowerCase(),
     of: (holding) => ({
       key: holding.assetClass,
       label: labelOf(ASSET_CLASSES, holding.assetClass),
@@ -413,6 +433,14 @@ export type FilterControl = {
   id: DimensionId;
   label: string;
   selected: string;
+  /** The selection as a sentence fragment, or `null` when nothing is selected. */
+  selectedPhrase: string | null;
+  /**
+   * The selected key names something no holding carries — a bookmark from
+   * before an account closed, or a hand-edited URL. A different empty result
+   * from "these two filters do not overlap", and worth different words.
+   */
+  selectedIsAbsent: boolean;
   options: ReadonlyArray<{ value: string; label: string }>;
 };
 
@@ -442,22 +470,41 @@ export function availableFilters(
 
   for (const dimension of DIMENSIONS) {
     const options = new Map<string, string>();
+    // The short label, for prose — the option label carries a disambiguating
+    // tail that reads badly in a sentence.
+    const phrases = new Map<string, string>();
 
     for (const holding of holdings) {
       const facet = dimension.of(holding);
       if (!options.has(facet.key)) options.set(facet.key, facet.optionLabel);
+      if (!phrases.has(facet.key)) phrases.set(facet.key, facet.label);
     }
 
     const selected = query.filters.get(dimension.id) ?? "";
     if (options.size < 2 && selected === "") continue;
 
+    const listed = [...options.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => compareText(a.label, b.label));
+
+    // A key nothing in the portfolio carries — a bookmark from before an
+    // account was closed, a hand-edited URL. `parseQuery` keeps it rather than
+    // widening the request behind the reader's back, so the select needs
+    // somewhere to point: without an option of its own it would fall back to
+    // the first, and every filter would read "All" beside an empty table.
+    if (selected !== "" && !options.has(selected)) {
+      listed.unshift({ value: selected, label: "Not in this portfolio" });
+    }
+
+    const chosen = phrases.get(selected);
+
     controls.push({
       id: dimension.id,
       label: dimension.filterLabel,
       selected,
-      options: [...options.entries()]
-        .map(([value, label]) => ({ value, label }))
-        .sort((a, b) => compareText(a.label, b.label)),
+      selectedPhrase: selected === "" || chosen === undefined ? null : dimension.phrase(chosen),
+      selectedIsAbsent: selected !== "" && chosen === undefined,
+      options: listed,
     });
   }
 
@@ -536,14 +583,23 @@ export type HoldingsGroup = {
   holdings: ValuedHolding[];
   total: HoldingsTotal;
   /**
-   * Decimal string, six places, of the gross positive total — the same
+   * Decimal string, six places, of the **gross positive total** — the same
    * denominator `allocation.ts` argues for at length, so that a liability's
    * share stays finite and keeps its sign as the household's net worth crosses
    * zero, and so the positive groups sum to `1.000000`. A screen must read the
    * sign before it draws a width from it, and must say which denominator it
-   * used.
+   * used: it is not a share of the total printed at the foot of the table, and
+   * with a liability in the set the two differ.
+   *
+   * `null` in the two cases where there is no fraction to state rather than a
+   * fraction that happens to be zero: a group nothing could price, whose value
+   * is itself `null`, and a filtered set with nothing positive in it, which
+   * offers no base to be a fraction of. Both render as a dash. Coercing either
+   * to `0.000000` would be the same null-as-zero this module refuses
+   * everywhere else, and it would read as "this group is none of the
+   * portfolio".
    */
-  share: string;
+  share: string | null;
 };
 
 /**
@@ -593,10 +649,10 @@ export function groupHoldings(
       label,
       holdings: rows,
       total,
-      share: render(
-        base === 0n ? 0n : divide(toUnits(total.value ?? "0", MONEY_SCALE), base, SHARE_SCALE),
-        SHARE_SCALE,
-      ),
+      share:
+        base === 0n || total.value === null
+          ? null
+          : render(divide(toUnits(total.value, MONEY_SCALE), base, SHARE_SCALE), SHARE_SCALE),
     }));
 }
 
@@ -616,6 +672,35 @@ export function groupHoldings(
  * shown as a dash and excluded from every total — and a reader can only act on
  * the difference if it is spelled out. Colour never carries it (§12).
  */
+/**
+ * A share count as text: the stored digits, minus the zeros scale-8 storage pads
+ * them with.
+ *
+ * Not in `format.ts` because nothing there formats a quantity — every function
+ * in it renders money, and a quantity takes no currency mark: half a fund is
+ * half a share, not fifty cents. Nothing here computes either. The digits are
+ * the digits that came out of the view, grouped and trimmed as text, with the
+ * same U+2212 minus `format.ts` uses so a negative quantity and a negative
+ * figure read alike in the same row.
+ *
+ * Here rather than in a route for the reason {@link holdingNote} is: Account
+ * detail and Holdings print the same holding's quantity, and a second copy of
+ * this drifted immediately — losing the thousands separators, the U+2212 and
+ * the negative-zero guard, so one screen showed a loan as `-14500` and the
+ * other as `−14,500`.
+ */
+export function formatQuantity(decimal: string): string {
+  const trimmed = decimal.trim();
+  const negative = trimmed.startsWith("-") || trimmed.startsWith("−");
+  const [int = "0", frac = ""] = trimmed.replace(/^[-+−]/, "").split(".");
+  const fraction = frac.replace(/0+$/, "");
+  const zero = /^0*$/.test(int) && fraction === "";
+
+  return `${negative && !zero ? "−" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${
+    fraction ? `.${fraction}` : ""
+  }`;
+}
+
 export function holdingNote(holding: {
   assetClass: ValuedHolding["assetClass"];
   isPriced: boolean;

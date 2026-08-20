@@ -20,7 +20,7 @@ import {
   type LastRecorded,
 } from "~/lib/balances.server";
 import { formatMoney } from "~/lib/format";
-import { holdingNote } from "~/lib/holdings-view";
+import { formatQuantity, holdingNote } from "~/lib/holdings-view";
 import {
   NotFoundError,
   ValidationError,
@@ -261,40 +261,8 @@ function shortLabel(label: string): string {
   return head.trim();
 }
 
-/**
- * A share count as text: the stored digits, minus the zeros scale-8 storage pads
- * them with.
- *
- * Not in `format.ts` because nothing there formats a quantity — every function
- * in it renders money, and a quantity takes no currency mark: half a fund is
- * half a share, not fifty cents. Nothing here computes either. The digits are
- * the digits that came out of the view, grouped and trimmed as text, with the
- * same U+2212 minus `format.ts` uses so a negative quantity and a negative
- * figure read alike in the same row.
- */
-function formatQuantity(decimal: string): string {
-  const trimmed = decimal.trim();
-  const negative = trimmed.startsWith("-") || trimmed.startsWith("−");
-  const [int = "0", frac = ""] = trimmed.replace(/^[-+−]/, "").split(".");
-  const fraction = frac.replace(/0+$/, "");
-  const zero = /^0*$/.test(int) && fraction === "";
-
-  return `${negative && !zero ? "−" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${
-    fraction ? `.${fraction}` : ""
-  }`;
-}
-
 type Holding = Route.ComponentProps["loaderData"]["holdings"][number];
 
-/**
- * What the row says about the holding under its name: what it is, and anything
- * qualifying the price beside it.
- *
- * An unpriced holding is in the table and out of the total (§8.2), and a stale
- * price is used rather than discarded (§6.2). Both facts are said in words on
- * the row they apply to, because the coverage note above the table says how many
- * and this says which.
- */
 export default function Account({ loaderData, actionData }: Route.ComponentProps) {
   const {
     range,

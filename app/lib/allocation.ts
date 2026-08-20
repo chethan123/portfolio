@@ -57,6 +57,7 @@
  *     it is, and the caller should show the amounts alone.
  */
 import { ACCOUNT_KINDS, type Option } from "./account-options.ts";
+import { formatPercent } from "./format.ts";
 import { MONEY_SCALE, SHARE_SCALE, divide, render, toUnits } from "./money.ts";
 
 import type { AssetClass, Coverage, ValuedHolding } from "./valuation.server.ts";
@@ -214,4 +215,21 @@ export function allocationByAssetClass(holdings: ValuedHolding[]): AllocationSli
  */
 export function sharePercent(share: string): string {
   return render(toUnits(share, SHARE_SCALE), SHARE_SCALE - 2);
+}
+
+/**
+ * `"0.197531"` → `"19.8%"`, and a liability's `"-0.120413"` → `"−12.0%"`.
+ *
+ * `formatPercent` marks a positive because it was written for a *movement*,
+ * where an unmarked gain is ambiguous. A share is not a movement and a column
+ * of pluses is noise, so the lead it added is dropped — the lead only, never
+ * the sign itself, so the minus on a liability's row survives and the rounding
+ * and the U+2212 stay in `format.ts` where they are written once.
+ *
+ * Beside {@link sharePercent} rather than in a route, because two screens now
+ * render a share and the second copy of a rule like "drop the plus but keep the
+ * minus" is where the two of them start disagreeing.
+ */
+export function formatShare(share: string): string {
+  return formatPercent(sharePercent(share)).replace(/^\+/, "");
 }

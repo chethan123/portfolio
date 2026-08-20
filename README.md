@@ -50,7 +50,8 @@ its own.
   whole screen works with JavaScript turned off.
 - **A filter you cannot use is not drawn.** A dimension only becomes a dropdown once the data holds
   two different values for it, and every option in it is a value something really has — so a
-  one-person household gets no Owner filter and no filter can ever select an empty table.
+  one-person household gets no Owner filter, and no single filter can land you on an empty table.
+  Two of them still can, and the screen says which two rather than leaving you to work it out.
 - **Three coverages, not one.** A workplace plan reports a price and no cost basis at all, so the
   value total can be complete while the unrealized total is short. Each figure carries its own
   count rather than borrowing a neighbour's, because a cost basis over 11 holdings printed against

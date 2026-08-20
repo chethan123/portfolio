@@ -32,6 +32,7 @@ import {
   DEFAULT_SORT,
   applyFilters,
   availableFilters,
+  formatQuantity,
   groupHoldings,
   holdingNote,
   parseQuery,
@@ -211,6 +212,41 @@ describe("availableFilters", () => {
     expect(controls[0]?.selected).toBe("Fidelity");
   });
 
+  it("gives a selected key nothing carries an option of its own", () => {
+    // Otherwise `defaultValue` finds no match, the select falls back to its
+    // first option, and every filter reads "All" above an empty table with no
+    // clue what was actually filtered.
+    const [account] = availableFilters(
+      [holding({ accountId: "1" }), holding({ accountId: "2" })],
+      query("account=999"),
+    ).filter((control) => control.id === "account");
+
+    expect(account?.selected).toBe("999");
+    expect(account?.options[0]).toEqual({ value: "999", label: "Not in this portfolio" });
+    // And it is flagged, so the empty result can say "this link predates a
+    // change" rather than sending the reader hunting for an overlap that was
+    // never the problem.
+    expect(account?.selectedIsAbsent).toBe(true);
+    expect(account?.selectedPhrase).toBeNull();
+  });
+
+  it("phrases a selection as a sentence fragment, not as its field caption", () => {
+    // "nothing is brokerage Chase and asset class Equity" is not English; the
+    // caption above a `<select>` and the same fact in prose are different words.
+    const controls = availableFilters(
+      [
+        holding({ institution: "Chase", accountKind: "liability" }),
+        holding({ institution: "Fidelity", accountKind: "brokerage" }),
+      ],
+      query("institution=Chase&kind=liability"),
+    );
+
+    expect(controls.map((control) => control.selectedPhrase)).toEqual([
+      "at Chase",
+      "in a liability account",
+    ]);
+  });
+
   it("distinguishes two people who share a name", () => {
     const [owner] = availableFilters(
       [
@@ -329,6 +365,32 @@ describe("sortHoldings", () => {
     );
   });
 
+  it("orders the text columns by what is printed in them, both ways", () => {
+    const rows = [
+      holding({ instrumentName: "Zinc", accountName: "Zeta", ownerName: "Zoe" }),
+      holding({ instrumentName: "Apple", accountName: "Alpha", ownerName: "Ada" }),
+    ];
+
+    for (const key of ["asset", "account", "owner"] as const) {
+      expect(sortHoldings(rows, key, "asc")[0]?.instrumentName).toBe("Apple");
+      expect(sortHoldings(rows, key, "desc")[0]?.instrumentName).toBe("Zinc");
+    }
+  });
+
+  it("keeps a missing price, cost basis or unrealized last on its own column", () => {
+    // `value` is the column that gets exercised everywhere else; the other
+    // three take the same path and nothing was checking that they do.
+    for (const key of ["price", "costBasis", "unrealized"] as const) {
+      const rows = [
+        holding({ instrumentName: "Missing", [key]: null }),
+        holding({ instrumentName: "Present", price: "5.0000", costBasis: "5.0000", unrealized: "5.0000" }),
+      ];
+
+      expect(sortHoldings(rows, key, "asc").at(-1)?.instrumentName).toBe("Missing");
+      expect(sortHoldings(rows, key, "desc").at(-1)?.instrumentName).toBe("Missing");
+    }
+  });
+
   it("does not sort the caller's array", () => {
     const rows = [holding({ value: "1.0000" }), holding({ value: "2.0000" })];
     const before = [...rows];
@@ -435,7 +497,11 @@ describe("groupHoldings", () => {
     ]);
   });
 
-  it("gives every group a zero share when nothing is positive", () => {
+  it("has no share to report when nothing is positive", () => {
+    // A household with only a loan recorded: there is no gross-asset base for
+    // anything to be a fraction of. `null`, not `0.000000` — a zero here would
+    // read as "this group is none of the portfolio", when the truth is that the
+    // question has no denominator. The amount beside it still says what it is.
     const groups = groupHoldings(
       [holding({ accountKind: "liability", value: "-20000.0000" })],
       "kind",
@@ -443,7 +509,7 @@ describe("groupHoldings", () => {
       DEFAULT_DIRECTION,
     );
 
-    expect(groups[0]?.share).toBe("0.000000");
+    expect(groups[0]?.share).toBeNull();
     expect(groups[0]?.total.value).toBe("-20000.0000");
   });
 
@@ -462,6 +528,29 @@ describe("groupHoldings", () => {
 
     expect(unpriced?.total.value).toBeNull();
     expect(unpriced?.total.valueCoverage).toEqual({ known: 0, total: 1 });
+    // And its share is null for the same reason the value is: a group nothing
+    // could price is not 0% of the portfolio, it is an unknown fraction of it.
+    expect(unpriced?.share).toBeNull();
+  });
+
+  it("groups on every dimension, not just the ones with a column", () => {
+    const rows = [
+      holding({ institution: "Fidelity", taxTreatment: "taxable", assetClass: "equity" }),
+      holding({ institution: "Vanguard", taxTreatment: "tax_free", assetClass: "bond" }),
+    ];
+
+    for (const [dimension, labels] of [
+      ["institution", ["Fidelity", "Vanguard"]],
+      ["tax", ["Tax-free", "Taxable"]],
+      ["assetClass", ["Bonds", "Equity"]],
+      ["account", ["Taxable"]],
+    ] as const) {
+      const labelled = groupHoldings(rows, dimension, DEFAULT_SORT, DEFAULT_DIRECTION)
+        .map((group) => group.label)
+        .sort();
+
+      expect(labelled).toEqual([...labels].sort());
+    }
   });
 
   it("labels an account type in the short form a table cell has room for", () => {
@@ -487,5 +576,24 @@ describe("holdingNote", () => {
     // of the two is fixed by waiting.
     expect(holdingNote(holding({ isStale: true }))).toBe("Equity · price is stale");
     expect(holdingNote(holding({ value: null }))).toBe("Equity · never priced");
+  });
+});
+
+describe("formatQuantity", () => {
+  it("trims the zeros scale-8 storage pads a share count with", () => {
+    expect(formatQuantity("145.23400000")).toBe("145.234");
+    expect(formatQuantity("1.00000000")).toBe("1");
+  });
+
+  it("groups thousands and uses the U+2212 minus, like every figure beside it", () => {
+    // The failure this catches is a second copy of this function drifting: a
+    // hyphen and no separators renders the same loan as `-14500` on one screen
+    // and `−14,500` on the other.
+    expect(formatQuantity("-14500.00000000")).toBe("−14,500");
+    expect(formatQuantity("1234567.00000000")).toBe("1,234,567");
+  });
+
+  it("has no negative zero", () => {
+    expect(formatQuantity("-0.00000000")).toBe("0");
   });
 });

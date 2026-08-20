@@ -1750,7 +1750,7 @@ code {
  * sets the width and `min-width: 0` is what lets the box shrink below its
  * content — without it the intrinsic width wins and the bar overflows.
  */
-.filter-bar > div {
+.filter-bar > div:not(.filter-actions) {
   flex: 1 1 12rem;
   min-width: 0;
 }
@@ -1812,9 +1812,13 @@ code {
   white-space: normal;
 }
 
+/* `--surface-container-high`, the same tone as the column headings, because a
+ * group heading is the more senior of the two rows: `--panel-hover` resolves
+ * *below* the header row in light mode, and reads as a lesser thing than the
+ * subtotal it introduces. */
 .data-table .row-group th {
   padding: var(--space-sm) var(--space-md);
-  background: var(--panel-hover);
+  background: var(--surface-container-high);
   border-top: 1px solid var(--outline-variant);
   border-bottom: 1px solid var(--outline-variant);
 }
@@ -1829,6 +1833,19 @@ code {
 .data-table .row-subtotal td {
   background: var(--panel-hover);
   border-top: 1px solid var(--outline-variant);
+}
+
+/* No hover on either. The row-level hover below is an affordance — it says
+ * "this row is a thing you are pointing at" — and a heading and a subtotal are
+ * not rows you can act on. Re-asserted rather than carved out of the shared
+ * rule, so the other three tables in the app are untouched. */
+.data-table .row-group:hover th {
+  background: var(--surface-container-high);
+}
+
+.data-table .row-subtotal:hover th,
+.data-table .row-subtotal:hover td {
+  background: var(--panel-hover);
 }
 
 .data-table .row-total th,
@@ -1905,7 +1922,11 @@ code {
     border: 0;
   }
 
-  .data-table--holdings tbody tr {
+  /* The card padding is the card's. A group heading and a subtotal are
+   * full-width strips between cards, and inset by 16px they read as narrower
+   * than the list they belong to — and their own top border doubles up with
+   * this one. */
+  .data-table--holdings tbody tr:not(.row-group):not(.row-subtotal) {
     padding: var(--space-md);
     border-top: 1px solid var(--outline-variant);
   }
@@ -1914,6 +1935,12 @@ code {
     border-top: 0;
   }
 
+  /* `display: flex` on a `td` is forbidden above, and for a real reason: it
+   * drops the cell out of the table layout and un-aligns the column. Here there
+   * is no table layout left to fall out of — the block above has already made
+   * every element in the table `display: block`, which is the whole point of
+   * the reflow — so a cell is free to be a label-and-figure row. The rule holds
+   * everywhere a table is still a table. */
   .data-table--holdings tbody td {
     display: flex;
     align-items: baseline;
@@ -1993,7 +2020,7 @@ code {
 
   /* Two filters to a row: seven stacked controls is most of a phone screen
    * before the table it filters has started. */
-  .filter-bar > div {
+  .filter-bar > div:not(.filter-actions) {
     flex: 1 1 calc(50% - var(--space-md));
   }
 

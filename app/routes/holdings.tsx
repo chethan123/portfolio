@@ -7,7 +7,8 @@ import {
   ChevronRightIcon,
   TrendingFlatIcon,
 } from "~/components/icons";
-import { formatMoney, formatPercent, formatSignedMoney, isNegative } from "~/lib/format";
+import { formatMoney, formatSignedMoney, isNegative } from "~/lib/format";
+import { formatShare } from "~/lib/allocation";
 import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
@@ -18,6 +19,7 @@ import {
   type SortKey,
   applyFilters,
   availableFilters,
+  formatQuantity,
   groupHoldings,
   holdingNote,
   parseQuery,
@@ -25,7 +27,7 @@ import {
   summarise,
   toSearch,
 } from "~/lib/holdings-view";
-import { sharePercent } from "~/lib/allocation";
+import { MONEY_SCALE, render, toUnits } from "~/lib/money";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import type { Route } from "./+types/holdings";
@@ -75,6 +77,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   // reading `parseQuery` gives them. The bounce cannot loop: `toSearch` is
   // deterministic and `parseQuery(toSearch(q))` is `q`, so the second pass is
   // already canonical.
+  // Grouping hides the column it grouped by, so a URL that sorts by that same
+  // column leaves the table ordered by a heading nobody can see: no caret, no
+  // `aria-sort`, and no control to reverse it. Fall back to the default sort,
+  // and do it here rather than in the component so the URL stops claiming a
+  // sort the screen is not applying.
+  if (query.group !== null && !columnsFor(query.group).some((column) => column.key === query.sort)) {
+    query.sort = DEFAULT_SORT;
+    query.direction = DEFAULT_DIRECTION;
+  }
+
   const canonical = toSearch(query);
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
@@ -90,6 +102,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Distinguishes "nothing uploaded" from "this filter matched nothing" —
     // two states that must not share a screen (§8.4).
     hasHoldings: holdings.length > 0,
+    totalHoldings: holdings.length,
     accountCount: new Set(visible.map((holding) => holding.accountId)).size,
     filters,
     // A `Map` does not survive the trip to the browser; the component rebuilds
@@ -151,21 +164,26 @@ function firstDirection(column: SortKey): SortDirection {
   return COLUMNS.find((entry) => entry.key === column)?.numeric === true ? "desc" : "asc";
 }
 
-/** Exactly zero, whatever the scale — `"0.0000"`, `"-0.00"`, `"0"`. */
-function isZero(decimal: string): boolean {
-  return /^[+-]?0*(\.0*)?$/.test(decimal.trim());
-}
-
 /**
- * A gain, a loss or neither.
+ * A gain, a loss or neither — decided on the figure that will be *printed*, not
+ * on the one behind it.
  *
- * Flat is its own case rather than being folded into gain: an unrealized figure
- * of exactly zero is a position that has not moved, and painting it green with
- * an up arrow would say it had.
+ * The stored value has four decimal places and the cell shows two, so an
+ * unrealized gain of `-0.0040` is a loss by the digits and `$0.00` by the time
+ * `formatSignedMoney` has rounded it — whose own guard then suppresses the sign
+ * on a zero. Classifying before rounding therefore paints a red down-arrow
+ * beside an unsigned `$0.00`, which leaves the arrow and the hue carrying a
+ * claim the text does not make: exactly the "never colour alone" rule §12
+ * states. Rounding first, through the same half-away-from-zero the formatter
+ * uses, keeps the three channels saying one thing.
+ *
+ * Flat is its own case rather than being folded into gain: a position that has
+ * not moved painted green with an up arrow would say it had.
  */
 function Delta({ amount }: { amount: string }) {
-  const flat = isZero(amount);
-  const down = !flat && isNegative(amount);
+  const shown = render(toUnits(amount, 2), 2);
+  const flat = toUnits(amount, 2) === 0n;
+  const down = !flat && isNegative(shown);
   const Arrow = flat ? TrendingFlatIcon : down ? ArrowDownIcon : ArrowUpIcon;
 
   return (
@@ -185,24 +203,31 @@ function Money({ amount }: { amount: string | null }) {
   return <>{amount === null ? "—" : formatMoney(amount)}</>;
 }
 
-/**
- * `"0.342100"` → `"34.2%"`.
- *
- * `formatPercent` marks a positive because it was written for a movement, and a
- * share is not one — the leading `+` is stripped, exactly as the analysis screen
- * strips it. A negative keeps its sign, because a group that is net debt is a
- * negative fraction of what is owned and that is the fact being reported.
- */
-function share(value: string): string {
-  return formatPercent(sharePercent(value)).replace(/^\+/, "");
-}
-
 export default function Holdings({ loaderData }: Route.ComponentProps) {
-  const { hasHoldings, accountCount, filters, active, group, sort, direction, groups, rows, total } =
-    loaderData;
+  const {
+    hasHoldings,
+    totalHoldings,
+    accountCount,
+    filters,
+    active,
+    group,
+    sort,
+    direction,
+    groups,
+    rows,
+    total,
+  } = loaderData;
 
   const query: HoldingsQuery = { filters: new Map(active), group, sort, direction };
   const shown = total.valueCoverage.total;
+  const filtered = active.length > 0;
+
+  // Clearing the filters clears the filters. The grouping and the sort are how
+  // you were reading the table rather than what you were reading, and the form
+  // above already carries them through an Apply for exactly that reason — a
+  // "Clear" beside it that quietly threw them away would undo more than it
+  // says.
+  const cleared = toSearch({ ...query, filters: new Map() }) || ".";
   const columns = columnsFor(group);
   const span = columns.length;
   const labelSpan = span - FIGURES;
@@ -232,6 +257,10 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
           <p className="panel-count u-data">
             {shown} holding{shown === 1 ? "" : "s"} · {accountCount} account
             {accountCount === 1 ? "" : "s"}
+            {/* Without this a filtered table looks like the whole portfolio to
+                anyone who did not set the filter — including you, a day later,
+                following your own bookmark. */}
+            {filtered ? ` · filtered from ${totalHoldings}` : null}
           </p>
         </header>
 
@@ -241,16 +270,25 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
           // a different and false claim.
           <div className="panel-body">
             <p className="empty-note">
-              No holding matches every filter at once. <Link to=".">Clear filters</Link> to see
-              the whole portfolio again.
+              {describe(filters)} <Link to={cleared}>Clear filters</Link> to see all{" "}
+              <span className="u-data">{totalHoldings}</span> again.
             </p>
           </div>
         ) : (
           <>
             <div className="data-table-scroll">
-              <table className="data-table data-table--holdings">
-                <thead>
-                  <tr>
+              {/* Explicit roles, matching the implicit ones exactly.
+                    Below 768px the stylesheet reflows this table to cards with
+                    `display: block`, and browsers drop a table's implicit ARIA
+                    roles when they do — taking `scope`, `aria-sort` and every
+                    header-to-cell association with them, so a screen reader on
+                    a phone would get a pile of unlabelled text held together
+                    only by CSS-generated `::before` captions. Spelling the
+                    roles out costs nothing on desktop, where they are what the
+                    elements already mean. */}
+                <table className="data-table data-table--holdings" role="table">
+                <thead role="rowgroup">
+                  <tr role="row">
                     {columns.map((column) => (
                       <SortHeader key={column.key} column={column} query={query} />
                     ))}
@@ -258,7 +296,7 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
                 </thead>
 
                 {groups === null ? (
-                  <tbody>
+                  <tbody role="rowgroup">
                     {rows?.map((holding) => (
                       <Row
                         key={`${holding.accountId}-${holding.instrumentId}`}
@@ -279,9 +317,9 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
                   ))
                 )}
 
-                <tfoot>
-                  <tr className="row-total">
-                    <th scope="row" colSpan={labelSpan}>
+                <tfoot role="rowgroup">
+                  <tr className="row-total" role="row">
+                    <th scope="row" colSpan={labelSpan} role="rowheader">
                       Total
                     </th>
                     <Figures total={total} />
@@ -291,13 +329,53 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
             </div>
 
             <div className="panel-body">
-              <Coverage total={total} />
+              <Coverage total={total} grouped={groups !== null} />
             </div>
           </>
         )}
       </div>
     </section>
   );
+}
+
+/**
+ * Why the table is empty, in words — "Nothing in the portfolio is owned by Bob
+ * and at Chase."
+ *
+ * An empty result that only says "no holding matches every filter at once"
+ * leaves the reader looking back up at seven dropdowns to work out which pair
+ * cannot coexist. The controls know their own chosen option and each dimension
+ * knows how to say itself in a sentence, so the screen can name them.
+ *
+ * The stale-key case gets its own words. "Nothing is owned by Bob and at Chase"
+ * is a fact about the portfolio; a filter pointing at an account that has since
+ * been closed is a fact about the URL, and telling the reader to look for an
+ * overlap that was never the problem would waste their time.
+ */
+function describe(filters: Route.ComponentProps["loaderData"]["filters"]): string {
+  const absent = filters.filter((filter) => filter.selectedIsAbsent);
+
+  if (absent.length > 0) {
+    const named = join(absent.map((filter) => filter.label.toLowerCase()));
+
+    return `The ${named} filter names something this portfolio does not hold — the link may predate a change to it.`;
+  }
+
+  const chosen = filters
+    .map((filter) => filter.selectedPhrase)
+    .filter((phrase): phrase is string => phrase !== null);
+
+  if (chosen.length === 0) return "Nothing is held at all.";
+  if (chosen.length === 1) return `Nothing in the portfolio is ${chosen[0]}.`;
+
+  return `No holding matches every filter at once. Nothing in the portfolio is ${join(chosen)}.`;
+}
+
+/** `["a", "b", "c"]` → `"a, b and c"`. */
+function join(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+
+  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
 
 function Header() {
@@ -335,6 +413,7 @@ function Filters({
   if (filters.length === 0) return null;
 
   const active = query.filters.size > 0;
+  const cleared = toSearch({ ...query, filters: new Map() }) || ".";
 
   return (
     <Form method="get" className="filter-bar" aria-label="Filter holdings">
@@ -365,7 +444,7 @@ function Filters({
           Apply
         </button>
         {active ? (
-          <Link className="button button--text" to=".">
+          <Link className="button button--text" to={cleared}>
             Clear filters
           </Link>
         ) : null}
@@ -425,6 +504,7 @@ function SortHeader({
   return (
     <th
       scope="col"
+      role="columnheader"
       className={column.numeric ? "is-numeric" : undefined}
       aria-sort={active ? (query.direction === "asc" ? "ascending" : "descending") : undefined}
     >
@@ -466,15 +546,15 @@ function Figures({ total }: { total: Total }) {
 
   return (
     <>
-      <td className="is-numeric" data-label="Value">
+      <td className="is-numeric" role="cell" data-label="Value">
         <Money amount={total.value} />
         {note(total.valueCoverage)}
       </td>
-      <td className="is-numeric" data-label="Cost basis">
+      <td className="is-numeric" role="cell" data-label="Cost basis">
         <Money amount={total.costBasis} />
         {note(total.basisCoverage)}
       </td>
-      <td className="is-numeric" data-label="Unrealized">
+      <td className="is-numeric" role="cell" data-label="Unrealized">
         {total.unrealized === null ? "—" : <Delta amount={total.unrealized} />}
         {note(total.unrealizedCoverage)}
       </td>
@@ -497,9 +577,9 @@ function GroupBody({
   const count = group.total.valueCoverage.total;
 
   return (
-    <tbody>
-      <tr className="row-group">
-        <th scope="colgroup" colSpan={span}>
+    <tbody role="rowgroup">
+      <tr className="row-group" role="row">
+        <th scope="rowgroup" colSpan={span} role="rowheader">
           {group.label}
           <span className="cell-sub">
             {count} holding{count === 1 ? "" : "s"}
@@ -515,10 +595,17 @@ function GroupBody({
         />
       ))}
 
-      <tr className="row-subtotal">
-        <th scope="row" colSpan={labelSpan}>
+      <tr className="row-subtotal" role="row">
+        <th scope="row" colSpan={labelSpan} role="rowheader">
           {group.label} subtotal
-          <span className="cell-sub">{share(group.share)} of the filtered total</span>
+          {/* "Of gross assets", not "of the total below". The denominator is
+              the sum of the positive groups, so with a loan in the set these
+              shares reach 100% above a `<tfoot role="rowgroup">` total that is smaller — see
+              `allocation.ts` for why the net total is refused. A group nothing
+              could price has no fraction to state at all. */}
+          <span className="cell-sub">
+            {group.share === null ? "—" : `${formatShare(group.share)} of gross assets`}
+          </span>
         </th>
         <Figures total={group.total} />
       </tr>
@@ -530,8 +617,8 @@ function Row({ holding, columns }: { holding: Holding; columns: ReadonlyArray<Co
   const shows = (key: SortKey) => columns.some((column) => column.key === key);
 
   return (
-    <tr>
-      <td data-label="Asset">
+    <tr role="row">
+      <td role="cell" data-label="Asset">
         <div className="cell-stack">
           {holding.symbol ? <span className="badge">{holding.symbol}</span> : null}
           <div>
@@ -543,7 +630,7 @@ function Row({ holding, columns }: { holding: Holding; columns: ReadonlyArray<Co
         </div>
       </td>
       {shows("account") ? (
-        <td data-label="Account">
+        <td role="cell" data-label="Account">
           {/* One hop to the account's own page, which is where its chart and its
               set-balance form live (§13.1). */}
           <Link className="cell-link" to={`/accounts/${holding.accountId}`}>
@@ -553,23 +640,23 @@ function Row({ holding, columns }: { holding: Holding; columns: ReadonlyArray<Co
           <span className="cell-sub">{holding.institution}</span>
         </td>
       ) : null}
-      {shows("owner") ? <td data-label="Owner">{holding.ownerName}</td> : null}
-      <td className="is-numeric" data-label="Quantity">
+      {shows("owner") ? <td role="cell" data-label="Owner">{holding.ownerName}</td> : null}
+      <td className="is-numeric" role="cell" data-label="Quantity">
         {formatQuantity(holding.quantity)}
       </td>
       {/* Null price and null value are the same holding: never quoted. A dash
           says so; a zero would understate the portfolio by the whole position
           and look deliberate. */}
-      <td className="is-numeric" data-label="Price">
+      <td className="is-numeric" role="cell" data-label="Price">
         <Money amount={holding.price} />
       </td>
-      <td className="is-numeric" data-label="Value">
+      <td className="is-numeric" role="cell" data-label="Value">
         <Money amount={holding.value} />
       </td>
-      <td className="is-numeric" data-label="Cost basis">
+      <td className="is-numeric" role="cell" data-label="Cost basis">
         <Money amount={holding.costBasis} />
       </td>
-      <td className="is-numeric" data-label="Unrealized">
+      <td className="is-numeric" role="cell" data-label="Unrealized">
         {holding.unrealized === null ? "—" : <Delta amount={holding.unrealized} />}
       </td>
     </tr>
@@ -586,7 +673,7 @@ function Row({ holding, columns }: { holding: Holding; columns: ReadonlyArray<Co
  * quote is missing from the value total while its cost basis is on file. Saying
  * "40 of 42" once would have to pick one of those and misreport the others.
  */
-function Coverage({ total }: { total: Total }) {
+function Coverage({ total, grouped }: { total: Total; grouped: boolean }) {
   const { valueCoverage: value, unrealizedCoverage: unrealized } = total;
   const notes: string[] = [];
 
@@ -607,6 +694,15 @@ function Coverage({ total }: { total: Total }) {
     );
   }
 
+  // The subtotals' shares are fractions of the gross positive total, not of the
+  // figure in the Total row, and with a liability in the set the two differ
+  // enough to matter. Named here once rather than repeated on every subtotal.
+  if (grouped) {
+    notes.push(
+      "Each group's share is of gross assets — the positive groups added together — so the shares above sum to 100% and a liability's is negative.",
+    );
+  }
+
   return (
     <p className="coverage-note">
       {notes.join(" ")}
@@ -617,12 +713,3 @@ function Coverage({ total }: { total: Total }) {
   );
 }
 
-/**
- * Shares to eight places is what the column is stored at and is unreadable;
- * trailing zeros are trimmed so a whole number of shares reads as one.
- */
-function formatQuantity(quantity: string): string {
-  const trimmed = quantity.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
-
-  return trimmed;
-}
