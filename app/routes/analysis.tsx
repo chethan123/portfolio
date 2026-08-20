@@ -3,10 +3,10 @@ import {
   allocationByAccountKind,
   allocationByAssetClass,
   allocationByPerson,
-  sharePercent,
+  formatShare,
   type AllocationSlice,
 } from "~/lib/allocation";
-import { formatMoney, formatPercent, isNegative } from "~/lib/format";
+import { formatMoney, isNegative } from "~/lib/format";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import type { Route } from "./+types/analysis";
@@ -87,24 +87,11 @@ function isPositive(decimal: string): boolean {
  * The one float on this page, under the licence `toPlotValue` documents: the
  * result is multiplied by a circumference and rounded to a screen coordinate,
  * so an error in the fifteenth significant digit cannot survive to be seen.
- * Every figure a person *reads* comes from `sharePercent` and `formatMoney`,
+ * Every figure a person *reads* comes from `formatShare` and `formatMoney`,
  * which never leave the digits.
  */
 function fraction(share: string): number {
   return Number(share);
-}
-
-/**
- * `"0.197531"` → `"19.8%"`, and a liability's `"-0.120413"` → `"−12.0%"`.
- *
- * `formatPercent` marks a positive because it was written for a *movement*,
- * where an unmarked gain is ambiguous. A share is not a movement and a column
- * of pluses is noise, so the lead it added is dropped — the lead only, never
- * the sign itself, so the minus on a liability's row survives and the rounding
- * and the U+2212 stay in `format.ts` where they are written once.
- */
-function formatShare(share: string): string {
-  return formatPercent(sharePercent(share)).replace(/^\+/, "");
 }
 
 /** One drawn arc: how much of the ring it is, and where it starts. */
