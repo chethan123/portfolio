@@ -383,7 +383,12 @@ a {
 
 /* The rail's foot holds one filled button. The mock spends it on "Invest Now";
  * this app has nothing to sell, so it spends it on the only action that
- * writes (§13.1). */
+ * writes (§13.1).
+ *
+ * The width is deliberately left alone: as a flex item of the column rail it
+ * already stretches to the rail minus these margins. `.button--block` here
+ * would resolve `width: 100%` against the full rail and then add the margins
+ * on top of it, hanging the button 23px past the rail's edge. */
 .app-rail-action {
   margin: 0 var(--space-lg) var(--space-lg);
 }
