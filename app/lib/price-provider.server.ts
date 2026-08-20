@@ -109,6 +109,33 @@ function decimal(value: unknown, scale: number): string | null {
 }
 
 /**
+ * The widest yield `quote.yield_pct` can hold — `numeric(10,6)`.
+ *
+ * Four integer digits, so 9999.999999%.
+ */
+const YIELD_CEILING = 10000;
+
+/**
+ * A yield the column can actually store, or null.
+ *
+ * A distressed or mispriced instrument — a $0.02 price still carrying a $2.50
+ * rate — derives a 12500% yield, and Postgres answers a `numeric` overflow by
+ * aborting the statement. That statement is inside the refresh transaction, so
+ * one bad symbol would roll back every other instrument's price *and* the
+ * stale-marking beside it: the whole household loses its refresh over one
+ * listing. The same outcome the per-symbol currency guard exists to prevent.
+ *
+ * Dropped rather than clamped. A yield at the ceiling is a wrong number
+ * presented as a real one, and §8.2's rule throughout this codebase is to
+ * report what is not known as unknown rather than to substitute a plausible
+ * figure.
+ */
+function inRange(value: string | null): string | null {
+  if (value === null) return null;
+  return Math.abs(Number(value)) < YIELD_CEILING ? value : null;
+}
+
+/**
  * The subset of Yahoo's quote payload this application reads, validated.
  *
  * Zod rather than the library's own TypeScript types, deliberately. Those types
@@ -138,8 +165,23 @@ const yahooQuote = z.object({
    * cannot be misread in either unit.
    */
   dividendYield: z.number().optional(),
-  /** Annual dividend per share, in the quote's currency. */
+  /**
+   * Annual dividend per share, in the quote's currency.
+   *
+   * Declared on equities and mutual funds. An ETF's payload carries no
+   * `dividendRate` at all — the per-share figure arrives as
+   * `trailingAnnualDividendRate` on the common base — so reading only this one
+   * leaves `annual_dividend_per_share` null for every ETF a household holds,
+   * which is most of a taxable brokerage account.
+   */
   dividendRate: z.number().optional(),
+  /**
+   * Trailing twelve-month dividend per share. The ETF spelling of the field
+   * above, and unambiguous in a way its `…Yield` sibling is not: this is an
+   * amount of money, not a ratio, so there is no percent-versus-fraction
+   * question to get wrong.
+   */
+  trailingAnnualDividendRate: z.number().optional(),
 });
 
 type YahooQuote = z.infer<typeof yahooQuote>;
@@ -150,9 +192,15 @@ type YahooQuote = z.infer<typeof yahooQuote>;
  * The library hands back a `Date`, but it has shipped epoch seconds in the
  * past and this is an unofficial client for an endpoint that can change under
  * us — so all three plausible shapes are accepted and anything unrecognised
- * falls back to the fetch time. Falling back is safe rather than lossy: the
- * quote is being written *now*, so "now" is at worst a few hours late on a
- * mutual fund NAV, and it never invents a date the market did not trade on.
+ * falls back to the fetch time.
+ *
+ * Falling back is the lesser of the two available errors rather than a safe
+ * one. "Now" is at worst a few hours late on a mutual fund NAV, which the next
+ * poll corrects. It can also file a close against a non-trading day, if the
+ * timestamp is missing on a day `isMarketOpen` wrongly called open — an
+ * unlisted closure, or any date after the holiday table runs out. That is a
+ * spurious row rather than a wrong price, and the alternative is discarding a
+ * real price over a missing metadata field.
  */
 function instantOf(value: YahooQuote["regularMarketTime"], fetchedAt: Date): Date {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
@@ -205,16 +253,20 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
     throw new CurrencyRefused(quote.symbol, quote.currency.toUpperCase());
   }
 
-  const annualDividendPerShare = decimal(quote.dividendRate, 4);
+  // The equity/mutual-fund spelling first, then the ETF one. Both are amounts
+  // per share in the quote's own currency, so preferring either is a matter of
+  // which the payload carries rather than of units.
+  const perShare = quote.dividendRate ?? quote.trailingAnnualDividendRate;
+  const annualDividendPerShare = decimal(perShare, 4);
 
   // The unambiguous field first; otherwise derive it. Deriving divides two
   // numbers that are both already in the quote's own currency, so the unit
   // cannot be mistaken — which is the entire point of not reading the field
   // that could be either.
   const yieldPct =
-    decimal(quote.dividendYield, 6) ??
-    (quote.dividendRate !== undefined && quoted !== undefined
-      ? decimal((quote.dividendRate / quoted) * 100, 6)
+    inRange(decimal(quote.dividendYield, 6)) ??
+    (perShare !== undefined && quoted !== undefined
+      ? inRange(decimal((perShare / quoted) * 100, 6))
       : null);
 
   return {
@@ -225,6 +277,31 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
     annualDividendPerShare,
     asOf: instantOf(quote.regularMarketTime, fetchedAt),
   };
+}
+
+/**
+ * An instantiated `yahoo-finance2` client.
+ *
+ * **The default export is a class, not a ready-made client.** Every module name
+ * is also installed on the class as a static that throws
+ * `Call \`const yahooFinance = new YahooFinance()\` first` — a v2-to-v4 upgrade
+ * guard. Calling `yahooFinance.quote(...)` on the export therefore type-checks
+ * as a function and fails at runtime on the first tick, forever, with the
+ * failure swallowed by the poller's catch. Nothing in a fake-driven test suite
+ * would ever notice, which is why `tests/price-provider.test.ts` asserts this
+ * shape directly rather than trusting it.
+ *
+ * Imported dynamically rather than at module scope so that an unofficial,
+ * network-touching dependency stays out of the module graph of anything that
+ * merely imports the `PriceProvider` type.
+ *
+ * Typed as "an object with a callable `quote`" rather than through the
+ * library's own overloads, which do not resolve on an array query. Exported for
+ * the contract test.
+ */
+export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise<unknown> }> {
+  const { default: YahooFinance } = await import("yahoo-finance2");
+  return new YahooFinance() as unknown as { quote(symbols: string[]): Promise<unknown> };
 }
 
 /**
@@ -246,19 +323,14 @@ export function yahooPriceProvider(): PriceProvider {
     async getQuotes(symbols: string[]): Promise<ProviderQuote[]> {
       if (symbols.length === 0) return [];
 
-      // Imported here rather than at module scope: this keeps an unofficial,
-      // network-touching dependency out of the module graph of anything that
-      // merely imports the `PriceProvider` type.
-      const { default: yahooFinance } = await import("yahoo-finance2");
-
+      const client = await yahooClient();
       const fetchedAt = new Date();
 
-      // Taken as `unknown[]` rather than through the library's own overloads,
-      // which resolve ambiguously on an array query and collapse to `never`.
-      // Nothing is lost: `yahooQuote` above validates every field this module
-      // reads, and validating rather than trusting is the correct posture
-      // towards an unofficial client for an unpublished endpoint (§6.1).
-      const raw = (await yahooFinance.quote(symbols)) as unknown as unknown[];
+      // `unknown[]` because `yahooClient` is typed loosely — see there. Nothing
+      // is lost: `yahooQuote` above validates every field this module reads,
+      // and validating rather than trusting is the correct posture towards an
+      // unofficial client for an unpublished endpoint (§6.1).
+      const raw = (await client.quote(symbols)) as unknown[];
 
       const quotes: ProviderQuote[] = [];
       for (const entry of raw) {

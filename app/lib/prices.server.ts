@@ -25,10 +25,16 @@
  * that quote already owns. That is also why the market calendar is allowed to
  * be approximate: it decides whether to spend a request, never what to store.
  *
- * §6.2's "an intraday refresh can never corrupt history" still holds. Today's
- * row is provisional and converges on the close as the session runs; rows for
- * past dates are never rewritten, because a past date's quote is not what the
- * provider returns.
+ * Today's row is provisional and converges on the close as the session runs.
+ *
+ * A past date's row *can* be rewritten, and deliberately so: an afternoon poll
+ * returning yesterday's NAV, and a holiday poll returning Friday's, are exactly
+ * the two cases above, and both rewrite a past row with the same price it
+ * already holds. What §6.2's "an intraday refresh can never corrupt history"
+ * amounts to here is narrower than "past rows are immutable": a row is only
+ * ever rewritten with the provider's own price for the day that provider says
+ * it belongs to, so a rewrite is idempotent unless the provider itself revises
+ * a close — which is a correction, not corruption.
  */
 import { sql } from "kysely";
 
@@ -90,12 +96,25 @@ const selectFeedInstruments = (db: Kysely<Database>) =>
 function bySymbol(instruments: FeedInstrument[]): Map<string, FeedInstrument[]> {
   const map = new Map<string, FeedInstrument[]>();
   for (const instrument of instruments) {
-    const existing = map.get(instrument.symbol);
-    if (existing === undefined) map.set(instrument.symbol, [instrument]);
+    const key = matchKey(instrument.symbol);
+    const existing = map.get(key);
+    if (existing === undefined) map.set(key, [instrument]);
     else existing.push(instrument);
   }
   return map;
 }
+
+/**
+ * The form a symbol is matched on.
+ *
+ * Upper-cased, because the provider answers in its own canonical case and an
+ * instrument stored as `vti` would otherwise never match the `VTI` that comes
+ * back — marking itself stale on every run, permanently, with nothing in the
+ * log naming it. Matching is deliberately the *only* thing this normalises: the
+ * stored symbol is left exactly as typed, since §4.3 makes it a mutable
+ * attribute a person edits rather than a key the app owns.
+ */
+const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
 
 /**
  * Run `body` in a transaction, unless one is already open.
@@ -150,14 +169,28 @@ export async function refreshQuotes(
   if (feed.length === 0) return { requested: 0, priced: 0, stale: 0, closes: 0 };
 
   const lookup = bySymbol(feed);
-  const quotes = await provider.getQuotes([...lookup.keys()]);
+
+  // A provider that throws — a network failure, a rate limit, the unofficial
+  // endpoint changing shape — is the case §6.1 says to expect. Left to
+  // propagate, the run would end here with every `is_stale` flag exactly as it
+  // was, so the UI would keep presenting last week's prices as current: the
+  // §11 failure this slice exists to prevent. An empty batch instead falls
+  // through to the same path a symbol that did not come back takes, which marks
+  // every selected instrument stale and writes no price.
+  let quotes: ProviderQuote[];
+  try {
+    quotes = await provider.getQuotes([...lookup.keys()]);
+  } catch (error) {
+    console.error("Price provider failed; marking every selected instrument stale:", error);
+    quotes = [];
+  }
 
   return inTransaction(db, async (trx) => {
     const pricedIds = new Set<string>();
     let closes = 0;
 
     for (const quote of quotes) {
-      const matches = lookup.get(quote.symbol);
+      const matches = lookup.get(matchKey(quote.symbol));
 
       // A quote for something we did not ask about. Not an error worth failing
       // the run for — a provider is entitled to normalise a symbol — but it has
@@ -289,10 +322,23 @@ export async function priceFreshness(
   const row = await db
     .selectFrom("holding_valued")
     .innerJoin("quote", "quote.instrument_id", "holding_valued.instrument_id")
+    // `fixed` is the seeded `USD` row, whose `as_of` is written once by the
+    // initial migration and never again. Every bank and loan account holds one,
+    // so without this filter `oldest` is pinned to the install timestamp for the
+    // life of the instance — an "as of" line that never moves, which is a worse
+    // lie than no line at all. `manual` is excluded for the same reason from the
+    // other direction: a hand-typed price is as fresh as the person who typed
+    // it, and a refresh loop has no claim on it.
+    .where("holding_valued.price_source", "=", "feed")
     .select([
       sql<Date | null>`min(quote.as_of)`.as("oldest"),
-      sql<string>`count(*) filter (where holding_valued.is_stale)`.as("stale"),
-      sql<string>`count(*)`.as("priced"),
+      // Distinct instruments, not holdings. One fund held in three accounts is
+      // three rows of `holding_valued` and one thing that is stale, and the
+      // count is going to be read as "3 of 40 prices are stale".
+      sql<string>`count(distinct holding_valued.instrument_id) filter (where holding_valued.is_stale)`.as(
+        "stale",
+      ),
+      sql<string>`count(distinct holding_valued.instrument_id)`.as("priced"),
     ])
     .executeTakeFirst();
 
