@@ -36,10 +36,10 @@ so a chosen range survives a reload and can be bookmarked.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-dark.png">
-  <img alt="Holdings: a filter bar, a group-by strip and the full table of every position with its quantity, price, value, cost basis and unrealized gain" src="docs/screenshots/holdings-light.png">
+  <img alt="Holdings grouped by asset class: a filter bar, a group-by strip, and every position under an Equity, Bonds, Cash or Other heading, each group closing with a subtotal and its share of gross assets" src="docs/screenshots/holdings-light.png">
 </picture>
 
-Every position the household holds, whichever account it sits in. Filter by owner, account,
+Above, grouped by asset class. Every position the household holds, whichever account it sits in. Filter by owner, account,
 brokerage, account type, tax treatment, classification or asset class; group by any of the same
 seven, with subtotals. "Everything Priya holds at Fidelity", "the whole taxable side", "all the
 bonds, wherever they are" — each is this table with the arguments changed rather than a screen of
@@ -131,9 +131,20 @@ cannot be removed, and the refusal names them.
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-mobile-dark.png">
   <img alt="The overview on a phone, with the navigation as a bottom bar" width="390" src="docs/screenshots/overview-mobile-light.png">
 </picture>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-mobile-dark.png">
+  <img alt="Holdings on a phone: the same table reflowed to a card per position, each field labelled" width="390" src="docs/screenshots/holdings-mobile-light.png">
+</picture>
 
 The same pages, with the left rail becoming a bottom bar and the tables reflowing. Nothing is
 withheld on a small screen: setting a balance and the whole of Settings are reachable from a phone.
+
+Holdings — the second shot — is where that reflow does the most work: eight columns become a card per
+position with every field labelled, on the same markup rather than a second layout to keep in step.
+The column headings stay — as a strip of sort links, because "what is my largest position" is a
+question most likely to be asked from a phone. What a card still does **not** do is collapse: §8.1
+asks for tap-to-expand and this does not have it, because a `<details>` cannot wrap a table row and
+there is no client-side JavaScript anywhere in this application to do it another way.
 
 ### Not built yet
 
