@@ -125,6 +125,85 @@ export function sumMoney(values: ReadonlyArray<string | null>): {
 }
 
 /**
+ * What a statement wrote in a number column, read as one of three things: a
+ * decimal string, a deliberate absence, or nonsense.
+ *
+ * Three outcomes rather than two because absence and nonsense must not be
+ * conflated. `n/a`, `--`, an em dash, a lone `-` and the empty string are how
+ * real exports write "the statement did not say" — each becomes `absent`, and
+ * the caller stores a null, never a zero: a zero cost basis reports a fake gain
+ * equal to the whole untracked position (§8.2, and 0001's "no default at any
+ * layer"). Anything else non-numeric is `unparseable`, which the caller reports
+ * against the row and column it came from rather than silently dropping — a
+ * disclaimer line under a mapped column is a thing to name, not to swallow.
+ */
+export type NormalisedFigure =
+  | { kind: "figure"; value: string }
+  | { kind: "absent" }
+  | { kind: "unparseable" };
+
+/** The spellings of "the statement did not say", lowercased. U+2014 is the em dash. */
+const ABSENT = new Set(["", "-", "--", "—", "n/a"]);
+
+/**
+ * Normalise one cell of a statement's number column — `$1,234.56`,
+ * `(1,234.56)`, `12.5%`, `n/a` — to a decimal string, an absence, or a report
+ * of nonsense (§5.3, spec 0004).
+ *
+ * Lives here beside the digit-level primitives because the value never passes
+ * through a JavaScript number: the digits the file wrote are the digits
+ * returned, with only the dressing removed. `input.server.ts` has a sibling in
+ * `bareDecimal` for what a *person types into a box*; this one reads what a
+ * *brokerage wrote into a file*, and the two differ where their sources do —
+ * a form never contains `(1,234.56)` or a trailing `%`, and a file's `n/a` is
+ * data rather than an input error.
+ *
+ * The shapes handled, each a checklist item in spec 0004 step 02:
+ *
+ * - thousands separators (comma, space, U+00A0, U+2009) removed; the point kept
+ * - a leading `$` and surrounding whitespace removed
+ * - `(1,234.56)` is negative — accounting notation, common on Schwab exports
+ * - a trailing `%` removed with the value returned unscaled; what a percent
+ *   *means* is the caller's question, and answering it here would be arithmetic
+ * - U+2212, the true minus `format.ts` prints, converted to the ASCII hyphen —
+ *   the same conversion `signedQuantity` makes for the same reason
+ * - a negative zero loses its sign, as everywhere else: a debt of nothing is
+ *   not a thing to write as though it were something
+ */
+export function normaliseFigure(cell: string): NormalisedFigure {
+  const trimmed = cell.trim().replace(/−/g, "-");
+
+  if (ABSENT.has(trimmed.toLowerCase())) return { kind: "absent" };
+
+  const parenthesised = /^\((.*)\)$/.exec(trimmed);
+  let value = (parenthesised?.[1] ?? trimmed)
+    // `\s` covers U+00A0 and the thin space some brokerages group thousands
+    // with, so one class removes the currency mark and every separator.
+    .replace(/[$\s,]/g, "")
+    .replace(/%$/, "")
+    .replace(/^\+/, "");
+
+  // Both notations at once — `(-1)` — is not a figure anyone wrote on purpose.
+  let negative = parenthesised !== null;
+  if (value.startsWith("-")) {
+    if (negative) return { kind: "unparseable" };
+    negative = true;
+    value = value.slice(1);
+  }
+
+  // ".50" and "50." are unambiguous and completed; a bare "." is neither, and
+  // the lookarounds keep it from composing into an accidental zero — the same
+  // guard `input.server.ts` documents at length.
+  value = value.replace(/^\.(?=\d)/, "0.").replace(/(?<=\d)\.$/, "");
+
+  if (!/^\d+(\.\d+)?$/.test(value)) return { kind: "unparseable" };
+
+  const zero = /^0+(\.0+)?$/.test(value);
+
+  return { kind: "figure", value: negative && !zero ? `-${value}` : value };
+}
+
+/**
  * Order two decimal strings, ascending, with the nulls last in either
  * direction. Pass the scale the column is stored at — {@link MONEY_SCALE} for a
  * value, {@link QUANTITY_SCALE} for a quantity — so that a share count of

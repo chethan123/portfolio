@@ -22,6 +22,7 @@ import {
   SHARE_SCALE,
   compareDecimal,
   divide,
+  normaliseFigure,
   render,
   sumMoney,
   toUnits,
@@ -105,6 +106,71 @@ describe("sumMoney", () => {
     const sum = sumMoney(["25000.0000", "-14500.0000"]);
 
     expect(render(sum.amount, MONEY_SCALE)).toBe("10500.0000");
+  });
+});
+
+describe("normaliseFigure", () => {
+  /** The value a cell normalised to, asserting it was a figure at all. */
+  const figure = (cell: string): string | null => {
+    const result = normaliseFigure(cell);
+    return result.kind === "figure" ? result.value : null;
+  };
+
+  it("removes thousands separators and keeps the decimal point", () => {
+    expect(figure("1,234.56")).toBe("1234.56");
+    // U+00A0 is what a copy out of a rendered statement carries; U+2009 is the
+    // thin space some brokerages group thousands with.
+    expect(figure("1 500")).toBe("1500");
+    expect(figure("1 234.5")).toBe("1234.5");
+  });
+
+  it("removes a leading currency symbol and surrounding whitespace", () => {
+    expect(figure(" $229.35 ")).toBe("229.35");
+    expect(figure("$ 2,450.10")).toBe("2450.10");
+  });
+
+  it("reads a parenthesised value as negative", () => {
+    expect(figure("(1,234.56)")).toBe("-1234.56");
+    expect(figure("($56.00)")).toBe("-56.00");
+  });
+
+  it("removes a trailing percent sign and returns the value unscaled", () => {
+    // What a percent means is the caller's question; scaling it here would be
+    // arithmetic, and this function only ever removes dressing.
+    expect(figure("12.5%")).toBe("12.5");
+    expect(figure("4.90%")).toBe("4.90");
+  });
+
+  it("converts a true minus to a hyphen, as `signedQuantity` does", () => {
+    expect(figure("−45.10")).toBe("-45.10");
+  });
+
+  it("keeps the digits exactly as written, trailing zeros included", () => {
+    // The output is the file's digits, not a reading of them — "170.6600" at
+    // the money scale is not the same statement as "170.66".
+    expect(figure("170.6600")).toBe("170.6600");
+    expect(figure("+3.25")).toBe("3.25");
+    expect(figure(".50")).toBe("0.50");
+    expect(figure("50.")).toBe("50");
+  });
+
+  it("has no negative zero", () => {
+    expect(figure("(0.00)")).toBe("0.00");
+    expect(figure("-0")).toBe("0");
+  });
+
+  it("reads every spelling of absence as absent — never as zero", () => {
+    // A null cost basis is 0001's deliberate "no default at any layer"; a zero
+    // would report a fake gain equal to the whole untracked position.
+    for (const cell of ["", "   ", "-", "−", "--", "—", "n/a", "N/A"]) {
+      expect(normaliseFigure(cell)).toEqual({ kind: "absent" });
+    }
+  });
+
+  it("reports anything else non-numeric as unparseable, not as absent", () => {
+    for (const cell of ["see disclosures", "1.2.3", ".", "12%5", "(-1)", "$-"]) {
+      expect(normaliseFigure(cell)).toEqual({ kind: "unparseable" });
+    }
   });
 });
 
