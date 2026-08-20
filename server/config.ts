@@ -66,9 +66,9 @@ const configSchema = z.object({
     .default(3000),
 
   /**
-   * Quote refresh cadence. Nothing reads this yet — the pricing slice does —
-   * but it is validated from the first release so the configuration surface is
-   * complete and stable.
+   * Quote refresh cadence. Read by the in-process poller (DESIGN.md §6.2),
+   * which ticks on this interval and does nothing on a tick outside market
+   * hours.
    */
   PRICE_POLL_INTERVAL_MINUTES: integerFromString("minutes")
     .refine((value) => value >= 1 && value <= 1440, {
@@ -76,7 +76,10 @@ const configSchema = z.object({
     })
     .default(15),
 
-  /** Market-hours calculation only. Storage is UTC regardless. */
+  /**
+   * Market-hours calculation, and the zone a quote's timestamp is read in to
+   * decide which trading day it belongs to. Storage is UTC regardless.
+   */
   MARKET_TIMEZONE: timeZone.default("America/New_York"),
 
   /** Container clock. The database stores UTC whatever this says. */
