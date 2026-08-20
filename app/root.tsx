@@ -170,7 +170,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <ul className="app-nav app-nav--footer">
               <NavItems items={FOOTER_NAVIGATION} />
             </ul>
-            <Link className="button button--block app-rail-action" to="/upload">
+            <Link className="button app-rail-action" to="/upload">
               <UploadIcon />
               Upload statement
             </Link>
