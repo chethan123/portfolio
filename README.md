@@ -122,6 +122,13 @@ nothing a sentence does not:
 Until Upload lands, positions arrive through the set-balance form or by seeding. Accounts, people
 and balances all work today.
 
+Prices now refresh on their own (below), so Income has the yield figures it needs; what it still
+lacks is the screen. The pricing slice also leaves its own UI unbuilt — the "as of" timestamp, the
+stale-price treatment, a "Refresh now" control and the Settings → Instruments tab, where a
+collective investment trust gets its price typed in by hand. Those are specified in
+[`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn in
+[`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md).
+
 ## Running an instance
 
 ```sh
@@ -202,6 +209,32 @@ at or before the date, an account counts until its `closed_at`, and the price is
 Saturday is worth what Friday closed at, and why cash prices at 1.00 on any date at all. An account
 with no upload at or before the date contributes no rows rather than a zero: history starts at the
 first upload (DESIGN.md §7).
+
+## Where prices come from
+
+Quotes are fetched by an in-process loop on `PRICE_POLL_INTERVAL_MINUTES`, and only while the market
+is open — there is no worker container, which DESIGN.md §10 chose deliberately for the single
+deployment target. [`app/lib/price-provider.server.ts`](app/lib/price-provider.server.ts) is the only
+module that imports `yahoo-finance2`, behind the one-method interface §6.1 mandates, so swapping
+providers touches one file. [`app/lib/prices.server.ts`](app/lib/prices.server.ts) is the only module
+that writes a price.
+
+Three decisions in there are worth knowing before reading a number on a screen:
+
+- **A quote is filed under the date the provider struck it**, not under today. A mutual fund strikes
+  one NAV after the close, so an afternoon poll returns yesterday's — filed under today it would be
+  a fabricated close, and a poll on Thanksgiving would manufacture a row for a day the market did
+  not trade. The market calendar in [`app/lib/market-hours.ts`](app/lib/market-hours.ts) therefore
+  only decides whether to spend a request; it can waste one or miss one, and it cannot corrupt the
+  daily spine.
+- **Today's daily close is provisional.** It is rewritten on each poll and settles on the last price
+  of the session. Rows for past dates are never touched.
+- **A symbol that does not come back keeps its last price and is marked stale**, never zeroed and
+  never nulled into a sum. One that has never been priced gets no row at all, and `holding_valued`
+  reports it as unpriced rather than as worthless.
+
+Non-USD quotes are refused outright, because there is no currency column to tell two currencies
+apart once they are both in a `numeric` (DESIGN.md §14).
 
 ## Recording people and accounts
 

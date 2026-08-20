@@ -24,6 +24,7 @@ import {
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { authGate } from "~/lib/auth.server";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
+import { startPricePoller } from "~/lib/price-poller.server";
 
 import type { Route } from "./+types/root";
 
@@ -57,6 +58,14 @@ export const middleware: Route.MiddlewareFunction[] = [
  * reports it without needing credentials.
  */
 export async function loader() {
+  // The quote refresh loop (§6.2). Started from here because the application is
+  // served by `react-router-serve` over the framework's build, so there is no
+  // server entry file to hook — and root's loader is the one server-side path
+  // every page render passes through. Idempotent: after the first call this is
+  // a property lookup. It is not awaited and cannot throw; polling is a
+  // background concern and must never be able to fail a page render.
+  startPricePoller();
+
   let firstRun: FirstRunStep = null;
 
   try {
