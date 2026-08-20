@@ -25,6 +25,7 @@ back rather than hardcoding: `select id, kind from account`.
 |---|---|---|
 | `overview-*.png` | `/` | — |
 | `holdings-*.png` | `/holdings` | — · unfiltered and ungrouped, which is the state the URL with no query string produces |
+| `holdings-edit-*.png` | `/holdings?edit=<account>.<instrument>` | — · one row open for correction. Pick a row with a cost basis, so both boxes carry a figure, and crop to the open row with a few rows either side — the point of the shot is the boxes sitting in their own columns, which a whole-page capture at this width shows too small to read |
 | `analysis-*.png` | `/analysis` | — |
 | `account-detail-*.png` | `/accounts/:id` | the `brokerage` one — it holds seven positions, including a stale price |
 | `account-balance-*.png` | `/accounts/:id` | the `liability` one — it carries the set-balance form |

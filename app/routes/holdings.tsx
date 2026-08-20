@@ -5,6 +5,7 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   ChevronRightIcon,
+  EditIcon,
   TrendingFlatIcon,
 } from "~/components/icons";
 import { formatMoney, formatSignedMoney, isNegative } from "~/lib/format";
@@ -23,11 +24,15 @@ import {
   groupHoldings,
   holdingNote,
   parseQuery,
+  parseRowKey,
+  rowKey,
   sortHoldings,
   summarise,
   toSearch,
 } from "~/lib/holdings-view";
+import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { MONEY_SCALE, render, toUnits } from "~/lib/money";
+import { revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import type { Route } from "./+types/holdings";
@@ -53,6 +58,13 @@ import type { Route } from "./+types/holdings";
  * chosen view survives a reload, and it can be bookmarked or sent to the other
  * person in the household. The application has no React state anywhere and a
  * filter bar is not the place to start.
+ *
+ * That rule is also what decides the shape of the one write this screen has
+ * (§5.4). "Editable cells" is a `useState` per row and a table where any figure
+ * is one mis-click from being overwritten; `?edit=12.7` is a link, and it opens
+ * exactly one row, and it survives a reload, and it works with JavaScript off.
+ * The editor is the screen's existing grammar applied to a form rather than a
+ * new mechanism bolted beside it.
  */
 export function meta() {
   return [{ title: "Holdings · Portfolio" }];
@@ -87,7 +99,28 @@ export async function loader({ request }: Route.LoaderArgs) {
     query.direction = DEFAULT_DIRECTION;
   }
 
-  const canonical = toSearch(query);
+  // `edit` and `saved` are deliberately *not* part of `HoldingsQuery`.
+  //
+  // They are not how you are reading the table, they are one thing you are
+  // doing to one row of it, and keeping them out of the query object is what
+  // makes every control on the screen close the editor for free: each of those
+  // controls is a link built by `toSearch`, which knows nothing about either
+  // parameter and therefore drops both. Filtering while a row is open should
+  // not carry a half-typed correction into a different view, and adding a field
+  // to `HoldingsQuery` would have had it do exactly that on all seven controls
+  // at once.
+  //
+  // They are still canonicalised, by being re-serialised from the pair they
+  // parse to rather than echoed: a mangled `edit=` bounces to the URL without
+  // it, which is the same "no editor" a missing one produces.
+  const editing = parseRowKey(url.searchParams.get("edit"));
+  const saved = parseRowKey(url.searchParams.get("saved"));
+
+  const view = toSearch(query);
+  // A receipt supersedes an editor rather than sitting beside one: `saved` is
+  // where the write redirects to, and the row it names has just been closed.
+  const canonical =
+    saved !== null ? withRow(view, "saved", saved) : withRow(view, "edit", editing);
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const holdings = await currentHoldings();
@@ -97,6 +130,23 @@ export async function loader({ request }: Route.LoaderArgs) {
   // again.
   const filters = availableFilters(holdings, query);
   const visible = applyFilters(holdings, query);
+
+  // The receipt quotes the database, never the URL.
+  //
+  // `?saved=` says *which* row was written and nothing about what was written
+  // to it, and the figures beside the confirmation are read back out of
+  // `currentHoldings()` here — so a hand-typed parameter can only ever produce
+  // a sentence describing what the account actually holds, which is the
+  // guarantee Account detail's `?recorded=` has for the same reason (§13.7).
+  // Looked up in every holding rather than in the filtered set, so that the
+  // sentence still appears if the write is confirmed from a narrowed view.
+  const written =
+    saved === null
+      ? null
+      : (holdings.find(
+          (holding) =>
+            holding.accountId === saved.accountId && holding.instrumentId === saved.instrumentId,
+        ) ?? null);
 
   return {
     // Distinguishes "nothing uploaded" from "this filter matched nothing" —
@@ -117,7 +167,95 @@ export async function loader({ request }: Route.LoaderArgs) {
         : groupHoldings(visible, query.group, query.sort, query.direction),
     rows: query.group === null ? sortHoldings(visible, query.sort, query.direction) : null,
     total: summarise(visible),
+    /** The canonical view, with no row open and no receipt — every Cancel goes here. */
+    view,
+    /** The row the editor is open on, or null. */
+    editing: saved === null && editing !== null ? rowKey(editing) : null,
+    /** The row just written, as the database now reads it. */
+    written:
+      written === null
+        ? null
+        : {
+            key: rowKey(written),
+            instrumentName: written.instrumentName,
+            accountName: written.accountName,
+            quantity: written.quantity,
+          },
+    /**
+     * Today in UTC, from the server, so the editor's note names the date the
+     * write will actually carry rather than one the reader's clock invented.
+     */
+    today: new Date().toISOString().slice(0, 10),
   };
+}
+
+/**
+ * Restate one position.
+ *
+ * The route reads two boxes and hands them over; everything that decides
+ * whether the correction is allowed, and everything that decides what lands in
+ * the database, is in `positions.server.ts` (§5.4).
+ *
+ * **Which row is being corrected comes from the URL, not from a hidden field.**
+ * The form posts back to the address that opened it — `?…&edit=12.7` — so the
+ * row's identity travels the same way the rest of this screen's state does, and
+ * there is no field a submission could carry that disagrees with the page it
+ * was submitted from.
+ *
+ * The redirect target is rebuilt by `toSearch` from a parsed query rather than
+ * taken from what arrived, which is what keeps it a Holdings view: the only
+ * strings it can produce are the ones this screen already speaks.
+ */
+export async function action({ request }: Route.ActionArgs) {
+  const url = new URL(request.url);
+  const target = parseRowKey(url.searchParams.get("edit"));
+
+  if (target === null) {
+    // Not a validation failure: there is no form to re-render a message on. A
+    // POST here without a row named is a mangled address, not a bad figure.
+    throw new Response("A correction has to name the row it corrects.", { status: 400 });
+  }
+
+  const values = formFields(await request.formData());
+
+  try {
+    await revisePosition(target.accountId, target.instrumentId, values);
+
+    // Redirect rather than render, for the three reasons Account detail gives:
+    // a reload cannot re-submit the write, the boxes are gone because this is a
+    // fresh GET rather than the same elements re-rendered, and the confirmation
+    // is forced to describe what the database says instead of what the
+    // submission claimed.
+    const view = toSearch(parseQuery(url.searchParams));
+    throw redirect(`${url.pathname}${withRow(view, "saved", target)}`);
+  } catch (error) {
+    // The URL still names the row, so the editor is still open when this
+    // re-renders — which is what lets the message appear beside the box that
+    // caused it while the box keeps what was typed.
+    if (error instanceof ValidationError) return { errors: error.fieldErrors, values };
+    if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
+    throw error;
+  }
+}
+
+/** The form the row's inputs belong to — see {@link Row} for why they are apart. */
+const EDITOR = "revise-position";
+
+/**
+ * A canonical view, plus the one transient row a receipt or an editor names.
+ *
+ * Appended here rather than taught to `toSearch`, because the parameter is
+ * transient by design: it belongs to this request and to no link built from the
+ * view (see the loader).
+ */
+function withRow(
+  search: string,
+  param: "edit" | "saved",
+  row: { accountId: string; instrumentId: string } | null,
+): string {
+  if (row === null) return search;
+
+  return `${search === "" ? "?" : `${search}&`}${param}=${rowKey(row)}`;
 }
 
 type Holding = NonNullable<Route.ComponentProps["loaderData"]["rows"]>[number];
@@ -203,7 +341,7 @@ function Money({ amount }: { amount: string | null }) {
   return <>{amount === null ? "—" : formatMoney(amount)}</>;
 }
 
-export default function Holdings({ loaderData }: Route.ComponentProps) {
+export default function Holdings({ loaderData, actionData }: Route.ComponentProps) {
   const {
     hasHoldings,
     totalHoldings,
@@ -216,11 +354,26 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
     groups,
     rows,
     total,
+    view,
+    editing,
+    written,
+    today,
   } = loaderData;
 
   const query: HoldingsQuery = { filters: new Map(active), group, sort, direction };
   const shown = total.valueCoverage.total;
   const filtered = active.length > 0;
+
+  // Everything one row needs to know about being the row that is open, gathered
+  // once rather than threaded through `GroupBody` as six props it does not read.
+  const editor: Editor = {
+    editing,
+    written,
+    today,
+    view,
+    errors: actionData?.errors,
+    values: actionData?.values,
+  };
 
   // Clearing the filters clears the filters. The grouping and the sort are how
   // you were reading the table rather than what you were reading, and the form
@@ -229,8 +382,12 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
   // says.
   const cleared = toSearch({ ...query, filters: new Map() }) || ".";
   const columns = columnsFor(group);
-  const span = columns.length;
-  const labelSpan = span - FIGURES;
+  // One column past the data columns: the row's own Edit control. It sorts by
+  // nothing and sums to nothing, so it is not a `Column` — the array is what
+  // the headers, the sort links and `columnsFor` are all built from, and an
+  // entry in it with no `SortKey` would have to be special-cased in each.
+  const span = columns.length + 1;
+  const labelSpan = columns.length - FIGURES;
 
   if (!hasHoldings) {
     return (
@@ -292,6 +449,14 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
                     {columns.map((column) => (
                       <SortHeader key={column.key} column={column} query={query} />
                     ))}
+                    {/* Named for a screen reader and blank for everyone else:
+                        a word over a column of icons would be a heading for a
+                        control rather than for data, and on the phone the head
+                        row is a strip of sort links where it would read as one
+                        more of those. */}
+                    <th scope="col" role="columnheader" className="is-actions">
+                      <span className="visually-hidden">Correct</span>
+                    </th>
                   </tr>
                 </thead>
 
@@ -302,6 +467,8 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
                         key={`${holding.accountId}-${holding.instrumentId}`}
                         holding={holding}
                         columns={columns}
+                        span={span}
+                        editor={editor}
                       />
                     ))}
                   </tbody>
@@ -313,6 +480,7 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
                       columns={columns}
                       span={span}
                       labelSpan={labelSpan}
+                      editor={editor}
                     />
                   ))
                 )}
@@ -323,6 +491,7 @@ export default function Holdings({ loaderData }: Route.ComponentProps) {
                       Total
                     </th>
                     <Figures total={total} />
+                    <td className="is-actions" role="cell" />
                   </tr>
                 </tfoot>
               </table>
@@ -568,11 +737,13 @@ function GroupBody({
   columns,
   span,
   labelSpan,
+  editor,
 }: {
   group: Group;
   columns: ReadonlyArray<Column>;
   span: number;
   labelSpan: number;
+  editor: Editor;
 }) {
   const count = group.total.valueCoverage.total;
 
@@ -592,6 +763,8 @@ function GroupBody({
           key={`${holding.accountId}-${holding.instrumentId}`}
           holding={holding}
           columns={columns}
+          span={span}
+          editor={editor}
         />
       ))}
 
@@ -608,58 +781,270 @@ function GroupBody({
           </span>
         </th>
         <Figures total={group.total} />
+        <td className="is-actions" role="cell" />
       </tr>
     </tbody>
   );
 }
 
-function Row({ holding, columns }: { holding: Holding; columns: ReadonlyArray<Column> }) {
+/** What a row needs to know about the one correction the screen may be making. */
+type Editor = {
+  /** The row key the editor is open on, or null. */
+  editing: string | null;
+  /** The row a write just landed on, as the loader read it back. */
+  written: Route.ComponentProps["loaderData"]["written"];
+  today: string;
+  /** The canonical view with no row named — where Cancel goes. */
+  view: string;
+  errors?: Readonly<Record<string, string>>;
+  values?: Record<string, string>;
+};
+
+/**
+ * One holding, and — for at most one of them at a time — the boxes that correct
+ * it (§5.4).
+ *
+ * **The inputs are in their own columns and the form is in the row beneath.** A
+ * `<form>` cannot wrap a `<tr>`; the only legal places for one inside a table
+ * are inside a cell. Putting the whole editor in a single cell would take the
+ * quantity out of the Quantity column and out of its right-aligned tabular
+ * figures, which is most of what makes an inline correction readable — you are
+ * meant to be checking the number against the ones above and below it. So the
+ * form element sits in the full-width row below and the inputs join it by
+ * `form=`, which is what the attribute is for, and which associates a control
+ * with a form wherever either one sits in the document.
+ *
+ * **Price, Value and Unrealized keep showing the stored figures while a row is
+ * open.** They are what the correction is being made against. Blanking them, or
+ * projecting them from the half-typed quantity, would replace the reference
+ * with a guess at the exact moment it is being read.
+ *
+ * The boxes open on `formatQuantity`'s output rather than on the raw column, so
+ * a row reading `120.5` opens as `120.5` and not as `120.50000000` — and
+ * `signedQuantity` and `perShareAmount` were written to take that spelling
+ * back, U+2212 and thousands separators and all, precisely so the prefill and
+ * the parser could be the same string.
+ */
+function Row({
+  holding,
+  columns,
+  span,
+  editor,
+}: {
+  holding: Holding;
+  columns: ReadonlyArray<Column>;
+  span: number;
+  editor: Editor;
+}) {
   const shows = (key: SortKey) => columns.some((column) => column.key === key);
+  const key = rowKey(holding);
+  const open = editor.editing === key;
+  const { errors, values } = editor;
+
+  // Every refusal, in a fixed order, gathered for the line beneath the row.
+  //
+  // They go there rather than under the box each belongs to because the boxes
+  // are in table columns: "A quantity must be a number, like 120.5 — or −8,000
+  // for something owed." is a sentence, and the Quantity column is as wide as
+  // the widest share count in the household. A message set in a 6rem column
+  // either wraps to five lines or widens the column and shifts every figure in
+  // the table sideways, and it does whichever it does at the moment the reader
+  // is trying to read it. The full-width line below has room for the sentence;
+  // `aria-invalid` and `aria-describedby` are what keep it attached to its box
+  // for a reader who is not looking at the layout at all.
+  const messages =
+    errors === undefined
+      ? []
+      : (["form", "quantity", "costBasisPerShare"] as const)
+          .map((field) => [field, errors[field]] as const)
+          .filter((entry): entry is readonly [(typeof entry)[0], string] => entry[1] !== undefined);
+
+  // What was typed wins over what is stored, so a refusal never costs the
+  // entry. On a fresh open there is nothing typed and the stored figures are
+  // what the boxes show.
+  const typedQuantity = values?.quantity ?? formatQuantity(holding.quantity);
+  const typedBasis =
+    values?.costBasisPerShare ??
+    (holding.costBasisPerShare === null ? "" : formatQuantity(holding.costBasisPerShare));
 
   return (
-    <tr role="row">
-      <td role="cell" data-label="Asset">
-        <div className="cell-stack">
-          {holding.symbol ? <span className="badge">{holding.symbol}</span> : null}
-          <div>
-            {holding.instrumentName}
-            <span className="cell-sub">
-              {holding.classification} · {holdingNote(holding)}
-            </span>
+    <>
+      <tr role="row" className={open ? "row-editing" : undefined}>
+        <td role="cell" data-label="Asset">
+          <div className="cell-stack">
+            {holding.symbol ? <span className="badge">{holding.symbol}</span> : null}
+            <div>
+              {holding.instrumentName}
+              <span className="cell-sub">
+                {holding.classification} · {holdingNote(holding)}
+              </span>
+            </div>
           </div>
-        </div>
-      </td>
-      {shows("account") ? (
-        <td role="cell" data-label="Account">
-          {/* One hop to the account's own page, which is where its chart and its
-              set-balance form live (§13.1). */}
-          <Link className="cell-link" to={`/accounts/${holding.accountId}`}>
-            {holding.accountName}
-            <ChevronRightIcon />
-          </Link>
-          <span className="cell-sub">{holding.institution}</span>
         </td>
+        {shows("account") ? (
+          <td role="cell" data-label="Account">
+            {/* One hop to the account's own page, which is where its chart and its
+                set-balance form live (§13.1). */}
+            <Link className="cell-link" to={`/accounts/${holding.accountId}`}>
+              {holding.accountName}
+              <ChevronRightIcon />
+            </Link>
+            <span className="cell-sub">{holding.institution}</span>
+          </td>
+        ) : null}
+        {shows("owner") ? <td role="cell" data-label="Owner">{holding.ownerName}</td> : null}
+        <td className="is-numeric" role="cell" data-label="Quantity">
+          {open ? (
+            <input
+              id="revise-quantity"
+              form={EDITOR}
+              name="quantity"
+              defaultValue={typedQuantity}
+              // `text`, not `number`, for the reason the set-balance box gives:
+              // a number input silently drops what it cannot parse, so a pasted
+              // "1,250.00" arrives as an empty string and the family is told a
+              // quantity is required. The parsing this app wants is exact and
+              // lives in `input.server`.
+              type="text"
+              inputMode="decimal"
+              className="cell-input"
+              aria-label={`Quantity of ${holding.instrumentName}`}
+              aria-invalid={errors?.quantity ? true : undefined}
+              aria-describedby={errors?.quantity ? "revise-error-quantity" : undefined}
+              autoComplete="off"
+              // The one place a correction starts, so it is where the cursor
+              // goes when the row opens.
+              autoFocus
+            />
+          ) : (
+            formatQuantity(holding.quantity)
+          )}
+        </td>
+        {/* Null price and null value are the same holding: never quoted. A dash
+            says so; a zero would understate the portfolio by the whole position
+            and look deliberate. */}
+        <td className="is-numeric" role="cell" data-label="Price">
+          <Money amount={holding.price} />
+        </td>
+        <td className="is-numeric" role="cell" data-label="Value">
+          <Money amount={holding.value} />
+        </td>
+        <td className="is-numeric" role="cell" data-label="Cost basis">
+          {open ? (
+            <input
+              id="revise-cost-basis"
+              form={EDITOR}
+              name="costBasisPerShare"
+              defaultValue={typedBasis}
+              type="text"
+              inputMode="decimal"
+              className="cell-input"
+              // The column prints the whole position's basis and the box takes
+              // one share's, which is the number a statement prints and the
+              // number the column is stored from. Said in the label rather than
+              // left to be inferred from a figure that will not match.
+              aria-label={`Cost basis per share of ${holding.instrumentName}`}
+              placeholder="per share"
+              aria-invalid={errors?.costBasisPerShare ? true : undefined}
+              aria-describedby={
+                errors?.costBasisPerShare ? "revise-error-costBasisPerShare" : undefined
+              }
+              autoComplete="off"
+            />
+          ) : (
+            <Money amount={holding.costBasis} />
+          )}
+        </td>
+        <td className="is-numeric" role="cell" data-label="Unrealized">
+          {holding.unrealized === null ? "—" : <Delta amount={holding.unrealized} />}
+        </td>
+        <td className="is-actions" role="cell" data-label="">
+          {open ? null : (
+            <Link
+              className="row-edit"
+              to={withRow(editor.view, "edit", holding)}
+              // "Edit" forty times over is forty identical entries in a screen
+              // reader's list of links. The row is what distinguishes them.
+              aria-label={`Correct ${holding.instrumentName} in ${holding.accountName}`}
+              preventScrollReset
+            >
+              <EditIcon />
+            </Link>
+          )}
+        </td>
+      </tr>
+
+      {open ? (
+        // The line beneath the open row is the editor's footer: what saving
+        // will do, and the two controls that do it.
+        //
+        // Save and Cancel are *here* rather than in the actions cell, which is
+        // where they started. That column is sized by `width: 1%` to the 32px
+        // control it holds at rest, and two buttons in it widened the table
+        // past its panel — putting the whole screen into a horizontal scroll to
+        // reach a Save button, on the one interaction that is supposed to be
+        // quick. This row is already full width and already carries the
+        // sentence explaining the click, so the button belongs beside it.
+        <tr className="row-note" role="row">
+          <td colSpan={span} role="cell" data-label="">
+            <div className="row-editor">
+              <div>
+                {messages.length > 0 ? (
+                  messages.map(([field, message]) => (
+                    <p
+                      key={field}
+                      id={`revise-error-${field}`}
+                      className="field-error"
+                      role="alert"
+                    >
+                      {message}
+                    </p>
+                  ))
+                ) : (
+                  // Said before the click rather than after it, exactly as the
+                  // set-balance form says its own version: what saving does
+                  // here is not what "edit" usually means, and a reader who
+                  // expects one number to be overwritten would not expect a
+                  // statement dated today to appear carrying every other
+                  // position in the account.
+                  <p className="form-note">
+                    Saving records a new statement for {holding.accountName}, dated {editor.today},
+                    carrying every other position in it forward unchanged. The current one is kept
+                    on its own date, so nothing already recorded moves.
+                  </p>
+                )}
+              </div>
+
+              <Form
+                id={EDITOR}
+                method="post"
+                action={`/holdings${withRow(editor.view, "edit", holding)}`}
+                className="row-actions"
+              >
+                <button type="submit" className="button button--quiet">
+                  Save
+                </button>
+                <Link className="button button--text" to={editor.view === "" ? "." : editor.view}>
+                  Cancel
+                </Link>
+              </Form>
+            </div>
+          </td>
+        </tr>
       ) : null}
-      {shows("owner") ? <td role="cell" data-label="Owner">{holding.ownerName}</td> : null}
-      <td className="is-numeric" role="cell" data-label="Quantity">
-        {formatQuantity(holding.quantity)}
-      </td>
-      {/* Null price and null value are the same holding: never quoted. A dash
-          says so; a zero would understate the portfolio by the whole position
-          and look deliberate. */}
-      <td className="is-numeric" role="cell" data-label="Price">
-        <Money amount={holding.price} />
-      </td>
-      <td className="is-numeric" role="cell" data-label="Value">
-        <Money amount={holding.value} />
-      </td>
-      <td className="is-numeric" role="cell" data-label="Cost basis">
-        <Money amount={holding.costBasis} />
-      </td>
-      <td className="is-numeric" role="cell" data-label="Unrealized">
-        {holding.unrealized === null ? "—" : <Delta amount={holding.unrealized} />}
-      </td>
-    </tr>
+
+      {editor.written?.key === key ? (
+        <tr className="row-note" role="row">
+          <td colSpan={span} role="cell" data-label="">
+            <p className="form-note" role="status">
+              Recorded. {editor.written.accountName} now reads{" "}
+              <b className="u-data">{formatQuantity(editor.written.quantity)}</b> of{" "}
+              {editor.written.instrumentName}.
+            </p>
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
 

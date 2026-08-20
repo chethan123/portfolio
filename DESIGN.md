@@ -298,6 +298,71 @@ another saved mapping.
 
 ---
 
+### 5.4 Correcting one position
+
+A statement arrives quarterly and a position changes weekly. §5.1's flow is four screens, which is
+right for a statement and far too much ceremony for "the 401k contribution added eleven units". So
+the Holdings table carries one small write: **open one row, restate its quantity and its cost basis,
+save.**
+
+It is `setBalance` for accounts that hold more than one thing, and it obeys the same rules rather
+than being an exception to them.
+
+**It appends; it never edits.** `holding_valued_at` reads position sets for every date the net worth
+chart plots, so an `UPDATE holding SET quantity` would not correct a number — it would silently
+restate every figure back to the date of the statement the row landed in. March's net worth would
+move because an August typo was fixed, with nothing on any screen saying so. A correction is
+therefore a *new* position set dated today, and the one it corrects stays where it is, still
+speaking for its own dates. Undo is a second correction, resolved by the same tie-break a
+re-uploaded statement is (`created_at`, then `id`).
+
+**It carries the whole account forward.** §5.2's "a missing row means sold" makes a position set a
+photograph of everything an account holds, so a set containing only the corrected row would record
+every other security in the account as sold. The new set is the old set with one row changed and the
+rest copied across verbatim. That copy asserts nothing new: §14.7 already records that this
+application reads holdings as frozen between statements, and carrying them forward *is* that
+reading.
+
+**It changes numbers, never membership.** Adding an instrument means resolving a name nobody has
+seen before against the alias table (§4.3), which is the upload flow's job. A correction can say
+"not 100 units but 120", and can say "zero", and cannot say "and also some Apple". A quantity of
+zero is stored as zero rather than dropping the row: a dropped row is unreachable from a table that
+no longer prints it, so the position would be uneditable by the very screen that removed it.
+
+**The sign may not be flipped.** §2 puts the sign in the quantity, so a correction that turns
+something held into something owed moves household net worth by twice the figure while reading as an
+ordinary edit. `setBalance` avoids this by refusing to accept a sign at all; this box has to show
+one, because it opens containing the figure the table prints — so it refuses the *change* instead.
+Recording zero first and the other direction second is the deliberate two-step, and it is the only
+way an overdrawn bank account can be entered today (§14.8 is unchanged: the set-balance form still
+cannot).
+
+**There is no date field.** A correction is about now. A past date is a statement, and a statement is
+the upload flow's job. The set is dated `greatest(today, the corrected set's date)`, because
+`recordedDate` allows a statement to be dated tomorrow for a household east of UTC and a correction
+filed behind the sheet it corrects is a write that appears to succeed and changes no figure
+anywhere.
+
+**No schema change, and no new identity.** A holding has no id worth putting in a URL — the `holding`
+row carrying a position changes on every upload — so a row is addressed by `(account, instrument)`,
+which `holding_one_row_per_instrument` makes unique inside the one position set `holding_valued`
+returns per account. The server re-resolves that pair through `latest_position_set` at the moment of
+the write, so it always names what the account holds *now* rather than what it held when the page
+rendered. If the current statement no longer carries the instrument, the write is refused and
+nothing at all is written.
+
+**It is a URL, not client state.** The editor opens at `?edit=<account>.<instrument>` and confirms at
+`?saved=<account>.<instrument>`; neither is part of the canonical Holdings query, so every filter,
+grouping and sort control closes the editor for free. §8.1's screen has no React state and this does
+not introduce any — it works with JavaScript off, survives a reload, and is the same grammar the
+rest of the screen is built from.
+
+> **Accepted limitation.** A correction cannot fix the *past*. Restating a figure on a date that
+> already has a statement means deleting that position set and re-recording it, which is §5.2's undo
+> and has no interface yet.
+
+---
+
 ## 6. Pricing
 
 ### 6.1 Provider
@@ -525,6 +590,12 @@ those are undiscoverable exactly when needed.
 allowed on mobile (§11), so it's reachable from the account row on Holdings — not three levels deep
 behind a desktop-shaped configuration area.
 
+**Correcting one position is the same exception, generalised** (§5.4). A row on Holdings opens in
+place, restates its quantity and cost basis, and closes. It stays on Holdings for the reason the
+balance form does: it is the write a household actually makes between statements, and a write made
+weekly does not belong behind a tab visited a few times ever. It does not replace the upload flow and
+cannot — it changes figures on positions that already exist, never which positions an account holds.
+
 **The upload flow (§5.1) is four screens**, not one: file drop → column mapping → unresolved
 instruments → diff preview. Only the first is trivial.
 
@@ -632,12 +703,16 @@ consequence in §10: without HTTPS in front, phones cannot install it.
 
 **The phone is for reading, plus one-field writes.**
 
-Every mutation except balance editing is a desktop-shaped workflow — upload → mapping →
-resolution → diff → commit is four screens with real state, and designing it for a 390px viewport
-would compromise the desktop version that will actually be used.
+Every mutation except balance editing and position correction is a desktop-shaped workflow — upload
+→ mapping → resolution → diff → commit is four screens with real state, and designing it for a 390px
+viewport would compromise the desktop version that will actually be used.
 
 - **Read:** all three pages.
-- **Write:** manual balance updates only (checking, loan) — a single number input.
+- **Write:** manual balance updates (checking, loan) and single-position corrections on Holdings
+  (§5.4) — one or two number inputs, and no screen-to-screen state in either. A correction qualifies
+  on exactly the test the balance form passes: it is a number typed into a box, and everything that
+  makes ingest desktop-shaped — the column mapping, the unresolved instruments, the diff — is absent
+  because a correction cannot change which instruments an account holds.
 - **Everything else:** still renders on mobile and still works if you are determined; it simply gets
   no mobile-specific layout investment. Not hidden — hiding it means being stuck on a tablet.
 

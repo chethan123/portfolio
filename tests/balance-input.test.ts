@@ -34,6 +34,24 @@ describe("moneyMagnitude", () => {
     expect(parseInput(amount, { amount: "14500.00" }).amount).toBe("14500.00");
   });
 
+  it("refuses a lone point rather than reading it as an empty account", () => {
+    // ".50" and "50." are completed rather than refused, and for a while the
+    // two rules composed: "." became "0." became "0", so a stray keystroke was
+    // a well-formed balance of nothing. On a checking account that is the whole
+    // balance, recorded as gone, with no refusal anywhere to say so.
+    let message: string | undefined;
+    try {
+      parseInput(amount, { amount: "." });
+    } catch (error) {
+      if (error instanceof ValidationError) message = error.fieldErrors.amount;
+      else throw error;
+    }
+    expect(message).toMatch(/must be an amount in dollars/);
+
+    expect(parseInput(amount, { amount: ".50" }).amount).toBe("0.50");
+    expect(parseInput(amount, { amount: "50." }).amount).toBe("50");
+  });
+
   it.each([
     ["$14,500.00", "14500.00"],
     ["14,500.00", "14500.00"],

@@ -713,3 +713,62 @@ export function holdingNote(holding: {
 
   return parts.join(" · ");
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Addressing one row                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The name one row answers to in a URL — `12.7`, account then instrument.
+ *
+ * A holding has no id of its own to use here. `holding_valued` does not select
+ * one, on purpose: the view answers "what is held now", and the row it returns
+ * is a fact about an account and an instrument rather than about the particular
+ * `holding` row that happened to carry it into the latest position set. That id
+ * changes every time a statement is uploaded, and a link built on it would rot
+ * on the next upload while still pointing at a real row.
+ *
+ * The pair does not rot, and it is exactly as unique: `holding_valued` returns
+ * one position set per account and `holding_one_row_per_instrument` allows one
+ * row per instrument inside it. Which is also why the editor needs no schema
+ * change to address a row — the server re-resolves the pair through
+ * `latest_position_set` at the moment of the write, so it always names whatever
+ * the account currently holds rather than whatever it held when the page
+ * rendered.
+ *
+ * A full stop separates them because both halves are `bigint` ids and so
+ * contain only digits, which leaves the separator unambiguous and legible in a
+ * query string where `%2F` or `-` would not be.
+ */
+export function rowKey(holding: Pick<ValuedHolding, "accountId" | "instrumentId">): string {
+  return `${holding.accountId}.${holding.instrumentId}`;
+}
+
+/**
+ * The pair a row key names, or null if it names nothing.
+ *
+ * Strict about shape and silent about failure, the way {@link parseQuery} is
+ * about everything else in the query string: an `edit=` a person mangled, or
+ * one carried in from a bookmark predating a change, closes the editor rather
+ * than raising anything. The ids are only checked for being ids here — whether
+ * they name a row the household actually holds is a question for the database,
+ * and the answer is the same "no editor" either way.
+ *
+ * Eighteen digits, not "any run of digits". Both halves reach a `bigint` column,
+ * and a nineteen-digit number can be larger than one holds — which Postgres
+ * answers with `value out of range`, reaching the reader as a 500 rather than
+ * as a closed editor. Ten to the eighteen is comfortably inside the type and
+ * unreachably far outside anything this application will ever count to.
+ */
+export function parseRowKey(
+  value: string | null,
+): { accountId: string; instrumentId: string } | null {
+  if (value === null) return null;
+
+  const match = /^(\d{1,18})\.(\d{1,18})$/.exec(value);
+  if (match === null) return null;
+
+  const [, accountId = "", instrumentId = ""] = match;
+
+  return { accountId, instrumentId };
+}

@@ -36,6 +36,8 @@ import {
   groupHoldings,
   holdingNote,
   parseQuery,
+  parseRowKey,
+  rowKey,
   sortHoldings,
   summarise,
   toSearch,
@@ -595,5 +597,40 @@ describe("formatQuantity", () => {
 
   it("has no negative zero", () => {
     expect(formatQuantity("-0.00000000")).toBe("0");
+  });
+});
+
+describe("addressing one row", () => {
+  it("names a row by the pair that survives an upload, not by a holding id", () => {
+    // A `holding` row's id changes every time a statement lands, so an `?edit=`
+    // built on one would rot on the next upload while still pointing at a real
+    // row somewhere. The account and the instrument are what the reader means.
+    expect(rowKey({ accountId: "12", instrumentId: "7" })).toBe("12.7");
+  });
+
+  it("round-trips, which is what makes the URL canonical", () => {
+    expect(parseRowKey(rowKey({ accountId: "12", instrumentId: "7" }))).toEqual({
+      accountId: "12",
+      instrumentId: "7",
+    });
+  });
+
+  it.each([
+    null,
+    "",
+    "12",
+    "12.",
+    ".7",
+    "12.7.3",
+    "a.b",
+    "-1.7",
+    "12.7 ",
+    "9999999999999999999.7",
+  ])("reads %j as no row at all", (value) => {
+    // Silent about failure, the way `parseQuery` is about everything else in
+    // this query string: a mangled `edit=` closes the editor rather than
+    // raising. It also keeps a non-numeric id away from a `::bigint` cast,
+    // which reaches a reader as a 500 rather than as a closed editor.
+    expect(parseRowKey(value)).toBeNull();
   });
 });

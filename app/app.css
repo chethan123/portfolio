@@ -1457,6 +1457,29 @@ textarea:focus-visible {
   border-color: var(--primary);
 }
 
+/*
+ * A box that was refused.
+ *
+ * Every form in this application already sets `aria-invalid` and prints the
+ * reason underneath, and until now nothing drew it — which was survivable while
+ * the message sat directly beneath its own box. The Holdings editor is where it
+ * stops being survivable: its boxes are in table columns and their messages are
+ * in the row below, so with two of them open a reader has to match a sentence
+ * to a column by reading it.
+ *
+ * Never colour alone (§12). The sentence is the claim and it is still there in
+ * words; this is the second channel, and the border thickens as well as
+ * changing hue so it survives being seen without colour at all. The focus ring
+ * still wins while the box is focused, because where the cursor is is the more
+ * urgent of the two facts.
+ */
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--loss);
+  border-width: 2px;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -1881,6 +1904,153 @@ code {
   color: var(--on-surface-variant);
 }
 
+/* --- Correcting one position ----------------------------------------------
+ * The inline editor (DESIGN.md §5.4). Nothing here is a new component: the
+ * boxes are the app's `input`, the buttons are `.button--quiet` and
+ * `.button--text`, and the note under the row is `.form-note`. What is new is
+ * only that they occur inside a table row.
+ */
+
+/*
+ * The last column: the row's own Correct control.
+ *
+ * `width: 1%` is the table idiom for "as narrow as your content" — a `td` will
+ * not go below its content's width, so the percentage collapses the column to
+ * the icon and leaves every other column the space it had. No left padding, so
+ * what the column costs is the control and the table's own right margin and
+ * nothing else: every pixel here comes out of the Asset column, which is the
+ * one that wraps.
+ */
+.data-table--holdings th.is-actions,
+.data-table--holdings td.is-actions {
+  width: 1%;
+  padding-left: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/*
+ * The control itself, drawn only on approach.
+ *
+ * A pencil printed on all forty rows is forty pieces of chrome competing with
+ * the figures the table exists to show, so it fades up on hover and on focus.
+ *
+ * `:focus`, not `:focus-visible`, and the distinction is the whole
+ * accessibility of the control. `:focus-visible` exists to decide whether to
+ * paint a focus *ring* on something already on the screen; here the reveal is
+ * not the ring, it is the control, so a heuristic that withholds it leaves the
+ * pencil focused, reachable, operable by Enter — and invisible. `:focus` is
+ * unconditional, and a focused control being visible is never the wrong answer.
+ */
+.row-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  color: var(--on-surface-variant);
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.row-edit svg {
+  width: 18px;
+  height: 18px;
+}
+
+.data-table--holdings tbody tr:hover .row-edit,
+.row-edit:focus {
+  opacity: 1;
+}
+
+.row-edit:hover {
+  background: var(--surface-container-high);
+  color: var(--on-surface);
+}
+
+/* Touch has no hover, so the fade would leave the control undiscoverable on
+ * the one device DESIGN.md §11 lets write. */
+@media (hover: none) {
+  .row-edit {
+    opacity: 1;
+  }
+}
+
+/*
+ * A box in a cell.
+ *
+ * Full width of its column and right-aligned on the same tabular figures the
+ * column is set in, so the digits being typed line up with the digits above and
+ * below them — which is the whole reason the editor is in the columns rather
+ * than in a panel underneath. Shorter than a standalone control because a row
+ * that grew by 40px on open would push the rest of the table down the screen.
+ */
+.cell-input {
+  width: 100%;
+  min-width: 6rem;
+  height: 32px;
+  padding: 0 var(--space-base);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The open row keeps its ground while the pointer is elsewhere: it is the row
+ * being acted on, and losing the tint on mouse-out would make the one row that
+ * is different look like every other. */
+.data-table--holdings tr.row-editing td,
+.data-table--holdings tr.row-editing:hover td {
+  background: var(--panel-hover);
+}
+
+/*
+ * The open row's footer: the sentence on one side, Save and Cancel on the
+ * other.
+ *
+ * The flex is on a `div` and on the `form` inside the cell, never on the cell
+ * — the rule against `display: flex` on a `td` holds here, because the table is
+ * still a table around it.
+ */
+.row-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+/* The sentence takes the room it needs and yields it: `min-width: 0` is what
+ * lets a four-line refusal wrap rather than push the buttons off the table. */
+.row-editor > div {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-base);
+  flex: none;
+}
+
+/*
+ * The line under an open row: what saving will do, or why it was refused.
+ *
+ * A full-width row rather than a caption inside the actions cell, because the
+ * sentence is about the whole correction and the cell is 32px wide. It carries
+ * the open row's ground so the two read as one block.
+ */
+.data-table--holdings tr.row-note td {
+  padding-top: 0;
+  background: var(--panel-hover);
+  border-top: 0;
+  white-space: normal;
+}
+
+.data-table--holdings tr.row-note:hover td {
+  background: var(--panel-hover);
+}
+
 /*
  * The phone (DESIGN.md §8.1, §11).
  *
@@ -2016,6 +2186,62 @@ code {
   .data-table--holdings .row-subtotal th,
   .data-table--holdings .row-total th {
     padding-bottom: var(--space-xs);
+  }
+
+  /*
+   * The correction, on a card (DESIGN.md §11 — the phone reads, and writes one
+   * number).
+   *
+   * The actions cell loses its label and its right edge and becomes the card's
+   * last line, which is where a card's actions belong. On a subtotal and on the
+   * grand total the same cell carries nothing at all, and an empty flex row
+   * there would open a gap under the figures.
+   */
+  .data-table--holdings th.is-actions,
+  .data-table--holdings td.is-actions {
+    width: auto;
+    padding-left: 0;
+    text-align: left;
+  }
+
+  .data-table--holdings td.is-actions:empty {
+    display: none;
+  }
+
+  .data-table--holdings tbody td.is-actions {
+    display: block;
+    margin-top: var(--space-sm);
+  }
+
+  /* A box that shared its line with the field's label would be a third of a
+   * phone wide. The card gives it the row instead — and the caption goes back
+   * to the leading edge with it, since `.is-numeric` right-aligns the cell for
+   * a column of figures that no longer exists once the table is a card. */
+  .data-table--holdings tbody tr.row-editing td:has(> .cell-input) {
+    display: block;
+    text-align: left;
+  }
+
+  .data-table--holdings tbody tr.row-editing td:has(> .cell-input)::before {
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .cell-input {
+    text-align: left;
+  }
+
+  /* The note is the card's own last line rather than a row of its own: at 390px
+   * the sentence is four lines and the padding between two cards would read as
+   * a break in the middle of one correction. */
+  .data-table--holdings tbody tr.row-note {
+    padding: 0 var(--space-md) var(--space-md);
+    border-top: 0;
+  }
+
+  .data-table--holdings tr.row-note td {
+    display: block;
+    padding: 0;
   }
 
   /* Two filters to a row: seven stacked controls is most of a phone screen
