@@ -3,6 +3,125 @@
 A self-hosted family portfolio and net worth tracker. See [DESIGN.md](DESIGN.md) for the full
 design — domain model, ingest, pricing, screens, stack, and the accepted limitations.
 
+## What it looks like
+
+Every screen below is the real application, running against the generated demo household in
+[`scripts/seed-demo.ts`](scripts/seed-demo.ts) — two people, six accounts at six institutions,
+three years of statements, one holding nobody can price and one loan. **The figures are invented,
+the behaviour is not.** The demo deliberately includes the awkward cases, because a screenshot of a
+portfolio where everything is priced and everything has a cost basis is a screenshot of the easy
+case.
+
+Screenshots follow your GitHub theme; the app follows your system's.
+
+### Overview — what the household is worth
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-dark.png">
+  <img alt="The overview: total net worth, a three-year chart, the account list and allocation by account" src="docs/screenshots/overview-light.png">
+</picture>
+
+The one figure the household actually asks for, and the line behind it. The range control is a URL,
+so a chosen range survives a reload and can be bookmarked.
+
+- **Every total says what it was computed from.** "The figure and the line are 17 of 18 holdings.
+  The rest have never been priced." A holding nobody can quote is never silently dropped and never
+  counted as zero — it is excluded and the exclusion is written down.
+- **Liabilities are accounts.** The auto loan sits in the list at −$14,500 and subtracts from net
+  worth, because a loan is a negative `USD` position rather than a special case in the arithmetic.
+- **A zero and an absence never look alike.** An account holding nothing, an account nothing can
+  price, and an empty instance each get their own words instead of a `$0.00`.
+
+### Analysis — where the money actually sits
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/analysis-dark.png">
+  <img alt="Analysis: three donut-and-table panels breaking net worth down by person, by account type and by asset class" src="docs/screenshots/analysis-light.png">
+</picture>
+
+Three breakdowns of the same total — by person, by account type, and by asset class — each a donut
+beside the table it is drawn from.
+
+- **Debt is drawn as debt.** The ring paints what is owned, so the loan's row is left unfilled and
+  the panel says why rather than pretending a negative is a slice.
+- **Percentages state their denominator.** A negative row's share is of gross assets, not of the
+  total in the centre, and the panel says so instead of leaving you to work out which.
+
+### Account detail — one account, end to end
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/account-detail-dark.png">
+  <img alt="A brokerage account: its own header, its own valuation chart, and a holdings table" src="docs/screenshots/account-detail-light.png">
+</picture>
+
+Each account carries its own header, its own valuation line, and what it holds.
+
+- **Price quality is on the row it applies to.** The real-estate ETF above reads "price is stale",
+  meaning its last known price is being used rather than discarded. A holding that has never been
+  quoted at all reads "never priced" and shows a dash for its price and value — never a zero, which
+  would understate the account by the whole position and look deliberate.
+- **The figure here is the figure elsewhere.** This total and the overview's row for the same
+  account are one `SUM` over one shared view, not two queries that agree by luck.
+
+### Set balance — the one thing you type
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/account-balance-dark.png">
+  <img alt="A loan account showing the set balance form, with the amount entered unsigned and stored negative" src="docs/screenshots/account-balance-light.png">
+</picture>
+
+Bank accounts and loans have no statement worth mapping — they are one number. Those two kinds get a
+form; nothing else does.
+
+- **You type what you owe, not what it stores.** The minus sign for a liability comes from the kind
+  of account, never from your typing, so `14,500` on a loan can only ever move net worth *down*.
+  `$14,500.00`, `14,500` and `14500.00` are all accepted.
+- **Recording never overwrites.** Each balance is kept on its own date and the most recent one
+  speaks, so a correction is an entry rather than an edit and undo costs nothing.
+- **A brokerage is refused, on purpose.** A recorded set is a photograph of everything an account
+  holds, so one cash figure against a brokerage would record every security in it as sold. Those
+  accounts are not offered the form at all.
+
+### Settings — people and accounts
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
+  <img alt="Settings: the account list with kind, owner and tax treatment, above the add-account form" src="docs/screenshots/settings-light.png">
+</picture>
+
+Who is in the household and what they own. Accounts carry a kind, an owner and a **three-way tax
+treatment** — taxable, tax-deferred, tax-free — because $500k in a Traditional IRA is roughly $350k
+of spending power while $500k in a Roth is $500k, and a boolean throws away exactly that.
+
+Nothing here deletes anything. An account is *closed*, which stops it counting toward today's net
+worth while it keeps counting on every date before it closed; a person who still owns accounts
+cannot be removed, and the refusal names them.
+
+### On a phone
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-mobile-dark.png">
+  <img alt="The overview on a phone, with the navigation as a bottom bar" width="390" src="docs/screenshots/overview-mobile-light.png">
+</picture>
+
+The same pages, with the left rail becoming a bottom bar and the tables reflowing. Nothing is
+withheld on a small screen: setting a balance and the whole of Settings are reachable from a phone.
+
+### Not built yet
+
+Three screens are reachable and still placeholders — two from the navigation, one from the Upload
+button. They are listed here rather than screenshotted, because a picture of a placeholder says
+nothing a sentence does not:
+
+| Screen | What it will do |
+|---|---|
+| **Holdings** | Every position across all accounts, filterable and groupable, with subtotals |
+| **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment |
+| **Upload** | CSV statement import with column mapping and a diff preview before anything is applied |
+
+Until Upload lands, positions arrive through the set-balance form or by seeding. Accounts, people
+and balances all work today.
+
 ## Running an instance
 
 ```sh
