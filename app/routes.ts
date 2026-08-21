@@ -3,8 +3,7 @@ import { type RouteConfig, index, route } from "@react-router/dev/routes";
 /**
  * Navigation order is DESIGN.md §8.4: ordered by how often a page is opened,
  * so the daily pages come first and Settings is last. The three dashboards
- * carry empty states and Upload is a placeholder in this slice; their content
- * is other slices.
+ * carry empty states; their content is other slices.
  */
 export default [
   index("routes/overview.tsx"),
@@ -12,6 +11,15 @@ export default [
   route("analysis", "routes/analysis.tsx"),
   route("income", "routes/income.tsx"),
   route("upload", "routes/upload.tsx"),
+
+  // The step screens over one upload draft (DESIGN.md §5.1). Not nav entries:
+  // a step is reached only by working through the flow, and the rail's filled
+  // button stays the one way in. The layout carries the strip and the
+  // expired-draft page; the index resumes a draft at whichever step it got to.
+  route("upload/:draftId", "routes/upload/draft.tsx", [
+    index("routes/upload/index.tsx"),
+    route("columns", "routes/upload/columns.tsx"),
+  ]),
 
   // The per-account drill-down (DESIGN.md §13.1). §8.1 had ruled it out on the
   // grounds that a filtered Holdings table already is one; the Stitch "Account

@@ -24,6 +24,7 @@ export type SeededAccount = { id: string; name: string; ownerId: string };
 export type SeededClassification = { id: string; name: string; assetClass: AssetClass };
 export type SeededInstrument = { id: string; symbol: string | null; name: string };
 export type SeededPositionSet = { id: string; accountId: string; asOf: string };
+export type SeededUploadDraft = { id: string; accountId: string };
 
 /** A line on a statement: how much of what, and what it cost. */
 export type HoldingInput = {
@@ -78,6 +79,24 @@ export type Fixtures = {
     /** An empty set is legal: it is how "sold everything" is recorded. */
     holdings?: HoldingInput[];
   }): Promise<SeededPositionSet>;
+
+  /**
+   * A half-finished upload, staged but not committed.
+   *
+   * Bypasses `createDraft` deliberately — the domain function refuses closed
+   * accounts and sweeps as a side effect, and a fixture that swept would eat
+   * the very rows a sweep test just planted.
+   */
+  seedUploadDraft(options: {
+    account: SeededAccount;
+    filename?: string;
+    bytes?: Uint8Array;
+    /**
+     * Overrides the insert time, which is what the 24-hour sweep reads — a
+     * test about the sweep backdates a draft through this.
+     */
+    createdAt?: Date | string;
+  }): Promise<SeededUploadDraft>;
 
   seedQuote(options: {
     instrument: SeededInstrument;
@@ -247,6 +266,28 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     return { id: row.id, accountId: account.id, asOf: row.as_of_date };
   };
 
+  const seedUploadDraft: Fixtures["seedUploadDraft"] = async ({
+    account,
+    filename = `statement-${next()}.csv`,
+    bytes = new TextEncoder().encode("Symbol,Quantity\n"),
+    createdAt,
+  }) => {
+    const row = await db
+      .insertInto("upload_draft")
+      .values({
+        account_id: account.id,
+        filename,
+        raw_file: Buffer.from(bytes),
+        // Left to the column default when a test does not care, exactly as
+        // `seedPositionSet` leaves its `created_at`.
+        ...(createdAt === undefined ? {} : { created_at: createdAt }),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    return { id: row.id, accountId: account.id };
+  };
+
   const seedQuote: Fixtures["seedQuote"] = async ({
     instrument,
     price,
@@ -311,6 +352,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedClassification,
     seedInstrument,
     seedPositionSet,
+    seedUploadDraft,
     seedQuote,
     seedDailyClose,
     seedManualNetWorth,

@@ -138,6 +138,16 @@ export interface SchemaMigrations {
   filename: string;
 }
 
+export interface UploadDraft {
+  account_id: Int8;
+  as_of_date: string | null;
+  created_at: Generated<Timestamp>;
+  filename: string;
+  id: Generated<Int8>;
+  mapping: Json | null;
+  raw_file: Buffer;
+}
+
 export interface DB {
   account: Account;
   classification: Classification;
@@ -152,4 +162,5 @@ export interface DB {
   price_daily: PriceDaily;
   quote: Quote;
   schema_migrations: SchemaMigrations;
+  upload_draft: UploadDraft;
 }

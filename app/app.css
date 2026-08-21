@@ -2254,3 +2254,59 @@ code {
     margin-left: 0;
   }
 }
+
+/* --- Upload steps ----------------------------------------------------------
+ * The upload flow's step strip (ingest brief §2.1), between the page title and
+ * the first panel. Quiet text in the breadcrumb's grammar, not chips: two of
+ * the four entries are deliberately not clickable, and a strip of chips where
+ * two are dead is a control that lies twice. Four entries always — a step with
+ * nothing to do dims in place rather than disappearing, so "how much is left"
+ * never shifts underfoot. It wraps below 390px rather than scrolling, because
+ * a hidden fourth step is exactly what the strip exists to keep in view.
+ */
+
+.upload-steps ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-base);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--on-surface-variant);
+}
+
+.upload-steps li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-base);
+}
+
+/* The house enumeration grammar; the numbers already carry the ordering a
+ * chevron would restate. */
+.upload-steps li + li::before {
+  content: "·";
+}
+
+.upload-steps a {
+  color: var(--on-surface-variant);
+  text-decoration: none;
+}
+
+.upload-steps a:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+/* The one place the reader is standing is the one thing at full strength. */
+.upload-steps li[aria-current="step"] {
+  color: var(--on-surface);
+  font-weight: 600;
+}
+
+/* A skipped step keeps its place at the closed-row opacity, "· none" and all. */
+.upload-steps--skipped {
+  opacity: 0.6;
+}
