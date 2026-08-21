@@ -1,0 +1,6 @@
+# Ingress front door — DESIGN.md §10.1, compose.yaml. Plain HTTP for now;
+# TLS termination is a follow-up.
+
+:80 {
+	reverse_proxy app:{$APP_PORT:3000}
+}

@@ -661,23 +661,30 @@ revisiting first.
 The deliverable is a **single application image plus a Compose file**. `docker compose up` on a
 fresh machine with an empty data directory must produce a working instance with no manual steps.
 
-**Two services, no more:**
+**Three services:**
 
 ```
-db    postgres:17-alpine
-      · named volume for PGDATA
-      · healthcheck: pg_isready
-      · not published to the host by default — the app reaches it on the compose network
+db      postgres:17-alpine
+        · named volume for PGDATA
+        · healthcheck: pg_isready
+        · not published to the host — the app reaches it on the compose network
 
-app   built from ./Dockerfile
-      · depends_on: db (condition: service_healthy)
-      · publishes one port
-      · restart: unless-stopped
-      · healthcheck: GET /healthz
+app     built from ./Dockerfile
+        · depends_on: db (condition: service_healthy)
+        · not published to the host — caddy reaches it on the compose network
+        · restart: unless-stopped
+        · healthcheck: GET /healthz
+
+caddy   caddy:2-alpine
+        · depends_on: app (condition: service_healthy)
+        · the only service that publishes a port
+        · restart: unless-stopped
 ```
 
-The in-process scheduler (§10) is why there is no third service. A separate worker container would
+The in-process scheduler (§10) is why there is no separate worker service. A worker container would
 mean two images, two deployments, and two places to read logs, to save a missed poll on restart.
+`caddy` is a different kind of service — the ingress front door, not application logic — and is the
+only container reachable from outside the compose network.
 
 **Dockerfile — multi-stage:**
 

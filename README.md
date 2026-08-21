@@ -228,9 +228,9 @@ docker compose up -d
 ```
 
 That is the whole procedure on a fresh machine. Postgres comes up, the app waits for it to report
-healthy, applies the schema, and only then starts serving on <http://localhost:3000>. There is no
-manual setup step and no migration to run by hand — migrations are idempotent, so restarting the
-container is always safe.
+healthy and applies the schema, and a bundled Caddy container fronts it on <http://localhost>. There
+is no manual setup step and no migration to run by hand — migrations are idempotent, so restarting
+the container is always safe.
 
 Every setting is an environment variable and every one of them is documented in
 [`.env.example`](.env.example) with its default. Copy it to `.env` only if you want to change
@@ -241,10 +241,11 @@ container immediately with a message naming the variable.
 which includes the case where the database is reachable but a migration shipped in the image has
 never been applied. It never requires authentication, so monitoring needs no credentials.
 
-The app serves plain HTTP and trusts `X-Forwarded-*`, so TLS termination is your reverse proxy's
-job. [`docs/operating.md`](docs/operating.md) has the proxy configuration, the `pg_dump` backup and
-restore procedure, the full environment table, and why a phone will not install the app from a LAN
-address.
+The app itself is not reachable directly — only the bundled `caddy` service publishes a port, and it
+serves plain HTTP for now, with TLS termination left as a follow-up. `caddy` sets `X-Forwarded-*`,
+which the app trusts. [`docs/operating.md`](docs/operating.md) has the proxy configuration, the
+`pg_dump` backup and restore procedure, the full environment table, and why a phone will not install
+the app from a LAN address.
 
 ## Working on it
 
