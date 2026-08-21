@@ -44,6 +44,20 @@ export default function UploadDraftLayout() {
 }
 
 /**
+ * The account id a review re-POST's 404 carries for the expired page's one
+ * extra link (ingest brief §6.5, §7.4). The review action reads it from the
+ * form's hidden field — the draft the id would be read from is gone by then —
+ * and throws it as `data({ accountId }, { status: 404 })`. It fed a posted
+ * field once, so it is validated as an id here too, before anything links to
+ * it; every other step's 404 carries a plain string body and yields null.
+ */
+function accountIdOf(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const value = (data as { accountId?: unknown }).accountId;
+  return typeof value === "string" && /^\d+$/.test(value) ? value : null;
+}
+
+/**
  * A draft URL that no longer answers is ordinary, not an error in anything: a
  * bookmark outlives its draft when the sweep, the commit or a closed account
  * takes the row. The 404 the steps throw for it gets this titled page; only a
@@ -53,6 +67,12 @@ export function ErrorBoundary() {
   const error = useRouteError();
 
   if (isRouteErrorResponse(error) && error.status === 404) {
+    // "Already recorded" means the reader most likely wants to see the result,
+    // so the review re-POST's page adds the account link. A GET cannot tell a
+    // committed draft from a swept one — same absence in the database — so it
+    // gets the /upload link only, and the title's "or" stays honest.
+    const accountId = accountIdOf(error.data);
+
     // Worded here rather than echoing the response body, whose sentence leads
     // with the same words the title already carries.
     return (
@@ -68,6 +88,12 @@ export function ErrorBoundary() {
         </header>
         <p>
           <Link to="/upload">Start a new upload</Link>
+          {accountId !== null ? (
+            <>
+              {" · "}
+              <Link to={`/accounts/${accountId}`}>See what the account holds now</Link>
+            </>
+          ) : null}
         </p>
       </section>
     );

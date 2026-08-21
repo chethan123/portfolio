@@ -19,6 +19,7 @@ import {
   setBalance,
   type LastRecorded,
 } from "~/lib/balances.server";
+import { uploadReceipt } from "~/lib/uploads.server";
 import { formatMoney } from "~/lib/format";
 import { formatQuantity, holdingNote } from "~/lib/holdings-view";
 import {
@@ -148,6 +149,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const dates = sampleDates(await windowDays(range));
 
+  // The upload flow's landing receipt (`?uploaded=<setId>`, ingest brief
+  // §6.5). Every figure in it is read back from the database, never from the
+  // URL: the parameter names *which* set was written and says nothing about
+  // what is in it, so an invalid or stale value yields null and no sentence —
+  // the same contract the `?recorded=` receipt below already keeps.
+  const uploadedParam = new URL(request.url).searchParams.get("uploaded");
+  const receipt =
+    uploadedParam === null ? null : await uploadReceipt(params.accountId, uploadedParam);
+
   const [account, holdings, series, recorded] = await Promise.all([
     // Read for one field: the tax treatment. `AccountTotal` carries what a
     // figure is computed from and no more, and a tax treatment is a fact about
@@ -177,6 +187,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     holdings,
     computed,
     recorded,
+    receipt,
     // Whose balance is one typed number rather than a statement (§5.2). Decided
     // in the domain module, not here: a route that knew which kinds take a
     // typed balance would be a second answer to a question `balances.server.ts`
@@ -271,6 +282,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
     holdings,
     computed,
     recorded,
+    receipt,
     takesBalance,
     owed,
     today,
@@ -301,6 +313,30 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
         <span aria-hidden="true">/</span>
         <span aria-current="page">{total.accountName}</span>
       </nav>
+
+      {/* The upload flow's receipt, in the place the thing happened: directly
+          under the page's header, above the first panel. Every figure is the
+          loader's — recomputed against the set the account is actually
+          reading — so a hand-typed ?uploaded= can only describe what is
+          stored, or nothing. No toast, no green flash: a sentence, until the
+          next navigation. */}
+      {receipt !== null ? (
+        <p role="status">
+          Recorded <b>{receipt.filename ?? "the statement"}</b>:{" "}
+          {receipt.firstStatement ? (
+            <>
+              <span className="u-data">{receipt.counts.added}</span> added
+            </>
+          ) : (
+            <>
+              <span className="u-data">{receipt.counts.added}</span> added ·{" "}
+              <span className="u-data">{receipt.counts.updated}</span> updated ·{" "}
+              <span className="u-data">{receipt.counts.removed}</span> removed
+            </>
+          )}
+          , as of <b className="u-data">{receipt.asOf}</b>.
+        </p>
+      ) : null}
 
       <section className="panel">
         <div className="detail-header">

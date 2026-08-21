@@ -30,6 +30,9 @@ back rather than hardcoding: `select id, kind from account`.
 | `account-detail-*.png` | `/accounts/:id` | the `brokerage` one — it holds seven positions, including a stale price |
 | `account-balance-*.png` | `/accounts/:id` | the `liability` one — it carries the set-balance form |
 | `settings-*.png` | `/settings/accounts` | — |
+| `upload-*.png` | `/upload` | — · the drop screen as it opens: the step strip, the account select over the demo household's open accounts, no file chosen and no refusal showing |
+| `upload-mapping-*.png` | `/upload/:draftId/columns` | the `brokerage` one · start an upload against it with a Fidelity-shaped CSV (a couple of preamble rows, then Symbol · Description · Quantity · Average Cost Basis) and stop on this step. Capture the unfilled first-upload state, with the file's own header and sample rows visible verbatim above the mapping selects |
+| `upload-review-*.png` | `/upload/:draftId/review` | the `brokerage` one · **the diff must show a removal listed in full.** Author the CSV against what the account currently holds: restate most positions unchanged, change one quantity, add one instrument and leave one out, so all three groups render and the removed row carries its quantity and last known value. Do not commit before both themes are captured — the draft dies with the commit |
 | `overview-mobile-*.png` | `/` | — |
 | `analysis-mobile-*.png` | `/analysis` | — |
 

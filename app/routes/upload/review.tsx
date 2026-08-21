@@ -1,0 +1,396 @@
+import { Form, Link, data, redirect } from "react-router";
+
+import { formatMoney } from "~/lib/format";
+import { formatQuantity } from "~/lib/holdings-view";
+import {
+  FORM_ERROR,
+  NotFoundError,
+  ValidationError,
+  formFields,
+  latestRecordableDate,
+} from "~/lib/input.server";
+import { DraftNotReadyError, commitUpload, diffForDraft } from "~/lib/uploads.server";
+
+import type { UploadStepsData } from "~/components/upload-steps";
+import type { DiffAdded, DiffRemoved, DiffUpdated } from "~/lib/uploads.server";
+import type { Route } from "./+types/review";
+
+/**
+ * Step four — the diff, then the commit (ingest brief §6).
+ *
+ * The safety valve, and the flow's only write. §5.2's "a missing row means
+ * sold" is what makes a filtered export dangerous: a file showing 2 of 30
+ * positions is a *valid* statement that silently sells 28 holdings, so every
+ * removal is listed in full and a file removing more than half of what the
+ * account holds cannot be committed without ticking a sentence that says so.
+ *
+ * Review is read-only plus the date and the tick: a wrong figure is fixed by
+ * walking back to columns, because the figure is wrong in the mapping, not in
+ * the diff.
+ */
+export function meta() {
+  return [{ title: "Review · Upload · Portfolio" }];
+}
+
+export async function loader({ params }: Route.LoaderArgs) {
+  try {
+    const diff = await diffForDraft(params.draftId);
+
+    return {
+      steps: {
+        current: 4,
+        draftId: diff.draftId,
+        // Whether this flow's instruments step had anything to do is not
+        // recoverable here: an alias, once written, does not say which draft
+        // wrote it. The entry therefore stays a link — its target redirects
+        // straight back to review when there is nothing to resolve, the same
+        // harmless bounce the index route performs — rather than guessing at
+        // the dimmed "· none" state.
+        instrumentsSkipped: false,
+      } satisfies UploadStepsData,
+      diff,
+      // Today in UTC, from the server, so the box does not open on a date the
+      // reader's clock invented and the app then refuses (§4.1).
+      today: new Date().toISOString().slice(0, 10),
+      // The date control's ceiling, read from the validator rather than
+      // guessed, so the picker and the refusal state one rule.
+      latestAsOf: latestRecordableDate(),
+    };
+  } catch (error) {
+    // An earlier step not genuinely passed is a redirect there, not an error:
+    // a bookmarked review over a draft whose mapping broke, or whose file
+    // still carries a first sighting, resumes where the answer is.
+    if (error instanceof DraftNotReadyError) {
+      return redirect(`/upload/${params.draftId}/${error.step}`);
+    }
+    if (error instanceof NotFoundError) throw new Response(error.message, { status: 404 });
+    throw error;
+  }
+}
+
+export async function action({ params, request }: Route.ActionArgs) {
+  const values = formFields(await request.formData());
+
+  try {
+    const written = await commitUpload(params.draftId, values);
+
+    // Success lands on the account the upload just changed, with the set id
+    // for the receipt — which is read back from the database there, never
+    // from this URL.
+    throw redirect(`/accounts/${written.accountId}?uploaded=${written.setId}`);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
+      // module the client bundle must not drag in.
+      const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
+      return { errors: fieldErrors, formError: formError ?? null, values };
+    }
+    if (error instanceof DraftNotReadyError) {
+      return redirect(`/upload/${params.draftId}/${error.step}`);
+    }
+    if (error instanceof NotFoundError) {
+      // The committed-draft re-POST — the back button pressed after success, a
+      // resubmitted tab. The draft the account id would be read from is gone,
+      // so the posted hidden field feeds the expired page's one extra link —
+      // never a write — and it is validated as an id here, before the error
+      // boundary trusts it, because it arrives from a posted form.
+      const accountId =
+        values.accountId !== undefined && /^\d+$/.test(values.accountId)
+          ? values.accountId
+          : null;
+      throw data({ accountId }, { status: 404 });
+    }
+    throw error;
+  }
+}
+
+/** `$424.1200` — a per-share figure at the column's own four places, or the dash. */
+function basisFigure(value: string | null): string {
+  return value === null ? "—" : formatMoney(value, 4);
+}
+
+/** The instrument cell: badge for a public ticker, name, the row's note line. */
+function InstrumentCell({ row }: { row: DiffAdded | DiffUpdated | DiffRemoved }) {
+  return (
+    <td>
+      <div className="cell-stack">
+        {/* No badge for an instrument with no public ticker — a placeholder in
+            a ticker-shaped chip reads as a ticker. */}
+        {row.symbol ? <span className="badge">{row.symbol}</span> : null}
+        <div>
+          {row.name}
+          <span className="cell-sub">{row.note}</span>
+        </div>
+      </div>
+    </td>
+  );
+}
+
+/** A group's heading row — the diff's Added / Updated / Removed. */
+function GroupHeading({ label }: { label: string }) {
+  return (
+    <tr className="row-group">
+      <th scope="rowgroup" colSpan={4}>
+        {label}
+      </th>
+    </tr>
+  );
+}
+
+export default function Review({ loaderData, actionData }: Route.ComponentProps) {
+  const { diff, today, latestAsOf } = loaderData;
+
+  const errors = actionData?.errors;
+  // What was posted wins over every default on a refusal — a refusal must
+  // never cost an edit.
+  const values = actionData?.values;
+
+  // The counts each naming what they counted, in the table's own group order,
+  // so the line is the table's index rather than a second sequence. A first
+  // statement reads "14 ADDED" alone: three zero counts would dress an
+  // ordinary first upload as a strange one.
+  const summary = diff.firstStatement
+    ? `${diff.added.length} ADDED`
+    : `${diff.added.length} ADDED · ${diff.updated.length} UPDATED · ${diff.removed.length} REMOVED`;
+
+  return (
+    <section className="panel">
+      <header className="panel-header">
+        <h2 className="panel-title">What this statement changes</h2>
+        <span className="panel-count">{summary}</span>
+      </header>
+
+      <div className="panel-body form-intro">
+        {/* The file and the account lead, because a draft survives a closed
+            laptop and the reader may be resuming cold. */}
+        <p>
+          <strong>{diff.filename}</strong> · {diff.accountName}
+        </p>
+
+        {diff.firstStatement ? (
+          <p>
+            This is the first statement recorded for {diff.accountName}, so every position in
+            it is added — there is nothing yet to have updated or removed.
+          </p>
+        ) : (
+          <p>
+            Compared against what {diff.accountName} holds now.
+            {/* Unchanged rows are deliberately absent from the table: listing
+                rows that do nothing buries the ones that do, and the count is
+                all an unchanged row has to say. */}
+            {diff.unchangedCount > 0 ? (
+              <>
+                {" "}
+                <span className="u-data">{diff.unchangedCount}</span>{" "}
+                {diff.unchangedCount === 1
+                  ? "row is unchanged and is not listed."
+                  : "rows are unchanged and are not listed."}
+              </>
+            ) : null}
+          </p>
+        )}
+
+        {/* A row the parser left out for stating no quantity is named rather
+            than silent — a row that vanishes silently is how "a missing row
+            means sold" becomes an accident (`SkippedRow`). */}
+        {diff.skipped.map((skip) => (
+          <p key={skip.row}>
+            Line <span className="u-data">{skip.row + 1}</span>'s "{skip.instrument}" states
+            no quantity, so it is not part of this statement.
+          </p>
+        ))}
+      </div>
+
+      {/* The diff, in Holdings' table grammar throughout: additions first
+          because they read fastest, removals last because they are the reason
+          the screen exists and the eye rests where the reading ends. */}
+      <div className="data-table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Instrument</th>
+              <th scope="col" className="is-numeric">
+                Quantity
+              </th>
+              {/* Per share, and the heading says so: the whole-position basis
+                  moves whenever the quantity does — the per-share figure is
+                  the one the statement actually restated. */}
+              <th scope="col" className="is-numeric">
+                Cost basis / share
+              </th>
+              {/* At the current quote — context, not part of the write. */}
+              <th scope="col" className="is-numeric">
+                Value
+              </th>
+            </tr>
+          </thead>
+
+          {diff.added.length > 0 ? (
+            <tbody>
+              <GroupHeading label="Added" />
+              {diff.added.map((row) => (
+                <tr key={row.instrumentId}>
+                  <InstrumentCell row={row} />
+                  <td className="is-numeric">{formatQuantity(row.quantity)}</td>
+                  <td className="is-numeric">{basisFigure(row.costBasisPerShare)}</td>
+                  <td className="is-numeric">
+                    {row.value === null ? "—" : formatMoney(row.value)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          ) : null}
+
+          {diff.updated.length > 0 ? (
+            <tbody>
+              <GroupHeading label="Updated" />
+              {diff.updated.map((row) => (
+                <tr key={row.instrumentId}>
+                  <InstrumentCell row={row} />
+                  {/* Before → after in the cell for whatever changed; the
+                      unchanged cell prints its single figure. The before half
+                      recedes (`.diff-was`) so the eye lands on what will be
+                      true, not what was. */}
+                  <td className="is-numeric">
+                    {row.quantityChanged ? (
+                      <>
+                        <span className="diff-was">{formatQuantity(row.quantityBefore)}</span>{" "}
+                        → {formatQuantity(row.quantityAfter)}
+                      </>
+                    ) : (
+                      formatQuantity(row.quantityAfter)
+                    )}
+                  </td>
+                  <td className="is-numeric">
+                    {row.basisChanged ? (
+                      <>
+                        <span className="diff-was">{basisFigure(row.costBasisBefore)}</span> →{" "}
+                        {basisFigure(row.costBasisAfter)}
+                      </>
+                    ) : (
+                      basisFigure(row.costBasisAfter)
+                    )}
+                  </td>
+                  <td className="is-numeric">
+                    {row.value === null ? "—" : formatMoney(row.value)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          ) : null}
+
+          {diff.removed.length > 0 ? (
+            <tbody>
+              <GroupHeading label="Removed" />
+              {/* Every removed position individually — instrument, quantity,
+                  last known value — never collapsed into a count. "1 removed"
+                  is recognisable as the AAPL sale only when AAPL is printed. */}
+              {diff.removed.map((row) => (
+                <tr key={row.instrumentId}>
+                  <InstrumentCell row={row} />
+                  <td className="is-numeric">{formatQuantity(row.quantity)}</td>
+                  <td className="is-numeric">{basisFigure(row.costBasisPerShare)}</td>
+                  {/* A dash, never $0.00, for a holding nothing ever priced —
+                      $0.00 would claim the household sold something worthless. */}
+                  <td className="is-numeric">
+                    {row.value === null ? "—" : formatMoney(row.value)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          ) : null}
+        </table>
+      </div>
+
+      <Form method="post">
+        {/* Feeds the expired page's link on a re-POST, never a write — the
+            draft the id would be read from is gone by then (§6.5, §7.4). */}
+        <input type="hidden" name="accountId" value={diff.accountId} />
+
+        {/* The majority-removal confirmation, at the danger-zone weight the
+            app already closes an account with: a decision being put to the
+            reader, not a standing fact about the data. A file removing half
+            or less draws no confirmation at all — a tick that is always
+            demanded is a tick nobody reads. */}
+        {diff.majorityRemoved ? (
+          <div className="danger-zone">
+            <label className="choice">
+              <input
+                type="checkbox"
+                name="confirmRemovals"
+                value="true"
+                defaultChecked={values?.confirmRemovals === "true"}
+              />
+              <strong>
+                {diff.removesEverything ? (
+                  <>
+                    This file removes every position this account holds — all{" "}
+                    <span className="u-data">{diff.currentCount}</span>.
+                  </>
+                ) : (
+                  <>
+                    This file removes <span className="u-data">{diff.removed.length}</span> of
+                    the <span className="u-data">{diff.currentCount}</span> positions this
+                    account holds.
+                  </>
+                )}
+              </strong>
+            </label>
+          </div>
+        ) : null}
+
+        {/* The commit-time refusals — the product guard, the account-number
+            disagreement, the closed account, the unticked confirmation — all
+            render here, above the commit row. */}
+        {actionData?.formError ? (
+          <div className="panel-body form-intro">
+            <p className="form-error" role="alert">
+              {actionData.formError}
+            </p>
+          </div>
+        ) : null}
+
+        <div className="panel-form">
+          {diff.asOf.source === "file" ? (
+            // The statement said it; offering an editor here would invite
+            // overriding a fact with an opinion.
+            <p className="form-note">
+              The statement dates itself: <span className="u-data">{diff.asOf.date}</span>.
+            </p>
+          ) : (
+            <div>
+              <label htmlFor="review-as-of">
+                Statement date
+                <input
+                  id="review-as-of"
+                  name="asOf"
+                  type="date"
+                  defaultValue={values?.asOf ?? today}
+                  max={latestAsOf}
+                  aria-invalid={errors?.asOf ? true : undefined}
+                />
+              </label>
+              {errors?.asOf ? (
+                <p className="field-error" role="alert">
+                  {errors.asOf}
+                </p>
+              ) : (
+                <p className="form-note">This file does not date itself.</p>
+              )}
+            </div>
+          )}
+
+          <button type="submit" className="button">
+            Record this statement
+          </button>
+          {/* The misread-column story ends here: see every quantity a thousand
+              times too large, walk back, remap, return. Nothing was written,
+              because nothing is written before the commit. */}
+          <Link className="button button--text" to={`/upload/${diff.draftId}/columns`}>
+            Back to columns
+          </Link>
+        </div>
+      </Form>
+    </section>
+  );
+}

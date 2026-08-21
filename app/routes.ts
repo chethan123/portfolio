@@ -22,6 +22,10 @@ export default [
     // Skipped by redirect when the file carries no first sightings (ingest
     // brief §5, §7.5) — the strip dims the entry rather than dropping it.
     route("instruments", "routes/upload/instruments.tsx"),
+    // The diff, then the commit — the flow's only write (ingest brief §6,
+    // spec 0004 step 05). POST inserts the position set, deletes the draft
+    // and redirects to /accounts/:id?uploaded=<setId> for the receipt.
+    route("review", "routes/upload/review.tsx"),
   ]),
 
   // The per-account drill-down (DESIGN.md §13.1). §8.1 had ruled it out on the

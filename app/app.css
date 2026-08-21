@@ -2389,3 +2389,15 @@ code {
   line-height: 24px;
   font-weight: 600;
 }
+
+/* --- Upload review ----------------------------------------------------------
+ * The before half of an updated diff cell (ingest brief §6.1, §10): the old
+ * figure recedes so the eye lands on what will be true, not what was. One
+ * class — the cell keeps `.is-numeric`'s weight 600 for the after figure, and
+ * the arrow between them is U+2192 in `currentColor`, plain text.
+ */
+
+.diff-was {
+  color: var(--on-surface-variant);
+  font-weight: 400;
+}
