@@ -15,68 +15,30 @@ from a LAN address.
 
 ## Reverse proxy and TLS
 
-**The app serves plain HTTP and never manages certificates.** TLS termination is your reverse
-proxy's job — your certs, your renewal, your external hostname. The app has no TLS configuration
-because it has no TLS.
+**Ingress runs through a bundled `caddy` container.** `compose.yaml` includes a `caddy` service, and
+it is the only container that publishes a port — `app` and `db` are reachable only on the compose
+network, which is what keeps the app port off the network in the first place rather than relying on
+you to bind it to loopback. Caddy's configuration lives in [`Caddyfile`](../Caddyfile) at the
+repository root.
 
-The app **trusts `X-Forwarded-*`**. Set the three headers below and the app sees the request as the
-browser made it: `https` where the browser used `https`, and the visitor's address rather than the
-proxy's.
+**TLS is not configured yet.** Caddy currently proxies plain HTTP on port 80 straight through to the
+app, so this alone does not make the instance safe to expose to the internet. Two ways to add TLS
+later, without ever having to publish the app's own port:
 
-nginx:
+- Give the site block in `Caddyfile` a real hostname instead of `:80` and Caddy will request and
+  renew a certificate for it automatically.
+- Or put your own TLS-terminating proxy in front of this one, pointed at Caddy's port 80.
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name portfolio.example.com;
-
-    # your certificate directives here
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-Caddy sets all three itself, so the whole configuration is:
-
-```caddy
-portfolio.example.com {
-    reverse_proxy 127.0.0.1:3000
-}
-```
-
-### Do not expose the app port directly
-
-Trusting forwarded headers means trusting whoever can connect. Anything that can reach the app port
-can claim any scheme and any client address, so **the app port belongs on the proxy's network and
-nowhere else**.
-
-What that trust can actually be abused for is small — a forged `X-Forwarded-Proto` changes only the
-`Secure` attribute on the sender's own session cookie, and grants no access to anything — but the
-fix is one line, so take it. `compose.yaml` publishes the app port on all interfaces, which is right
-for a LAN instance with no proxy. When a proxy runs on the same host, bind it to loopback in a
-`compose.override.yaml`:
-
-```yaml
-services:
-  app:
-    ports:
-      - "127.0.0.1:3000:3000"
-```
-
-### What the app does with the headers
+The app **trusts `X-Forwarded-*`**, and the bundled Caddy sets all three headers itself — nothing to
+configure there.
 
 | Header | Effect |
 |---|---|
-| `X-Forwarded-Proto` | Decides whether the login cookie is issued `Secure`. Behind TLS it is; on a plain-HTTP LAN instance it is not, because a `Secure` cookie would be dropped by the browser and nobody could stay logged in. |
+| `X-Forwarded-Proto` | Decides whether the login cookie is issued `Secure`. Behind TLS it is; over plain HTTP it is not, because a `Secure` cookie would be dropped by the browser and nobody could stay logged in. |
 | `X-Forwarded-For` | The address a failed login attempt is logged against. Nothing is authorised on it. |
 
-The database is never exposed: `compose.yaml` publishes no port for it, and the app reaches it over
-the Compose network.
+The database is never exposed either: `compose.yaml` publishes no port for it, and the app reaches
+it over the compose network.
 
 ---
 

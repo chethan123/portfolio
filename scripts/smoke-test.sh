@@ -13,8 +13,7 @@
 # Run from the repository root:  ./scripts/smoke-test.sh
 set -euo pipefail
 
-readonly PORT="${PORT:-3000}"
-readonly HEALTH_URL="http://127.0.0.1:${PORT}/healthz"
+readonly HEALTH_URL="http://127.0.0.1/healthz"
 readonly TIMEOUT_SECONDS=180
 
 log() { printf '\n=== %s\n' "$*"; }
@@ -22,7 +21,7 @@ fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 
 cleanup() {
   log "Tearing down"
-  docker compose logs --no-color app db 2>&1 | tail -80 || true
+  docker compose logs --no-color app db caddy 2>&1 | tail -80 || true
   docker compose down -v --remove-orphans || true
 }
 trap cleanup EXIT
@@ -41,7 +40,11 @@ wait_for_healthy() {
 
 expect_status() {
   local expected="$1" actual
-  actual="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$HEALTH_URL" || true)"
+  # `app` reporting healthy only guarantees the app is up, not that the separate
+  # `caddy` container has finished starting and bound its own port yet, so this
+  # retries briefly rather than assuming the first connection lands.
+  actual="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+    --retry 10 --retry-connrefused --retry-delay 1 "$HEALTH_URL" || true)"
   [[ "$actual" == "$expected" ]] || fail "GET /healthz returned ${actual}, expected ${expected}"
   printf 'GET /healthz -> %s\n' "$actual"
 }
@@ -133,7 +136,7 @@ for compiler in gcc cc g++ make tsc; do
 done
 printf 'no compiler\n'
 
-# --- Exactly one published port, and it is not the database's -----------------
+# --- Exactly one published port, and it belongs to caddy, not app or db -------
 log "Checking published ports"
 published_ports() {
   docker inspect --format '{{json .NetworkSettings.Ports}}' "$(docker compose ps -q "$1")"
@@ -142,8 +145,11 @@ published_ports() {
 [[ "$(published_ports db)" != *HostPort* ]] || fail "the db port is published to the host"
 printf 'db port not published\n'
 
-[[ "$(published_ports app)" == *"\"HostPort\":\"${PORT}\""* ]] ||
-  fail "the app is not published on port ${PORT}"
-printf 'app published on %s\n' "$PORT"
+[[ "$(published_ports app)" != *HostPort* ]] || fail "the app port is published to the host"
+printf 'app port not published\n'
+
+[[ "$(published_ports caddy)" == *'"HostPort":"80"'* ]] ||
+  fail "caddy is not published on port 80"
+printf 'caddy published on 80\n'
 
 log "Smoke test passed"

@@ -1,6 +1,9 @@
-# Two services, no more — DESIGN.md §10.1. The price poller runs in-process
-# inside `app`, which is why there is no third service: a separate worker would
-# mean two images, two deployments and two places to read logs.
+# Three services — DESIGN.md §10.1. The price poller runs in-process inside
+# `app`, which is why there is no separate worker: a worker container would
+# mean two images, two deployments and two places to read logs. `caddy` is a
+# different kind of service — the ingress front door — and is the only one
+# that publishes a port; `app` and `db` are reachable only on the compose
+# network.
 #
 #   docker compose up -d
 #
@@ -62,8 +65,8 @@ services:
       PRICE_POLL_INTERVAL_MINUTES: ${PRICE_POLL_INTERVAL_MINUTES:-15}
       MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
       TZ: ${TZ:-UTC}
-    ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+    # No `ports:` by design, same as `db` above. Only `caddy` is reachable from
+    # outside the compose network; the app is reached at `app:${PORT}`.
     # The container writes nothing to its own filesystem, so it can be destroyed
     # and recreated freely. Enforced rather than merely intended.
     read_only: true
@@ -79,6 +82,23 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      # Caddy substitutes this into the Caddyfile below. Kept in sync with the
+      # app's own listen port rather than hardcoded.
+      APP_PORT: ${PORT:-3000}
+    # The only port published to the host. Plain HTTP on 80 for now — TLS
+    # termination is a follow-up, not part of this change.
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
 
 volumes:
   db-data:
