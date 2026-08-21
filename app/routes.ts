@@ -19,6 +19,9 @@ export default [
   route("upload/:draftId", "routes/upload/draft.tsx", [
     index("routes/upload/index.tsx"),
     route("columns", "routes/upload/columns.tsx"),
+    // Skipped by redirect when the file carries no first sightings (ingest
+    // brief §5, §7.5) — the strip dims the entry rather than dropping it.
+    route("instruments", "routes/upload/instruments.tsx"),
   ]),
 
   // The per-account drill-down (DESIGN.md §13.1). §8.1 had ruled it out on the

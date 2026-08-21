@@ -2361,3 +2361,31 @@ code {
 .upload-steps--skipped {
   opacity: 0.6;
 }
+
+/* --- Unresolved instruments -------------------------------------------------
+ * One first sighting's bounded group (ingest brief §5.1, §10): a column at
+ * panel padding, a top hairline separating it from the one before, so a
+ * screen with five strings reads as five questions rather than one form with
+ * twenty stray fields. `.danger-zone`'s bounding without its row layout;
+ * everything inside is existing controls.
+ */
+
+.resolve-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+}
+
+.resolve-item + .resolve-item {
+  border-top: 1px solid var(--outline-variant);
+}
+
+/* The raw string exactly as the file wrote it, prominent: body-lg at 600 —
+ * the byte-exact string is the thing being resolved. */
+.resolve-raw {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}

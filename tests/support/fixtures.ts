@@ -64,6 +64,16 @@ export type Fixtures = {
     classification?: SeededClassification;
   }): Promise<SeededInstrument>;
 
+  /**
+   * An alias row planted as though an earlier upload resolved it — the
+   * concurrent-draft row a resolution test collides with, and the "already
+   * seen" case a lookup test hits. Byte-exact, like the column it writes.
+   */
+  seedInstrumentAlias(options: {
+    instrument: SeededInstrument;
+    rawString: string;
+  }): Promise<void>;
+
   seedPositionSet(options: {
     account: SeededAccount;
     /** `YYYY-MM-DD`. The statement's date, never the upload's. */
@@ -223,6 +233,16 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     return { id: row.id, symbol: row.symbol, name: row.name };
   };
 
+  const seedInstrumentAlias: Fixtures["seedInstrumentAlias"] = async ({
+    instrument,
+    rawString,
+  }) => {
+    await db
+      .insertInto("instrument_alias")
+      .values({ raw_string: rawString, instrument_id: instrument.id })
+      .execute();
+  };
+
   const seedPositionSet: Fixtures["seedPositionSet"] = async ({
     account,
     asOf,
@@ -351,6 +371,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedAccount,
     seedClassification,
     seedInstrument,
+    seedInstrumentAlias,
     seedPositionSet,
     seedUploadDraft,
     seedQuote,
