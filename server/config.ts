@@ -77,6 +77,17 @@ const configSchema = z.object({
     .default(15),
 
   /**
+   * The most a statement upload may carry, in whole megabytes. A brokerage CSV
+   * is tens of kilobytes, so the cap bounds what an accident can put in
+   * memory, not real use.
+   */
+  MAX_UPLOAD_MB: integerFromString("megabytes")
+    .refine((value) => value >= 1, {
+      message: "must be at least 1 megabyte",
+    })
+    .default(10),
+
+  /**
    * Market-hours calculation, and the zone a quote's timestamp is read in to
    * decide which trading day it belongs to. Storage is UTC regardless.
    */

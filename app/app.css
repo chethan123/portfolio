@@ -1488,6 +1488,57 @@ label {
   line-height: 20px;
 }
 
+/*
+ * The checkbox/radio carve-out (ingest brief §10).
+ *
+ * The shared rule above sizes every input at --control-h, which is right for
+ * a box someone types into and absurd for a tick. These two keep their
+ * intrinsic size and native drawing, accented from the one solid fill so a
+ * tick reads in the same blue as the button that commits it — in both themes,
+ * because --primary-container is the same value in both.
+ */
+input[type="checkbox"],
+input[type="radio"] {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  accent-color: var(--primary-container);
+}
+
+/*
+ * The inline label variant: the global label stacks its caption above the
+ * control, and a checkbox's sentence belongs beside the box — the whole pair
+ * one hit target, exactly as the stacked form is.
+ */
+label.choice {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-base);
+}
+
+/*
+ * A radio pair's group. A fieldset so the caption is announced with the
+ * choice, reset to the bare labelled column every other control already is —
+ * the browser's inset border box is furniture no form here wears.
+ */
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+legend {
+  padding: 0;
+}
+
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
@@ -2253,4 +2304,103 @@ code {
   .filter-actions {
     margin-left: 0;
   }
+}
+
+/* --- Upload steps ----------------------------------------------------------
+ * The upload flow's step strip (ingest brief §2.1), between the page title and
+ * the first panel. Quiet text in the breadcrumb's grammar, not chips: two of
+ * the four entries are deliberately not clickable, and a strip of chips where
+ * two are dead is a control that lies twice. Four entries always — a step with
+ * nothing to do dims in place rather than disappearing, so "how much is left"
+ * never shifts underfoot. It wraps below 390px rather than scrolling, because
+ * a hidden fourth step is exactly what the strip exists to keep in view.
+ */
+
+.upload-steps ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-base);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--on-surface-variant);
+}
+
+.upload-steps li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-base);
+}
+
+/* The house enumeration grammar; the numbers already carry the ordering a
+ * chevron would restate. */
+.upload-steps li + li::before {
+  content: "·";
+}
+
+.upload-steps a {
+  color: var(--on-surface-variant);
+  text-decoration: none;
+}
+
+.upload-steps a:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+/* The one place the reader is standing is the one thing at full strength. */
+.upload-steps li[aria-current="step"] {
+  color: var(--on-surface);
+  font-weight: 600;
+}
+
+/* A skipped step keeps its place at the closed-row opacity, "· none" and all. */
+.upload-steps--skipped {
+  opacity: 0.6;
+}
+
+/* --- Unresolved instruments -------------------------------------------------
+ * One first sighting's bounded group (ingest brief §5.1, §10): a column at
+ * panel padding, a top hairline separating it from the one before, so a
+ * screen with five strings reads as five questions rather than one form with
+ * twenty stray fields. `.danger-zone`'s bounding without its row layout;
+ * everything inside is existing controls.
+ */
+
+.resolve-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+}
+
+.resolve-item + .resolve-item {
+  border-top: 1px solid var(--outline-variant);
+}
+
+/* The raw string exactly as the file wrote it, prominent: body-lg at 600 —
+ * the byte-exact string is the thing being resolved. pre-wrap keeps that
+ * claim visually true: leading and doubled spaces are part of what the alias
+ * table will store, and HTML's whitespace collapsing would hide them. */
+.resolve-raw {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+/* --- Upload review ----------------------------------------------------------
+ * The before half of an updated diff cell (ingest brief §6.1, §10): the old
+ * figure recedes so the eye lands on what will be true, not what was. One
+ * class — the cell keeps `.is-numeric`'s weight 600 for the after figure, and
+ * the arrow between them is U+2192 in `currentColor`, plain text.
+ */
+
+.diff-was {
+  color: var(--on-surface-variant);
+  font-weight: 400;
 }

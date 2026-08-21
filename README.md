@@ -138,6 +138,44 @@ form; nothing else does.
   holds, so one cash figure against a brokerage would record every security in it as sold. Those
   accounts are not offered the form at all.
 
+### Upload — a statement, mapped once and diffed before it lands
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/upload-dark.png">
+  <img alt="The upload flow's drop screen: the four-step strip under the page title, a select over the household's open accounts and the statement file input" src="docs/screenshots/upload-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/upload-mapping-dark.png">
+  <img alt="The columns screen: the file's own header row and first three data rows shown verbatim, dollar signs and all, above a select per column saying which is which" src="docs/screenshots/upload-mapping-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/upload-review-dark.png">
+  <img alt="The review screen: what the statement changes, grouped into added, updated and removed, with a removed position listed in full with its quantity and last known value" src="docs/screenshots/upload-review-light.png">
+</picture>
+
+How securities accounts get populated at all: pick the account, drop the CSV, say which column is
+which, resolve anything the file names that has never been seen before — then read exactly what the
+statement changes before it is recorded. Four screens, each a real URL over a server-side draft, so
+the back button, a reload and a half-finished upload left overnight all behave, with JavaScript off
+included.
+
+- **Mapped once per institution.** The first export from a brokerage is mapped by hand against the
+  file's own sample rows, shown verbatim so you map by values rather than guessing from names. The
+  mapping is remembered by header fingerprint, and every later export arrives with the screen
+  already filled in — still shown, never silently reapplied, so a changed export is visible.
+- **A missing row means sold — and the diff says removals in full.** A statement is a photograph of
+  the whole account, so a filtered export listing 2 of 30 positions is a *valid* statement that
+  sells 28 holdings. Every removed position is therefore listed individually with its quantity and
+  last known value, never as a count, and a file removing more than half of what the account holds
+  cannot be committed without ticking a sentence that states the ratio in those words.
+- **Nothing is recorded until the last screen.** The first three steps write only to the draft; the
+  commit is one transaction — the immutable position set with the original bytes retained, its
+  holdings, the draft deleted. A misread column caught on the review costs nothing, because nothing
+  was written, and the landing page's confirmation is read back from the database rather than from
+  the URL.
+
 ### Settings — people and accounts
 
 <picture>
@@ -165,26 +203,23 @@ withheld on a small screen: setting a balance and the whole of Settings are reac
 
 ### Not built yet
 
-Two screens are reachable and still placeholders — one from the navigation, one from the Upload
-button. They are listed here rather than screenshotted, because a picture of a placeholder says
-nothing a sentence does not:
+One screen is reachable and still a placeholder — Income, from the navigation. It is listed here
+rather than screenshotted, because a picture of a placeholder says nothing a sentence does not:
 
 | Screen | What it will do |
 |---|---|
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment |
-| **Upload** | CSV statement import with column mapping and a diff preview before anything is applied |
-
-Until Upload lands, positions arrive through the set-balance form or by seeding. Accounts, people
-and balances all work today.
 
 Prices refresh on their own (below), so Income has the yield figures it needs; what it still lacks
 is the screen. The pricing slice also leaves its own UI unbuilt — the "as of" timestamp, the
 stale-price treatment, a "Refresh now" control and the Settings → Instruments tab, where a
 collective investment trust gets its price typed in by hand. Those are specified in
 [`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn in
-[`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md). Holdings above was built the
-same way, from [`docs/specs/0003-holdings.md`](docs/specs/0003-holdings.md) and
-[`docs/design/holdings-ui-brief.md`](docs/design/holdings-ui-brief.md).
+[`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md). Holdings and Upload above
+were built the same way — from [`docs/specs/0003-holdings.md`](docs/specs/0003-holdings.md) with
+[`docs/design/holdings-ui-brief.md`](docs/design/holdings-ui-brief.md), and from
+[`docs/specs/0004-ingest.md`](docs/specs/0004-ingest.md) with
+[`docs/design/ingest-ui-brief.md`](docs/design/ingest-ui-brief.md).
 
 ## Running an instance
 

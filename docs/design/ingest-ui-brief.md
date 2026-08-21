@@ -23,7 +23,7 @@ is allocated, and how it has moved. Two or three readers, on a desktop, occasion
   Numeric alignment comes from `font-variant-numeric: tabular-nums`, never from a mono family.
 - **Icons are inline SVG**, 18–24px, stroked in `currentColor`. No icon font, no CDN.
 - **There is no client-side JavaScript state.** No route in this app calls `useState`, `useEffect`,
-  `useMemo` or `useRef` — the grep returns nothing. Every control below is a form or an anchor, and
+  `useMemo` or `useRef`. Every control below is a form or an anchor, and
   every piece of flow state is a row in a server-side `upload_draft` table reached by a URL: each of
   the four steps is a real address over that draft, so the back button, a reload, a closed laptop
   and a bookmarked half-finished upload all behave, and every screen works with JavaScript off.
@@ -94,7 +94,7 @@ the light column in light and the dark column in dark, with no other colours any
 | `--on-primary-container` | `#ffffff` | `#e3e6ff` | Text on that fill |
 | `--secondary-container` | `#d0e1fb` | `#39485a` | The active tab / nav item's ground |
 | `--gain` | `#005c3e` | `#10b981` | Positive movement, unrealized gain |
-| `--loss` | `#ba1a1a` | `#f87171` | Negative movement, destructive, field errors |
+| `--loss` | `#ba1a1a` | `#f87171` | Negative movement, unrealized loss, destructive, field errors |
 | `--warning` | `#92500e` | `#fbbf24` | **Stale price, partial coverage** |
 | `--warning-surface` | `#fef3c7` | `#33280a` | The ground under a warning |
 
@@ -105,9 +105,11 @@ Derived roles: `--panel` = `--surface-container-lowest` in light, `--surface-con
 
 **The two borders are not interchangeable**, and the columns screen is where it bites hardest in
 this flow. `--outline-variant` carries 1.5:1: it frames a panel and divides rows, and is *felt*
-rather than read. `--outline` clears 3:1 and is what a control boundary uses. The mapping panel
-holds six `<select>`s, two radios, a checkbox and a file input across the flow — controls drawn in
-`--outline-variant` are controls nobody can see the edge of, which is a defect rather than a style.
+rather than read. `--outline` clears 3:1 and is what a control boundary uses. The drop screen holds
+a `<select>` and the file input; the columns screen holds **seven** `<select>`s counting the
+header-row choice, a radio pair and a checkbox; the instruments screen adds two more radio pairs
+per unresolved string — controls drawn in `--outline-variant` are controls nobody can see the edge
+of, which is a defect rather than a style.
 
 Categorical sequence (fills only, never text): light `#0041c8`, `#007751`, `#505f76`, `#b6c4ff`,
 `#c3c5d9`; dark `#0055ff`, `#10b981`, `#b6c4ff`, `#ef4444`, `#4edea3`. Nothing in this flow draws
@@ -172,10 +174,12 @@ drawer, no hamburger anywhere in this app.
 - <1024px: no rail. A 64px sticky top bar with the wordmark and an "Upload" button; a fixed bottom
   nav with the same items, icon over 12px label, active item on a `--primary-container` pill. Canvas
   gets 16px margins and 88px of bottom padding.
-- A page-level banner — the open-instance warning, the first-run prompt, the stale-price banner of
-  the pricing brief §4.1 — sits **between the top bar and the main canvas**, full-bleed, above the
-  1152px content column. The upload flow never draws one itself; it inherits whatever the shell
-  shows, and everything it has to say is said inside its own panels.
+- A page-level banner — the open-instance warning, the stale-price banner of the pricing brief
+  §4.1 — sits **between the top bar and the main canvas**, full-bleed, above the 1152px content
+  column. **The first-run prompt is not a banner**: the shell renders it as a rounded `.first-run`
+  card at the head of the content column, inside `.app-main`, on every page including `/upload`.
+  The upload flow never draws either itself; it inherits whatever the shell shows, and everything
+  it has to say is said inside its own panels.
 
 ---
 
@@ -191,7 +195,7 @@ Draw these exactly; they already exist in code under these names.
 | `.panel` | `--panel` ground, 1px `--outline-variant`, 12px radius, light shadow, `overflow: hidden`. **No padding of its own**, which is what lets a table bleed to its edge |
 | `.panel-header` | Row, space-between, 24px padding, bottom hairline. Stacks to a column below 768px, 16px padding |
 | `.panel-title` | title-md, optional 20px leading icon in `--on-surface-variant` |
-| `.panel-count` | Right side of a panel header: label-md, tabular, e.g. "3 UPDATED · 1 ADDED · 1 REMOVED" |
+| `.panel-count` | Right side of a panel header: label-md, tabular, e.g. "1 ADDED · 3 UPDATED · 1 REMOVED" |
 | `.panel-body` | 24px padding (16px below 768px) |
 | `.panel-form` / `.record-form` | Flex wrap, `align-items: flex-end`, 16px gap, 24px padding — a row of labelled fields ending in a button. **`.panel-body + .panel-form` drops the form's top padding** so prose and the form it captions close up |
 | `.form-intro` | A `.panel-body` that is a form's caption: flex column, 12px gap, so an explanation, a confirmation and a refusal read as separate statements rather than one run-on paragraph |
@@ -234,9 +238,13 @@ title and before the work.
 
 **States, and who may be a link.**
 
-- **Completed steps are anchors.** Going back is free — the draft holds every answer, so returning
-  to Columns from Review costs nothing and loses nothing — and a step already passed is therefore a
-  place, not a promise. Each links to its own URL over the same draft.
+- **Completed steps 2 and 3 are anchors.** Going back is free — the draft holds every answer, so
+  returning to Columns from Review costs nothing and loses nothing — and a step already passed is
+  therefore a place, not a promise. Each links to its own URL over the same draft.
+- **Step 1 is the exception: once passed, it is plain completed text, never a link.** `/upload` is
+  draft-less — it is the screen that *creates* a draft — and no URL reopens account-and-file for a
+  draft that exists. An anchor there would silently start a new upload from the middle of this one,
+  which is the same failure the future-step rule below forbids, wearing a friendlier face.
 - **The current step is plain text carrying `aria-current="step"`**, set in `--on-surface` at
   weight 600. Everything else in the strip is `--on-surface-variant` at weight 400, so the one
   place the reader is standing is the one thing that reads at full strength.
@@ -250,16 +258,23 @@ title and before the work.
   reader's sense of "how much is left" is the thing the strip exists to hold steady.
 
 **Visual grammar: quiet text, not chips.** The closest interactive precedent is `.segmented`, and
-it is the wrong one: a chip claims clickability, and two of these four entries are deliberately not
-clickable — a strip of four chips where two are dead is a control that lies twice. The right
-precedent is `.breadcrumb`: 14px text in `--on-surface-variant`, anchors that underline only on
-hover, separated by **middots** — the house enumeration grammar, and the numbers already carry the
-ordering a chevron would restate. The numbers are part of each item ("1 Account & file"), set
-tabular so the strip does not shimmer between steps.
+it is the wrong one: a chip claims clickability, and at any moment most of these entries are
+deliberately not clickable — at best two of the four are ever links, and a strip of chips where
+half are dead is a control that lies with every dead one. The right precedent is `.breadcrumb`:
+14px text in `--on-surface-variant`, anchors that underline only on hover, separated by
+**middots** — the house enumeration grammar, and the numbers already carry the ordering a chevron
+would restate. The numbers are part of each item ("1 Account & file"), set tabular so the strip
+does not shimmer between steps.
 
 Draw the strip four times side by side: on step one (nothing completed, three futures); on step two
-(one link behind, two futures); on step four with all three behind it as links; and on step four
-with "3 New instruments · none" dimmed in the middle.
+(step 1 behind it as plain completed text — **zero links**, two futures); on step four with **two**
+links behind it (Columns and New instruments, step 1 completed as text); and on step four with
+"3 New instruments · none" dimmed in the middle, leaving Columns as the strip's one link.
+
+**Each step titles its own document.** "Upload · Portfolio", "Columns · Upload · Portfolio",
+"New instruments · Upload · Portfolio", "Review · Upload · Portfolio" — four URLs must not share
+one history label, because the back button's menu and the browser tab are the strip's off-screen
+twins, and four entries all reading "Upload" make the draft's own history unnavigable.
 
 ---
 
@@ -291,8 +306,9 @@ Then a `.panel-form` (`multipart/form-data` — the app's first), closing up und
   not change — the same refusal `setBalance` already makes — and a disabled option is a question
   ("why can I see it and not choose it?") the select cannot answer. **Every open account kind is
   offered, not just brokerage**: a liability statement listing what is owed and an overdrawn bank
-  export carrying its own minus sign are both legitimate uploads, and the upload path is in fact
-  the only way the overdraft is recordable at all (DESIGN.md §14.8).
+  export carrying its own minus sign are both legitimate uploads — and the overdraft in particular
+  is recordable only through an upload or by recasting the account as a `liability`, because the
+  set-balance form cannot take a sign (DESIGN.md §14.8).
 - **"Statement file"** — a native file input accepting `.csv,text/csv`, drawn with the standard
   40px control treatment. **If a drag-and-drop target is drawn, it is decoration over this same
   input** — a dashed `--outline-variant` region echoing `.empty-state`'s border grammar, with the
@@ -306,14 +322,16 @@ Then a `.panel-form` (`multipart/form-data` — the app's first), closing up und
 - A filled `.button` **"Continue to columns"**. Filled, because it is this page's one primary
   action and the rail's filled button is what brought the reader here.
 
-**Refusals, all field-level and none of them costing the entry.** A missing file or no account
-chosen renders a `.field-error` under its own control, the way every form in the app renders one.
-An **empty file** is refused as empty — "This file has no content" — not as a parse error, because
-a zero-byte download is a fact about the download. A file that is **not decodable as UTF-8 text**
-is refused with a sentence about the file — "This does not read as a text file. Export the CSV
-version of the statement" — never a driver error; a leading BOM is not a decode failure and is
-stripped silently. A file **over the size limit** is refused naming the limit. In every refusal the
-account selection is re-rendered as chosen, so the fix is one control, not the whole form again.
+**Refusals, all field-level.** A missing file or no account chosen renders a `.field-error` under
+its own control, the way every form in the app renders one. An **empty file** is refused as empty —
+"This file has no content" — not as a parse error, because a zero-byte download is a fact about the
+download. A file that is **not decodable as UTF-8 text** is refused with a sentence about the file
+— "This does not read as a text file. Export the CSV version of the statement" — never a driver
+error; a leading BOM is not a decode failure and is stripped silently. A file **over the size
+limit** is refused naming the limit. In every refusal the account selection is re-rendered as
+chosen — but **the chosen file is always lost**: a browser will not refill a file input, so every
+refusal on this screen costs the file pick, and the copy should assume the reader is picking it
+again rather than pretend otherwise. The account choice is what survives.
 
 **The two account-less states are §7.1 and §7.2** — the first-run prompt and the every-account-
 closed empty state — and in both of them the form is not drawn at all: a select over nothing and a
@@ -367,16 +385,21 @@ separators, `n/a` and all: the reader is choosing columns by these values, so la
 remove the evidence. Numeric-looking columns are **not** right-aligned here — the preview does not
 yet know which columns are numbers; that is what the screen is deciding.
 
-Draw it with a Fidelity-shaped file, preamble skipped, header at row 4:
+Draw it with **the file this brief threads through §4, §5 and §6** —
+`Positions_2026-06-30.csv`, a Fidelity-shaped export of five data rows (VTI · BND ·
+CASH & CASH INVESTMENTS · FXNAX · VXUS), preamble skipped, header at row 4, first three data rows
+shown:
 
 > **Symbol · Description · Quantity · Last Price · Current Value · Average Cost Basis · As of**
-> VTI · Vanguard Total Stock Market ETF · 145.234 · $482.10 · "$70,017.31" · $424.12 · 06/30/2026
+> VTI · Vanguard Total Stock Market ETF · 156.234 · $482.10 · "$75,320.41" · $424.12 · 06/30/2026
 > BND · Vanguard Total Bond Market ETF · 210.000 · $72.61 · "$15,248.10" · $71.05 · 06/30/2026
 > CASH & CASH INVESTMENTS · -- · 4,210.55 · $1.00 · "$4,210.55" · n/a · 06/30/2026
 
-A wide file scrolls sideways **inside the panel**; the page never scrolls horizontally. Three
-sample rows, not ten: three is enough to see what a column holds, and the mapping form below must
-stay on the same screenful as the evidence.
+These are the **file's** figures, not the account's: the account still holds 145.234 of VTI until
+the commit, and the gap between the preview's 156.234 and the table on Holdings is exactly what the
+review screen will state as an update. A wide file scrolls sideways **inside the panel**; the page
+never scrolls horizontally. Three sample rows, not ten: three is enough to see what a column holds,
+and the mapping form below must stay on the same screenful as the evidence.
 
 ### 4.3 The header-row choice
 
@@ -387,9 +410,12 @@ candidate rows the CSV reader detects, each option the row number plus its first
 
 **Why a form round-trip and not a live control.** Changing the header row changes what the preview
 shows and what every mapping select offers — and this app has no client state to re-render either
-with. A submit re-renders the screen from the draft with nothing else lost, because the draft holds
-the file. This is also the screen where a two-line preamble is fixed — by pointing at the real
-header, not by editing the CSV.
+with. A submit re-renders the screen from the draft — the file itself is never at risk, because the
+draft holds it — but **mapping selections not yet saved are lost with the round trip**, and rightly:
+the header row decides what the selects offer, so a choice made against the old header may not even
+exist against the new one. This is why the header-row control sits first, above the controls it
+resets. It is also the screen where a two-line preamble is fixed — by pointing at the real header,
+not by editing the CSV.
 
 ### 4.4 The mapping controls
 
@@ -404,11 +430,14 @@ A `.panel-form` of six labelled `<select>`s, each over the file's header cells:
 | asOf | "As-of date" | No | Yes — the review screen asks for the date instead |
 | accountNumber | "Account number" | No | Yes — a guard, never a selector (§9.12) |
 
-The five optional selects carry **"Not in this file"** as an explicit option rather than an empty
+The four optional selects carry **"Not in this file"** as an explicit option rather than an empty
 one, because "unset" and "deliberately absent" are different answers and only one of them should
-survive a save. **The same column may not be chosen twice**: a duplicate is a field-level refusal
-on the second control — *"'Quantity' is already mapped to Quantity"* — since a column that is two
-things is a parse whose output cannot be checked against anything.
+survive a save. **Instrument or Quantity left unchosen is a field-level refusal** through
+`parseInput`, rendered under its own control the way every other form in the app renders one — not
+a disabled submit, which would explain nothing. **The same column may not be chosen twice**: a
+duplicate is a field-level refusal on the second control — *"'Quantity' is already mapped to
+Quantity"* — since a column that is two things is a parse whose output cannot be checked against
+anything.
 
 **Below Cost basis, a two-way radio: "Per share / Total for the position."** Brokerages report the
 two about equally often, and the wrong guess is off by a factor of the position size in a direction
@@ -436,7 +465,7 @@ on every row — all of these render **on this screen**, as `.field-error` parag
 mapping form, each naming the row and column that caused it:
 
 > *"Row 17, Quantity — 'See disclosures below' is not a number."*
-> *"Rows disagree on the as-of date: 30 Jun 2026 and 31 Jul 2026. A statement carries one date."*
+> *"Rows disagree on the as-of date: 2026-06-30 and 2026-07-31. A statement carries one date."*
 
 They belong here because **remapping is the fix** — a disclaimer line under the symbol column is
 cured by moving the header row or the column choice, not by anything a later screen offers. An
@@ -457,10 +486,13 @@ silently. The misses land here, each resolved once and remembered forever; the s
 next export passes through in silence. **Reached only when there is at least one miss** — otherwise
 the flow redirects straight to review and the step dims in the strip (§2.1).
 
-**The intro states the count plainly**, in a `.form-intro`: **"2 of 14 holdings in this file have
-not been seen before."** Then one sentence of consequence, because this step is the flow's one
-early write: *"Resolving writes the name down as vocabulary — the statement itself is still not
-recorded until the last step."*
+**The intro states the count plainly**, in a `.form-intro`: **"2 of 5 holdings in this file have
+not been seen before."** — the two being `Positions_2026-06-30.csv`'s VXUS row, genuinely new, and
+its cash row, which this quarter's export spells `CASH & CASH INVESTMENTS` where the last one wrote
+`FCASH`: byte-exact lookup rightly treats a respelling as a first sighting even when the instrument
+is old news. Then one sentence of consequence, because this step is the flow's one early write:
+*"Resolving writes the name down as vocabulary — the statement itself is still not recorded until
+the last step."*
 
 ### 5.1 One bounded group per unresolved string
 
@@ -469,11 +501,12 @@ Each first sighting is a **bordered sub-section inside the panel** — full widt
 that a screen with five strings reads as five questions, not one form with twenty stray fields.
 
 At the group's head, **the raw string exactly as the file wrote it**, prominent: body-lg weight
-600, verbatim — `VANG TARGET RET 2045 TR II` — because the byte-exact string *is* the thing being
+600, verbatim — `CASH & CASH INVESTMENTS` — because the byte-exact string *is* the thing being
 resolved, and prettifying it would show the reader something other than what will be written to the
 alias table. Beneath it, `.cell-sub`-grade context, enough to recognise the holding without opening
-the file: *"Description: Vanguard Target Retirement 2045 Trust II · 812.400 units"* — the mapped
-name column's value when one is mapped, and the row's quantity.
+the file: the mapped name column's value when one is mapped, and the row's quantity — for the VXUS
+group, *"Description: Vanguard Total International Stock ETF · 120.000 units"*; for the cash group,
+whose Description cell is `--` and maps to nothing, the quantity alone: *"4,210.55 units"*.
 
 ### 5.2 The two paths, both always visible
 
@@ -483,10 +516,10 @@ see what each asks before choosing. Fields in the unchosen branch are simply ign
 
 **"This is an instrument already listed."** A `<select>` of existing instruments by symbol and
 name — *"VTI — Vanguard Total Stock Market ETF"*, *"USD — Cash"* — which is how a second spelling
-of a fund already held gets attached to it. Draw this branch chosen for the second example string,
-`FID GOV CASH RESERVES`, pointed at the existing Cash instrument: aliases are global, so
-Fidelity's spelling and the 401k plan's spelling both land on the one instrument — the everyday
-case for this path.
+of a fund already held gets attached to it. Draw this branch chosen for the
+`CASH & CASH INVESTMENTS` group, pointed at the existing Cash instrument: the alias lands beside
+`FCASH`, both spellings now silent forever — and aliases are global, so a third institution using
+either spelling inherits the answer too. The everyday case for this path.
 
 **"This is new."** Four decisions, each a labelled control:
 
@@ -507,9 +540,11 @@ case for this path.
   road every equity takes. A new name colliding with an existing classification is a field-level
   refusal naming it.
 
-Draw the "This is new" branch filled in for `VANG TARGET RET 2045 TR II`: symbol empty, name
-prefilled *"Vanguard Target Retirement 2045 Trust II"*, price source Manual, and "New
-classification…" chosen with *"Target-date 2045"* → Other.
+Draw the "This is new" branch filled in for the `VXUS` group: symbol *"VXUS"*, name prefilled
+*"Vanguard Total International Stock ETF"* from the mapped Description column, price source Feed,
+and "New classification…" chosen with *"International blend"* → Equity. The collective-investment-
+trust case — symbol empty, price source Manual — is the field-notes' subject rather than this
+file's: it belongs to a 401k's first upload, whose review is the "14 ADDED" variant of §6.5.
 
 ### 5.3 One form, one submit, no skip
 
@@ -522,8 +557,10 @@ and everything already chosen is re-rendered chosen.
 **The USD probe, and the one refusal it adds.** Creating a `feed` instrument asks the price
 provider for its symbol once, at this moment, because this is the only moment the household can act
 on the answer. A quote in any currency other than USD refuses the creation with a field-level
-sentence on the symbol, naming both: *"VWRL is quoted in GBP, and this app sums USD only."* — the
-same words the refresh-time guard uses, because two spellings of one refusal are two rules. A
+sentence on the symbol, naming both: *"VWRL is quoted in GBP. This instance holds USD only, so it
+was not created."* — the refresh-time guard's shipped sentence with only its tail adapted ("…so the
+price was not stored" becomes "…so it was not created"), because two spellings of one refusal are
+two rules. A
 provider that fails to answer — timeout, outage, unknown symbol — does **not** block creation: the
 instrument is created and the next refresh marks it stale, exactly as it would any symbol that
 stopped quoting. A network hiccup must not hold a statement hostage.
@@ -539,15 +576,18 @@ is read before it is recorded.
 
 **Shape.** One `.panel`: header, intro, the diff table bleeding edge to edge, then the commit form
 at the foot. The `.panel-header` carries the title **"What this statement changes"** and, in the
-`.panel-count` slot, **the summary line in §5.1's shape: "3 UPDATED · 1 ADDED · 1 REMOVED"** — the
-counts each naming what they counted, set tabular. A first statement for an account reads
-**"14 ADDED"**, not a diff against nothing: there is nothing to have updated or removed, and three
-zero counts would dress an ordinary first upload as a strange one.
+`.panel-count` slot, **the summary line in §5.1's shape: "1 ADDED · 3 UPDATED · 1 REMOVED"** — the
+counts each naming what they counted, set tabular, and reading in **the table's own group order**,
+so the line is the table's index rather than a second sequence to reconcile against it (§5.1's
+"3 updated · 1 added · 1 removed" supplies the format, not the ordering). A first statement for an
+account reads **"14 ADDED"**, not a diff against nothing: there is nothing to have updated or
+removed, and three zero counts would dress an ordinary first upload as a strange one.
 
 The `.form-intro` beneath restates the frame in a sentence — *"Compared against what Fidelity
 Brokerage holds now. 1 row is unchanged and is not listed."* — because unchanged rows are
-deliberately absent from the table: listing nine rows that do nothing buries the five that do, and
-the count is all an unchanged row has to say.
+deliberately absent from the table: listing rows that do nothing buries the five that do, and the
+count is all an unchanged row has to say. In the worked file that one row is the cash position,
+`4,210.55` in the file and `4,210.55` in the account.
 
 ### 6.1 The diff table
 
@@ -575,15 +615,16 @@ it should not be.
 cell's `.cell-sub` — the lot-level statement listing VTSAX three times lands as one row of 412.5
 units, and combining must be visible *before* it is recorded, never discovered after.
 
-**A zero-quantity row is shown, and stored as zero** — `50.000 → 0.000` under Updated — never
+**A zero-quantity row is shown, and stored as zero** — `12.000 → 0.000` under Updated — never
 dropped: a dropped row is unreachable from the table that no longer prints it, and only a fresh
 statement could bring it back (§5.4's reasoning, applied here).
 
 Draw the table with these five rows, so every treatment is visible at once:
 
-1. **Added** — VXUS, badge, "Vanguard Total International Stock ETF" · 120.000 · $58.20 · **`—`**
-   with `.cell-sub` `never priced` — created two steps ago, no quote until the next refresh. The
-   em dash and the words are the pricing brief's §4.2; do not invent a third spelling.
+1. **Added** — VXUS, badge, "Vanguard Total International Stock ETF" · 120.000 · $58.2000 ·
+   **`—`** with `.cell-sub` `never priced` — the instrument §5 created one step ago, with no quote
+   until the next refresh. The em dash and the words are the pricing brief's §4.2; do not invent a
+   third spelling.
 2. **Updated, quantity** — VTI · `145.234 → 156.234` · $424.1200 · $75,320.41.
 3. **Updated, basis appearing** — BND · 210.000 · `— → $71.0500` · $15,248.10.
 4. **Updated, both** — FXNAX · `1,050.000 → 1,112.400` · `$11.8200 → $11.9400` · $13,181.94.
@@ -604,8 +645,10 @@ Two cases, and **the screen says plainly which happened** — the reader should 
 from the presence of a control whether the file was dated.
 
 - **The file carried a date** (the mapping named an as-of column): a static sentence in the commit
-  form's leading edge — *"The statement dates itself: 30 Jun 2026."* — and **no control**. The
-  statement said it; offering an editor here would invite overriding a fact with an opinion.
+  form's leading edge — *"The statement dates itself: 2026-06-30."* — and **no control**. The date
+  is printed as the ISO string the application stores and prints everywhere else; this brief adds
+  no date-formatting grammar. The statement said it; offering an editor here would invite
+  overriding a fact with an opinion.
 - **The file carried none**: a labelled date input, caption "Statement date", defaulting to today,
   with the app's recordable-date bound as its `max` — the same rule the refusal states, because a
   control and its validator quoting two different rules is two rules. The sentence beside it:
@@ -643,11 +686,28 @@ anchor **"Back to columns"**, because the misread-column story ends here: see ev
 thousand times too large, walk back, remap, return. Nothing was written, because nothing is written
 before the commit.
 
-**Success lands on the account** — `/accounts/:id?uploaded=<setId>` — with a `role="status"`
-receipt in the account page's existing confirmation grammar:
+**Three more refusals fire at the moment of the write, and all three render as a `.form-error`
+above the commit row** — the house grammar for a refusal about the whole form rather than one
+control:
 
-> "Recorded. **Positions_2026-06-30.csv** landed as 3 updated · 1 added · 1 removed, as of
-> **30 Jun 2026**. Fidelity Brokerage now holds **5 positions**."
+- **A product the money column cannot hold.** Every row is checked with the exported
+  `fitsTheMoneyColumn` — `quantity × cost_basis_per_share`, and the same product against the
+  instrument's current price where one exists, since the valuation view casts that too. One row
+  failing refuses the **whole** commit and names the instrument; nothing partially applied.
+- **An account-number disagreement.** When the mapping named an account-number column and the
+  account already has one recorded, a mismatch refuses the commit **naming both numbers** — this is
+  the silent-collision failure first-class accounts exist to prevent, caught at the moment it would
+  happen.
+- **A closed account** — closed while the draft sat open — refuses in `setBalance`'s words: a
+  closed account's history does not change.
+
+**Success lands on the account** — `/accounts/:id?uploaded=<setId>` — with a `role="status"`
+receipt. It needs a stated home, because a brokerage, 401k or IRA page has no set-balance panel to
+host a confirmation: the sentence sits **directly under the account page's header, above the first
+panel**, in the page's own type —
+
+> "Recorded. **Positions_2026-06-30.csv** landed as 1 added · 3 updated · 1 removed, as of
+> **2026-06-30**. Fidelity Brokerage now holds **5 positions**."
 
 **Every figure in that sentence is read back from the database, never from the URL.** `?uploaded=`
 names *which* set was written and says nothing about what is in it, so a hand-typed parameter can
@@ -655,9 +715,10 @@ only ever produce a sentence describing what the account actually holds — the 
 `?recorded=` receipt on this page already has. No toast, no green flash: the confirmation is a
 sentence in the place the thing happened, and it stays until the next navigation.
 
-**A committed draft posted again** — the back button pressed after success, a stale tab — renders
-the expired-or-already-recorded page (§7.4) with a link to the account. Not a second set, not a
-500.
+**A committed draft posted again** — the back button pressed after success, a resubmitted tab —
+renders the already-recorded page of §7.4 with a link to the account. The link is possible only
+because the review form carries the account id as a hidden field: the draft the id would be read
+from is gone, and the hidden field feeds that one link, never a write. Not a second set, not a 500.
 
 **Draw this screen four times**: the ordinary diff above; the first statement ("14 ADDED", one
 group, no confirmation, the VTSAX "3 rows combined" note visible); the majority-removal state with
@@ -672,11 +733,13 @@ reader has no way to check. Draw them side by side.
 
 ### 7.1 No accounts at all
 
-The drop screen renders **the existing first-run prompt** — `.first-run`,
-`--secondary-container` ground, not dismissible, already worded — pointing at Settings → People
-then Accounts, and **no form at all**. A select over nothing and a file input that can lead
-nowhere are dead controls; the prompt is the app's one pointer at the next step and this screen
-does not need a second voice.
+**The shell has already said everything.** When the household is empty, `root.tsx` renders the
+existing first-run prompt — the `.first-run` card, `--secondary-container` ground, not
+dismissible, already worded, pointing at Settings → People then Accounts — at the head of the
+content column on every page, `/upload` included. The drop screen therefore draws **no prompt of
+its own and no form at all**: a second prompt would double the one voice the app deliberately
+keeps single, and a select over nothing and a file input that can lead nowhere are dead controls.
+The page is its header, the step strip, and the shell's card above them.
 
 ### 7.2 Accounts exist, but every one is closed
 
@@ -695,11 +758,15 @@ screens further from its fix.
 ### 7.4 An expired or already-committed draft
 
 Any step URL over a draft that is gone — swept after 24 hours, already committed, or belonging to
-an account since closed — renders the app's not-found page: title **"This upload has expired or
-was already recorded."**, a sentence of detail, and a link back to `/upload` (plus a link to the
-account when the draft was committed, because "already recorded" means the reader most likely
-wants to see the result). Never a 500: a bookmark that outlived its draft is ordinary behaviour,
-not an error in anything.
+an account since closed — renders the flow's not-found page: title **"This upload has expired or
+was already recorded."**, a sentence of detail, and a link back to `/upload`. A committed draft
+and a swept one are the same absence in the database, so **a GET cannot tell them apart and gets
+exactly this page, with the `/upload` link only** — the title's "or" is honest about what is
+knowable. The one richer case is the **re-POST of the review form** (§6.5): the form carries the
+account id as a hidden field — feeding a link, not a write — so the already-recorded page reached
+that way adds a link to the account, because "already recorded" means the reader most likely wants
+to see the result. Never a 500: a bookmark that outlived its draft is ordinary behaviour, not an
+error in anything.
 
 ### 7.5 Nothing unresolved
 
@@ -847,10 +914,18 @@ built routes. Stitch output that renames them creates a duplicate design system:
 
 **Already true in code, so match it rather than redesigning it:**
 
-- **The first-run prompt is built and worded** (`app/components/first-run-prompt.tsx`): one prompt,
-  not dismissible, pointing at People then Accounts. §7.1 renders it, not a lookalike.
+- **The first-run prompt is built, worded and placed** (`app/components/first-run-prompt.tsx`,
+  rendered by `root.tsx` inside `.app-main` as a card at the head of the content column — not a
+  full-bleed banner). The shell already draws it on `/upload` when the household is empty; §7.1's
+  whole job is to withhold the form, never to render a second prompt.
 - **The closed-account refusal wording exists** — `setBalance`'s "a closed account's history does
   not change" — and §3 and §7.2 borrow it rather than paraphrasing.
+- **The currency refusal's sentence is `CurrencyRefused`'s**
+  (`app/lib/price-provider.server.ts:84`): "*{symbol} is quoted in {currency}. This instance holds
+  USD only, so the price was not stored.*" §5.3 adapts only its tail. Note that
+  `docs/design/pricing-ui-brief.md:239-240` coined a second spelling — "…and this app sums USD
+  only" — before the guard shipped; that brief should be reconciled to the shipped words on its
+  next sync, not the other way round.
 - **`holdingNote()` in `app/lib/holdings-view.ts`** is the single producer of "never priced" and
   "price is stale". The review's removed-but-unpriced row and the added-but-unquoted row both
   borrow it; output that spells either phrase differently is changing shipped copy.
@@ -876,18 +951,24 @@ built routes. Stitch output that renames them creates a duplicate design system:
   re-fill a file input programmatically. The draft holding the bytes is what makes every later
   step an ordinary string form.
 
+**One deliberate deviation from the tickets, recorded so sync does not "fix" it.** Ticket 03 says
+`costBasisIs` is "shown only when a cost basis column is chosen"; §4.4 renders it always, with the
+`.field-note` saying when it applies — because a reveal that reacts to another control in the same
+form needs JavaScript, and the note costs one line where the script would cost the app its first
+piece of client state. The ticket's line is amended by this brief, not violated by it.
+
 **Genuinely new, and needing new CSS:**
 
 | New thing | Suggested name | Note |
 |---|---|---|
-| The step indicator | `.upload-steps` | `<nav aria-label="Upload">` over an `<ol>`. Text grammar from `.breadcrumb` (14px, `--on-surface-variant`, anchors underline on hover), middot separators, numbers tabular. Current step keys off `aria-current="step"` (`--on-surface`, 600), future steps are plain `<span>`s, and one modifier dims the skipped entry at `opacity: 0.6` — `.record-row--closed`'s precedent, not a new opacity |
+| The step indicator | `.upload-steps` | `<nav aria-label="Upload">` over an `<ol>`. Text grammar from `.breadcrumb` (14px, `--on-surface-variant`, anchors underline on hover), middot separators, numbers tabular. Current step keys off `aria-current="step"` (`--on-surface`, 600); future steps — and completed step 1, which has no URL to return to (§2.1) — are plain `<span>`s; one modifier dims the skipped entry at `opacity: 0.6` — `.record-row--closed`'s precedent, not a new opacity |
 | One first sighting's group | `.resolve-item` | A column at 24px padding with a top `--outline-variant` hairline (none on the first) — `.danger-zone`'s bounding without its row layout. The raw string at body-lg 600; everything inside it is existing controls |
 | The before half of an updated cell | `.diff-was` | `--on-surface-variant`, weight 400, inside an `.is-numeric` cell that keeps weight 600 for the after figure; the arrow is U+2192 in `currentColor`. One class, because the old figure must recede without a second table grammar |
 | Checkbox and radio controls | — | **The app has no checkbox or radio anywhere today**, and the shared `input` rule sizes every input at `--control-h` (40px). This slice needs the carve-out — `input[type="checkbox"], input[type="radio"]` at intrinsic size with an accent from `--primary-container` — plus an inline-row `label` variant (suggested `.choice`: inline-flex, 8px gap, control before caption), since the global `label` stacks its caption above the control and a radio's caption belongs beside it |
 | The removal confirmation | reuse `.danger-zone` | The block is `.danger-zone`'s rule set holding a `.choice` label; the sentence's weight is inline type, not a new class. No new CSS expected beyond the checkbox work above |
 | The drop-zone decoration | — | Only if the decoration is drawn: a dashed `--outline-variant` region wrapping the native input, borrowing `.empty-state`'s border grammar. Skippable entirely |
 | Upload routes | — | New route files for the four URLs; no nav entry — the rail's existing filled button is the only way in, and the step screens are reached only through the flow |
-| The expired-draft page | — | Rendered through the app's not-found grammar; it needs to carry a link (back to `/upload`, and to the account when committed), which the current `ErrorBoundary` — title and subtitle only — does not yet draw. One small addition, made once |
+| The expired-draft page | — | A **route-level `ErrorBoundary` on the upload layout route** (`routes/upload/draft.tsx`), owning the title of §7.4 and its links (`/upload` always; the account only on the review re-POST, from the hidden field). Not a change to the root boundary: today a route throwing `Response(404)` gets root's generic "404 Not Found" title and no link, which is the wrong page for an expired draft and the right page for everything else |
 
 **Three token-level things to verify on sync:** every new figure carries `.u-data` or
 `.is-numeric`; no new rule hardcodes a hex; and both the `prefers-color-scheme: dark` block and the

@@ -196,8 +196,10 @@ create table holding (
   -- equal to the entire untracked position.
   cost_basis_per_share numeric(20, 4),
 
-  -- A statement lists an instrument once. Two rows for the same instrument in
-  -- one set is a parse fault, not data.
+  -- A set holds one row per instrument, and the constraint keeps it so. A file
+  -- that lists one instrument on several lines — lot-level exports do — is
+  -- combined by the parser on the way in, and the review screen says so before
+  -- anything is recorded (docs/specs/0004-ingest.md).
   constraint holding_one_row_per_instrument unique (position_set_id, instrument_id)
 );
 

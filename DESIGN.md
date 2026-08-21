@@ -253,6 +253,12 @@ Accounts are **first-class** and created once. The alternative — deriving acco
 Traditional *and* a Roth IRA at the same firm, merging two portfolios with no error. It is also more
 typing on every upload, forever.
 
+**An in-progress upload is a row, not client state.** The flow above runs over an `upload_draft`
+table — the file's bytes, the chosen account and the half-finished mapping — so every step is a URL
+that survives a reload, the back button and a closed laptop. It is the one table §4.1's list does
+not carry, deliberately: it stages what is *becoming* a statement and holds nothing any other
+screen reads, and the row is deleted the moment its statement lands (or swept after a day).
+
 ### 5.2 Uploads append, never mutate
 
 Each upload creates an immutable, as-of-dated `position_set`. Current holdings are the latest set
@@ -1063,6 +1069,8 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
 8. **The "set balance" form cannot record an overdrawn bank account.** Consequence of deriving the
    sign from `account.kind` rather than accepting a typed one (§5.2): the alternative accepts `14500`
    for a debt, which does not fail but moves net worth by twice the loan. An overdraft is recordable
-   today only as a `liability` account or through an upload. Lifting the limitation means a per-kind
+   as a `liability` account or through an upload — in fact, not only in principle: the mapping
+   step's owed-as-positive box keeps the file's own sign when unticked, so a bank export carrying a
+   negative balance records one. Lifting the limitation for the form itself means a per-kind
    decision about whether a negative is meaningful, not a change to the storage rule — the schema
    already holds a negative quantity against any account.

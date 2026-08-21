@@ -45,6 +45,7 @@ describe("configuration validation", () => {
 
     expect(config.PORT).toBe(3000);
     expect(config.PRICE_POLL_INTERVAL_MINUTES).toBe(15);
+    expect(config.MAX_UPLOAD_MB).toBe(10);
     expect(config.MARKET_TIMEZONE).toBe("America/New_York");
     expect(config.TZ).toBe("UTC");
     expect(config.AUTH_PASSWORD).toBeUndefined();
@@ -68,6 +69,16 @@ describe("configuration validation", () => {
 
     expect(config.PRICE_POLL_INTERVAL_MINUTES).toBe(30);
     expect(config.MARKET_TIMEZONE).toBe("Europe/London");
+  });
+
+  it("parses the upload cap and refuses anything that is not a whole megabyte count", () => {
+    expect(loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "25" }).MAX_UPLOAD_MB).toBe(25);
+
+    // "2.5" and "ten" are both refused as non-integers; "0" trips the minimum,
+    // because a cap of zero megabytes is an upload form that accepts nothing.
+    expect(() => loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "2.5" })).toThrow(/MAX_UPLOAD_MB/);
+    expect(() => loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "ten" })).toThrow(/MAX_UPLOAD_MB/);
+    expect(() => loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "0" })).toThrow(/MAX_UPLOAD_MB/);
   });
 
   it("requires a session secret once the login gate is switched on", () => {

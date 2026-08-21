@@ -227,8 +227,13 @@ const SCALE_GAP = 10n ** BigInt(QUANTITY_SCALE);
  * compared: half away from zero can carry a figure a hair under the limit up to
  * exactly the limit, which is the one case a check on the unrounded product
  * would wave through.
+ *
+ * Two callers, both at the moment of a write: {@link revisePosition} checks the
+ * one row it is restating, and `commitUpload` (`uploads.server.ts`) checks every
+ * parsed row of a statement — an upload writes many rows at once, so it is the
+ * likelier way in, and one failing row refuses the whole commit there.
  */
-function fitsTheMoneyColumn(quantity: string, perShare: string | null): boolean {
+export function fitsTheMoneyColumn(quantity: string, perShare: string | null): boolean {
   if (perShare === null) return true;
 
   const product = toUnits(quantity, QUANTITY_SCALE) * toUnits(perShare, MONEY_SCALE);

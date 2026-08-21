@@ -5,7 +5,7 @@ _Part of [0004-ingest.md](../0004-ingest.md)._
 **What to build:** §5.3's generic mapper — the reason a new brokerage costs zero code. The screen
 shows the file's own header row and its first data rows, asks which column is which, and saves the
 answer against the institution and a fingerprint of that header. Every later export with the same
-header skips the screen entirely.
+header opens the screen already filled in.
 
 The screen's real job is to be readable: a household maps by looking at *values*, not at column
 names, so the sample rows underneath each dropdown are the feature, not decoration.
