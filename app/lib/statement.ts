@@ -19,6 +19,8 @@
  * number, because §4.1 keeps money out of floats end to end and 0003 made that
  * one module wide by construction.
  */
+import { z } from "zod";
+
 import {
   MONEY_SCALE,
   QUANTITY_SCALE,
@@ -74,6 +76,33 @@ export type StatementMapping = {
   owedAsPositive: boolean;
   combineDuplicateRows: boolean;
 };
+
+/**
+ * The same shape as a schema, for the two `jsonb` columns that store it —
+ * `upload_draft.mapping` and `column_mapping.mapping` share this one
+ * definition, so a row written by either writer reads back through the same
+ * gate. A stored value that fails it is treated as no mapping at all rather
+ * than a throw: a malformed row is a fact about old data, not a fault in the
+ * request that happened to read it.
+ *
+ * Annotated as `z.ZodType<StatementMapping>` so the type above and the schema
+ * cannot drift apart without the compiler saying so.
+ */
+export const statementMapping: z.ZodType<StatementMapping> = z.object({
+  headerRow: z.number().int().nonnegative(),
+  delimiter: z.enum([",", ";", "\t"]),
+  columns: z.object({
+    instrument: z.string().min(1),
+    quantity: z.string().min(1),
+    name: z.string().nullish(),
+    costBasis: z.string().nullish(),
+    asOf: z.string().nullish(),
+    accountNumber: z.string().nullish(),
+  }),
+  costBasisIs: z.enum(["per_share", "total"]),
+  owedAsPositive: z.boolean(),
+  combineDuplicateRows: z.boolean(),
+});
 
 /** One position the file states, with every figure a decimal string. */
 export type ParsedPosition = {

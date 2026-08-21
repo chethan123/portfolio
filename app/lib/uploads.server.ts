@@ -42,6 +42,7 @@ import { getDb, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError, parseInput } from "./input.server.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
+import type { StatementMapping } from "./statement.ts";
 import type { Kysely } from "kysely";
 
 const BYTES_PER_MB = 1024 * 1024;
@@ -248,4 +249,27 @@ export async function requireDraft(
     mapping: row.mapping,
     createdAt: row.created_at,
   };
+}
+
+/**
+ * The columns step passing: the mapping lands on the draft, which is what
+ * makes "how far did this draft get" a property of the row and lets a later
+ * step — or a return to this one — read the answer back.
+ *
+ * @throws {NotFoundError} through {@link requireDraft}, with the same
+ *         expired-or-recorded sentence — a mapping posted against a draft the
+ *         sweep or a commit has taken is a dead bookmark, not a fault.
+ */
+export async function saveMapping(
+  draftId: string,
+  mapping: StatementMapping,
+  db: Kysely<Database> = getDb(),
+): Promise<void> {
+  const draft = await requireDraft(draftId, db);
+
+  await db
+    .updateTable("upload_draft")
+    .set({ mapping: JSON.stringify(mapping) })
+    .where("id", "=", draft.id)
+    .execute();
 }

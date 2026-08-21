@@ -1488,6 +1488,57 @@ label {
   line-height: 20px;
 }
 
+/*
+ * The checkbox/radio carve-out (ingest brief §10).
+ *
+ * The shared rule above sizes every input at --control-h, which is right for
+ * a box someone types into and absurd for a tick. These two keep their
+ * intrinsic size and native drawing, accented from the one solid fill so a
+ * tick reads in the same blue as the button that commits it — in both themes,
+ * because --primary-container is the same value in both.
+ */
+input[type="checkbox"],
+input[type="radio"] {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  accent-color: var(--primary-container);
+}
+
+/*
+ * The inline label variant: the global label stacks its caption above the
+ * control, and a checkbox's sentence belongs beside the box — the whole pair
+ * one hit target, exactly as the stacked form is.
+ */
+label.choice {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-base);
+}
+
+/*
+ * A radio pair's group. A fieldset so the caption is announced with the
+ * choice, reset to the bare labelled column every other control already is —
+ * the browser's inset border box is furniture no form here wears.
+ */
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+legend {
+  padding: 0;
+}
+
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
