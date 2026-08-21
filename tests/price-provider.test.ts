@@ -13,7 +13,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { CurrencyRefused, toProviderQuote, yahooClient } from "~/lib/price-provider.server";
+import {
+  CurrencyRefused,
+  probeSymbol,
+  toProviderQuote,
+  yahooClient,
+} from "~/lib/price-provider.server";
 
 /** The fetch time, for the fallback path. Fixed so assertions can name it. */
 const FETCHED_AT = new Date("2026-06-05T18:00:00Z");
@@ -204,6 +209,79 @@ describe("the instant a price was struck", () => {
     });
 
     expect(quote?.asOf).toEqual(FETCHED_AT);
+  });
+});
+
+describe("probing a symbol at creation time", () => {
+  // The creation-time half of the currency guard (0004, "Resolution, and the
+  // guard that has to run here"). Stubs only: the probe takes the client as a
+  // parameter for exactly this reason, and no test here reaches the network.
+  const clientAnswering = (quote: (symbols: string[]) => Promise<unknown>) => async () => ({
+    quote,
+  });
+
+  it("answers ok for a symbol that resolves in USD", async () => {
+    const probe = await probeSymbol(
+      "VTI",
+      clientAnswering(async () => [
+        { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" },
+      ]),
+    );
+
+    expect(probe).toEqual({ status: "ok" });
+  });
+
+  it("carries the provider's currency when the quote is not in USD", async () => {
+    // The one outcome the person creating the instrument can act on, so it
+    // must not be flattened into "unavailable" — which is why this cannot be
+    // built on getQuotes, where a refusal becomes an absent quote. The
+    // currency arrives as the refresh guard spells it, so the refusal names
+    // symbol and currency in the same words.
+    const probe = await probeSymbol(
+      "VOD.L",
+      clientAnswering(async () => [
+        { symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" },
+      ]),
+    );
+
+    expect(probe).toEqual({ status: "non-usd", currency: "GBP" });
+  });
+
+  it("answers unavailable for a symbol the provider does not know", async () => {
+    // Yahoo drops unknown symbols from the response entirely; absence is its
+    // ordinary spelling of "never heard of it". Creation proceeds and the next
+    // refresh marks the instrument stale, same as any symbol that stops
+    // quoting.
+    const probe = await probeSymbol("MISTYPED", clientAnswering(async () => []));
+
+    expect(probe).toEqual({ status: "unavailable" });
+  });
+
+  it("answers unavailable rather than throwing when the provider fails", async () => {
+    // A provider error or timeout must not block creation (0004). The probe
+    // never throws; the caller has no catch to write.
+    const probe = await probeSymbol(
+      "VTI",
+      clientAnswering(async () => {
+        throw new Error("socket hang up");
+      }),
+    );
+
+    expect(probe).toEqual({ status: "unavailable" });
+  });
+
+  it("answers unavailable for a payload that is not even a list", async () => {
+    // An unofficial endpoint can change shape under us. A payload the schema
+    // has never seen is a provider failure, not a reason to refuse creation.
+    const probe = await probeSymbol("VTI", clientAnswering(async () => "not an array"));
+
+    expect(probe).toEqual({ status: "unavailable" });
+  });
+
+  it("answers unavailable for an entry it does not recognise", async () => {
+    const probe = await probeSymbol("VTI", clientAnswering(async () => [{ nothing: "useful" }]));
+
+    expect(probe).toEqual({ status: "unavailable" });
   });
 });
 

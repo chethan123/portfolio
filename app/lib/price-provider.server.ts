@@ -318,6 +318,78 @@ export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise
  * — `ProviderQuote` has nowhere to carry it, on purpose, since §6.1 stores no
  * currency column anywhere.
  */
+/**
+ * What one probe of one symbol can say. A closed set, because the caller's
+ * three answers are fixed by the spec: create, refuse naming the currency, or
+ * create anyway and let the next refresh mark it stale.
+ */
+export type SymbolProbe =
+  | { status: "ok" }
+  | { status: "non-usd"; currency: string }
+  | { status: "unavailable" };
+
+/**
+ * The probe as the upload flow's resolution step receives it — just the
+ * symbol, so a test stub is one async arrow and nothing else. `probeSymbol`
+ * satisfies it; the client parameter is this module's private business.
+ */
+export type ProbeSymbol = (symbol: string) => Promise<SymbolProbe>;
+
+/**
+ * Does this symbol quote, and in a currency we can hold?
+ *
+ * The creation-time half of the guard `CurrencyRefused` anticipates above:
+ * §6.1 puts this guard at instrument resolution, and that is still where it
+ * belongs — this is that moment finally existing. `getQuotes` cannot serve it,
+ * deliberately: there a refusal becomes an absent quote, because a refresh
+ * must not lose ninety-nine prices over one foreign listing. Here the caller
+ * is a person creating one instrument, and "absent" would collapse the one
+ * distinction they can act on — a currency we refuse — into the one they
+ * cannot — a provider having a bad day.
+ *
+ * So a non-USD quote comes back named, carrying the provider's currency for a
+ * refusal in the refresh guard's own words, while everything else that can go
+ * wrong — unknown symbol, thrown client, malformed payload — is one answer,
+ * `unavailable`, and never a throw. The spec's reason: a provider failure must
+ * not block creation, because the next refresh marks the instrument stale
+ * exactly as it does today for any symbol that stops quoting.
+ *
+ * The currency rule itself lives in {@link toProviderQuote} and is not
+ * restated here; the probe only translates its verdict.
+ *
+ * `client` is injectable for the same reason the interface exists: no test
+ * touches the network.
+ */
+export async function probeSymbol(
+  symbol: string,
+  client: typeof yahooClient = yahooClient,
+): Promise<SymbolProbe> {
+  try {
+    const provider = await client();
+    const fetchedAt = new Date();
+    const raw = await provider.quote([symbol]);
+
+    // Not an array is the same answer as an empty one: Yahoo drops unknown
+    // symbols from the response entirely, so absence is the ordinary spelling
+    // of "never heard of it".
+    for (const entry of Array.isArray(raw) ? raw : []) {
+      try {
+        if (toProviderQuote(entry, fetchedAt) !== null) return { status: "ok" };
+      } catch (error) {
+        if (error instanceof CurrencyRefused) {
+          return { status: "non-usd", currency: error.currency };
+        }
+        throw error;
+      }
+    }
+  } catch {
+    // Deliberately everything. Whatever the provider did, the answer the
+    // caller is allowed to act on is the same: create the instrument.
+  }
+
+  return { status: "unavailable" };
+}
+
 export function yahooPriceProvider(): PriceProvider {
   return {
     async getQuotes(symbols: string[]): Promise<ProviderQuote[]> {
