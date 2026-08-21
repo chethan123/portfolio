@@ -574,13 +574,65 @@ describe("the as-of date", () => {
     expect(parsed.problems[0]?.message).toMatch(/"2026-06-30" on line 3/);
   });
 
+  it("reads the US date shapes real exports carry as the ISO date", () => {
+    // The spelling is normalised; the rules — a real calendar date, no later
+    // than tomorrow — are still `recordedDate`'s, unchanged.
+    const padded = parseStatement(
+      [
+        ["Symbol", "Qty", "As Of"],
+        ["AAPL", "50", "06/30/2026"],
+      ],
+      mapping({ columns }),
+    );
+    expect(padded.asOfDate).toBe("2026-06-30");
+    expect(padded.problems).toEqual([]);
+
+    const bare = parseStatement(
+      [
+        ["Symbol", "Qty", "As Of"],
+        ["AAPL", "50", "6/3/2026"],
+      ],
+      mapping({ columns }),
+    );
+    expect(bare.asOfDate).toBe("2026-06-03");
+    expect(bare.problems).toEqual([]);
+  });
+
+  it("refuses a US-shaped date that is not on the calendar", () => {
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty", "As Of"],
+        ["AAPL", "50", "13/40/2026"],
+      ],
+      mapping({ columns }),
+    );
+
+    expect(parsed.asOfDate).toBeNull();
+    expect(parsed.problems[0]).toMatchObject({ row: 1, column: "As Of" });
+    expect(parsed.problems[0]?.message).toMatch(/not a date on the calendar/);
+  });
+
+  it("reads two spellings of one date as agreement, not as two dates", () => {
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty", "As Of"],
+        ["AAPL", "50", "06/30/2026"],
+        ["MSFT", "25", "2026-06-30"],
+      ],
+      mapping({ columns }),
+    );
+
+    expect(parsed.asOfDate).toBe("2026-06-30");
+    expect(parsed.problems).toEqual([]);
+  });
+
   it("validates the date by the same rule a typed one faces", () => {
     // `recordedDate`'s rules, unchanged: the spelling, the calendar, and the
     // future — a statement dated 2126 would pin the account until 2126.
     const spelled = parseStatement(
       [
         ["Symbol", "Qty", "As Of"],
-        ["AAPL", "50", "07/31/2026"],
+        ["AAPL", "50", "July 31, 2026"],
       ],
       mapping({ columns }),
     );

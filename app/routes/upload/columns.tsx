@@ -9,7 +9,7 @@ import {
   parseMappingForm,
   upsertMapping,
 } from "~/lib/column-mapping.server";
-import { candidateHeaderRows, defaultHeaderRow, readCsv } from "~/lib/csv";
+import { defaultHeaderRow, headerRowChoices, readCsv } from "~/lib/csv";
 import {
   FORM_ERROR,
   NotFoundError,
@@ -89,6 +89,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
     const headerCells = rows[headerRow] ?? [];
 
+    // A saved mapping that no longer parses clean explains itself on the GET
+    // too: review and instruments bounce such a draft back here, and problems
+    // that rendered only from a POST would leave that arrival a blank form
+    // with no word of why. Parsed against the mapping as saved — its own
+    // header row — which is exactly what the bouncing step refused.
+    const savedParse = savedMapping === null ? null : parseStatement(rows, savedMapping);
+    const savedProblems = savedParse === null ? [] : savedParse.problems;
+
     // The draft's own mapping wins over the institution's remembered one —
     // returning from a later step must show what was saved on *this* draft —
     // and the lookup only runs when the draft has nothing yet.
@@ -142,12 +150,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       };
     }
 
-    // The header-row select's options: the candidate rows, plus the row on
-    // screen when it is not among them (a saved or requested row must render
-    // as chosen, whatever detection thinks of it).
-    const candidates = candidateHeaderRows(rows);
-    const optionRows = candidates.includes(headerRow) ? candidates : [headerRow, ...candidates];
-    const headerOptions = optionRows.map((index) => {
+    // The header-row select's options: the candidate rows first, then every
+    // other non-blank row — a real header with two same-named columns fails
+    // candidate detection and must still be choosable; name-based mapping
+    // resolves a duplicated name to its first occurrence, and the fingerprint
+    // pins the header (`headerRowChoices` documents why) — plus the row on
+    // screen, whatever detection thinks of it.
+    const headerOptions = headerRowChoices(rows, headerRow).map((index) => {
       const cells = (rows[index] ?? [])
         .map((cell) => cell.trim())
         .filter((cell) => cell !== "");
@@ -183,6 +192,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       defaults,
       fromInstitution,
       missingColumns,
+      savedProblems: savedProblems.map((problem) => problem.message),
+      savedProblemFields:
+        savedMapping === null ? [] : problemFieldsOf(savedMapping, savedProblems),
       // The route's component cannot import a `.server` module, so the
       // sentinel rides down with the data it belongs to.
       notInFile: NOT_IN_FILE,
@@ -293,12 +305,17 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
     defaults,
     fromInstitution,
     missingColumns,
+    savedProblems,
+    savedProblemFields,
     notInFile,
   } = loaderData;
 
   const errors = actionData?.errors;
-  const problems = actionData?.problems ?? [];
-  const problemFields = actionData?.problemFields ?? [];
+  // What was posted wins over what was saved, exactly as with the values
+  // below: after a refused POST the problems describe that post, and only a
+  // fresh GET renders the saved mapping's own (the bounced-redirect case).
+  const problems = actionData?.problems ?? savedProblems;
+  const problemFields = actionData?.problemFields ?? savedProblemFields;
 
   // What was posted wins over what was saved, so a refusal never costs an
   // edit. A checkbox absent from the post means unticked, which is why the

@@ -160,8 +160,16 @@ const ABSENT = new Set(["", "-", "--", "—", "n/a"]);
  *
  * The shapes handled, each a checklist item in spec 0004 step 02:
  *
- * - thousands separators (comma, space, U+00A0, U+2009) removed; the point kept
- * - a leading `$` and surrounding whitespace removed
+ * - thousands separators (comma, space, U+00A0, U+2009) removed — but only
+ *   where they genuinely group thousands: a leading group of one to three
+ *   digits, every later group exactly three, none right of the decimal point.
+ *   Anything else — `1.234,56`, `1 234,56`, `12,34`, `1,23,456` — is European
+ *   decimal notation or a shredded row, and stripping the separators would
+ *   misread it a thousandfold. Refused instead: a refusal is safe because it
+ *   is named to a row; a misread is not
+ * - a leading `$` — after an optional sign, whitespace or the opening
+ *   parenthesis — removed; a `$` anywhere else is not a way anyone writes
+ *   money, so `12$34` is refused rather than read as `1234`
  * - `(1,234.56)` is negative — accounting notation, common on Schwab exports
  * - a trailing `%` removed with the value returned unscaled; what a percent
  *   *means* is the caller's question, and answering it here would be arithmetic
@@ -176,19 +184,52 @@ export function normaliseFigure(cell: string): NormalisedFigure {
   if (ABSENT.has(trimmed.toLowerCase())) return { kind: "absent" };
 
   const parenthesised = /^\((.*)\)$/.exec(trimmed);
-  let value = (parenthesised?.[1] ?? trimmed)
-    // `\s` covers U+00A0 and the thin space some brokerages group thousands
-    // with, so one class removes the currency mark and every separator.
-    .replace(/[$\s,]/g, "")
-    .replace(/%$/, "")
-    .replace(/^\+/, "");
+  let value = (parenthesised?.[1] ?? trimmed).trim();
 
-  // Both notations at once — `(-1)` — is not a figure anyone wrote on purpose.
   let negative = parenthesised !== null;
-  if (value.startsWith("-")) {
-    if (negative) return { kind: "unparseable" };
-    negative = true;
-    value = value.slice(1);
+
+  // A leading sign, tolerated on either side of the currency mark. Both
+  // negative notations at once — `(-1)` — is not a figure anyone wrote on
+  // purpose.
+  const leadingSign = (): "unparseable" | undefined => {
+    if (value.startsWith("+") || value.startsWith("-")) {
+      if (value.startsWith("-")) {
+        if (negative) return "unparseable";
+        negative = true;
+      }
+      value = value.slice(1).trimStart();
+    }
+    return undefined;
+  };
+
+  if (leadingSign() === "unparseable") return { kind: "unparseable" };
+  if (value.startsWith("$")) value = value.slice(1).trimStart();
+  if (leadingSign() === "unparseable") return { kind: "unparseable" };
+
+  // The currency mark is leading dressing or it is nothing: `12$34` refused,
+  // never read as `1234`.
+  if (value.includes("$")) return { kind: "unparseable" };
+
+  value = value.replace(/%$/, "");
+
+  // Separators are removed only once they are proven to group thousands.
+  // `\s` covers U+00A0 and the thin space some brokerages group with.
+  if (/[\s,]/.test(value)) {
+    const point = value.indexOf(".");
+    const integer = point === -1 ? value : value.slice(0, point);
+    const fraction = point === -1 ? null : value.slice(point + 1);
+
+    // A separator right of the decimal point cannot be grouping thousands —
+    // `1.234,56` is a European decimal, and 1.23456 is a thousandfold misread.
+    if (fraction !== null && /[\s,]/.test(fraction)) return { kind: "unparseable" };
+
+    const groups = integer.split(/[\s,]/);
+    const wellGrouped =
+      /^\d{1,3}$/.test(groups[0] ?? "") &&
+      groups.slice(1).every((group) => /^\d{3}$/.test(group));
+    if (!wellGrouped) return { kind: "unparseable" };
+
+    value = fraction === null ? groups.join("") : `${groups.join("")}.${fraction}`;
   }
 
   // ".50" and "50." are unambiguous and completed; a bare "." is neither, and

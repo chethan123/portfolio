@@ -80,6 +80,13 @@ describe("headerFingerprint", () => {
     expect(headerFingerprint(["SyMbOl", " quantity  ", "Average   Cost\tBasis"])).toBe(plain);
   });
 
+  it("keeps a separator between cells, so cell boundaries are part of the identity", () => {
+    // Joined with U+001F, not concatenated: without a separator these two
+    // headers would canonicalise to the same "abc" and share every saved
+    // mapping between two files whose columns are nothing alike.
+    expect(headerFingerprint(["ab", "c"])).not.toBe(headerFingerprint(["a", "bc"]));
+  });
+
   it("distinguishes the same columns in a different order, deliberately", () => {
     // A reordered export costs one re-map, which is cheaper than a mapping
     // that silently follows a column that moved.
@@ -211,6 +218,55 @@ describe("saveMapping", () => {
 
       const stored = await requireDraft(draft.id, db);
       expect(stored.mapping).toEqual(MAPPING);
+    }),
+  );
+
+  it(
+    "records whether this mapping's parse raised any first sighting",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft, seedInstrument }) => {
+      // The one moment the answer exists: after the instruments step writes
+      // the aliases, nothing can tell "skipped" from "resolved" — an alias
+      // does not say which draft wrote it. The review screen's step strip
+      // dims its entry off this bit (ingest brief §2.1, §7.5).
+      const account = await seedAccount({ kind: "brokerage" });
+      const instrument = await seedInstrument({ symbol: "VTI" });
+      await plantAlias(db, instrument, "VTI");
+
+      const simple: StatementMapping = {
+        ...MAPPING,
+        headerRow: 0,
+        columns: { instrument: "Symbol", quantity: "Quantity" },
+      };
+
+      const sightings = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\nNEVER SEEN,50\n"),
+      });
+      await saveMapping(sightings.id, simple, db);
+      expect((await requireDraft(sightings.id, db)).hadFirstSightings).toBe(true);
+
+      const quiet = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\n"),
+      });
+      await saveMapping(quiet.id, simple, db);
+      expect((await requireDraft(quiet.id, db)).hadFirstSightings).toBe(false);
+    }),
+  );
+
+  it(
+    "leaves the bit undecided for a mapping that does not parse clean",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      const account = await seedAccount({ kind: "brokerage" });
+      const draft = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\n"),
+      });
+
+      // MAPPING's header row 2 points past this file: problems, so no columns
+      // step has genuinely passed and no skip claim may be made.
+      await saveMapping(draft.id, MAPPING, db);
+      expect((await requireDraft(draft.id, db)).hadFirstSightings).toBeNull();
     }),
   );
 

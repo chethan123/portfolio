@@ -179,6 +179,68 @@ function integerDigits(value: string): number {
   return (value.split(".")[0] ?? "").replace(/^-/, "").replace(/^0+/, "").length;
 }
 
+/** One lot a fold sums: how much of something, and what one unit cost. */
+export type FoldableLot = {
+  /** Decimal string at the quantity column's scale, sign included. */
+  quantity: string;
+  /** Null when the lot's own basis is unknown. */
+  costBasisPerShare: string | null;
+};
+
+/**
+ * Fold several lots of one instrument into one position: quantities summed,
+ * basis quantity-weighted, both at the columns' scales.
+ *
+ * The one weighted-average rule for the two folds the flow performs — the
+ * parser's duplicate-row combining here, and the post-resolution spelling fold
+ * in `uploads.server.ts` — extracted so the money arithmetic stays exactly one
+ * implementation wide (`money.ts` gives the reason). The weighted numerator is
+ * in units of 10^-12 (money × quantity), the denominator 10^-8, so the plain
+ * quotient is already in money units.
+ *
+ * The basis is null when the lots net to nothing — no quantity to weight by —
+ * or when any lot's own basis is unknown, since a blended figure over a gap
+ * would be a fake precision.
+ */
+export function foldLots(lots: ReadonlyArray<FoldableLot>): {
+  /** The summed quantity rendered at `numeric(20, 8)`'s scale. */
+  quantity: string;
+  costBasisPerShare: string | null;
+} {
+  const quantityUnits = lots.reduce(
+    (sum, lot) => sum + toUnits(lot.quantity, QUANTITY_SCALE),
+    0n,
+  );
+
+  let costBasisPerShare: string | null = null;
+  if (quantityUnits !== 0n && lots.every((lot) => lot.costBasisPerShare !== null)) {
+    let weighted = 0n;
+    for (const lot of lots) {
+      weighted +=
+        toUnits(lot.costBasisPerShare ?? "0", MONEY_SCALE) *
+        toUnits(lot.quantity, QUANTITY_SCALE);
+    }
+    costBasisPerShare = render(divide(weighted, quantityUnits, 0), MONEY_SCALE);
+  }
+
+  return { quantity: render(quantityUnits, QUANTITY_SCALE), costBasisPerShare };
+}
+
+/**
+ * A statement's as-of cell as `recordedDate` reads it: ISO kept as written,
+ * and the US shapes real exports carry — `MM/DD/YYYY`, `M/D/YYYY` — rewritten
+ * to `YYYY-MM-DD`. Only the spelling moves; whether the result is a real,
+ * recordable date is still `recordedDate`'s question, so `13/40/2026` becomes
+ * `2026-13-40` and is refused as not on the calendar. Disagreement between
+ * rows compares these normalised spellings, so `06/30/2026` and `2026-06-30`
+ * in one file are one date, not two.
+ */
+function isoAsOf(value: string): string {
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
+  if (us === null) return value;
+  return `${us[3]}-${(us[1] ?? "").padStart(2, "0")}-${(us[2] ?? "").padStart(2, "0")}`;
+}
+
 /** One data row, parsed but not yet combined, with the file's own sign. */
 type RowRecord = {
   row: number;
@@ -186,7 +248,6 @@ type RowRecord = {
   name: string | null;
   accountNumber: string | null;
   quantity: string;
-  quantityUnits: bigint;
   costBasisPerShare: string | null;
 };
 
@@ -402,7 +463,6 @@ export function parseStatement(
       name: optionalCell(cells, nameIndex),
       accountNumber: optionalCell(cells, accountNumberIndex),
       quantity: quantity.value,
-      quantityUnits: toUnits(quantity.value, QUANTITY_SCALE),
       costBasisPerShare,
     });
   }
@@ -455,23 +515,11 @@ export function parseStatement(
       continue;
     }
 
-    const quantityUnits = group.reduce((sum, record) => sum + record.quantityUnits, 0n);
-
-    // Basis weighted by quantity, at the columns' scales: the numerator is in
-    // units of 10^-12 (money × quantity), the denominator 10^-8, so the plain
-    // quotient is already in money units. Null when the lots net to nothing —
-    // no quantity to weight by — or when any lot's own basis is unknown, since
-    // a blended figure over a gap would be a fake precision.
-    let costBasisPerShare: string | null = null;
-    if (quantityUnits !== 0n && group.every((record) => record.costBasisPerShare !== null)) {
-      let weighted = 0n;
-      for (const record of group) {
-        weighted += toUnits(record.costBasisPerShare ?? "0", MONEY_SCALE) * record.quantityUnits;
-      }
-      costBasisPerShare = render(divide(weighted, quantityUnits, 0), MONEY_SCALE);
-    }
-
-    const quantity = signed(render(quantityUnits, QUANTITY_SCALE));
+    // Quantities summed, basis quantity-weighted — `foldLots` states the rule
+    // once for this fold and the spelling fold both. The sum is over the
+    // file's own signs; the mapping's negation applies to the result.
+    const fold = foldLots(group);
+    const quantity = signed(fold.quantity);
 
     positions.push({
       row: first.row,
@@ -479,20 +527,23 @@ export function parseStatement(
       name: first.name,
       accountNumber: first.accountNumber,
       quantity,
-      costBasisPerShare,
+      costBasisPerShare: fold.costBasisPerShare,
     });
     combined.push({ instrument, rowCount: group.length, quantity });
   }
 
   // The as-of date: the first row carrying one speaks for the file, every
-  // other row must agree to the letter, and the one value is validated by the
-  // same rule a typed date is — a statement dated 2126 would pin the account
-  // until 2126 (`recordedDate` documents why). Two dates refuse the file
-  // naming both, never picking one: a statement is a photograph of one day.
+  // other row must agree with it once both are spelled the one way `isoAsOf`
+  // spells them, and the one value is validated by the same rule a typed date
+  // is — a statement dated 2126 would pin the account until 2126
+  // (`recordedDate` documents why). Two dates refuse the file naming both,
+  // never picking one: a statement is a photograph of one day.
   let asOfDate: string | null = null;
   const firstSighting = asOfSightings[0];
   if (firstSighting !== undefined) {
-    const differing = asOfSightings.find((sighting) => sighting.value !== firstSighting.value);
+    const differing = asOfSightings.find(
+      (sighting) => isoAsOf(sighting.value) !== isoAsOf(firstSighting.value),
+    );
     if (differing !== undefined) {
       problems.push({
         row: differing.row,
@@ -503,7 +554,7 @@ export function parseStatement(
           "and a statement is a photograph of one day.",
       });
     } else {
-      const parsed = recordedDate("The as-of date").safeParse(firstSighting.value);
+      const parsed = recordedDate("The as-of date").safeParse(isoAsOf(firstSighting.value));
       if (parsed.success) {
         asOfDate = parsed.data;
       } else {

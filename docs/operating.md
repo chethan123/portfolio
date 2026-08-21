@@ -151,7 +151,7 @@ happens to need it.
 | `SESSION_SECRET` | **When `AUTH_PASSWORD` is set** | — | Signs the login cookie. Startup fails naming this variable if you set a password without it. Use a long random string: `openssl rand -hex 32`. |
 | `PORT` | No | `3000` | HTTP listen port. Under Compose it is also the published host port, so changing it moves both. |
 | `PRICE_POLL_INTERVAL_MINUTES` | No | `15` | Quote refresh cadence, 1–1440. The refresh runs in the app process and only while the market is open. |
-| `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole megabytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. |
+| `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes (1024² bytes), minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
 

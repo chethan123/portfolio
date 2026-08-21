@@ -210,6 +210,36 @@ export function candidateHeaderRows(rows: ReadonlyArray<ReadonlyArray<string>>):
 }
 
 /**
+ * Every row the header-row select offers, as indices: the candidates first —
+ * the default choice among them is `defaultHeaderRow`'s — then every other
+ * non-blank row, in file order, and the row currently on screen whatever
+ * detection thinks of it.
+ *
+ * The widening beyond the candidates exists for a real header that fails the
+ * candidate screen — most plainly one carrying two same-named columns, which
+ * `isCandidate`'s no-two-alike rule refuses. Such a header is still the
+ * header, and a select that cannot offer it strands the file. Name-based
+ * mapping resolves a duplicated header name to its first occurrence — the
+ * spec chose names deliberately, and the fingerprint pins the exact header
+ * the mapping was built against, so the resolution cannot silently move.
+ */
+export function headerRowChoices(
+  rows: ReadonlyArray<ReadonlyArray<string>>,
+  current: number,
+): number[] {
+  const candidates = candidateHeaderRows(rows);
+  const offered = new Set(candidates);
+  const rest: number[] = [];
+
+  for (const [index, cells] of rows.entries()) {
+    if (!offered.has(index) && !isBlank(cells)) rest.push(index);
+  }
+
+  const all = [...candidates, ...rest];
+  return all.includes(current) ? all : [current, ...all];
+}
+
+/**
  * The header row to preselect: the first candidate whose column count matches
  * the majority column count of the rows below it — which is what skips a
  * preamble of "Account Summary", a blank line and a date stamp, none of which

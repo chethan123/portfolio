@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { candidateHeaderRows, defaultHeaderRow, readCsv } from "~/lib/csv";
+import { candidateHeaderRows, defaultHeaderRow, headerRowChoices, readCsv } from "~/lib/csv";
 
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
 
@@ -190,5 +190,37 @@ describe("candidateHeaderRows and defaultHeaderRow", () => {
   it("returns nothing only for a file with no rows at all", () => {
     expect(candidateHeaderRows([])).toEqual([]);
     expect(defaultHeaderRow([])).toBeNull();
+  });
+});
+
+describe("headerRowChoices", () => {
+  it("offers a real header that fails candidate detection, after the candidates", () => {
+    // Two same-named columns rule row 0 out as a candidate, and a data row
+    // often qualifies instead — but the duplicated header is still the
+    // header, and a select that cannot offer it strands the file. Name-based
+    // mapping resolves the duplicated name to its first occurrence.
+    const rows = [
+      ["Symbol", "Value", "Value"],
+      ["AAPL", "50", "8533.00"],
+      ["MSFT", "25", "9875.50"],
+    ];
+
+    expect(candidateHeaderRows(rows)).toEqual([1, 2]);
+    expect(headerRowChoices(rows, 1)).toEqual([1, 2, 0]);
+  });
+
+  it("keeps blank rows out and the row on screen in, whatever detection thinks", () => {
+    const rows = [
+      ["Symbol", "Qty"],
+      ["", ""],
+      ["AAPL", "50"],
+    ];
+
+    // The blank spacer is never offered; the candidates already cover the
+    // rest, so nothing is appended.
+    expect(headerRowChoices(rows, 0)).toEqual([0, 2]);
+    // A requested row outside the list — a stale ?header= — still renders as
+    // chosen rather than vanishing from its own control.
+    expect(headerRowChoices(rows, 1)).toEqual([1, 0, 2]);
   });
 });

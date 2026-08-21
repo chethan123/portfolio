@@ -190,11 +190,12 @@ describe("diffForDraft", () => {
         value: "75320.4114",
       });
 
-      // A basis appearing where there was none is an update and says which.
+      // A basis appearing where there was none is an update, and the pair of
+      // figures says which way: the UI derives "— → figure" from
+      // `basisChanged` plus the nulls, so that is what is pinned.
       expect(updated.get("BND")).toMatchObject({
         quantityChanged: false,
         basisChanged: true,
-        basisAppeared: true,
         basisDisappeared: false,
         costBasisBefore: null,
         costBasisAfter: "71.05",
@@ -203,8 +204,9 @@ describe("diffForDraft", () => {
       expect(updated.get("FXNAX")).toMatchObject({
         quantityChanged: true,
         basisChanged: true,
-        basisAppeared: false,
         basisDisappeared: false,
+        costBasisBefore: "11.8200",
+        costBasisAfter: "11.94",
       });
 
       // Removed, in full: instrument, quantity, last known value — never a count.
@@ -239,7 +241,6 @@ describe("diffForDraft", () => {
       expect(diff.updated[0]).toMatchObject({
         quantityChanged: false,
         basisChanged: true,
-        basisAppeared: false,
         basisDisappeared: true,
         costBasisBefore: "52.4100",
         costBasisAfter: null,
@@ -407,6 +408,28 @@ describe("diffForDraft", () => {
 
       const diff = await diffForDraft(draftId, db);
       expect(diff.asOf).toEqual({ source: "file", date: "2026-06-30" });
+    }),
+  );
+
+  it(
+    "dims the instruments step only when the columns step found no first sighting",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "SKP", name: "Skipped-step Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "SKP" });
+
+      // Every string already vocabulary when the mapping lands: the step was
+      // skipped by redirect, and the strip may dim it with "· none".
+      const skipped = await stage(ctx, account, "Symbol,Quantity,Basis\nSKP,10,\n");
+      expect((await diffForDraft(skipped, db)).instrumentsSkipped).toBe(true);
+
+      // A first sighting at mapping time: the step genuinely ran, and the
+      // alias it wrote afterwards does not rewrite that history.
+      const fresh = await seedInstrument({ symbol: "FRS", name: "Fresh Fund" });
+      const visited = await stage(ctx, account, "Symbol,Quantity,Basis\nFRS FIRST SEEN,5,\n");
+      await seedInstrumentAlias({ instrument: fresh, rawString: "FRS FIRST SEEN" });
+      expect((await diffForDraft(visited, db)).instrumentsSkipped).toBe(false);
     }),
   );
 
@@ -740,6 +763,74 @@ describe("commitUpload", () => {
   );
 
   it(
+    "refuses a file whose own rows disagree about the account number, naming both",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const one = await seedInstrument({ symbol: "IN1", name: "Intra One" });
+      const two = await seedInstrument({ symbol: "IN2", name: "Intra Two" });
+      await seedInstrumentAlias({ instrument: one, rawString: "IN1" });
+      await seedInstrumentAlias({ instrument: two, rawString: "IN2" });
+
+      // Two numbers in one file is not a statement of one account — refused
+      // whatever the account has recorded, and the first number is not
+      // captured either.
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Acct\nIN1,10,,A-111\nIN2,5,,B-222\n",
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      const refusal = await refusalOf(() =>
+        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/A-111/);
+      expect(refusal.fieldErrors.form).toMatch(/B-222/);
+      expect(refusal.fieldErrors.form).toMatch(/one account/);
+
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .execute();
+      expect(sets).toHaveLength(0);
+      const stored = await db
+        .selectFrom("account")
+        .select("external_account_number")
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+      expect(stored.external_account_number).toBeNull();
+    }),
+  );
+
+  it(
+    "commits a file whose rows agree about the account number, as before",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const one = await seedInstrument({ symbol: "AG1", name: "Agreeing One" });
+      const two = await seedInstrument({ symbol: "AG2", name: "Agreeing Two" });
+      await seedInstrumentAlias({ instrument: one, rawString: "AG1" });
+      await seedInstrumentAlias({ instrument: two, rawString: "AG2" });
+
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Acct\nAG1,10,,Z-999\nAG2,5,,Z-999\n",
+        { columns: { accountNumber: "Acct" } },
+      );
+
+      const written = await commitUpload(
+        draftId,
+        { accountId: account.id, asOf: "2026-06-30" },
+        db,
+      );
+      expect(written.counts.added).toBe(2);
+    }),
+  );
+
+  it(
     "captures the file's account number when the account has none recorded",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
@@ -842,6 +933,44 @@ describe("commitUpload", () => {
       );
       expect(written.counts.removed).toBe(2);
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+    }),
+  );
+
+  it(
+    "asks for the tick strictly past half — exactly half commits without one",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const funds = [];
+      for (const symbol of ["HF1", "HF2", "HF3", "HF4"]) {
+        const fund = await seedInstrument({ symbol, name: `Half ${symbol}` });
+        await seedInstrumentAlias({ instrument: fund, rawString: symbol });
+        funds.push(fund);
+      }
+      await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: funds.map((fund) => ({ instrument: fund, quantity: "1" })),
+      });
+
+      // 3 of 4 crosses the boundary and is refused unticked — first, because
+      // a refusal writes nothing and the account still holds all 4 after it.
+      const majority = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\n");
+      const refusal = await refusalOf(() =>
+        commitUpload(majority, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/removes 3 of the 4 positions/);
+
+      // 2 of 4 removed is not "more than half": no confirmation is demanded,
+      // because a tick that is always demanded is a tick nobody reads.
+      const half = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\nHF2,1,\n");
+      expect((await diffForDraft(half, db)).majorityRemoved).toBe(false);
+      const written = await commitUpload(
+        half,
+        { accountId: account.id, asOf: "2026-06-30" },
+        db,
+      );
+      expect(written.counts.removed).toBe(2);
     }),
   );
 
@@ -1019,7 +1148,9 @@ describe("uploadReceipt", () => {
       );
 
       // Recomputed by diffing the named set against its predecessor under the
-      // same tie-break — read back from the database, never from the URL.
+      // same tie-break — read back from the database, never from the URL. The
+      // holding count feeds the receipt's closing "now holds N positions"
+      // (brief §6.5), and it is the set's own rows, not a URL claim.
       const receipt = await uploadReceipt(account.id, written.setId, db);
       expect(receipt).toMatchObject({
         setId: written.setId,
@@ -1027,6 +1158,7 @@ describe("uploadReceipt", () => {
         filename: FILENAME,
         firstStatement: false,
         counts: { added: 1, updated: 1, unchanged: 0, removed: 1 },
+        holdingCount: 2,
       });
 
       // A set that is not the account's latest yields no receipt...
@@ -1057,6 +1189,7 @@ describe("uploadReceipt", () => {
       expect(receipt).toMatchObject({
         firstStatement: true,
         counts: { added: 1, updated: 0, unchanged: 0, removed: 0 },
+        holdingCount: 1,
       });
     }),
   );

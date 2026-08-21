@@ -14,6 +14,8 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
+import { sql } from "kysely";
+
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
 import { createDraft, requireDraft } from "~/lib/uploads.server";
@@ -54,8 +56,8 @@ describe("createDraft", () => {
       expect(stored.filename).toBe("Positions_2026-06-30.csv");
       expect(stored.accountName).toBe(account.name);
       expect(Buffer.from(stored.bytes).equals(Buffer.from(CSV))).toBe(true);
-      expect(stored.asOfDate).toBeNull();
       expect(stored.mapping).toBeNull();
+      expect(stored.hadFirstSightings).toBeNull();
     }),
   );
 
@@ -79,6 +81,37 @@ describe("createDraft", () => {
       await expect(requireDraft(stale.id, db)).rejects.toThrow(NotFoundError);
       await expect(requireDraft(fresh.id, db)).resolves.toMatchObject({ id: fresh.id });
       await expect(requireDraft(next.id, db)).resolves.toMatchObject({ id: next.id });
+    }),
+  );
+
+  it(
+    "keeps a draft exactly 24 hours old and sweeps one a second older",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      // "Older than 24 hours" is a strict comparison, pinned at the second.
+      // Deterministic because `now()` is fixed for the whole transaction the
+      // test runs in: the backdate below and the sweep's own cutoff read the
+      // same instant, so "exactly 24 hours" is exact, not racy.
+      const account = await seedAccount({ kind: "brokerage" });
+      const onTheLine = await seedUploadDraft({ account });
+      const justPast = await seedUploadDraft({ account });
+
+      await db
+        .updateTable("upload_draft")
+        .set({ created_at: sql`now() - interval '24 hours'` })
+        .where("id", "=", onTheLine.id)
+        .execute();
+      await db
+        .updateTable("upload_draft")
+        .set({ created_at: sql`now() - interval '24 hours 1 second'` })
+        .where("id", "=", justPast.id)
+        .execute();
+
+      await createDraft({ accountId: account.id, filename: "next.csv", bytes: CSV }, db);
+
+      await expect(requireDraft(onTheLine.id, db)).resolves.toMatchObject({
+        id: onTheLine.id,
+      });
+      await expect(requireDraft(justPast.id, db)).rejects.toThrow(NotFoundError);
     }),
   );
 

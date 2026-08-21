@@ -66,6 +66,25 @@ export async function unresolvedStrings(
   return distinct.filter((value) => !resolved.has(value));
 }
 
+/**
+ * Do two raw instrument strings state the same cell?
+ *
+ * Byte-exact, except that line endings compare normalised (`\r\n?` → `\n`).
+ * The exception exists because HTML form serialisation normalises a lone LF
+ * or CR inside a posted value to CRLF: a quoted multi-line cell echoed back
+ * through a hidden field would fail a byte-exact staleness check on every
+ * submit, forever. Nothing is given up by tolerating it — two aliases
+ * genuinely differing only by CR-versus-LF cannot exist meaningfully through
+ * a browser, since every post would collapse them to one spelling anyway.
+ *
+ * This compares only; what gets *stored* is always the draft's own parsed
+ * string, never a posted copy, so no CRLF-mangled alias can land.
+ */
+export function sameRawStrings(a: string, b: string): boolean {
+  const lineEndings = (value: string): string => value.replace(/\r\n?/g, "\n");
+  return lineEndings(a) === lineEndings(b);
+}
+
 /** One first sighting, with enough context to recognise the holding. */
 export type UnresolvedPosition = {
   /** The instrument cell exactly as the file wrote it — what will be stored. */

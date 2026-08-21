@@ -17,6 +17,7 @@ import {
   resolutionFieldsAt,
   resolveAll,
   resolutionScreen,
+  sameRawStrings,
   unresolvedStrings,
   type ResolutionFields,
 } from "~/lib/instrument-resolution.server";
@@ -568,5 +569,25 @@ describe("resolutionFieldsAt", () => {
       newClassificationName: "International blend",
       newClassificationAssetClass: "equity",
     });
+  });
+});
+
+describe("sameRawStrings", () => {
+  it("reads LF, CRLF and bare CR spellings of one cell as the same string", () => {
+    // HTML form serialisation rewrites a lone LF or CR inside a posted value
+    // to CRLF, so a quoted multi-line cell echoed through a hidden field
+    // would fail a byte-exact check on every submit, forever.
+    expect(sameRawStrings("FUND\nCLASS A", "FUND\r\nCLASS A")).toBe(true);
+    expect(sameRawStrings("FUND\rCLASS A", "FUND\nCLASS A")).toBe(true);
+    expect(sameRawStrings("FUND\r\nCLASS A", "FUND\r\nCLASS A")).toBe(true);
+  });
+
+  it("is byte-exact about everything that is not a line ending", () => {
+    expect(sameRawStrings("VTI", "VTI ")).toBe(false);
+    expect(sameRawStrings("FUND\nCLASS A", "FUND\nCLASS B")).toBe(false);
+  });
+
+  it("still separates case, exactly as the alias table does", () => {
+    expect(sameRawStrings("VTI", "vti")).toBe(false);
   });
 });

@@ -334,7 +334,13 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               <span className="u-data">{receipt.counts.removed}</span> removed
             </>
           )}
-          , as of <b className="u-data">{receipt.asOf}</b>.
+          , as of <b className="u-data">{receipt.asOf}</b>.{" "}
+          {/* The closing clause (brief §6.5): the count is the recorded set's
+              own rows, read back from the database like every other figure in
+              this sentence — never the URL's claim. */}
+          {total.accountName} now holds{" "}
+          <b className="u-data">{receipt.holdingCount}</b>{" "}
+          {receipt.holdingCount === 1 ? "position" : "positions"}.
         </p>
       ) : null}
 

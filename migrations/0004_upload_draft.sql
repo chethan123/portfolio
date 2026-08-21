@@ -8,9 +8,16 @@
 -- redirects — which is what makes a reload, the back button and a bookmarked
 -- half-finished upload all behave.
 --
---   * `as_of_date` and `mapping` are null until their step is passed, which is
---     what makes "how far did this draft get" a property of the row rather
---     than a status column to keep in sync.
+--   * `mapping` is null until the columns step is passed, which is what makes
+--     "how far did this draft get" a property of the row rather than a status
+--     column to keep in sync. `as_of_date` is reserved for a resume-the-date
+--     flow no step writes yet — nothing reads it either, so it carries no
+--     meaning today beyond matching the spec's DDL.
+--   * `had_first_sightings` is the step strip's memory: null until the columns
+--     step decides, then whether that mapping's parse raised any string no
+--     alias resolved. It has to be written at that moment because it is
+--     unrecoverable afterwards — an alias, once written, does not say which
+--     draft wrote it, so a later read cannot tell "skipped" from "resolved".
 --   * `raw_file` is `not null` here and nullable on `position_set`, for the
 --     reason 0001 gives: a manual balance edit has no file, but a draft is a
 --     file by definition.
@@ -23,13 +30,14 @@
 --     payer. The `created_at` index is what the sweep reads.
 
 create table upload_draft (
-  id         bigint generated always as identity primary key,
-  account_id bigint not null references account (id) on delete cascade,
-  filename   text   not null,
-  raw_file   bytea  not null,
-  as_of_date date,
-  mapping    jsonb,
-  created_at timestamptz not null default now()
+  id                  bigint generated always as identity primary key,
+  account_id          bigint not null references account (id) on delete cascade,
+  filename            text   not null,
+  raw_file            bytea  not null,
+  as_of_date          date,
+  mapping             jsonb,
+  had_first_sightings boolean,
+  created_at          timestamptz not null default now()
 );
 
 create index upload_draft_created_at_idx on upload_draft (created_at);

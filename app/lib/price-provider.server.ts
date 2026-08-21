@@ -305,20 +305,6 @@ export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise
 }
 
 /**
- * The live provider.
- *
- * Constructed rather than exported as a singleton so that nothing imports
- * `yahoo-finance2` by reaching for a module-level value — a caller has to ask
- * for it, and the only caller that does is the refresh path.
- *
- * A non-USD quote is refused per symbol, not per batch: one foreign listing in
- * a household of a hundred holdings must not cost the other ninety-nine their
- * prices. The refusal is returned to the caller as an absent quote, which it
- * already knows how to treat, and logged here where the currency is still known
- * — `ProviderQuote` has nowhere to carry it, on purpose, since §6.1 stores no
- * currency column anywhere.
- */
-/**
  * What one probe of one symbol can say. A closed set, because the caller's
  * three answers are fixed by the spec: create, refuse naming the currency, or
  * create anyway and let the next refresh mark it stale.
@@ -390,6 +376,20 @@ export async function probeSymbol(
   return { status: "unavailable" };
 }
 
+/**
+ * The live provider.
+ *
+ * Constructed rather than exported as a singleton so that nothing imports
+ * `yahoo-finance2` by reaching for a module-level value — a caller has to ask
+ * for it, and the only caller that does is the refresh path.
+ *
+ * A non-USD quote is refused per symbol, not per batch: one foreign listing in
+ * a household of a hundred holdings must not cost the other ninety-nine their
+ * prices. The refusal is returned to the caller as an absent quote, which it
+ * already knows how to treat, and logged here where the currency is still known
+ * — `ProviderQuote` has nowhere to carry it, on purpose, since §6.1 stores no
+ * currency column anywhere.
+ */
 export function yahooPriceProvider(): PriceProvider {
   return {
     async getQuotes(symbols: string[]): Promise<ProviderQuote[]> {

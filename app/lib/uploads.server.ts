@@ -5,10 +5,10 @@
  * The upload flow is four screens and every one of them is a real URL with no
  * client state, so everything a step needs has to live where a URL can reach
  * it. This module owns that place: one `upload_draft` row holding the bytes,
- * the filename and, as the steps pass, the mapping and the as-of date. Each
- * step reads the draft, writes its own part back and redirects — which is what
- * makes a reload, the back button and a bookmarked half-finished upload all
- * behave.
+ * the filename and, once the columns step passes, the mapping and whether the
+ * file raised any first sighting. Each step reads the draft, writes its own
+ * part back and redirects — which is what makes a reload, the back button and
+ * a bookmarked half-finished upload all behave.
  *
  * It is also where the application's first multipart form is read. Every other
  * action goes through `formFields`, which drops file parts by design, so the
@@ -51,13 +51,14 @@ import { readCsv } from "./csv.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { holdingNote } from "./holdings-view.ts";
 import { NotFoundError, ValidationError, parseInput, recordedDate } from "./input.server.ts";
+import { unresolvedStrings } from "./instrument-resolution.server.ts";
 import { MONEY_SCALE, QUANTITY_SCALE, divide, render, toUnits } from "./money.ts";
 import { fitsTheMoneyColumn } from "./positions.server.ts";
-import { parseStatement, statementMapping } from "./statement.ts";
+import { foldLots, parseStatement, statementMapping } from "./statement.ts";
 import { accountHoldings } from "./valuation.server.ts";
 
 import type { AssetClass, IsoDate } from "./valuation.server.ts";
-import type { ParsedPosition, StatementMapping } from "./statement.ts";
+import type { ParsedPosition, ParsedStatement, StatementMapping } from "./statement.ts";
 import type { Kysely } from "kysely";
 
 const BYTES_PER_MB = 1024 * 1024;
@@ -79,13 +80,18 @@ export type UploadDraft = {
   filename: string;
   /** The uploaded bytes, exactly as they arrived — BOM, CRLF and all. */
   bytes: Uint8Array;
-  /** Null until the review step records the date. */
-  asOfDate: IsoDate | null;
   /**
    * Null until the columns step is passed — which is how "how far did this
    * draft get" stays a property of the row. Its shape is that step's contract.
    */
   mapping: unknown;
+  /**
+   * Whether the columns step's parse raised any first sighting — the step
+   * strip's dimmed "· none" memory, null until that step decides. Written at
+   * that moment because it is unrecoverable afterwards: an alias, once
+   * written, does not say which draft wrote it.
+   */
+  hadFirstSightings: boolean | null;
   createdAt: Date;
 };
 
@@ -253,8 +259,8 @@ async function findDraft(
       "account.external_account_number",
       "upload_draft.filename",
       "upload_draft.raw_file",
-      "upload_draft.as_of_date",
       "upload_draft.mapping",
+      "upload_draft.had_first_sightings",
       "upload_draft.created_at",
     ])
     .where("upload_draft.id", "=", draftId)
@@ -268,8 +274,8 @@ async function findDraft(
     accountName: row.account_name,
     filename: row.filename,
     bytes: row.raw_file,
-    asOfDate: row.as_of_date,
     mapping: row.mapping,
+    hadFirstSightings: row.had_first_sightings,
     createdAt: row.created_at,
     accountClosedAt: row.closed_at,
     accountNumber: row.external_account_number,
@@ -302,6 +308,14 @@ export async function requireDraft(
  * makes "how far did this draft get" a property of the row and lets a later
  * step — or a return to this one — read the answer back.
  *
+ * `had_first_sightings` is decided and written here too, because this is the
+ * one moment the answer exists: whether *this* mapping's parse raised any
+ * string no alias resolves. The instruments step then writes the aliases, and
+ * afterwards nothing can tell "the step was skipped" from "the step was
+ * passed" — an alias does not say which draft wrote it. The review screen's
+ * step strip dims its entry off this bit (brief §2.1, §7.5). Null when the
+ * mapping does not parse clean, since no columns step has genuinely passed.
+ *
  * @throws {NotFoundError} through {@link requireDraft}, with the same
  *         expired-or-recorded sentence — a mapping posted against a draft the
  *         sweep or a commit has taken is a dead bookmark, not a fault.
@@ -313,11 +327,84 @@ export async function saveMapping(
 ): Promise<void> {
   const draft = await requireDraft(draftId, db);
 
+  const { rows } = readCsv(draft.bytes, mapping.delimiter);
+  const parsed = parseStatement(rows, mapping);
+  const hadFirstSightings =
+    parsed.problems.length > 0
+      ? null
+      : (
+          await unresolvedStrings(
+            parsed.positions.map((position) => position.instrument),
+            db,
+          )
+        ).length > 0;
+
   await db
     .updateTable("upload_draft")
-    .set({ mapping: JSON.stringify(mapping) })
+    .set({
+      mapping: JSON.stringify(mapping),
+      had_first_sightings: hadFirstSightings,
+    })
     .where("id", "=", draft.id)
     .execute();
+}
+
+/**
+ * Where a draft's file stands against the flow's steps, in one read. The rule
+ * — parse the draft through its saved mapping; a malformed mapping or parse
+ * problems mean the columns step, an unresolved string means the instruments
+ * step, and otherwise the file is ready — exists once, here, rather than once
+ * per route that resumes a draft.
+ *
+ * `step` names the earliest step still owed; `null` means none is, and the
+ * draft can be diffed and committed. The instruments variant carries the
+ * parse and the unresolved strings, because that screen's whole job is to ask
+ * about them; the columns variant carries nothing, because a mapping that
+ * does not parse has nothing trustworthy to carry.
+ */
+export type DraftParse =
+  | { step: "columns" }
+  | {
+      step: "instruments";
+      parsed: ParsedStatement;
+      mapping: StatementMapping;
+      /** The first sightings, in the order the file raised them. */
+      unresolved: string[];
+    }
+  | { step: null; parsed: ParsedStatement; mapping: StatementMapping };
+
+/**
+ * Parse a draft's file through its saved mapping and say which step, if any,
+ * the draft still owes. The index route redirects to `step`, the instruments
+ * route renders or bounces on it, and {@link diffForDraft} turns a non-null
+ * `step` into a {@link DraftNotReadyError}.
+ */
+export async function parseDraft(
+  draft: UploadDraft,
+  db: Kysely<Database> = getDb(),
+): Promise<DraftParse> {
+  const saved = statementMapping.safeParse(draft.mapping);
+  if (!saved.success) return { step: "columns" };
+
+  // The mapping's own delimiter, never a second sniff: re-reading the same
+  // bytes must not depend on the sniff reaching the same verdict twice.
+  const { rows } = readCsv(draft.bytes, saved.data.delimiter);
+  const parsed = parseStatement(rows, saved.data);
+
+  // A saved mapping only lands after a clean parse, so problems here mean the
+  // stored row predates a rule or was written by hand — either way, remapping
+  // is the fix, and columns is where remapping lives.
+  if (parsed.problems.length > 0) return { step: "columns" };
+
+  const unresolved = await unresolvedStrings(
+    parsed.positions.map((position) => position.instrument),
+    db,
+  );
+  if (unresolved.length > 0) {
+    return { step: "instruments", parsed, mapping: saved.data, unresolved };
+  }
+
+  return { step: null, parsed, mapping: saved.data };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -371,8 +458,6 @@ export type DiffUpdated = DiffInstrument & {
   costBasisBefore: string | null;
   costBasisAfter: string | null;
   basisChanged: boolean;
-  /** `— → figure`: the statement started reporting a basis. */
-  basisAppeared: boolean;
   /** `figure → —`: quiet in exactly the place it should not be, so the note says it too. */
   basisDisappeared: boolean;
   /** The after-state at the current quote. Null when never priced. */
@@ -416,6 +501,14 @@ export type UploadDiff = {
   skipped: Array<{ row: number; instrument: string }>;
   /** Which of §6.3's two cases this statement is — the screen says it plainly. */
   asOf: { source: "file"; date: IsoDate } | { source: "asked" };
+  /**
+   * True when the columns step recorded that this draft's file raised no
+   * first sightings, so the step strip dims its instruments entry with
+   * "· none" (brief §2.1, §7.5). False both for a draft that genuinely
+   * visited the step and for one saved before the bit existed — dimming is a
+   * claim, and an unknown history does not get to make it.
+   */
+  instrumentsSkipped: boolean;
 };
 
 /** One row as the commit will write it, with the facts its guards read. */
@@ -505,22 +598,14 @@ async function assembleDiff(
   draft: UploadDraft,
   db: Kysely<Database>,
 ): Promise<AssembledDiff> {
-  const saved = statementMapping.safeParse(draft.mapping);
-  if (!saved.success) throw new DraftNotReadyError("columns");
+  // The shared draft-parse rule: an owed step here is a bookmarked review over
+  // a draft whose mapping broke or whose file still carries a first sighting.
+  const result = await parseDraft(draft, db);
+  if (result.step !== null) throw new DraftNotReadyError(result.step);
+  const { parsed } = result;
 
-  // The mapping's own delimiter, never a second sniff: re-reading the same
-  // bytes must not depend on the sniff reaching the same verdict twice.
-  const { rows: fileRows } = readCsv(draft.bytes, saved.data.delimiter);
-  const parsed = parseStatement(fileRows, saved.data);
-
-  // A saved mapping only lands after a clean parse, so problems here mean the
-  // stored row predates a rule — remapping is the fix, and columns is where
-  // remapping lives.
-  if (parsed.problems.length > 0) throw new DraftNotReadyError("columns");
-
-  // Byte-exact alias lookup, all strings in one read. A miss at this point is
-  // a state error — a concurrent draft cannot have *removed* vocabulary, but a
-  // bookmarked review can predate this draft's own instruments step.
+  // Byte-exact alias lookup, all strings in one read — `parseDraft` has
+  // already established that every string resolves; this read is for the ids.
   const strings = parsed.positions.map((position) => position.instrument);
   const aliasRows =
     strings.length === 0
@@ -531,7 +616,6 @@ async function assembleDiff(
           .where("raw_string", "in", strings)
           .execute();
   const aliases = new Map(aliasRows.map((row) => [row.raw_string, row.instrument_id]));
-  if (strings.some((raw) => !aliases.has(raw))) throw new DraftNotReadyError("instruments");
 
   // Group by the *resolved* instrument, in first-appearance order.
   const groups = new Map<string, ParsedPosition[]>();
@@ -571,31 +655,14 @@ async function assembleDiff(
     }
 
     // The spelling fold. Signs were already applied by the parser, so the sum
-    // is over the final quantities; the weighted basis is the parser's own
-    // rule at the columns' scales — see `parseStatement`.
-    const quantityUnits = group.reduce(
-      (sum, position) => sum + toUnits(position.quantity, QUANTITY_SCALE),
-      0n,
-    );
-
-    let costBasisPerShare: string | null = null;
-    if (
-      quantityUnits !== 0n &&
-      group.every((position) => position.costBasisPerShare !== null)
-    ) {
-      let weighted = 0n;
-      for (const position of group) {
-        weighted +=
-          toUnits(position.costBasisPerShare ?? "0", MONEY_SCALE) *
-          toUnits(position.quantity, QUANTITY_SCALE);
-      }
-      costBasisPerShare = render(divide(weighted, quantityUnits, 0), MONEY_SCALE);
-    }
+    // is over the final quantities; `foldLots` is the parser's own
+    // duplicate-row rule, stated once in `statement.ts` and called from both.
+    const fold = foldLots(group);
 
     folded.push({
       instrumentId,
-      quantity: render(quantityUnits, QUANTITY_SCALE),
-      costBasisPerShare,
+      quantity: fold.quantity,
+      costBasisPerShare: fold.costBasisPerShare,
       accountNumber,
       lineCount,
     });
@@ -688,7 +755,6 @@ async function assembleDiff(
       costBasisBefore: before.costBasisPerShare,
       costBasisAfter: row.costBasisPerShare,
       basisChanged,
-      basisAppeared: before.costBasisPerShare === null && row.costBasisPerShare !== null,
       basisDisappeared,
       value: valueAt(row.quantity, fact.price),
     });
@@ -733,6 +799,7 @@ async function assembleDiff(
         parsed.asOfDate !== null
           ? { source: "file", date: parsed.asOfDate }
           : { source: "asked" },
+      instrumentsSkipped: draft.hadFirstSightings === false,
     },
     rows,
     fileAccountNumber: rows.find((row) => row.accountNumber !== null)?.accountNumber ?? null,
@@ -787,10 +854,12 @@ export type CommittedUpload = {
  *
  * - a closed account, in `setBalance`'s words — closed while the draft sat open
  * - a posted account id disagreeing with the draft's — a stale or forged form
- * - the account-number guard: a mapped account-number column disagreeing with
- *   the number recorded on the account refuses naming both. This is the
- *   silent-collision failure §5.1 made accounts first-class to avoid, caught
- *   at the moment it would happen; the number is a guard, never a selector
+ * - the account-number guard, both halves naming both numbers: a file whose
+ *   own rows disagree about the number is not a statement of one account, and
+ *   a mapped account-number column disagreeing with the number recorded on
+ *   the account is the silent-collision failure §5.1 made accounts
+ *   first-class to avoid, caught at the moment it would happen; the number is
+ *   a guard, never a selector
  * - the as-of date, validated by `recordedDate` when the file did not date
  *   itself. When it did, the file's date is used and a posted one is not
  *   consulted — the review renders no control in that case, so a date can only
@@ -841,6 +910,23 @@ export async function commitUpload(
   }
 
   const { diff, rows, fileAccountNumber } = await assembleDiff(draft, db);
+
+  // The intra-file half of the account-number guard: a file carrying two
+  // different numbers is not a statement of one account, whatever number the
+  // account has recorded — refused naming both, never resolved by picking
+  // one, the same shape as the parser's as-of disagreement.
+  const numbers = rows.flatMap((row) =>
+    row.accountNumber !== null ? [row.accountNumber] : [],
+  );
+  const firstNumber = numbers[0];
+  const differingNumber = numbers.find((number) => number !== firstNumber);
+  if (firstNumber !== undefined && differingNumber !== undefined) {
+    throw ValidationError.form(
+      `This file says it describes account "${firstNumber}" on one row and ` +
+        `"${differingNumber}" on another, and a statement describes one account. ` +
+        "Check which account this export belongs to — nothing was recorded.",
+    );
+  }
 
   // The account-number guard (§9.12 of the brief: a guard, never a selector).
   if (draft.accountNumber !== null) {
@@ -974,6 +1060,12 @@ export type UploadReceipt = {
   /** True when the set has no predecessor: the sentence reads "14 added". */
   firstStatement: boolean;
   counts: { added: number; updated: number; unchanged: number; removed: number };
+  /**
+   * How many positions the recorded set holds — the receipt's closing
+   * "now holds N positions" (brief §6.5), counted from the set's own rows so
+   * a hand-typed parameter can only ever describe what is stored.
+   */
+  holdingCount: number;
 };
 
 /**
@@ -1042,9 +1134,11 @@ export async function uploadReceipt(
   let added = 0;
   let updated = 0;
   let unchanged = 0;
+  let holdingCount = 0;
 
   for (const row of holdingRows) {
     if (row.position_set_id !== set.id) continue;
+    holdingCount += 1;
     const prior = before.get(row.instrument_id);
     if (prior === undefined) {
       added += 1;
@@ -1067,5 +1161,6 @@ export async function uploadReceipt(
     filename: set.source_filename,
     firstStatement: predecessorId === null,
     counts: { added, updated, unchanged, removed: before.size },
+    holdingCount,
   };
 }

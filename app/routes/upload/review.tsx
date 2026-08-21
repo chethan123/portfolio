@@ -40,13 +40,11 @@ export async function loader({ params }: Route.LoaderArgs) {
       steps: {
         current: 4,
         draftId: diff.draftId,
-        // Whether this flow's instruments step had anything to do is not
-        // recoverable here: an alias, once written, does not say which draft
-        // wrote it. The entry therefore stays a link — its target redirects
-        // straight back to review when there is nothing to resolve, the same
-        // harmless bounce the index route performs — rather than guessing at
-        // the dimmed "· none" state.
-        instrumentsSkipped: false,
+        // The columns step wrote down whether this draft's file raised any
+        // first sighting — the one moment the answer existed, since an alias,
+        // once written, does not say which draft wrote it. The strip dims
+        // "3 New instruments · none" off that bit (brief §2.1, §7.5).
+        instrumentsSkipped: diff.instrumentsSkipped,
       } satisfies UploadStepsData,
       diff,
       // Today in UTC, from the server, so the box does not open on a date the

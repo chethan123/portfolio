@@ -118,10 +118,21 @@ describe("normaliseFigure", () => {
 
   it("removes thousands separators and keeps the decimal point", () => {
     expect(figure("1,234.56")).toBe("1234.56");
+    expect(figure("1,234,567")).toBe("1234567");
+    expect(figure("$1,234.56")).toBe("1234.56");
     // U+00A0 is what a copy out of a rendered statement carries; U+2009 is the
     // thin space some brokerages group thousands with.
     expect(figure("1 500")).toBe("1500");
     expect(figure("1 234.5")).toBe("1234.5");
+  });
+
+  it("refuses a separator that does not group thousands, never guessing", () => {
+    // Every one of these has a reading a thousandfold away from the naive
+    // strip — European decimals, a lakh grouping, a currency mark inside the
+    // digits. A refusal is named to its row; a misread is silent.
+    for (const cell of ["1.234,56", "1 234,56", "12,34", "1,23,456", "12$34"]) {
+      expect(normaliseFigure(cell)).toEqual({ kind: "unparseable" });
+    }
   });
 
   it("removes a leading currency symbol and surrounding whitespace", () => {

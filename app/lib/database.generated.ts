@@ -143,6 +143,7 @@ export interface UploadDraft {
   as_of_date: string | null;
   created_at: Generated<Timestamp>;
   filename: string;
+  had_first_sightings: boolean | null;
   id: Generated<Int8>;
   mapping: Json | null;
   raw_file: Buffer;

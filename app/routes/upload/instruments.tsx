@@ -11,15 +11,12 @@ import {
   resolutionFieldsAt,
   resolutionScreen,
   resolveAll,
-  unresolvedStrings,
+  sameRawStrings,
 } from "~/lib/instrument-resolution.server";
-import { readCsv } from "~/lib/csv";
 import { formatQuantity } from "~/lib/holdings-view";
-import { parseStatement, statementMapping } from "~/lib/statement";
-import { requireDraft, type UploadDraft } from "~/lib/uploads.server";
+import { parseDraft, requireDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
-import type { ParsedStatement } from "~/lib/statement";
 import type { Route } from "./+types/instruments";
 
 /**
@@ -48,54 +45,36 @@ const ASSET_CLASS_OPTIONS = [
   { value: "other", label: "Other" },
 ] as const;
 
-/**
- * The draft's file, parsed through its saved mapping — or null when the
- * columns step has not genuinely been passed, in which case the caller
- * redirects there: a resolution screen cannot ask questions a mapping has
- * not raised.
- */
-function parseDraftFile(
-  draft: UploadDraft,
-): { parsed: ParsedStatement; nameColumn: string | null } | null {
-  const saved = statementMapping.safeParse(draft.mapping);
-  if (!saved.success) return null;
-
-  // The mapping's own delimiter, never a second sniff: re-reading the same
-  // bytes must not depend on the sniff reaching the same verdict twice.
-  const { rows } = readCsv(draft.bytes, saved.data.delimiter);
-  const parsed = parseStatement(rows, saved.data);
-
-  // A saved mapping only lands after a clean parse, so problems here mean
-  // the stored row predates a rule — remapping is the fix, and columns is
-  // where remapping lives.
-  if (parsed.problems.length > 0) return null;
-
-  return { parsed, nameColumn: saved.data.columns.name ?? null };
-}
-
 export async function loader({ params }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
-    const file = parseDraftFile(draft);
-    if (file === null) return redirect(`/upload/${draft.id}/columns`);
 
-    const screen = await resolutionScreen(file.parsed.positions);
+    // `parseDraft` owns the resume rule: a mapping that no longer parses
+    // clean bounces to columns — a resolution screen cannot ask questions a
+    // mapping has not raised — and a file with nothing unresolved is skipped
+    // by redirect, never an empty screen: a step with nothing to do would
+    // charge a click for no decision (brief §7.5).
+    const result = await parseDraft(draft);
+    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
+    if (result.step === null) return redirect(`/upload/${draft.id}/review`);
 
-    // Skipped by redirect, never an empty screen: a step with nothing to do
-    // would charge a click for no decision (brief §7.5).
+    const screen = await resolutionScreen(result.parsed.positions);
+
+    // Everything resolved between the two reads — a concurrent draft's
+    // submit — is the same skip the redirect above performs.
     if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review`);
 
     return {
       steps: {
         current: 3,
         draftId: draft.id,
-        instrumentsSkipped: false,
+        instrumentsSkipped: draft.hadFirstSightings === false,
       } satisfies UploadStepsData,
       screen,
       // The caption the context line names the file's own name column by —
       // "Description: Vanguard Total International Stock ETF" — when one is
       // mapped.
-      nameColumn: file.nameColumn,
+      nameColumn: result.mapping.columns.name ?? null,
       // The sentinel rides down with the data, because the route's component
       // cannot import a `.server` module (the columns screen's precedent).
       newClassification: NEW_CLASSIFICATION,
@@ -111,28 +90,31 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   try {
     const draft = await requireDraft(params.draftId);
-    const file = parseDraftFile(draft);
-    if (file === null) return redirect(`/upload/${draft.id}/columns`);
-
-    const unresolved = await unresolvedStrings(
-      file.parsed.positions.map((position) => position.instrument),
-    );
+    const result = await parseDraft(draft);
+    if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
 
     // A double submit — two tabs, the back button — finds everything already
     // resolved and simply moves on, exactly as the loader would have.
-    if (unresolved.length === 0) return redirect(`/upload/${draft.id}/review`);
+    if (result.step === null) return redirect(`/upload/${draft.id}/review`);
+
+    const { unresolved } = result;
 
     // The posted answers pair with the current unresolved strings by index,
     // and each group carries its raw string in a hidden field so a stale
     // form — another draft resolved one of these strings while this page sat
-    // open — cannot land an answer on the wrong string.
-    if (unresolved.some((raw, index) => values[`raw-${index}`] !== raw)) {
+    // open — cannot land an answer on the wrong string. Compared through
+    // `sameRawStrings`, because the browser rewrites a multi-line cell's
+    // line endings to CRLF on the way through the hidden field.
+    if (unresolved.some((raw, index) => !sameRawStrings(values[`raw-${index}`] ?? "", raw))) {
       throw ValidationError.form(
         "The file's first sightings changed while this page was open — " +
           "check the answers below and save again.",
       );
     }
 
+    // `raw` is the draft's own parsed string, never the posted hidden-field
+    // copy — the alias must store the bytes the file wrote, and the copy may
+    // have been CRLF-mangled by the form round trip.
     await resolveAll(
       unresolved.map((raw, index) => ({ raw, fields: resolutionFieldsAt(values, index) })),
     );
