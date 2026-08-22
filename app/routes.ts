@@ -41,6 +41,10 @@ export default [
     route("people", "routes/settings/people.tsx"),
     route("accounts", "routes/settings/accounts.tsx"),
     route("accounts/:accountId", "routes/settings/account.tsx"),
+    // The one preference in an application whose settings are otherwise all
+    // domain rows: the capital gains rate the Analysis screen estimates with.
+    // `0005_app_setting.sql` argues why it is not an environment variable.
+    route("tax", "routes/settings/tax.tsx"),
   ]),
 
   // The optional login gate's one page (DESIGN.md §10). It renders only while

@@ -38,6 +38,11 @@ export interface Account {
   tax_treatment: string;
 }
 
+export interface AppSetting {
+  capital_gains_rate: Generated<Numeric>;
+  id: Generated<boolean>;
+}
+
 export interface Classification {
   asset_class: string;
   id: Generated<Int8>;
@@ -151,6 +156,7 @@ export interface UploadDraft {
 
 export interface DB {
   account: Account;
+  app_setting: AppSetting;
   classification: Classification;
   column_mapping: ColumnMapping;
   holding: Holding;

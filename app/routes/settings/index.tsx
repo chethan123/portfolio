@@ -40,6 +40,14 @@ export default function SettingsIndex() {
               treatment, and a closing date when one stops being used.
             </dd>
 
+            <dt>
+              <Link to="/settings/tax">Tax</Link>
+            </dt>
+            <dd>
+              The capital gains rate the Analysis screen uses to estimate what settling an
+              unrealized gain in a taxable account would cost.
+            </dd>
+
             <dt>Classifications, Instruments and History</dt>
             <dd>
               Asset labels, ticker and manual-price management, and the hand-typed net worth

@@ -22,7 +22,9 @@ import {
   allocationByAccountKind,
   allocationByAssetClass,
   allocationByPerson,
+  formatRate,
   sharePercent,
+  unrealizedByAssetType,
 } from "~/lib/allocation";
 import { formatPercent } from "~/lib/format";
 
@@ -49,6 +51,7 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
     instrumentId: String((sequence += 1)),
     symbol: "VTI",
     instrumentName: "Vanguard Total Stock Market ETF",
+    quoteType: "ETF",
     classification: "US equity",
     assetClass: "equity",
     quantity: "1.00000000",
@@ -335,5 +338,193 @@ describe("sharePercent", () => {
     ]);
 
     expect(formatPercent(sharePercent(equity?.share ?? "0"))).toBe("+80.0%");
+  });
+});
+
+/**
+ * The fourth cut: unrealized gains by asset type, and the tax a taxable one
+ * would attract (DESIGN.md §4.5, §8.1).
+ *
+ * The rate is passed as a percentage string throughout, the way the column
+ * stores it and the way the screen prints it, so these tests would fail if
+ * anything on the path quietly started treating it as a fraction.
+ *
+ * What is pinned beyond the grouping: that a gain in a tax-exempt account stays
+ * in the table and out of the tax; that a bucket nobody recorded a cost basis
+ * for is an em dash rather than $0.00; and that the tax arithmetic is exact on
+ * the digits, including at the half where a float rounds the other way.
+ */
+const RATE = "23.800000";
+
+describe("unrealized gains by asset type", () => {
+  it("splits the provider's vocabulary into individual stocks and funds", () => {
+    const { rows } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "1000.0000" }),
+        holding({ quoteType: "ETF", unrealized: "500.0000" }),
+        holding({ quoteType: "MUTUALFUND", unrealized: "250.0000" }),
+      ],
+      RATE,
+    );
+
+    expect(rows.map((row) => [row.key, row.unrealized])).toEqual([
+      ["stocks", "1000.0000"],
+      ["funds", "750.0000"],
+    ]);
+  });
+
+  it("matches a quote type however the provider cased or padded it", () => {
+    const { rows } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "equity", unrealized: "10.0000" }),
+        holding({ quoteType: " ETF ", unrealized: "20.0000" }),
+      ],
+      RATE,
+    );
+
+    expect(rows.map((row) => [row.key, row.unrealized])).toEqual([
+      ["stocks", "10.0000"],
+      ["funds", "20.0000"],
+    ]);
+  });
+
+  it("files cash, a liability and an unquoted trust under the last row rather than dropping them", () => {
+    // The seeded USD instrument every bank balance and every loan is a holding
+    // of, and a workplace-plan trust that no provider quotes.
+    const { rows, total } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "1000.0000" }),
+        holding({ quoteType: "CURRENCY", unrealized: "0.0000" }),
+        holding({ quoteType: null, unrealized: "40.0000" }),
+        holding({ quoteType: "CRYPTOCURRENCY", unrealized: "60.0000" }),
+      ],
+      RATE,
+    );
+
+    expect(rows.map((row) => [row.key, row.unrealized])).toEqual([
+      ["stocks", "1000.0000"],
+      ["other", "100.0000"],
+    ]);
+    // The point of keeping them: the table still totals the whole portfolio.
+    expect(total?.unrealized).toBe("1100.0000");
+  });
+
+  it("drops a row nothing is in, rather than showing an empty one", () => {
+    const { rows } = unrealizedByAssetType([holding({ quoteType: "EQUITY" })], RATE);
+
+    expect(rows.map((row) => row.key)).toEqual(["stocks"]);
+  });
+
+  it("has no total at all when there are no holdings", () => {
+    expect(unrealizedByAssetType([], RATE)).toEqual({ rows: [], total: null });
+  });
+
+  it("taxes a gain in a taxable account and leaves a tax-exempt one alone", () => {
+    const { rows, total } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", taxTreatment: "taxable", unrealized: "1000.0000" }),
+        holding({ quoteType: "EQUITY", taxTreatment: "tax_free", unrealized: "4000.0000" }),
+        holding({ quoteType: "EQUITY", taxTreatment: "tax_deferred", unrealized: "5000.0000" }),
+      ],
+      RATE,
+    );
+
+    // The gain is the whole $10,000; only the taxable $1,000 is taxed.
+    expect(rows[0]?.unrealized).toBe("10000.0000");
+    expect(rows[0]?.taxable).toBe("1000.0000");
+    expect(rows[0]?.tax).toBe("238.0000");
+    expect(total?.tax).toBe("238.0000");
+  });
+
+  it("owes nothing on a taxable position at a loss, rather than owing a negative", () => {
+    const { rows } = unrealizedByAssetType(
+      [holding({ quoteType: "EQUITY", unrealized: "-1000.0000" })],
+      RATE,
+    );
+
+    expect(rows[0]?.unrealized).toBe("-1000.0000");
+    expect(rows[0]?.taxable).toBe("-1000.0000");
+    expect(rows[0]?.tax).toBeNull();
+  });
+
+  it("reports a bucket with no cost basis as unknown, never as zero", () => {
+    const { rows, total } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "1000.0000" }),
+        holding({ quoteType: "ETF", unrealized: null }),
+        holding({ quoteType: "ETF", unrealized: null }),
+      ],
+      RATE,
+    );
+
+    expect(rows[1]?.unrealized).toBeNull();
+    expect(rows[1]?.tax).toBeNull();
+    expect(rows[1]?.coverage).toEqual({ known: 0, total: 2 });
+    // A row nobody can compute does not drag the total to unknown.
+    expect(total?.unrealized).toBe("1000.0000");
+    expect(total?.coverage).toEqual({ known: 1, total: 3 });
+  });
+
+  it("counts an uncomputable holding in coverage while leaving it out of the sum", () => {
+    const { rows } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "1000.0000" }),
+        holding({ quoteType: "EQUITY", unrealized: null }),
+      ],
+      RATE,
+    );
+
+    expect(rows[0]?.unrealized).toBe("1000.0000");
+    expect(rows[0]?.coverage).toEqual({ known: 1, total: 2 });
+  });
+
+  it("totals the tax from the rows, so the column adds up on screen", () => {
+    const { rows, total } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "100000.0000" }),
+        holding({ quoteType: "ETF", unrealized: "-40000.0000" }),
+      ],
+      RATE,
+    );
+
+    expect(rows.map((row) => row.tax)).toEqual(["23800.0000", null]);
+    // Not 23.8% of the netted $60,000 — a total smaller than the row above it
+    // reads as an arithmetic fault, and the screen names the limitation
+    // instead.
+    expect(total?.tax).toBe("23800.0000");
+  });
+
+  it("multiplies exactly, including where a float would not", () => {
+    const cases: ReadonlyArray<[string, string, string]> = [
+      // A third of a cent each way: half rounds away from zero, matching
+      // `format.ts`, and neither drifts.
+      ["0.0001", "50", "0.0001"],
+      ["0.0001", "49", "0.0000"],
+      // The classic float: 0.1 + 0.2 territory, done on digits instead.
+      ["1234567.8900", "23.8", "293827.1578"],
+      // A rate is allowed six places, and all six count — and the seventh,
+      // which is the half, rounds away from zero rather than truncating.
+      ["1000.0000", "23.812345", "238.1235"],
+      ["100.0000", "0", "0.0000"],
+    ];
+
+    for (const [gain, rate, tax] of cases) {
+      const { rows } = unrealizedByAssetType(
+        [holding({ quoteType: "EQUITY", unrealized: gain })],
+        rate,
+      );
+
+      expect([gain, rate, rows[0]?.tax]).toEqual([gain, rate, tax]);
+    }
+  });
+});
+
+describe("formatRate", () => {
+  it("prints a stored rate the way the panel heading says it", () => {
+    expect(formatRate("23.800000")).toBe("23.8%");
+    // One decimal place, like every other percentage on the screens, and no
+    // leading plus: a rate is not a movement.
+    expect(formatRate("0.000000")).toBe("0.0%");
+    expect(formatRate("100.000000")).toBe("100.0%");
   });
 });

@@ -14,6 +14,7 @@ import { NavLink, Outlet } from "react-router";
 const TABS = [
   { to: "/settings/people", label: "People" },
   { to: "/settings/accounts", label: "Accounts" },
+  { to: "/settings/tax", label: "Tax" },
 ] as const;
 
 export default function SettingsLayout() {
