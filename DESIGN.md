@@ -640,8 +640,9 @@ routing here, so it is not needed.
 
 | Area | Decision |
 |---|---|
-| **Packaging** | Docker Compose: app + Postgres. All configuration via environment variables. |
-| **TLS** | The app serves plain HTTP. TLS termination is the operator's reverse proxy — their certs, their choice. The app never manages certificates. |
+| **Packaging** | Docker Compose: Caddy + app + Postgres. All configuration via environment variables. |
+| **Ingress** | A bundled Caddy container is the only service that publishes a port. The app and the database are reachable only on the compose network, so the app's forwarded-header trust is never extended to whoever can reach the host. |
+| **TLS** | **Not configured yet.** The app serves plain HTTP and never manages certificates; terminating TLS is Caddy's job once it is set up, either by giving the site block a real hostname or by fronting Caddy with the operator's own proxy. |
 | **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. An instance served over plain HTTP at a LAN IP **cannot install as a PWA on a phone**. This is a deployment constraint to document, not something the app can work around. |
 | **Auth** | Optional. Setting `AUTH_PASSWORD` enables a login gate — one middleware, one cookie, one login page. Unset means no auth, with a persistent warning banner in the UI. |
 | **Job scheduler** | In-process, inside the app container. One process to deploy, one place to read logs. Trade-off: a restart mid-session misses a poll until the next tick — acceptable at 15-minute granularity. |
@@ -716,9 +717,17 @@ Migrations must be idempotent so a restart is always safe.
 freely, and backups have exactly one target (§10, `pg_dump`). Uploaded CSVs are retained in
 Postgres rather than on disk (§5.2) specifically to preserve this property.
 
-**Reverse proxy.** The app listens on plain HTTP and trusts `X-Forwarded-*` headers. TLS, the
-certificate lifecycle, and any external hostname are the operator's concern. Note the PWA
-consequence in §10: without HTTPS in front, phones cannot install it.
+**Reverse proxy.** Ingress runs through the bundled `caddy` service, configured by a `Caddyfile` at
+the repository root. It is the only container that publishes a port, which is what keeps the app off
+the host's network — the app listens on plain HTTP and trusts `X-Forwarded-*`, and that trust is
+only sound while the set of things that can connect to it is the proxy alone. Caddy sets those
+headers itself.
+
+TLS is deliberately not configured yet, so what the proxy currently buys is topology, not
+confidentiality. The certificate lifecycle and any external hostname remain the operator's concern:
+either name a real host in the `Caddyfile` and let Caddy issue for it, or front Caddy with an
+existing TLS-terminating proxy. Note the PWA consequence in §10: until one of those is done, phones
+cannot install it.
 
 ---
 
