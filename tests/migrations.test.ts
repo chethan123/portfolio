@@ -284,6 +284,35 @@ describe("the schema's refusals", () => {
       `),
     ).toBe("23505");
   });
+
+  it("refuses a second row of settings", async () => {
+    // 23505 unique_violation, off the boolean primary key constrained to true:
+    // "which row is the settings" is a question the schema does not allow to
+    // have two answers.
+    expect(await errorCodeFrom(`insert into app_setting default values;`)).toBe("23505");
+  });
+
+  it("refuses a capital gains rate outside 0 to 100", async () => {
+    // 23514 check_violation. A negative rate is not a rate, and a rate above
+    // 100% would report a tax larger than the gain it is on.
+    expect(
+      await errorCodeFrom(`update app_setting set capital_gains_rate = -1;`),
+    ).toBe("23514");
+    expect(
+      await errorCodeFrom(`update app_setting set capital_gains_rate = 100.000001;`),
+    ).toBe("23514");
+  });
+
+  // Not a refusal, and deliberately here anyway: a check constraint is only
+  // as good as the values it lets through, and the pair reads as one rule.
+  it("allows the ends of that range", async () => {
+    expect(
+      await errorCodeFrom(`update app_setting set capital_gains_rate = 0;`),
+    ).toBeNull();
+    expect(
+      await errorCodeFrom(`update app_setting set capital_gains_rate = 100;`),
+    ).toBeNull();
+  });
 });
 
 describe("the schema's nullability", () => {

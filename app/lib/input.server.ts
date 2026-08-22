@@ -15,6 +15,8 @@
  */
 import { z } from "zod";
 
+import { SHARE_SCALE, compareDecimal } from "./money.ts";
+
 /**
  * The field name a message belongs to when it belongs to no single field —
  * "this person still owns two accounts" is about the submission, not about a
@@ -370,3 +372,46 @@ export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
     .transform((value) => (value === "" ? null : value))
     .nullish()
     .transform((value) => value ?? null);
+
+/**
+ * A tax rate, typed as a percentage — `23.8`, not `0.238`.
+ *
+ * A percentage is what a person says out loud, what the form asks for and what
+ * the panel it feeds prints beside its column heading, so it is what the field
+ * takes and what the column stores. The one conversion to a multiplier lives
+ * where the multiplying happens, rather than at every boundary this figure
+ * crosses.
+ *
+ * `bareDecimal` again, so `23.8%` pasted out of a tax table is the same figure
+ * as `23.8` typed by hand — the sign is the only generosity withheld, because a
+ * negative rate is not a rate.
+ *
+ * **No `Number`.** The output is the digits, like every other figure that ends
+ * up multiplying money (§4.1).
+ *
+ * @param label how the rate is named in a refusal, e.g. "A tax rate".
+ * @param decimals places allowed after the point. Defaults to the share scale,
+ *        which is what the column stores and finer than anyone will type.
+ */
+export const percentRate = (label: string, decimals = SHARE_SCALE) =>
+  z
+    .string({ message: `${label} is required.` })
+    .trim()
+    .transform((value) => bareDecimal(value.replace(/%$/, "")))
+    .superRefine((value, ctx) => {
+      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
+
+      if (value === "") {
+        refuse(`${label} is required.`);
+      } else if (/^[-−]/.test(value)) {
+        refuse(`${label} cannot be negative.`);
+      } else if (!/^\d+(\.\d+)?$/.test(value)) {
+        refuse(`${label} must be a percentage, like 23.8.`);
+      } else if ((value.split(".")[1] ?? "").length > decimals) {
+        refuse(`${label} takes at most ${decimals} decimal places.`);
+      } else if (compareDecimal(value, "100", decimals) > 0) {
+        // Compared on the digits rather than through `Number(value) > 100`,
+        // which is the same float this module keeps every other figure out of.
+        refuse(`${label} cannot be more than 100%.`);
+      }
+    });

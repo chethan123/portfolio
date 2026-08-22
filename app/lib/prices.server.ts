@@ -199,6 +199,7 @@ export async function refreshQuotes(
 
       for (const instrument of matches) {
         await writeQuote(trx, instrument.id, quote);
+        await writeQuoteType(trx, instrument.id, quote);
         await writeDailyClose(trx, instrument.id, quote, marketTimeZone);
         pricedIds.add(instrument.id);
         closes += 1;
@@ -265,6 +266,42 @@ async function writeQuote(
         is_stale: (builder) => builder.ref("excluded.is_stale"),
       }),
     )
+    .execute();
+}
+
+/**
+ * What the provider calls the instrument, kept current on the instrument row.
+ *
+ * The column is written at creation (`instrument-resolution.server.ts`) and
+ * refreshed here, which is what makes it true of instruments created before it
+ * was written at all: every feed instrument passes through this loop on the
+ * next poll. Without that, the Analysis screen's stocks-versus-funds split
+ * (§4.4) would be right only for instruments added after the column started
+ * being filled in, and every older holding would sit in the catch-all row
+ * looking like a fault in the panel rather than an empty column.
+ *
+ * **Only ever set from something the provider actually said.** A quote that
+ * omits the field leaves the stored value alone rather than nulling it: an
+ * absent field is the provider being terse, not the instrument changing into
+ * something unclassifiable. A changed value is written, because that is the
+ * provider correcting itself — a fund reclassified, a ticker reused — and the
+ * column is its vocabulary to define.
+ *
+ * `is distinct from` rather than `<>`: a stored null must count as a change, and
+ * `<>` answers null to that comparison, which updates nothing.
+ */
+async function writeQuoteType(
+  db: Kysely<Database>,
+  instrumentId: string,
+  quote: ProviderQuote,
+): Promise<void> {
+  if (quote.quoteType === null) return;
+
+  await db
+    .updateTable("instrument")
+    .set({ quote_type: quote.quoteType })
+    .where("id", "=", instrumentId)
+    .where(sql<boolean>`quote_type is distinct from ${quote.quoteType}`)
     .execute();
 }
 

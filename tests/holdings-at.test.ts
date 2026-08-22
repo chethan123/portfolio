@@ -579,6 +579,7 @@ describe("the shape a past date returns", () => {
             instrumentId: vti.id,
             symbol: "VTI",
             instrumentName: "Vanguard Total Stock Market ETF",
+            quoteType: "ETF",
             classification: "Total stock market (as of)",
             assetClass: "equity",
             quantity: "100.00000000",

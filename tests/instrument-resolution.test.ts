@@ -28,14 +28,20 @@ import type { ProbeSymbol } from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
 
-/** A probe that answers `ok` and counts how often it was asked. */
-function okProbe(): { probe: ProbeSymbol; calls: string[] } {
+/**
+ * A probe that answers `ok` and counts how often it was asked.
+ *
+ * `quoteType` is what the provider would have said, because the created row
+ * stores it (§4.4) — a stub answering null here would pass while telling the
+ * screen every instrument is unclassifiable.
+ */
+function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbol; calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
     probe: async (symbol) => {
       calls.push(symbol);
-      return { status: "ok" };
+      return { status: "ok", quoteType };
     },
   };
 }
@@ -138,6 +144,42 @@ describe("resolveAll — pointing at an existing instrument", () => {
 
 describe("resolveAll — creating an instrument", () => {
   it(
+    "stores what the provider calls the instrument",
+    withDatabase(async ({ db }) => {
+      const { probe } = okProbe("ETF");
+      await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
+
+      const created = await db
+        .selectFrom("instrument")
+        .select("quote_type")
+        .where("symbol", "=", "VXUS")
+        .executeTakeFirstOrThrow();
+
+      expect(created.quote_type).toBe("ETF");
+    }),
+  );
+
+  it(
+    "stores null when the provider named no type, rather than guessing one",
+    withDatabase(async ({ db }) => {
+      // A quote that came back without the field. The catch-all row that
+      // receives this on the Analysis screen is visible and counted; an
+      // instrument filed as an equity because nobody said otherwise would not
+      // be.
+      const { probe } = okProbe(null);
+      await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
+
+      const created = await db
+        .selectFrom("instrument")
+        .select("quote_type")
+        .where("symbol", "=", "VXUS")
+        .executeTakeFirstOrThrow();
+
+      expect(created.quote_type).toBeNull();
+    }),
+  );
+
+  it(
     "writes the classification first when new, then the instrument, then the alias",
     withDatabase(async ({ db }) => {
       const { probe, calls } = okProbe();
@@ -163,6 +205,10 @@ describe("resolveAll — creating an instrument", () => {
       expect(instrument.name).toBe("Vanguard Total International Stock ETF");
       expect(instrument.price_source).toBe("feed");
       expect(instrument.classification_id).toBe(classification.id);
+      // The probe already asked the provider what this is; the created row is
+      // where that answer goes, and the Analysis screen's stocks-versus-funds
+      // split is what reads it back.
+      expect(instrument.quote_type).toBe("EQUITY");
 
       const alias = await db
         .selectFrom("instrument_alias")

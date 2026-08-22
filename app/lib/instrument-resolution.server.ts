@@ -557,6 +557,18 @@ export async function resolveAll(
 
   if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
+  /**
+   * What the probe said this symbol is, for a plan that is about to become a
+   * row. Read out of the verdict cache rather than probed again: the loop above
+   * already asked once per symbol, and asking twice would be a second network
+   * call to learn something already known.
+   */
+  const quoteTypeOf = (plan: { symbol: string | null }): string | null => {
+    const verdict = plan.symbol === null ? undefined : verdicts.get(plan.symbol);
+
+    return verdict?.status === "ok" ? verdict.quoteType : null;
+  };
+
   // ---- the writes: classification first when new, then instrument, then
   // the alias — one transaction, so a fault leaves no half-remembered
   // vocabulary.
@@ -606,10 +618,16 @@ export async function resolveAll(
           .values({
             symbol: plan.symbol,
             name: plan.name,
-            // Null, honestly: `quote_type` is the provider's vocabulary and
-            // the probe deliberately answers only "does it quote, and in
-            // USD" — nothing in the application writes the column today.
-            quote_type: null,
+            // Whatever the probe was told, and null when it was told nothing —
+            // an unquoted symbol, a manually priced trust, a provider having a
+            // bad day. The Analysis screen splits stocks from funds on this
+            // column (§4.4), and the probe above is the one moment the
+            // application both learns the answer and has a row to write it on;
+            // a refresh backfills the rest (`prices.server.ts`). Null stays
+            // null rather than becoming a guess: the catch-all row that
+            // receives it is visible and counted, and an instrument filed as an
+            // equity because nobody said otherwise would not be.
+            quote_type: quoteTypeOf(plan),
             price_source: plan.priceSource,
             classification_id: classificationId,
           })

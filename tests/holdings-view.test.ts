@@ -67,6 +67,7 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
     instrumentId: String((sequence += 1)),
     symbol: "VTI",
     instrumentName: "Vanguard Total Stock Market ETF",
+    quoteType: "ETF",
     classification: "US equity",
     assetClass: "equity",
     quantity: "1.00000000",

@@ -217,6 +217,19 @@ landing in equity or bonds.
 `quote_type` arrives free from the price provider on a separate axis and will overlap slightly with
 user labels. Harmless; the user's label is what displays.
 
+**One screen is the exception, and it is bounded.** The unrealized gains panel (§8.1) splits its
+rows on `quote_type` rather than on a classification, because "individual stocks versus funds" is a fact
+about the instrument and the user's labels mix axes — a label list that aggregates by index tracked
+cannot answer it. So the provider's vocabulary does reach the screen, in exactly one place, matched
+against an explicit list of three values. The column is written from the provider's answer at the
+moment an instrument is created — the resolution step already probes the symbol, and that probe
+now carries the type back rather than discarding it — and refreshed on every poll, which is what
+makes it true of instruments created before it was written at all. The consequence is worth stating
+plainly: an instrument nobody quotes — a workplace-plan trust priced by hand, with no `quote_type`
+at all — lands in that panel's catch-all row rather than under stocks or funds. The mitigation is that the catch-all is a
+row on the table with its own figures and not a discard, so the holding is visible, it is counted,
+and the panel's total still reconciles with the portfolio behind it.
+
 ### 4.5 Tax treatment
 
 Three-way, not boolean:
@@ -230,6 +243,14 @@ Three-way, not boolean:
 An enum costs exactly what a boolean costs, and the boolean would throw away the largest distinction
 on the balance sheet: $500k in a Traditional IRA is roughly $350k of spending power, while $500k in
 a Roth is $500k. A "sheltered vs taxable" view built on a boolean hides precisely that.
+
+**The unrealized gains panel (§8.1) is the first screen that acts on the distinction rather than
+displaying it.** Only a `taxable` holding contributes to its tax column: a gain in a Roth is never
+taxed, and a gain in a Traditional 401k is taxed as ordinary income on withdrawal, which is a
+different rate on a different amount at a different time and not something a capital gains rate can
+stand in for. Both still show their gain in the column beside it, because the gain is real wherever
+it sits — what the treatment decides is only whether a tax figure is owed against it, and the panel
+says so on the page rather than leaving a reader to infer it from a blank cell.
 
 This is also the data that makes after-tax net worth modelling possible later.
 
@@ -465,13 +486,14 @@ Three rules govern how the two series coexist, so the chart never overstates wha
 
 ### 8.1 Dashboards
 
-The three daily-use, read-only pages. The management screens that create the data they read are
+The four daily-use, read-only pages. The management screens that create the data they read are
 in §8.4.
 
 | Page | Contents |
 |---|---|
 | **Overview** | Net worth headline · trend line (dashed manual prefix, solid computed) · allocation donut by asset class · assets vs liabilities |
 | **Holdings** | The workhorse. Full column set on desktop, cards on mobile. Filter by person / account / tax treatment / classification; group by any of them, with subtotals |
+| **Analysis** | Net worth cut three ways — by person, by account kind, by asset class — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment. The one view where the loan's negative yield does something interesting |
 
 A groupable, filterable Holdings table absorbs what would otherwise be four more pages — by person,
@@ -480,6 +502,18 @@ features.
 
 **Deliberately not in v1:** per-account drill-down (the filtered Holdings table already is one) and a
 dedicated tax page (a group-by plus a chart on Overview).
+
+**The tax exclusion is half reversed: there is still no tax page, but there is a tax-aware panel.**
+The argument above was that a tax view is a grouping and a chart over columns the other screens
+already carry. That holds for *sliced by tax treatment*, which Holdings does with a group-by, and it
+does not hold for *what settling a gain would cost* — no grouping of the data on screen produces a
+tax figure, because the rate is not in the data and had nowhere to be typed. So Analysis gained a
+fourth panel over the array it already loads, and Settings gained the one number it needs (§8.4).
+It stayed a panel rather than becoming a page for the reason the original sentence gives: one table
+does not earn a tab, and nothing here is a filing. What it produces is an estimate and is labelled
+one — the tax is computed per row and totalled from the rows, so a loss in one asset type is not
+netted against a gain in another the way a real return would net it, which makes the figure an
+upper bound. The panel says that on the page.
 
 **Mobile shape matters.** The full column set is a desktop grid; thirteen columns on a phone is a
 horizontal scroll nobody uses. Mobile gets a card list with a few fields visible and tap-to-expand.
@@ -595,6 +629,16 @@ mutation. Everything else that writes lives behind Settings.
 | Classifications | Create, rename, assign `asset_class` |
 | Instruments | Edit symbol, price source, classification. View aliases. **Set manual prices for CITs** |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
+| Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
+
+**Tax is the first tab that is a preference rather than a set of domain rows.** Every other tab
+creates or edits something the portfolio is made of; this one holds a single number that describes
+the household rather than its holdings. It is not an environment variable, which is where every
+other non-domain setting lives (§10.1), because the environment configures the *deployment* — where
+the database is, which timezone a close is stamped in — and a bracket is not a deployment fact. It
+is the household's own figure, it moves when their income or their state does, and the person who
+wants it changed is the one reading the number it produced rather than the one with a shell on the
+container. Behind a redeploy it would be stale in exactly the case the panel was built for.
 
 **The Instruments tab carries real weight**, which is why it isn't just inline editing on a table
 row. It's the only place that answers "which manual-priced instruments have gone stale?" — a
@@ -700,7 +744,7 @@ concurrently, and not in a separate one-shot service — a single instance means
 problem, and serving requests against a half-migrated schema is the failure this ordering prevents.
 Migrations must be idempotent so a restart is always safe.
 
-**Environment surface** — the whole configuration API, documented in `.env.example`:
+**Environment surface** — the deployment's whole configuration API, documented in `.env.example`:
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -711,6 +755,13 @@ Migrations must be idempotent so a restart is always safe.
 | `PRICE_POLL_INTERVAL_MINUTES` | no | `15` | Quote refresh cadence |
 | `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation |
 | `TZ` | no | `UTC` | Container clock; the database stores UTC regardless |
+
+**One setting is deliberately not in that table.** Environment variables remain the whole of what an
+*operator* configures — everything validated at startup, everything that needs a restart to change.
+The household's capital gains rate is none of those, so it lives in `app_setting`, a single-row
+table seeded by its own migration and edited at Settings → Tax (§8.4). There is no `CAPITAL_GAINS_RATE`
+variable and there should not be one: two places to set a figure is two places to read a different
+answer from.
 
 **Volumes.** One named volume for Postgres data. The application container is otherwise
 **stateless** — it writes nothing to its own filesystem, so it can be destroyed and recreated

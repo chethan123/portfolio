@@ -95,6 +95,7 @@ describe("the valuation rule", () => {
           instrumentId: vti.id,
           symbol: "VTI",
           instrumentName: "Vanguard Total Stock Market ETF",
+          quoteType: "ETF",
           classification: "Total stock market",
           assetClass: "equity",
           quantity: "100.00000000",

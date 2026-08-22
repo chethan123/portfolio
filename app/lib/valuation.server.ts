@@ -55,6 +55,12 @@ export type ValuedHolding = {
   /** Null for an instrument with no public ticker, such as a 401k trust. */
   symbol: string | null;
   instrumentName: string;
+  /**
+   * What the price provider calls this — `EQUITY`, `ETF`, `MUTUALFUND`, and the
+   * seeded `CURRENCY` on the USD row. Null for an instrument nobody quotes,
+   * which is a workplace-plan trust priced by hand rather than a fault.
+   */
+  quoteType: string | null;
   classification: string;
   assetClass: AssetClass;
   /** Decimal string. Negative for a liability — the sign lives here. */
@@ -115,6 +121,11 @@ function toValuedHolding(row: HoldingValuedRow): ValuedHolding {
     instrumentId: required(row.instrument_id, "instrument_id"),
     symbol: row.symbol,
     instrumentName: required(row.instrument_name, "instrument_name"),
+    // Not `required`: `instrument.quote_type` is genuinely nullable and
+    // `instrument-resolution.server.ts` writes null on purpose for a manually
+    // priced instrument. Insisting on it here would 500 the screens over a
+    // 401k trust.
+    quoteType: row.quote_type,
     classification: required(row.classification, "classification"),
     assetClass: required(row.asset_class, "asset_class") as AssetClass,
     quantity: required(row.quantity, "quantity"),

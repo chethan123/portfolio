@@ -1,6 +1,8 @@
 /**
  * The portfolio cut three ways — by person, by account kind, by asset class —
- * for the analysis screen (DESIGN.md §8.1, §8.3).
+ * for the analysis screen (DESIGN.md §8.1, §8.3), and a fourth cut of the same
+ * array beneath them: unrealized gains by asset type, with the tax a taxable
+ * one would attract. {@link unrealizedByAssetType} carries its own reasoning.
  *
  * Pure functions over the {@link ValuedHolding} rows the query layer already
  * returned. No database, deliberately, for two reasons. The screen renders its
@@ -58,7 +60,7 @@
  */
 import { ACCOUNT_KINDS, type Option } from "./account-options.ts";
 import { formatPercent } from "./format.ts";
-import { MONEY_SCALE, SHARE_SCALE, divide, render, toUnits } from "./money.ts";
+import { MONEY_SCALE, SHARE_SCALE, divide, render, sumMoney, toUnits } from "./money.ts";
 
 import type { AssetClass, Coverage, ValuedHolding } from "./valuation.server.ts";
 
@@ -231,5 +233,280 @@ export function sharePercent(share: string): string {
  * minus" is where the two of them start disagreeing.
  */
 export function formatShare(share: string): string {
-  return formatPercent(sharePercent(share)).replace(/^\+/, "");
+  return withoutLead(formatPercent(sharePercent(share)));
+}
+
+/**
+ * The plus off the front of a formatted percentage, and nothing else.
+ *
+ * `formatPercent` marks a positive because it was written for a *movement*; a
+ * share and a tax rate are neither, and a column of pluses is noise. Only the
+ * lead goes — never the sign itself, so a liability's minus and its U+2212
+ * survive, and both stay written down once.
+ */
+function withoutLead(percent: string): string {
+  return percent.replace(/^\+/, "");
+}
+
+/**
+ * The same portfolio, cut a fourth way: what has been gained but not sold, and
+ * what settling for it would cost (DESIGN.md §4.5, §8.1).
+ *
+ * Here rather than in a module of its own for the reason the header gives for
+ * the other three — it groups the same array the screen already holds, under
+ * the same coverage discipline, for the same page. A second module would also
+ * be a third copy of the twenty-field holding factory the tests build these
+ * from, and this codebase has already watched one copied helper drift.
+ *
+ * Two rules make this cut different from the three above it, and both come from
+ * §4.5's three-way tax treatment:
+ *
+ *   * **Only a taxable account can owe capital gains tax.** A gain inside an
+ *     IRA or a 401k is never taxed at this rate — a Roth withdrawal is not
+ *     taxed at all and a traditional one is taxed as ordinary income on the way
+ *     out — so those holdings keep their gain in the table and contribute
+ *     nothing to the tax beside it. Dropping their rows instead would hide the
+ *     largest distinction on the balance sheet.
+ *   * **The tax is per row, and the total is the sum of the rows.** Real tax
+ *     nets a loss in one asset type against a gain in another; this does not,
+ *     because a total that is smaller than one of the rows above it reads as an
+ *     arithmetic fault rather than as a tax rule. What it produces is therefore
+ *     an upper bound, and the screen says so.
+ */
+
+/** What the gains table splits on. */
+export type AssetTypeKey = "stocks" | "funds" | "other";
+
+/**
+ * `quote_type` is the price provider's vocabulary, not this application's
+ * (§4.4), so it is matched against an explicit list in exactly one place.
+ *
+ * Exact matches only, on the trimmed and uppercased string. `INDEX`,
+ * `CRYPTOCURRENCY` and the seeded `CURRENCY` of the USD row are absent by
+ * decision rather than by oversight: the column carries no check constraint, so
+ * a substring rule loose enough to catch `MUTUAL FUND` is loose enough to file
+ * an equity-linked note as an equity. Anything unlisted lands in `other`, where
+ * it is visible on screen rather than quietly dropped.
+ */
+const QUOTE_TYPES: ReadonlyMap<string, AssetTypeKey> = new Map([
+  ["EQUITY", "stocks"],
+  ["ETF", "funds"],
+  ["MUTUALFUND", "funds"],
+]);
+
+/**
+ * The three rows, in the order they are read.
+ *
+ * `other` is last and is deliberately a row rather than a footnote. It is never
+ * empty on a real instance: `0001`'s seed gives every bank balance and every
+ * loan the one `USD` instrument, whose `quote_type` is `CURRENCY`, and a
+ * workplace-plan trust carries no `quote_type` at all. A footnote about a
+ * permanently occupied bucket is a footnote nobody reads, and leaving those
+ * holdings out entirely would make this table the one page whose total does not
+ * reconcile with the portfolio behind it.
+ */
+const ASSET_TYPES: ReadonlyArray<{ key: AssetTypeKey; label: string }> = [
+  { key: "stocks", label: "Individual stocks" },
+  { key: "funds", label: "Funds and ETFs" },
+  { key: "other", label: "Cash, loans and everything else" },
+];
+
+/** Which row a holding belongs to. */
+function assetTypeOf(quoteType: string | null): AssetTypeKey {
+  if (quoteType === null) return "other";
+
+  return QUOTE_TYPES.get(quoteType.trim().toUpperCase()) ?? "other";
+}
+
+/**
+ * A percentage becomes a multiplier by moving the point two places, and the
+ * point is moved by dividing — so this is the scale of the denominator that
+ * does it: `100` written at {@link SHARE_SCALE}, the same scale the rate itself
+ * is read at.
+ */
+const PERCENT_BASE = 100n * 10n ** BigInt(SHARE_SCALE);
+
+/** One row of the gains table. */
+export type GainRow = {
+  key: AssetTypeKey | "total";
+  label: string;
+  /**
+   * Every account, this asset type. **Null, not zero, when no holding in the
+   * row had a gain that could be computed** — the view returns null when either
+   * the cost basis or the price is missing, so an unpriced trust counts here
+   * exactly as an untracked basis does. A group nobody can compute a gain for
+   * is not a group that gained nothing, and $0.00 is a claim (§8.2).
+   */
+  unrealized: string | null;
+  /** The part of `unrealized` sitting in a taxable account, by the same rule. */
+  taxable: string | null;
+  /**
+   * `taxable` at the household's rate — null where there is nothing to tax,
+   * which is a row with no taxable holdings and equally a row whose taxable
+   * holdings are at a net loss. A negative tax would be a refund this
+   * application is in no position to promise.
+   */
+  tax: string | null;
+  /** How many of the row's holdings the gain could actually be computed from. */
+  coverage: Coverage;
+};
+
+/**
+ * The rows of the gains table and the total beneath them.
+ *
+ * `total` is null exactly when `rows` is empty — there is no total of nothing,
+ * and a `$0.00` in that case would be the same fake figure a null amount is
+ * kept out of everywhere else.
+ */
+export type GainGroups = { rows: GainRow[]; total: GainRow | null };
+
+/** A sum of gains, or null where there was nothing to sum. */
+function figure(sum: { amount: bigint; known: number }): string | null {
+  return sum.known === 0 ? null : render(sum.amount, MONEY_SCALE);
+}
+
+/**
+ * What settling a gain would cost — or null where there is no gain to tax.
+ *
+ * Null is about the gain, not the bill: a rate of zero over a real gain returns
+ * `0.0000`, because nothing owed on something is a figure, while a loss returns
+ * null, because there is no base for a rate to be a rate of.
+ *
+ * Exact on the digits: the gain's units times the rate's units is a product of
+ * two integers, and `divide` takes the point back out of it with the same half
+ * away from zero `format.ts` rounds a displayed figure by. No `Number` at any
+ * step, because this multiplies money (§4.1).
+ *
+ * **Rounded to the cent here, not at the point it is printed.** Every other
+ * money figure in the application is stored at four places because that is what
+ * a statement gave it; this one is *computed* from a percentage, so the third
+ * and fourth places are essentially never zero. Carrying them would make the
+ * column fail to add up in the ordinary case rather than the rare one: two rows
+ * at `5391.2284` and `11459.9761` print as $5,391.23 and $11,459.98 over a
+ * total of $16,851.20, and a reader adding the two figures in front of them
+ * gets a different answer than the one underneath. Rounding where the figure is
+ * made keeps the printed column exact — the same rule `Delta` follows in
+ * classifying on the figure that will be printed rather than the one behind it.
+ * The result is still rendered at the money scale, because that is the scale
+ * every other amount on the row is at; it simply has zeros in the last two
+ * places.
+ */
+function taxOn(gain: bigint, ratePercent: string): string | null {
+  if (gain <= 0n) return null;
+
+  const cents = divide(gain * toUnits(ratePercent, SHARE_SCALE), PERCENT_BASE * 100n, 0);
+
+  return render(cents * 100n, MONEY_SCALE);
+}
+
+/**
+ * Unrealized gains by asset type, with the tax a taxable one would attract.
+ *
+ * @param holdings the array the screen already holds — no query of its own, so
+ *                 the table and the rows behind it cannot disagree.
+ * @param ratePercent the household's capital gains rate as a decimal string
+ *                    percentage, `"23.800000"` — a percentage, not a fraction,
+ *                    all the way from the column to the heading.
+ * @returns the rows that have holdings, and the total beneath them. Empty rows
+ *          are dropped; the total is present whenever any row is.
+ */
+export function unrealizedByAssetType(
+  holdings: ValuedHolding[],
+  ratePercent: string,
+): GainGroups {
+  const rows: GainRow[] = [];
+
+  for (const { key, label } of ASSET_TYPES) {
+    const inRow = holdings.filter((holding) => assetTypeOf(holding.quoteType) === key);
+    if (inRow.length === 0) continue;
+
+    const all = sumMoney(inRow.map((holding) => holding.unrealized));
+    const taxable = sumMoney(
+      inRow
+        .filter((holding) => holding.taxTreatment === "taxable")
+        .map((holding) => holding.unrealized),
+    );
+
+    rows.push({
+      key,
+      label,
+      unrealized: figure(all),
+      taxable: figure(taxable),
+      tax: taxOn(taxable.amount, ratePercent),
+      coverage: { known: all.known, total: all.total },
+    });
+  }
+
+  if (rows.length === 0) return { rows, total: null };
+
+  // Summed from the rows rather than from the holdings a second time: two
+  // passes over one array are two things that can disagree, and the tax in
+  // particular must be the sum of what is printed above it (see the header).
+  const total = rows.reduce(
+    (running, row) => ({
+      unrealized: add(running.unrealized, row.unrealized),
+      taxable: add(running.taxable, row.taxable),
+      tax: add(running.tax, row.tax),
+      coverage: {
+        known: running.coverage.known + row.coverage.known,
+        total: running.coverage.total + row.coverage.total,
+      },
+    }),
+    {
+      unrealized: null as string | null,
+      taxable: null as string | null,
+      tax: null as string | null,
+      coverage: { known: 0, total: 0 },
+    },
+  );
+
+  return { rows, total: { key: "total", label: "Total", ...total } };
+}
+
+/**
+ * Two figures added, where a null is an absence rather than a zero.
+ *
+ * Null plus a figure is that figure — a row nobody could compute does not drag
+ * the total to unknown, it simply is not in it, which is the same thing
+ * `sumMoney` does one level down. Null plus null stays null, so a total under
+ * three uncomputable rows is an em dash rather than `$0.00`.
+ */
+function add(running: string | null, next: string | null): string | null {
+  if (next === null) return running;
+  if (running === null) return next;
+
+  return render(toUnits(running, MONEY_SCALE) + toUnits(next, MONEY_SCALE), MONEY_SCALE);
+}
+
+/**
+ * `"23.800000"` → `"23.8"`, `"3.750000"` → `"3.75"`, `"15.000000"` → `"15"`.
+ *
+ * The stored rate with its padding taken off and **nothing rounded**. The
+ * column keeps six places because a rate may genuinely have them, and every
+ * other percentage on these screens goes through `formatPercent`, which rounds
+ * to one — fine for a share of a portfolio, wrong for a figure a person typed
+ * and expects to see again. A rate shown as `3.8` after `3.75` was entered is a
+ * screen disagreeing with its own database, and the settings box would write
+ * the rounded version back on the next save.
+ *
+ * Trailing zeros go because they are the column's padding rather than anything
+ * anyone typed; the digits themselves are untouched, so this is exact by doing
+ * no arithmetic at all — the same reason {@link sharePercent} exists.
+ */
+export function rateDigits(ratePercent: string): string {
+  const [whole = "0", fraction = ""] = ratePercent.trim().split(".");
+  const kept = fraction.replace(/0+$/, "");
+
+  return kept === "" ? whole : `${whole}.${kept}`;
+}
+
+/**
+ * `"23.800000"` → `"23.8%"`, for a heading.
+ *
+ * {@link rateDigits} plus the sign, rather than `formatPercent`, so the heading
+ * and the box under Settings cannot show two different rates — which is what
+ * rounding one of them and not the other would do.
+ */
+export function formatRate(ratePercent: string): string {
+  return `${rateDigits(ratePercent)}%`;
 }

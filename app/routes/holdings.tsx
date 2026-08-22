@@ -1,14 +1,9 @@
 import { Form, Link, redirect } from "react-router";
 
+import { Delta, Money } from "~/components/money-cell";
 import { EmptyState } from "~/components/empty-state";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  ChevronRightIcon,
-  EditIcon,
-  TrendingFlatIcon,
-} from "~/components/icons";
-import { formatMoney, formatSignedMoney, isNegative } from "~/lib/format";
+import { ChevronRightIcon, EditIcon } from "~/components/icons";
+import { formatMoney, isNegative } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
 import {
   DEFAULT_DIRECTION,
@@ -31,7 +26,6 @@ import {
   toSearch,
 } from "~/lib/holdings-view";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
-import { MONEY_SCALE, render, toUnits } from "~/lib/money";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
 
@@ -313,45 +307,6 @@ function columnsFor(group: DimensionId | null): ReadonlyArray<Column> {
  */
 function firstDirection(column: SortKey): SortDirection {
   return COLUMNS.find((entry) => entry.key === column)?.numeric === true ? "desc" : "asc";
-}
-
-/**
- * A gain, a loss or neither — decided on the figure that will be *printed*, not
- * on the one behind it.
- *
- * The stored value has four decimal places and the cell shows two, so an
- * unrealized gain of `-0.0040` is a loss by the digits and `$0.00` by the time
- * `formatSignedMoney` has rounded it — whose own guard then suppresses the sign
- * on a zero. Classifying before rounding therefore paints a red down-arrow
- * beside an unsigned `$0.00`, which leaves the arrow and the hue carrying a
- * claim the text does not make: exactly the "never colour alone" rule §12
- * states. Rounding first, through the same half-away-from-zero the formatter
- * uses, keeps the three channels saying one thing.
- *
- * Flat is its own case rather than being folded into gain: a position that has
- * not moved painted green with an up arrow would say it had.
- */
-function Delta({ amount }: { amount: string }) {
-  const shown = render(toUnits(amount, 2), 2);
-  const flat = toUnits(amount, 2) === 0n;
-  const down = !flat && isNegative(shown);
-  const Arrow = flat ? TrendingFlatIcon : down ? ArrowDownIcon : ArrowUpIcon;
-
-  return (
-    // Sign, then arrow, then hue — readable with no colour perception at all
-    // (§12). `--bare` because a tinted pill on every row is noise.
-    <span
-      className={`delta delta--bare ${flat ? "delta--flat" : down ? "delta--loss" : "delta--gain"}`}
-    >
-      <Arrow />
-      {formatSignedMoney(amount)}
-    </span>
-  );
-}
-
-/** A money cell: the figure, or a dash where there is nothing to show. */
-function Money({ amount }: { amount: string | null }) {
-  return <>{amount === null ? "—" : formatMoney(amount)}</>;
 }
 
 export default function Holdings({ loaderData, actionData }: Route.ComponentProps) {
