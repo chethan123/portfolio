@@ -376,11 +376,27 @@ function figure(sum: { amount: bigint; known: number }): string | null {
  * two integers, and `divide` takes the point back out of it with the same half
  * away from zero `format.ts` rounds a displayed figure by. No `Number` at any
  * step, because this multiplies money (§4.1).
+ *
+ * **Rounded to the cent here, not at the point it is printed.** Every other
+ * money figure in the application is stored at four places because that is what
+ * a statement gave it; this one is *computed* from a percentage, so the third
+ * and fourth places are essentially never zero. Carrying them would make the
+ * column fail to add up in the ordinary case rather than the rare one: two rows
+ * at `5391.2284` and `11459.9761` print as $5,391.23 and $11,459.98 over a
+ * total of $16,851.20, and a reader adding the two figures in front of them
+ * gets a different answer than the one underneath. Rounding where the figure is
+ * made keeps the printed column exact — the same rule `Delta` follows in
+ * classifying on the figure that will be printed rather than the one behind it.
+ * The result is still rendered at the money scale, because that is the scale
+ * every other amount on the row is at; it simply has zeros in the last two
+ * places.
  */
 function taxOn(gain: bigint, ratePercent: string): string | null {
   if (gain <= 0n) return null;
 
-  return render(divide(gain * toUnits(ratePercent, SHARE_SCALE), PERCENT_BASE, 0), MONEY_SCALE);
+  const cents = divide(gain * toUnits(ratePercent, SHARE_SCALE), PERCENT_BASE * 100n, 0);
+
+  return render(cents * 100n, MONEY_SCALE);
 }
 
 /**

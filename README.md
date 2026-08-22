@@ -92,7 +92,7 @@ the cost basis become boxes in their own columns, and Save records it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/analysis-dark.png">
-  <img alt="Analysis: three donut-and-table panels breaking net worth down by person, by account type and by asset class" src="docs/screenshots/analysis-light.png">
+  <img alt="Analysis: three donut-and-table panels breaking net worth down by person, by account type and by asset class, and a fourth table of unrealized gains by asset type with the tax a taxable one would attract" src="docs/screenshots/analysis-light.png">
 </picture>
 
 Three breakdowns of the same total — by person, by account type, and by asset class — each a donut

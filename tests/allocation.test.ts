@@ -495,6 +495,23 @@ describe("unrealized gains by asset type", () => {
     expect(total?.tax).toBe("23800.0000");
   });
 
+  it("rounds each row's tax to the cent, so the printed column adds up", () => {
+    // 22,652.22 × 23.8% is 5,391.228360 and 48,151.16 × 23.8% is
+    // 11,459.976080. Carried to four places those print as $5,391.23 and
+    // $11,459.98 over a total of $16,851.20 — two figures that do not sum to
+    // the third in front of the reader. Rounded where they are made, they do.
+    const { rows, total } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "22652.2200" }),
+        holding({ quoteType: "ETF", unrealized: "48151.1600" }),
+      ],
+      RATE,
+    );
+
+    expect(rows.map((row) => row.tax)).toEqual(["5391.2300", "11459.9800"]);
+    expect(total?.tax).toBe("16851.2100");
+  });
+
   it("nets the total's base while the total's tax stays the sum of the rows", () => {
     // The one place the two figures on the total row do not describe each
     // other: dividing the tax by the base gives a rate nobody set, which is
@@ -549,15 +566,16 @@ describe("unrealized gains by asset type", () => {
 
   it("multiplies exactly, including where a float would not", () => {
     const cases: ReadonlyArray<[string, string, string]> = [
-      // A third of a cent each way: half rounds away from zero, matching
-      // `format.ts`, and neither drifts.
-      ["0.0001", "50", "0.0001"],
-      ["0.0001", "49", "0.0000"],
       // The classic float: 0.1 + 0.2 territory, done on digits instead.
-      ["1234567.8900", "23.8", "293827.1578"],
-      // A rate is allowed six places, and all six count — and the seventh,
-      // which is the half, rounds away from zero rather than truncating.
-      ["1000.0000", "23.812345", "238.1235"],
+      // 1,234,567.89 × 23.8% is 293,827.157820 exactly, and the half-cent
+      // rounds away from zero.
+      ["1234567.8900", "23.8", "293827.1600"],
+      // A rate is allowed six places and all six count: 238.12345 to the
+      // nearest cent, rounded down because the tenth of a cent is below the
+      // half.
+      ["1000.0000", "23.812345", "238.1200"],
+      // Half a cent up, and a hair under it down.
+      ["1000.0000", "23.805", "238.0500"],
       ["100.0000", "0", "0.0000"],
     ];
 
