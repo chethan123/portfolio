@@ -1,7 +1,7 @@
 import { Form } from "react-router";
 
 import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
-import { formatRate } from "~/lib/allocation";
+import { rateDigits } from "~/lib/allocation";
 import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.server";
 
 import type { Route } from "./+types/tax";
@@ -70,6 +70,16 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
         </header>
 
         <Form method="post" className="panel-form">
+          {/* A refusal that names no field would otherwise be a form that did
+              nothing and said nothing. There is one field here, so this is
+              close to unreachable — which is exactly why it must not be the
+              case that goes unrendered. */}
+          {actionData?.formError ? (
+            <p className="form-error" role="alert">
+              {actionData.formError}
+            </p>
+          ) : null}
+
           <div>
             <label htmlFor="capital-gains-rate">
               Rate, as a percentage
@@ -77,13 +87,15 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
                 id="capital-gains-rate"
                 name="capitalGainsRate"
                 inputMode="decimal"
-                // What was typed survives a refusal; otherwise the stored rate
-                // is what the box shows, printed the way the panel prints it
-                // rather than as the column's six stored places.
+                // What was typed survives a refusal; otherwise the box shows
+                // the stored rate with the column's padding taken off and
+                // nothing rounded. Rounding here would round-trip: a rate saved
+                // as 3.75 would come back as 3.8 and the next save would store
+                // that, quietly changing a figure nobody edited.
                 defaultValue={
                   error
                     ? (actionData?.values.capitalGainsRate ?? "")
-                    : formatRate(capitalGainsRate).replace("%", "")
+                    : rateDigits(capitalGainsRate)
                 }
                 aria-invalid={error ? true : undefined}
                 aria-describedby="capital-gains-rate-note"

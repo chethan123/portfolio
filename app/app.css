@@ -1007,6 +1007,20 @@ a {
   }
 }
 
+/* The gains table's headings wrap; every other table's do not.
+ *
+ * `.data-table th` is `white-space: nowrap` because a wrapped column heading in
+ * a wide desktop grid reads as two columns. This table has three columns and
+ * two of the headings are two words, which on a 390px phone is the difference
+ * between fitting the canvas and scrolling it sideways — and a table that
+ * scrolls sideways is the failure §8.1 names. Wrapping the words is cheaper
+ * than abbreviating them: "Potential tax" over two lines still says what the
+ * column is, and "Tax" does not.
+ */
+.data-table--gains th {
+  white-space: normal;
+}
+
 /* --- Tables ---------------------------------------------------------------
  * No vertical rules. A hairline between rows, a header a tone up, and every
  * numeric column right-aligned so the digits stack (§13.4).

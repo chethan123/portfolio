@@ -323,7 +323,13 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
   if (total === null) return null;
 
   const partial = total.coverage.known < total.coverage.total;
-  const taxed = rows.some((row) => row.tax !== null);
+  // The netting caveat is about a loss in one row going untouched against a
+  // gain in another, so it is said only where there is a loss to net — above a
+  // table of gains it explains a subtraction nobody could have expected, and
+  // above a table taxed at 0% it would be a warning about nothing.
+  const netted =
+    rows.some((row) => row.tax !== null) &&
+    rows.some((row) => row.taxable !== null && isNegative(row.taxable));
 
   return (
     <section className="panel">
@@ -335,7 +341,7 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
       </header>
 
       <div className="data-table-scroll">
-        <table className="data-table">
+        <table className="data-table data-table--gains">
           <thead>
             <tr>
               <th scope="col">Asset type</th>
@@ -363,8 +369,8 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
           {/* Said once, on the panel, rather than as a dash in a fourth column
               on every row: the rule is about the table, not about a cell. */}
           Only a taxable account can owe capital gains tax, so a gain inside an
-          IRA or a 401k is in the first column and not in the second (§4.5).
-          {taxed
+          IRA or a 401k is in the first column and not in the second.
+          {netted
             ? " A loss in one asset type is not netted against a gain in another here, which a" +
               " real return would do — so the tax column is an upper bound."
             : null}
@@ -471,8 +477,9 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
         // account kind and an asset class, so either all three breakdowns have
         // rows or none of them do.
         <EmptyState>
-          The portfolio broken down by person, by account type and by asset class appears here
-          once a statement has been uploaded. Nothing has been uploaded to this instance yet.
+          The portfolio broken down by person, by account type and by asset class — and what it
+          has gained but not yet sold — appears here once a statement has been uploaded. Nothing
+          has been uploaded to this instance yet.
         </EmptyState>
       ) : (
         <>

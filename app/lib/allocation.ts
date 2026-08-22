@@ -458,13 +458,34 @@ function add(running: string | null, next: string | null): string | null {
 }
 
 /**
- * `"23.800000"` → `"23.8%"`.
+ * `"23.800000"` → `"23.8"`, `"3.750000"` → `"3.75"`, `"15.000000"` → `"15"`.
  *
- * The rate is already a percentage, so unlike {@link formatShare} there is no
- * point to move — but the plus `formatPercent` leads a positive with has to go
- * for the same reason, and it goes through the same helper so that "drop the
- * lead, keep the sign" stays one rule.
+ * The stored rate with its padding taken off and **nothing rounded**. The
+ * column keeps six places because a rate may genuinely have them, and every
+ * other percentage on these screens goes through `formatPercent`, which rounds
+ * to one — fine for a share of a portfolio, wrong for a figure a person typed
+ * and expects to see again. A rate shown as `3.8` after `3.75` was entered is a
+ * screen disagreeing with its own database, and the settings box would write
+ * the rounded version back on the next save.
+ *
+ * Trailing zeros go because they are the column's padding rather than anything
+ * anyone typed; the digits themselves are untouched, so this is exact by doing
+ * no arithmetic at all — the same reason {@link sharePercent} exists.
+ */
+export function rateDigits(ratePercent: string): string {
+  const [whole = "0", fraction = ""] = ratePercent.trim().split(".");
+  const kept = fraction.replace(/0+$/, "");
+
+  return kept === "" ? whole : `${whole}.${kept}`;
+}
+
+/**
+ * `"23.800000"` → `"23.8%"`, for a heading.
+ *
+ * {@link rateDigits} plus the sign, rather than `formatPercent`, so the heading
+ * and the box under Settings cannot show two different rates — which is what
+ * rounding one of them and not the other would do.
  */
 export function formatRate(ratePercent: string): string {
-  return withoutLead(formatPercent(ratePercent));
+  return `${rateDigits(ratePercent)}%`;
 }

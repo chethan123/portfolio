@@ -23,6 +23,7 @@ import {
   allocationByAssetClass,
   allocationByPerson,
   formatRate,
+  rateDigits,
   sharePercent,
   unrealizedByAssetType,
 } from "~/lib/allocation";
@@ -522,9 +523,23 @@ describe("unrealized gains by asset type", () => {
 describe("formatRate", () => {
   it("prints a stored rate the way the panel heading says it", () => {
     expect(formatRate("23.800000")).toBe("23.8%");
-    // One decimal place, like every other percentage on the screens, and no
-    // leading plus: a rate is not a movement.
-    expect(formatRate("0.000000")).toBe("0.0%");
-    expect(formatRate("100.000000")).toBe("100.0%");
+    expect(formatRate("0.000000")).toBe("0%");
+    expect(formatRate("100.000000")).toBe("100%");
+  });
+
+  it("rounds nothing, so the heading and the settings box cannot disagree", () => {
+    // `formatPercent` would make all three of these read 3.8%, 23.8% and
+    // 15.3% — a screen contradicting the figure a person typed, and a box that
+    // writes the rounded version back on the next save.
+    expect(formatRate("3.750000")).toBe("3.75%");
+    expect(formatRate("23.812345")).toBe("23.812345%");
+    expect(formatRate("15.250000")).toBe("15.25%");
+  });
+
+  it("takes off the column's padding and nothing else", () => {
+    expect(rateDigits("23.800000")).toBe("23.8");
+    expect(rateDigits("15.000000")).toBe("15");
+    expect(rateDigits("0.000000")).toBe("0");
+    expect(rateDigits("0.000100")).toBe("0.0001");
   });
 });
