@@ -144,31 +144,38 @@ describe("resolveAll — pointing at an existing instrument", () => {
 
 describe("resolveAll — creating an instrument", () => {
   it(
-    "stores what the provider calls the instrument, and null when it said nothing",
+    "stores what the provider calls the instrument",
     withDatabase(async ({ db }) => {
       const { probe } = okProbe("ETF");
       await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
 
-      const known = await db
+      const created = await db
         .selectFrom("instrument")
         .select("quote_type")
         .where("symbol", "=", "VXUS")
         .executeTakeFirstOrThrow();
-      expect(known.quote_type).toBe("ETF");
 
-      // A provider that answered without naming a type. Null rather than a
-      // guess: the catch-all row that receives it on the Analysis screen is
-      // visible and counted, and an instrument filed as an equity because
-      // nobody said otherwise would not be.
-      const { probe: silent } = okProbe(null);
-      await resolveAll([{ raw: "VEU", fields: createFields({ symbol: "VEU" }) }], { probe: silent }, db);
+      expect(created.quote_type).toBe("ETF");
+    }),
+  );
 
-      const unnamed = await db
+  it(
+    "stores null when the provider named no type, rather than guessing one",
+    withDatabase(async ({ db }) => {
+      // A quote that came back without the field. The catch-all row that
+      // receives this on the Analysis screen is visible and counted; an
+      // instrument filed as an equity because nobody said otherwise would not
+      // be.
+      const { probe } = okProbe(null);
+      await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
+
+      const created = await db
         .selectFrom("instrument")
         .select("quote_type")
-        .where("symbol", "=", "VEU")
+        .where("symbol", "=", "VXUS")
         .executeTakeFirstOrThrow();
-      expect(unnamed.quote_type).toBeNull();
+
+      expect(created.quote_type).toBeNull();
     }),
   );
 
