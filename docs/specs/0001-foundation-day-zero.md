@@ -380,9 +380,6 @@ rendered on every page.
 
 ### Container
 
-> The service count and published port below were later superseded by
-> [ADR-0001](../adr/0001-caddy-sole-ingress.md).
-
 Two services, per §10.1: `db` on `postgres:17-alpine` with a named volume and a `pg_isready`
 healthcheck and no published port; `app` built from the repo, depending on `db` being healthy,
 publishing one port, restarting unless stopped, with a `/healthz` healthcheck.

@@ -11,9 +11,6 @@ their phone refuses to install the app over plain HTTP.
 
 **Status:** ready-for-agent
 
-> The proxy is no longer the operator's to supply — superseded by
-> [ADR-0001](../../adr/0001-caddy-sole-ingress.md).
-
 - [ ] The app trusts forwarded headers, so scheme and client address are correct behind a reverse
       proxy and the auth cookie is issued appropriately
 - [ ] The app serves plain HTTP and never manages certificates; TLS is documented as the operator's

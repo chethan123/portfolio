@@ -12,9 +12,6 @@ proves the whole deployment path end to end before there is a schema to put in i
 
 **Status:** ready-for-agent
 
-> The service count and published-port criteria below were later superseded by
-> [ADR-0001](../../adr/0001-caddy-sole-ingress.md).
-
 - [ ] `docker compose up` on a fresh machine with an empty volume produces a working instance with
       no manual steps
 - [ ] Two services only: `db` on `postgres:17-alpine` and `app` built from the repo
