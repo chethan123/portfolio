@@ -303,6 +303,8 @@ describe("the schema's refusals", () => {
     ).toBe("23514");
   });
 
+  // Not a refusal, and deliberately here anyway: a check constraint is only
+  // as good as the values it lets through, and the pair reads as one rule.
   it("allows the ends of that range", async () => {
     expect(
       await errorCodeFrom(`update app_setting set capital_gains_rate = 0;`),

@@ -41,4 +41,8 @@ create table app_setting (
     check (capital_gains_rate >= 0 and capital_gains_rate <= 100)
 );
 
-insert into app_setting default values;
+-- Guarded like every seed in `0001`, though the runner's applied-filename
+-- ledger already means this file runs once: the guard is in the SQL because
+-- that is where the singleton rule is, and a seed that depends on bookkeeping
+-- elsewhere to stay singular is a seed that is only accidentally idempotent.
+insert into app_setting default values on conflict (id) do nothing;

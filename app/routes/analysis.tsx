@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 
-import { Delta } from "~/components/delta";
+import { Delta, Money } from "~/components/money-cell";
 import { EmptyState } from "~/components/empty-state";
 import {
   allocationByAccountKind,
@@ -295,17 +295,6 @@ function Breakdown({
 }
 
 /**
- * A money cell, or a dash where there is nothing to put in one.
- *
- * The dash is the whole point of the null: a row whose holdings never had a
- * cost basis recorded has an *unknown* gain, and `$0.00` would report that
- * unknown as a fact (§8.2).
- */
-function Figure({ amount }: { amount: string | null }) {
-  return <>{amount === null ? "—" : formatMoney(amount)}</>;
-}
-
-/**
  * Unrealized gains by asset type, and what settling them would cost.
  *
  * A table with no ring beside it, unlike the three panels above. A gain is
@@ -336,7 +325,7 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
       <header className="panel-header">
         <h2 className="panel-title">Unrealized gains</h2>
         <p className="panel-count">
-          Taxed at {formatRate(rate)} · <Link to="/settings/tax">change</Link>
+          Taxed at {formatRate(rate)} · <Link to="/settings/tax">change rate</Link>
         </p>
       </header>
 
@@ -369,14 +358,14 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
           {/* Said once, on the panel, rather than as a dash in a fourth column
               on every row: the rule is about the table, not about a cell. */}
           Only a taxable account can owe capital gains tax, so a gain inside an
-          IRA or a 401k is in the first column and not in the second.
+          IRA or a 401k is under Unrealized and not under Potential tax.
           {netted
             ? " A loss in one asset type is not netted against a gain in another here, which a" +
               " real return would do — so the tax column is an upper bound."
             : null}
           {partial
             ? ` Based on ${total.coverage.known} of ${total.coverage.total} holdings: the rest` +
-              " have no cost basis recorded, and a gain cannot be computed without one."
+              " have no cost basis or no price recorded, and a gain needs both."
             : null}
         </p>
       </div>
@@ -394,9 +383,10 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
  */
 function GainsRow({ row, isTotal = false }: { row: GainRow; isTotal?: boolean }) {
   // The label is a `td` on an ordinary row and a `th` on the total, which is
-  // what the three breakdown tables above already do: `.data-table th` sets a
-  // cell in uppercase because it is styling a column heading, and only
-  // `.row-total th` undoes that. An asset type set in caps would read as a
+  // what the Holdings table's `tfoot` does (`holdings.tsx`) — the breakdown
+  // tables above have no total row to have taken it from. `.data-table th` sets
+  // a cell in uppercase because it is styling a column heading, and only
+  // `.row-total th` undoes that, so an asset type set in caps would read as a
   // heading for the rows beneath it, of which there are none.
   const Label = isTotal ? "th" : "td";
 
@@ -406,8 +396,14 @@ function GainsRow({ row, isTotal = false }: { row: GainRow; isTotal?: boolean })
         {row.label}
         {/* The base the tax was taken on. Beside the label rather than in a
             column of its own, and only where it says something the tax cell
-            does not already imply. */}
-        {row.taxable !== null && row.taxable !== row.unrealized ? (
+            does not already imply.
+
+            Never on the total, where it would invite a check that fails: the
+            total's base is netted across the rows and the total's tax is the
+            sum of the un-netted row taxes, so a reader dividing one by the
+            other gets a rate nobody set. The netting is explained in words
+            under the table instead, which is where a rule belongs. */}
+        {!isTotal && row.taxable !== null && row.taxable !== row.unrealized ? (
           <span className="cell-sub">{formatMoney(row.taxable)} of it in taxable accounts</span>
         ) : null}
       </Label>
@@ -415,7 +411,7 @@ function GainsRow({ row, isTotal = false }: { row: GainRow; isTotal?: boolean })
         {row.unrealized === null ? "—" : <Delta amount={row.unrealized} />}
       </td>
       <td className="is-numeric">
-        <Figure amount={row.tax} />
+        <Money amount={row.tax} />
       </td>
     </tr>
   );

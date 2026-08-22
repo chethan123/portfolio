@@ -20,6 +20,12 @@
  * default invented here. A settings row that had gone missing and a rate of
  * zero look identical once a default is applied, and one of them is a bug worth
  * hearing about.
+ *
+ * The cost of that choice, written down rather than discovered: if the row is
+ * ever deleted by hand, both the Analysis screen and the Settings page that
+ * would repair it fail together. The repair is one statement —
+ * `insert into app_setting default values;` — and it is here because the screen
+ * that would have told you is the one that is down.
  */
 import { z } from "zod";
 

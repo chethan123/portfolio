@@ -1,6 +1,6 @@
 import { Form, Link, redirect } from "react-router";
 
-import { Delta } from "~/components/delta";
+import { Delta, Money } from "~/components/money-cell";
 import { EmptyState } from "~/components/empty-state";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
 import { formatMoney, isNegative } from "~/lib/format";
@@ -307,11 +307,6 @@ function columnsFor(group: DimensionId | null): ReadonlyArray<Column> {
  */
 function firstDirection(column: SortKey): SortDirection {
   return COLUMNS.find((entry) => entry.key === column)?.numeric === true ? "desc" : "asc";
-}
-
-/** A money cell: the figure, or a dash where there is nothing to show. */
-function Money({ amount }: { amount: string | null }) {
-  return <>{amount === null ? "—" : formatMoney(amount)}</>;
 }
 
 export default function Holdings({ loaderData, actionData }: Route.ComponentProps) {

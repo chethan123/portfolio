@@ -1,6 +1,26 @@
 import { ArrowDownIcon, ArrowUpIcon, TrendingFlatIcon } from "~/components/icons";
-import { formatSignedMoney, isNegative } from "~/lib/format";
+import { formatMoney, formatSignedMoney, isNegative } from "~/lib/format";
 import { render, toUnits } from "~/lib/money";
+
+/**
+ * The two ways a money figure goes into a table cell, kept together because
+ * both are rules about what a *missing* or *signed* figure may look like, and
+ * both are now read by more than one screen.
+ */
+
+/**
+ * A money cell, or a dash where there is nothing to put in one.
+ *
+ * The dash is the whole point of the null. An unpriced holding is not a
+ * worthless one and a gain nobody recorded a cost basis for is not a gain of
+ * zero, so `$0.00` here would report an unknown as a fact — which is the
+ * failure §8.2 refuses everywhere. Written once and imported twice for the
+ * same reason `Delta` below is: two tables deciding separately what a null
+ * looks like is two chances for one of them to decide it looks like zero.
+ */
+export function Money({ amount }: { amount: string | null }) {
+  return <>{amount === null ? "—" : formatMoney(amount)}</>;
+}
 
 /**
  * A signed money figure, said three ways at once (DESIGN.md §12).

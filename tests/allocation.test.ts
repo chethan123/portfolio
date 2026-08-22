@@ -495,6 +495,58 @@ describe("unrealized gains by asset type", () => {
     expect(total?.tax).toBe("23800.0000");
   });
 
+  it("nets the total's base while the total's tax stays the sum of the rows", () => {
+    // The one place the two figures on the total row do not describe each
+    // other: dividing the tax by the base gives a rate nobody set, which is
+    // why the screen does not print the base on that row and says the rule in
+    // words instead.
+    const { total } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "100000.0000" }),
+        holding({ quoteType: "EQUITY", taxTreatment: "tax_free", unrealized: "5000.0000" }),
+        holding({ quoteType: "ETF", unrealized: "-40000.0000" }),
+      ],
+      RATE,
+    );
+
+    expect(total?.unrealized).toBe("65000.0000");
+    expect(total?.taxable).toBe("60000.0000");
+    expect(total?.tax).toBe("23800.0000");
+  });
+
+  it("shows a gain with no tax where the taxable holdings cannot be computed", () => {
+    // Taxable holdings exist, so the row is not tax-exempt; none of them has a
+    // gain that could be computed, so there is nothing to tax. Two different
+    // absences, and neither is a zero.
+    const { rows } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", taxTreatment: "tax_free", unrealized: "1000.0000" }),
+        holding({ quoteType: "EQUITY", taxTreatment: "taxable", unrealized: null }),
+      ],
+      RATE,
+    );
+
+    expect(rows[0]?.unrealized).toBe("1000.0000");
+    expect(rows[0]?.taxable).toBeNull();
+    expect(rows[0]?.tax).toBeNull();
+  });
+
+  it("counts an unpriced holding the same way as an untracked cost basis", () => {
+    // `holding_valued` nulls `unrealized` when either side is missing, so a
+    // trust nobody quotes lands in coverage exactly as a missing basis does —
+    // which is why the screen's note names both.
+    const { rows } = unrealizedByAssetType(
+      [
+        holding({ quoteType: "EQUITY", unrealized: "500.0000" }),
+        holding({ quoteType: "EQUITY", value: null, costBasis: "800.0000", unrealized: null }),
+      ],
+      RATE,
+    );
+
+    expect(rows[0]?.unrealized).toBe("500.0000");
+    expect(rows[0]?.coverage).toEqual({ known: 1, total: 2 });
+  });
+
   it("multiplies exactly, including where a float would not", () => {
     const cases: ReadonlyArray<[string, string, string]> = [
       // A third of a cent each way: half rounds away from zero, matching

@@ -332,8 +332,10 @@ export type GainRow = {
   label: string;
   /**
    * Every account, this asset type. **Null, not zero, when no holding in the
-   * row had a cost basis recorded**: a group nobody can compute a gain for is
-   * not a group that gained nothing, and $0.00 is a claim (§8.2).
+   * row had a gain that could be computed** — the view returns null when either
+   * the cost basis or the price is missing, so an unpriced trust counts here
+   * exactly as an untracked basis does. A group nobody can compute a gain for
+   * is not a group that gained nothing, and $0.00 is a claim (§8.2).
    */
   unrealized: string | null;
   /** The part of `unrealized` sitting in a taxable account, by the same rule. */
@@ -364,8 +366,11 @@ function figure(sum: { amount: bigint; known: number }): string | null {
 }
 
 /**
- * What settling a gain would cost, in money units — or null where nothing
- * would be owed.
+ * What settling a gain would cost — or null where there is no gain to tax.
+ *
+ * Null is about the gain, not the bill: a rate of zero over a real gain returns
+ * `0.0000`, because nothing owed on something is a figure, while a loss returns
+ * null, because there is no base for a rate to be a rate of.
  *
  * Exact on the digits: the gain's units times the rate's units is a product of
  * two integers, and `divide` takes the point back out of it with the same half
