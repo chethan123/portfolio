@@ -310,7 +310,18 @@ export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise
  * create anyway and let the next refresh mark it stale.
  */
 export type SymbolProbe =
-  | { status: "ok" }
+  | {
+      status: "ok";
+      /**
+       * What the provider calls the thing — `EQUITY`, `ETF`, `MUTUALFUND` —
+       * carried out of the probe rather than discarded, because the moment a
+       * symbol is confirmed to quote is the one moment the application has this
+       * fact and an instrument row to put it on. Null when the payload omitted
+       * it, which is honest: this column is the provider's vocabulary, and
+       * "the provider did not say" is a real answer.
+       */
+      quoteType: string | null;
+    }
   | { status: "non-usd"; currency: string }
   | { status: "unavailable" };
 
@@ -360,7 +371,8 @@ export async function probeSymbol(
     // of "never heard of it".
     for (const entry of Array.isArray(raw) ? raw : []) {
       try {
-        if (toProviderQuote(entry, fetchedAt) !== null) return { status: "ok" };
+        const quote = toProviderQuote(entry, fetchedAt);
+        if (quote !== null) return { status: "ok", quoteType: quote.quoteType };
       } catch (error) {
         if (error instanceof CurrencyRefused) {
           return { status: "non-usd", currency: error.currency };

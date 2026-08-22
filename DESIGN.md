@@ -221,9 +221,12 @@ user labels. Harmless; the user's label is what displays.
 rows on `quote_type` rather than on a classification, because "individual stocks versus funds" is a fact
 about the instrument and the user's labels mix axes — a label list that aggregates by index tracked
 cannot answer it. So the provider's vocabulary does reach the screen, in exactly one place, matched
-against an explicit list of three values. The consequence is worth stating plainly: an instrument
-nobody quotes — a workplace-plan trust priced by hand, with no `quote_type` at all — lands in that
-panel's catch-all row rather than under stocks or funds. The mitigation is that the catch-all is a
+against an explicit list of three values. The column is written from the provider's answer at the
+moment an instrument is created — the resolution step already probes the symbol, and that probe
+now carries the type back rather than discarding it — and refreshed on every poll, which is what
+makes it true of instruments created before it was written at all. The consequence is worth stating
+plainly: an instrument nobody quotes — a workplace-plan trust priced by hand, with no `quote_type`
+at all — lands in that panel's catch-all row rather than under stocks or funds. The mitigation is that the catch-all is a
 row on the table with its own figures and not a discard, so the holding is visible, it is counted,
 and the panel's total still reconciles with the portfolio behind it.
 

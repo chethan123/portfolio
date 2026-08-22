@@ -490,6 +490,51 @@ describe("how fresh the prices are", () => {
   );
 
   it(
+    "backfills what the provider calls an instrument, and keeps it current",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // Created before the column was written at all, which is every
+      // instrument on an instance older than the gains panel.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed", quoteType: null });
+
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", quoteType: "ETF" })]), NEW_YORK, db);
+
+      const after = await db
+        .selectFrom("instrument")
+        .select("quote_type")
+        .where("id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+
+      // Without this the Analysis split would be right only for instruments
+      // added after the column started being filled in, and every older
+      // holding would sit in the catch-all row.
+      expect(after.quote_type).toBe("ETF");
+    }),
+  );
+
+  it(
+    "leaves the stored type alone when the provider does not say",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed", quoteType: "ETF" });
+
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", quoteType: null })]),
+        NEW_YORK,
+        db,
+      );
+
+      const after = await db
+        .selectFrom("instrument")
+        .select("quote_type")
+        .where("id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+
+      // A terse payload is the provider saying less, not the instrument
+      // becoming unclassifiable.
+      expect(after.quote_type).toBe("ETF");
+    }),
+  );
+
+  it(
     "reports nothing on an instance that holds nothing",
     withDatabase(async ({ db }) => {
       const freshness = await priceFreshness(db);

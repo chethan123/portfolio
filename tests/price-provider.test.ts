@@ -228,7 +228,20 @@ describe("probing a symbol at creation time", () => {
       ]),
     );
 
-    expect(probe).toEqual({ status: "ok" });
+    // Null rather than a guess: this payload never said what the thing is, and
+    // the column it feeds is the provider's vocabulary or nothing.
+    expect(probe).toEqual({ status: "ok", quoteType: null });
+  });
+
+  it("carries what the provider calls the instrument, for the row it creates", async () => {
+    const probe = await probeSymbol(
+      "VTI",
+      clientAnswering(async () => [
+        { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" },
+      ]),
+    );
+
+    expect(probe).toEqual({ status: "ok", quoteType: "ETF" });
   });
 
   it("carries the provider's currency when the quote is not in USD", async () => {
