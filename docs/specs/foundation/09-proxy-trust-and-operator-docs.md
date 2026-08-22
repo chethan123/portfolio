@@ -11,6 +11,12 @@ their phone refuses to install the app over plain HTTP.
 
 **Status:** ready-for-agent
 
+> **Amended after shipping.** The proxy is no longer purely the operator's to supply: a `caddy`
+> service ships in `compose.yaml` and is the only container that publishes a port, which is what
+> now keeps the app off the host's network. TLS is still not configured — terminating it is
+> Caddy's job when it is set up, so the criterion below about certificates being the operator's
+> concern holds for the certificate lifecycle but not for the proxy itself. See DESIGN.md §10.1.
+
 - [ ] The app trusts forwarded headers, so scheme and client address are correct behind a reverse
       proxy and the auth cookie is issued appropriately
 - [ ] The app serves plain HTTP and never manages certificates; TLS is documented as the operator's

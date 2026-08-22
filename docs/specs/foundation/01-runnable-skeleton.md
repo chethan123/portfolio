@@ -12,6 +12,11 @@ proves the whole deployment path end to end before there is a schema to put in i
 
 **Status:** ready-for-agent
 
+> **Amended after shipping.** Ingress now runs through a bundled `caddy` service, so two criteria
+> below no longer describe the deployment: there are three services rather than two, and `app`
+> publishes no port at all — `caddy` is the only one that does. The criteria are left as written
+> because they record what this slice was asked to build; DESIGN.md §10.1 is the current topology.
+
 - [ ] `docker compose up` on a fresh machine with an empty volume produces a working instance with
       no manual steps
 - [ ] Two services only: `db` on `postgres:17-alpine` and `app` built from the repo
