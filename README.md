@@ -96,12 +96,18 @@ the cost basis become boxes in their own columns, and Save records it.
 </picture>
 
 Three breakdowns of the same total — by person, by account type, and by asset class — each a donut
-beside the table it is drawn from.
+beside the table it is drawn from, and beneath them what has been gained and not yet sold.
 
 - **Debt is drawn as debt.** The ring paints what is owned, so the loan's row is left unfilled and
   the panel says why rather than pretending a negative is a slice.
 - **Percentages state their denominator.** A negative row's share is of gross assets, not of the
   total in the centre, and the panel says so instead of leaving you to work out which.
+- **The gains panel names a tax and calls it a ceiling.** Only a taxable account can owe capital
+  gains tax, so a gain inside an IRA is in the unrealized column and not in the one beside it. The
+  rate is the household's own, set at Settings → Tax and starting at 23.8% — 20% long-term plus the
+  3.8% net investment income tax. A loss in one asset type is not netted against a gain in another
+  the way a real return would net it, so the figure is an upper bound rather than a bill, and the
+  panel says which.
 
 ### Account detail — one account, end to end
 
@@ -232,10 +238,12 @@ healthy and applies the schema, and a bundled Caddy container fronts it on <http
 is no manual setup step and no migration to run by hand — migrations are idempotent, so restarting
 the container is always safe.
 
-Every setting is an environment variable and every one of them is documented in
+Every setting an operator has is an environment variable and every one of them is documented in
 [`.env.example`](.env.example) with its default. Copy it to `.env` only if you want to change
 something. Configuration is validated once at startup: a missing or malformed value stops the
-container immediately with a message naming the variable.
+container immediately with a message naming the variable. The one setting that is not an operator's
+is the capital gains rate the Analysis screen estimates with: it is a database row, edited at
+Settings → Tax rather than in the environment.
 
 `GET /healthz` returns 200 while the instance is genuinely serving and a non-200 when it is not —
 which includes the case where the database is reachable but a migration shipped in the image has
