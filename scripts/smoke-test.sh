@@ -13,7 +13,8 @@
 # Run from the repository root:  ./scripts/smoke-test.sh
 set -euo pipefail
 
-readonly HEALTH_URL="http://127.0.0.1/healthz"
+readonly BASE_URL="http://127.0.0.1"
+readonly HEALTH_URL="${BASE_URL}/healthz"
 readonly TIMEOUT_SECONDS=180
 
 log() { printf '\n=== %s\n' "$*"; }
@@ -168,5 +169,79 @@ printf 'app port not published\n'
 [[ "$(published_ports caddy)" == *'"HostPort":"80"'* ]] ||
   fail "caddy is not published on port 80"
 printf 'caddy published on 80\n'
+
+# --- The stack actually serves a page, not just a health check ----------------
+# Everything above proves the container is up. This proves the framework inside
+# it is: `react-router-serve` over the real build, the route manifest, and the
+# server render. The vitest suite deliberately skips all of that — it loads no
+# React Router plugin — so this is the one place it is exercised at all.
+log "Fetching a real page"
+
+page="$(curl -sS --max-time 30 --retry 10 --retry-connrefused --retry-delay 1 "$BASE_URL/" || true)"
+[[ "$page" == *'aria-label="Primary"'* ]] || fail "GET / did not render the navigation rail"
+[[ "$page" == *"Portfolio"* ]] || fail "GET / did not render the brand"
+printf 'GET / rendered a page\n'
+
+# The body, not just the status. `/healthz` is what Compose, the proxy and any
+# monitoring read, and "200 with the wrong body" is the failure they cannot see.
+health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
+[[ "$health" == *'"status":"ok"'* ]] || fail "GET /healthz body was not ok: ${health}"
+[[ "$health" == *'"migrations":"current"'* ]] ||
+  fail "GET /healthz did not report the schema current: ${health}"
+printf 'GET /healthz -> %s\n' "$health"
+
+# --- The login gate, end to end -----------------------------------------------
+# The gate is one middleware on the root route, so "every page is behind it" is
+# a property of the whole running stack rather than of the middleware function
+# that `auth.test.ts` and `root-gate.test.ts` call directly. Turning it on means
+# recreating the app container, which is why this runs last.
+log "Turning the login gate on"
+readonly TEST_PASSWORD="correct horse battery staple"
+AUTH_PASSWORD="$TEST_PASSWORD" SESSION_SECRET="smoke-test-signing-key" \
+  docker compose up -d --wait app
+wait_for_healthy
+
+# `/healthz` must stay reachable with no credentials, or monitoring goes blind
+# the moment an operator sets a password.
+expect_status 200
+
+status_of() {
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$@"
+}
+
+gated="$(status_of "$BASE_URL/holdings")"
+[[ "$gated" == "302" ]] || fail "with a password set, GET /holdings returned ${gated}, expected 302"
+
+location="$(curl -sS -o /dev/null -D - --max-time 30 "$BASE_URL/holdings" |
+  tr -d '\r' | awk 'tolower($1) == "location:" { print $2 }')"
+[[ "$location" == /login* ]] || fail "GET /holdings redirected to '${location}', expected /login"
+[[ "$location" == *"next=%2Fholdings"* || "$location" == *"next=/holdings" ]] ||
+  fail "the redirect to /login did not carry where the visitor was going: ${location}"
+printf 'GET /holdings -> 302 %s\n' "$location"
+
+readonly COOKIE_JAR="$(mktemp)"
+signed_in="$(status_of -c "$COOKIE_JAR" --data-urlencode "password=${TEST_PASSWORD}" \
+  --data-urlencode "next=/holdings" "$BASE_URL/login")"
+[[ "$signed_in" == "302" ]] || fail "POST /login with the right password returned ${signed_in}"
+# curl writes an HttpOnly cookie with a `#HttpOnly_` prefix, so the jar is also
+# where that flag can be checked — and a session cookie readable from JavaScript
+# would be the whole point of the gate given away.
+grep -qi "__portfolio_session" "$COOKIE_JAR" || fail "POST /login issued no session cookie"
+grep -qi "^#HttpOnly_.*__portfolio_session" "$COOKIE_JAR" ||
+  fail "the session cookie was not issued HttpOnly"
+printf 'POST /login -> 302 with an HttpOnly session cookie\n'
+
+after="$(status_of -b "$COOKIE_JAR" "$BASE_URL/holdings")"
+[[ "$after" == "200" ]] || fail "with the session cookie, GET /holdings returned ${after}"
+printf 'GET /holdings with the cookie -> 200\n'
+
+# A wrong password must not issue one. Same page, no cookie, no redirect.
+readonly REFUSED_JAR="$(mktemp)"
+refused="$(status_of -c "$REFUSED_JAR" --data-urlencode "password=not the password" \
+  "$BASE_URL/login")"
+[[ "$refused" == "200" ]] || fail "POST /login with a wrong password returned ${refused}"
+grep -qi "__portfolio_session" "$REFUSED_JAR" &&
+  fail "POST /login issued a session cookie for a wrong password"
+printf 'POST /login with a wrong password -> 200, no cookie\n'
 
 log "Smoke test passed"
