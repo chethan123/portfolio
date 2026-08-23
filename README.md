@@ -284,8 +284,9 @@ never been applied. It never requires authentication, so monitoring needs no cre
 The app itself is not reachable directly — only the bundled `caddy` service publishes a port, and it
 serves plain HTTP for now, with TLS termination left as a follow-up. `caddy` sets `X-Forwarded-*`,
 which the app trusts. [`docs/operating.md`](docs/operating.md) has the proxy configuration, the
-`pg_dump` backup and restore procedure, the full environment table, and why no instance installs as
-an app on a phone yet.
+`pg_dump` backup and restore procedure, the full environment table, the security posture an operator
+has to decide about, and why no instance installs as an app on a phone yet. When something is
+actually broken, [`docs/runbook.md`](docs/runbook.md) is indexed by symptom instead of by topic.
 
 Once it is running, [`docs/guide/`](docs/guide/) is the household's guide to using it — the same
 screens as above, but as instructions rather than as reasons.

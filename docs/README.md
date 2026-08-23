@@ -16,6 +16,12 @@ live in `app/`, are written to be read by the household already, and change with
 to grep the docs. Describe what a screen refuses and why; quote it only where the exact words are
 the subject, and expect to re-check that quote.
 
+A **contract** is the exception, and the difference is whether something else already fails when it
+changes. The `/healthz` response body is pinned by a test and read by machines, so quoting it is how
+an operator knows what to match on. A log line is not a contract: describe the signal and give a
+stem worth grepping for, rather than a sentence that will drift. When in doubt, ask what breaks if
+the string changes — if the answer is "only this document", describe it instead.
+
 **Name a deliberate duplication where you make it.** Some things are worth saying twice to two
 different readers. [`operating.md`](operating.md) does this for `.env.example` and says so in place.
 An unmarked second copy is a future contradiction; a marked one is a decision.
@@ -29,7 +35,8 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | a contributor finding their way around | how the code is arranged and why the seams sit where they do | user-facing behaviour |
 | [`../AGENTS.md`](../AGENTS.md) | agents working in this repo | how work here is done and judged | project documentation of any kind |
 | [`guide/`](guide/) | a family member using a running instance | how to do a thing, screen by screen and task by task | rationale, operations, anything needing a terminal |
-| [`operating.md`](operating.md) | whoever self-hosts the instance | proxying, TLS, backups, restores, environment variables, upgrades | how to read a screen |
+| [`operating.md`](operating.md) | whoever self-hosts the instance | how the deployment is put together and how to run it: installing, configuration, TLS, security posture, monitoring, backups, upgrades, growth | how to read a screen; what to do at 2am, which is the runbook's |
+| [`runbook.md`](runbook.md) | the same person, mid-incident | symptoms, in the words someone would use, with the commands that confirm and fix each | explanation — every entry links to `operating.md` for the why |
 | [`specs/`](specs/) | whoever builds the slice | approved work, before it is built | anything not agreed yet |
 | [`design/`](design/) | whoever builds the screen | UI briefs a slice is drawn from | the decision to build it — that is a spec |
 | [`research/`](research/) | whoever revisits a decision | investigation, including options that were rejected | anything approved, which is a spec |
@@ -56,6 +63,13 @@ add its row here.
   is not a zero. The README states them at the altitude of a module seam for a contributor; the
   guide states them as consequences for a household.
 - **[`operating.md`](operating.md) restates parts of `.env.example`.** Named there, in place.
+- **[`runbook.md`](runbook.md) and [`operating.md`](operating.md) cover the same failures** at
+  different moments: one indexed by symptom and read while something is broken, the other by topic
+  and read while it is not. The seam that keeps them from drifting is that the runbook explains
+  nothing — it confirms, acts, and links.
+- **[`operating.md`](operating.md) overlaps `ARCHITECTURE.md` §7.4 and §7.6** on observability and
+  security. Those sections hold the mechanism, for a contributor; `operating.md` holds the decisions
+  an operator has to make, and links rather than restating.
 
 ## Screenshots
 
