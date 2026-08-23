@@ -471,10 +471,6 @@ export async function parseDraft(
   return { step: null, parsed, mapping: saved.data };
 }
 
-/* -------------------------------------------------------------------------- */
-/*  The diff                                                                   */
-/* -------------------------------------------------------------------------- */
-
 /**
  * A review-step read over a draft that has not genuinely reached review: the
  * mapping is absent or no longer reads back through its schema, or the file
@@ -884,10 +880,6 @@ export async function diffForDraft(
   return (await assembleDiff(draft, db)).diff;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  The commit                                                                 */
-/* -------------------------------------------------------------------------- */
-
 /** The review form's fields, unvalidated — validating them is the commit's job. */
 export type CommitInput = {
   /** The statement date, only read when the file did not date itself. */
@@ -1110,10 +1102,6 @@ export async function commitUpload(
     };
   });
 }
-
-/* -------------------------------------------------------------------------- */
-/*  The receipt                                                                */
-/* -------------------------------------------------------------------------- */
 
 /** What the account page's `?uploaded=` confirmation sentence states. */
 export type UploadReceipt = {

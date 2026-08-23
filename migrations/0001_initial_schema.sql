@@ -23,15 +23,11 @@
 --     container clock (DESIGN.md §10).
 
 
--- ----------------------------------------------------------------- people ----
-
 create table person (
   id   bigint generated always as identity primary key,
   name text not null
 );
 
-
--- --------------------------------------------------------------- accounts ----
 
 -- Ownership attaches to the account as a single owner (DESIGN.md §4.2). Joint
 -- accounts are deliberately not supported; a plan holding both Traditional and
@@ -68,8 +64,6 @@ create table account (
 
 create index account_owner_id_idx on account (owner_id);
 
-
--- --------------------------------------------------- instruments and labels ---
 
 -- User-editable labels, not a code enum, because the category list will grow
 -- (DESIGN.md §4.4). `asset_class` is the fixed rollup that makes the user's
@@ -136,8 +130,6 @@ create table instrument_alias (
 
 create index instrument_alias_instrument_id_idx on instrument_alias (instrument_id);
 
-
--- ------------------------------------------------------------- statements ----
 
 -- An immutable, as-of-dated photograph of what an account held. Uploads append
 -- and never mutate (DESIGN.md §5.2), so undo is free and quantity history comes
@@ -206,8 +198,6 @@ create table holding (
 create index holding_instrument_id_idx on holding (instrument_id);
 
 
--- ----------------------------------------------------------------- prices ----
-
 -- The immutable spine. An intraday refresh can never corrupt it, and a missed
 -- day is a visible gap rather than a wrong close. Non-trading days get no row;
 -- history queries carry forward the last close, so Saturday equals Friday.
@@ -238,8 +228,6 @@ create table quote (
 );
 
 
--- ------------------------------------------------------------ pre-history ----
-
 -- Hand-typed points covering the period before the app existed (DESIGN.md §7).
 -- Rendered as a visually distinct series; computed values always win on
 -- overlapping dates.
@@ -248,8 +236,6 @@ create table manual_networth (
   amount numeric(20, 4) not null
 );
 
-
--- ------------------------------------------------------------ CSV mapping ----
 
 -- A generic mapper with saved mappings, not hardcoded per-brokerage parsers.
 -- The first upload from an institution maps its columns in a UI; the header row
@@ -265,7 +251,6 @@ create table column_mapping (
 );
 
 
--- ------------------------------------------------------------------ seeds ----
 --
 -- These four rows are what let cash and debt travel the same code path as a
 -- share position, with no branch anywhere.

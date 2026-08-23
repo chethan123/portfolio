@@ -165,8 +165,7 @@ export async function lastRecorded(
  * the tie on `created_at` then `id`, so the last one submitted wins and the
  * earlier one stays as history.
  *
- * @param raw the submitted fields, unvalidated. Validating here rather than in
- *            the route is what keeps a second caller from skipping the rules.
+ * @param raw the submitted fields, unvalidated.
  * @throws {NotFoundError} when no such account exists.
  * @throws {ValidationError} with a message per bad field, and a form-level one
  *         for an account whose kind or state refuses the write outright.

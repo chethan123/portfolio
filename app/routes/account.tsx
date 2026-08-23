@@ -262,7 +262,6 @@ const TILES = {
   liability: LiabilityIcon,
 } satisfies Record<AccountKind, typeof AccountBalanceIcon>;
 
-/** The label a stored value is read as, or the value itself if it has none. */
 /**
  * A form's option label, minus the explanation after its dash.
  *

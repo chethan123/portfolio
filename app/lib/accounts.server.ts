@@ -25,6 +25,9 @@
  * `holding_valued` excludes closed accounts and `holding_valued_at` includes
  * them for dates before `closed_at`, and both live in SQL where every consumer
  * gets the same answer (DESIGN.md §8.2).
+ *
+ * Every exported query takes an optional `db` handle: it defaults to the
+ * process-wide one, and tests pass a transaction they roll back.
  */
 import { z } from "zod";
 
@@ -146,9 +149,6 @@ const selectAccounts = (db: Kysely<Database>) =>
  * Closed accounts stay in the list rather than disappearing: they are what the
  * historical figures are computed from, and a family member looking for one
  * they closed last year should find it rather than conclude it was lost.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function listAccounts(db: Kysely<Database> = getDb()): Promise<Account[]> {
   const rows = await selectAccounts(db)

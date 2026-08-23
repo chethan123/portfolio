@@ -71,7 +71,6 @@ export type AuthConfig = {
   readonly SESSION_SECRET?: string | undefined;
 };
 
-/** The outcome of a login attempt. */
 export type LoginResult =
   | { readonly ok: true; readonly response: Response }
   | { readonly ok: false; readonly message: string };
@@ -79,7 +78,6 @@ export type LoginResult =
 export type AuthGate = {
   /** Is a password configured? False means the instance is open to anyone. */
   readonly enabled: boolean;
-  /** Does this request carry a valid session? */
   isAuthenticated(request: Request): Promise<boolean>;
   /**
    * The gate itself.

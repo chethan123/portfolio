@@ -26,6 +26,9 @@
  * would repair it fail together. The repair is one statement —
  * `insert into app_setting default values;` — and it is here because the screen
  * that would have told you is the one that is down.
+ *
+ * Every exported query takes an optional `db` handle: it defaults to the
+ * process-wide one, and tests pass a transaction they roll back.
  */
 import { z } from "zod";
 
@@ -54,9 +57,6 @@ export type CapitalGainsRateInput = z.infer<typeof capitalGainsRateInput>;
  * A string because it is a `numeric` column and the pool's type-parser override
  * hands those over as digits (§4.1). Nothing here calls `Number` on it, and
  * neither should anything downstream.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function readCapitalGainsRate(db: Kysely<Database> = getDb()): Promise<string> {
   const row = await db
@@ -73,8 +73,7 @@ export async function readCapitalGainsRate(db: Kysely<Database> = getDb()): Prom
  * An update rather than an upsert: the row is seeded by the migration and the
  * schema permits exactly one, so there is no case where this should create.
  *
- * @param raw the submitted fields, unvalidated. Validating here rather than in
- *            the route is what keeps a second caller from skipping the rules.
+ * @param raw the submitted fields, unvalidated.
  * @throws {ValidationError} with a message per bad field.
  * @returns the stored rate, as the column now holds it.
  */

@@ -73,8 +73,6 @@ const FIRST_SIGHTING = "SCHD";
 
 type Theme = "light" | "dark";
 
-/* ------------------------------------------------------------ the browser -- */
-
 async function open(browser: Browser, theme: Theme, mobile = false): Promise<Page> {
   const page = await browser.newPage({
     viewport: mobile ? MOBILE : DESKTOP,
@@ -101,8 +99,6 @@ async function shoot(page: Page, file: string, fullPage = true): Promise<void> {
   await page.screenshot({ path: file, fullPage });
   console.log(`  ${file}`);
 }
-
-/* -------------------------------------------------------------- the data -- */
 
 /** The kinds of account the shot list needs one of. */
 const NEEDED = ["brokerage", "bank", "liability"] as const;
@@ -231,8 +227,6 @@ async function forgetFirstSighting(pool: Pool): Promise<void> {
   await pool.query(`delete from instrument where symbol = $1`, [FIRST_SIGHTING]);
 }
 
-/* ----------------------------------------------------- the upload walk-in -- */
-
 /**
  * Walk the four-step upload as far as a given step and shoot it. Stops short of
  * recording: see the header.
@@ -289,8 +283,6 @@ async function walkUpload(
 
   if (shots.review) await shoot(page, shots.review);
 }
-
-/* --------------------------------------------------------------- the run -- */
 
 /** The empty-instance shots, against a migrated but unseeded database. */
 async function captureFirstRun(browser: Browser): Promise<void> {
