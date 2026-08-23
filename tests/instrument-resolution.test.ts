@@ -218,7 +218,6 @@ describe("resolveAll — creating an instrument", () => {
       expect(alias.instrument_id).toBe(instrument.id);
       expect(resolved).toEqual([{ raw: "VXUS", instrumentId: instrument.id }]);
 
-      // The feed creation probed its symbol exactly once.
       expect(calls).toEqual(["VXUS"]);
     }),
   );

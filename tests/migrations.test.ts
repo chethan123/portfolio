@@ -116,9 +116,7 @@ describe("the migration runner", () => {
 
   // Titled for what it actually asserts. `migrationsOnDisk` ends in `.sort()`,
   // so this pins that sort and fails if it is dropped — but nothing here
-  // applies anything, so it is not evidence about apply order. That the runner
-  // applies them in the order this returns is covered by the ledger assertions
-  // above, which read back the recorded names.
+  // applies anything, so it is not evidence about apply order.
   it("lists migrations in filename order", async () => {
     const onDisk = await migrationsOnDisk();
 

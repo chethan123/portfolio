@@ -188,10 +188,6 @@ export async function currentPosition(
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/*  What the view can express                                                  */
-/* -------------------------------------------------------------------------- */
-
 /**
  * `numeric(20, 4)`, as the two figures `holding_valued` derives are cast to.
  *
@@ -274,8 +270,7 @@ function sameDirection(before: string, after: string): boolean {
 /**
  * Restate one position on an account's current statement.
  *
- * @param raw the submitted fields, unvalidated. Validating here rather than in
- *            the route is what keeps a second caller from skipping the rules.
+ * @param raw the submitted fields, unvalidated.
  * @throws {NotFoundError} when no such account exists.
  * @throws {ValidationError} with a message per bad field, and a form-level one
  *         where the submission cannot apply at all.

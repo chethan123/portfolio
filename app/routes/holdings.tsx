@@ -699,7 +699,6 @@ function Figures({ total }: { total: Total }) {
   );
 }
 
-/** One group: a heading row, its holdings, then its subtotal. */
 function GroupBody({
   group,
   columns,

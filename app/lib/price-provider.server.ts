@@ -67,10 +67,9 @@ export type PriceProvider = {
  * A quote the provider returned in a currency we cannot hold.
  *
  * DESIGN.md §6.1 puts this guard at instrument resolution, and that is still
- * where it belongs once the upload flow exists. It is *also* here because
- * resolution is not built yet, so a refresh is currently the only moment a
- * currency is ever observed — and the failure it prevents is the worst kind
- * available: no error anywhere, GBP quietly summed into a USD net worth.
+ * where it belongs. It is enforced here too because the failure it prevents is
+ * the worst kind available: no error anywhere, GBP quietly summed into a USD
+ * net worth.
  *
  * Carries the symbol and the currency so the log line names both.
  */

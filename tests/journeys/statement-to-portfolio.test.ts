@@ -336,7 +336,6 @@ describe("the same brokerage's next statement", () => {
   );
 });
 
-/** Has anything been recorded for this account yet? */
 async function accountHasAnySet(ctx: TestContext, accountId: string): Promise<boolean> {
   return (await positionSetCount(ctx, accountId)) > 0;
 }

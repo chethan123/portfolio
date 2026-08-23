@@ -221,7 +221,6 @@ function group(holdings: ValuedHolding[], by: Grouping): AllocationSlice[] {
   }));
 }
 
-/** The label for a stored value, or the value itself if it has none. */
 function labelOf<Value extends string>(
   options: ReadonlyArray<Option<Value>>,
   value: Value,
@@ -368,7 +367,6 @@ const ASSET_TYPES: ReadonlyArray<{ key: AssetTypeKey; label: string }> = [
   { key: "other", label: "Cash, loans and everything else" },
 ];
 
-/** Which row a holding belongs to. */
 function assetTypeOf(quoteType: string | null): AssetTypeKey {
   if (quoteType === null) return "other";
 

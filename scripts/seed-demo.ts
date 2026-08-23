@@ -42,8 +42,6 @@ import { pendingMigrations } from "../server/migrations.ts";
 
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
-/* ------------------------------------------------------------------ shapes -- */
-
 /** `YYYY-MM-DD`, as dates cross the driver boundary in both directions. */
 type IsoDate = string;
 
@@ -143,11 +141,7 @@ type AccountSeed = {
   holdings: HoldingSeed[];
 };
 
-/* ------------------------------------------------------------- the people -- */
-
 const PEOPLE = ["Alex Rivera", "Jordan Rivera"];
-
-/* ------------------------------------------------- the classification list -- */
 
 /**
  * The user's labels, and the fixed rollup underneath them (DESIGN.md §4.4).
@@ -168,8 +162,6 @@ const CLASSIFICATIONS: { name: string; assetClass: AssetClass }[] = [
   { name: "Real estate", assetClass: "other" },
   { name: "Target date fund", assetClass: "other" },
 ];
-
-/* ---------------------------------------------------------- the instruments -- */
 
 const INSTRUMENTS: InstrumentSeed[] = [
   {
@@ -277,8 +269,6 @@ const INSTRUMENTS: InstrumentSeed[] = [
     pricing: { kind: "none" },
   },
 ];
-
-/* ------------------------------------------------------------- the accounts -- */
 
 const ACCOUNTS: AccountSeed[] = [
   {
@@ -398,8 +388,6 @@ const ACCOUNTS: AccountSeed[] = [
  */
 const MANUAL_PREFIX_FACTORS = [0.44, 0.5, 0.58, 0.67, 0.78, 0.71, 0.79, 0.92];
 
-/* ------------------------------------------------------------ the calendar -- */
-
 const DAY_MS = 86_400_000;
 const TRADING_DAYS = 252;
 const HISTORY_YEARS = 3;
@@ -481,8 +469,6 @@ function buildCalendar(now: Date): Calendar {
     manualDates,
   };
 }
-
-/* --------------------------------------------------------------- the prices -- */
 
 /** mulberry32. Seeded, so two runs of this script produce the same portfolio. */
 function makeRandom(seed: number): () => number {
@@ -579,8 +565,6 @@ function buildPrices(calendar: Calendar, gauss: () => number): Map<string, Serie
   return prices;
 }
 
-/* ----------------------------------------------------------- the quantities -- */
-
 /**
  * The quantity on each statement, and the cost basis reported beside it.
  *
@@ -665,8 +649,6 @@ function requirePrice(series: Series | undefined, date: IsoDate, key: string): n
   return price;
 }
 
-/* --------------------------------------------------------------- the guard -- */
-
 const MARKER_TABLE = "demo_seed";
 
 /**
@@ -745,8 +727,6 @@ const WIPE = [
   `delete from column_mapping`,
 ];
 
-/* ---------------------------------------------------------------- plumbing -- */
-
 async function all<T extends QueryResultRow>(
   client: PoolClient,
   text: string,
@@ -794,8 +774,6 @@ function redact(url: string): string {
   }
 }
 
-/* ------------------------------------------------------------------- write -- */
-
 type Written = { table: string; rows: number };
 
 async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> {
@@ -803,7 +781,6 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
   const prices = buildPrices(calendar, makeGaussian(random));
   const written: Written[] = [];
 
-  /* people */
   const people = new Map<string, string>();
   for (const person of await all<{ id: string; name: string }>(
     client,
@@ -828,7 +805,6 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
   }
   written.push({ table: "classification", rows: CLASSIFICATIONS.length });
 
-  /* instruments */
   const instruments = new Map<string, string>();
   for (const row of await all<{ id: string; name: string }>(
     client,
@@ -944,7 +920,6 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
   );
   written.push({ table: "quote", rows: quoteIds.length });
 
-  /* accounts */
   const accounts = new Map<string, string>();
   for (const row of await all<{ id: string; name: string }>(
     client,
@@ -968,7 +943,6 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
   }
   written.push({ table: "account", rows: accounts.size });
 
-  /* statements, and the holdings on them */
   const holdingSets: string[] = [];
   const holdingInstruments: string[] = [];
   const holdingQuantities: string[] = [];
@@ -1050,8 +1024,6 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
 
   return written;
 }
-
-/* ------------------------------------------------------------------ report -- */
 
 async function report(client: PoolClient, written: Written[]): Promise<void> {
   const database = await one<{ name: string }>(client, `select current_database() as name`);
@@ -1163,8 +1135,6 @@ async function report(client: PoolClient, written: Written[]): Promise<void> {
   }
   console.log("");
 }
-
-/* -------------------------------------------------------------------- main -- */
 
 async function main(): Promise<void> {
   const { DATABASE_URL } = loadConfig(process.env);

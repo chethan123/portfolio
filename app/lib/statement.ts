@@ -176,7 +176,6 @@ function isZero(value: string): boolean {
   return /^0+(\.0+)?$/.test(value);
 }
 
-/** Digits after the point, on a normalised figure. */
 function fractionDigits(value: string): number {
   return (value.split(".")[1] ?? "").length;
 }

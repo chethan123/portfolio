@@ -16,6 +16,9 @@
  * driver boundary as a string on purpose (see `server/db.ts`), and this module
  * never undoes that with `Number()` or `parseFloat`. The only numbers here are
  * cardinalities in {@link Coverage}, which are counts of rows rather than money.
+ *
+ * Every exported query takes an optional `db` handle: it defaults to the
+ * process-wide one, and tests pass a transaction they roll back.
  */
 import { sql } from "kysely";
 
@@ -161,7 +164,6 @@ export type IsoDate = string;
  */
 type ValuedSource = AliasedRawBuilder<HoldingValuedRow, "holding_valued">;
 
-/** What is held right now. */
 const valuedNow = (): ValuedSource =>
   sql.table<HoldingValuedRow>("holding_valued").as("holding_valued");
 
@@ -230,9 +232,6 @@ async function readTotal(db: Kysely<Database>, source: ValuedSource): Promise<To
  * tie-broken deterministically, with closed accounts excluded. A holding whose
  * instrument has never been priced is here too, carrying `isPriced: false` —
  * dropping it would understate every total silently.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function currentHoldings(db: Kysely<Database> = getDb()): Promise<ValuedHolding[]> {
   return readHoldings(db, valuedNow());
@@ -240,9 +239,6 @@ export async function currentHoldings(db: Kysely<Database> = getDb()): Promise<V
 
 /**
  * Net worth right now, and how much of it is known.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function netWorth(db: Kysely<Database> = getDb()): Promise<Total> {
   return readTotal(db, valuedNow());
@@ -268,8 +264,6 @@ export async function netWorth(db: Kysely<Database> = getDb()): Promise<Total> {
  * @param date `YYYY-MM-DD`. Any date, including one before the app existed —
  *             cash and debt still price at 1.00 there, through the same
  *             carry-forward and with no special case.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function holdingsAt(
   date: IsoDate,
@@ -286,8 +280,6 @@ export async function holdingsAt(
  * had nothing", and the coverage count is what lets a chart say so.
  *
  * @param date `YYYY-MM-DD`.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function netWorthAt(
   date: IsoDate,
@@ -387,9 +379,6 @@ function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
  *
  * A zero-total account therefore sorts between the assets and the liabilities,
  * which is where a zero belongs, and ties break on name like any other.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function accountTotals(
   db: Kysely<Database> = getDb(),
@@ -456,8 +445,6 @@ export async function accountTotals(
  * is a blank — the caller should 404 instead.
  *
  * @param accountId the account's id as it arrives from a URL, digits or not.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function accountTotal(
   accountId: string,
@@ -509,10 +496,6 @@ export async function accountTotal(
  * Empty for an account that holds nothing, for one that is closed, and for an
  * id that names no account: all three hold nothing right now, and which of them
  * it is, is {@link accountTotal}'s answer rather than this one's.
- *
- * @param accountId the account's id as it arrives from a URL, digits or not.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function accountHoldings(
   accountId: string,
@@ -583,10 +566,6 @@ async function readSeries(
  * rows — "nothing was recorded yet", which the caller must not draw as a real
  * zero (DESIGN.md §7). {@link netWorthSeries} callers use `coverage.total` to
  * find where the computed line actually starts.
- *
- * @param dates `YYYY-MM-DD`, in any order; the result comes back sorted.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function netWorthSeries(
   dates: IsoDate[],
@@ -609,11 +588,6 @@ export async function netWorthSeries(
  * starts where its history starts instead of climbing out of a fictional zero
  * (DESIGN.md §7), as long as the caller reads `coverage.total` rather than the
  * amount to decide where the line begins.
- *
- * @param accountId the account's id as it arrives from a URL, digits or not.
- * @param dates `YYYY-MM-DD`, in any order; the result comes back sorted.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function accountSeries(
   accountId: string,
@@ -629,9 +603,6 @@ export async function accountSeries(
  * Returned raw and unmerged. Merging is the caller's, because rule 2 —
  * computed wins on overlapping dates, manual only fills gaps — is a display
  * rule about two lines, not a fact about either one.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function manualNetWorth(
   db: Kysely<Database> = getDb(),
@@ -673,8 +644,6 @@ export type NetWorthChange = {
 
 /**
  * @param since `YYYY-MM-DD`, the start of the window being reported.
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function netWorthChange(
   since: IsoDate,
@@ -722,9 +691,6 @@ export async function netWorthChange(
  * Read from `position_set` rather than from the view: this is the date history
  * *begins*, which is a fact about what was uploaded, and it stays correct for a
  * range whose accounts have all since been closed.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function firstRecordedDate(
   db: Kysely<Database> = getDb(),

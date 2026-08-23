@@ -31,8 +31,6 @@
 -- (DESIGN.md §2).
 
 
--- ---------------------------------------------------- the "latest" tie-break --
-
 -- Which position set speaks for an account, defined exactly once.
 --
 -- `p_as_of` bounds the search: null means "no bound", which is what the current
@@ -58,8 +56,6 @@ as $$
   limit 1
 $$;
 
-
--- ------------------------------------------------------------ holding_valued --
 
 -- Plain, NOT materialised (DESIGN.md §8.2). The data changes on upload, a
 -- household's portfolio is small, and a materialised view would introduce a

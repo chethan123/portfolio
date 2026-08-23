@@ -10,6 +10,9 @@
  * that makes that safe is {@link removePerson} refusing while any account still
  * names them — the schema's `on delete restrict` says the same thing, and this
  * module is what turns it into a sentence instead of a constraint violation.
+ *
+ * Every exported query takes an optional `db` handle: it defaults to the
+ * process-wide one, and tests pass a transaction they roll back.
  */
 import { z } from "zod";
 
@@ -48,9 +51,6 @@ export type PersonInput = z.infer<typeof personInput>;
 
 /**
  * Everyone in the household, in the order a list should show them.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person[]> {
   const rows = await db
@@ -80,8 +80,7 @@ export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person
 /**
  * Record a person.
  *
- * @param raw the submitted fields, unvalidated. Validating here rather than in
- *            the route is what keeps a second caller from skipping the rules.
+ * @param raw the submitted fields, unvalidated.
  * @throws {ValidationError} with a message per bad field.
  */
 export async function createPerson(

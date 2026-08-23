@@ -223,7 +223,6 @@ describe("storing a price", () => {
       const provider = fakeProvider([quote({ symbol: "VTI", price: "271.5000" })]);
       const report = await refreshQuotes(provider, NEW_YORK, db);
 
-      // Asked once, stored twice.
       expect(provider.asked).toEqual([["VTI"]]);
       expect(report.priced).toBe(2);
 
@@ -245,7 +244,6 @@ describe("a symbol that does not come back", () => {
       const gone = await seedInstrument({ symbol: "GONE", priceSource: "feed" });
       await seedQuote({ instrument: gone, price: "42.0000", isStale: false });
 
-      // The provider answers about nothing.
       const report = await refreshQuotes(fakeProvider([]), NEW_YORK, db);
 
       const stored = await db

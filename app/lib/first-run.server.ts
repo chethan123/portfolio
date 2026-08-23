@@ -8,6 +8,9 @@
  * This is one question with three answers rather than two booleans on the
  * screen, so the prompt cannot render both steps at once or neither when both
  * apply.
+ *
+ * Every exported query takes an optional `db` handle: it defaults to the
+ * process-wide one, and tests pass a transaction they roll back.
  */
 import { getDb, type Database } from "./db.server.ts";
 
@@ -28,9 +31,6 @@ export type FirstRunStep = "people" | "accounts" | null;
  *
  * `exists` rather than `count`: the answer is a boolean, the tables can grow,
  * and this runs on every page render.
- *
- * @param db a handle to read through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function firstRunStep(db: Kysely<Database> = getDb()): Promise<FirstRunStep> {
   const row = await db

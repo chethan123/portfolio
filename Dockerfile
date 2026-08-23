@@ -8,7 +8,6 @@
 #   runtime node:24-slim with production dependencies and build output only —
 #           no compiler, no dev dependencies, no source tree, non-root.
 
-# ---------------------------------------------------------------- deps --------
 FROM node:24-slim AS deps
 WORKDIR /app
 
@@ -18,7 +17,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --include=dev
 
 
-# --------------------------------------------------------------- build --------
 FROM node:24-slim AS build
 WORKDIR /app
 ENV NODE_ENV=production
@@ -54,7 +52,6 @@ COPY scripts/prune-unreachable-deps.mjs ./scripts/
 RUN node ./scripts/prune-unreachable-deps.mjs && rm -rf ./scripts
 
 
-# ------------------------------------------------------------- runtime --------
 FROM node:24-slim AS runtime
 WORKDIR /app
 

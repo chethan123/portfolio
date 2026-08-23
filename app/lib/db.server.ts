@@ -31,7 +31,6 @@ import type { DB } from "./database.generated.ts";
  */
 export type Database = DB;
 
-/** A Kysely instance over an existing pool. */
 function kyselyOver(pool: pg.Pool): Kysely<Database> {
   return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
 }

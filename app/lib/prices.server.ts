@@ -35,6 +35,9 @@
  * ever rewritten with the provider's own price for the day that provider says
  * it belongs to, so a rewrite is idempotent unless the provider itself revises
  * a close — which is a correction, not corruption.
+ *
+ * Every exported query takes an optional `db` handle: it defaults to the
+ * process-wide one, and tests pass a transaction they roll back.
  */
 import { sql } from "kysely";
 
@@ -149,8 +152,6 @@ function inTransaction<T>(
  *                 and CI never reaches the network.
  * @param marketTimeZone `MARKET_TIMEZONE`. Decides which calendar day a quote's
  *                 instant belongs to, and nothing else.
- * @param db a handle to write through. Defaults to the process-wide one; tests
- *           pass a transaction they roll back.
  */
 export async function refreshQuotes(
   provider: PriceProvider,

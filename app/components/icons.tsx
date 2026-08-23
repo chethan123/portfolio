@@ -91,7 +91,6 @@ export function UploadIcon(props: IconProps) {
   );
 }
 
-/** Download. The Export action on a table header. */
 export function DownloadIcon(props: IconProps) {
   return (
     <Icon {...props}>

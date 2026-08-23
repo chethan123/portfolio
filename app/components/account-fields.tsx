@@ -39,7 +39,6 @@ export function AccountFields({
 }) {
   const field = (name: string) => `${idPrefix}-${name}`;
 
-  /** A message under its own box, or nothing. */
   const Error_ = ({ name }: { name: string }) =>
     errors?.[name] ? (
       <p className="field-error" role="alert">

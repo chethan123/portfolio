@@ -260,7 +260,6 @@ a {
   border: 0;
 }
 
-/* Used by the horizontally scrolling range strip on a phone. */
 .no-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -518,8 +517,6 @@ a {
   font-weight: 600;
 }
 
-/* The Analysis screen's header: a large title, a line of prose under it, and
- * a right-hand slot for page-level actions. */
 .page-header {
   display: flex;
   align-items: flex-end;
@@ -835,7 +832,6 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-/* The x labels sit under the plot, not over it. */
 .chart-ticks {
   display: flex;
   justify-content: space-between;
@@ -1051,7 +1047,6 @@ a {
   background: var(--panel-hover);
 }
 
-/* Cells only. A column header is a label, not data, so it is not tabular. */
 .data-table td.is-numeric,
 .data-table th.is-numeric {
   text-align: right;
@@ -1077,9 +1072,6 @@ a {
   color: var(--on-surface-variant);
 }
 
-/* The change column's arrow and figure, kept out of the `td` itself: the mock
- * puts `display:flex` on the cell, which drops it out of the table layout and
- * un-aligns the whole column. */
 .cell-change {
   display: inline-flex;
   align-items: center;
@@ -1087,10 +1079,7 @@ a {
   gap: var(--space-xs);
 }
 
-/* --- Account rows ---------------------------------------------------------
- * The dashboard's accounts list: a tile, a name over its institution, and the
- * value with its delta right-aligned.
- */
+/* --- Account rows --------------------------------------------------------- */
 
 .account-row {
   display: flex;
@@ -1406,7 +1395,6 @@ a.account-row:hover {
   border-color: var(--outline);
 }
 
-/* Text-only, for a card header's action. */
 .button--text {
   height: auto;
   padding: 0;

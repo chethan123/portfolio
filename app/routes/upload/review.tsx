@@ -107,7 +107,6 @@ function basisFigure(value: string | null): string {
   return value === null ? "—" : formatMoney(value, 4);
 }
 
-/** The instrument cell: badge for a public ticker, name, the row's note line. */
 function InstrumentCell({ row }: { row: DiffAdded | DiffUpdated | DiffRemoved }) {
   return (
     <td>
@@ -124,7 +123,6 @@ function InstrumentCell({ row }: { row: DiffAdded | DiffUpdated | DiffRemoved })
   );
 }
 
-/** A group's heading row — the diff's Added / Updated / Removed. */
 function GroupHeading({ label }: { label: string }) {
   return (
     <tr className="row-group">

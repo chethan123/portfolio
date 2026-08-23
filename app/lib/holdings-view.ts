@@ -57,10 +57,6 @@ import {
 
 import type { AccountKind, Coverage, TaxTreatment, ValuedHolding } from "./valuation.server.ts";
 
-/* -------------------------------------------------------------------------- */
-/*  Dimensions                                                                 */
-/* -------------------------------------------------------------------------- */
-
 /**
  * The seven things a holding can be filtered or grouped by. These double as URL
  * parameter names, so they are short and stable — renaming one silently breaks
@@ -102,7 +98,6 @@ const SHORT_TAX: Record<TaxTreatment, string> = {
   tax_free: "Tax-free",
 };
 
-/** The label for a stored value, or the value itself if it has none. */
 function labelOf<Value extends string>(
   options: ReadonlyArray<Option<Value>>,
   value: Value,
@@ -219,10 +214,6 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
 ];
 
 const DIMENSION_BY_ID = new Map(DIMENSIONS.map((dimension) => [dimension.id, dimension]));
-
-/* -------------------------------------------------------------------------- */
-/*  Sorting                                                                    */
-/* -------------------------------------------------------------------------- */
 
 export type SortKey =
   | "asset"
@@ -344,11 +335,6 @@ export function sortHoldings(
   });
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Reading the URL                                                            */
-/* -------------------------------------------------------------------------- */
-
-/** Everything the screen's state is: which filters, which grouping, which sort. */
 export type HoldingsQuery = {
   /** Dimension id → the selected key. A dimension absent from the map is unfiltered. */
   filters: Map<DimensionId, string>;
@@ -421,10 +407,6 @@ export function toSearch(query: HoldingsQuery): string {
 
   return search === "" ? "" : `?${search}`;
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Filtering                                                                  */
-/* -------------------------------------------------------------------------- */
 
 /** One dimension's filter, with the choices the data actually supports. */
 export type FilterControl = {
@@ -518,10 +500,6 @@ export function applyFilters(holdings: ValuedHolding[], query: HoldingsQuery): V
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Totals                                                                     */
-/* -------------------------------------------------------------------------- */
-
 /**
  * What a set of holdings comes to, and how much of it could be computed.
  *
@@ -565,14 +543,9 @@ function totalOf(holdings: ValuedHolding[]): { total: HoldingsTotal; units: bigi
   };
 }
 
-/** The figures under the whole table. */
 export function summarise(holdings: ValuedHolding[]): HoldingsTotal {
   return totalOf(holdings).total;
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Grouping                                                                   */
-/* -------------------------------------------------------------------------- */
 
 /** One group's rows, its subtotal, and how much of the table it is. */
 export type HoldingsGroup = {
@@ -662,22 +635,6 @@ export function groupHoldings(
   }));
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Row captions                                                               */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The sub-line under an instrument's name: what it is, and what is wrong with
- * its price if anything is.
- *
- * Lives here rather than in a route because Account detail renders the same
- * caption under the same instrument, and two copies is two chances for one
- * screen to call a holding "never priced" while the other calls it stale. The
- * words are load-bearing — §6.2 distinguishes a price that is merely old, which
- * is still shown and still counted, from one that has never existed, which is
- * shown as a dash and excluded from every total — and a reader can only act on
- * the difference if it is spelled out. Colour never carries it (§12).
- */
 /**
  * A share count as text: the stored digits, minus the zeros scale-8 storage pads
  * them with.
@@ -707,6 +664,18 @@ export function formatQuantity(decimal: string): string {
   }`;
 }
 
+/**
+ * The sub-line under an instrument's name: what it is, and what is wrong with
+ * its price if anything is.
+ *
+ * Lives here rather than in a route because Account detail renders the same
+ * caption under the same instrument, and two copies is two chances for one
+ * screen to call a holding "never priced" while the other calls it stale. The
+ * words are load-bearing — §6.2 distinguishes a price that is merely old, which
+ * is still shown and still counted, from one that has never existed, which is
+ * shown as a dash and excluded from every total — and a reader can only act on
+ * the difference if it is spelled out. Colour never carries it (§12).
+ */
 export function holdingNote(holding: {
   assetClass: ValuedHolding["assetClass"];
   isPriced: boolean;
@@ -719,10 +688,6 @@ export function holdingNote(holding: {
 
   return parts.join(" · ");
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Addressing one row                                                         */
-/* -------------------------------------------------------------------------- */
 
 /**
  * The name one row answers to in a URL — `12.7`, account then instrument.
