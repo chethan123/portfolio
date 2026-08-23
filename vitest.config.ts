@@ -19,5 +19,15 @@ export default defineConfig({
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     // Integration tests share one Postgres; keep them off each other's toes.
     fileParallelism: false,
+    // Read with `npm run test:coverage`. Deliberately not a CI gate and
+    // deliberately without a threshold: a percentage that fails a build is how
+    // a suite acquires tests written for the number rather than for a rule.
+    // The useful reading is which *files* are dark, not what the total says.
+    coverage: {
+      include: ["app/**", "server/**"],
+      // Generated from the live database by `npm run db:types`; there is
+      // nothing here anyone wrote.
+      exclude: ["app/lib/database.generated.ts"],
+    },
   },
 });
