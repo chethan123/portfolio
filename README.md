@@ -284,8 +284,11 @@ never been applied. It never requires authentication, so monitoring needs no cre
 The app itself is not reachable directly — only the bundled `caddy` service publishes a port, and it
 serves plain HTTP for now, with TLS termination left as a follow-up. `caddy` sets `X-Forwarded-*`,
 which the app trusts. [`docs/operating.md`](docs/operating.md) has the proxy configuration, the
-`pg_dump` backup and restore procedure, the full environment table, and why a phone will not install
-the app from a LAN address.
+`pg_dump` backup and restore procedure, the full environment table, and why no instance installs as
+an app on a phone yet.
+
+Once it is running, [`docs/guide/`](docs/guide/) is the household's guide to using it — the same
+screens as above, but as instructions rather than as reasons.
 
 ## Working on it
 

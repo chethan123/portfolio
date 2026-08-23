@@ -9,39 +9,46 @@ silently go stale: **a change to a screen is not finished until these are retake
 
 ## Retaking them
 
-```sh
-printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\n' > .env.demo
-node --env-file=.env.demo ./server/migrate.ts
-node --env-file=.env.demo ./scripts/seed-demo.ts
+[`../../scripts/capture-screenshots.ts`](../../scripts/capture-screenshots.ts) retakes all of them,
+along with [the guide's](../guide/images/). Its header carries the commands and the mechanics.
 
-DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo npm run dev
-```
+This file carries what the script cannot: which shot is of what, and why.
 
-Then capture each page below at a 1440×1000 viewport, `deviceScaleFactor: 2`, full page, once with
-the browser in light and once in dark. The seed reassigns account ids on every run, so read them
-back rather than hardcoding: `select id, kind from account`.
+## Which shot is of what
 
-| File | Page | Which account |
+| File | Page | Which account, and why |
 |---|---|---|
 | `overview-*.png` | `/` | — |
 | `holdings-*.png` | `/holdings` | — · unfiltered and ungrouped, which is the state the URL with no query string produces |
-| `holdings-edit-*.png` | `/holdings?edit=<account>.<instrument>` | — · one row open for correction. Pick a row with a cost basis, so both boxes carry a figure, and crop to the open row with a few rows either side — the point of the shot is the boxes sitting in their own columns, which a whole-page capture at this width shows too small to read |
+| `holdings-edit-*.png` | `/holdings` with one row open | the brokerage one, on a row that has a cost basis, so both boxes carry a figure. Scoped to the table rather than the page: the point of the shot is the two boxes sitting in their own columns, which a whole-page capture at this width renders too small to read |
 | `analysis-*.png` | `/analysis` | — |
 | `account-detail-*.png` | `/accounts/:id` | the `brokerage` one — it holds seven positions, including a stale price |
 | `account-balance-*.png` | `/accounts/:id` | the `liability` one — it carries the set-balance form |
 | `settings-*.png` | `/settings/accounts` | — |
-| `upload-*.png` | `/upload` | — · the drop screen as it opens: the step strip, the account select over the demo household's open accounts, no file chosen and no refusal showing |
-| `upload-mapping-*.png` | `/upload/:draftId/columns` | the `brokerage` one · start an upload against it with a Fidelity-shaped CSV (a couple of preamble rows, then Symbol · Description · Quantity · Average Cost Basis) and stop on this step. Capture the unfilled first-upload state, with the file's own header and sample rows visible verbatim above the mapping selects |
-| `upload-review-*.png` | `/upload/:draftId/review` | the `brokerage` one · **the diff must show a removal listed in full.** Author the CSV against what the account currently holds: restate most positions unchanged, change one quantity, add one instrument and leave one out, so all three groups render and the removed row carries its quantity and last known value. Do not commit before both themes are captured — the draft dies with the commit |
+| `upload-*.png` | `/upload` | — · the drop screen as it opens: the step strip, the account select, no file chosen and no refusal showing |
+| `upload-mapping-*.png` | `/upload/:draftId/columns` | the `brokerage` one · the unfilled first-upload state, with the file's own header and sample rows visible verbatim above the mapping selects |
+| `upload-review-*.png` | `/upload/:draftId/review` | the `brokerage` one · **the diff must show a removal listed in full.** The statement is authored against what the account currently holds so all three groups render and the removed row carries its quantity and last known value |
 | `overview-mobile-*.png` | `/` | — |
 | `analysis-mobile-*.png` | `/analysis` | — |
 
-Mobile shots (`*-mobile-*.png`) are 390×900, `isMobile`, and **not** full page. The bottom
-navigation is `position: fixed`, and a full-page capture paints it across the middle of the image
-instead of at the foot of the screen where a phone shows it.
+## The decisions behind them
 
-The `AUTH_PASSWORD` banner is left in deliberately. It is what a default instance actually looks
+**Both themes.** GitHub renders these against the reader's own theme, and a light screenshot on a
+dark page looks broken. [The guide's images](../guide/images/) have no such constraint and are light
+only.
+
+**Mobile shots are not full-page.** They are 390×900 with `isMobile`. The bottom navigation is
+`position: fixed`, so a full-page capture paints it across the middle of the image instead of at the
+foot of the screen where a phone shows it.
+
+**The `AUTH_PASSWORD` banner is left in deliberately.** It is what a default instance actually looks
 like, and hiding it would make the screenshots show a configuration the reader does not have.
+
+**Account ids are never written down.** The seed renumbers accounts on every run, so the script
+looks them up by kind. A shot described above as "the brokerage one" means exactly that.
+
+**The upload flow is walked but never committed.** The draft dies with the commit, and recording the
+statement would change the household every other shot is of.
 
 Research screenshots of the *Stitch mock* are a different thing entirely and live in
 [`../research/stitch-2026-08/`](../research/stitch-2026-08/).

@@ -1440,8 +1440,8 @@ clean state rather than resuming halfway through.
 
 ## 9. Testing architecture
 
-**35 test files, 590 `it(…)` declarations — 638 cases once the nine `it.each` tables expand — against
-a real Postgres.** No mock, no in-memory substitute, no SQLite. The risk this codebase carries lives
+**Every test in the `vitest` suite runs against a real Postgres.** No mock, no in-memory substitute,
+no SQLite. (For the size of the suite, count it: `find tests -name '*.test.ts*'`.) The risk this codebase carries lives
 in Postgres-specific SQL and in `numeric` handling, and both disappear under a substitute: a fake
 database would pass while the real one silently rounded money or resolved the wrong position set.
 
@@ -1500,17 +1500,20 @@ gets in the way of server-module tests.
 
 ### 9.3 The standing constraint
 
-**No test imports a module under `app/routes/**`.** Three import `app/root.tsx`: `root-gate.test.ts`
-drives the gate middleware directly, and both `.test.tsx` files render `root.tsx`'s `Layout` through
-`createRoutesStub` and `renderToStaticMarkup` — shell behaviour rather than isolated components, and
-deliberately so, because the rule being protected is "every page carries the banner", which a
-component test would not notice the shell dropping.
+**A route module's logic is testable exactly as far as it is exported.** This section used to say
+that no test imported anything under `app/routes/**`; `tests/routes/` now does, and so do the
+journey and invariant suites, which is the better arrangement rather than a violation of it.
 
-What those three demonstrate is the useful version of this constraint: a route module *is* testable
-when its logic is an **export** rather than a closure inside a loader. Everything currently living
-inside a loader body — `describe(filters)` in `holdings.tsx`, the chart-range helpers — is untestable
-not by framework limitation but by where it was put. That is a stronger argument for thin routes than
-"routes cannot be tested", and it is the one this repo actually supports.
+What those tests import is the point: a `loader` and an `action`, called directly. Everything still
+living *inside* a loader body — `describe(filters)` in `holdings.tsx`, the chart-range helpers — is
+untestable not by framework limitation but by where it was put. That is a stronger argument for thin
+routes than "routes cannot be tested", and it is the one this repo actually supports.
+
+Tests against `app/root.tsx` are a separate case: `root-gate.test.ts` drives the gate middleware
+directly, and both `.test.tsx` files render `root.tsx`'s `Layout` through `createRoutesStub` and
+`renderToStaticMarkup` — shell behaviour rather than isolated components, and deliberately so,
+because the rule being protected is "every page carries the banner", which a component test would
+not notice the shell dropping.
 
 ---
 
