@@ -74,16 +74,18 @@ graph LR
     caddy -->|"reverse_proxy app:3000"| app
     csv -.->|"uploaded through the browser"| browser
     app -->|SQL over the compose network| db
-    app -->|"batched quote fetch, ≤ every 15 min,<br/>market hours only"| yahoo
+    app -->|"batched quote fetch, ≤ every 15 min, market hours only<br/>+ a one-symbol probe at instrument creation, in the request path"| yahoo
 
     classDef ext fill:#f5f0e8,stroke:#8a7a5c,color:#3b3222
     class yahoo,csv ext
 ```
 
-**External dependencies, in full.** Yahoo Finance for quotes, and nothing else. There is no email,
-no object store, no queue, no cache tier, no identity provider, no analytics. The one third party is
-reached through a single-method interface (§7.5) precisely because it is unofficial and expected to
-break.
+**External dependencies, in full.** Yahoo Finance, and nothing else. There is no email, no object
+store, no queue, no cache tier, no identity provider, no analytics. It is reached two ways: the
+poller's batched refresh, which is off the request path entirely, and `probeSymbol` — a single-symbol
+currency check that runs *inside* a form submission when someone creates a feed-priced instrument
+(§6.1). The second one is the only place a third party can make a person wait. Both go through the
+one interface in §7.5, precisely because the endpoint is unofficial and expected to break.
 
 **Trust boundaries.** Three, marked here because §7.6 depends on them:
 
@@ -159,7 +161,7 @@ sequenceDiagram
     E->>E: node server/validate-config.ts
     Note right of E: Fails fast, naming every bad<br/>variable. No partial start.
     E->>DB: node server/migrate.ts
-    Note right of E: Advisory lock, then each .sql file<br/>in its own transaction
+    Note right of E: Ledger ensured, advisory lock taken,<br/>then each .sql file in its own transaction
     DB-->>E: schema current
     E->>S: exec react-router-serve ./build/server/index.js
     S-->>C: GET /healthz → 200
@@ -177,8 +179,11 @@ healthcheck gates `caddy` on it.
 
 ### 3.3 Configuration surface
 
-Every setting is an environment variable, and `server/config.ts` is the only module in the codebase
-that reads `process.env`. It is a Zod schema, parsed once, with cross-field rules.
+Every setting is an environment variable, and `server/config.ts` is the only module that
+*interprets* one. Callers hand the environment in — `loadConfig(env)` is pure — so
+`validate-config.ts:12`, `migrate.ts:24` and `scripts/seed-demo.ts:1170` pass `process.env` without
+knowing what is in it, and `getConfig()` is the single place a value is actually read and cached. It
+is a Zod schema, parsed once, with cross-field rules.
 
 | Variable | Default | Required | Effect |
 |---|---|---|---|
@@ -187,9 +192,13 @@ that reads `process.env`. It is a Zod schema, parsed once, with cross-field rule
 | `SESSION_SECRET` | unset | conditionally | Cookie signing key. Becomes required the moment `AUTH_PASSWORD` is set. |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
 | `PRICE_POLL_INTERVAL_MINUTES` | `15` | no | Poller cadence, 1–1440. |
-| `MAX_UPLOAD_MB` | `10` | no | Upload body cap. Bounds what an accident can put in memory. |
+| `MAX_UPLOAD_MB` | `10` | no | Upload body cap. **Not wired through `compose.yaml`** — under the documented deployment it is permanently 10 MB (§11.3). |
 | `MARKET_TIMEZONE` | `America/New_York` | no | Market-hours calculation and trading-day attribution. Validated as an IANA zone. |
 | `TZ` | `UTC` | no | Container clock. The database stores UTC regardless. |
+
+One more variable exists that the application never reads: **`POSTGRES_PASSWORD`** is Compose-level,
+consumed by the `db` service, and must be kept in sync with the credentials inside `DATABASE_URL`
+(`compose.yaml:21-25`).
 
 Two properties of this module are structural rather than cosmetic:
 
@@ -251,27 +260,47 @@ the framework handles serialisation.
 **The layering rule that matters most:** *the arithmetic goes down, never up.* Money is multiplied and
 summed in SQL at `numeric` precision. When a figure has to be combined in JavaScript — a subtotal
 under a grouped table, a percentage — it goes through `app/lib/money.ts`, which works on `BigInt`
-counts of the last decimal place. Nothing else in the codebase adds a money value.
+counts of the last decimal place. Nothing adds a money value except through `money.ts`'s units.
 
 ### 4.2 Single-site invariants
 
 A recurring shape in this codebase: a hazard is contained by making exactly one place able to cause
-it. These are the ones worth knowing before changing anything, each verifiable with a grep.
+it. These are the ones worth knowing before changing anything — but they are not all the same kind of
+guarantee, and treating them as one kind is how a reader ends up disproving the table with a single
+grep. They come in three tiers.
+
+**Enforced by structure — a second site is not reachable without deleting the first.**
 
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
-| Postgres pool construction | `server/db.ts` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Reading `process.env` | `server/config.ts` | A setting that exists but is not in the documented surface, and not validated at start. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts` | The provider swap stops being a day's work. The interface is also the test seam — CI never reaches the network. |
+| Postgres pool construction | `server/db.ts:62` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:303` | The provider swap stops being a day's work. The interface is also the test seam. |
 | Writing a price | `app/lib/prices.server.ts` | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
-| JS money arithmetic | `app/lib/money.ts` | A second implementation of rounding. It was *moved* out of `allocation.ts` rather than copied for exactly this reason. |
-| Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | The failure DESIGN.md §8.2 names as the weakest point in the whole design: two pages showing different totals, with no error anywhere. |
-| Multipart body reading | `app/lib/uploads.server.ts` | A second place to forget the size cap. Every other action uses `formFields`, which drops file parts by design. |
 
-**One documented exception.** `prices.server.ts:356` (`priceFreshness`) also selects from
-`holding_valued` — not to value anything, but to scope the "as of" freshness line to instruments
-actually held in an open account. It reads `quote.as_of` and counts distinct instruments; it computes
-no money. The invariant is about *valuation*, and this read stays inside it.
+**Owned by a module, upheld by its callers.**
+
+| Invariant | The owner | The obligation |
+|---|---|---|
+| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Three callers pass `process.env` in — `validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` — and none of them reads a variable itself. |
+| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:50`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design — `app/routes/login.tsx:33` is the one exception, and it reads no files. |
+
+**Shared primitives, with exceptions that are documented rather than denied.**
+
+| Invariant | The primitive | The exceptions |
+|---|---|---|
+| Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:239` rounds the overflow-guard product inline instead of calling `divide`. |
+| Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | Two, both real (below). The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
+
+**The two valuation exceptions, stated rather than buried:**
+
+- `prices.server.ts:356` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
+  to scope the "as of" line to instruments held in an open account, filtered to `price_source =
+  'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
+- `uploads.server.ts:554` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+  diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
+  in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
+  zero) and is never summed into a total. This is the one place a valuation figure is produced outside
+  the view, and it is worth watching.
 
 ### 4.3 The `.server` convention
 
@@ -279,14 +308,22 @@ React Router's Vite plugin excludes `*.server.ts` from the client bundle. The su
 a real boundary, not a naming preference:
 
 - `*.server.ts` may import the database, the config, and Node built-ins.
-- `*.ts` in `app/lib` must be safe in a browser bundle. `allocation.ts` and `holdings-view.ts` import
-  `ValuedHolding` from `valuation.server.ts` — but as a **type-only import**, which is erased at
-  compile time and pulls no server code across. That is what lets a screen component call
-  `allocationByPerson()` directly on loader data.
+- `*.ts` in `app/lib` must be safe in a browser bundle. `allocation.ts`, `holdings-view.ts` and
+  `account-options.ts` import `ValuedHolding` from `valuation.server.ts` — but as a **type-only
+  import**, which is erased at compile time and pulls no server code across. That is what lets a
+  screen component call `allocationByPerson()` directly on loader data.
+
+**One file breaks this today.** `app/lib/statement.ts:32` imports `recordedDate` from
+`input.server.ts` as a **value**, not a type, and uses it at `:557`. It stays out of the client bundle
+only because `parseStatement` is reachable from loaders and actions alone and is tree-shaken away;
+nothing enforces that. A component-side call to `parseStatement` would drag `input.server.ts` across
+the boundary. Worth fixing before that happens rather than after.
 
 ### 4.4 Request lifecycle
 
-A representative read — `GET /holdings?group=account&owner=2` — end to end:
+A representative read — `GET /holdings?owner=2&group=account` — end to end. The parameter order
+matters: `toSearch` builds a canonical search string, and a URL that does not match it is bounced
+before any database work happens (`holdings.tsx:118`), so `?group=account&owner=2` would 302 first.
 
 ```mermaid
 sequenceDiagram
@@ -299,51 +336,63 @@ sequenceDiagram
     participant PG as Postgres
     participant H as holdings-view (pure)
 
-    B->>C: GET /holdings?group=account&owner=2
+    B->>C: GET /holdings?owner=2&group=account
     C->>M: proxied, X-Forwarded-* set
     M->>M: authGate().requireSession(request)
-    Note right of M: Deny-by-default. Every route in the<br/>tree passes here — only a short open<br/>list is exempt.
+    Note right of M: Deny-by-default for every ROUTED path.<br/>Only a short open list is exempt.
     M->>L: next()
+    L->>H: parseQuery(searchParams)
+    Note right of L: First statement in the loader. The query<br/>decides whether the fetch happens at all.
+    L->>L: canonical search? else 302
     L->>V: currentHoldings()
     V->>PG: select * from holding_valued order by …
     PG-->>V: rows — numeric as decimal STRINGS
     V-->>L: ValuedHolding[]
-    L->>H: parseQuery(searchParams)
-    L->>H: applyFilters / groupHoldings / summarise
-    Note right of H: Pure functions over the array that<br/>already exists. No second query, so a<br/>row and its subtotal cannot disagree.
+    L->>H: availableFilters / applyFilters / groupHoldings / summarise
+    Note right of H: Pure functions over the array that<br/>already exists. Rows, groups and totals<br/>all come from it, so they cannot disagree.
     H-->>L: rows + groups + totals
     L-->>B: SSR HTML (hydrates to client routing)
 ```
 
 Three properties of this path are deliberate:
 
-1. **The gate is middleware on the root route**, so it sees every request to every route in the tree
+1. **The gate is middleware on the root route**, so it sees every request that reaches the route tree
    and refuses anything not on `auth.server.ts`'s short open list. A route added by a later slice is
-   protected the moment it is routable; nobody has to remember to protect it.
+   protected the moment it is routable; nobody has to remember to protect it. Static assets are
+   served ahead of the router and are not gated — see §7.6.
 2. **Filtering and grouping are pure functions over one array**, not seven new SQL predicates. The
    screen's table and the subtotals under it are computed from the same rows, so agreement is
-   structural rather than something to keep true.
+   structural rather than something to keep true. Nothing the table displays costs a second query;
+   an open `?edit=` row costs exactly one more read (`holdings.tsx:195`), for the date the correction
+   will be filed under.
 3. **Numbers never become numbers.** The rows leave Postgres as decimal strings and stay that way
    through grouping, subtotalling and rendering.
 
 ### 4.5 Write paths
 
-Every write in the application is one of five operations. All of them are *appends* — nothing in the
-domain is ever updated in place except a quote and a settings row.
+Five operations produce **history** — the position sets every figure is computed from, and the
+vocabulary that makes them readable. All five append; none rewrites a past fact.
 
 | Operation | Module | Writes | Append-only? |
 |---|---|---|---|
-| Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft | Yes — a new set |
+| Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft, captures `account.external_account_number` when still null | Yes — a new set |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes — a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes — a new set |
-| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes — vocabulary, never revised |
-| Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert) | No — the intraday tier is overwritten by design |
+| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:663`) |
+| Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
 
-**Why append-only is not a preference.** `holding_valued_at(d)` reads position sets for every date the
-net worth chart plots. An `update holding set quantity = …` would not correct a number — it would
-silently restate every figure back to the date of the statement that row landed in. Your March net
-worth would move because you fixed an August typo, with nothing on any screen saying so
-(`positions.server.ts` header).
+**This is not every write in the application.** The management surface updates rows in place, as
+CRUD should: `accounts.server.ts:234` edits an account and `:270` closes one, `people.server.ts:116`
+renames a person and `:173` deletes one outright when they own no accounts, `settings.server.ts:88`
+writes the tax rate, `column-mapping.server.ts:96` upserts a saved mapping, and `uploads.server.ts`
+inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
+database: a position set, once written, is never edited, because `holding_valued_at` reads it for
+every date the chart plots.
+
+**Why append-only is not a preference.** An `update holding set quantity = …` would not correct a
+number — it would silently restate every figure back to the date of the statement that row landed in.
+Your March net worth would move because you fixed an August typo, with nothing on any screen saying
+so (`positions.server.ts` header).
 
 **Why a correction carries the whole account forward.** A position set is a photograph of everything
 an account holds, so "a missing row means sold" (DESIGN.md §5.2). A set containing only the corrected
@@ -372,9 +421,14 @@ Everything on the balance sheet is a position, including cash and debt:
 | Personal loan | `USD` | `−8,000` | `1.00` | `−8,000` |
 
 **The sign lives in quantity, never in price.** A price is a positive market fact; a negative quantity
-is the standard encoding for a liability. The structural consequence is that net worth is a single
-`SUM` with no branches, and there is no `is_liability` special case in any calculation, any view, or
-any screen.
+is the standard encoding for a liability. The structural consequence is that **net worth is a single
+`SUM` with no branches** — no `is_liability` column, and no branch for cash or debt in the view, the
+as-of function, or any total.
+
+There is exactly one place the sign is read: the allocation denominator. A slice's share is computed
+against the gross *positive* total rather than the net, because $8,000 of debt and $8,000 of assets
+are not the same slice of anything (`allocation.ts:132-165`), and the Analysis screen prints that
+caveat to the reader.
 
 Four seed rows in `migrations/0001_initial_schema.sql` are what make this hold end to end: a `Cash`
 classification, a `USD` instrument with `price_source = 'fixed'`, a `quote` of `1.00`, and — the
@@ -407,7 +461,7 @@ erDiagram
         text kind "brokerage|401k|ira|bank|liability"
         bigint owner_id FK "on delete restrict"
         text tax_treatment "taxable|tax_deferred|tax_free"
-        text external_account_number "guard, never a selector"
+        text external_account_number "nullable — a guard, never a selector"
         timestamptz closed_at "nullable; closing preserves history"
     }
     CLASSIFICATION {
@@ -419,7 +473,7 @@ erDiagram
         bigint id PK
         text symbol "nullable — a CIT has no ticker"
         text name
-        text quote_type "the provider's own vocabulary"
+        text quote_type "nullable — null for a manually priced instrument"
         text price_source "feed|fixed|manual"
         bigint classification_id FK "not null, on delete restrict"
     }
@@ -461,9 +515,9 @@ erDiagram
         bigint account_id FK "on delete cascade"
         text filename
         bytea raw_file "not null — a draft is a file"
-        date as_of_date "reserved"
-        jsonb mapping "null until columns step passes"
-        boolean had_first_sightings "the step strip's memory"
+        date as_of_date "nullable — reserved"
+        jsonb mapping "nullable — null until columns step passes"
+        boolean had_first_sightings "nullable — the step strip's memory"
         timestamptz created_at "swept at 24h"
     }
 ```
@@ -473,8 +527,8 @@ Four tables stand outside the graph because they reference nothing:
 | Table | Shape | Purpose |
 |---|---|---|
 | `manual_networth` | `date` PK, `amount numeric(20,4)` | Hand-typed points covering the period before the app existed. Computed values always win on overlapping dates. |
-| `column_mapping` | unique `(institution, header_fingerprint)`, `mapping jsonb` | How a brokerage's export format is remembered once and applied to every later file. |
-| `app_setting` | `id boolean PK check (id)`, `capital_gains_rate numeric(9,6)` | Singleton, enforced by the schema. A second row is a constraint violation, not a silent ambiguity. |
+| `column_mapping` | `id bigint PK`, unique `(institution, header_fingerprint)`, `mapping jsonb` | How a brokerage's export format is remembered once and applied to every later file. |
+| `app_setting` | `id boolean PK check (id)`, `capital_gains_rate numeric(9,6) default 23.8 check (0–100)` | Singleton, enforced by the schema. A second row is a constraint violation, not a silent ambiguity. |
 | `schema_migrations` | `filename` PK, `applied_at` | The migration ledger. Created by the runner, since it must exist before anything else. |
 
 ### 5.3 What deletion does — the history policy, read off the FKs
@@ -493,6 +547,12 @@ split is exact and each side is a decision:
 | `quote` / `price_daily` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. |
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
 
+**Only two of those deletes are reachable from the application at all:** a person who owns no
+accounts (`people.server.ts:173`), and a just-created, never-held instrument that lost an alias race
+(`instrument-resolution.server.ts:663`). There is no account delete and no position-set delete
+anywhere in `app/`. The rest of the table is a standing guarantee about someone with a `psql`
+session, not about a screen.
+
 Retirement is `account.closed_at`, never a delete. `holding_valued` excludes closed accounts;
 `holding_valued_at(d)` includes them for the dates they were open (`closed_at is null or closed_at >
 d`), so history before a closure is preserved and today's figures are not polluted.
@@ -503,8 +563,8 @@ Three SQL objects sit between the tables and every screen. They are the mitigati
 DESIGN.md §8.2 names as the weakest point in the whole design.
 
 ```
-                    latest_position_set(account_id, as_of := null)
-                    ── the tie-break, defined exactly once ──
+             latest_position_set(p_account_id, p_as_of default null)
+                    ── the tie-break, defined once in SQL ──
                     order by as_of_date desc, created_at desc, id desc
                     limit 1
                               │
@@ -514,7 +574,8 @@ DESIGN.md §8.2 names as the weakest point in the whole design.
     latest_position_set(a.id)      latest_position_set(a.id, d)
     closed_at is null              closed_at is null or closed_at > d
     price := quote.price           price := last price_daily close ≤ d
-    is_stale := quote.is_stale     is_stale := false
+    is_stale := coalesce(          is_stale := false
+      quote.is_stale, false)
               │                                │
               └───────────────┬────────────────┘
                               │
@@ -522,13 +583,18 @@ DESIGN.md §8.2 names as the weakest point in the whole design.
                     ── ONE row type, not two ──
 ```
 
-**`latest_position_set(account_id, p_as_of)`** — `stable`, one function, one ordering. "Latest" is
+**`latest_position_set(p_account_id, p_as_of)`** — `stable`, one function, one ordering. "Latest" is
 `max(as_of_date)` per account, tie-broken by `created_at desc` then `id desc`. Re-uploading a
 correction for an as-of date that already has a set is a real occurrence; without the tie-break the
 answer is a coin flip. Surrogate keys are `bigint generated always as identity` precisely so that
 "tie-break by id descending" means "the later insert wins" — a random UUID would make it arbitrary.
 The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping at
 the first row.
+
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1113`) needs the
+*predecessor* of a given set — "what did this account hold before this upload landed" — which the
+function cannot express, so it repeats the `order by` with a citation back to it. That is the only
+second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
 
 **`holding_valued`** — a plain, **non-materialised** view. Data changes on upload, a household's
 portfolio is small, and a materialised view would introduce a refresh step whose omission shows up as
@@ -549,8 +615,10 @@ Four rules are encoded in the view, and each one is a refusal to understate:
 2. **Null propagates through `unrealized`.** `value - cost_basis` is null when either side is null.
    Nothing coalesces a null cost basis to zero — that would report a fake gain equal to the entire
    untracked position.
-3. **A stale price is used, not discarded.** `is_stale` is carried through unchanged; the last known
-   value beats a zero or a null.
+3. **A stale price is used, not discarded.** `is_stale` is carried through where a price exists; the
+   last known value beats a zero or a null. A holding with no `quote` row at all comes back
+   `is_stale = false`, not null — `coalesce(q.is_stale, false)` — because unpriced is not stale.
+   Staleness is a property of a price that exists.
 4. **Rounded to the money scale exactly once.** `quantity × price` carries scale 12 and is cast back
    to `numeric(20,4)` in a named `cross join lateral`, so `unrealized` is literally `value -
    cost_basis` rather than a second rounding of a second expression that could disagree by a fraction
@@ -565,36 +633,40 @@ anywhere.
 
 | Index | Definition | Serves |
 |---|---|---|
-| `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set` — matched exactly, so the tie-break is an index scan stopping at row one. The hottest index in the schema. |
+| `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set` — matched exactly, so the tie-break is an index scan stopping at row one. The index every valuation read goes through. |
 | `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). |
 | `holding_instrument_id_idx` | `(instrument_id)` | The instrument → holdings direction: which accounts hold this fund. |
-| `instrument_symbol_idx` | `(symbol)` | The refresh loop's symbol lookup. |
+| `instrument_symbol_idx` | `(symbol)` | The `USD` lookup on every `setBalance` write (`balances.server.ts:204`), and the refresh loop's `order by symbol`. The refresh never looks a symbol up by value — it selects all feed instruments and matches in memory. |
 | `instrument_alias_instrument_id_idx` | `(instrument_id)` | Which raw strings point at this instrument. |
 | `account_owner_id_idx` | `(owner_id)` | Grouping by person. |
 | `instrument_classification_id_idx` | `(classification_id)` | Grouping by classification and asset class. |
 | `upload_draft_created_at_idx` | `(created_at)` | The 24-hour draft sweep. |
 | `column_mapping_one_per_fingerprint` | unique `(institution, header_fingerprint)` | One saved mapping per exact header, per institution. |
+| `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at` — an index scan stopping at the first row, executed once per holding per plotted date. |
 
 ### 5.6 The numeric boundary
 
-The single most consequential line of infrastructure in the codebase is in `server/db.ts`:
+The single most consequential line of infrastructure in the codebase is in `server/db.ts:43-47`:
 
 ```ts
 const STRING_TYPE_OIDS = [
-  pg.types.builtins.NUMERIC,   // 1700 — parsed to a float by default, which ROUNDS
-  pg.types.builtins.INT8,      // 20   — outside Number.MAX_SAFE_INTEGER
-  pg.types.builtins.DATE,      // 1082 — a calendar date, not an instant
+  pg.types.builtins.NUMERIC,
+  pg.types.builtins.INT8,
+  pg.types.builtins.DATE,
 ] as const;
 ```
 
+Three OIDs, for three different reasons. `NUMERIC` (1700) is the one that changes behaviour:
 `node-postgres` parses `numeric` into a JavaScript number by default. A six-figure balance then
 surfaces later as two dashboards disagreeing by cents, with no error anywhere. Registering the
 override anywhere other than at pool construction would leave a code path that gets numbers — which
 is why there is exactly one construction site (§4.2).
 
-The `date` override is the same class of bug in different clothing: `pg` parses Postgres `date` into a
-JS `Date` at *local* midnight, so formatting it back in any timezone west of UTC yields the previous
-day. `position_set.as_of_date` shifting by a day would select the wrong position set, silently.
+`DATE` (1082) is the same class of bug in different clothing: `pg` parses Postgres `date` into a JS
+`Date` at *local* midnight, so formatting it back in any timezone west of UTC yields the previous day.
+`position_set.as_of_date` shifting by a day would select the wrong position set, silently. `INT8`
+(20) changes nothing — `pg` already returns bigints as strings — and is listed to make the guarantee
+explicit rather than inherited, which is why every surrogate key crosses the boundary as a string.
 
 `timestamp` and `timestamptz` are deliberately left alone. `created_at`, `closed_at` and
 `quote.as_of` are genuine instants, compared in SQL rather than in JavaScript, and a `Date` is the
@@ -617,17 +689,31 @@ Postgres numeric(20,4)  ──▶  "12345.6700"  ──▶  toUnits(s, 4) → 12
 
 Three rules follow, and the codebase holds all three:
 
-- **Never `Number()`, `parseFloat`, or JSON round-trip a money value.** The permitted `Number()` calls
-  in `app/lib` are all on cardinalities — row counts, header indices, clock minutes — never on a
-  `numeric` column.
-- **Do the arithmetic in SQL, or in `money.ts`.** There is no third option and no decimal library.
+- **Never `Number()`, `parseFloat`, or JSON round-trip a money value.** Almost every `Number()` call
+  in `app/lib` is on a cardinality — a row count, a header index, a clock minute. There are exactly
+  two deliberate exceptions, and both are narrow enough to state: `format.ts:187` (`toPlotValue`)
+  floats a money value to position a chart point, where the result is multiplied by a pixel height
+  and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
+  and `price-provider.server.ts:135` floats a yield only to decide whether the column can hold it,
+  returning the original string either way.
+- **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
+  library.
 - **`format.ts` refuses to compute and `money.ts` refuses to format.** Neither does the other's job.
 
-The generated types enforce the string half at compile time: `npm run db:types` runs
-`kysely-codegen --numeric-parser string --date-parser string` against the live database, **including
-views**, so `holding_valued` is typed like a table. CI verifies the committed types match the schema
-(`npm run db:types -- --verify`), which is what makes regeneration after a migration mandatory rather
-than remembered.
+The generated types carry the **read** half of this: `npm run db:types` runs `kysely-codegen
+--numeric-parser string --date-parser string` against the live database, including views, so a
+`numeric` column selects as a `string`. Two caveats a reader needs:
+
+- The generated `Numeric` is `ColumnType<string, number | string, number | string>` — the select side
+  is a string, but an insert or update still *accepts* a JavaScript number. On the write path the
+  rule is a convention, not a compile-time guarantee.
+- Postgres reports every column of a view as nullable regardless of the underlying column, so
+  `holding_valued` comes out entirely `| null`. That is why `valuation.server.ts:96-109` exists: a
+  `required()` narrower that throws, wrapped around fifteen columns in `toValuedHolding`. The view is
+  typed *from* a table, not typed *like* one.
+
+CI verifies the committed types match the schema (`npm run db:types -- --verify`), which is what makes
+regeneration after a migration mandatory rather than remembered.
 
 ---
 
@@ -640,23 +726,46 @@ four screens, each a real URL with no client state, over one staging row.
 
 #### The pipeline
 
+```mermaid
+flowchart TD
+    D[("upload_draft<br/><b>.raw_file</b> — the file, verbatim<br/><b>.mapping</b> — set by the columns step")]
+
+    D -.->|"every screen starts again<br/>from these bytes"| C
+    D -.-> I
+    D -.-> R
+
+    subgraph C["step 2 — COLUMNS"]
+        C1["readCsv"] --> C2["parseStatement<br/><i>folds lots by RAW STRING</i>"] --> C3["save .mapping on the draft"]
+    end
+
+    subgraph I["step 3 — INSTRUMENTS"]
+        I1["readCsv"] --> I2["parseStatement"] --> I3["unresolvedStrings"] --> I4["resolveAll"]
+    end
+
+    subgraph R["step 4 — REVIEW"]
+        R1["readCsv"] --> R2["parseStatement"] --> R3["assembleDiff<br/><i>folds AGAIN, by RESOLVED instrument</i>"] --> R4["commitUpload<br/>one transaction"]
+    end
+
+    A[("instrument_alias")]
+    I4 -->|writes| A
+    A -->|"read back — never handed<br/>over in memory"| R3
+
+    classDef store fill:#f2efe6,stroke:#8a7a5c,color:#3b3222
+    class D,A store
 ```
-  bytes                rows                 positions              instruments            a set
-    │                    │                     │                       │                    │
-    ▼                    ▼                     ▼                       ▼                    ▼
-┌────────┐   ┌────────────────────┐   ┌──────────────────┐   ┌──────────────────┐   ┌──────────────┐
-│ upload │──▶│      csv.ts        │──▶│   statement.ts   │──▶│instrument-       │──▶│  uploads.    │
-│ _draft │   │  readCsv(bytes,    │   │  parseStatement( │   │resolution.server │   │  server.ts   │
-│  row   │   │          delim?)   │   │    rows, mapping)│   │  resolveAll()    │   │ commitUpload │
-└────────┘   └────────────────────┘   └──────────────────┘   └──────────────────┘   └──────────────┘
-             sniffs delimiter,        applies the column      byte-exact alias       one transaction:
-             tolerates preambles,     mapping; folds tax      lookup; asks once      position_set +
-             footers, ragged rows;    lots; refusals are      per unseen string;     holdings, draft
-             NEVER throws on          DATA addressed to a     writes vocabulary      deleted
-             content                  row and a column        immediately
-                    │                          │                       │                    │
-                    └── pure, no DB ───────────┘                       └── writes ──────────┘
-```
+
+**Nothing passes between steps in memory.** Each screen re-reads the draft's bytes, re-parses them
+through the saved mapping, and re-resolves against the alias table. `resolveAll` is not a stage that
+hands its output to the commit — it has one caller, the instruments route, and it communicates with
+the commit only by having written rows into `instrument_alias`. That is what makes a reload, the back
+button and a bookmarked half-finished upload all behave, and it is why the mapping records its own
+delimiter rather than letting a second sniff reach a different verdict.
+
+**Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:660`) folds
+again by the *resolved instrument*, so two spellings of one fund — `FCASH` and `CASH & CASH
+INVESTMENTS` — collapse once the alias table says they are the same thing. The parser cannot do the
+second fold because it does not know about aliases.
 
 Both parsing halves are **pure** — no database, no request — so every awkward file in existence is a
 fixture and a test rather than a bug found on the review screen with a household's real statement in
@@ -673,11 +782,18 @@ Two invariants everything downstream leans on:
   `headerRow` is an index into these rows. Dropping a blank line would silently shift every mapping
   made against a file after it.
 
-**`parseStatement` returns refusals as data, not throws.** Each problem is addressed to a row and a
-column, because the mapping screen renders the refusal beside the row that caused it and remapping is
-the fix. A thrown error could name only the first fault, and a screen cannot point at a stack trace.
-Problems present means the file must not be committed; the positions that *did* parse are still
-returned so the screen has something to show beside the complaint.
+**`parseStatement` returns refusals as data, not throws.** Each problem carries the row and the column
+that caused it. The *column* is what the screen uses structurally — `problemFieldsOf`
+(`columns.tsx:209`) marks the offending `<select>` as invalid, because remapping is the fix; the row
+travels inside the message the reader sees ("on line 12"). A thrown error could name only the first
+fault, and a screen cannot point at a stack trace.
+
+Problems present means the file must not be committed. Whether anything is still returned depends on
+what went wrong, and the distinction matters: a *row's* problem does not discard the rows around it,
+so the screen has something to show beside the complaint. A problem with the **mapping itself** — a
+required column not named, a column name the header row does not carry — returns no positions at all
+(`statement.ts:283-290`), because nothing below it could be trusted. The second case is the ordinary
+one: a saved mapping meeting a renamed column.
 
 #### The step machine
 
@@ -686,31 +802,38 @@ stateDiagram-v2
     [*] --> Drop: POST /upload
     Drop --> Columns: draft created, older drafts swept
 
-    Columns --> Columns: parse problems — refused in place,<br/>each naming its row and column
+    Columns --> Columns: parse problems, or an instrument column<br/>empty on every data row — refused in place
     Columns --> Instruments: mapping saved, file raises<br/>a string no alias resolves
     Columns --> Review: mapping saved, every string known
 
     Instruments --> Review: resolveAll() — aliases written NOW,<br/>not at commit
 
-    Review --> Review: guards refuse — closed account,<br/>account-number disagreement,<br/>oversized product, majority removal
+    Review --> Columns: mapping no longer parses —<br/>DraftNotReadyError, resume where the answer is
+    Review --> Instruments: a first sighting reappeared
+    Review --> Review: guards refuse — see the commit flowchart
     Review --> Committed: commitUpload() — one transaction
     Committed --> [*]: redirect /accounts/:id?uploaded=<setId>
 
-    Columns --> Expired: swept at 24h / already committed
+    Columns --> Expired: swept at 24h / already committed /<br/>account closed underneath it
     Instruments --> Expired
     Review --> Expired
-    Expired --> [*]: one 404 page, not four
+    Expired --> [*]: one page, two renderings
 ```
 
 **Where the draft got to is a property of the row, not a status column.** `mapping` is null until the
 columns step passes; with one, the file's own strings decide between instruments and review.
-`parseDraft` computes that in one place, and `/upload/:draftId` — the bare address — is a loader with
-no page that redirects to whichever step is still owed. That is what makes a reload, the back button
-and a bookmarked half-finished upload all behave.
+`parseDraft` computes that in one place. `/upload/:draftId` matches two things: a layout
+(`upload/draft.tsx` — the page title, the step strip, and the one expired-draft error boundary all
+four steps throw into) and an index route with no page of its own (`upload/index.tsx`), whose loader
+redirects to whichever step is still owed. Nothing renders at the bare address; a screen there would
+be a fifth step nobody asked to stand on.
 
-**A dead draft is one 404, not four.** Swept, already committed, mistyped and belonging-to-a-closed-
-account all read the same expired-or-recorded page, because the reader's next move — start again from
-`/upload` — is the same in every case.
+**A dead draft is one page, not four.** Swept, already committed, mistyped and
+belonging-to-a-closed-account all reach the same expired-or-recorded boundary, because the reader's
+next move — start again from `/upload` — is the same in every case. The one variation is deliberate: a
+re-POSTed review knows which account the statement already landed in, so it throws
+`data({ accountId }, { status: 404 })` (`review.tsx:96`) and that rendering adds a second link to the
+account. Every other step throws a plain-string 404 and gets the single link.
 
 #### Column mapping: how a brokerage is remembered
 
@@ -758,6 +881,7 @@ sequenceDiagram
     IR->>PG: insert classification (new ones, deduped within the submit)
     IR->>PG: insert instrument
     IR->>PG: insert instrument_alias — ON CONFLICT: existing row wins
+    Note right of IR: Lost the race? The instrument this<br/>submit just created is DELETED rather<br/>than left as a duplicate.
     IR->>PG: COMMIT
     IR-->>R: ResolvedAlias[]
     R-->>U: redirect → review
@@ -772,53 +896,66 @@ There is deliberately **no skip**. A skipped row is a holding silently missing f
 
 #### Commit: the flow's one write
 
-`commitUpload` is the deepest function in the codebase — three parameters over six guards and a
-transaction. The guards run in this order, and the order is the design:
+`commitUpload` is the deepest function in the codebase — three parameters over an entry check, seven
+guards and a transaction. The order is the design:
 
 ```mermaid
 flowchart TD
-    A["commitUpload(draftId, input)"] --> B{"account closed?"}
+    A["commitUpload(draftId, input)"] --> A1{"draft still there?"}
+    A1 -->|no| R0["404 — swept, or already committed"]
+    A1 -->|yes| B{"account closed?"}
     B -->|yes| R1["refuse: a closed account's<br/>history does not change"]
     B -->|no| C{"posted accountId<br/>≠ draft's?"}
     C -->|yes| R2["refuse: stale or forged form"]
-    C -->|no| D["assembleDiff — parse, resolve, classify"]
+    C -->|no| D["assembleDiff — re-parse, re-resolve,<br/>fold by instrument, classify"]
     D --> E{"file names two<br/>different accounts?"}
     E -->|yes| R3["refuse naming both —<br/>never resolved by picking one"]
     E -->|no| F{"file's number ≠<br/>account's recorded number?"}
     F -->|yes| R4["refuse: a statement lands in<br/>the account it describes"]
-    F -->|no| G{"quantity × basis, or<br/>quantity × price,<br/>overflows numeric(20,4)?"}
-    G -->|yes| R5["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
-    G -->|no| H{"majority removed and<br/>not confirmed?"}
-    H -->|yes| R6["refuse, stating the ratio"]
-    H -->|no| T["BEGIN"]
+    F -->|no| G{"file dated itself?"}
+    G -->|no| G1{"posted asOf a real,<br/>non-future date?"}
+    G1 -->|no| R5["refuse: the statement date"]
+    G -->|yes| H
+    G1 -->|yes| H
+    H{"quantity × basis, or<br/>quantity × price,<br/>overflows numeric(20,4)?"}
+    H -->|yes| R6["refuse — the WRITE would succeed<br/>and the VIEW would then raise on<br/>every request, taking Holdings and<br/>Analysis down together"]
+    H -->|no| I{"majority removed and<br/>not confirmed?"}
+    I -->|yes| R7["refuse, stating the ratio"]
+    I -->|no| T["BEGIN"]
 
     T --> T1["DELETE the draft FIRST"]
     T1 --> T2{"0 rows deleted?"}
-    T2 -->|yes| R7["404 — a concurrent commit<br/>got here first; ABORT"]
+    T2 -->|yes| R8["404 — a concurrent commit<br/>got here first; ABORT"]
     T2 -->|no| T3["INSERT position_set"]
     T3 --> T4["INSERT holdings"]
-    T4 --> T5["COMMIT"]
-    T5 --> Z["redirect /accounts/:id?uploaded=setId"]
+    T4 --> T5["UPDATE account.external_account_number<br/>only where still null"]
+    T5 --> T6["COMMIT"]
+    T6 --> Z["redirect /accounts/:id?uploaded=setId"]
 
     classDef refuse fill:#f8eeee,stroke:#a05a5a,color:#3f2020
-    class R1,R2,R3,R4,R5,R6,R7 refuse
+    class R0,R1,R2,R3,R4,R5,R6,R7,R8 refuse
 ```
 
-Two of those deserve emphasis:
+Three of those deserve emphasis:
 
+- **The as-of guard is easy to miss** and sits in the middle of the run. When the file dates itself,
+  that date is used; when it does not, the date the reader typed is validated here — not in
+  `parseStatement`, which never saw it.
 - **The product guard.** A product past `numeric(20,4)` does not fail the *write* — it succeeds, and
   then `holding_valued` raises on every request afterwards, taking Holdings and Analysis down
   together. Checking both multiplications before storing turns a site-wide outage into one sentence
   about one row.
-- **Delete-first as the transaction's guard.** The draft's deletion leads. A concurrent commit that
-  got here first has already taken the row, so `numDeletedRows === 0` aborts everything. Nothing
-  before that point wrote anything.
+- **Delete-first as the transaction's guard.** The draft's deletion leads: a concurrent commit that
+  got here first has already taken the row, so `numDeletedRows === 0` aborts everything, and nothing
+  before that point wrote anything. The entry check at the top is the cheap version of the same
+  question; this one is the version that is safe under a race.
 
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
-*captured*: when the account has no number recorded and the committed file carries one, the commit
-writes it onto the account (`uploads.server.ts:1025`), so the guard arms itself on the first upload
-and every later statement is checked against it.
+*captured*, inside the same transaction: when the account has no number recorded and the committed
+file carries one, the commit writes it onto the account (`uploads.server.ts:1025-1032`, guarded by
+`where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
+itself on the first upload, and every later statement is checked against it.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
@@ -835,13 +972,15 @@ sequenceDiagram
     participant Q as quote table
     participant D as price_daily
 
+    T->>T: state.running?
+    Note right of T: In-process serialisation. An overlapping<br/>tick is DROPPED, never queued.
     T->>T: isMarketOpen(now, MARKET_TIMEZONE)?
     Note right of T: A cost optimisation. Nothing<br/>downstream trusts it.
     T->>PG: pg_try_advisory_lock(poller key)
-    alt another holder / a tick already running
-        T-->>T: skip — dropped, never queued
+    alt another process holds it
+        T-->>T: skip this tick
     end
-    T->>PG: select instruments where price_source = 'feed'
+    T->>PG: select instruments where price_source = 'feed'<br/>and symbol is not null
     T->>P: getQuotes([...symbols]) — one batch
     alt provider throws
         P-->>T: error
@@ -851,18 +990,23 @@ sequenceDiagram
     T->>PG: BEGIN
     loop each returned quote
         T->>Q: upsert price, yield, dividend, as_of, is_stale := false
+        T->>PG: update instrument.quote_type (only when the provider said something)
         T->>D: upsert close AT marketDateOf(quote.asOf, tz)
     end
     T->>Q: is_stale := true for everything that did not come back
     T->>PG: COMMIT
 ```
 
+A refresh writes three tables, not two: the two tiers below, plus `instrument.quote_type` when the
+provider names one, which is what keeps the Analysis screen's stocks-versus-funds split correct for
+instruments created before that column was filled in.
+
 **The two tiers, and why the split exists:**
 
 | Table | Cardinality | Lifecycle | Read by |
 |---|---|---|---|
 | `quote` | one row per instrument | overwritten in place | `holding_valued` — today's figures |
-| `price_daily` | one row per instrument per trading day | the immutable spine | `holding_valued_at(d)` — every historical figure |
+| `price_daily` | **at most** one row per instrument per trading day | the immutable spine | `holding_valued_at(d)` — every historical figure |
 
 **The single most important line in the pricing subsystem** is which date a close is filed under: *the
 date inside the quote's own timestamp, in the market's zone — never today's date.* Two silent failures
@@ -894,12 +1038,23 @@ as current. Instead the error is caught, the batch becomes empty, and every sele
 through the same path a symbol that did not come back takes: **the last known price is kept and used,
 and the row is flagged.** Never zeroed, never nulled into a sum.
 
+That holds for anything that has ever had a price. An instrument that has never been priced has no
+`quote` row to flag, so the stale update touches nothing and it stays `is_priced = false` in the view
+— which is the honest answer, and the one the coverage counts are built to report.
+
 **The freshness line reports the *oldest* `as_of`, not the newest.** A portfolio where ninety-nine
 instruments updated a second ago and one has been failing for a week would report itself current under
 a newest-first reading — which is exactly the "silently showing yesterday's net worth as though it
-were live" failure this application refuses. `priceFreshness` also excludes `fixed` and `manual`
-sources: every bank and loan account holds the seeded `USD` row, whose `as_of` is written once at
-install, and without that filter the "as of" line would be pinned to the install timestamp forever.
+were live" failure this application refuses. Two more properties of `priceFreshness` are load-bearing:
+
+- It excludes `fixed` and `manual` sources. Every bank and loan account holds the seeded `USD` row,
+  whose `as_of` is written once at install; without that filter the "as of" line would be pinned to
+  the install timestamp forever. A hand-typed price is as fresh as the person who typed it, and a
+  refresh loop has no claim on it.
+- It reads *through* `holding_valued`, so it is scoped to instruments actually held in an open
+  account, and counts `distinct instrument_id` rather than holdings — one fund held in three accounts
+  is one stale price, not three. An instrument nobody owns going stale is not a fact about anyone's
+  net worth, and reporting it would make the banner unclearable.
 
 **Poller hazards, all three handled explicitly** (`price-poller.server.ts`):
 
@@ -914,8 +1069,10 @@ would make Compose restart a perfectly healthy app.
 
 ### 6.3 Read path — dashboards
 
-Every screen that shows money reads through `valuation.server.ts`. Its public surface is nine reads
-falling out of three private helpers written once against both sources:
+Every screen that shows money reads through `valuation.server.ts`. It exports twelve reads. Seven of
+them go through the `ValuedSource` seam — `readHoldings`, `readTotal` and `readSeries`, written once
+and pointed at either source; the other five are their own queries inside the same module, which is
+the point: they are in the module, not scattered across routes.
 
 ```ts
 currentHoldings()              // every holding held right now, valued
@@ -928,7 +1085,17 @@ manualNetWorth() / netWorthChange() / firstRecordedDate()
 ```
 
 The seam is `ValuedSource` — `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
-type, so every read below the seam is written once and works for both.
+type, so a read built on it works for both. `accountTotals`, `accountTotal`, `netWorthChange`,
+`manualNetWorth` and `firstRecordedDate` sit beside it rather than on it: the first three hand-write
+aggregates the seam cannot express, and the last two deliberately read elsewhere — `manual_networth`
+for the pre-app series, and `position_set` for "when does history start", which must not depend on
+anything being priced.
+
+`netWorthSeries` deserves one note, because it is the only read whose SQL *shape* is load-bearing for
+correctness rather than for speed: the dates are joined laterally against `holding_valued_at(d.date)`
+with the narrowing pushed **inside** the lateral. A `WHERE` in the outer query would be evaluated
+after the join and would reject the all-null row a `LEFT JOIN` manufactures for an uncovered date,
+taking the uncovered date down with it. See §10.
 
 ```
    Screen                Reads                            Shape it groups by
@@ -939,6 +1106,10 @@ type, so every read below the seam is written once and works for both.
                                      7 dimensions: person · account · institution
                                      · kind · tax_treatment · classification
                                      · asset_class
+                                     (the view exposes an 8th, `instrument`;
+                                      holdings-view declines it deliberately —
+                                      a filter over the thing each row IS is a
+                                      search box wearing a dropdown)
    Analysis      currentHoldings ──▶ allocation.ts (pure)
                                      by person · by account kind · by asset class
                                      + unrealized gains and estimated tax
@@ -947,17 +1118,24 @@ type, so every read below the seam is written once and works for both.
 
 **No dashboard writes its own join.** Filtering, grouping and subtotalling happen as pure functions
 over the array the query layer already returned, because the grouping key is already on every row —
-`holding_valued` was built to expose exactly the eight dimensions §8.3 names. Three `GROUP BY`
-queries would be three more hand-rolled dashboard queries, which is the drift the view exists to
-prevent.
+`holding_valued` was built to expose exactly the eight dimensions DESIGN.md §8.3 names. Three
+`GROUP BY` queries would be three more hand-rolled dashboard queries, which is the drift the view
+exists to prevent.
 
-**Coverage travels with every figure.** A total is `{ amount, coverage: { known, total } }`, never a
-bare number, so a partial answer is labelled "based on 8 of 12 holdings" rather than quietly
-understated. An unpriced holding contributes nothing to `amount` and is counted in `coverage.total`.
+**Coverage travels with every figure computed from holdings.** Such a total is
+`{ amount, coverage: { known, total } }`, never a bare number, so a partial answer is labelled "based
+on 8 of 12 holdings" rather than quietly understated. An unpriced holding contributes nothing to
+`amount` and is counted in `coverage.total`. Two shapes are deliberately bare: `netWorthChange`, since
+a difference between two totals has no single coverage, and `ManualPoint`, since a hand-typed figure
+has none by definition.
 
 **A filter is only offered when it can discriminate.** `availableFilters` returns a dimension only if
 the data holds two or more distinct values for it, so a one-person household is never shown an Owner
-select that can only mean "everyone", and no *single* filter can select an empty table.
+select that can only mean "everyone". One exception, and it is the right one: a dimension that already
+carries a selection is returned anyway, with a "Not in this portfolio" option synthesised if the
+selected key matches nothing (`holdings-view.ts:484-497`). A stale bookmark from before an account
+closed therefore shows an empty table the reader can *see and clear*, rather than being silently
+widened behind their back.
 
 **History starts at the first upload.** An account with no position set at or before a date
 contributes **no rows** — not a zero. Callers read `coverage.total` rather than the amount to decide
@@ -974,12 +1152,26 @@ more ceremony than the fact deserves.
 | Where | Account page, `bank` and `liability` only | Inline on the Holdings table |
 | Module | `balances.server.ts` | `positions.server.ts` |
 | Writes | `position_set(source='manual')` + one `USD` holding | `position_set(source='manual')` + the whole account carried forward, one row changed |
-| The sign | **Derived, never typed** — the household types what they owe and the module negates it | **Refused if it flips** — the box shows the current sign, so reversing it asserts an asset became a debt |
-| Guards | Closed account; kind must accept it | Closed account; position still present; direction unchanged; both products fit `numeric(20,4)` |
+| The date the set carries | Taken from the form | `greatest(effectiveDate(before.asOf), the set it corrects)`, computed in SQL — a correction can never file *behind* the statement it corrects |
+| The sign | **Derived, never typed** — the household types what they owe and the module negates it | **Refused if it flips in one edit** — zero matches either direction, so a genuine reversal is two deliberate edits, which is what the refusal tells the reader to do |
+| Guards, in order | Account exists → kind accepts it → not closed → fields parse → the seeded `USD` row exists | Account exists → not closed → position still present → fields parse → direction unchanged → both products fit `numeric(20,4)` |
+| Atomicity | One statement — a data-modifying CTE | Same, plus the "is this position still here" check repeated **inside** the write; zero rows written is the refusal |
+
+**Why one statement and not two.** A `position_set` that landed without its holdings would not read as
+a failed write. It would read as a *successful* one meaning "this account now holds nothing" — and by
+the tie-break it would outrank every earlier statement. Both writers are therefore a single
+data-modifying CTE, so the set and its rows exist together or not at all.
+
+**Why the position is checked twice.** `currentPosition` runs before the write as an ordinary
+pre-check, so the form can refuse politely. That check races. The one that does not is inside the
+write: the `source` CTE selects `latest_position_set(...)` *and* requires the instrument still be in
+it, so an account that changed underneath the open form produces no rows, and "nothing landed" is
+turned into the refusal (`positions.server.ts:349-392`).
 
 Both differ from an upload only in carrying `source = 'manual'` and no filename. Nothing downstream
 learns a new shape: `latest_position_set` picks the new set up by the same tie-break, and every figure
-in the application moves because one row landed in the table they all already read.
+in the application moves because one row landed in the table they all already read. That is the whole
+argument for routing them through the same mechanism instead of giving each a code path.
 
 Why the sign is handled differently in the two: a form that accepts a signed number accepts `14500`
 for a debt, which does not fail — it silently moves household net worth by twice the loan.
@@ -997,7 +1189,7 @@ Three error types, and the layer each one is answered at.
 | Type | Raised by | Carries | Answered by | Becomes |
 |---|---|---|---|---|
 | `ValidationError` | domain modules | `FieldErrors` — a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
-| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })` |
+| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `upload/review.tsx:99` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
 | `DraftNotReadyError` | `uploads.server.ts` | the step still owed | the upload routes | a redirect to that step |
 
 **A refusal is an ordinary outcome of a form submission — never a 500.** That rule is what keeps
@@ -1015,16 +1207,18 @@ still-shutting-down container, and a determined operator can run two.
 
 | Race | Guard | Where |
 |---|---|---|
-| Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it | `server/migrations.ts` |
+| Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
 | Two poller ticks in different processes | Advisory lock per tick, distinct key | `price-poller.server.ts` |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
 | Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
-| A form posted against a position that moved | `currentPosition` re-read inside the write, refusing if it is gone | `positions.server.ts` |
+| A form posted against a position that moved | The write's own `source` CTE requires the position still be in the latest set; zero rows written *is* the refusal. `currentPosition` at `:287` is the earlier, racing pre-check | `positions.server.ts:349-392` |
 | An account closed while a draft sat open | Checked *before* field validation, in every write path | all three writers |
 
-The advisory lock keys are arbitrary constants that must not change, and must not collide — a cold
-start with a shared key would have a poll and a migration blocking each other for no reason.
+The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
+`7295380114023641` (migrations) and `…42` (poller). With a shared key the collision would be
+one-directional rather than mutual: the migration takes a blocking `pg_advisory_lock` and would queue
+behind a poll, while the poller takes `pg_try_advisory_lock` and would simply drop its tick.
 
 **`inTransaction` and the test seam.** Three modules carry the same small helper:
 
@@ -1076,13 +1270,15 @@ and it never requires credentials.
                     ┌───────────┴────────────┐
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
-        the ONLY importer of          implements this and nothing else;
-        yahoo-finance2                CI never reaches the network
+        the only importer in app/     implements this and nothing else;
+        (price-provider.server:303)   the refresh tests reach no network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
 makes that tolerable is that swapping it is a day's work — which is only true while this interface is
-the sole thing the write path imports.
+the sole thing the write path imports. One test imports the library directly
+(`tests/price-provider.test.ts:300-324`), deliberately, to pin the static-versus-instance shape the
+adapter depends on.
 
 Three conversions happen at this boundary and nowhere else:
 
@@ -1105,14 +1301,15 @@ implying more.
 |---|---|
 | Authentication | **Optional.** `AUTH_PASSWORD` enables one password, one signed cookie, one login page. Unset means open, with a persistent UI banner |
 | Authorisation | None. There is no user table and no per-person permissions — every session sees everything |
-| Enforcement point | One middleware on the root route. **Deny-by-default**: everything not on a short open list is refused, including paths that do not exist yet |
+| Enforcement point | One middleware on the root route. **Deny-by-default for every routed path**: everything not on `auth.server.ts:40`'s open list (`/healthz`, `/login`) is refused, including routes that do not exist yet. Static assets and `public/` are served ahead of the router and are **not** gated |
 | Session revocation | Sessions are pinned to a SHA-256 of the password, so changing `AUTH_PASSWORD` logs everyone out. That is the only revocation an instance with no user table can offer |
 | Password comparison | `timingSafeEqual` over hashes |
 | Cookie `Secure` | Chosen from the *browser's* scheme via `X-Forwarded-Proto`, not the app's own — behind a TLS-terminating proxy the request arrives over plain HTTP and the cookie must still be `Secure` |
 | Session storage | A signed cookie and nothing else. The container is `read_only`, which a file-backed store would discover on the first login |
 | TLS | **Not configured.** The app serves plain HTTP and never manages certificates; terminating TLS is Caddy's job once a real hostname is set |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
-| SQL injection | Kysely parameterises; the `sql` template tag is used only with bound values |
+| SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers (`valuation.server.ts:166,369` — the `accountId` there is bound behind a `/^\d+$/` guard) |
+| Error disclosure | **Any uncaught error's `message` reaches the page** (`root.tsx:223-227`). On the default deployment, with `AUTH_PASSWORD` unset, that reader is unauthenticated, and a Postgres error is the likely text (§11.3) |
 
 **The forwarded-header decision, stated plainly.** The app trusts `X-Forwarded-*` unconditionally, and
 that trust has one deployment requirement behind it: **the app must not be reachable directly**,
@@ -1127,6 +1324,11 @@ gate reads none of it.
 1. Service workers require a secure context, so an instance served over plain HTTP at a LAN IP
    **cannot install as a PWA on a phone**.
 2. The login cookie will not carry `Secure`, because the browser's scheme is `http`.
+
+**What this posture is not.** It is sized for a household LAN. An instance exposed to the internet
+needs, at minimum, TLS terminated in front of it, `AUTH_PASSWORD` set, and the error-disclosure row
+above dealt with. None of those is the app refusing to work — they are choices the operator has to
+make, and this table is here so they can be made knowingly.
 
 ---
 
@@ -1146,9 +1348,11 @@ Three stages, each with one job:
 │ npm run build          → client and server bundles, via Vite          │
 │ npm prune --omit=dev   → the production tree, guaranteed a SUBSET of  │
 │                          the one the build was verified against       │
-│ rm -rf node_modules/typescript                                        │
+│ rm -rf node_modules/typescript \                                      │
+│        node_modules/.bin/tsc node_modules/.bin/tsserver               │
 │   ── tsc is an OPTIONAL PEER of @react-router/node, kept by prune;    │
-│      the runtime stage is specified to contain no compiler            │
+│      the runtime stage is specified to contain no compiler, and the   │
+│      two bin symlinks would otherwise still resolve                   │
 └───────────────────────────────┬───────────────────────────────────────┘
 ┌─ runtime ─────────────────────▼───────────────────────────────────────┐
 │ node:24-slim · USER node · NODE_ENV=production TZ=UTC PORT=3000       │
@@ -1171,21 +1375,32 @@ migration runner.
 `.github/workflows/ci.yml`, on every push to `main` and every PR:
 
 ```
-npm ci
-  └─▶ npm run typecheck    ── react-router typegen && tsc --noEmit
-  │                           The runtime strips types WITHOUT checking them,
-  │                           so this is the only place they are verified.
-  └─▶ npm run build
-  └─▶ compose -f compose.test.yaml up -d --wait   ── a REAL Postgres
-      └─▶ npm run migrate
-      └─▶ npm test
-      └─▶ npm run db:types -- --verify
-            ── the committed types are derived from the live database, so a
-               migration landing without a regeneration would silently leave
-               every query typed against the old schema
+job: check
+  npm ci
+    └─▶ npm run typecheck    ── react-router typegen && tsc --noEmit
+    │                           The runtime strips types WITHOUT checking them,
+    │                           so this is the only place they are verified.
+    └─▶ npm run build
+    └─▶ compose -f compose.test.yaml up -d --wait   ── a REAL Postgres
+        └─▶ npm run migrate
+        └─▶ npm test
+        └─▶ npm run db:types -- --verify
+        │     ── the committed types are derived from the live database, so a
+        │        migration landing without a regeneration would silently leave
+        │        every query typed against the old schema
+        └─▶ compose down -v   (if: always())
+
+job: smoke                    ── runs in parallel, on a clean runner
+  ./scripts/smoke-test.sh
+    ── the ONLY test of everything §3.1 and §3.2 claim: compose up on an
+       empty volume, the app waiting for Postgres rather than racing it,
+       migrations running at startup, a restart skipping applied ones,
+       and the .sql files actually being present in the runtime image
 ```
 
-That last step is what makes the regeneration step in the README mandatory rather than remembered.
+The `db:types -- --verify` step is what makes regeneration after a migration mandatory rather than
+remembered. The `smoke` job is the only thing standing between a `compose.yaml` or `Dockerfile` edit
+and a broken deployment — the `vitest` suite cannot see either file.
 
 ### 8.3 Adding a migration
 
@@ -1206,12 +1421,15 @@ clean state rather than resuming halfway through.
 
 ## 9. Testing architecture
 
-**35 test files, 581 cases, against a real Postgres.** No mock, no in-memory substitute, no
-SQLite. The risk this codebase carries lives in Postgres-specific SQL and in `numeric` handling, and
-both disappear under a substitute: a fake database would pass while the real one silently rounded
-money or resolved the wrong position set.
+**35 test files, 590 `it(…)` declarations — 638 cases once the nine `it.each` tables expand — against
+a real Postgres.** No mock, no in-memory substitute, no SQLite. The risk this codebase carries lives
+in Postgres-specific SQL and in `numeric` handling, and both disappear under a substitute: a fake
+database would pass while the real one silently rounded money or resolved the wrong position set.
 
-### 9.1 The two seams
+Alongside the `vitest` suite there is exactly one other test: `scripts/smoke-test.sh`, run as its own
+CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and §8.1.
+
+### 9.1 The three groups
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -1227,10 +1445,17 @@ money or resolved the wrong position set.
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Pure-module tests                        20 files                       │
+│  Direct Postgres, no rollback wrapper      2 files                       │
+│  migrations.test.ts · numeric.test.ts                                    │
+│  They open their own pool because what they test IS the pool and the     │
+│  migration runner — the things withDatabase depends on.                  │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Genuinely pure                           18 files                       │
 │  csv · statement · money · market-hours · holdings-view · allocation     │
-│  · format · config · forwarded                                           │
-│  No database at all, because those modules have none. Six real brokerage │
+│  · format · config · forwarded · …                                       │
+│  No database, because those modules have none. Six real brokerage        │
 │  exports live in tests/fixtures/statements/.                             │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1241,9 +1466,13 @@ gets in the way of server-module tests.
 
 ### 9.2 Rules the suite is held to
 
-- **Seed through the builder, never raw SQL.** `tests/support/fixtures.ts` exposes `seedPerson`,
-  `seedAccount`, `seedPositionSet`, `seedQuote`, `seedDailyClose`. Raw `INSERT` statements belong in
-  the builder and nowhere else — that is what keeps a schema change from rewriting every test.
+- **Seed through the builder, never raw SQL.** `tests/support/fixtures.ts` exposes eleven builders —
+  `seedPerson`, `seedAccount`, `seedClassification`, `seedInstrument`, `seedInstrumentAlias`,
+  `seedPositionSet`, `seedQuote`, `seedDailyClose`, `seedUploadDraft`, `seedManualNetWorth`, and
+  `usdInstrument`. Raw `INSERT` statements belong in the builder and nowhere else — that is what keeps
+  a schema change from rewriting every test. One live exception, now stale: `plantAlias` in
+  `column-mapping.test.ts:54` inserts aliases directly, justified by a domain writer that did not
+  exist at the time and does now (§11.3).
 - **Test what would hurt to break**: domain rules, money and quantity maths, ingest and parsing edges,
   and a reproducing case for every bug fixed. Tests that assert framework behaviour, restate the
   implementation line by line, or mock so heavily they only exercise the mock are deliberately absent.
@@ -1252,11 +1481,17 @@ gets in the way of server-module tests.
 
 ### 9.3 The standing constraint
 
-**No test in this repo imports a route.** There is no `@testing-library`, `happy-dom` or `jsdom` in
-`package.json`, so anything living in a route module is untestable by construction. This is worth
-treating as a design constraint rather than a gap: it is the strongest argument for keeping routes as
-thin translators, and it is why logic keeps migrating out of `app/routes/**` and into `app/lib/**`.
-The two `.test.tsx` files test components in isolation, not routes.
+**No test imports a module under `app/routes/**`.** Three import `app/root.tsx`: `root-gate.test.ts`
+drives the gate middleware directly, and both `.test.tsx` files render `root.tsx`'s `Layout` through
+`createRoutesStub` and `renderToStaticMarkup` — shell behaviour rather than isolated components, and
+deliberately so, because the rule being protected is "every page carries the banner", which a
+component test would not notice the shell dropping.
+
+What those three demonstrate is the useful version of this constraint: a route module *is* testable
+when its logic is an **export** rather than a closure inside a loader. Everything currently living
+inside a loader body — `describe(filters)` in `holdings.tsx`, the chart-range helpers — is untestable
+not by framework limitation but by where it was put. That is a stronger argument for thin routes than
+"routes cannot be tested", and it is the one this repo actually supports.
 
 ---
 
@@ -1265,6 +1500,10 @@ The two `.test.tsx` files test components in isolation, not routes.
 The design target is one household: two to four people, a dozen accounts, of the order of 100
 instruments, and three or four statement uploads a quarter. Every structural choice below is sized to
 that, and each would be wrong at a hundred times the scale.
+
+The figures below describe the design target, not a measurement: there is no benchmark and no
+`EXPLAIN` output in the repo. The demo household in `scripts/seed-demo.ts` — two people, six accounts,
+three years of statements — is the largest dataset anything here has actually been run against.
 
 | Choice | Right here because | Would break at |
 |---|---|---|
@@ -1275,10 +1514,12 @@ that, and each would be wrong at a hundred times the scale.
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
 
-**The one query that is genuinely hot** is `latest_position_set`, called once per account per read.
+**Two indexes carry the read path.** `latest_position_set` runs once per account per read, and
 `position_set_account_as_of_idx` matches its ordering exactly, so it is an index scan stopping at the
-first row. It is also the one place where a schema change could quietly cost real time: adding a
-column to that ordering without adding it to the index would turn every dashboard read into a sort.
+first row; adding a column to that ordering without adding it to the index would turn every dashboard
+read into a sort. The carry-forward lateral inside `holding_valued_at` runs far more often — once per
+holding per plotted date — and rides `price_daily`'s primary key for the same stop-at-the-first-row
+reason.
 
 **`netWorthSeries` is one round trip, not one per point.** The dates are joined laterally against
 `holding_valued_at(d.date)`, with the narrowing pushed *inside* the lateral — a `WHERE` in the outer
@@ -1312,8 +1553,9 @@ disagree**, and the first thing to check in a review of any new dashboard.
 
 ### 11.3 Live architectural debt
 
-From the review in [`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md),
-which was run adversarially against the codebase rather than against its own claims:
+Two sources, labelled rather than blended. **From the architecture review**
+([`docs/research/2026-08-23-architecture-review.md`](docs/research/2026-08-23-architecture-review.md)),
+still live in the current code:
 
 - **One predicate, computed twice, at two instants.** "Does this file raise a first sighting?" is
   computed inside `saveMapping` (to persist `had_first_sightings`) and again in the columns route (to
@@ -1327,18 +1569,34 @@ which was run adversarially against the codebase rather than against its own cla
 - **`labelOf` exists three times**, in `account-options.ts`, `allocation.ts` and `holdings-view.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
   `accountInput` would produce a refusal nobody sees. Latent rather than live.
-- **Logic stranded in route modules** — `describe(filters)` in `holdings.tsx` among it — is untestable
-  by construction (§9.3).
+- **Logic stranded in route module bodies** — `describe(filters)` in `holdings.tsx` among it —
+  untestable where it currently sits (§9.3).
+- **`<FieldError>` is open-coded at roughly fifteen sites**, behind three differently-named local
+  helpers.
+- **The poller's tick/lock/release discipline has no test.** There is no `tests/price-poller.test.ts`,
+  so the three hazards §6.2 lists and the two rows §7.2 gives them are argued rather than verified.
+  Of everything on this page, that is the claim to trust least.
+
+**Found while writing this document**, not from the review:
+
 - **One stale schema comment.** `migrations/0001_initial_schema.sql:61` describes
   `external_account_number` as "used to auto-select the account on upload". The shipped ingest slice
   made it a guard and a capture instead, and nothing in `app/` selects an account by it. The column is
   right; the comment predates the decision.
+- **`MAX_UPLOAD_MB` is not wired through `compose.yaml`**, so under the documented deployment the cap
+  is permanently 10 MB whatever an operator puts in `.env` (§3.3).
+- **`statement.ts:32` imports a `.server` module as a value** (§4.3). It stays out of the client
+  bundle only by tree-shaking.
+- **Uncaught error messages render to the page** (`root.tsx:223-227`), unauthenticated on the default
+  deployment (§7.6).
+- **`plantAlias` in `column-mapping.test.ts:54`** inserts fixtures raw, on a justification that has
+  since expired — both the domain writer and a `seedInstrumentAlias` builder now exist.
 
 ### 11.4 Where the next feature probably goes
 
 | Wanted | Likely shape |
 |---|---|
-| A saved view builder (DESIGN.md §8.3) | `holdings-view.ts` already models the eight dimensions; the missing piece is persistence, plus absorbing the five array calls in `holdings.tsx` into a `holdingsTable` |
+| A saved view builder (DESIGN.md §8.3) | `holdings-view.ts` already models seven of §8.3's eight dimensions — `instrument` is deliberately excluded — so the missing piece is persistence, plus absorbing the five array calls in `holdings.tsx` into a `holdingsTable` |
 | A second price provider | Implement `PriceProvider` and change one construction site. The interface was built for this |
 | TLS | A real hostname in the `Caddyfile` site block. Nothing in the app changes — it already reads the browser's scheme from `X-Forwarded-Proto` |
 | Dividend history | A transaction ledger, and therefore a different ingest problem. Not an extension of this schema |
@@ -1351,7 +1609,7 @@ which was run adversarially against the codebase rather than against its own cla
 
 | File | Role |
 |---|---|
-| `config.ts` | The whole configuration API. The only reader of `process.env`. Pure, side-effect free |
+| `config.ts` | The whole configuration API. `loadConfig(env)` is pure — it neither reads `process.env` nor exits, which is what lets it run under Node's type stripping at container start; `getConfig()` is the one place a value is read and cached |
 | `db.ts` | The only Postgres pool construction site, because the type-parser overrides are registered here |
 | `migrations.ts` | Discovery, ledger, advisory lock, per-file transactions |
 | `migrate.ts` | The CLI the entrypoint runs |
@@ -1362,7 +1620,7 @@ which was run adversarially against the codebase rather than against its own cla
 | File | Role |
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, and `/healthz`'s report |
-| `valuation.server.ts` | **The only reader of `holding_valued` for valuation.** Nine reads over one seam |
+| `valuation.server.ts` | **The only reader of `holding_valued` for valuation.** Twelve exports: ten valuation reads, seven of them over the `ValuedSource` seam, plus `manualNetWorth` and `firstRecordedDate`, which deliberately read elsewhere |
 | `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload` — the ingest flow's one write |
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
@@ -1371,7 +1629,9 @@ which was run adversarially against the codebase rather than against its own cla
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
 | `balances.server.ts` | Setting a single-position balance; the sign is derived, never typed |
-| `accounts.server.ts` / `people.server.ts` | The management surface. Nothing is ever deleted |
+| `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement |
+| `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
+| `account-options.ts` | The account-kind and tax-treatment option lists the forms are built from. Pure |
 | `settings.server.ts` | The capital gains rate |
 | `auth.server.ts` | The optional gate — deny-by-default, one cookie |
 | `forwarded.server.ts` | Reading the request as the client actually made it |
@@ -1379,7 +1639,7 @@ which was run adversarially against the codebase rather than against its own cla
 | `input.server.ts` | `ValidationError`, `parseInput`, and the shared field shapes |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
-| `statement.ts` | Rows to positions. Pure; refusals are data addressed to a row and column |
+| `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
 | `holdings-view.ts` | The Holdings table: seven dimensions, filtering, grouping, subtotals |
 | `allocation.ts` | Three allocation cuts plus unrealized gains by asset type |
 | `market-hours.ts` | `isMarketOpen` (an optimisation) and `marketDateOf` (a correctness mechanism) |
@@ -1404,12 +1664,12 @@ which was run adversarially against the codebase rather than against its own cla
 |---|---|
 | **Position set** | One photograph of everything an account held on one date. The unit of ingest. Immutable |
 | **Holding** | One instrument within a position set: a signed quantity and an optional cost basis per share |
-| **Latest** | `max(as_of_date)` per account, tie-broken by `created_at desc, id desc`. Defined once, in `latest_position_set` |
+| **Latest** | `max(as_of_date)` per account, tie-broken by `created_at desc, id desc`. Defined once in SQL, in `latest_position_set`; `uploadReceipt` restates the ordering to reach a set's *predecessor*, which the function cannot express |
 | **First sighting** | A raw instrument string with no `instrument_alias` row behind it. Asked about once, remembered forever |
 | **Alias** | A byte-exact raw string from a statement, mapped to an instrument. `collate "C"` — no trimming, no case folding |
 | **Fingerprint** | SHA-256 over a normalised header row. Order-sensitive, case-insensitive |
 | **Coverage** | `{ known, total }` beside every figure, so a partial answer is labelled partial rather than understated |
 | **Stale** | A price that exists and failed to refresh. Distinct from **unpriced**, which is a price that has never existed |
 | **Carry-forward** | Resolving a date to the last `price_daily` close at or before it. Why Saturday is worth Friday's close, and why USD prices at 1.00 on any date |
-| **The spine** | `price_daily` — one row per instrument per trading day. Non-trading days get no row at all |
-| **Draft** | An in-progress upload. Scaffolding, not history: cascaded on account delete, swept at 24 hours |
+| **The spine** | `price_daily` — at most one row per instrument per trading day. Non-trading days get no row at all, and a missed poll is a visible gap the carry-forward closes |
+| **Draft** | An in-progress upload. Scaffolding, not history: swept at 24 hours, deleted by its own commit, and unreachable the moment its account closes. The FK cascades on account delete, which nothing in the application does |
