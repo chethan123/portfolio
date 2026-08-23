@@ -45,16 +45,14 @@
  * either job by hand.
  */
 import { ACCOUNT_KINDS, TAX_TREATMENTS, type Option } from "./account-options.ts";
-import { ASSET_CLASSES } from "./allocation.ts";
+import { ASSET_CLASSES, allocateShares } from "./allocation.ts";
 import {
   MONEY_SCALE,
   QUANTITY_SCALE,
   SHARE_SCALE,
   compareDecimal,
-  divide,
   render,
   sumMoney,
-  toUnits,
 } from "./money.ts";
 
 import type { AccountKind, Coverage, TaxTreatment, ValuedHolding } from "./valuation.server.ts";
@@ -586,7 +584,9 @@ export type HoldingsGroup = {
    * Decimal string, six places, of the **gross positive total** — the same
    * denominator `allocation.ts` argues for at length, so that a liability's
    * share stays finite and keeps its sign as the household's net worth crosses
-   * zero, and so the positive groups sum to `1.000000`. A screen must read the
+   * zero, and so the positive groups sum to `1.000000` exactly — `allocateShares`
+   * hands the units independent rounding loses back to the largest remainders,
+   * rather than leaving the column a millionth short. A screen must read the
    * sign before it draws a width from it, and must say which denominator it
    * used: it is not a share of the total printed at the foot of the table, and
    * with a liability in the set the two differ.
@@ -638,22 +638,28 @@ export function groupHoldings(
     ...totalOf(bucket.holdings),
   }));
 
-  // The denominator: the positive groups only. See `allocation.ts` for why this
-  // is not the net total.
-  const base = summed.reduce((sum, group) => (group.units > 0n ? sum + group.units : sum), 0n);
+  // Sorted before the shares are worked out: `allocateShares` breaks its ties
+  // on position, and the rendered order is the one they have to be broken in.
+  const ordered = summed.sort((a, b) =>
+    a.units === b.units ? compareText(a.label, b.label) : a.units > b.units ? -1 : 1,
+  );
 
-  return summed
-    .sort((a, b) => (a.units === b.units ? compareText(a.label, b.label) : a.units > b.units ? -1 : 1))
-    .map(({ key, label, holdings: rows, total }) => ({
-      key,
-      label,
-      holdings: rows,
-      total,
-      share:
-        base === 0n || total.value === null
-          ? null
-          : render(divide(toUnits(total.value, MONEY_SCALE), base, SHARE_SCALE), SHARE_SCALE),
-    }));
+  // The denominator, out of the positive groups only, is `allocateShares`'s to
+  // work out. What it cannot decide is the difference between a share of zero
+  // and no share at all, so the one case where there is no base to be a
+  // fraction of is still asked here. See `allocation.ts` for why the base is
+  // not the net total.
+  const anyPositive = ordered.some((group) => group.units > 0n);
+  const shares = allocateShares(ordered.map((group) => group.units));
+
+  return ordered.map(({ key, label, holdings: rows, total }, index) => ({
+    key,
+    label,
+    holdings: rows,
+    total,
+    share:
+      !anyPositive || total.value === null ? null : render(shares[index] ?? 0n, SHARE_SCALE),
+  }));
 }
 
 /* -------------------------------------------------------------------------- */

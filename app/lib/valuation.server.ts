@@ -376,6 +376,18 @@ function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
  * A liability account sorts to the bottom by construction rather than by a
  * branch, because its positions sum negative (DESIGN.md §2).
  *
+ * Row for row the same answer {@link accountTotal} gives for each of those
+ * accounts, and that agreement is the rule rather than a coincidence of two
+ * queries that happen to match: the overview's row and the drill-down's
+ * headline are one figure shown twice, so they are grouped the same way from
+ * the same source. Grouping the view directly would be an inner join, which
+ * silently drops exactly the accounts the LEFT join below exists to keep —
+ * see {@link accountTotal} for why an empty account is `0.0000` over zero rows
+ * rather than missing.
+ *
+ * A zero-total account therefore sorts between the assets and the liabilities,
+ * which is where a zero belongs, and ties break on name like any other.
+ *
  * @param db a handle to read through. Defaults to the process-wide one; tests
  *           pass a transaction they roll back.
  */
@@ -383,22 +395,38 @@ export async function accountTotals(
   db: Kysely<Database> = getDb(),
 ): Promise<AccountTotal[]> {
   const rows = await db
-    .selectFrom(valuedNow())
+    .selectFrom("account")
+    .innerJoin("person", "person.id", "account.owner_id")
+    .leftJoin("holding_valued", "holding_valued.account_id", "account.id")
     .select([
-      "account_id",
-      "account_name",
-      "institution",
-      "account_kind",
-      "owner_name",
-      sql<string>`cast(coalesce(sum(value), 0) as numeric(20, 4))`.as("amount"),
-      sql<string>`count(*) filter (where is_priced)`.as("known"),
-      sql<string>`count(*)`.as("total"),
+      "account.id as account_id",
+      "account.name as account_name",
+      "account.institution as institution",
+      "account.kind as account_kind",
+      "person.name as owner_name",
+      sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
+      // `is_priced` is null on the row the left join manufactures for an
+      // account with no holdings, and a null does not pass the filter.
+      sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
+      // Counts the joined column rather than the row, for the same reason:
+      // `count(*)` would score that manufactured row as one holding.
+      sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
-    .groupBy(["account_id", "account_name", "institution", "account_kind", "owner_name"])
-    // `sum(value)` again rather than the aliased `amount`: an alias is not in
+    // The view already drops closed accounts; joining from `account` reaches
+    // past that, so the rule has to be restated here to keep a closed account
+    // out rather than let it in as one holding nothing.
+    .where("account.closed_at", "is", null)
+    .groupBy([
+      "account.id",
+      "account.name",
+      "account.institution",
+      "account.kind",
+      "person.name",
+    ])
+    // `sum(...)` again rather than the aliased `amount`: an alias is not in
     // scope in ORDER BY across every Postgres version this may meet.
-    .orderBy(sql`coalesce(sum(value), 0)`, "desc")
-    .orderBy("account_name")
+    .orderBy(sql`coalesce(sum(holding_valued.value), 0)`, "desc")
+    .orderBy("account.name")
     .execute();
 
   return rows.map(toAccountTotal);
@@ -411,13 +439,15 @@ export async function accountTotals(
  * Deliberately the same {@link AccountTotal} the list above returns rather than
  * a second, drill-down-shaped type: the figure at the top of an account page
  * and the figure in its row on the overview are one arithmetic over one view,
- * and giving them separate types is how they would come to disagree.
+ * and giving them separate types is how they would come to disagree. The two
+ * must also agree value for value — {@link accountTotals} is this query
+ * without the id filter, and an account either appears in both or in neither.
  *
- * Grouped from `account` with the view LEFT joined onto it, which is the only
- * difference that matters here: an account whose statements are all empty — a
- * brokerage sold down to nothing, an account created before its first upload —
- * has no rows in the view at all, and an inner join would report it as missing
- * rather than as holding nothing. It comes back as `0.0000` over a coverage of
+ * Grouped from `account` with the view LEFT joined onto it, which is what makes
+ * that possible: an account whose statements are all empty — a brokerage sold
+ * down to nothing, an account created before its first upload — has no rows in
+ * the view at all, and an inner join would report it as missing rather than as
+ * holding nothing. It comes back as `0.0000` over a coverage of
  * zero rows, which says "nothing to value" and not "worth nothing".
  *
  * Null covers both an id that names no account and a closed one. Closed is not

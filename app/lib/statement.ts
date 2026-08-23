@@ -109,6 +109,13 @@ export type ParsedPosition = {
   /** Zero-based file row the position came from — the first, when combined. */
   row: number;
   /**
+   * The exact weighted numerator behind {@link ParsedPosition.costBasisPerShare}
+   * when this position is several file rows folded together, so the spelling
+   * fold in `uploads.server.ts` divides once rather than averaging an average.
+   * See {@link FoldableLot}.
+   */
+  weightedBasisUnits?: bigint | null;
+  /**
    * The instrument cell exactly as written, untrimmed and unresolved. Alias
    * lookup is byte-exact (`collate "C"`), so the parser must not normalise
    * what resolution will look up.
@@ -185,6 +192,21 @@ export type FoldableLot = {
   quantity: string;
   /** Null when the lot's own basis is unknown. */
   costBasisPerShare: string | null;
+  /**
+   * The exact quantity-weighted numerator this lot already carries, in units of
+   * 10^-12, when the lot is itself the result of an earlier fold.
+   *
+   * This is what makes the flow's two folds add up to one. `costBasisPerShare`
+   * is rounded to the money scale, so a second fold that re-weighted *it* would
+   * be averaging an average — and the two folds together would disagree with a
+   * single pass over the original lots. Carrying the numerator lets the second
+   * fold divide exactly once, however many times a position is folded on its
+   * way through.
+   *
+   * Absent on a lot straight off a file, where the per-share figure is the only
+   * thing there is.
+   */
+  weightedBasisUnits?: bigint | null;
 };
 
 /**
@@ -206,6 +228,8 @@ export function foldLots(lots: ReadonlyArray<FoldableLot>): {
   /** The summed quantity rendered at `numeric(20, 8)`'s scale. */
   quantity: string;
   costBasisPerShare: string | null;
+  /** The exact numerator behind that figure — see {@link FoldableLot}. */
+  weightedBasisUnits: bigint | null;
 } {
   const quantityUnits = lots.reduce(
     (sum, lot) => sum + toUnits(lot.quantity, QUANTITY_SCALE),
@@ -213,17 +237,28 @@ export function foldLots(lots: ReadonlyArray<FoldableLot>): {
   );
 
   let costBasisPerShare: string | null = null;
+  let weighted: bigint | null = null;
+
   if (quantityUnits !== 0n && lots.every((lot) => lot.costBasisPerShare !== null)) {
-    let weighted = 0n;
+    weighted = 0n;
     for (const lot of lots) {
+      // The lot's own exact numerator when it has one, and only otherwise the
+      // product of the rounded per-share figure. A lot that has been folded
+      // before is re-weighted from what it actually summed, never from what it
+      // was rounded to.
       weighted +=
+        lot.weightedBasisUnits ??
         toUnits(lot.costBasisPerShare ?? "0", MONEY_SCALE) *
-        toUnits(lot.quantity, QUANTITY_SCALE);
+          toUnits(lot.quantity, QUANTITY_SCALE);
     }
     costBasisPerShare = render(divide(weighted, quantityUnits, 0), MONEY_SCALE);
   }
 
-  return { quantity: render(quantityUnits, QUANTITY_SCALE), costBasisPerShare };
+  return {
+    quantity: render(quantityUnits, QUANTITY_SCALE),
+    costBasisPerShare,
+    weightedBasisUnits: weighted,
+  };
 }
 
 /**
@@ -521,6 +556,18 @@ export function parseStatement(
     const fold = foldLots(group);
     const quantity = signed(fold.quantity);
 
+    // `signed` may flip the sign after the weighting, and the numerator is
+    // `basis x quantity` — so it has to flip with it, or the spelling fold
+    // would divide a positive numerator by a negative quantity and report a
+    // liability's cost basis inverted.
+    const negated = quantity !== fold.quantity;
+    const weightedBasisUnits =
+      fold.weightedBasisUnits === null
+        ? null
+        : negated
+          ? -fold.weightedBasisUnits
+          : fold.weightedBasisUnits;
+
     positions.push({
       row: first.row,
       instrument,
@@ -528,6 +575,7 @@ export function parseStatement(
       accountNumber: first.accountNumber,
       quantity,
       costBasisPerShare: fold.costBasisPerShare,
+      weightedBasisUnits,
     });
     combined.push({ instrument, rowCount: group.length, quantity });
   }
