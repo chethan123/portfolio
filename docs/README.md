@@ -37,6 +37,7 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`guide/`](guide/) | a family member using a running instance | how to do a thing, screen by screen and task by task | rationale, operations, anything needing a terminal |
 | [`operating.md`](operating.md) | whoever self-hosts the instance | how the deployment is put together and how to run it: installing, configuration, TLS, security posture, monitoring, backups, upgrades, growth | how to read a screen; what to do at 2am, which is the runbook's |
 | [`runbook.md`](runbook.md) | the same person, mid-incident | symptoms, in the words someone would use, with the commands that confirm and fix each | explanation — every entry links to `operating.md` for the why |
+| [`developing.md`](developing.md) | a developer who has just cloned this | the mechanics of doing the work: a working checkout, the commands, the change loop, recipes, and the traps | the standards, which are `AGENTS.md`, and the structure, which is `ARCHITECTURE.md` |
 | [`specs/`](specs/) | whoever builds the slice | approved work, before it is built | anything not agreed yet |
 | [`design/`](design/) | whoever builds the screen | UI briefs a slice is drawn from | the decision to build it — that is a spec |
 | [`research/`](research/) | whoever revisits a decision | investigation, including options that were rejected | anything approved, which is a spec |
@@ -70,6 +71,13 @@ add its row here.
 - **[`operating.md`](operating.md) overlaps `ARCHITECTURE.md` §7.4 and §7.6** on observability and
   security. Those sections hold the mechanism, for a contributor; `operating.md` holds the decisions
   an operator has to make, and links rather than restating.
+- **[`developing.md`](developing.md) sits between `AGENTS.md` and `ARCHITECTURE.md`** and must not
+  become either. `AGENTS.md` says what good work looks like here; `ARCHITECTURE.md` says how the code
+  is arranged and why. `developing.md` says how to get a checkout working and what to run — it links
+  for every rule and every reason rather than carrying a second copy.
+- **[`../README.md`](../README.md)'s "Working on it" is the short version of
+  [`developing.md`](developing.md).** The README's reader may not have decided to contribute yet, so
+  it keeps a handful of commands and defers the rest.
 
 ## Screenshots
 

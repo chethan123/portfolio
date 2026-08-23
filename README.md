@@ -297,7 +297,8 @@ screens as above, but as instructions rather than as reasons.
 single-site invariants a change has to keep, §5 is the schema and the numeric boundary, and §6 walks
 the ingest and pricing dataflows end to end.
 
-Requires Node 24.
+Requires Node 24. [`docs/developing.md`](docs/developing.md) is the full path — setting up, the
+change loop, the recipes and the traps. The short version:
 
 ```sh
 npm install
