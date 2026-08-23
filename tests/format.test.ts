@@ -18,6 +18,7 @@ import {
   formatPercent,
   formatSignedMoney,
   isNegative,
+  toPlotValue,
 } from "~/lib/format";
 
 describe("formatMoney", () => {
@@ -110,5 +111,38 @@ describe("isNegative", () => {
     expect(isNegative("0.0000")).toBe(false);
     expect(isNegative("-0.0000")).toBe(false);
     expect(isNegative("12500.0000")).toBe(false);
+  });
+});
+
+/**
+ * The one sanctioned float in a codebase that keeps money out of floats end to
+ * end (DESIGN.md §4.1, and the `numeric` type-parser override `numeric.test.ts`
+ * guards). `toPlotValue` is allowed to call `Number()` because its result is
+ * multiplied by a pixel height and rounded to a screen coordinate — so what is
+ * pinned here is that argument holding, not that the conversion is exact.
+ */
+describe("toPlotValue", () => {
+  it("is exact for the magnitudes a household portfolio actually reaches", () => {
+    // Well inside 2**53, which is where a double stops counting by ones. Every
+    // figure this application plots is a balance, and a balance that exceeded
+    // this would have bigger problems than its chart.
+    expect(toPlotValue("1248392.1400")).toBe(1248392.14);
+    expect(toPlotValue("0.0000")).toBe(0);
+  });
+
+  it("carries the sign, so a household in net debt plots below the axis", () => {
+    expect(toPlotValue("-8000.0000")).toBe(-8000);
+  });
+
+  it("loses precision only far below one screen pixel", () => {
+    // The safety argument in the docstring, made concrete. Two balances that a
+    // double cannot tell apart differ here by less than 1e-6 of the 300px box,
+    // so the error cannot reach a rendered coordinate. This is also why the
+    // function must never be used for a figure that is shown, compared or
+    // summed — those have no pixel to hide the error in.
+    const banked = toPlotValue("12345678901234567.89");
+    const off = toPlotValue("12345678901234567.90");
+
+    expect(Math.abs(banked - off) / banked).toBeLessThan(1e-9);
   });
 });

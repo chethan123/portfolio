@@ -1,8 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { createRoutesStub } from "react-router";
 import { describe, expect, it } from "vitest";
 
-import { Layout } from "../app/root.tsx";
+import { renderThroughLayout } from "./support/render.tsx";
 
 import type { FirstRunStep } from "~/lib/first-run.server";
 
@@ -15,39 +13,20 @@ import type { FirstRunStep } from "~/lib/first-run.server";
  * of any page.
  */
 
-function renderPage(
-  path: string,
-  rootData: { authConfigured: boolean; firstRun: FirstRunStep },
-): string {
-  const Stub = createRoutesStub([
-    {
-      id: "root",
-      path: "*",
-      Component: () => (
-        <Layout>
-          <p>page body</p>
-        </Layout>
-      ),
-    },
-  ]);
-
-  return renderToStaticMarkup(
-    <Stub initialEntries={[path]} hydrationData={{ loaderData: { root: rootData } }} />,
-  );
-}
-
-const configured = { authConfigured: true };
+/** Every case here is on a configured instance; the banner is another file's rule. */
+const renderPage = (path: string, firstRun: FirstRunStep) =>
+  renderThroughLayout(path, { authConfigured: true, firstRun });
 
 describe("the first-run prompt", () => {
   it("points at People on an instance with nobody in it", () => {
-    const markup = renderPage("/", { ...configured, firstRun: "people" });
+    const markup = renderPage("/", "people");
 
     expect(markup).toContain("Add the people in your household");
     expect(markup).toContain('href="/settings/people"');
   });
 
   it("points at Accounts once somebody exists", () => {
-    const markup = renderPage("/", { ...configured, firstRun: "accounts" });
+    const markup = renderPage("/", "accounts");
 
     expect(markup).toContain('href="/settings/accounts"');
     // One step at a time: the People step is done and is not repeated.
@@ -55,7 +34,7 @@ describe("the first-run prompt", () => {
   });
 
   it("disappears once there is a person and an account", () => {
-    const markup = renderPage("/", { ...configured, firstRun: null });
+    const markup = renderPage("/", null);
 
     expect(markup).not.toContain("Start here.");
     expect(markup).not.toContain("One more step.");
@@ -63,10 +42,10 @@ describe("the first-run prompt", () => {
   });
 
   it("shows on the other read pages too, not only the home page", () => {
-    expect(renderPage("/holdings", { ...configured, firstRun: "people" })).toContain(
+    expect(renderPage("/holdings", "people")).toContain(
       "Add the people in your household",
     );
-    expect(renderPage("/income", { ...configured, firstRun: "accounts" })).toContain(
+    expect(renderPage("/income", "accounts")).toContain(
       "One more step.",
     );
   });
@@ -75,7 +54,7 @@ describe("the first-run prompt", () => {
     // Telling someone to go to Settings → People while they are standing on
     // Settings → People is noise, and it would sit directly above the form that
     // resolves it.
-    const markup = renderPage("/settings/people", { ...configured, firstRun: "people" });
+    const markup = renderPage("/settings/people", "people");
 
     expect(markup).not.toContain("Start here.");
     expect(markup).toContain("page body");
@@ -84,6 +63,6 @@ describe("the first-run prompt", () => {
   it("survives a first-run check that could not run", () => {
     // The root loader reports null when the database is unreachable, so the
     // page renders without a prompt rather than as an error.
-    expect(renderPage("/", { ...configured, firstRun: null })).toContain("page body");
+    expect(renderPage("/", null)).toContain("page body");
   });
 });

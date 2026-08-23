@@ -67,7 +67,7 @@ const MONTHS = [
   "Dec",
 ];
 
-type Scale = {
+export type Scale = {
   x: (date: string) => number;
   y: (amount: string) => number;
   /** The value domain actually drawn, padding included. */
@@ -76,7 +76,7 @@ type Scale = {
   time: { start: number; end: number };
 };
 
-function buildScale(points: ChartPoint[]): Scale {
+export function buildScale(points: ChartPoint[]): Scale {
   const times = points.map((point) => Date.parse(point.date));
   const values = points.map((point) => toPlotValue(point.amount));
 
@@ -103,6 +103,23 @@ function buildScale(points: ChartPoint[]): Scale {
     domain: { floor, span: valueSpan },
     time: { start: minTime, end: maxTime },
   };
+}
+
+/**
+ * The horizontal rules, and the label that names each one.
+ *
+ * Read off the drawn domain, not off the data's own min and max. The two
+ * differ by the padding above, and labelling the top of the box with the
+ * largest value in the series would put every tick 8% of the range out —
+ * a quiet inaccuracy on an axis is still an inaccuracy.
+ */
+export function gridRules(scale: Scale): { y: number; label: string }[] {
+  const { floor, span } = scale.domain;
+
+  return GRID.map((fraction) => ({
+    y: HEIGHT * (1 - fraction),
+    label: formatCompact((floor + span * fraction).toFixed(0)),
+  }));
 }
 
 const toPolyline = (points: ChartPoint[], scale: Scale) =>
@@ -181,15 +198,7 @@ export function NetWorthChart({
   const firstComputed = computed[0];
   const manualRun = manual.length > 0 && firstComputed ? [...manual, firstComputed] : manual;
 
-  // Read off the drawn domain, not off the data's own min and max. The two
-  // differ by the padding above, and labelling the top of the box with the
-  // largest value in the series would put every tick 8% of the range out —
-  // a quiet inaccuracy on an axis is still an inaccuracy.
-  const { floor, span } = scale.domain;
-  const rules = GRID.map((fraction) => ({
-    y: HEIGHT * (1 - fraction),
-    label: formatCompact((floor + span * fraction).toFixed(0)),
-  }));
+  const rules = gridRules(scale);
 
   const { start, end } = scale.time;
   const withDay = end - start < DAY_TICKS_UNDER;
