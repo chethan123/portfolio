@@ -10,9 +10,10 @@
  * DESIGN.md §10.1 settles what to do about that: the app trusts `X-Forwarded-*`.
  * That trust is unconditional and has one deployment requirement behind it —
  * **the app must not be reachable directly**, because anything that can connect
- * to it can set these headers. Compose publishes the app port for a LAN
- * instance; an internet-facing instance belongs behind the proxy and nowhere
- * else. `docs/operating.md` says so where an operator will read it.
+ * to it can set these headers. The bundled Compose file publishes no port for
+ * the app at all — only `caddy` is reachable — and that is what makes the trust
+ * sound; publishing the app port would break it. `docs/operating.md` says so
+ * where an operator will read it.
  *
  * What is at stake is small and worth being exact about: a forged
  * `X-Forwarded-Proto` changes only the `Secure` attribute on the sender's own

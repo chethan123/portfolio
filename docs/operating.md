@@ -78,17 +78,29 @@ Restore into an empty database rather than over a live one, so a partial restore
 half-old, half-new schema behind:
 
 ```sh
+DUMP=portfolio-2026-08-17.dump      # the file you are restoring
+
 docker compose stop app
 
 docker compose exec -T db dropdb   -U portfolio portfolio
 docker compose exec -T db createdb -U portfolio -O portfolio portfolio
-docker compose exec -T db pg_restore -U portfolio -d portfolio < portfolio-2026-08-17.dump
+docker compose exec -T db pg_restore --exit-on-error --single-transaction \
+  -U portfolio -d portfolio < "$DUMP"
 
 docker compose start app
 ```
 
+**`--exit-on-error --single-transaction` is what makes the sentence above true.** Left to itself
+`pg_restore` continues past failures and reports a count at the end, which is precisely the
+half-old, half-new schema this is trying to avoid. With both flags the restore is one transaction
+that either lands whole or leaves the empty database alone.
+
 Stopping `app` first is what keeps it from writing to a database that is being replaced underneath
-it. On start it applies any migrations the dump predates, so a backup taken from an older version
+it — and the price refresh loop inside it is the connection holder that would otherwise make
+`dropdb` fail. `caddy` stays up throughout and answers `502` until `app` is back; that is the
+restore working, not a second fault.
+
+On start `app` applies any migrations the dump predates, so a backup taken from an older version
 restores into the current one without a manual step.
 
 To rebuild a machine from nothing: install Docker, clone this repository, `docker compose up -d`,
@@ -111,15 +123,34 @@ happens to need it.
 | `DATABASE_URL` | **Yes** | — | Postgres connection string. Compose supplies one pointing at its own `db` service, so you only set this to run against your own Postgres. |
 | `AUTH_PASSWORD` | No | unset | Setting it turns on the login gate: one password, one cookie, one login page. Unset means the instance is open to anyone who can reach it, and the UI shows a permanent warning banner saying so. |
 | `SESSION_SECRET` | **When `AUTH_PASSWORD` is set** | — | Signs the login cookie. Startup fails naming this variable if you set a password without it. Use a long random string: `openssl rand -hex 32`. |
-| `PORT` | No | `3000` | HTTP listen port. Under Compose it is also the published host port, so changing it moves both. |
+| `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port: that is the fixed `80:80` in [`compose.yaml`](../compose.yaml), and moving it means editing that line. |
 | `PRICE_POLL_INTERVAL_MINUTES` | No | `15` | Quote refresh cadence, 1–1440. The refresh runs in the app process and only while the market is open. |
-| `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes (1024² bytes), minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. |
+| `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`** — see below. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
 
+**`MAX_UPLOAD_MB` does not reach the container under the bundled Compose file.** It is validated and
+read by the application, but it is missing from the `app` service's `environment:` block, so setting
+it in `.env` changes nothing and the cap stays at 10. To raise it, add the variable to that block
+yourself:
+
+```yaml
+    environment:
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
+```
+
 `POSTGRES_PASSWORD` also appears in `.env.example`. It configures `compose.yaml` rather than the
-app, which is why it is not in the table above; if you change it, change the password in
-`DATABASE_URL` to match.
+app, which is why it is not in the table above.
+
+**It only takes effect on an empty volume.** Postgres reads it when it first initialises its data
+directory and never again. On an instance that has already run, changing `POSTGRES_PASSWORD` and
+`DATABASE_URL` together does not rotate the password — it leaves the app unable to authenticate and
+crash-looping. Change it inside the database instead, then update `DATABASE_URL` to match:
+
+```sh
+docker compose exec db psql -U portfolio -d portfolio \
+  -c "alter role portfolio with password 'the-new-one'"
+```
 
 ---
 
