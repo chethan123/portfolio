@@ -15,7 +15,13 @@ The five canonical triage roles, used verbatim. See `docs/agents/triage-labels.m
 
 ### Domain docs
 
-Single-context — `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context — `CONTEXT.md` and `docs/adr/` at the repo root. Neither exists yet; both are created
+lazily, when a term or a decision actually resolves. See `docs/agents/domain.md`.
+
+### Where documents go
+
+`docs/README.md` is the layout authority for everything written down here. Read it before adding a
+document, and fix it there first if it does not say where yours belongs.
 
 ## How I want you to work
 

@@ -141,12 +141,14 @@ Take a backup before upgrading. Migrations are not reversible.
 
 ## Installing on a phone
 
-**An instance served over plain HTTP at a LAN address cannot be installed as an app on a phone.**
+**No instance can be installed as an app on a phone, on any scheme.** The application ships no web
+app manifest and no service worker, so there is nothing for a browser to install. Visiting it on a
+phone works as an ordinary page, and adding it to the home screen makes an ordinary bookmark.
 
-Service workers require a secure context — HTTPS, with `localhost` as the only exception — and
-without one the browser will not install the app or cache anything for offline reading. Visiting
-`http://192.168.1.20:3000` will work as an ordinary page and will simply not offer to install.
+Serving it over HTTPS does not change this. A secure context is a *precondition* for installing —
+service workers require one, with `localhost` as the only exception — but it is not sufficient on
+its own, and a LAN address over plain HTTP is not what is standing in the way here.
 
-This is a browser rule and a deployment constraint, not something the app can work around. To
-install it on a phone, put it behind a proxy with a real certificate, as
-[above](#reverse-proxy-and-tls).
+If installability is wanted later it is a change to the application, not to the deployment: a
+manifest, a service worker, and the offline caching `DESIGN.md` §11 sketches. Putting the instance
+behind a proxy with a real certificate is worth doing [for its own reasons](#reverse-proxy-and-tls).
