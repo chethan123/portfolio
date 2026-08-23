@@ -35,6 +35,30 @@ export function post(path: string, fields: Record<string, string | string[]>): R
 }
 
 /**
+ * A POST carrying a file part, as the upload screen's form does.
+ *
+ * `formFields` drops file parts by design, so the drop screen reads the file
+ * off the `FormData` itself — which means a journey through it has to send a
+ * real one rather than a filename in a text field.
+ */
+export function postFile(
+  path: string,
+  file: { name: string; content: string; type?: string },
+  fields: Record<string, string> = {},
+): Request {
+  const body = new FormData();
+
+  for (const [name, value] of Object.entries(fields)) body.set(name, value);
+  body.set(
+    "file",
+    new File([file.content], file.name, { type: file.type ?? "text/csv" }),
+    file.name,
+  );
+
+  return new Request(`http://portfolio.local${path}`, { method: "POST", body });
+}
+
+/**
  * The arguments a loader or action destructures.
  *
  * No route in this application reads `context`, and the ones that read
