@@ -5,6 +5,33 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-08-23 — Architecture review
+
+One document: [Deepening opportunities](./2026-08-23-architecture-review.md) — ten candidates for
+turning shallow interfaces into deep ones, reviewed against `f550132`.
+
+### The three things worth knowing without reading further
+
+1. **`rememberMapping` is the one correctness finding.** `had_first_sightings` is computed inside
+   `saveMapping` from one alias query; the redirect target is chosen at `upload/columns.tsx:275` from
+   a strictly later one. An alias inserted between them leaves the persisted step-strip bit
+   disagreeing with the step the reader was sent to. `saveMapping`'s own header argues the premise —
+   "this is the one moment the answer exists" — and stops one step short of the conclusion.
+
+2. **Five findings were rejected, three of them initially rated Strong.** This codebase argues its
+   decisions in module headers, so the dominant failure mode for a review like this is
+   re-litigation. §4 records each rejection with the quote that killed it, including two that were
+   at some point the review's top recommendation.
+
+3. **No test in this repo imports a route.** There is no `@testing-library`, `happy-dom` or `jsdom`
+   in `package.json`, so anything living in a route module is untestable by construction. That is a
+   standing constraint on where logic can go, not a finding.
+
+### Status
+
+Nothing here is approved work. §3 suggests a sequence if any of it is taken; the two byte-identical
+duplications (§2.3 `inTransaction`, §2.4 `labelOf`) are minutes each and independent of the rest.
+
 ## 2026-08-19 — Stitch screens and the FIRE audience
 
 Four documents from one investigation: what the Stitch mock actually contains, what the audience
