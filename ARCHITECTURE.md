@@ -1353,6 +1353,13 @@ Three stages, each with one job:
 │   ── tsc is an OPTIONAL PEER of @react-router/node, kept by prune;    │
 │      the runtime stage is specified to contain no compiler, and the   │
 │      two bin symlinks would otherwise still resolve                   │
+│ node scripts/prune-unreachable-deps.mjs   → 59 packages, 9.6 MB       │
+│   ── yahoo-finance2 declares the MCP SERVER SDK, a Deno shim and a    │
+│      fetch-mocking library as RUNTIME deps, for a subpath and two     │
+│      bins this app never imports; they bring a second Express, plus   │
+│      Hono, jose, cors and ajv. The script marks the tree with those   │
+│      three edges intact and again with them cut, and deletes only     │
+│      the difference — so it cannot remove anything still reachable    │
 └───────────────────────────────┬───────────────────────────────────────┘
 ┌─ runtime ─────────────────────▼───────────────────────────────────────┐
 │ node:24-slim · USER node · NODE_ENV=production TZ=UTC PORT=3000       │
@@ -1390,12 +1397,24 @@ job: check
         │        every query typed against the old schema
         └─▶ compose down -v   (if: always())
 
+job: audit                    ── runs in parallel
+  npm ci --ignore-scripts     ── an audit job does not run the install hooks
+    │                            of the packages it is in the middle of checking
+    └─▶ npm audit signatures            ── would catch a pinned name@version
+    │                                      being republished with new contents
+    └─▶ npm audit --omit=dev --audit-level=high   ── the only BLOCKING advisory
+    │                                                gate: production, serious
+    └─▶ npm audit                       ── dev advisories, reported not enforced
+    └─▶ deprecations, re-resolved first so a package deprecated SINCE the
+        lockfile was committed still shows up
+
 job: smoke                    ── runs in parallel, on a clean runner
   ./scripts/smoke-test.sh
     ── the ONLY test of everything §3.1 and §3.2 claim: compose up on an
        empty volume, the app waiting for Postgres rather than racing it,
        migrations running at startup, a restart skipping applied ones,
-       and the .sql files actually being present in the runtime image
+       the .sql files actually being present in the runtime image, and
+       the §8.1 prune having removed what it claims and nothing more
 ```
 
 The `db:types -- --verify` step is what makes regeneration after a migration mandatory rather than

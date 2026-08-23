@@ -131,6 +131,23 @@ for pkg in vitest vite typescript @react-router/dev @types/react; do
 done
 printf 'no dev dependencies\n'
 
+# The MCP server SDK and friends that `yahoo-finance2` declares but this
+# application never loads (see scripts/prune-unreachable-deps.mjs). Asserted
+# here because nothing else can catch the prune silently ceasing to fire.
+for pkg in @modelcontextprotocol/sdk @deno/shim-deno fetch-mock-cache hono jose cors; do
+  run_in_image "test ! -e /app/node_modules/$pkg" ||
+    fail "unreachable dependency still in the runtime image: $pkg"
+done
+printf 'unreachable yahoo-finance2 dependencies pruned\n'
+
+# The other half of the same check: the prune must not have overshot into what
+# the price provider actually needs.
+for pkg in yahoo-finance2 tough-cookie tldts express react-router kysely pg zod; do
+  run_in_image "test -e /app/node_modules/$pkg" ||
+    fail "the prune removed a dependency the app needs: $pkg"
+done
+printf 'runtime dependencies intact\n'
+
 for compiler in gcc cc g++ make tsc; do
   run_in_image "! command -v $compiler >/dev/null" || fail "compiler in the runtime image: $compiler"
 done
