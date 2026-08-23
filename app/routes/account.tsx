@@ -144,8 +144,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   if (total === null) throw new Response("Not found", { status: 404 });
 
   const requested = new URL(request.url).searchParams.get("range");
+  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `?range=`
+  // naming anything on `Object.prototype` — `toString`, `constructor`,
+  // `valueOf` — passed this gate, and `RANGES[requested].days` then read
+  // `undefined` all the way to `isoDate(NaN)` and a 500 on the page. A query
+  // parameter must not be able to do that.
   const range: RangeKey =
-    requested && requested in RANGES ? (requested as RangeKey) : DEFAULT_RANGE;
+    requested && Object.hasOwn(RANGES, requested) ? (requested as RangeKey) : DEFAULT_RANGE;
 
   const dates = sampleDates(await windowDays(range));
 

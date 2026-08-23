@@ -268,6 +268,10 @@ describe("an account that has since been closed", () => {
   );
 });
 
+// `latest_position_set(account, date)` is one function with one `order by`,
+// and `holding_valued` calls it with the date left null — so the created_at
+// then id tie-break is pinned once, in `current-holdings.test.ts`, rather than
+// twice. What is only reachable through this path is the date bound itself.
 describe("which position set speaks for a date", () => {
   it(
     "ignores a position set dated after the requested date",
@@ -288,84 +292,6 @@ describe("which position set speaks for a date", () => {
 
       expect((await holdingsAt("2026-01-31", db)).map((holding) => holding.quantity)).toEqual([
         "100.00000000",
-      ]);
-    }),
-  );
-
-  it(
-    "resolves a re-upload for an as-of date that already has a set to the correction",
-    withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
-      const account = await seedAccount();
-      const usd = await usdInstrument();
-
-      await seedPositionSet({
-        account,
-        asOf: "2026-01-31",
-        holdings: [{ instrument: usd, quantity: "100.00000000" }],
-      });
-      // The same statement re-uploaded after a mis-mapped column was fixed.
-      // History must resolve it the same way the current figures do, or the
-      // chart's last point disagrees with the dashboard above it.
-      await seedPositionSet({
-        account,
-        asOf: "2026-01-31",
-        holdings: [{ instrument: usd, quantity: "175.00000000" }],
-      });
-
-      expect((await holdingsAt("2026-02-13", db)).map((holding) => holding.quantity)).toEqual([
-        "175.00000000",
-      ]);
-    }),
-  );
-
-  it(
-    "does not let an older position set uploaded late displace a newer one",
-    withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
-      const account = await seedAccount();
-      const usd = await usdInstrument();
-
-      await seedPositionSet({
-        account,
-        asOf: "2026-02-28",
-        holdings: [{ instrument: usd, quantity: "250.00000000" }],
-      });
-      // January's statement, found in a drawer and uploaded after February's.
-      // It is a later insert with a higher id, and it must lose on any date at
-      // or after February.
-      await seedPositionSet({
-        account,
-        asOf: "2026-01-31",
-        holdings: [{ instrument: usd, quantity: "100.00000000" }],
-      });
-
-      expect((await holdingsAt("2026-03-01", db)).map((holding) => holding.quantity)).toEqual([
-        "250.00000000",
-      ]);
-    }),
-  );
-
-  it(
-    "breaks a shared as-of date on creation time before insertion order",
-    withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
-      const account = await seedAccount();
-      const usd = await usdInstrument();
-
-      await seedPositionSet({
-        account,
-        asOf: "2026-01-31",
-        createdAt: "2026-02-02T09:00:00Z",
-        holdings: [{ instrument: usd, quantity: "175.00000000" }],
-      });
-      // Inserted second — so it has the higher id — but created first.
-      await seedPositionSet({
-        account,
-        asOf: "2026-01-31",
-        createdAt: "2026-02-01T09:00:00Z",
-        holdings: [{ instrument: usd, quantity: "100.00000000" }],
-      });
-
-      expect((await holdingsAt("2026-02-13", db)).map((holding) => holding.quantity)).toEqual([
-        "175.00000000",
       ]);
     }),
   );

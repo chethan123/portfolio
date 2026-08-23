@@ -62,35 +62,16 @@ describe("createDraft", () => {
   );
 
   it(
-    "sweeps drafts older than a day and leaves fresh ones standing",
-    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
-      const account = await seedAccount({ kind: "brokerage" });
-      const stale = await seedUploadDraft({
-        account,
-        createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
-      });
-      const fresh = await seedUploadDraft({ account });
-
-      const next = await createDraft(
-        { accountId: account.id, filename: "next.csv", bytes: CSV },
-        db,
-      );
-
-      // The abandoned draft is gone; the resumable one and the one just
-      // created both answer. No scheduler did this — the upload itself did.
-      await expect(requireDraft(stale.id, db)).rejects.toThrow(NotFoundError);
-      await expect(requireDraft(fresh.id, db)).resolves.toMatchObject({ id: fresh.id });
-      await expect(requireDraft(next.id, db)).resolves.toMatchObject({ id: next.id });
-    }),
-  );
-
-  it(
     "keeps a draft exactly 24 hours old and sweeps one a second older",
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
       // "Older than 24 hours" is a strict comparison, pinned at the second.
       // Deterministic because `now()` is fixed for the whole transaction the
       // test runs in: the backdate below and the sweep's own cutoff read the
       // same instant, so "exactly 24 hours" is exact, not racy.
+      //
+      // The `createDraft` below is also what proves the sweep has no scheduler
+      // behind it: staging the next upload is the thing that clears the
+      // abandoned one, and the draft on the line survives it.
       const account = await seedAccount({ kind: "brokerage" });
       const onTheLine = await seedUploadDraft({ account });
       const justPast = await seedUploadDraft({ account });

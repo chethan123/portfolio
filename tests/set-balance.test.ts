@@ -191,17 +191,23 @@ describe("setBalance", () => {
     }),
   );
 
-  it.each(["401k", "ira"] as const)(
-    "refuses a %s account for the same reason",
+  // Written as one case over the kinds rather than three copies: what is being
+  // checked is that `SINGLE_POSITION` admits exactly two of the five.
+  //
+  // The case value is threaded in by calling `withDatabase` per case rather
+  // than handing `it.each` the wrapper directly. `withDatabase` returns a
+  // `() => Promise<void>`, which TypeScript happily accepts where `it.each`
+  // wants a one-argument body — so passing it straight through type-checks,
+  // runs once per case, and silently discards the kind. This file did exactly
+  // that, and `ira` went untested while the title claimed otherwise.
+  it.each(["401k", "ira"] as const)("refuses a %s account for the same reason", (kind) =>
     withDatabase(async ({ db, seedAccount }) => {
-      // Written as one case over the kinds rather than three copies: what is
-      // being checked is that `SINGLE_POSITION` admits exactly two of the five.
-      const account = await seedAccount({ kind: "401k" });
+      const account = await seedAccount({ kind });
       const refusal = await refusalOf(() =>
         setBalance(account.id, { amount: "1000.00", asOf: "2026-08-16" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/holds securities/);
-    }),
+    })(),
   );
 
   it(

@@ -637,3 +637,70 @@ describe("sameRawStrings", () => {
     expect(sameRawStrings("VTI", "vti")).toBe(false);
   });
 });
+
+/**
+ * Moved here from `column-mapping.test.ts`, which imported it from this module:
+ * the lookup is resolution's, not the mapping's, and a rule tested a file away
+ * from the code it governs is a rule nobody finds when that code changes.
+ */
+describe("unresolvedStrings", () => {
+  it(
+    "matches byte-exactly, so a case or padding difference is a miss",
+    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
+      const instrument = await seedInstrument({ symbol: "VTI" });
+      await seedInstrumentAlias({ instrument, rawString: "VTI" });
+
+      await expect(unresolvedStrings(["VTI", "vti", "VTI ", " VTI"], db)).resolves.toEqual([
+        "vti",
+        "VTI ",
+        " VTI",
+      ]);
+    }),
+  );
+
+  it(
+    "answers nothing for a file whose every string is already vocabulary",
+    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
+      const instrument = await seedInstrument({ symbol: "VTI" });
+      await seedInstrumentAlias({ instrument, rawString: "VTI" });
+      await seedInstrumentAlias({ instrument, rawString: "Vanguard Total Stock Market ETF" });
+
+      await expect(
+        unresolvedStrings(["VTI", "Vanguard Total Stock Market ETF", "VTI"], db),
+      ).resolves.toEqual([]);
+      // An empty file asks nothing, rather than reaching the database to find
+      // out that it has nothing to ask.
+      await expect(unresolvedStrings([], db)).resolves.toEqual([]);
+    }),
+  );
+
+  it(
+    "keeps first-appearance order and collapses repeats, the order the screen asks in",
+    withDatabase(async ({ db }) => {
+      await expect(unresolvedStrings(["BND", "VTI", "BND", "AAPL", "VTI"], db)).resolves.toEqual([
+        "BND",
+        "VTI",
+        "AAPL",
+      ]);
+    }),
+  );
+
+  it(
+    "reads an alias written for one institution's statement when another's names the same string",
+    withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
+      // `instrument_alias` is deliberately global: one `raw_string`, one
+      // instrument, no institution column between them. So Fidelity writing
+      // `CASH` resolves it for Schwab too, and the second brokerage's first
+      // upload asks nothing.
+      //
+      // This replaces a test that read `information_schema.columns` back and
+      // asserted the table had exactly two columns — true, brittle, and about
+      // the schema file rather than about what the schema does. Adding a
+      // `created_at` would have failed it and changed nothing.
+      const usd = await seedInstrument({ symbol: "USD", name: "US Dollar" });
+      await seedInstrumentAlias({ instrument: usd, rawString: "CASH" });
+
+      await expect(unresolvedStrings(["CASH"], db)).resolves.toEqual([]);
+    }),
+  );
+});

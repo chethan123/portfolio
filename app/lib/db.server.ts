@@ -11,6 +11,8 @@
  * application boundary as strings. Never `Number()`, `parseFloat` or JSON
  * round-trip them as numbers; do the arithmetic in SQL, or in a decimal library.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { Kysely, PostgresDialect, sql } from "kysely";
 import type pg from "pg";
 
@@ -48,18 +50,61 @@ let pool: pg.Pool | undefined;
 let instance: Kysely<Database> | undefined;
 
 /**
+ * A handle that overrides the process-wide one for the duration of a call.
+ *
+ * Every query in this application reaches the database through a trailing
+ * `db = getDb()` parameter, which is what lets a test pass a transaction and
+ * have the whole test roll back. A route loader is the one caller that cannot:
+ * it calls `listAccounts()` with no argument, by design, so the default is the
+ * process pool and a route test would commit.
+ *
+ * `AsyncLocalStorage` closes that gap without changing a single signature.
+ * `getDb()` is never called at module scope — every call site is either a
+ * default-parameter expression, evaluated per call, or inside a function body —
+ * so a store entered around a loader is visible to every query it makes,
+ * however deep, and to nothing outside it.
+ *
+ * Nothing in the running application enters the store; in production this is
+ * one `undefined` lookup per query.
+ */
+const override = new AsyncLocalStorage<{ db: Kysely<Database>; pool?: pg.Pool }>();
+
+/**
+ * Run `body` with `db` standing in for the process-wide handle.
+ *
+ * Scoped to the call, including everything it awaits. Pass `pool` as well for
+ * the paths that speak `pg` rather than Kysely — {@link checkHealth} reads the
+ * migration ledger that way.
+ *
+ * @see tests/support/database.ts, the only caller.
+ */
+export function withDb<T>(
+  db: Kysely<Database>,
+  body: () => Promise<T>,
+  overridePool?: pg.Pool,
+): Promise<T> {
+  return override.run({ db, pool: overridePool }, body);
+}
+
+/**
  * The process-wide pool, opened on first use.
  *
  * Exported for the things that speak `pg` rather than Kysely — the migration
  * ledger below is the only one today.
  */
 export function getPool(): pg.Pool {
+  const scoped = override.getStore()?.pool;
+  if (scoped !== undefined) return scoped;
+
   pool ??= createPool(getConfig().DATABASE_URL);
   return pool;
 }
 
 /** The process-wide database handle, opened on first use. */
 export function getDb(): Kysely<Database> {
+  const scoped = override.getStore()?.db;
+  if (scoped !== undefined) return scoped;
+
   instance ??= kyselyOver(getPool());
   return instance;
 }

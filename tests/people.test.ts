@@ -88,47 +88,34 @@ describe("recording people", () => {
 });
 
 describe("refusing bad input", () => {
-  it(
-    "refuses an empty name with a message about the name",
+  // One table rather than five transactions: these are `requiredText`'s rules,
+  // and what `createPerson` adds to them is the same on every row.
+  it.each([
+    ["an empty name", { name: "" }, /name is required/i],
+    ["a name that is only whitespace", { name: "   " }, /required/i],
+    // A form that never sent the field at all is the same mistake to a person
+    // as one that sent it blank, and must not be a 500.
+    ["a field that never arrived", {}, /required/i],
+    ["a name too long to be one", { name: "a".repeat(121) }, /120 characters/],
+  ])("refuses %s", (_case, input, message) =>
     withDatabase(async ({ db }) => {
-      const errors = await refusalOf(createPerson({ name: "" }, db));
+      const errors = await refusalOf(createPerson(input, db));
 
-      expect(errors.name).toMatch(/name is required/i);
-      expect(await listPeople(db)).toEqual([]);
-    }),
-  );
-
-  it(
-    "refuses a name that is only whitespace",
-    withDatabase(async ({ db }) => {
-      expect((await refusalOf(createPerson({ name: "   " }, db))).name).toMatch(/required/i);
-    }),
-  );
-
-  it(
-    "refuses a missing field the same way as an empty one",
-    withDatabase(async ({ db }) => {
-      // A form that never sent the field at all is the same mistake to a person
-      // as one that sent it blank, and must not be a 500.
-      expect((await refusalOf(createPerson({}, db))).name).toMatch(/required/i);
-    }),
-  );
-
-  it(
-    "refuses a name too long to be one",
-    withDatabase(async ({ db }) => {
-      const errors = await refusalOf(createPerson({ name: "a".repeat(121) }, db));
-
-      expect(errors.name).toMatch(/120 characters/);
-    }),
-  );
-
-  it(
-    "says which field was wrong, so the form can put the message beside it",
-    withDatabase(async ({ db }) => {
-      const errors = await refusalOf(createPerson({ name: "" }, db));
-
+      expect(errors.name).toMatch(message);
+      // Under `name`, and under nothing else, so the form can put the message
+      // beside the box rather than at the top of the page.
       expect(Object.keys(errors)).toEqual(["name"]);
+    })(),
+  );
+
+  it(
+    "writes nobody when it refuses",
+    withDatabase(async ({ db }) => {
+      // The half this cannot be a pure test for: a refusal that still inserted
+      // would leave a person nobody typed.
+      await refusalOf(createPerson({ name: "" }, db));
+
+      expect(await listPeople(db)).toEqual([]);
     }),
   );
 

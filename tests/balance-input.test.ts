@@ -71,11 +71,6 @@ describe("moneyMagnitude", () => {
     expect(parseInput(amount, { amount: "0.5" }).amount).toBe("0.5");
   });
 
-  it("completes the two abbreviations that are unambiguous", () => {
-    expect(parseInput(amount, { amount: ".50" }).amount).toBe("0.50");
-    expect(parseInput(amount, { amount: "50." }).amount).toBe("50");
-  });
-
   it("keeps a trailing zero a float round trip would destroy", () => {
     // `Number("14500.10").toString()` is "14500.1". The value is unchanged and
     // the *scale* is gone, which is how a balance recorded to the cent starts

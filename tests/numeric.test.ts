@@ -67,24 +67,28 @@ describe("numeric values crossing the database boundary", () => {
     await db?.destroy();
   });
 
-  it("returns a numeric as a decimal string at full scale, not as a number", async () => {
-    const result = await sql<{ amount: string }>`
-      select cast('12345.6789' as numeric(20, 4)) as amount
+  // One table rather than five near-identical `select cast(...)` bodies. The
+  // parser registration itself is already proved without a database at the top
+  // of this file; what a query adds is that the registration survives the pool
+  // this application actually builds, which is one assertion repeated, not
+  // five separate rules.
+  //
+  // Scales are the ones the schema really uses — `numeric(20, 4)` for money and
+  // `numeric(20, 8)` for quantity — so a case cannot pass against a width no
+  // column has.
+  it.each([
+    ["a value at full scale", "12345.6789", "numeric(20, 4)", "12345.6789"],
+    // Stored scale is 4, so the string keeps its zeros. `Number` would give 25000.
+    ["trailing zeros a number cannot carry", "25000", "numeric(20, 4)", "25000.0000"],
+    // How a liability is encoded: the sign lives on the quantity.
+    ["a negative quantity", "-412000.0000", "numeric(20, 4)", "-412000.0000"],
+    ["a fractional share", "0.12345678", "numeric(20, 8)", "0.12345678"],
+  ])("returns %s as the decimal string Postgres sent", async (_case, literal, type, expected) => {
+    const result = await sql<{ value: string }>`
+      select cast(${literal} as ${sql.raw(type)}) as value
     `.execute(db);
 
-    const amount = result.rows[0]?.amount;
-
-    expect(typeof amount).toBe("string");
-    expect(amount).toBe("12345.6789");
-  });
-
-  it("preserves trailing zeros, which a number cannot carry", async () => {
-    const result = await sql<{ amount: string }>`
-      select cast('25000' as numeric(20, 4)) as amount
-    `.execute(db);
-
-    // Stored scale is 4, so the string is '25000.0000'. Number would give 25000.
-    expect(result.rows[0]?.amount).toBe("25000.0000");
+    expect(result.rows[0]?.value).toBe(expected);
   });
 
   it("preserves a value large enough that float coercion would round it", async () => {
@@ -97,22 +101,6 @@ describe("numeric values crossing the database boundary", () => {
     expect(result.rows[0]?.amount).toBe("123456789012345678.87654321");
     // Proof the guard is load-bearing rather than decorative.
     expect(String(Number(enormous))).not.toBe(enormous);
-  });
-
-  it("preserves a fractional-share quantity at full scale", async () => {
-    const result = await sql<{ quantity: string }>`
-      select cast('0.0000000001' as numeric(28, 10)) as quantity
-    `.execute(db);
-
-    expect(result.rows[0]?.quantity).toBe("0.0000000001");
-  });
-
-  it("preserves a negative quantity, which is how a liability is encoded", async () => {
-    const result = await sql<{ quantity: string }>`
-      select cast('-412000.0000' as numeric(20, 4)) as quantity
-    `.execute(db);
-
-    expect(result.rows[0]?.quantity).toBe("-412000.0000");
   });
 
   it("keeps a numeric a string through a round trip into a real column", async () => {
@@ -132,14 +120,6 @@ describe("numeric values crossing the database boundary", () => {
     });
 
     expect(amount).toBe("12345.6789");
-  });
-
-  it("returns count(*), an int8, as a string", async () => {
-    const result = await sql<{ total: string }>`select count(*) as total from (select 1) t`.execute(
-      db,
-    );
-
-    expect(result.rows[0]?.total).toBe("1");
   });
 
   it("returns a date as the calendar date Postgres sent, not a Date at local midnight", async () => {

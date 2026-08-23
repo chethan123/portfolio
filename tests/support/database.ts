@@ -16,7 +16,7 @@
  * Requires a database. See `compose.test.yaml`:
  *   docker compose -f compose.test.yaml up -d --wait
  */
-import { createDatabase, type Database } from "~/lib/db.server";
+import { createDatabase, withDb, type Database } from "~/lib/db.server";
 import { createPool } from "../../server/db.ts";
 import { applyPendingMigrations } from "../../server/migrations.ts";
 
@@ -103,7 +103,15 @@ export function withDatabase(
 
     try {
       await database.transaction().execute(async (trx) => {
-        await body({ db: trx, ...makeFixtures(trx) });
+        // `withDb` is what extends this transaction to a caller that cannot be
+        // handed it. A route loader calls `listAccounts()` with no argument by
+        // design, so without this it would reach the process-wide pool, commit,
+        // and leave rows behind for every later test to trip over. Inside the
+        // store, `getDb()` returns `trx` however deep the call goes — so a
+        // route test rolls back exactly like a query test.
+        await withDb(trx, async () => {
+          await body({ db: trx, ...makeFixtures(trx) });
+        });
         throw new Rollback();
       });
     } catch (error) {

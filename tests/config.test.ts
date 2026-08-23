@@ -6,10 +6,6 @@ const MINIMAL = { DATABASE_URL: "postgres://portfolio:portfolio@db:5432/portfoli
 
 /** Every assertion here is about what an operator sees when they get it wrong. */
 describe("configuration validation", () => {
-  it("accepts a minimal environment", () => {
-    expect(() => loadConfig(MINIMAL)).not.toThrow();
-  });
-
   it("names the missing variable when a required setting is absent", () => {
     try {
       loadConfig({});

@@ -161,8 +161,13 @@ async function windowDays(range: RangeKey, manual: ManualPoint[]): Promise<numbe
 
 export async function loader({ request }: Route.LoaderArgs) {
   const requested = new URL(request.url).searchParams.get("range");
+  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `?range=`
+  // naming anything on `Object.prototype` — `toString`, `constructor`,
+  // `valueOf` — passed this gate, and `RANGES[requested].days` then read
+  // `undefined` all the way to `isoDate(NaN)` and a 500 on the page. A query
+  // parameter must not be able to do that.
   const range: RangeKey =
-    requested && requested in RANGES ? (requested as RangeKey) : DEFAULT_RANGE;
+    requested && Object.hasOwn(RANGES, requested) ? (requested as RangeKey) : DEFAULT_RANGE;
 
   // Read before the window is sized, because the "All" window is measured
   // partly from it. It is a handful of hand-typed rows.

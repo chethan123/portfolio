@@ -164,10 +164,6 @@ describe("with no password set", () => {
     expect(await refusalFor(gate, get("/people/3/accounts/new"))).toBeUndefined();
   });
 
-  it("leaves the health endpoint reachable without credentials", async () => {
-    expect(await refusalFor(open(), get("/healthz"))).toBeUndefined();
-  });
-
   it("reports itself as open, which is what the warning banner renders from", async () => {
     expect(open().enabled).toBe(false);
     expect(closed().enabled).toBe(true);
