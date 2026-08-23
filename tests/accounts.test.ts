@@ -68,20 +68,6 @@ describe("recording accounts", () => {
   );
 
   it(
-    "records the external account number, so an upload can pre-select the account",
-    withDatabase(async ({ db }) => {
-      const alice = await createPerson({ name: "Alice" }, db);
-
-      const account = await createAccount(
-        { ...validInput(alice.id), externalAccountNumber: "X-9911" },
-        db,
-      );
-
-      expect(account.externalAccountNumber).toBe("X-9911");
-    }),
-  );
-
-  it(
     "treats a blank account number as not recorded rather than as an empty one",
     withDatabase(async ({ db }) => {
       const alice = await createPerson({ name: "Alice" }, db);

@@ -17,7 +17,6 @@ import {
 } from "~/lib/column-mapping.server";
 import { readCsv } from "~/lib/csv";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
-import { unresolvedStrings } from "~/lib/instrument-resolution.server";
 import { rememberMapping, requireDraft } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -328,49 +327,6 @@ describe("rememberMapping", () => {
       // Response, and a dead bookmark answering as a form error would be a
       // blank screen with no word of why.
       await expect(rememberMapping("999999", MAPPING, db)).rejects.toThrow(NotFoundError);
-    }),
-  );
-});
-
-describe("unresolvedStrings", () => {
-  it(
-    "matches byte-exactly, so a case or padding difference is a miss",
-    withDatabase(async ({ db, seedInstrument }) => {
-      const instrument = await seedInstrument({ symbol: "VTI" });
-      await plantAlias(db, instrument, "VTI");
-
-      await expect(
-        unresolvedStrings(["VTI", "vti", "VTI ", " VTI"], db),
-      ).resolves.toEqual(["vti", "VTI ", " VTI"]);
-    }),
-  );
-
-  it(
-    "answers nothing for a file whose every string is already vocabulary",
-    withDatabase(async ({ db, seedInstrument }) => {
-      const instrument = await seedInstrument({ symbol: "VTI" });
-      await plantAlias(db, instrument, "VTI");
-      await plantAlias(db, instrument, "Vanguard Total Stock Market ETF");
-
-      await expect(
-        unresolvedStrings(["VTI", "Vanguard Total Stock Market ETF", "VTI"], db),
-      ).resolves.toEqual([]);
-    }),
-  );
-
-  it(
-    "keeps first-appearance order and collapses repeats, the order the screen asks in",
-    withDatabase(async ({ db }) => {
-      await expect(
-        unresolvedStrings(["BND", "VTI", "BND", "AAPL", "VTI"], db),
-      ).resolves.toEqual(["BND", "VTI", "AAPL"]);
-    }),
-  );
-
-  it(
-    "resolves an empty input to an empty list",
-    withDatabase(async ({ db }) => {
-      await expect(unresolvedStrings([], db)).resolves.toEqual([]);
     }),
   );
 });

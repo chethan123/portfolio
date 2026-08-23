@@ -334,25 +334,14 @@ describe("a provider that fails outright", () => {
         .where("instrument_id", "=", vti.id)
         .executeTakeFirstOrThrow();
 
-      // The price is kept and used; the flag is what changes.
+      // The price is kept and used; the flag is what changes. That this
+      // resolves at all is the other half: a poll is a background concern and
+      // a provider outage is the expected case §6.1 plans for, so the report
+      // comes back rather than the failure reaching a caller with no catch.
       expect(stored.price).toBe("271.5000");
       expect(stored.is_stale).toBe(true);
       expect(report.stale).toBe(1);
       expect(report.priced).toBe(0);
-    }),
-  );
-
-  it(
-    "does not propagate the failure to its caller",
-    withDatabase(async ({ db, seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-
-      // A poll is a background concern; a provider outage is the expected case
-      // §6.1 plans for, not an exception for the poller to catch.
-      await expect(refreshQuotes(brokenProvider(), NEW_YORK, db)).resolves.toMatchObject({
-        priced: 0,
-        stale: 1,
-      });
     }),
   );
 

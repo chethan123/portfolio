@@ -47,49 +47,20 @@ describe("the capital gains rate", () => {
   );
 
   it(
-    "reads a rate the way a person writes one",
+    "files a refusal under the name this form's field actually has",
     withDatabase(async ({ db }) => {
-      // The percent sign a paste out of a tax table brings with it, and the
-      // spacing a person types.
-      expect(await saveCapitalGainsRate({ capitalGainsRate: " 23.8% " }, db)).toBe("23.800000");
-    }),
-  );
+      // The rules themselves are `percentRate`'s and are pinned exactly, and
+      // without a database, in `rate-input.test.ts` — which parses the field
+      // under the name `rate`. What only this call site can show is that the
+      // message arrives under `capitalGainsRate`, the name the Tax form's box
+      // carries: filed under the wrong key it would render nowhere, and the
+      // screen would refuse the write in silence.
+      //
+      // Asserted on the message, not merely on the key being present: a bare
+      // `toHaveProperty` here would pass if every refusal said "banana".
+      const refusal = await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "101" }, db));
 
-  it(
-    "keeps every place the column stores",
-    withDatabase(async ({ db }) => {
-      expect(await saveCapitalGainsRate({ capitalGainsRate: "23.812345" }, db)).toBe("23.812345");
-    }),
-  );
-
-  it(
-    "allows the ends of the range: nothing owed, and everything owed",
-    withDatabase(async ({ db }) => {
-      expect(await saveCapitalGainsRate({ capitalGainsRate: "0" }, db)).toBe("0.000000");
-      expect(await saveCapitalGainsRate({ capitalGainsRate: "100" }, db)).toBe("100.000000");
-    }),
-  );
-
-  it(
-    "refuses a rate that is not a rate, naming the field",
-    withDatabase(async ({ db }) => {
-      expect(await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "" }, db))).toHaveProperty(
-        "capitalGainsRate",
-      );
-      expect(
-        await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "a quarter" }, db)),
-      ).toHaveProperty("capitalGainsRate");
-      expect(await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "-5" }, db))).toHaveProperty(
-        "capitalGainsRate",
-      );
-      expect(await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "101" }, db))).toHaveProperty(
-        "capitalGainsRate",
-      );
-      // Finer than the column stores, which would otherwise be rounded away
-      // silently and read back as a rate nobody typed.
-      expect(
-        await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "23.8123456" }, db)),
-      ).toHaveProperty("capitalGainsRate");
+      expect(refusal.capitalGainsRate).toMatch(/more than 100/);
     }),
   );
 

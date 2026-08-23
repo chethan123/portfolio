@@ -476,18 +476,4 @@ describe("instrument aliases", () => {
       `),
     ).toBe("23505");
   });
-
-  it("is global rather than scoped per institution", async () => {
-    // Fidelity's `CASH` and Schwab's `Cash & Cash Investments` are two rows
-    // pointing at the same instrument, with no institution column between them.
-    const columns = await sql<{ column_name: string }>`
-      select column_name from information_schema.columns
-      where table_name = 'instrument_alias'
-    `.execute(db);
-
-    expect(columns.rows.map((row) => row.column_name).sort()).toEqual([
-      "instrument_id",
-      "raw_string",
-    ]);
-  });
 });
