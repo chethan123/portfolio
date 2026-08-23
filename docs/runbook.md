@@ -169,7 +169,7 @@ A row in the ledger with no matching file is the fault.
 **Do.** For writes failing: free disk, or restore the grant, then retry the failing action — nothing
 was partly recorded. For a database ahead of the code, go to the next entry.
 
-Why: [Monitoring](operating.md#monitoring), [Growth](operating.md#growth).
+Why: [Monitoring](operating.md#monitoring), [Growth](operating.md#growth-and-limits).
 
 ---
 
@@ -283,7 +283,7 @@ cancel it by pid:
 docker compose exec db psql -U portfolio -d portfolio -c "select pg_cancel_backend(<pid>)"
 ```
 
-Why: [Monitoring](operating.md#monitoring), [Growth](operating.md#growth).
+Why: [Monitoring](operating.md#monitoring), [Growth](operating.md#growth-and-limits).
 
 ---
 
