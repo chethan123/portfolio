@@ -5,6 +5,31 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-08-23 — Dependency audit
+
+One document: [Dependency audit](./2026-08-23-dependency-audit.md) — every package in
+`package-lock.json` checked for use, maintenance, advisories and tampering, against `2cea455`.
+
+### The three things worth knowing without reading further
+
+1. **`yahoo-finance2` was 65% of the production tree and none of it ran.** Version 4 declares the MCP
+   server SDK, a Deno shim and a fetch-mocking library as runtime dependencies, for a subpath and two
+   CLI bins this application never touches — dragging a second Express, plus Hono, jose, cors and ajv
+   into the image. 59 packages now pruned in the Docker build, verified by booting the pruned tree.
+
+2. **No advisories anywhere, and the zero was checked rather than trusted.** The endpoint `npm audit`
+   queries was confirmed live against three known-bad versions first. One deprecated package
+   (`tsconfck`, via `vite-tsconfig-paths`) has been removed; the tree now has none.
+
+3. **No sign of tampering.** Every lockfile entry resolves to `registry.npmjs.org` with a `sha512`
+   hash and a registry signature; only `esbuild` and `fsevents` run install scripts, both dev-only.
+   The `chalk`/`debug` family is present but at clean versions.
+
+### Status
+
+The changes in §6 are applied. §7 lists what was deliberately left: an upstream issue on
+`yahoo-finance2`, an OSV cross-check from an unrestricted network, Dependabot, and React Router 8.
+
 ## 2026-08-23 — Architecture review
 
 One document: [Deepening opportunities](./2026-08-23-architecture-review.md) — ten candidates for

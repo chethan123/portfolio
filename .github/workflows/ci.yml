@@ -60,6 +60,56 @@ jobs:
         if: always()
         run: docker compose -f compose.test.yaml down -v
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      # `--ignore-scripts` because nothing here needs a package's install hook to
+      # have run, and an audit job is the last place that should execute
+      # third-party code it is in the middle of checking.
+      - run: npm ci --ignore-scripts
+
+      # The only check that would notice a pinned name and version being
+      # republished with different contents. Everything in the lockfile is
+      # signed by the registry today, so a gap here is a finding, not noise.
+      - name: Verify registry signatures
+        run: npm audit signatures
+
+      # Production only, and only high and critical: this gate exists to stop a
+      # serious advisory in code the container actually runs, not to turn the
+      # branch red over a moderate in a build tool.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      # Everything below is reported and not enforced, because the fix for a
+      # transitive advisory or a deprecation is usually somebody else's release.
+      - name: Report dev advisories
+        if: always()
+        run: npm audit || true
+
+      # npm records a package's deprecation notice in the lockfile, but only as
+      # of the resolution that wrote it — so this re-resolves into the throwaway
+      # workspace first, which is what makes a package deprecated *since* the
+      # lockfile was committed show up.
+      - name: Report deprecated packages
+        if: always()
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          node -e '
+            const lock = require("./package-lock.json");
+            const gone = Object.entries(lock.packages)
+              .filter(([, p]) => p.deprecated)
+              .map(([k, p]) => `${k.split("node_modules/").pop()}@${p.version}: ${p.deprecated}`);
+            console.log(gone.length ? gone.join("\n") : "no deprecated packages in the tree");
+          '
+
   smoke:
     name: Container smoke test
     runs-on: ubuntu-latest

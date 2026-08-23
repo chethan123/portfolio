@@ -43,6 +43,16 @@ RUN npm prune --omit=dev
 # runtime. The runtime stage is specified to contain no compiler, so it goes.
 RUN rm -rf node_modules/typescript node_modules/.bin/tsc node_modules/.bin/tsserver
 
+# `yahoo-finance2` declares the MCP server SDK, a Deno shim and a fetch-mocking
+# library among its runtime dependencies, for a subpath and two CLI bins this
+# application never touches: DESIGN.md §6.1 buys `quote()` and nothing else.
+# Between them they drag a second copy of Express, plus Hono, jose, cors, ajv
+# and fifty more packages into the image, where nothing can load them. The
+# script's header explains why cutting exactly those three edges is safe, and
+# why it cannot remove anything that is still reachable.
+COPY scripts/prune-unreachable-deps.mjs ./scripts/
+RUN node ./scripts/prune-unreachable-deps.mjs && rm -rf ./scripts
+
 
 # ------------------------------------------------------------- runtime --------
 FROM node:24-slim AS runtime

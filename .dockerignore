@@ -12,6 +12,8 @@ coverage
 docs
 tests
 scripts
+# ...except the one the build stage runs to trim the production tree.
+!scripts/prune-unreachable-deps.mjs
 *.md
 LICENSE
 .env
