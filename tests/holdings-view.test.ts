@@ -42,6 +42,7 @@ import {
   summarise,
   toSearch,
 } from "~/lib/holdings-view";
+import { SHARE_SCALE, toUnits } from "~/lib/money";
 
 import type { ValuedHolding } from "~/lib/valuation.server";
 
@@ -486,7 +487,9 @@ describe("groupHoldings", () => {
     // a household in net debt.
     const groups = groupHoldings(
       [
-        holding({ accountKind: "brokerage", value: "80000.0000" }),
+        holding({ accountKind: "brokerage", value: "10000.0000" }),
+        holding({ accountKind: "bank", value: "10000.0000" }),
+        holding({ accountKind: "401k", value: "10000.0000" }),
         holding({ accountKind: "liability", value: "-20000.0000" }),
       ],
       "kind",
@@ -494,10 +497,29 @@ describe("groupHoldings", () => {
       DEFAULT_DIRECTION,
     );
 
+    // Three groups rather than one, because one group's share is 1.000000
+    // whatever the arithmetic does. Each third rounds to 0.333333 on its own
+    // and three of those are a millionth short of the whole; the unit that
+    // flooring lost goes back to the first of the tied remainders in sort
+    // order, so the groups add up and the same set always reads the same way.
     expect(groups.map((group) => [group.label, group.share])).toEqual([
-      ["Brokerage", "1.000000"],
-      ["Liability", "-0.250000"],
+      ["Bank", "0.333334"],
+      ["Brokerage", "0.333333"],
+      ["Workplace plan", "0.333333"],
+      // −20,000 of the 30,000 owned. Not of the 10,000 net, and not topped up:
+      // a debt is not one of the pieces the whole is being cut into.
+      ["Liability", "-0.666667"],
     ]);
+
+    // Summed on the digits. `Number()` would round a millionth's shortfall away
+    // and report a pie that has a gap in it as whole.
+    const positive = groups
+      .map((group) => group.share)
+      .filter((share): share is string => share !== null && !share.startsWith("-"));
+
+    expect(positive.reduce((sum, share) => sum + toUnits(share, SHARE_SCALE), 0n)).toBe(
+      toUnits("1.000000", SHARE_SCALE),
+    );
   });
 
   it("has no share to report when nothing is positive", () => {

@@ -15,6 +15,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
+  accountTotal,
   accountTotals,
   manualNetWorth,
   netWorth,
@@ -124,6 +125,64 @@ describe("accountTotals", () => {
 
       expect(total?.amount).toBe("2500.0000");
       expect(total?.coverage).toEqual({ known: 1, total: 2 });
+    }),
+  );
+
+  it(
+    "lists an open account holding nothing as nothing to value, and still omits a closed one",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
+      const owner = await seedPerson({ name: "Alice" });
+      const usd = await usdInstrument();
+
+      const funded = await seedAccount({ name: "Funded", owner });
+      // The two ways an open account reaches the view as no rows at all: never
+      // uploaded to, and uploaded to but emptied — "sold everything" is
+      // recorded as a position set with no holdings.
+      const fresh = await seedAccount({ name: "Never uploaded", owner });
+      const emptied = await seedAccount({ name: "Sold out", owner });
+      await seedPositionSet({ account: emptied, asOf: "2026-01-31", holdings: [] });
+      // Closed is not a zero: it leaves the list entirely, the way
+      // `accountTotal` answers null rather than an account holding nothing.
+      const closed = await seedAccount({
+        name: "Old 401k",
+        owner,
+        closedAt: "2026-01-15",
+      });
+      await seedPositionSet({
+        account: funded,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "12500.00000000" }],
+      });
+      await seedPositionSet({
+        account: closed,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "9000.00000000" }],
+      });
+
+      const totals = await accountTotals(db);
+
+      // The zeros sort under the funded account and tie-break on name.
+      expect(totals.map((total) => [total.accountName, total.amount])).toEqual([
+        ["Funded", "12500.0000"],
+        ["Never uploaded", "0.0000"],
+        ["Sold out", "0.0000"],
+      ]);
+
+      // Zero over a coverage of zero rows — "nothing to value", not a figure a
+      // screen can call complete.
+      for (const name of ["Never uploaded", "Sold out"]) {
+        const total = totals.find((candidate) => candidate.accountName === name);
+        expect(total?.coverage).toEqual({ known: 0, total: 0 });
+      }
+
+      // The rule this pair exists to hold: the list and the drill-down are one
+      // figure shown twice, so neither may report an account the other does not.
+      for (const account of [funded, fresh, emptied]) {
+        expect(totals.find((candidate) => candidate.accountId === account.id)).toEqual(
+          await accountTotal(account.id, db),
+        );
+      }
+      expect(await accountTotal(closed.id, db)).toBeNull();
     }),
   );
 });

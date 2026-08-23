@@ -28,8 +28,26 @@ import {
   unrealizedByAssetType,
 } from "~/lib/allocation";
 import { formatPercent } from "~/lib/format";
+import { SHARE_SCALE, toUnits } from "~/lib/money";
 
 import type { ValuedHolding } from "~/lib/valuation.server";
+
+/**
+ * The positive shares totalled on their digits.
+ *
+ * `Number()` is what let the old version of this assertion pass while the
+ * shares came to 0.999999: summed as floats, a millionth short of a whole is
+ * still `1` once the addition has rounded. `BigInt` over the exact strings
+ * cannot hide it.
+ */
+function wholePie(slices: ReadonlyArray<{ share: string }>): bigint {
+  return slices
+    .filter((slice) => !slice.share.startsWith("-"))
+    .reduce((sum, slice) => sum + toUnits(slice.share, SHARE_SCALE), 0n);
+}
+
+/** One whole, at the scale a share is written to. */
+const WHOLE = toUnits("1.000000", SHARE_SCALE);
 
 let sequence = 0;
 
@@ -157,9 +175,50 @@ describe("allocationByAccountKind", () => {
       ["liability", "-8000.0000", "-0.197531"],
     ]);
 
-    // The positive slices still make a whole pie: 0.691358 + 0.308642 = 1.
-    const positive = slices.filter((slice) => !slice.share.startsWith("-"));
-    expect(positive.reduce((sum, slice) => sum + Number(slice.share), 0)).toBe(1);
+    // The positive slices still make a whole pie. These two round to it on
+    // their own — 0.691358 + 0.308642 — which is why this case never caught
+    // anything; the equal slices below are the ones that do not.
+    expect(wholePie(slices)).toBe(WHOLE);
+  });
+
+  it("gives the unit lost to rounding back to a slice, so three equal ones make a whole pie", () => {
+    const slices = allocationByAccountKind([
+      holding({ accountKind: "brokerage", value: "10000.0000" }),
+      holding({ accountKind: "bank", value: "10000.0000" }),
+      holding({ accountKind: "401k", value: "10000.0000" }),
+    ]);
+
+    // A third rounded on its own is 0.333333, and three of those come to
+    // 0.999999 — the hairline gap the analysis ring drew, since it adds no
+    // residual wedge. The spare unit goes to the first of the tied remainders
+    // in sort order, so which slice carries it is the same on every render.
+    expect(slices.map((slice) => [slice.label, slice.share])).toEqual([
+      ["Bank", "0.333334"],
+      ["Brokerage", "0.333333"],
+      ["Workplace plan (401k, 403b)", "0.333333"],
+    ]);
+    expect(wholePie(slices)).toBe(WHOLE);
+  });
+
+  it("leaves a liability's share out of that correction, at the value it rounds to alone", () => {
+    const slices = allocationByAccountKind([
+      holding({ accountKind: "brokerage", value: "10000.0000" }),
+      holding({ accountKind: "bank", value: "10000.0000" }),
+      holding({ accountKind: "401k", value: "10000.0000" }),
+      holding({ accountKind: "liability", value: "-10000.0000" }),
+    ]);
+
+    // The liability is the same magnitude as each asset group, and the asset
+    // group holding the spare unit reads 0.333334. The liability does not: it
+    // is a negative fraction of the 30,000 owned, not a piece of the pie being
+    // shared out, so nothing is ever handed to it.
+    expect(slices.map((slice) => [slice.label, slice.share])).toEqual([
+      ["Bank", "0.333334"],
+      ["Brokerage", "0.333333"],
+      ["Workplace plan (401k, 403b)", "0.333333"],
+      ["Loan or other liability", "-0.333333"],
+    ]);
+    expect(wholePie(slices)).toBe(WHOLE);
   });
 });
 

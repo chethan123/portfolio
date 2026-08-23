@@ -471,6 +471,91 @@ describe("revisePosition", () => {
   );
 
   it(
+    "refuses a balance typed past the cent, because a cash row's quantity is money",
+    withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
+      // The second door onto a bank balance. `setBalance` refuses this figure,
+      // and a row editor that took it would store $100.1235 — a balance no
+      // statement can produce, reached by editing the same account elsewhere.
+      const usd = await usdInstrument();
+      const account = await seedAccount({ kind: "bank", name: "Ally Savings" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: usd, quantity: "500.00000000" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        revisePosition(account.id, usd.id, { quantity: "100.12345678", costBasisPerShare: "" }, db),
+      );
+      expect(refusal.fieldErrors.quantity).toMatch(/recorded to the cent/);
+
+      // A fault in a box, so nothing lands: the balance and the account's one
+      // statement are exactly as they were.
+      expect((await accountTotal(account.id, db))?.amount).toBe("500.0000");
+      expect(
+        await db
+          .selectFrom("position_set")
+          .select("id")
+          .where("account_id", "=", account.id)
+          .execute(),
+      ).toHaveLength(1);
+    }),
+  );
+
+  it(
+    "records a balance that is to the cent, which is the whole figure a statement prints",
+    withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
+      const usd = await usdInstrument();
+      const account = await seedAccount({ kind: "bank", name: "Ally Savings" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: usd, quantity: "500.00000000" }],
+      });
+
+      const written = await revisePosition(
+        account.id,
+        usd.id,
+        { quantity: "100.12", costBasisPerShare: "" },
+        db,
+      );
+
+      expect(written.quantity).toBe("100.12");
+      expect((await currentHoldings(db))[0]?.quantity).toBe("100.12000000");
+      expect((await accountTotal(account.id, db))?.amount).toBe("100.1200");
+    }),
+  );
+
+  it(
+    "leaves a share quantity at its eight places, which is not money and is reported that way",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The rule the cent check must not spread to. A brokerage really does
+      // report a fractional share to eight places, and narrowing every quantity
+      // to two would refuse a figure copied straight off a statement.
+      const account = await seedAccount({ kind: "brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
+      await seedQuote({ instrument: vti, price: "250.0000" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+
+      const written = await revisePosition(
+        account.id,
+        vti.id,
+        { quantity: "1.23456789", costBasisPerShare: "" },
+        db,
+      );
+
+      expect(written.quantity).toBe("1.23456789");
+      expect((await currentHoldings(db))[0]?.quantity).toBe("1.23456789");
+      // 1.23456789 × 250 = 308.6419725, as the view rounds it to the column.
+      expect((await currentHoldings(db))[0]?.value).toBe("308.6420");
+    }),
+  );
+
+  it(
     "raises a not-found for an account id that names nothing",
     withDatabase(async ({ db }) => {
       // Separate from a refusal because the two become different responses: a
@@ -534,6 +619,9 @@ describe("currentPosition", () => {
         // Null rather than absent: a collective trust nobody quotes is still
         // held, so the quote is joined left exactly as the view joins it.
         price: null,
+        // Read alongside the price because the write needs it: anything but
+        // `fixed` is a count of something rather than a sum of money.
+        priceSource: "feed",
       });
     }),
   );

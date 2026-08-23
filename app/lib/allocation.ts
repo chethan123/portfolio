@@ -46,8 +46,10 @@
  * So the denominator is the **gross positive total**: the sum of the slices
  * that are positive. Consequences, all intended:
  *
- *   * The positive slices sum to 1, so a pie or a stacked bar drawn from them
- *     is complete and needs no residual wedge.
+ *   * The positive slices sum to exactly 1, because {@link allocateShares}
+ *     hands the units that independent rounding loses back to the largest
+ *     remainders. So a pie or a stacked bar drawn from them is complete and
+ *     needs no residual wedge.
  *   * A negative slice is a negative fraction of what is owned — "this loan is
  *     20% of the assets" — a figure that stays finite and keeps its sign as the
  *     household's net worth crosses zero.
@@ -124,6 +126,65 @@ function compare(a: Bucket, b: Bucket): number {
 }
 
 /**
+ * The share of each amount in a column, in the order given, as `BigInt` counts
+ * of the last place at {@link SHARE_SCALE}.
+ *
+ * Rounding each share on its own leaves the positives short of a whole: three
+ * equal slices each round to `0.333333` and the pie comes to `0.999999`, which
+ * the analysis ring draws as a hairline gap because it adds no residual wedge.
+ * So the positive shares are floored and the units that flooring lost are
+ * handed back one apiece to the largest remainders — largest-remainder
+ * apportionment — which reaches exactly `1.000000` while moving no share by
+ * more than one unit of its last place. There are always fewer units to hand
+ * back than there are positive amounts, since every remainder is below the
+ * base. Ties go to the earlier amount, which is the caller's sort order, so one
+ * input always renders one set of shares.
+ *
+ * A negative amount takes no part in the correction. It is a negative fraction
+ * of the gross positive total rather than a piece of the whole being divided
+ * up — see the header — so it keeps its own rounding and its sign. With nothing
+ * positive there is no base to be a fraction of and every share is zero.
+ *
+ * Exported for `holdings-view.ts`, which shares out its groups by the same rule
+ * and would otherwise need a second implementation of the correction.
+ */
+export function allocateShares(amounts: ReadonlyArray<bigint>): bigint[] {
+  const whole = 10n ** BigInt(SHARE_SCALE);
+  const base = amounts.reduce((total, amount) => (amount > 0n ? total + amount : total), 0n);
+
+  if (base === 0n) return amounts.map(() => 0n);
+
+  const shares: bigint[] = [];
+  const remainders: { index: number; remainder: bigint }[] = [];
+  let floored = 0n;
+
+  amounts.forEach((amount, index) => {
+    if (amount <= 0n) {
+      shares.push(divide(amount, base, SHARE_SCALE));
+      return;
+    }
+
+    const scaled = amount * whole;
+    const floor = scaled / base;
+
+    shares.push(floor);
+    remainders.push({ index, remainder: scaled % base });
+    floored += floor;
+  });
+
+  const short = whole - floored;
+  remainders.sort((a, b) =>
+    a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1,
+  );
+
+  const topped = new Set(
+    remainders.filter((_, rank) => BigInt(rank) < short).map((entry) => entry.index),
+  );
+
+  return shares.map((share, index) => (topped.has(index) ? share + 1n : share));
+}
+
+/**
  * The one grouping this module does; the three exports below only say what to
  * group by. Written once because "sum the priced ones, count all of them, then
  * divide by the gross" is the rule, and three copies of it is three chances for
@@ -146,22 +207,18 @@ function group(holdings: ValuedHolding[], by: Grouping): AllocationSlice[] {
     buckets.set(key, bucket);
   }
 
-  // The denominator: the positive slices only. See the header for why this is
-  // not the net total.
-  const base = [...buckets.values()].reduce(
-    (total, bucket) => (bucket.amount > 0n ? total + bucket.amount : total),
-    0n,
-  );
+  // Sorted before the shares are worked out, because the correction breaks its
+  // ties on position and the rendered order is the one it has to break them in.
+  const ordered = [...buckets.entries()].sort(([, a], [, b]) => compare(a, b));
+  const shares = allocateShares(ordered.map(([, bucket]) => bucket.amount));
 
-  return [...buckets.entries()]
-    .sort(([, a], [, b]) => compare(a, b))
-    .map(([key, bucket]) => ({
-      key,
-      label: bucket.label,
-      amount: render(bucket.amount, MONEY_SCALE),
-      share: render(base === 0n ? 0n : divide(bucket.amount, base, SHARE_SCALE), SHARE_SCALE),
-      coverage: bucket.coverage,
-    }));
+  return ordered.map(([key, bucket], index) => ({
+    key,
+    label: bucket.label,
+    amount: render(bucket.amount, MONEY_SCALE),
+    share: render(shares[index] ?? 0n, SHARE_SCALE),
+    coverage: bucket.coverage,
+  }));
 }
 
 /** The label for a stored value, or the value itself if it has none. */

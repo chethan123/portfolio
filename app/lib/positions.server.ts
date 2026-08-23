@@ -58,7 +58,7 @@ import { getAccount } from "./accounts.server.ts";
 import { MONEY_SCALE, QUANTITY_SCALE, toUnits } from "./money.ts";
 
 import type { IsoDate } from "./valuation.server.ts";
-import type { Kysely } from "kysely";
+import type { Kysely, Selectable } from "kysely";
 
 /** What the row's two editable boxes carry. */
 export const positionInput = z.object({
@@ -88,6 +88,17 @@ export type CurrentPosition = {
    * (see {@link fitsTheMoneyColumn}).
    */
   price: string | null;
+  /**
+   * Where the price comes from, of which `fixed` is the seeded USD row's alone
+   * (`instrument-resolution.server.ts`).
+   *
+   * Here for the same reason {@link CurrentPosition.price} is — {@link
+   * revisePosition} needs it, and this is the query that already knows it. It
+   * is how the write tells a count of shares from a sum of money: §2 stores a
+   * cash balance as a quantity of the fixed-price currency, so on those rows
+   * the quantity box is money and is held to money's rule.
+   */
+  priceSource: Selectable<Database["instrument"]>["price_source"];
 };
 
 /**
@@ -143,13 +154,15 @@ export async function currentPosition(
     cost_basis_per_share: string | null;
     as_of_date: string;
     price: string | null;
+    price_source: string;
   }>`
     select
       i.name                 as instrument_name,
       h.quantity             as quantity,
       h.cost_basis_per_share as cost_basis_per_share,
       ps.as_of_date          as as_of_date,
-      q.price                as price
+      q.price                as price,
+      i.price_source         as price_source
     from position_set ps
     join holding h    on h.position_set_id = ps.id
     join instrument i on i.id = h.instrument_id
@@ -171,6 +184,7 @@ export async function currentPosition(
     costBasisPerShare: row.cost_basis_per_share,
     asOf: row.as_of_date,
     price: row.price,
+    priceSource: row.price_source,
   };
 }
 
@@ -293,6 +307,24 @@ export async function revisePosition(
   }
 
   const input = parseInput(positionInput, raw);
+
+  // Money is recorded to the cent, and on a cash row this box holds money: §2
+  // stores a bank balance as a quantity of the fixed-price USD instrument, so
+  // this editor is a second door onto the figure `setBalance` writes. The two
+  // doors have to refuse the same things, and `signedQuantity` alone does not
+  // — it allows the eight places a fractional share genuinely needs, which on a
+  // balance is $100.1235, a figure no statement can produce and the Set Balance
+  // form would have turned away. The wording is `moneyMagnitude`'s, so the
+  // reader who meets both doors meets one rule.
+  //
+  // Only the quantity. A cost basis is a rate rather than a balance, and
+  // `perShareAmount` holds all four places of the column it is prefilled from
+  // — narrowing it here would make the box refuse what it had just printed.
+  if (before.priceSource === "fixed" && (input.quantity.split(".")[1] ?? "").length > 2) {
+    throw new ValidationError({
+      quantity: "A balance is recorded to the cent, so it takes at most two decimal places.",
+    });
+  }
 
   // The one refusal that is about meaning rather than about form. §2 puts the
   // sign in the quantity, so flipping it does not restate a position — it
