@@ -7,7 +7,6 @@ import {
   findMapping,
   headerFingerprint,
   parseMappingForm,
-  upsertMapping,
 } from "~/lib/column-mapping.server";
 import { defaultHeaderRow, headerRowChoices, readCsv } from "~/lib/csv";
 import {
@@ -16,9 +15,8 @@ import {
   ValidationError,
   formFields,
 } from "~/lib/input.server";
-import { unresolvedStrings } from "~/lib/instrument-resolution.server";
 import { parseStatement, statementMapping } from "~/lib/statement";
-import { requireDraft, saveMapping, type UploadDraft } from "~/lib/uploads.server";
+import { rememberMapping, requireDraft, type UploadDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
 import type { ParseProblem, StatementMapping } from "~/lib/statement";
@@ -233,49 +231,30 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   try {
     const draft = await requireDraft(params.draftId);
-    const account = await getAccount(draft.accountId);
     const { rows, delimiter } = readDraftFile(draft);
 
     const mapping = parseMappingForm(values, rows, delimiter);
-    const parsed = parseStatement(rows, mapping);
+
+    // One call decides everything downstream of the form: whether the file
+    // parses, whether the mapping is worth remembering, and which step this
+    // reader goes to. The step is the same answer that lands on the draft, so
+    // the strip on the next screen can never describe a different journey.
+    const outcome = await rememberMapping(draft.id, mapping);
 
     // Parse problems land here, not later (brief §4.5): each names the row
     // and column that caused it, because remapping is the fix and an error
     // two screens downstream from its cure is a round trip nobody asked for.
-    if (parsed.problems.length > 0) {
+    if ("problems" in outcome) {
       return {
         errors: {} as Record<string, string>,
         formError: null,
         values,
-        problems: parsed.problems.map((problem) => problem.message),
-        problemFields: problemFieldsOf(mapping, parsed.problems),
+        problems: outcome.problems.map((problem) => problem.message),
+        problemFields: problemFieldsOf(mapping, outcome.problems),
       };
     }
 
-    // No positions and nothing skipped means the mapped instrument column is
-    // empty on every data row — refused here, naming the column, rather than
-    // producing an empty diff two screens later. (All rows skipped is
-    // different: the column has content, the quantities are absence markers,
-    // and the review screen owns what an empty statement means.)
-    if (parsed.positions.length === 0 && parsed.skipped.length === 0) {
-      throw new ValidationError({
-        instrument:
-          `No row in this file has anything under "${mapping.columns.instrument}", ` +
-          "so it cannot be the instrument column. Check the column choice and the header row.",
-      });
-    }
-
-    await saveMapping(draft.id, mapping);
-    await upsertMapping(
-      account.institution,
-      headerFingerprint(rows[mapping.headerRow] ?? []),
-      mapping,
-    );
-
-    const unresolved = await unresolvedStrings(
-      parsed.positions.map((position) => position.instrument),
-    );
-    return redirect(`/upload/${draft.id}/${unresolved.length > 0 ? "instruments" : "review"}`);
+    return redirect(`/upload/${draft.id}/${outcome.nextStep}`);
   } catch (error) {
     if (error instanceof ValidationError) {
       // Split here, not in the component: `FORM_ERROR` lives in a `.server`

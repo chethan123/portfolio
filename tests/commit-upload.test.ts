@@ -30,8 +30,8 @@ import {
   DraftNotReadyError,
   commitUpload,
   diffForDraft,
+  rememberMapping,
   requireDraft,
-  saveMapping,
   uploadReceipt,
 } from "~/lib/uploads.server";
 import { accountHoldings, netWorth } from "~/lib/valuation.server";
@@ -73,7 +73,14 @@ type MappingOverrides = Omit<Partial<StatementMapping>, "columns"> & {
 
 const FILENAME = "Positions_2026-06-30.csv";
 
-/** Stage a review-ready draft: the file's bytes and a saved mapping. */
+/**
+ * Stage a review-ready draft: the file's bytes and a saved mapping.
+ *
+ * A fixture whose mapping does not parse its own CSV writes nothing, and the
+ * test would meet that several calls later as a puzzling
+ * {@link DraftNotReadyError} about a draft that never passed the columns step.
+ * So the parse problems are raised here, where the bad fixture is.
+ */
 async function stage(
   { db, seedUploadDraft }: Pick<TestContext, "db" | "seedUploadDraft">,
   account: SeededAccount,
@@ -82,7 +89,7 @@ async function stage(
 ): Promise<string> {
   const draft = await seedUploadDraft({ account, filename: FILENAME, bytes: encode(csv) });
 
-  await saveMapping(
+  const outcome = await rememberMapping(
     draft.id,
     {
       ...BASE_MAPPING,
@@ -91,6 +98,13 @@ async function stage(
     },
     db,
   );
+
+  if ("problems" in outcome) {
+    throw new Error(
+      "This fixture's mapping does not parse its own file: " +
+        outcome.problems.map((problem) => problem.message).join(" "),
+    );
+  }
 
   return draft.id;
 }
@@ -606,7 +620,7 @@ describe("commitUpload", () => {
     });
 
     try {
-      await saveMapping(draft.id, BASE_MAPPING, db);
+      await rememberMapping(draft.id, BASE_MAPPING, db);
 
       // A trigger that refuses this account's holdings only, so nothing else
       // touching the table is disturbed. The account id is our own insert's,

@@ -47,6 +47,7 @@ import { sql } from "kysely";
 import { getConfig } from "../../server/config.ts";
 import { getAccount } from "./accounts.server.ts";
 import { lastRecorded } from "./balances.server.ts";
+import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { holdingNote } from "./holdings-view.ts";
@@ -58,7 +59,12 @@ import { foldLots, parseStatement, statementMapping } from "./statement.ts";
 import { accountHoldings } from "./valuation.server.ts";
 
 import type { AssetClass, IsoDate } from "./valuation.server.ts";
-import type { ParsedPosition, ParsedStatement, StatementMapping } from "./statement.ts";
+import type {
+  ParseProblem,
+  ParsedPosition,
+  ParsedStatement,
+  StatementMapping,
+} from "./statement.ts";
 import type { Kysely } from "kysely";
 
 const BYTES_PER_MB = 1024 * 1024;
@@ -304,40 +310,84 @@ export async function requireDraft(
 }
 
 /**
- * The columns step passing: the mapping lands on the draft, which is what
- * makes "how far did this draft get" a property of the row and lets a later
- * step — or a return to this one — read the answer back.
+ * The columns step passing, in one answer: the mapping lands on the draft —
+ * which is what makes "how far did this draft get" a property of the row and
+ * lets a later step, or a return to this one, read it back — and the step the
+ * reader goes to next comes back to the caller.
  *
  * `had_first_sightings` is decided and written here too, because this is the
  * one moment the answer exists: whether *this* mapping's parse raised any
  * string no alias resolves. The instruments step then writes the aliases, and
  * afterwards nothing can tell "the step was skipped" from "the step was
  * passed" — an alias does not say which draft wrote it. The review screen's
- * step strip dims its entry off this bit (brief §2.1, §7.5). Null when the
- * mapping does not parse clean, since no columns step has genuinely passed.
+ * step strip dims its entry off this bit (brief §2.1, §7.5).
  *
+ * `nextStep` is that same bit handed back, never a second look. The route used
+ * to ask {@link unresolvedStrings} again after this write, and an alias landing
+ * between the two questions left the stored bit disagreeing with the step the
+ * reader was actually sent to — a review screen dimming an instruments entry
+ * the reader had just been walked through, or the reverse. One question, one
+ * answer, one moment.
+ *
+ * Everything is derived from the draft's own bytes, re-read here rather than
+ * passed in: rows handed down from a caller are a second copy of the truth,
+ * and the point of this function is that there is only one. The mapping
+ * carries the delimiter those rows were read with, so the re-read reaches the
+ * same rows the caller saw.
+ *
+ * The two writes are deliberately not one transaction. The draft's mapping is
+ * load-bearing — it *is* the columns step — while the institution's remembered
+ * mapping is a convenience cache the next upload can rebuild by asking the
+ * reader again. A failure in the cache must not destroy a step that passed.
+ *
+ * @returns the parse's problems, having written nothing, when the mapping does
+ *          not parse clean — the screen hangs them under its own selects, so
+ *          they come back structured rather than as sentences; otherwise the
+ *          step the flow moves to.
+ * @throws {ValidationError} keyed `instrument` when the mapped instrument
+ *         column is empty on every data row — refused here, naming the column,
+ *         rather than producing an empty diff two screens later.
  * @throws {NotFoundError} through {@link requireDraft}, with the same
  *         expired-or-recorded sentence — a mapping posted against a draft the
  *         sweep or a commit has taken is a dead bookmark, not a fault.
  */
-export async function saveMapping(
+export async function rememberMapping(
   draftId: string,
   mapping: StatementMapping,
   db: Kysely<Database> = getDb(),
-): Promise<void> {
+): Promise<{ problems: ParseProblem[] } | { nextStep: "instruments" | "review" }> {
   const draft = await requireDraft(draftId, db);
 
   const { rows } = readCsv(draft.bytes, mapping.delimiter);
   const parsed = parseStatement(rows, mapping);
+
+  // Problems mean no columns step has genuinely passed, so nothing is written:
+  // a draft that carried a mapping its own file cannot parse would send every
+  // later step back here anyway, and the half-written row would outlast the
+  // screen that could fix it.
+  if (parsed.problems.length > 0) return { problems: parsed.problems };
+
+  // No positions and nothing skipped means the mapped instrument column is
+  // empty on every data row. (All rows skipped is different: the column has
+  // content, the quantities are absence markers, and the review screen owns
+  // what an empty statement means.)
+  if (parsed.positions.length === 0 && parsed.skipped.length === 0) {
+    throw new ValidationError({
+      instrument:
+        `No row in this file has anything under "${mapping.columns.instrument}", ` +
+        "so it cannot be the instrument column. Check the column choice and the header row.",
+    });
+  }
+
+  // Asked once. This one answer is both the bit the step strip reads and the
+  // step this call sends the reader to.
   const hadFirstSightings =
-    parsed.problems.length > 0
-      ? null
-      : (
-          await unresolvedStrings(
-            parsed.positions.map((position) => position.instrument),
-            db,
-          )
-        ).length > 0;
+    (
+      await unresolvedStrings(
+        parsed.positions.map((position) => position.instrument),
+        db,
+      )
+    ).length > 0;
 
   await db
     .updateTable("upload_draft")
@@ -347,6 +397,20 @@ export async function saveMapping(
     })
     .where("id", "=", draft.id)
     .execute();
+
+  // The institution's remembered mapping, so the next file with this header
+  // opens the columns screen already filled in. Derived here rather than asked
+  // of the caller: the institution is the draft's account's, and the header is
+  // the row the mapping itself names.
+  const account = await getAccount(draft.accountId, db);
+  await upsertMapping(
+    account.institution,
+    headerFingerprint(rows[mapping.headerRow] ?? []),
+    mapping,
+    db,
+  );
+
+  return { nextStep: hadFirstSightings ? "instruments" : "review" };
 }
 
 /**

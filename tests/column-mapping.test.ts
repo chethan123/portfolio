@@ -16,9 +16,9 @@ import {
   upsertMapping,
 } from "~/lib/column-mapping.server";
 import { readCsv } from "~/lib/csv";
-import { NotFoundError } from "~/lib/input.server";
+import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { unresolvedStrings } from "~/lib/instrument-resolution.server";
-import { requireDraft, saveMapping } from "~/lib/uploads.server";
+import { rememberMapping, requireDraft } from "~/lib/uploads.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
@@ -207,73 +207,127 @@ describe("findMapping and upsertMapping", () => {
   );
 });
 
-describe("saveMapping", () => {
-  it(
-    "writes the mapping onto the draft, where a later step reads it back",
-    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
-      const account = await seedAccount({ kind: "brokerage" });
-      const draft = await seedUploadDraft({ account });
-
-      await saveMapping(draft.id, MAPPING, db);
-
-      const stored = await requireDraft(draft.id, db);
-      expect(stored.mapping).toEqual(MAPPING);
-    }),
-  );
+describe("rememberMapping", () => {
+  /** A mapping over the two-column files these tests hand it. */
+  const SIMPLE: StatementMapping = {
+    ...MAPPING,
+    headerRow: 0,
+    columns: { instrument: "Symbol", quantity: "Quantity" },
+  };
 
   it(
-    "records whether this mapping's parse raised any first sighting",
+    "sends the reader to the step it just wrote onto the draft, both ways round",
     withDatabase(async ({ db, seedAccount, seedUploadDraft, seedInstrument }) => {
-      // The one moment the answer exists: after the instruments step writes
-      // the aliases, nothing can tell "skipped" from "resolved" — an alias
-      // does not say which draft wrote it. The review screen's step strip
-      // dims its entry off this bit (ingest brief §2.1, §7.5).
+      // The bug this replaces: the bit was decided from one read and the
+      // redirect from a second, strictly later one, so an alias written
+      // between them left the step strip describing a journey the reader
+      // never took. One answer serves both, or neither is trustworthy.
       const account = await seedAccount({ kind: "brokerage" });
       const instrument = await seedInstrument({ symbol: "VTI" });
       await plantAlias(db, instrument, "VTI");
-
-      const simple: StatementMapping = {
-        ...MAPPING,
-        headerRow: 0,
-        columns: { instrument: "Symbol", quantity: "Quantity" },
-      };
 
       const sightings = await seedUploadDraft({
         account,
         bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\nNEVER SEEN,50\n"),
       });
-      await saveMapping(sightings.id, simple, db);
+      await expect(rememberMapping(sightings.id, SIMPLE, db)).resolves.toEqual({
+        nextStep: "instruments",
+      });
       expect((await requireDraft(sightings.id, db)).hadFirstSightings).toBe(true);
 
       const quiet = await seedUploadDraft({
         account,
         bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\n"),
       });
-      await saveMapping(quiet.id, simple, db);
+      await expect(rememberMapping(quiet.id, SIMPLE, db)).resolves.toEqual({
+        nextStep: "review",
+      });
       expect((await requireDraft(quiet.id, db)).hadFirstSightings).toBe(false);
+
+      // The mapping itself lands too — a later step reads it back off the row.
+      expect((await requireDraft(quiet.id, db)).mapping).toEqual(SIMPLE);
     }),
   );
 
   it(
-    "leaves the bit undecided for a mapping that does not parse clean",
+    "refuses an instrument column that is empty on every row, naming that column",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      // Refused here rather than two screens later as an empty diff: the
+      // column choice is the fix, and this is the screen that holds it.
+      const account = await seedAccount({ kind: "brokerage" });
+      const draft = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\n,100\n,50\n"),
+      });
+
+      let refusal: ValidationError | null = null;
+      try {
+        await rememberMapping(draft.id, SIMPLE, db);
+      } catch (error) {
+        if (!(error instanceof ValidationError)) throw error;
+        refusal = error;
+      }
+
+      expect(refusal?.fieldErrors.instrument).toMatch(/"Symbol"/);
+      // Refused means refused: no mapping landed on the draft.
+      expect((await requireDraft(draft.id, db)).mapping).toBeNull();
+    }),
+  );
+
+  it(
+    "hands back the parse's problems as they are, and writes nothing",
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
       const account = await seedAccount({ kind: "brokerage" });
+      const draft = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,not a number\n"),
+      });
+
+      const outcome = await rememberMapping(draft.id, SIMPLE, db);
+
+      // Structured, not sentences: the columns screen hangs `aria-invalid` off
+      // each problem's column, so flattening these to messages on the way out
+      // would cost the screen the only thing that points at a control.
+      expect("problems" in outcome).toBe(true);
+      const problems = "problems" in outcome ? outcome.problems : [];
+      expect(problems).toHaveLength(1);
+      expect(problems[0]?.column).toBe("Quantity");
+      expect(problems[0]?.row).toBe(1);
+
+      // Nothing written: a draft carrying a mapping its own file cannot parse
+      // would bounce every later step back to columns anyway.
+      const stored = await requireDraft(draft.id, db);
+      expect(stored.mapping).toBeNull();
+      expect(stored.hadFirstSightings).toBeNull();
+    }),
+  );
+
+  it(
+    "remembers the mapping for the institution, under its own header's fingerprint",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      // The convenience cache the next upload's columns screen prefills from.
+      // Written from here because this is where a mapping is known good; the
+      // route supplies neither the institution nor the fingerprint.
+      const account = await seedAccount({ kind: "brokerage", institution: "Fidelity" });
       const draft = await seedUploadDraft({
         account,
         bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,100\n"),
       });
 
-      // MAPPING's header row 2 points past this file: problems, so no columns
-      // step has genuinely passed and no skip claim may be made.
-      await saveMapping(draft.id, MAPPING, db);
-      expect((await requireDraft(draft.id, db)).hadFirstSightings).toBeNull();
+      await rememberMapping(draft.id, SIMPLE, db);
+
+      const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
+      await expect(findMapping("Fidelity", fingerprint, db)).resolves.toEqual(SIMPLE);
     }),
   );
 
   it(
     "refuses a draft that is gone with the same 404 every dead draft URL gets",
     withDatabase(async ({ db }) => {
-      await expect(saveMapping("999999", MAPPING, db)).rejects.toThrow(NotFoundError);
+      // A throw, not a returned problem: `columns.tsx` turns this into a 404
+      // Response, and a dead bookmark answering as a form error would be a
+      // blank screen with no word of why.
+      await expect(rememberMapping("999999", MAPPING, db)).rejects.toThrow(NotFoundError);
     }),
   );
 });
