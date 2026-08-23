@@ -1,7 +1,12 @@
 # Portfolio Tracker
 
-A self-hosted family portfolio and net worth tracker. See [DESIGN.md](DESIGN.md) for the full
-design — domain model, ingest, pricing, screens, stack, and the accepted limitations.
+A self-hosted family portfolio and net worth tracker.
+
+- **[DESIGN.md](DESIGN.md)** — the design and the reasoning behind it: domain model, ingest,
+  pricing, screens, stack, and the accepted limitations.
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how the running system is put together: processes and
+  deployment topology, the layers and the invariants that hold them apart, the database schema and
+  its derived views, and the dataflow behind ingest, pricing and every dashboard read.
 
 ## Built by agents
 
@@ -283,6 +288,10 @@ which the app trusts. [`docs/operating.md`](docs/operating.md) has the proxy con
 the app from a LAN address.
 
 ## Working on it
+
+[ARCHITECTURE.md](ARCHITECTURE.md) is the orientation document: §4 is the layering and the
+single-site invariants a change has to keep, §5 is the schema and the numeric boundary, and §6 walks
+the ingest and pricing dataflows end to end.
 
 Requires Node 24.
 
