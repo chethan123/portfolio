@@ -301,11 +301,17 @@ Requires Node 24.
 
 ```sh
 npm install
-npm run dev            # http://localhost:5173
+docker compose -f compose.test.yaml up -d --wait     # a Postgres to develop against
+DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm run migrate
+DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm run dev
 
 npm run typecheck      # the runtime strips types without checking them
 npm run build
 ```
+
+`npm run dev` needs a migrated database and does not apply migrations itself — only the container
+entrypoint does that. Without one it starts anyway and fails on the first request instead, because
+configuration is read lazily.
 
 Tests run against a real Postgres — the risk this codebase carries lives in Postgres-specific SQL
 and `numeric` handling, both of which disappear under a mock.
