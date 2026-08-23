@@ -174,9 +174,11 @@ looks exactly like a pass, and "I ran the test and it was green" is a claim you 
 output. Check that the run reports at least one test *passed*. The filter matches the text of
 `it(...)` — not a `describe` name, and not a message inside an assertion.
 
-**If Postgres is not up,** most files fail with a message that names the fix. Two —
-`migrations.test.ts` and `numeric.test.ts` — build their own connection because what they test *is*
-the pool and the migration runner, and those fail with a raw `ECONNREFUSED` instead. Same cause.
+**If Postgres is not up,** the failure names the fix rather than making you infer it from a
+connection error — it tells you the URL it tried and the `compose.test.yaml` command that starts one,
+and mentions `TEST_DATABASE_URL` if you would rather point it at your own. A few files build their
+own connection, because what they test *is* the pool or the migration runner, and they carry the same
+message themselves.
 
 ### How the suite is built
 
