@@ -54,17 +54,17 @@ docker compose -f compose.test.yaml exec db \
   psql -U portfolio -d portfolio_test -c 'create database portfolio_dev'
 
 # `.env.*` is gitignored except `.env.example`.
-printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_dev\n' > .env.dev
+printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_dev\n' > .env
 
-node --env-file=.env.dev ./server/migrate.ts
-DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_dev npm run dev
+node --env-file=.env ./server/migrate.ts   # Node needs the file named; see below
+npm run dev                               # Vite reads .env by itself
 ```
 
 Some of that is worth knowing rather than rediscovering.
 
 **The dev server serves on `http://localhost:5173`** — Vite's default, which nothing here overrides.
-If that port is taken Vite silently takes the next free one and prints it in its banner. Read the
-banner before pointing anything else at 5173.
+If that port is taken, Vite says so and moves to the next free one, printing the URL it settled on.
+Read the banner before pointing anything else at 5173.
 
 **`compose.test.yaml` creates exactly one database, `portfolio_test`.** Every other database — a
 development one, a demo one, a scratch one — you create by hand, with the `psql` line above or
@@ -77,7 +77,7 @@ step and you always do. Run the migrator yourself after every `git pull` that to
 It is idempotent, so re-running it costs nothing.
 
 **There is an `npm run migrate`, and it is what the README and CI use.** This document calls
-`node --env-file=.env.dev ./server/migrate.ts` instead only because npm would pass `--env-file` to
+`node --env-file=.env ./server/migrate.ts` instead only because npm would pass `--env-file` to
 the script rather than to node. `DATABASE_URL=… npm run migrate` is the same step with the variable
 in the environment; pick either and stay with it.
 
@@ -105,8 +105,8 @@ As you need them: [§5.6](../ARCHITECTURE.md#56-the-numeric-boundary) for how mo
 boundary, [§6](../ARCHITECTURE.md#6-dataflows) for ingest and pricing end to end, and
 [Appendix A](../ARCHITECTURE.md#appendix-a-module-map) as the map of what each module is for.
 
-**Module headers.** This codebase argues its decisions in a prose header above the code rather than
-in commit messages. When ARCHITECTURE.md and a header disagree, the header is nearer the code and is
+**Module headers.** This codebase argues its decisions in a prose header above the code, close to
+what it is arguing about. When ARCHITECTURE.md and a header disagree, the header is nearer the code and is
 probably right ([§1](../ARCHITECTURE.md#1-how-to-read-this-document)).
 
 ---
@@ -119,7 +119,7 @@ liability that sums negative, a holding with no cost basis, a price history with
 portfolio where everything is priced is the easy case, and screenshotting it proves nothing.
 
 ```sh
-node --env-file=.env.dev ./scripts/seed-demo.ts
+node --env-file=.env ./scripts/seed-demo.ts
 ```
 
 It prints what it wrote table by table, then the totals and the cuts behind them, and finishes with
@@ -204,8 +204,9 @@ what changes how you run and write things.
   are how a test reads one without a `try`.
 - **There is no `globals`.** Every file imports `describe`/`expect`/`it` from `vitest` itself, and
   every file that touches the database calls `afterAll(closeTestDatabase)` itself. The pool and the
-  Kysely instance are module-level and per file, and that call is the only thing that releases them —
-  see the header on [`../tests/support/database.ts`](../tests/support/database.ts).
+  Kysely instance are module-level and opened once per file, and `closeTestDatabase` is the only thing
+  that releases them. Nothing fails if you forget: the handles simply leak until the worker exits,
+  which is exactly why it is a convention rather than an error.
 - **There is no DOM.** No jsdom, no `@testing-library/react`, no `screen.getByText`; a component test
   calls `renderToStaticMarkup` on the component and asserts against the string.
   [`../tests/support/render.tsx`](../tests/support/render.tsx) is for the other case — rendering a
@@ -274,10 +275,19 @@ There is no `CONTRIBUTING.md` and no pull request template. What exists:
 
 - **Agreed work is a spec** in [`specs/`](specs/) — a numbered slice, with a directory of per-ticket
   specs beside it. Nothing that is not agreed yet goes there ([the layout standard](README.md)).
-- **Tickets are GitHub issues**, via the `gh` CLI. The conventions, including how a spec is filed and
-  how sub-issues and blockers are recorded, are [`agents/issue-tracker.md`](agents/issue-tracker.md);
-  the triage labels are [`agents/triage-labels.md`](agents/triage-labels.md), used verbatim.
+- **Tickets are GitHub issues.** [`agents/issue-tracker.md`](agents/issue-tracker.md) is the `gh`
+  vocabulary the agent skills use against this repo, and
+  [`agents/triage-labels.md`](agents/triage-labels.md) is the label set, used verbatim. Both are
+  configuration for those skills rather than a process you have to follow by hand.
+- **A screen starts as a brief.** [`design/`](design/) holds the UI briefs a slice is drawn from, and
+  [`research/`](research/) holds the investigation behind a decision, including the options that were
+  rejected. For screen work the brief is the input, not the code.
 - **Changes land on `main` through a pull request.** CI runs on every PR and on pushes to `main`.
+- **Commit messages carry the argument.** Read `git log` before you write your first one. The
+  subject is imperative and sentence case, with no `type:` prefix, and it names the effect rather
+  than the files — "Stop the four ways a figure quietly went wrong", not "update valuation.ts". The
+  body is prose, often several paragraphs, and it is where the reasoning goes: what was wrong, what
+  was tried, what was rejected. A one-line commit is the exception here, not the norm.
 
 ### What CI rejects
 
@@ -308,7 +318,7 @@ this is the same sequence with the parts that bite.
 2. Write it so it can run exactly once. The runner's ledger guarantees that, but any seed rows in it
    carry their own `ON CONFLICT` guards anyway — a seed that depends on bookkeeping elsewhere to stay
    singular is only accidentally idempotent.
-3. `node --env-file=.env.dev ./server/migrate.ts`
+3. `node --env-file=.env ./server/migrate.ts`
 4. **`npm run db:types`, and commit the regenerated `app/lib/database.generated.ts`.**
 5. `npm run typecheck` — this is where a migration that broke a query actually surfaces.
 
@@ -422,8 +432,9 @@ route: a domain function returns a `ValidationError` with a message per field ra
 **One site per hazard.** Some of these are structural — the pool is constructed once, `yahoo-finance2`
 is imported once, prices are written once — and a second site there is simply the rejection. Others
 are a primitive with documented exceptions: `valuation.server.ts` owns valuation over `holding_valued`,
-and two other modules touch that view on purpose, for the "as of" line and for the upload review's
-diff column. Read [§4.2](../ARCHITECTURE.md#42-single-site-invariants) and its three tiers before you
+and two other places are allowed out from under it on purpose — one reads the view to scope the "as
+of" line, and one computes a value in JavaScript for the upload review's diff column, because a row
+the account does not hold yet has no view row to read. Read [§4.2](../ARCHITECTURE.md#42-single-site-invariants) and its three tiers before you
 conclude a grep has found you a violation.
 
 **`any` never ships**, and derived types beat a second hand-written copy. That one belongs to
@@ -440,7 +451,7 @@ psql postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_dev
 docker compose -f compose.test.yaml exec db psql -U portfolio -d portfolio_dev
 ```
 
-`schema_migrations` is the ledger of applied filenames. Only filenames are recorded, so editing an
+`schema_migrations` is the ledger of applied filenames. No checksum is recorded, so editing an
 already-applied migration file changes nothing — the runner will never look at it again.
 
 **`.env` is read by some of these commands and not others, which is the confusing part.** There is
@@ -448,11 +459,10 @@ no `dotenv` dependency; what you get is whatever the thing running your code doe
 
 - **`npm run dev` and `npm run build` read `.env`.** Both go through Vite, which loads it. Put
   `DATABASE_URL` there and the dev server picks it up with nothing on the command line.
-- **What Vite loads is `.env`, `.env.local` and `.env.<mode>`** — `development` for `dev`,
-  `production` for `build`. It does **not** load `.env.dev`, which is the filename this document uses
-  for `--env-file` throughout. The two are one typo apart and neither complains: a `.env.dev` you
-  expected Vite to read is simply not read, and the failure arrives as the lazy configuration refusal
-  on the first request.
+- **Which files Vite reads.** `.env`, `.env.local` and `.env.<mode>` — `development` for `dev`,
+  `production` for `build`. It does not read arbitrary names, which is why this document keeps
+  everything in `.env` rather than inventing a per-purpose filename that only `--env-file` would
+  find.
 - **`npm run migrate` does not**, and neither does anything else that runs a `server/*.ts` or
   `scripts/*.ts` file directly under Node. Those need `--env-file=<file>`, or the variable in the
   command's environment. Run one against a `.env` you assumed was being read and it refuses at once,
@@ -462,7 +472,7 @@ no `dotenv` dependency; what you get is whatever the thing running your code doe
   your checkout's.
 
 The setup sequence above passes the variable explicitly at every step for exactly this reason: one
-form that works everywhere beats three rules about which command reads what.
+form that works everywhere beats a table of which command reads what.
 
 **Logs are stdout, and that is the entire pipeline.** In development they are in the terminal running
 `npm run dev`. There is no metrics endpoint, no tracing, no log shipping. Which kinds of line the
@@ -473,7 +483,7 @@ application emits, and a stem worth grepping for each, is the list in
 
 ```sh
 # Only on a database the seed already owns; on anything else it refuses, having written nothing.
-node --env-file=.env.dev ./scripts/seed-demo.ts     # replace the demo household
+node --env-file=.env ./scripts/seed-demo.ts     # replace the demo household
 docker compose -f compose.test.yaml down            # tmpfs, so this loses every database on it
 rm -rf .react-router build && npm run typecheck     # regenerate route types and clear the build
 ```
