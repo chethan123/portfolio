@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabase, type Database } from "~/lib/db.server";
 import { createPool } from "../server/db.ts";
 import {
+  MIGRATIONS_TABLE,
+  appliedMigrations,
   applyPendingMigrations,
   migrationsOnDisk,
   pendingMigrations,
@@ -136,6 +138,54 @@ describe("the migration runner", () => {
 
       expect(await pendingMigrations(pool, directory)).toEqual(["9999_not_applied_yet.sql"]);
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves nothing behind when a migration fails, so the next run retries it from a clean database", async () => {
+    // The only path in the system that can leave a deployed database half
+    // migrated. A file is many statements in one transaction, and the ledger
+    // row commits with them — if a failure left the DDL that ran before it, or
+    // recorded the filename anyway, the next boot would skip the migration and
+    // serve requests against a schema nobody can name. Both halves are silent:
+    // the operator sees one failed deploy, then a successful one.
+    const directory = await mkdtemp(path.join(tmpdir(), "portfolio-migrations-"));
+    const filename = "9999_partly_applied.sql";
+    const table = "migration_rollback_probe";
+
+    const tableExists = async (): Promise<boolean> => {
+      const result = await pool.query<{ present: boolean }>(
+        "select to_regclass($1) is not null as present",
+        [table],
+      );
+      return result.rows[0]?.present ?? false;
+    };
+
+    try {
+      // A statement that works followed by one that does not, which is the
+      // shape a real broken migration has — a typo below a valid `create`.
+      await writeFile(
+        path.join(directory, filename),
+        `create table ${table} (id bigint primary key);\nselect no_such_function();`,
+      );
+
+      await expect(applyPendingMigrations(pool, directory)).rejects.toThrow(filename);
+
+      // The CLI turns that rethrow into a non-zero exit, which is what stops
+      // the entrypoint from starting the server against this database.
+      expect(await appliedMigrations(pool)).not.toContain(filename);
+      expect(await tableExists()).toBe(false);
+
+      await writeFile(path.join(directory, filename), `create table ${table} (id bigint primary key);`);
+
+      // Retried rather than resumed: the same filename, applied whole.
+      expect(await applyPendingMigrations(pool, directory)).toEqual([filename]);
+      expect(await tableExists()).toBe(true);
+    } finally {
+      // The one test here that commits, since a migration runner opens its own
+      // transactions and cannot be wrapped in one.
+      await pool.query(`drop table if exists ${table}`);
+      await pool.query(`delete from ${MIGRATIONS_TABLE} where filename = $1`, [filename]);
       await rm(directory, { recursive: true, force: true });
     }
   });
