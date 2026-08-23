@@ -3,6 +3,33 @@
 A self-hosted family portfolio and net worth tracker. See [DESIGN.md](DESIGN.md) for the full
 design — domain model, ingest, pricing, screens, stack, and the accepted limitations.
 
+## Built by agents
+
+**Almost all of this — the code, the SQL, the tests and the documents you are reading — was written
+by an AI agent rather than typed by me.** I set the direction, wrote the specs, reviewed the diffs
+and sent a good number of them back. Half the commits on `main` name Claude as their author and most
+of the rest carry it as a co-author.
+
+That is the experiment rather than a shortcut on the way to one. I wanted to find out what it takes
+to build *and then keep maintaining* a real application this way — not a weekend demo, but something
+with a schema that migrates, statements that must not be double-counted, and money that must not be
+rounded, still standing up to changes months later.
+
+I am saying so at the top because some people would rather know before they read a line, and a
+project that is coy about it wastes their time. What it means in practice:
+
+- **A specification first, then the code.** Each slice starts as a document in
+  [`docs/specs/`](docs/specs), with a UI brief in [`docs/design/`](docs/design) where a screen is
+  involved, and is built against it. Both are in the repository, so what was asked for can be read
+  beside what was delivered.
+- **Nothing lands unreviewed.** Every plan gets an adversarial second pass against the codebase
+  before any of it is written, and every diff is read by me before it merges. The working rules the
+  agents are held to are in [AGENTS.md](AGENTS.md); the design they are held to is
+  [DESIGN.md](DESIGN.md).
+- **Judge it by the code.** The claims the rest of this page makes are the ones worth checking —
+  a partial total labelled as partial, every removed position listed in full, `numeric` never
+  round-tripped through a JavaScript number. If the provenance shows anywhere, it shows there.
+
 ## What it looks like
 
 Every screen below is the real application, running against the generated demo household in
