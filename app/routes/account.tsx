@@ -25,6 +25,7 @@ import { formatQuantity, holdingNote } from "~/lib/holdings-view";
 import {
   NotFoundError,
   ValidationError,
+  earliestRecordableDate,
   formFields,
   latestRecordableDate,
 } from "~/lib/input.server";
@@ -210,8 +211,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // Today in UTC, from the server, so the box does not open on a date the
     // reader's clock invented and the app then refuses (§4.1).
     today: isoDate(Date.now()),
-    // The date control's ceiling, read from the validator rather than guessed,
-    // so the picker and the refusal cannot drift apart.
+    // The date control's two boundaries, read from the validator rather than
+    // guessed, so the picker and the refusal cannot drift apart.
+    earliestAsOf: earliestRecordableDate(),
     latestAsOf: latestRecordableDate(),
     // The redirect after a write says which date it wrote, and this confirms it
     // against the set the account is actually reading. A hand-typed `?recorded=`
@@ -298,6 +300,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
     takesBalance,
     owed,
     today,
+    earliestAsOf,
     latestAsOf,
     justRecorded,
   } = loaderData;
@@ -585,6 +588,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
           owed={owed}
           recorded={recorded}
           today={today}
+          earliestAsOf={earliestAsOf}
           latestAsOf={latestAsOf}
           errors={actionData?.errors}
           values={actionData?.values}
@@ -619,6 +623,7 @@ function SetBalance({
   owed,
   recorded,
   today,
+  earliestAsOf,
   latestAsOf,
   errors,
   values,
@@ -631,6 +636,8 @@ function SetBalance({
   owed: boolean;
   recorded: LastRecorded | null;
   today: string;
+  /** The earliest date the validator accepts. */
+  earliestAsOf: string;
   /** The furthest-ahead date the validator accepts. */
   latestAsOf: string;
   errors?: Readonly<Record<string, string>>;
@@ -720,6 +727,7 @@ function SetBalance({
               name="asOf"
               type="date"
               defaultValue={asOf}
+              min={earliestAsOf}
               max={latestAsOf}
               aria-invalid={errors?.asOf ? true : undefined}
             />

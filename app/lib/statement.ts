@@ -301,6 +301,10 @@ type RowRecord = {
  * - quantities finer than eight decimal places, and money finer than four, are
  *   refused rather than rounded: the columns hold what the file said or the
  *   file is wrong, never a silently adjusted figure
+ * - a file dating itself before the first day this application can price
+ *   anything refuses, by the same rule a typed date faces
+ *   ({@link recordedDate}) — carrying a close forward cannot reach a date
+ *   earlier than the earliest close there is
  * - rows sharing an instrument string are combined when the mapping says so —
  *   quantities summed, basis quantity-weighted — and reported; with combining
  *   off, a duplicated instrument is a refusal, because a position set holds

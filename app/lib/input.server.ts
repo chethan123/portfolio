@@ -220,6 +220,22 @@ export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
     });
 
 /**
+ * The earliest date {@link recordedDate} will accept.
+ *
+ * `1970-01-01` rather than an arbitrary round year, because that is the first
+ * day this application can put a price on anything: `0001_initial_schema.sql`
+ * seeds USD a close of `1.00` dated `1970-01-01`, and `holding_valued_at`
+ * carries the last close *forward* only. A set dated before that row produces a
+ * chart point on which even cash is unpriced.
+ *
+ * Exported alongside {@link latestRecordableDate} so a date control can carry
+ * both boundaries, for the same reason: the rule is stated once and read twice.
+ */
+export function earliestRecordableDate(): string {
+  return "1970-01-01";
+}
+
+/**
  * The furthest-ahead date {@link recordedDate} will accept.
  *
  * Exported so a date control can carry the same boundary as its `max`. The rule
@@ -233,7 +249,7 @@ export function latestRecordableDate(): string {
 /**
  * A date something was true on, as `YYYY-MM-DD`.
  *
- * Two refusals, each earning its place:
+ * Three refusals, each earning its place:
  *
  * **A date that does not exist.** `2026-02-30` is a real thing to type and
  * Postgres would reject it as a `date`, which reaches the family as a driver
@@ -244,6 +260,14 @@ export function latestRecordableDate(): string {
  * 2126 does not merely record a wrong date — it pins the account to that row
  * and no later statement can outrank it until 2126. A mistyped digit becomes a
  * balance that cannot be corrected by recording the right one.
+ *
+ * **A date before this application can price anything.** The ceiling had no
+ * floor, so `1026-08-24` — one digit away from `2026-08-24` — recorded a
+ * position set a thousand years back and permanently flattened the "All"
+ * net-worth chart, with no way to reach the row and correct it. The floor is
+ * {@link earliestRecordableDate}, and it also disposes of `0000-01-01`, which
+ * has a year zero in JavaScript, passes the round trip above, and then reaches
+ * the family as a driver error because Postgres has no year zero.
  *
  * Tomorrow is allowed, and only tomorrow. The browser's date control speaks the
  * reader's local date while everything here speaks UTC (§4.1), so a household
@@ -274,6 +298,13 @@ export const recordedDate = (label: string) =>
       const parsed = new Date(`${value}T00:00:00Z`);
       if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
         refuse(`${label} is not a date on the calendar.`);
+        return;
+      }
+
+      if (value < earliestRecordableDate()) {
+        refuse(
+          `${label} is before ${earliestRecordableDate()}, the first day this application can price anything.`,
+        );
         return;
       }
 
