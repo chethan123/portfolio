@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createAuthGate, type AuthGate } from "../app/lib/auth.server.ts";
+import { createAuthGate, safeRedirectTarget, type AuthGate } from "../app/lib/auth.server.ts";
 
 /**
  * The optional login gate (DESIGN.md §10).
@@ -167,5 +167,97 @@ describe("with no password set", () => {
   it("reports itself as open, which is what the warning banner renders from", async () => {
     expect(open().enabled).toBe(false);
     expect(closed().enabled).toBe(true);
+  });
+});
+
+describe("safeRedirectTarget", () => {
+  /**
+   * Every shape that has to become the home page.
+   *
+   * `next` survives a round trip through a login form, so it is
+   * attacker-supplied by construction: a visitor who typed the real password
+   * on the real login page is sent wherever this says. The shipped check read
+   * the first two characters only.
+   *
+   * Control characters are written as `\u` escapes, never as literals. Nothing
+   * in this repo pins line endings and there is no linter, so a formatter
+   * normalising a literal would silently reopen the hole in a diff nobody
+   * could read.
+   */
+  const HOSTILE: ReadonlyArray<readonly [string, string]> = [
+    ["/\u0009evil.example", "a tab inside the path, which the browser strips before following"],
+    ["\u0009/evil.example", "a leading tab, which the browser strips before the slash"],
+    ["/\u000aevil.example", "a bare newline"],
+    ["/holdings\u000d\u000aX-Injected: 1", "a CRLF header shape"],
+    ["/\u0000evil", "a NUL, which throws out of Headers.set rather than redirecting"],
+    ["/..//evil.example.com", "dot segments that resolution collapses into an authority"],
+    ["/%2e%2e//evil.example.com", "the same, percent-encoded"],
+    ["//evil.example", "a protocol-relative URL"],
+    ["https://evil.example", "an absolute URL"],
+    ["/\\evil.example", "a backslash Windows treats as a slash"],
+    ["\\\\evil.example", "a UNC path"],
+    ["javascript:alert(1)", "a scheme that is not a location at all"],
+    ["/../..//evil.example", "deeper dot segments"]
+  ];
+
+  it.each(HOSTILE)("refuses %j — %s", (target) => {
+    expect(safeRedirectTarget(target)).toBe("/");
+  });
+
+  it("refuses nothing at all", () => {
+    expect(safeRedirectTarget(null)).toBe("/");
+    expect(safeRedirectTarget(undefined)).toBe("/");
+    expect(safeRedirectTarget("")).toBe("/");
+  });
+
+  it("keeps a target that is genuinely on this instance", () => {
+    // The whole point of the parameter: a bookmark deep in the app returns
+    // there after login, query string and all.
+    expect(safeRedirectTarget("/holdings")).toBe("/holdings");
+    expect(safeRedirectTarget("/holdings?account=7")).toBe("/holdings?account=7");
+    expect(safeRedirectTarget("/people/3/accounts/new")).toBe("/people/3/accounts/new");
+  });
+
+  it("keeps an encoded double slash, which is a path and not an authority", () => {
+    // Deliberately not in the hostile table. `%2f` is not a separator, so this
+    // is an ordinary on-origin path with an odd name — refusing it would be a
+    // false positive, and the test helper re-encodes it besides.
+    expect(safeRedirectTarget("/%2f%2fevil.example")).toBe("/%2f%2fevil.example");
+  });
+
+  it("is idempotent over every case above", () => {
+    // The property that found the defect this function was rewritten for. A
+    // first draft validated the input and returned the input, so resolution
+    // *synthesised* the `//` the input guard had just rejected: feeding the
+    // output back in produced a different answer, which is what a browser
+    // would have seen.
+    for (const [target] of [...HOSTILE, ["/holdings?account=7", ""] as const]) {
+      const once = safeRedirectTarget(target);
+      expect([target, safeRedirectTarget(once)]).toEqual([target, once]);
+    }
+  });
+
+  it("returns only ASCII, so redirect() can never throw on its output", () => {
+    // The invariant, and the one that catches the vector no gate names. A
+    // non-Latin-1 path is not a control character and keeps its origin under
+    // resolution, so nothing refuses `/日本` — `URL` percent-encodes it to
+    // `/%E6%97%A5%E6%9C%AC` instead. `Headers.set`, which is what
+    // `redirect()` calls, throws on anything it cannot put in a ByteString.
+    expect(safeRedirectTarget("/日本")).toBe("/%E6%97%A5%E6%9C%AC");
+
+    const probes = [
+      ...HOSTILE.map(([target]) => target),
+      "/日本",
+      "/a?q=日本",
+      "/a#日本",
+      String.fromCharCode(0xd800),
+      "/" + String.fromCharCode(0xd800),
+    ];
+
+    for (const probe of probes) {
+      const out = safeRedirectTarget(probe);
+      expect([probe, /^[\x20-\x7e]*$/.test(out)]).toEqual([probe, true]);
+      expect(() => new Headers().set("Location", out)).not.toThrow();
+    }
   });
 });

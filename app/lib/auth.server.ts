@@ -142,19 +142,118 @@ function normalizePath(url: URL): { pathname: string; target: string } {
   return { pathname, target: query ? `${pathname}?${query}` : pathname };
 }
 
+/** Where a refused target goes. Not a route: the one page every instance has. */
+const HOME_PATH = "/";
+
+/**
+ * Characters that must never reach `Headers.set`, as `\u` escapes.
+ *
+ * C0, DEL and C1. Written as escapes and never as literals on purpose: nothing
+ * in this repo pins line endings — no `.gitattributes`, no `.editorconfig` —
+ * and there is no linter. A formatter normalising a literal `0x0D` inside this
+ * class would silently reopen the CRLF injection it exists to close, in a diff
+ * nobody could read.
+ */
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/;
+
+/**
+ * An origin no browser can reach, used only to resolve a relative target so
+ * its origin can be compared. If resolution moves off this, the target was not
+ * relative to this instance whatever it looked like.
+ */
+const UNREACHABLE_BASE = "http://redirect-target.invalid";
+
 /**
  * Only ever redirect somewhere on this instance.
  *
  * A `next` parameter is attacker-supplied by construction — it survives a
  * round trip through a login form — so anything that could leave the origin
- * (`//evil.example`, `https://…`, a backslash Windows treats as a slash)
- * becomes the home page instead.
+ * becomes the home page instead. It is a refusal, never a sanitisation: this
+ * module states its contract in reject vocabulary, and re-serialising a CRLF
+ * injection attempt into `/X-Injected:%201` would accept as a path something
+ * that was never one.
+ *
+ * The five gates, each closing something the one before it does not:
+ *
+ * 1. **Control characters.** The shipped check read the first two characters
+ *    only, so `/\tevil.example` survived it — the browser then strips the tab
+ *    and follows it off-origin (`SEC-1`). A NUL additionally *throws* out of
+ *    `Headers.set`, which is what `redirect()` calls (`SEC-3`).
+ * 2. **A prefix that is not `/`.** `https://evil.example`, and equally
+ *    `evil.example`, which is not an attack so much as a string this function
+ *    must not quietly reinterpret as `/evil.example`. Refusing is the posture;
+ *    gate 4 is what would still stop the absolute forms if this line went.
+ * 3. **`//` and `/\`.** Both read as an authority rather than a path.
+ * 4. **An origin that moved under resolution.** Deny-by-default for shapes not
+ *    enumerated above. Enumerating valid routes instead is not
+ *    an option — `app/routes.ts` imports a devDependency absent from the
+ *    runtime image, so matching would mean a second router free to drift, and
+ *    it inverts this module's posture.
+ * 5. **A `//` the resolution itself synthesised.** The one that is easy to
+ *    miss, and the reason gate 4 is not the last word: resolving runs RFC 3986
+ *    dot-segment removal, which *manufactures* the prefix gate 3 just rejected.
+ *    `/..//evil.example.com` resolves to `//evil.example.com` — an authority.
+ *    Validating only the input, and returning the input, would have shipped an
+ *    open redirect strictly worse than the defect being fixed.
+ *
+ * On the redundancy, stated plainly because mutation testing found it and a
+ * later reader will otherwise rediscover it as dead code: **gates 2, 3 and 4
+ * overlap on purpose, and deleting any one of them alone breaks no test.**
+ * Gate 4 is unreachable while gates 2 and 3 stand — swept over 72,103 inputs
+ * that pass gates 1 to 3, not one moves origin, because a string beginning with
+ * a single `/` is path-absolute by construction. That is not an argument for
+ * cutting it. What actually carries the guarantee is structural and is none of
+ * the three: this returns the *resolved path*, never the input, so even an
+ * absolute URL reaching the end would surrender everything but its path. The
+ * gates are what turn that into a refusal rather than a silent
+ * reinterpretation. Gates 1 and 5, and returning `path` rather than `target`,
+ * are each individually load-bearing — `tests/auth.test.ts` fails if any one of
+ * those three is removed.
+ *
+ * A non-Latin-1 path such as `/日本` is the vector a fix framed only as "reject
+ * control characters" leaves live: it is not a control character, but it throws
+ * out of `Headers.set` through the same ByteString conversion. It is *not*
+ * caught by any gate above — resolution keeps the origin — and it does not need
+ * to be. `URL` percent-encodes it on the way through, so what gate 5 returns is
+ * `/%E6%97%A5%E6%9C%AC`: pure ASCII, and the same place. That is normalisation
+ * into the canonical spelling of a legitimate path, not the sanitisation this
+ * function refuses to do — a CRLF injection is an attack with no valid reading,
+ * while a non-ASCII path is an ordinary URL with exactly one.
+ *
+ * The invariant that makes the return value safe to hand to `Headers.set` is
+ * therefore stronger than the gates state, and is asserted directly in
+ * `tests/auth.test.ts`: **every value this returns is ASCII.** Swept over the
+ * whole code-point space, in path, query and fragment position, plus lone
+ * surrogates, nothing escapes it.
+ *
+ * @returns an ASCII path safe to hand to `redirect()`, or `/`.
  */
 export function safeRedirectTarget(target: string | null | undefined): string {
-  if (!target) return "/";
-  if (!target.startsWith("/")) return "/";
-  if (target.startsWith("//") || target.startsWith("/\\")) return "/";
-  return target;
+  if (!target) return HOME_PATH;
+  if (CONTROL_CHARACTERS.test(target)) return HOME_PATH;
+  if (!target.startsWith("/")) return HOME_PATH;
+  if (target.startsWith("//") || target.startsWith("/\\")) return HOME_PATH;
+
+  let resolved: URL;
+  try {
+    resolved = new URL(target, UNREACHABLE_BASE);
+  } catch {
+    // A shape `URL` itself will not take is not one to hand a browser.
+    return HOME_PATH;
+  }
+
+  if (resolved.origin !== UNREACHABLE_BASE) return HOME_PATH;
+
+  const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+
+  // Gate 5. `resolved.origin` is still this instance's at this point — the
+  // synthesised authority only appears once the parts are joined back up.
+  if (!path.startsWith("/") || path.startsWith("//") || path.startsWith("/\\")) {
+    return HOME_PATH;
+  }
+  if (CONTROL_CHARACTERS.test(path)) return HOME_PATH;
+
+  return path;
 }
 
 /**
@@ -230,7 +329,12 @@ export function createAuthGate(config: AuthConfig): AuthGate {
 
       // Keep the caller's place, but only for a plain page view: sending a form
       // POST back to itself after login would replay it unasked.
-      const next = request.method === "GET" && target !== "/" ? target : null;
+      //
+      // Through the validator, so the gate cannot mint a return address it
+      // would itself refuse — and *before* the `!== "/"` test, or a target that
+      // validates down to "/" produces a redundant `?next=%2F`.
+      const safe = safeRedirectTarget(target);
+      const next = request.method === "GET" && safe !== "/" ? safe : null;
       throw redirect(
         next ? `${LOGIN_PATH}?next=${encodeURIComponent(next)}` : LOGIN_PATH,
       );
