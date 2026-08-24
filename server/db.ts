@@ -59,7 +59,7 @@ for (const oid of STRING_TYPE_OIDS) {
  * database without reaching for a second construction site.
  */
 export function createPool(connectionString: string): pg.Pool {
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString,
     // Bounded so `/healthz` reports unreachable rather than hanging until the
     // Compose healthcheck times out.
@@ -67,4 +67,54 @@ export function createPool(connectionString: string): pg.Pool {
     // The database stores UTC regardless of the container clock (DESIGN.md §10).
     options: "-c timezone=UTC",
   });
+
+  // A dropped connection must not be a dropped process.
+  //
+  // Postgres restarting, a `pg_terminate_backend`, or an idle connection reaped
+  // by a proxy all reach `pg` as an `error` event on an EventEmitter. An
+  // `error` event with no listener is rethrown by Node, and there is no
+  // `uncaughtException` net here on purpose (three deliberate fail-closed exits
+  // would be masked by one), so the whole application exits — including the
+  // request that was being served and every other connection in the pool.
+  //
+  // BOTH handlers are load-bearing. They cover disjoint halves of a client's
+  // life, and each was measured to leave the other half fatal:
+  //
+  //   client state | pool handler only | client handler only | both
+  //   idle in pool | survived          | DIED                | survived
+  //   checked out  | DIED              | survived            | survived
+  //
+  // The seam is `pg-pool`, which attaches its own `error` listener to an idle
+  // client and *removes it on checkout* (`pg-pool/index.js:344`). So while a
+  // client is idle its errors arrive re-emitted on the pool, and while it is
+  // checked out they arrive on the client and nowhere else. The price poller
+  // holds a client across a network round trip to the quote provider
+  // (`price-poller.server.ts`), which is exactly the second window.
+  //
+  // Deleting either one reintroduces the crash on the half it covers. That the
+  // client handler logs first on an idle drop is not evidence the pool handler
+  // is dead code: `pg-pool`'s own idle listener re-emits on the pool afterwards,
+  // and with no handler there the process still dies.
+  pool.on("error", (error) => {
+    console.error("Postgres pool error on an idle client; the pool will reconnect.", error);
+  });
+
+  // `connect`, not `acquire`. `acquire` fires *before* the idle listener is
+  // removed (`pg-pool/index.js:339` precedes `:344`), so a handler that checks
+  // `listenerCount("error")` there never sees zero and never attaches. And
+  // because a pooled client is acquired many times, attaching on every acquire
+  // adds a listener per checkout — measured at 13 after 13 acquires, past
+  // Node's leak warning at 11. `connect` fires exactly once per physical
+  // client, which is the lifetime this handler wants.
+  //
+  // Swallowing is safe: `pg` calls `_errorAllQueries` immediately before
+  // `emit('error')` (`pg/lib/client.js:421-422`), so an in-flight query is
+  // already rejected by the time this runs and no caller is left hanging.
+  pool.on("connect", (client) => {
+    client.on("error", (error) => {
+      console.error("Postgres client error while checked out; the client will be discarded.", error);
+    });
+  });
+
+  return pool;
 }
