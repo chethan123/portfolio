@@ -81,7 +81,17 @@ owner, tax treatment and status.
 
 ## Correcting or retiring an account
 
-Select an account's name in the table to open it. Change any field and select **Save changes**.
+Select an account's name in the table to open it. Change any field and select **Save changes** —
+one of them can come back refused.
+
+**Kind is the one field that can be refused**, because it is not a caption on the account — it is
+how every screen reads what that account holds, on every date. Changing one to *Bank* or *Loan or
+other liability* is refused while its latest statement still lists positions, since those accounts
+hold a single balance and the positions would be recorded as sold; and it is refused while the
+balance is recorded the other way round from the kind you picked, since that would turn savings into
+a debt or a debt into savings without anything being typed. Both messages appear beside the field
+and name what is in the way. An account with no statement yet can be changed to anything, and so can
+any account moving between *Brokerage*, *Workplace plan* and *IRA*.
 
 **Nothing is ever deleted here.** There is no delete button anywhere in the app. An account you have
 stopped using is *closed* instead: select **Close**, followed by the account's name, at the foot of

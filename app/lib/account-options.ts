@@ -4,8 +4,8 @@
  * Not a `.server` module, deliberately: the domain module needs these values to
  * validate against and the form needs them to render options, and a list
  * written twice is a list free to drift from the schema's check constraints.
- * Everything here is plain data with no database access, so both sides can
- * import it.
+ * Everything here is plain data and pure functions over it, with no database
+ * access, so both sides can import it.
  *
  * The `AccountKind` and `TaxTreatment` types are imported for their names only
  * — a type import is erased, so this file pulls no server code into the client
@@ -62,4 +62,61 @@ export function labelOf<Value extends string>(
   value: Value,
 ): string {
   return options.find((option) => option.value === value)?.label ?? value;
+}
+
+/**
+ * Which kinds hold their whole position in one number.
+ *
+ * An exhaustive record rather than a list or a predicate: adding a kind to the
+ * schema becomes a compile error here, at the exact place someone has to decide
+ * whether a single `USD` row is the truth about it. A list would just quietly
+ * not contain the new kind, and quietly not containing it is the answer that
+ * loses a portfolio.
+ */
+const SINGLE_POSITION: Record<AccountKind, boolean> = {
+  brokerage: false,
+  "401k": false,
+  ira: false,
+  bank: true,
+  liability: true,
+};
+
+/**
+ * Which direction a kind's balance runs.
+ *
+ * Only consulted for the kinds {@link SINGLE_POSITION} admits; the securities
+ * accounts are absent from this question because they never reach it.
+ */
+const OWES: Record<AccountKind, boolean> = {
+  brokerage: false,
+  "401k": false,
+  ira: false,
+  bank: false,
+  liability: true,
+};
+
+/**
+ * Can this kind of account have its balance set by hand?
+ *
+ * Here rather than in `balances.server.ts`, where it was written, because both
+ * writers now need it: `setBalance` asks it of the account it is writing to,
+ * and `updateAccount` asks it of the kind it is being asked to write. The
+ * second cannot import the first: `balances.server.ts` already imports
+ * `accounts.server.ts`. The two tables are the kind vocabulary as much as the
+ * labels are, so they live with it.
+ */
+export function acceptsSetBalance(kind: AccountKind): boolean {
+  return SINGLE_POSITION[kind];
+}
+
+/**
+ * Does a balance on this kind count against the household?
+ *
+ * Exported so the form can caption its box with the direction it is going to
+ * apply — "Amount owed" over a box whose contents become a negative quantity.
+ * The alternative is a screen that says "Balance" and stores the opposite of
+ * what a reader would expect, which is a lie told by omission.
+ */
+export function isOwed(kind: AccountKind): boolean {
+  return OWES[kind];
 }

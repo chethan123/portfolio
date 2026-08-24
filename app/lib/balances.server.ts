@@ -21,10 +21,17 @@
  * accepts a signed number accepts `14500` for a debt — which does not fail, it
  * silently moves the household's net worth by twice the loan.
  *
- * **Only `bank` and `liability`.** A position set is a photograph of everything
- * an account holds, so recording one `USD` row against a brokerage would record
- * every security in it as sold (§5.2's "a missing row means sold"). The refusal
- * below is what stands between a mis-clicked form and a wiped portfolio.
+ * **Only `bank` and `liability`, and only while the statement lists nothing
+ * else.** A position set is a photograph of everything an account holds, so
+ * recording one `USD` row against a brokerage would record every security in it
+ * as sold (§5.2's "a missing row means sold"). The kind refusal below states
+ * that and cannot enforce it: `kind` is a label, and an account can hold
+ * securities under a `bank` one — `commitUpload` never reads `kind`, and until
+ * report `SET-1` a Settings edit was free to hang `Bank` on a brokerage full of
+ * them. What stands between a mis-clicked form and a wiped portfolio is the
+ * second refusal, which asks `current-statement.server.ts` what this account
+ * holds now — and asks again inside the write itself, where no statement can
+ * land between the question and the answer.
  *
  * **Both inserts are one statement.** A `position_set` that lands without its
  * holding is not a failed write — it is a *successful* write meaning "this
@@ -35,66 +42,21 @@
 import { sql } from "kysely";
 import { z } from "zod";
 
+import { acceptsSetBalance, isOwed } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import {
   NotFoundError,
   ValidationError,
+  listSentence,
   moneyMagnitude,
   parseInput,
   recordedDate,
 } from "./input.server.ts";
 import { getAccount } from "./accounts.server.ts";
+import { currentStatement } from "./current-statement.server.ts";
 
-import type { AccountKind, IsoDate } from "./valuation.server.ts";
+import type { IsoDate } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
-
-/**
- * Which kinds hold their whole position in one number.
- *
- * An exhaustive record rather than a list or a predicate: adding a kind to the
- * schema becomes a compile error here, at the exact place someone has to decide
- * whether a single `USD` row is the truth about it. A list would just quietly
- * not contain the new kind, and quietly not containing it is the answer that
- * loses a portfolio.
- */
-const SINGLE_POSITION: Record<AccountKind, boolean> = {
-  brokerage: false,
-  "401k": false,
-  ira: false,
-  bank: true,
-  liability: true,
-};
-
-/**
- * Which direction a kind's balance runs.
- *
- * Only consulted for the kinds {@link SINGLE_POSITION} admits; the securities
- * accounts are absent from this question because they never reach it.
- */
-const OWES: Record<AccountKind, boolean> = {
-  brokerage: false,
-  "401k": false,
-  ira: false,
-  bank: false,
-  liability: true,
-};
-
-/** Can this kind of account have its balance set by hand? */
-export function acceptsSetBalance(kind: AccountKind): boolean {
-  return SINGLE_POSITION[kind];
-}
-
-/**
- * Does a balance on this kind count against the household?
- *
- * Exported so the form can caption its box with the direction it is going to
- * apply — "Amount owed" over a box whose contents become a negative quantity.
- * The alternative is a screen that says "Balance" and stores the opposite of
- * what a reader would expect, which is a lie told by omission.
- */
-export function isOwed(kind: AccountKind): boolean {
-  return OWES[kind];
-}
 
 /** What was submitted: an unsigned amount, and the date it was true on. */
 export const balanceInput = z.object({
@@ -168,7 +130,8 @@ export async function lastRecorded(
  * @param raw the submitted fields, unvalidated.
  * @throws {NotFoundError} when no such account exists.
  * @throws {ValidationError} with a message per bad field, and a form-level one
- *         for an account whose kind or state refuses the write outright.
+ *         for an account whose kind, state or current statement refuses the
+ *         write outright.
  */
 export async function setBalance(
   accountId: string,
@@ -195,36 +158,87 @@ export async function setBalance(
     );
   }
 
-  const input = parseInput(balanceInput, raw);
+  // Still before the field validation, and for the same reason: an account
+  // holding securities under a `bank` label is a problem correcting the boxes
+  // will not fix.
+  //
+  // The refusal the kind check above cannot make. It reads the rows rather than
+  // the label, which is what makes it hold however the rows got there — an
+  // upload never reads `kind` at all, and a Settings edit used to be free to
+  // relabel a brokerage full of securities (report `SET-1`). The writer that
+  // can lose them is the one that has to check.
+  const statement = await currentStatement(accountId, db);
 
-  const usd = await db
-    .selectFrom("instrument")
-    .select("id")
-    .where("symbol", "=", "USD")
-    .executeTakeFirst();
-
-  if (usd === undefined) {
+  if (statement.cashInstrumentId === null) {
     // Seeded by `0001_initial_schema.sql`, so its absence is a broken install
     // rather than anything a family member did. Not a ValidationError: there is
     // no field to put it under and no edit that would fix it.
+    //
+    // Ahead of the refusal below, and that ordering is load-bearing: with no
+    // `USD` row to compare against, every holding reads as something a typed
+    // balance would drop, so an account holding anything at all would be told
+    // its statement is in the way rather than that the install is broken.
     throw new Error("The USD instrument is missing — the initial migration has not been applied.");
   }
+
+  if (statement.others.length > 0) {
+    throw ValidationError.form(
+      `${account.name}'s current statement also lists ${listSentence(statement.others)}. A typed ` +
+        "balance replaces the whole statement, so recording one here would record " +
+        `${statement.others.length === 1 ? "it" : "them"} as sold. Upload a statement for this ` +
+        "account, or correct the position on Holdings.",
+    );
+  }
+
+  const input = parseInput(balanceInput, raw);
 
   // The whole of the sign logic, in one place. `0` keeps no sign: "−0.00" is a
   // debt of nothing written as though it were something.
   const zero = /^0+(\.0+)?$/.test(input.amount);
   const quantity = isOwed(account.kind) && !zero ? `-${input.amount}` : input.amount;
 
-  await sql`
-    with new_set as (
+  // The check above, again, inside the write — `revisePosition`'s pattern, for
+  // `revisePosition`'s reason. The pre-check is a read, and a statement
+  // committed between it and this insert would be sold off by a write that
+  // never saw it. `guard` yields no row in that case and both inserts select
+  // from it, so the account gets *nothing at all* rather than a position set
+  // recording securities as gone.
+  //
+  // An account with no statement still writes: `latest_position_set` is NULL
+  // for one, and `position_set_id = NULL` matches no holding, so `not exists`
+  // holds.
+  //
+  // No test covers the race, deliberately. Reaching it means committing a
+  // statement between the two reads, and the suite's rollback isolation puts
+  // that insert in the same transaction — where the pre-check sees it and
+  // refuses first. `revisePosition:377-387` is untested for the same reason.
+  const written = await sql<{ position_set_id: string }>`
+    with guard as (
+      select 1
+      where not exists (
+        select 1 from holding h
+        where h.position_set_id = latest_position_set(${accountId}::bigint)
+          and h.instrument_id <> ${statement.cashInstrumentId}::bigint
+          and h.quantity <> 0
+      )
+    ),
+    new_set as (
       insert into position_set (account_id, as_of_date, source)
-      values (${accountId}::bigint, ${input.asOf}::date, 'manual')
+      select ${accountId}::bigint, ${input.asOf}::date, 'manual' from guard
       returning id
     )
     insert into holding (position_set_id, instrument_id, quantity)
-    select new_set.id, ${usd.id}::bigint, ${quantity}::numeric
+    select new_set.id, ${statement.cashInstrumentId}::bigint, ${quantity}::numeric
     from new_set
+    returning holding.position_set_id
   `.execute(db);
+
+  if (written.rows[0] === undefined) {
+    throw ValidationError.form(
+      `${account.name} changed while this form was open, so nothing was recorded. ` +
+        "Reload the page and record the balance against what it holds now.",
+    );
+  }
 
   return {
     accountId: account.id,

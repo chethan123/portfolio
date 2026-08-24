@@ -181,7 +181,7 @@ healthcheck gates `caddy` on it.
 
 Every setting is an environment variable, and `server/config.ts` is the only module that
 *interprets* one. Callers hand the environment in — `loadConfig(env)` is pure — so
-`validate-config.ts:12`, `migrate.ts:24` and `scripts/seed-demo.ts:1170` pass `process.env` without
+`validate-config.ts:12`, `migrate.ts:24` and `scripts/seed-demo.ts:1140` pass `process.env` without
 knowing what is in it, and `getConfig()` is the single place a value is actually read and cached. It
 is a Zod schema, parsed once, with cross-field rules.
 
@@ -274,7 +274,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:62` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:303` | The provider swap stops being a day's work. The interface is also the test seam. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:302` | The provider swap stops being a day's work. The interface is also the test seam. |
 | Writing a price | `app/lib/prices.server.ts` | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
 
 **Owned by a module, upheld by its callers.**
@@ -283,20 +283,22 @@ grep. They come in three tiers.
 |---|---|---|
 | Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Three callers pass `process.env` in — `validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` — and none of them reads a variable itself. |
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:50`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design — `app/routes/login.tsx:33` is the one exception, and it reads no files. |
+| Everything read off an account's kind | `app/lib/account-options.ts` | The kinds, their labels, and the two predicates derived from them — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints or from each other. The obligation is that it stays plain data: the client bundle imports it, so a rule needing a query cannot live here. |
+| What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:239` rounds the overflow-guard product inline instead of calling `divide`. |
+| Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:251` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | Two, both real (below). The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
 
 **The two valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:356` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
+- `prices.server.ts:357` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
   to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
-- `uploads.server.ts:554` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:614` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -382,8 +384,8 @@ vocabulary that makes them readable. All five append; none rewrites a past fact.
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
 
 **This is not every write in the application.** The management surface updates rows in place, as
-CRUD should: `accounts.server.ts:234` edits an account and `:270` closes one, `people.server.ts:116`
-renames a person and `:173` deletes one outright when they own no accounts, `settings.server.ts:88`
+CRUD should: `accounts.server.ts:246` edits an account and `:362` closes one, `people.server.ts:113`
+renames a person and `:148` deletes one outright when they own no accounts, `settings.server.ts:88`
 writes the tax rate, `column-mapping.server.ts:96` upserts a saved mapping, and `uploads.server.ts`
 inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
 database: a position set, once written, is never edited, because `holding_valued_at` reads it for
@@ -548,7 +550,7 @@ split is exact and each side is a decision:
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
 
 **Only two of those deletes are reachable from the application at all:** a person who owns no
-accounts (`people.server.ts:173`), and a just-created, never-held instrument that lost an alias race
+accounts (`people.server.ts:178`), and a just-created, never-held instrument that lost an alias race
 (`instrument-resolution.server.ts:663`). There is no account delete and no position-set delete
 anywhere in `app/`. The rest of the table is a standing guarantee about someone with a `psql`
 session, not about a screen.
@@ -591,7 +593,7 @@ answer is a coin flip. Surrogate keys are `bigint generated always as identity` 
 The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping at
 the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1113`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1138`) needs the
 *predecessor* of a given set — "what did this account hold before this upload landed" — which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -636,7 +638,7 @@ anywhere.
 | `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set` — matched exactly, so the tie-break is an index scan stopping at row one. The index every valuation read goes through. |
 | `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). |
 | `holding_instrument_id_idx` | `(instrument_id)` | The instrument → holdings direction: which accounts hold this fund. |
-| `instrument_symbol_idx` | `(symbol)` | The `USD` lookup on every `setBalance` write (`balances.server.ts:204`), and the refresh loop's `order by symbol`. The refresh never looks a symbol up by value — it selects all feed instruments and matches in memory. |
+| `instrument_symbol_idx` | `(symbol)` | Resolving which row is cash (`current-statement.server.ts:80-86`) — on every `setBalance` write, and on every kind change into a kind that holds one balance. The lookup conjoins `price_source = 'fixed'`, which no index covers; `symbol` is the selective half. Also the refresh loop's `order by symbol`, which never looks a symbol up by value — it selects all feed instruments and matches in memory. |
 | `instrument_alias_instrument_id_idx` | `(instrument_id)` | Which raw strings point at this instrument. |
 | `account_owner_id_idx` | `(owner_id)` | Grouping by person. |
 | `instrument_classification_id_idx` | `(classification_id)` | Grouping by classification and asset class. |
@@ -694,7 +696,7 @@ Three rules follow, and the codebase holds all three:
   two deliberate exceptions, and both are narrow enough to state: `format.ts:187` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
   and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
-  and `price-provider.server.ts:135` floats a yield only to decide whether the column can hold it,
+  and `price-provider.server.ts:134` floats a yield only to decide whether the column can hold it,
   returning the original string either way.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
   library.
@@ -708,7 +710,7 @@ The generated types carry the **read** half of this: `npm run db:types` runs `ky
   is a string, but an insert or update still *accepts* a JavaScript number. On the write path the
   rule is a convention, not a compile-time guarantee.
 - Postgres reports every column of a view as nullable regardless of the underlying column, so
-  `holding_valued` comes out entirely `| null`. That is why `valuation.server.ts:96-109` exists: a
+  `holding_valued` comes out entirely `| null`. That is why `valuation.server.ts:99-111` exists: a
   `required()` narrower that throws, wrapped around fifteen columns in `toValuedHolding`. The view is
   typed *from* a table, not typed *like* one.
 
@@ -1154,19 +1156,28 @@ more ceremony than the fact deserves.
 | Writes | `position_set(source='manual')` + one `USD` holding | `position_set(source='manual')` + the whole account carried forward, one row changed |
 | The date the set carries | Taken from the form | `greatest(effectiveDate(before.asOf), the set it corrects)`, computed in SQL — a correction can never file *behind* the statement it corrects |
 | The sign | **Derived, never typed** — the household types what they owe and the module negates it | **Refused if it flips in one edit** — zero matches either direction, so a genuine reversal is two deliberate edits, which is what the refusal tells the reader to do |
-| Guards, in order | Account exists → kind accepts it → not closed → fields parse → the seeded `USD` row exists | Account exists → not closed → position still present → fields parse → direction unchanged → both products fit `numeric(20,4)` |
-| Atomicity | One statement — a data-modifying CTE | Same, plus the "is this position still here" check repeated **inside** the write; zero rows written is the refusal |
+| Guards, in order | Account exists → kind accepts it → not closed → the seeded `USD` row exists → the current statement lists nothing but that row → fields parse | Account exists → not closed → position still present → fields parse → direction unchanged → both products fit `numeric(20,4)` |
+| Atomicity | One statement — a data-modifying CTE, with the pre-check repeated **inside** the write; zero rows written is the refusal | The same, asked of one position rather than of the whole statement |
 
 **Why one statement and not two.** A `position_set` that landed without its holdings would not read as
 a failed write. It would read as a *successful* one meaning "this account now holds nothing" — and by
 the tie-break it would outrank every earlier statement. Both writers are therefore a single
 data-modifying CTE, so the set and its rows exist together or not at all.
 
-**Why the position is checked twice.** `currentPosition` runs before the write as an ordinary
-pre-check, so the form can refuse politely. That check races. The one that does not is inside the
-write: the `source` CTE selects `latest_position_set(...)` *and* requires the instrument still be in
-it, so an account that changed underneath the open form produces no rows, and "nothing landed" is
-turned into the refusal (`positions.server.ts:349-392`).
+**Why both writers ask their question twice.** `currentPosition` and `currentStatement` run before
+the write as ordinary pre-checks, so the form can refuse politely and name what is in the way. Those
+reads race. The checks that do not are inside the writes themselves: `revisePosition`'s `source` CTE
+selects `latest_position_set(...)` *and* requires the instrument still be in it
+(`positions.server.ts:376-406`), and `setBalance`'s `guard` CTE requires that same set to hold
+nothing but the cash row it is replacing (`balances.server.ts:215-234`). Both inserts select from
+those CTEs, so an account that changed underneath an open form produces no rows at all — no position
+set, no holding — and "nothing landed" is what becomes the refusal.
+
+**Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
+`account.kind` alone (`account.tsx:208`), and a `bank` account can be holding securities with no kind
+change behind it — `createDraft` (`uploads.server.ts:205`) reads only whether the account is closed,
+so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
+no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
 Both differ from an upload only in carrying `source = 'manual'` and no filename. Nothing downstream
 learns a new shape: `latest_position_set` picks the new set up by the same tie-break, and every figure
@@ -1212,7 +1223,9 @@ still-shutting-down container, and a determined operator can run two.
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
 | Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
-| A form posted against a position that moved | The write's own `source` CTE requires the position still be in the latest set; zero rows written *is* the refusal. `currentPosition` at `:287` is the earlier, racing pre-check | `positions.server.ts:349-392` |
+| A form posted against a position that moved | The write's own `source` CTE requires the position still be in the latest set; zero rows written *is* the refusal. `currentPosition` at `:296` is the earlier, racing pre-check | `positions.server.ts:376-406` |
+| A balance typed against a statement that changed under it | The same shape: the write's own `guard` CTE requires the latest set to list nothing but the cash row being replaced, so a statement that landed in the gap leaves both inserts nothing to select from. `currentStatement` at `:170` is the earlier, racing pre-check | `balances.server.ts:215-234` |
+| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock, because what the gap can cost is a label briefly disagreeing with the rows — never a row. The writer that could lose rows is the one carrying the in-write guard above, which is why this one needs no transaction | `accounts.server.ts:269` |
 | An account closed while a draft sat open | Checked *before* field validation, in every write path | all three writers |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
@@ -1277,7 +1290,7 @@ and it never requires credentials.
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
 makes that tolerable is that swapping it is a day's work — which is only true while this interface is
 the sole thing the write path imports. One test imports the library directly
-(`tests/price-provider.test.ts:300-324`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:301-327`), deliberately, to pin the static-versus-instance shape the
 adapter depends on.
 
 Three conversions happen at this boundary and nowhere else:
@@ -1490,7 +1503,7 @@ gets in the way of server-module tests.
   `seedPositionSet`, `seedQuote`, `seedDailyClose`, `seedUploadDraft`, `seedManualNetWorth`, and
   `usdInstrument`. Raw `INSERT` statements belong in the builder and nowhere else — that is what keeps
   a schema change from rewriting every test. One live exception, now stale: `plantAlias` in
-  `column-mapping.test.ts:54` inserts aliases directly, justified by a domain writer that did not
+  `column-mapping.test.ts:53` inserts aliases directly, justified by a domain writer that did not
   exist at the time and does now (§11.3).
 - **Test what would hurt to break**: domain rules, money and quantity maths, ingest and parsing edges,
   and a reproducing case for every bug fixed. Tests that assert framework behaviour, restate the
@@ -1590,7 +1603,9 @@ still live in the current code:
   and `uploads.server.ts` — identically. All three already import from `db.server.ts`.
 - **`labelOf` exists three times**, in `account-options.ts`, `allocation.ts` and `holdings-view.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
-  `accountInput` would produce a refusal nobody sees. Latent rather than live.
+  `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
+  keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
+  still there. Latent rather than live.
 - **Logic stranded in route module bodies** — `describe(filters)` in `holdings.tsx` among it —
   untestable where it currently sits (§9.3).
 - **`<FieldError>` is open-coded at roughly fifteen sites**, behind three differently-named local
@@ -1601,7 +1616,7 @@ still live in the current code:
 
 **Found while writing this document**, not from the review:
 
-- **One stale schema comment.** `migrations/0001_initial_schema.sql:61` describes
+- **One stale schema comment.** `migrations/0001_initial_schema.sql:57` describes
   `external_account_number` as "used to auto-select the account on upload". The shipped ingest slice
   made it a guard and a capture instead, and nothing in `app/` selects an account by it. The column is
   right; the comment predates the decision.
@@ -1611,7 +1626,7 @@ still live in the current code:
   bundle only by tree-shaking.
 - **Uncaught error messages render to the page** (`root.tsx:223-227`), unauthenticated on the default
   deployment (§7.6).
-- **`plantAlias` in `column-mapping.test.ts:54`** inserts fixtures raw, on a justification that has
+- **`plantAlias` in `column-mapping.test.ts:53`** inserts fixtures raw, on a justification that has
   since expired — both the domain writer and a `seedInstrumentAlias` builder now exist.
 
 ### 11.4 Where the next feature probably goes
@@ -1650,15 +1665,16 @@ still live in the current code:
 | `price-provider.server.ts` | **The only importer of `yahoo-finance2`.** The provider interface and the symbol probe |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
-| `balances.server.ts` | Setting a single-position balance; the sign is derived, never typed |
-| `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement |
+| `balances.server.ts` | Setting a single-position balance: the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
+| `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
+| `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
-| `account-options.ts` | The account-kind and tax-treatment option lists the forms are built from. Pure |
+| `account-options.ts` | The account-kind and tax-treatment vocabulary the forms are built from, and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
 | `settings.server.ts` | The capital gains rate |
 | `auth.server.ts` | The optional gate — deny-by-default, one cookie |
 | `forwarded.server.ts` | Reading the request as the client actually made it |
 | `first-run.server.ts` | One question, three answers |
-| `input.server.ts` | `ValidationError`, `parseInput`, and the shared field shapes |
+| `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |

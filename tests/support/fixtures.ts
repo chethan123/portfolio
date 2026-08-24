@@ -362,6 +362,10 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .selectFrom("instrument")
       .select(["id", "symbol", "name"])
       .where("symbol", "=", "USD")
+      // The seeded row, which is the oldest — a test that creates a second
+      // `USD` (the instruments step does, report `ING-8`) would otherwise
+      // assert against whichever one the plan happened to return.
+      .orderBy("id")
       .executeTakeFirstOrThrow();
     return { id: row.id, symbol: row.symbol, name: row.name };
   };

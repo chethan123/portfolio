@@ -63,7 +63,16 @@ place.
 
 ![Editing an account, with the close control at the foot](images/settings-account-edit.png)
 
-Select the account's name in the table. Every field is editable, and saving is one button.
+Select the account's name in the table. Every field is editable and saving is one button, but not
+every change is accepted.
+
+**Kind** is the one field that can be refused, because it is how the app reads everything the
+account already holds. Changing an account to *Bank* or *Loan or other liability* is refused while
+its latest statement still lists positions that a single typed balance would replace, and refused
+while its balance is recorded the other way round from the kind you picked — savings moved to *Loan
+or other liability*, or a debt moved to *Bank*. The message appears beside **Kind** and names what is
+in the way. An account with no statement yet can be changed to anything, and so can any account
+moving between *Brokerage*, *Workplace plan* and *IRA*.
 
 Correcting a tax treatment here changes every figure computed from this account, everywhere.
 

@@ -211,6 +211,166 @@ describe("setBalance", () => {
   );
 
   it(
+    "refuses an account holding securities under a bank label, which the kind alone cannot catch",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The regression (report `SET-1`). The kind check above passes here —
+      // the label says `bank`, and a label is what a Settings edit used to be
+      // free to hang on a brokerage full of securities. Nothing but the rows
+      // themselves says this write would record both holdings as sold.
+      //
+      // Seeded directly, because that state is no longer reachable through a
+      // kind change and is still reachable through an upload: `commitUpload`
+      // never reads `kind` at all.
+      const bank = await seedAccount({ kind: "bank", name: "Fidelity Individual" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
+      const schd = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity" });
+      await seedQuote({ instrument: vti, price: "250.0000" });
+      await seedQuote({ instrument: schd, price: "75.0000" });
+      await seedPositionSet({
+        account: bank,
+        asOf: "2026-08-16",
+        holdings: [
+          { instrument: vti, quantity: "100.00000000" },
+          { instrument: schd, quantity: "40.00000000" },
+        ],
+      });
+
+      const refusal = await refusalOf(() =>
+        setBalance(bank.id, { amount: "5000.00", asOf: "2026-08-16" }, db),
+      );
+
+      // Named, both of them: "this would lose something" is not actionable,
+      // and the reader is the person who has to decide whether it is true.
+      expect(refusal.fieldErrors.form).toMatch(/Vanguard Total Stock Market/);
+      expect(refusal.fieldErrors.form).toMatch(/Schwab US Dividend Equity/);
+
+      // A refusal, not a write that happened to be smaller: no second set,
+      // and the figure the household reads is the one it read before.
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", bank.id)
+        .execute();
+      expect(sets).toHaveLength(1);
+      expect((await accountTotal(bank.id, db))?.amount).toBe("28000.0000");
+    }),
+  );
+
+  it(
+    "records a balance over a position that was sold out, which is stored as zero rather than dropped",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, usdInstrument }) => {
+      // `revisePosition` writes a sold-out position as a zero row rather than
+      // dropping it (`positions.server.ts:31-36`), so a guard that counted
+      // rows instead of non-zero quantities would lock this account out of
+      // typed balances for good.
+      const bank = await seedAccount({ kind: "bank" });
+      const usd = await usdInstrument();
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
+      await seedPositionSet({
+        account: bank,
+        asOf: "2026-08-16",
+        holdings: [
+          { instrument: usd, quantity: "500.00000000" },
+          { instrument: vti, quantity: "0.00000000" },
+        ],
+      });
+
+      const recorded = await setBalance(bank.id, { amount: "600.00", asOf: "2026-08-17" }, db);
+
+      expect(recorded.amount).toBe("600.00");
+      expect((await accountTotal(bank.id, db))?.amount).toBe("600.0000");
+    }),
+  );
+
+  it(
+    "refuses a money-market fund, which is priced as fixed without being cash",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      // Pins how "cash" is resolved: the seeded `USD` row, by symbol *and*
+      // price source together. `price_source = 'fixed'` alone is the tempting
+      // answer and it is wrong — `seed-demo.ts:209` files SPAXX as `fixed`, so
+      // a reader that took `fixed` for cash would call this account cash-only
+      // and let one typed figure sell 16,000 money-market shares.
+      const bank = await seedAccount({ kind: "bank", name: "Fidelity Cash Management" });
+      const spaxx = await seedInstrument({
+        symbol: "SPAXX",
+        name: "Fidelity Government Money Market Fund",
+        priceSource: "fixed",
+      });
+      await seedPositionSet({
+        account: bank,
+        asOf: "2026-08-16",
+        holdings: [{ instrument: spaxx, quantity: "16000.00000000" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        setBalance(bank.id, { amount: "16000.00", asOf: "2026-08-16" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/Fidelity Government Money Market Fund/);
+    }),
+  );
+
+  it(
+    "writes to the seeded USD row when a second instrument carries the same symbol",
+    withDatabase(async ({ db, seedAccount, seedInstrument, usdInstrument }) => {
+      // The instruments step of an upload will create a second row carrying
+      // `USD` with no warning (report `ING-8`), so "the USD instrument" has to
+      // name one row rather than whichever the plan returns first.
+      const bank = await seedAccount({ kind: "bank" });
+      const seeded = await usdInstrument();
+      const second = await seedInstrument({
+        symbol: "USD",
+        name: "US Dollar",
+        priceSource: "manual",
+      });
+
+      const recorded = await setBalance(bank.id, { amount: "1000.00", asOf: "2026-08-16" }, db);
+      expect(recorded.amount).toBe("1000.00");
+
+      const written = await db
+        .selectFrom("holding")
+        .innerJoin("position_set", "position_set.id", "holding.position_set_id")
+        .select("holding.instrument_id")
+        .where("position_set.account_id", "=", bank.id)
+        .execute();
+
+      // The seeded row, which is priced at 1.00 on every date. The other one
+      // has no price at all, so a balance written against it would read as an
+      // uncovered holding rather than as money.
+      expect(written.map((holding) => holding.instrument_id)).toEqual([seeded.id]);
+      expect(seeded.id).not.toBe(second.id);
+    }),
+  );
+
+  it(
+    "refuses a cash line the seed did not create, rather than dropping it silently",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      // An accepted behaviour change, stated rather than discovered: no
+      // `instrument_alias` rows are seeded, so an uploaded "CASH" line becomes
+      // its own instrument, and this account can no longer take a typed
+      // balance. The refusal is true — that row really would be dropped — and
+      // it names the escape, which is zeroing the row on Holdings rather than
+      // re-uploading the statement that produced it.
+      const bank = await seedAccount({ kind: "bank", name: "Schwab Checking" });
+      const cash = await seedInstrument({
+        symbol: "CASH",
+        name: "Cash and Cash Investments",
+        priceSource: "manual",
+      });
+      await seedPositionSet({
+        account: bank,
+        asOf: "2026-08-16",
+        holdings: [{ instrument: cash, quantity: "3200.00000000" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        setBalance(bank.id, { amount: "3200.00", asOf: "2026-08-16" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/Cash and Cash Investments/);
+      expect(refusal.fieldErrors.form).toMatch(/Holdings/);
+    }),
+  );
+
+  it(
     "refuses a closed account, whose history does not change",
     withDatabase(async ({ db, seedAccount }) => {
       const bank = await seedAccount({ kind: "bank", closedAt: "2026-01-01" });
@@ -234,6 +394,32 @@ describe("setBalance", () => {
       );
 
       expect(refusal.fieldErrors.form).toMatch(/holds securities/);
+      expect(refusal.fieldErrors.amount).toBeUndefined();
+    }),
+  );
+
+  it(
+    "reports the statement refusal before the field refusals, for the same reason",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      // The ordering above, pinned for the guard the kind check cannot make —
+      // and this is the half that can move. The statement pre-check sits ahead
+      // of `parseInput` deliberately (`balances.server.ts:161-163`); dropped
+      // below it, the case above still passes and this reader is told their
+      // amount is not a number, with nothing about the position that a
+      // corrected amount would then have recorded as sold.
+      const bank = await seedAccount({ kind: "bank", name: "Fidelity Individual" });
+      const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
+      await seedPositionSet({
+        account: bank,
+        asOf: "2026-08-16",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        setBalance(bank.id, { amount: "not a number", asOf: "nonsense" }, db),
+      );
+
+      expect(refusal.fieldErrors.form).toMatch(/Vanguard Total Stock Market/);
       expect(refusal.fieldErrors.amount).toBeUndefined();
     }),
   );

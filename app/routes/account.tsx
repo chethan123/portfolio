@@ -10,15 +10,15 @@ import {
   SavingsIcon,
 } from "~/components/icons";
 import { NetWorthChart } from "~/components/net-worth-chart";
-import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "~/lib/account-options";
-import { getAccount } from "~/lib/accounts.server";
 import {
+  ACCOUNT_KINDS,
+  TAX_TREATMENTS,
   acceptsSetBalance,
   isOwed,
-  lastRecorded,
-  setBalance,
-  type LastRecorded,
-} from "~/lib/balances.server";
+  labelOf,
+} from "~/lib/account-options";
+import { getAccount } from "~/lib/accounts.server";
+import { lastRecorded, setBalance, type LastRecorded } from "~/lib/balances.server";
 import { uploadReceipt } from "~/lib/uploads.server";
 import { formatMoney } from "~/lib/format";
 import { formatQuantity, holdingNote } from "~/lib/holdings-view";
@@ -194,9 +194,17 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     recorded,
     receipt,
     // Whose balance is one typed number rather than a statement (§5.2). Decided
-    // in the domain module, not here: a route that knew which kinds take a
-    // typed balance would be a second answer to a question `balances.server.ts`
-    // already answers exhaustively.
+    // in the shared kind vocabulary, not here: a route that knew which kinds
+    // take a typed balance would be a second answer to a question
+    // `account-options.ts` already answers exhaustively.
+    //
+    // Kind alone, deliberately, even though `setBalance` no longer trusts kind
+    // alone. An account can hold securities under a `bank` label with no kind
+    // change at all — `createDraft` (`uploads.server.ts:205`) checks only
+    // whether the account is closed and reads `kind` nowhere — and hiding the
+    // panel in that state would leave the page with no write control and
+    // nothing saying why. Mounted, it earns a refusal that names exactly what
+    // is held.
     takesBalance: acceptsSetBalance(total.accountKind),
     owed: isOwed(total.accountKind),
     // Today in UTC, from the server, so the box does not open on a date the
@@ -559,6 +567,18 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
         </section>
       )}
 
+      {/* Outside the panel, because the panel is not always here. A refusal
+          rendered only inside `SetBalance` reaches nobody on an account whose
+          kind takes no typed balance — and that is exactly the account
+          `setBalance` refuses, so the reader got a 200, an unchanged page and
+          no word of why nothing was recorded (report `SET-5`). Not a second
+          copy: this is the only place `errors.form` is drawn. */}
+      {actionData?.errors?.form ? (
+        <p className="form-error" role="alert">
+          {actionData.errors.form}
+        </p>
+      ) : null}
+
       {takesBalance ? (
         <SetBalance
           accountName={total.accountName}
@@ -656,12 +676,6 @@ function SetBalance({
             Recorded. {accountName} now reads{" "}
             {valued ? <b className="u-data">{formatMoney(amount)}</b> : "no valuation"} as of{" "}
             {recorded.asOf}.
-          </p>
-        ) : null}
-
-        {errors?.form ? (
-          <p className="field-error" role="alert">
-            {errors.form}
           </p>
         ) : null}
       </div>

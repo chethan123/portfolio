@@ -8,8 +8,9 @@ option is not rediscovered later.
 ## 2026-08-24 — Exploratory test pass
 
 One document: [Exploratory test report](./2026-08-24-exploratory-test-report.md) — 67 findings from
-running the application and attacking every feature, against `b7f94f3`. **Nothing was fixed**; each
-entry is written to be picked up as a task.
+running the application and attacking every feature, against `b7f94f3`. **Nothing was fixed when it
+was written**; each entry is written to be picked up as a task. `SET-1` and `SET-5` have since been
+fixed and are annotated in place.
 
 ### The four things worth knowing without reading further
 
@@ -35,7 +36,8 @@ entry is written to be picked up as a task.
 
 ### Status
 
-Nothing here is approved work and nothing is fixed. The report opens with the seven worth doing
+Nothing here is approved work, and only `SET-1` — the critical one — and `SET-5` beside it have been
+fixed since. The report opens with the seven worth doing
 first and a duplicate table, so the same bug is not filed four times. The suite (746 tests),
 `npm run typecheck` and `npm audit` were all clean throughout — these are things the automated gates
 structurally cannot see.
