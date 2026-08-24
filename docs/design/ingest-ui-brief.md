@@ -720,9 +720,37 @@ renders the already-recorded page of §7.4 with a link to the account. The link 
 because the review form carries the account id as a hidden field: the draft the id would be read
 from is gone, and the hidden field feeds that one link, never a write. Not a second set, not a 500.
 
-**Draw this screen four times**: the ordinary diff above; the first statement ("14 ADDED", one
+**A statement filed behind** — dated before the one the account currently reads — gets a sentence
+of its own, and must not get this one. `latest_position_set` orders on `as_of_date`, so such a set
+never becomes what the account reads: "now holds **N**" would be a true count under a false claim,
+and the closing clause is replaced rather than reworded. It also gets a note on the review screen
+above, because the diff there is computed against what the account holds *now* and its removals
+therefore describe a comparison rather than an outcome — nothing listed as removed will be removed,
+and the majority-removal tick is not demanded, since it would be asking to confirm something that
+cannot happen.
+
+> "Recorded. **Statement_2026-03-31.csv** landed as 1 added · 0 updated · 0 removed, as of
+> **2026-03-31**. That is earlier than the statement Fidelity Brokerage is reading, so what the
+> account holds is unchanged — this recorded **1 position** into its history."
+
+**The counts here are not the review screen's counts, and for a filed-behind statement they visibly
+differ.** The review diff is computed against what the account holds *now*; the receipt is computed
+against the recorded set's own *predecessor* — the set immediately before it in
+`as_of_date, created_at, id` order. For a statement filed between two others those are two different
+baselines, so a review reading "0 added · 1 updated · 1 removed" is confirmed by a receipt reading
+"0 added · 1 updated · 0 removed". Both are correct answers to different questions, and the receipt's
+is the honest one for a sentence about what was written. Do not "fix" one to match the other without
+changing the baseline deliberately — that is the change this one deferred.
+
+This is the case that previously produced *no receipt at all*: the gate asked "is this the account's
+latest set", a set filed behind never is, and so a write that silently moved the net-worth chart was
+confirmed nowhere. The gate is now a union — the set the account reads, or the set written most
+recently.
+
+**Draw this screen five times**: the ordinary diff above; the first statement ("14 ADDED", one
 group, no confirmation, the VTSAX "3 rows combined" note visible); the majority-removal state with
-the tick unticked and the refusal showing; and the removes-everything wording.
+the tick unticked and the refusal showing; the removes-everything wording; and the filed-behind
+note, which suppresses the tick.
 
 ---
 

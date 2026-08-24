@@ -188,6 +188,24 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           </p>
         )}
 
+        {/* A statement filed behind, said plainly, because the table above it
+            cannot be read as a prediction (`ING-1`). The diff is computed
+            against what the account holds *now*, so its removals describe a
+            comparison rather than an outcome: `latest_position_set` orders on
+            `as_of_date`, and a backdated set does not become the one the
+            account reads. What it does do is rewrite the chart between its own
+            date and the next statement, and that happened before with no
+            confirmation anywhere. */}
+        {diff.filedBehind && diff.asOf.source === "file" ? (
+          <p className="form-note" role="status">
+            This statement is dated <span className="u-data">{diff.asOf.date}</span>, which is
+            earlier than the statement {diff.accountName} is currently reading. Recording it
+            will not change what the account holds now, and nothing listed as removed will be
+            removed — but it does change the account's history from{" "}
+            <span className="u-data">{diff.asOf.date}</span> up to the next statement.
+          </p>
+        ) : null}
+
         {/* A row the parser left out for stating no quantity is named rather
             than silent — a row that vanishes silently is how "a missing row
             means sold" becomes an accident (`SkippedRow`). */}
@@ -310,7 +328,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
             reader, not a standing fact about the data. A file removing half
             or less draws no confirmation at all — a tick that is always
             demanded is a tick nobody reads. */}
-        {diff.majorityRemoved ? (
+        {diff.majorityRemoved && !diff.filedBehind ? (
           <div className="danger-zone">
             <label className="choice">
               <input

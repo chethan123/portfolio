@@ -119,7 +119,7 @@ describe("the date control's boundaries", () => {
 
 describe("the receipts", () => {
   it(
-    "confirms an upload only for the set the account is actually reading",
+    "confirms an upload for a set the account reads or wrote, and for no other",
     withDatabase(async (ctx) => {
       const { account, january, february } = await seedTwoStatements(ctx);
       const at = (search: string) =>

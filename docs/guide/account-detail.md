@@ -69,6 +69,12 @@ nothing to update or remove.
 It is a sentence, not a pop-up, and every figure in it is read back from what was actually stored.
 It goes when you navigate away.
 
+If the statement you recorded is dated **earlier** than the one the account is already reading, the
+sentence says so and does not claim the account now holds what that statement held — because it
+does not. The account goes on showing the later statement. What the older one changes is the
+history in between: the net-worth chart between its date and the next statement moves. That used to
+happen with no confirmation at all.
+
 ## Set balance
 
 A bank or loan account has no statement worth mapping, so it gets a form instead. The panel sits at
@@ -117,7 +123,11 @@ balance you set or from a statement.
   submission is the one that counts.
 - Undo is another entry, not a delete.
 
-After it saves, the form empties and a line confirms what the account now reads and as of when.
+After it saves, the form empties and a line confirms what the account now reads and as of when —
+**unless the date you gave is earlier than the balance the account is already reading.** That
+records, and it moves the chart between that date and the next entry, but no line appears. Uploads
+say so now; this form does not yet, and until it does the way to check a backdated balance landed is
+the net-worth chart rather than this page.
 
 ---
 
