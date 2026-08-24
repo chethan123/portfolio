@@ -5,6 +5,41 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-08-24 — Exploratory test pass
+
+One document: [Exploratory test report](./2026-08-24-exploratory-test-report.md) — 67 findings from
+running the application and attacking every feature, against `b7f94f3`. **Nothing was fixed**; each
+entry is written to be picked up as a task.
+
+### The four things worth knowing without reading further
+
+1. **One click can wipe an account, and nothing in the app undoes it.** Change a brokerage's **Kind**
+   to *Bank* or *Loan* and the Set-balance form appears on it; one submission records a single `USD`
+   row, which under "a missing row means sold" sells every security in it. `balances.server.ts:24-27`
+   writes the invariant out in full — a kind edit walks straight around it. That is the only Critical.
+
+2. **`docker compose restart db` kills the app process.** `createPool` never attaches
+   `pool.on('error')`, so `node-postgres`'s idle-client error is an uncaught exception. Verified with
+   a real Postgres restart on both a dev server and a production build; `restart: unless-stopped`
+   turns it into a flap rather than an outage, which is what has hidden it.
+
+3. **Two of the app's own stated rules are broken by the screens that state them.** The printed money
+   columns do not add up to the printed total on nine measured screens, against the rule written at
+   `allocation.ts:435-449`; and no screen anywhere says how old a price is, against DESIGN.md §11's
+   "non-negotiable" — while `priceFreshness()` already computes the answer and has zero callers.
+
+4. **The upload flow's safety valve does not hold.** The review screen and the commit are two
+   independent reads of a mutable draft, so a second tab makes the commit write figures the reader
+   never saw; and a data row with a blank instrument cell is dropped with no mention on the review
+   screen at all — 96% of the repo's own `401k.csv` fixture, mapped the obvious way.
+
+### Status
+
+Nothing here is approved work and nothing is fixed. The report opens with the seven worth doing
+first and a duplicate table, so the same bug is not filed four times. The suite (746 tests),
+`npm run typecheck` and `npm audit` were all clean throughout — these are things the automated gates
+structurally cannot see.
+
 ## 2026-08-23 — Dependency audit
 
 One document: [Dependency audit](./2026-08-23-dependency-audit.md) — every package in
