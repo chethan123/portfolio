@@ -5,7 +5,8 @@ reading it. **Nothing was fixed when this was written**, and two entries — `SE
 have since been annotated where they were fixed. Every entry is written so someone else can pick it
 up as a task: what happens, what should happen and why, a verified reproduction, and the evidence.
 
-- **67 findings**: 1 critical, 11 high, 20 medium, 35 low.
+- **67 findings**: 1 critical, 11 high, 20 medium, 35 low. **Two are fixed** — `SET-1`, the only
+  critical, and `SET-5` beside it. The other 65 stand.
 - Six testers worked in parallel, each with its own application instance and its own database, so
   one tester's writes could never explain another's reading.
 - Every finding was reproduced before it was written down. Where something looked wrong and turned
@@ -140,9 +141,12 @@ production checks. Playwright drove Chromium from `/opt/pw-browsers/chromium-119
 ---
 ## Every finding, most severe first
 
+A row marked **Fixed** carries the same mark on its entry below, which says what changed. The
+entry itself is left as it was written — it is the record of what the defect was.
+
 | Severity | ID | Finding |
 |---|---|---|
-| Critical | `SET-1` | Changing an account's kind to `bank`/`liability` re-opens the Set-balance form on an account full of securities, and one submission wipes it — irrecoverably |
+| Critical | `SET-1` | **Fixed.** Changing an account's kind to `bank`/`liability` re-opens the Set-balance form on an account full of securities, and one submission wipes it — irrecoverably |
 | High | `DASH-1` | `/accounts/<19+ digit id>` returns 500 with the raw Postgres error on the page |
 | High | `DASH-2` | The printed money columns do not add up to the printed total (one cent out, on every read screen) |
 | High | `ING-1` | A statement dated before the account's latest set commits into a black hole — the review's diff and its removal confirmation describe changes that never happen, and no receipt is shown |
@@ -171,7 +175,7 @@ production checks. Playwright drove Chromium from `/opt/pw-browsers/chromium-119
 | Medium | `SEC-3` | A `next=` containing `%0A` or `%0D` throws an unhandled 500 out of `redirect()` |
 | Medium | `SET-3` | `asOf=0000-01-01` is accepted by the validator and 500s in the driver |
 | Medium | `SET-4` | Closing an account leaves the overview headline and its own chart disagreeing by that account's value for the rest of the day |
-| Medium | `SET-5` | `setBalance`'s form-level refusal is thrown, caught, and rendered nowhere — the submission is a silent no-op |
+| Medium | `SET-5` | **Fixed.** `setBalance`'s form-level refusal is thrown, caught, and rendered nowhere — the submission is a silent no-op |
 | Medium | `SET-6` | A NUL byte in any text field is a 500 with a driver stack trace instead of a refusal |
 | Medium | `SET-7` | `personId` is never checked for id shape — any non-numeric or oversized value 500s |
 | Low | `DASH-5` | A stray hairline runs under the first cell only of every total and subtotal row |
