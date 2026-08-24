@@ -5,7 +5,8 @@ reading it. **Nothing was fixed when this was written**, and two entries — `SE
 have since been annotated where they were fixed. Every entry is written so someone else can pick it
 up as a task: what happens, what should happen and why, a verified reproduction, and the evidence.
 
-- **67 findings**: 1 critical, 11 high, 20 medium, 35 low. **Two are fixed** — `SET-1`, the only
+- **73 findings**: 1 critical, 14 high, 22 medium, 36 low. **Two are fixed** — `SET-1`, the only
+  critical, and `SET-5` beside it. Six more (`FIX-1` … `FIX-6`) came out of that fix and are open.
   critical, and `SET-5` beside it. The other 65 stand.
 - Six testers worked in parallel, each with its own application instance and its own database, so
   one tester's writes could never explain another's reading.
@@ -27,6 +28,7 @@ Findings are grouped by the area that was tested and keep their tester's prefix,
 | `DASH` | the read screens and the numbers on them | seeded demo household |
 | `SEC` | the login gate, HTTP hardening, first run and empty state | empty DB, gate **on** |
 | `PRC` | pricing, the in-process poller, the automated suite | seeded demo household |
+| `FIX` | found while fixing `SET-1`, and reproduced against the fixed code | seeded demo household |
 
 Severity is used as follows. **Critical** — data loss, corruption, or a security compromise.
 **High** — wrong money on screen, a broken core flow, or the whole process going down.
@@ -71,6 +73,10 @@ If only a handful get picked up, these are the ones, in this order.
    off-origin **after** a successful login.
 
 ---
+
+Since that list was written, `SET-1` and `SET-5` have been fixed — and fixing them surfaced six
+more, filed as [`FIX-1` … `FIX-6`](#found-while-fixing-set-1). Three are High, and two of those
+(`FIX-3`, `FIX-6`) are `SET-1`'s own shape: a writer that never asks what its write will bury.
 
 ## Duplicates and overlaps — file one task, not four
 
@@ -149,6 +155,9 @@ entry itself is left as it was written — it is the record of what the defect w
 | Critical | `SET-1` | **Fixed.** Changing an account's kind to `bank`/`liability` re-opens the Set-balance form on an account full of securities, and one submission wipes it — irrecoverably |
 | High | `DASH-1` | `/accounts/<19+ digit id>` returns 500 with the raw Postgres error on the page |
 | High | `DASH-2` | The printed money columns do not add up to the printed total (one cent out, on every read screen) |
+| High | `FIX-1` | `positions.server.ts` reads `price_source = 'fixed'` as "this row is money", so the Holdings editor refuses the fractional quantity its own box is prefilled with |
+| High | `FIX-3` | The upload flow commits a *partial* removal with no confirmation — three of seven positions, $47,832.83, on one click |
+| High | `FIX-6` | Both `setBalance` guards read what the account holds *now*, never the set the write's own date will supersede — a backdated balance buries a securities set |
 | High | `ING-1` | A statement dated before the account's latest set commits into a black hole — the review's diff and its removal confirmation describe changes that never happen, and no receipt is shown |
 | High | `ING-2` | A NUL byte anywhere in the instrument column crashes the columns step with a raw Postgres error on screen |
 | High | `ING-4` | Data rows whose mapped instrument cell is blank are discarded silently — the review screen never mentions them |
@@ -160,6 +169,8 @@ entry itself is left as it was written — it is the record of what the defect w
 | High | `SET-2` | A single-character typo in the balance date (`1026` for `2026`) permanently destroys the "All" net-worth chart, with no way back |
 | Medium | `DASH-3` | Overview lists an account with nothing recorded as `$0.00`; its own page refuses to |
 | Medium | `DASH-4` | Account-detail holdings table scrolls sideways on a phone: Value is off-screen, Price is clipped mid-figure |
+| Medium | `FIX-4` | Relabelling a bank or loan account as a securities kind is accepted with a bare "Saved." |
+| Medium | `FIX-5` | An account whose kind takes a statement but which holds only cash has no write control on its own page, and nothing says why |
 | Medium | `ING-3` | A numeric-but-out-of-bigint-range id in the URL 500s with a raw Postgres error instead of the documented 404 |
 | Medium | `ING-6` | Double-clicking "Record this statement" records the statement but leaves the reader on the "expired or already recorded" page |
 | Medium | `ING-7` | The documented closed-account commit refusal is unreachable; the reader gets the generic expired page instead |
@@ -187,6 +198,7 @@ entry itself is left as it was written — it is the record of what the defect w
 | Low | `DASH-11` | Grouped by asset class, the subtotal shares shown sum to 99.9% under a note promising 100% |
 | Low | `DASH-12` | The "shares sum to 100%" note is printed on a grouped table whose every share is a dash |
 | Low | `DASH-13` | The Income empty state gives a reason that is no longer true |
+| Low | `FIX-2` | Four comments state that `price_source = 'fixed'` belongs to the seeded `USD` row alone, and the seed disproves them |
 | Low | `ING-10` | The account total and the holdings table's rounded row values disagree by a cent |
 | Low | `ING-11` | `/favicon.ico` 404s, so every page load logs a console error |
 | Low | `LEAD-3` | The overview range parameter is case-sensitive and silently ignores the casing its own buttons display |
@@ -214,7 +226,7 @@ entry itself is left as it was written — it is the record of what the defect w
 | Low | `SET-14` | A rejected 1MB field is echoed back to the browser twice, in a 2.2MB response |
 | Low | `SET-15` | `23,8` in the tax-rate box is refused as "cannot be more than 100%", and `1,5` is silently stored as 15% |
 
-**67 findings** — 1 critical, 11 high, 20 medium, 35 low.
+**73 findings** — 1 critical, 14 high, 22 medium, 36 low. `FIX-1` to `FIX-6` came out of fixing `SET-1` and were reproduced against the fixed code.
 
 ---
 
@@ -1138,25 +1150,9 @@ change itself. The entry below stands as it was written, as the record of what t
 - **Notes:** The Set-balance panel's own helper line — "Recording a balance never overwrites an
   earlier one: each is kept on its own date" — is true of *rows* and badly misleading about
   *effect* in this state. The same door exists for `401k`/`ira` → `bank`.
-- **Left open by that fix**, deliberately, and each still reproducible. Nothing else in this report
-  was touched either.
-  1. `revisePosition`'s cash test (`positions.server.ts:318`) is `priceSource === "fixed"`, so it
-     holds `SPAXX` to two decimal places — a money-market share count is legitimately fractional.
-  2. Four comments assert that `fixed` belongs to the seeded `USD` row alone
-     (`instrument-resolution.server.ts:177,353`, `positions.server.ts:92`, `prices.server.ts:71`).
-     `scripts/seed-demo.ts:209` files `SPAXX` as `fixed` and disproves all four. Either the seed or
-     the comments are wrong, and the fix had to resolve cash on `symbol` **and** `price_source`
-     together to avoid choosing between them.
-  3. **The upload door is still open.** `commitUpload` never reads `kind`, so a statement can still
-     be uploaded to a `bank` account. It cannot silently empty one — the majority-removal tick
-     catches that — but it can commit *partial* removals with no confirmation, because the tick is
-     keyed on a strict majority (`uploads.server.ts:855,1029`) and a 4-of-7 statement drops three
-     positions silently.
-  4. `SET-9` stands. `sameDirection` (`positions.server.ts:263`) returns true whenever either side
-     is zero, so the $29,000 sign shape is still reachable through the Holdings editor in two
-     deliberate edits.
-  5. `bank`/`liability` → a securities kind still strands the account: the Set-balance panel
-     disappears and `/accounts/:id` is then left with no write control at all.
+- **Left open by that fix**, deliberately. Each was reproduced against the fixed code and is filed
+  in its own right under [Found while fixing SET-1](#found-while-fixing-set-1): `FIX-1` to `FIX-6`.
+  Nothing else in this report was touched either.
 
 ---
 
@@ -1383,6 +1379,10 @@ form-level refusal reaches the reader whether or not the panel is mounted. It wa
 ---
 
 #### [SET-9] The Holdings editor will store a negative balance on a bank account, which the Set-balance form refuses outright
+
+**Re-verified against `88ab150`, and it still stands.** Two deliberate edits — `0`, then `-29000`
+— took `Ally Online Savings` (`kind = 'bank'`) to −$29,000.00 and household net worth from
+$687,247.44 to $616,247.44. The `SET-1` fix does not touch this door.
 
 - **Severity:** Low
 - **Where:** `app/lib/positions.server.ts:306-339` (`revisePosition`'s narrowing + `sameDirection`)
@@ -2990,3 +2990,215 @@ These looked wrong and are not. Recorded so nobody spends the time again.
   `price-provider.server.ts:96-104` states exactly this and why ("the input is already a float that
   has been through JSON, so there is no precision left to preserve"). ARCHITECTURE §5.6's claim is
   about values crossing *from Postgres*, and that claim holds.
+
+---
+
+## Found while fixing SET-1
+
+These six came out of building and verifying the `SET-1` fix rather than out of the original pass,
+and each was **reproduced against the fixed code** (`88ab150`) rather than against the code the rest
+of this report describes. They are here because the fix deliberately did not take them: each is a
+separate door, a separate guard and a separate change, and bundling them would have made one
+reviewable fix into an unreviewable one.
+
+Two of them — `FIX-3` and `FIX-6` — are the same shape as `SET-1` itself: **a writer that never asks
+what its write will bury.** That is the theme worth carrying forward from this whole exercise.
+
+#### [FIX-1] `positions.server.ts` reads `price_source = 'fixed'` as "this row is money", so the Holdings editor refuses the fractional quantity its own box is prefilled with
+
+- **Severity:** High
+- **Where:** `app/lib/positions.server.ts:318` (the test), `:92` (the premise it acts on);
+  `scripts/seed-demo.ts:209`
+- **What happens:** `revisePosition` narrows a row to two decimal places when
+  `before.priceSource === "fixed"`, on the stated grounds that `fixed` is the seeded `USD` row's
+  alone (`:92`). It is not — the demo seed files `SPAXX`, a money-market fund, as `fixed`. A
+  money-market share count is legitimately fractional, so the editor refuses a real figure.
+
+  It is worse than a lone refusal, because the **upload door has no such rule**: `uploads.server.ts`
+  never reads `price_source` at all (grep: zero hits). So a statement carrying a fractional `SPAXX`
+  quantity commits, and the editor then opens on the stored figure and refuses to save it back
+  unchanged.
+- **What should happen:** the test wants "is this row money", not "is this row's price constant".
+  The `SET-1` fix already wrote the right condition for the other two writers — the seeded cash row
+  is `symbol = 'USD' AND price_source = 'fixed'`
+  (`app/lib/current-statement.server.ts:80-86`), never `price_source` alone.
+- **Repro:**
+  1. `Fidelity Individual` holds 16,000 `SPAXX`.
+  2. `POST /holdings?edit=<fidelityId>.<spaxxId>` with `quantity=16342.375` → refused.
+  3. The same quantity on a non-`fixed` fund — `VBTLX`, `price_source = 'feed'`, in
+     `Empower 401(k)` — is accepted.
+  4. Or reach it the way a household would: upload a statement whose `SPAXX` row reads `16000.375`,
+     then open that row on Holdings.
+- **Evidence:**
+  ```
+  POST /holdings?edit=<fidelityId>.<spaxxId>  quantity=16342.375  -> 200, refused:
+    "A balance is recorded to the cent, so it takes at most two decimal places."
+  POST /holdings?edit=<empowerId>.<vbtlxId>   quantity=16342.375  -> 302, stored 16342.37500000
+
+  # the upload/editor disagreement, end to end
+  upload a 7-row statement, SPAXX row 16000.375
+    review:  0 ADDED · 1 UPDATED · 0 REMOVED    SPAXX 16,000 -> 16,000.375
+    stored:  16000.37500000
+  GET  /holdings?edit=<fidelityId>.<spaxxId>  ->  <input name="quantity" value="16,000.375">
+  POST same, quantity=16000.375               ->  refused, same message
+  ```
+- **Notes:** the two doors onto one row disagree, so an account can be left in a state whose only
+  correction path is another upload. Merged with what was originally filed as a separate
+  stale-comment finding: `:92` is the false premise and `:318` is the line acting on it, twelve
+  lines apart in one file — one defect. What is left of the comment problem is `FIX-2`.
+
+#### [FIX-2] Four comments state that `price_source = 'fixed'` belongs to the seeded `USD` row alone, and the seed disproves them
+
+- **Severity:** Low
+- **Where:** `app/lib/instrument-resolution.server.ts:177`, `:353`; `app/lib/prices.server.ts:71`,
+  `:363`; disproved by `scripts/seed-demo.ts:209`
+- **What happens:** each comment asserts the invariant as fact. Every seeded database has two
+  `fixed` instruments. `prices.server.ts:363` is doubly wrong: it says the row's `as_of` is written
+  once by the initial migration and never again, and `SPAXX`'s is written by the seed.
+- **What should happen:** either the seed stops filing a money-market fund as `fixed`, or the
+  comments stop claiming exclusivity. This repo argues its decisions in prose, so a comment stating
+  a false premise is a defect — the `SET-1` fix had to work around all four
+  (`app/lib/current-statement.server.ts:69-76` says so in place).
+- **Repro:** `select id, symbol, price_source from instrument where price_source = 'fixed' order by id;`
+- **Evidence:**
+  ```
+    id  | symbol |                 name                  | price_source
+      1 | USD    | US Dollar                             | fixed
+   1514 | SPAXX  | Fidelity Government Money Market Fund | fixed
+  ```
+- **Notes:** prose only — nothing acts on these three the way `positions.server.ts:92` does, which
+  is why that one travels with `FIX-1` instead. `instrument-resolution.server.ts`'s screen behaviour
+  is correct; only its stated reason is false.
+
+#### [FIX-3] The upload flow commits a *partial* removal with no confirmation — three of seven positions, $47,832.83, on one click
+
+- **Severity:** High
+- **Where:** `app/lib/uploads.server.ts:855` (`majorityRemoved: removed.length * 2 > current.length`),
+  `:1029` (the tick), `:940` (`commitUpload`, which never reads `kind` — grep: zero hits)
+- **What happens:** the removes-everything confirmation is keyed on a **strict majority**. A
+  statement that drops three of seven positions renders no checkbox at all and commits on one click.
+  At four of seven the tick appears. Removing a row is recording a sale (DESIGN.md §5.2), so the
+  threshold decides how much can be sold without consent.
+- **What should happen:** the guard exists for exactly this hazard and should not walk under an
+  arbitrary line. Either every removal is named and confirmed, or the threshold is stated somewhere
+  a reader can find it.
+- **Repro:** driven through the real upload flow in a browser, not by calling `commitUpload`.
+  1. `Fidelity Individual` holds 7 positions, `$211,007.64`; household `$687,247.44`.
+  2. `/upload` → *Fidelity Individual* → a 4-row CSV listing only AAPL, MSFT, VTI, VXUS at their
+     existing quantities.
+  3. Map columns, continue. Review reads `0 ADDED · 0 UPDATED · 3 REMOVED`.
+  4. One click on **Record this statement**.
+- **Evidence:**
+  ```
+  review: 0 ADDED · 0 UPDATED · 3 REMOVED
+    SPAXX  16,000       —          $16,000.00
+    VNQ    135.139179   $82.5532   $13,862.28
+    VGSH   301.149891   $58.0522   $17,970.55
+    input[name="confirmRemovals"] present: 0
+    buttons: [ 'Record this statement' ]
+
+  receipt: 0 added · 0 updated · 3 removed
+    TOTAL VALUE  $211,007.64 -> $163,174.81   (−$47,832.83)
+    household    $687,247.44 -> $639,414.62
+
+  # the threshold, demonstrated — a 3-row file (4 of 7 removed):
+    input[name="confirmRemovals"] present: 1
+    "This file removes 4 of the 7 positions this account holds."
+  ```
+- **Notes:** the review screen **does** list every removal by name, quantity and value — this is a
+  missing *consent*, not a missing disclosure, and the entry should not be read as the latter. Same
+  shape as `FIX-6`: a writer that does not ask what its write will bury.
+
+#### [FIX-4] Relabelling a bank or loan account as a securities kind is accepted with a bare "Saved."
+
+- **Severity:** Medium
+- **Where:** `app/lib/accounts.server.ts:269` — the guard is asked only of the **destination** kind,
+  and `acceptsSetBalance("brokerage")` is false, so the whole refusal block is skipped for this
+  direction
+- **What happens:** `bank → brokerage` on an account whose entire history is typed balances saves
+  with no warning. The account then has a kind whose balance is supposed to come from a statement
+  and no statement to come from. The asymmetry is stark: the opposite direction now earns a
+  four-line refusal naming every position.
+- **What should happen:** the direction is not dangerous — nothing is lost and it is reversible —
+  but it is a change the reader almost certainly did not mean, and it is the one kind change with
+  no feedback at all. A warning, or a sentence on the account page afterwards (see `FIX-5`).
+- **Repro:**
+  1. `/settings/accounts/<allyId>` — `Ally Online Savings`, Kind **Bank**, `$42,000.00`.
+  2. Kind → *Brokerage* → **Save changes**.
+- **Evidence:** the save returns `Saved.` with no warning; `/accounts/<allyId>` afterwards renders
+  no write control at all (`FIX-5`).
+- **Notes:** split from `FIX-5` because the two have different fixes and `FIX-5` is reachable
+  without this. Recoverable: changing the kind back to *Bank* is accepted — the current statement is
+  a single `USD` row, so the `SET-1` guard passes — and the panel returns.
+
+#### [FIX-5] An account whose kind takes a statement but which holds only cash has no write control on its own page, and nothing says why
+
+- **Severity:** Medium
+- **Where:** `app/routes/account.tsx:208` (`takesBalance: acceptsSetBalance(total.accountKind)`),
+  `:582` (`{takesBalance ? <SetBalance …/> : null}`)
+- **What happens:** the Set-balance panel is decided from `kind` alone, so a `brokerage` holding a
+  single `USD` row renders **zero forms** in `<main>` and no explanation. The page shows a value it
+  offers no way to change, and nothing points at the Settings edit that would restore the panel.
+- **What should happen:** `app/routes/account.tsx:203-208` reasons about exactly this for the
+  neighbouring case — *"hiding the panel in that state would leave the page with no write control
+  and nothing saying why"* — and then does it here. Either a sentence, or the panel mounted and
+  refusing.
+- **Repro:** reach the state either way — relabel a bank account to *Brokerage* (`FIX-4`), or open
+  any brokerage that happens to hold only a `USD` row — then load `/accounts/:id`.
+- **Evidence:**
+  ```
+  BEFORE (Kind: Bank)                     AFTER (Kind: Brokerage)
+  [Set balance] [Edit details]            [Edit details]
+  forms in <main>: post /accounts/:id     forms in <main>: []
+  Holdings 1 HOLDING USD 42,000           Holdings 1 HOLDING USD 42,000
+  ```
+  Still possible from elsewhere: uploading a statement to it, and correcting the `USD` row at
+  `/holdings?edit=<allyId>.<usdId>`. Neither is discoverable from the account's own page.
+- **Notes:** split from `FIX-4`; reachable independently of it.
+
+#### [FIX-6] Both `setBalance` guards read what the account holds *now*, never the set the write's own date will supersede — a backdated balance buries a securities set
+
+- **Severity:** High
+- **Where:** `app/lib/balances.server.ts:170` (the pre-check, before `input.asOf` is parsed at
+  `:194`), `:184` (the refusal), `:220` (the in-write `guard` CTE),
+  `app/lib/current-statement.server.ts:102`; and
+  `migrations/0002_holding_valued.sql:46` — `latest_position_set(p_account_id bigint, p_as_of date
+  default null)`, **whose date parameter neither guard passes**
+- **What happens:** the `SET-1` fix asks "does this account hold anything a typed balance would
+  drop?" of the account's *current* statement. A balance recorded with an earlier `asOf` does not
+  supersede the current statement — it supersedes whatever set was current **on that date**, which
+  the guards never look at. So an account whose statement is legitimately cash-only today can take a
+  backdated balance that buries a securities set for a historical window, with no refusal and no
+  confirmation.
+- **What should happen:** both guards already have the argument they need —
+  `latest_position_set(accountId, input.asOf)`. That means parsing the date before the guard rather
+  than after it, and asking the question of the set the write will actually outrank.
+- **Repro:** reached through the UI only — no `psql` mutation.
+  1. `Vanguard Roth IRA` (`ira`, holds BND/VOO/VWO, quarterly sets 2023-09-30 → 2026-08-20).
+     Household `$687,247.44`; at 2026-02-15, `$547,514.61`.
+  2. Zero all three securities on `/holdings?edit=…` — the remedy the kind refusal itself names.
+  3. Settings → Kind → *Bank* → **Save changes**. Accepted, and **correctly**: the current statement
+     now holds nothing.
+  4. Record a balance of `25000` as of `2026-08-24`. The account is now genuinely cash-only.
+  5. Same form: `25000` as of **`2026-01-15`** — before the securities sets. Recorded.
+- **Evidence:**
+  ```
+  POST /accounts/<rothId> amount=25000 asOf=2026-01-15 -> 302, no refusal, no confirmation
+    .form-error / .field-error on the landed page: []
+
+                                 2026-02-15      2026-08-24 (today)
+  seeded baseline                $547,514.61     $687,247.44
+  after steps 1–4 (legitimate)   $547,514.61     $616,466.14
+  after step 5 (backdated)       $495,557.40     $616,466.14
+                                  −$51,957.21       unchanged
+
+  12156 | 2025-12-31 | upload | BND=292.38…, VOO=111.33…, VWO=311.42…
+  12249 | 2026-01-15 | manual | USD=25000.00000000   <- the backdated write
+  12157 | 2026-03-31 | upload | BND=299.15…, VOO=113.69…, VWO=316.88…
+  ```
+- **Notes:** materially milder than `SET-1` — today's figure is untouched and the securities set is
+  verifiably still there, sitting behind the manual one for the window 2026-01-15 → 2026-03-30. But
+  every historical figure in that window is wrong by $51,957.21, and the only reachable repair is
+  uploading a statement dated inside it. A second, smaller defect on the same path: the account page
+  shows **no confirmation at all** for a backdated write, because `justRecorded`
+  (`app/routes/account.tsx:221-222`) compares `?recorded=` against the *latest* set's date.
