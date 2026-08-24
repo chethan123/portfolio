@@ -96,6 +96,13 @@ A statement is rejected outright, rather than partly imported, when it cannot be
 - **It is too large.** The cap is set by whoever runs the instance.
 - **A quantity makes no sense**, or rows disagree about what date the statement is. The message
   names the line, so open the file at that line.
+- **A row states a quantity but names no instrument.** The message names the line. Almost always
+  the instrument column is mapped to a column that is empty on those rows — go back a step and
+  pick the column that actually holds the fund or ticker name. It is refused rather than skipped
+  because a nameless quantity dropped quietly is indistinguishable from a file that simply did not
+  contain those holdings.
+- **The statement dates itself before 1970-01-01.** That is the earliest date this application can
+  price anything, so a statement older than it could not be valued.
 
 Nothing is ever partly recorded. A refused file leaves the account exactly as it was, which is why
 it is safe to try again.

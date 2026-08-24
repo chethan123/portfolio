@@ -253,10 +253,15 @@ describe("rememberMapping", () => {
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
       // Refused here rather than two screens later as an empty diff: the
       // column choice is the fix, and this is the screen that holds it.
+      //
+      // The rows state no quantity either. This fixture used to read `,100`
+      // and `,50`, which now meets the nameless-quantity refusal in the parser
+      // one layer down — so the rule this test is named for would have shipped
+      // uncovered. That shape is its own test below.
       const account = await seedAccount({ kind: "brokerage" });
       const draft = await seedUploadDraft({
         account,
-        bytes: new TextEncoder().encode("Symbol,Quantity\n,100\n,50\n"),
+        bytes: new TextEncoder().encode("Symbol,Quantity\n,\n,--\n"),
       });
 
       let refusal: ValidationError | null = null;
@@ -270,6 +275,40 @@ describe("rememberMapping", () => {
       expect(refusal?.fieldErrors.instrument).toMatch(/"Symbol"/);
       // Refused means refused: no mapping landed on the draft.
       expect((await requireDraft(draft.id, db)).mapping).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses a quantity recorded under no instrument, and remembers nothing for the institution",
+    withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
+      // `ING-4`, at the seam that decides where the fix belongs. The damage
+      // outlives the upload: `rememberMapping` writes the institution's column
+      // mapping after the parse, so a mapping onto the wrong column that is
+      // merely *reported* two screens later is still remembered here and
+      // prefilled onto every future statement from the same institution.
+      //
+      // Nothing pinned this before, and it is the whole argument for refusing
+      // in the parser rather than on review.
+      const account = await seedAccount({ kind: "brokerage" });
+      const draft = await seedUploadDraft({
+        account,
+        bytes: new TextEncoder().encode("Symbol,Quantity\n,100\n,50\n"),
+      });
+
+      const outcome = await rememberMapping(draft.id, SIMPLE, db);
+
+      expect("problems" in outcome).toBe(true);
+      const problems = "problems" in outcome ? outcome.problems : [];
+      expect(problems).toHaveLength(2);
+      expect(problems[0]?.column).toBe("Symbol");
+      expect(problems[0]?.message).toMatch(/names nothing under "Symbol"/);
+
+      // Neither write happened — not the draft's mapping, and not the
+      // institution's.
+      expect((await requireDraft(draft.id, db)).mapping).toBeNull();
+      expect(
+        await findMapping(account.institution, headerFingerprint(["Symbol", "Quantity"]), db),
+      ).toBeNull();
     }),
   );
 

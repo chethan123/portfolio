@@ -286,8 +286,15 @@ describe("row handling", () => {
   const columns = { instrument: "Symbol", quantity: "Qty" };
 
   it("skips a row whose instrument cell is empty, as a footer or spacer", () => {
+    // Genuinely empty rows, which is what a spacer and a footer actually look
+    // like. The fixture used to state quantities here — `["", "1"]` — and so
+    // asserted `ING-4` rather than this rule; those shapes are now their own
+    // test below.
+    //
+    // A short row and a present-but-empty cell are the same input: the reader
+    // never pads and the parser reads `(cells[i] ?? "").trim()`.
     const parsed = parseStatement(
-      [["Symbol", "Qty"], ["AAPL", "50"], ["", "1"], ["   ", "2"], [""]],
+      [["Symbol", "Qty"], ["AAPL", "50"], ["", ""], ["   ", "  "], [""], []],
       mapping({ columns }),
     );
 
@@ -295,6 +302,59 @@ describe("row handling", () => {
     expect(parsed.positions).toHaveLength(1);
     // Not reported either: a spacer names nothing worth telling the reader.
     expect(parsed.skipped).toEqual([]);
+  });
+
+  it("refuses a row that states a quantity under no instrument", () => {
+    // `ING-4`. A quantity with no name is not a spacer, and dropping it
+    // silently is how a mapping onto the wrong column looks exactly like a
+    // correct one — the file is accepted and most of it is simply gone.
+    const parsed = parseStatement(
+      [["Symbol", "Qty"], ["AAPL", "50"], ["", "1"], ["   ", "2"]],
+      mapping({ columns }),
+    );
+
+    expect(parsed.problems).toHaveLength(2);
+    expect(parsed.problems[0]).toMatchObject({ row: 2, column: "Symbol" });
+    expect(parsed.problems[0]?.message).toMatch(/Line 3/);
+    expect(parsed.problems[0]?.message).toMatch(/names nothing under "Symbol"/);
+    // The second is the whitespace-only cell, which trims to the same thing.
+    expect(parsed.problems[1]).toMatchObject({ row: 3, column: "Symbol" });
+  });
+
+  it("refuses the real file that reproduced it, mapped to the column that broke", () => {
+    // The reproducing case, walked through the running app: `401k.csv` mapped
+    // to `Ticker` was accepted, and the instruments step then asked about
+    // exactly one holding. Two rows worth $58,692.68 — 95.9% of a $61,200.68
+    // file — were gone, with no notice on any screen.
+    const parsed = parseStatement(readCsv(fixture("401k.csv")).rows, {
+      headerRow: 0,
+      delimiter: ",",
+      costBasisIs: "per_share",
+      owedAsPositive: false,
+      combineDuplicateRows: true,
+      columns: { instrument: "Ticker", quantity: "Units", asOf: "As Of" },
+    });
+
+    // Both blank-`Ticker` rows are named, by the line a reader would count.
+    expect(parsed.problems.map((problem) => problem.row)).toEqual([1, 2]);
+    expect(parsed.problems[0]?.message).toMatch(/Line 2/);
+    expect(parsed.problems[0]?.message).toMatch(/412\.51230000/);
+    // And the file does not commit: problems present means refused.
+    expect(parsed.problems.length).toBeGreaterThan(0);
+  });
+
+  it("still skips a nameless row silently when its quantity is not a figure", () => {
+    // The discriminator is a *parseable* quantity. A disclaimer that happens to
+    // land under the quantity column names nothing and states nothing, so it
+    // stays a spacer — refusing it would refuse `fidelity.csv`'s footer.
+    const parsed = parseStatement(
+      [["Symbol", "Qty"], ["AAPL", "50"], ["", "--"], ["", "Past performance"]],
+      mapping({ columns }),
+    );
+
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.skipped).toEqual([]);
+    expect(parsed.positions).toHaveLength(1);
   });
 
   it("skips and reports a row that names an instrument but states no quantity", () => {

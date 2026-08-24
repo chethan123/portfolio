@@ -111,7 +111,12 @@ Three spellings are read: `YYYY-MM-DD`, `MM/DD/YYYY` and `M/D/YYYY`.
 
 ## What happens to your rows
 
-- **A row with a blank instrument is skipped silently.** That is a spacer or a footer.
+- **A row with a blank instrument and no quantity is skipped silently.** That is a spacer or a
+  footer, and it says nothing worth telling you about.
+- **A row with a blank instrument that does state a quantity refuses the whole file**, naming the
+  line. A quantity with nothing to attach it to is a position with no name, and the usual cause is
+  that the instrument column is mapped to a column your statement leaves empty on most rows — so
+  the file would import looking correct while most of it silently vanished.
 - **A row that names something but whose quantity is an absence marker is skipped and listed on the
   review**, by line number. A blank, a dash or `n/a` in the quantity column is the usual case — a
   "Cash & Cash Investments" heading, a subtotal. It is named rather than dropped quietly, because a
