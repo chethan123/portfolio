@@ -29,6 +29,44 @@ A brokerage, IRA or workplace plan holds individual positions, and its value is 
 are worth — so there is no single number to type. Its balance comes from
 [a statement](upload.md) or [a correction](holdings.md) instead.
 
+## A bank or loan account will not take a balance either
+
+The form is there, and it still says no — naming what the account holds.
+
+A typed balance is the *whole* statement for that account: one figure, replacing everything recorded
+before it. That is exactly right for a current account, and it is why the account list, the chart
+and net worth all move the moment you record one. But if a statement was uploaded against this
+account at some point, it may list more than cash — and typing one figure over it would record
+everything else as sold.
+
+So the refusal names the positions in the way. Either [upload a statement](upload.md) for the
+account, which is what says what it holds, or [correct the position](holdings.md) on Holdings if it
+should not be there.
+
+## An account's kind will not change
+
+Every other field on an account can be corrected freely. **Kind** is the one that cannot always be,
+because it is not a caption — every figure in the application reads it, on every date, including
+dates from before you changed it.
+
+Two refusals, both naming what is in the way:
+
+- **It holds positions.** A bank or loan account is one balance; a brokerage, IRA or workplace plan
+  is a list. An account holding positions cannot become one that holds a single balance while those
+  positions are still recorded against it, because they would have nowhere to go.
+- **Its balance points the other way.** Money held and money owed are the same figure with opposite
+  signs, so making a savings account a loan would turn what you have into what you owe without
+  anything being typed. Record the balance as zero first if it really did turn around, then change
+  the kind.
+
+An account with nothing recorded against it yet can always change kind, which is the case this
+usually is — a kind picked wrongly when the account was added.
+
+**On a closed account, neither way out is open.** A closed account's history does not change, so
+there is no balance to zero and no statement to upload, and the message says so rather than
+suggesting something that would be refused in turn. Its other fields still edit normally — this is
+only about **Kind**.
+
 ## A person cannot be removed
 
 Someone who owns an account cannot be removed, and that includes accounts that have been **closed** —

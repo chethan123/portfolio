@@ -4,9 +4,10 @@
  *
  * The domain modules own their own rules — `people.server.ts` decides what a
  * name is — and this module is only the shared vocabulary they express those
- * rules in: one error type carrying per-field messages, one parse helper, and
- * the field shapes the forms are built from — two of text, one of money and one
- * of dates.
+ * rules in: one error type carrying per-field messages, one parse helper, the
+ * field shapes the forms are built from — two of text, one of money and one of
+ * dates — and the one phrase-builder their refusals share, so that three
+ * modules naming a list of things name it the same way.
  *
  * It exists so that a route never has to know about Zod. A route reads the
  * form, hands the raw fields to a domain function and renders whatever comes
@@ -57,6 +58,19 @@ export class ValidationError extends Error {
  */
 export class NotFoundError extends Error {
   override readonly name = "NotFoundError";
+}
+
+/**
+ * "A", "A and B", "A, B and C" — a refusal reads as a sentence, not a dump.
+ *
+ * Here rather than beside any one of the three refusals that name a list,
+ * because they are three ways of saying the same thing to the same reader and a
+ * second copy would be free to punctuate it differently. Not `Intl.ListFormat`,
+ * which writes the serial comma none of the prose in this application does.
+ */
+export function listSentence(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 /**

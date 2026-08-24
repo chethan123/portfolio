@@ -31,11 +31,20 @@
  */
 import { z } from "zod";
 
-import { accountKindValues, taxTreatmentValues } from "./account-options.ts";
+import {
+  ACCOUNT_KINDS,
+  acceptsSetBalance,
+  accountKindValues,
+  isOwed,
+  labelOf,
+  taxTreatmentValues,
+} from "./account-options.ts";
+import { currentStatement } from "./current-statement.server.ts";
 import { getDb, type Database } from "./db.server.ts";
 import {
   NotFoundError,
   ValidationError,
+  listSentence,
   optionalText,
   parseInput,
   requiredText,
@@ -210,15 +219,28 @@ export async function createAccount(
 /**
  * Correct an account, including a wrong tax treatment.
  *
- * Editing is deliberately unrestricted: a tax treatment recorded wrongly is a
- * figure reported wrongly for as long as it stands, and there is nothing to be
- * gained by making it hard to fix. Changing the owner is the way a person who
- * owns accounts becomes removable (`people.server.ts`).
+ * Editing is unrestricted but for the kind: a tax treatment recorded wrongly is
+ * a figure reported wrongly for as long as it stands, and there is nothing to
+ * be gained by making it hard to fix. Changing the owner is the way a person
+ * who owns accounts becomes removable (`people.server.ts`).
+ *
+ * The kind is the exception because both views apply it retroactively to every
+ * date (`0002_holding_valued.sql:84`, `0003_holding_valued_at.sql:50`), so it
+ * is not a caption on an account — it is a claim about what the account's rows
+ * *mean*, and the writers downstream believe it. Relabelling a brokerage full
+ * of securities as a `bank` used to hand `setBalance` an account it would sell
+ * out in one submission, and moving a `bank` holding savings to `liability`
+ * used to file $42,000 of assets as debt on every screen and every historical
+ * date, with no write at all (report `SET-1`). The two refusals below close
+ * both, and only those two: any change to an account with no statement still
+ * goes through, so does anything between the securities kinds, and so does
+ * `bank` or `liability` onto a securities kind.
  *
  * Closing is not done here — {@link closeAccount} is its own operation, so an
  * ordinary edit can never retire an account by accident.
  *
- * @throws {ValidationError} with a message per bad field.
+ * @throws {ValidationError} with a message per bad field, and one under `kind`
+ *         for a kind the account's current statement contradicts.
  * @throws {NotFoundError} when no such account exists.
  */
 export async function updateAccount(
@@ -229,6 +251,84 @@ export async function updateAccount(
   const existing = await getAccount(id, db);
   const input = parseInput(accountInput, raw);
   await requireOwner(input.ownerId, db);
+
+  // Asked of the new kind and the rows, never of the old kind. A condition with
+  // an `existing.kind` term in it would refuse one hop and permit the same
+  // destination reached in two — `liability → brokerage → bank` is the same
+  // relabelling with a station in the middle — and this way there is no
+  // sequence of edits that arrives anywhere a single edit could not.
+  //
+  // The kinds that hold securities are unaffected: a statement is what says
+  // what they hold, so there is nothing here for them to contradict.
+  //
+  // Read-then-write, with no lock, and deliberately no transaction. A statement
+  // committed between this read and the update leaves the label briefly wrong,
+  // which is a mislabel and not a loss — `setBalance` repeats its own guard
+  // inside its write statement, so the account cannot be emptied through the
+  // gap this one leaves.
+  if (input.kind !== existing.kind && acceptsSetBalance(input.kind)) {
+    const { cashIsNegative, others } = await currentStatement(existing.id, db);
+
+    // A one-balance kind cannot hold positions, so relabelling would strand
+    // them: the Holdings table would still list them and the account's own page
+    // would offer the form that sells them.
+    //
+    // The remedy is the sibling refusal's (`balances.server.ts:184-191`), and
+    // has to be: the positions have to stop being recorded against the account
+    // before it can be a one-balance account, and zeroing them or uploading a
+    // statement without them are the two ways to stop recording them. Naming
+    // the guard condition back at the reader — "change the kind on an account
+    // whose statement is a single cash balance" — is not advice, it is the
+    // refusal restated.
+    //
+    // Neither door is open on a closed account: `revisePosition` and
+    // `createDraft` both refuse one, `holding_valued` drops it from Holdings,
+    // and `/accounts/:id` 404s for it (`account.tsx:137-144`). §5.3 accepts
+    // that the mislabel is then permanent — but the message must say so rather
+    // than send its reader looking for a door that is not there.
+    if (others.length > 0) {
+      const them = others.length === 1 ? "it" : "them";
+      const those = others.length === 1 ? "That position has" : "Those positions have";
+      throw new ValidationError({
+        kind:
+          `${existing.name}'s current statement lists ${listSentence(others)}, and a ` +
+          `${labelOf(ACCOUNT_KINDS, input.kind)} account holds one balance rather than ` +
+          `positions. ${those} to stop being recorded against it first` +
+          (existing.isClosed
+            ? ", and a closed account's history does not change — so while it is closed, this " +
+              "is not a kind it can take."
+            : `: zero ${them} on Holdings, or upload a statement that no longer lists ${them}.`),
+      });
+    }
+
+    // §2 puts the sign in the quantity, so a kind whose direction disagrees
+    // with the stored balance inverts what that balance means with no write at
+    // all — `revisePosition`'s refused sign flip (`positions.server.ts:331-339`)
+    // by another door. The remedy names Holdings as well as this account's own
+    // page because the account may be sitting on a securities kind as it is
+    // read — `liability → brokerage → bank` is refused at the second hop — and
+    // `account.tsx` mounts no Set-balance panel on one, so naming that door
+    // alone would name a remedy the account does not have.
+    //
+    // On a closed account it has neither: `setBalance` refuses one outright and
+    // `/accounts/:id` 404s for it, and `holding_valued` drops it, so Holdings
+    // lists nothing to zero. Same reasoning as the clause above — the mislabel
+    // is permanent (§5.3), and the message says that instead of naming two
+    // doors that are not there.
+    if (cashIsNegative !== null && isOwed(input.kind) !== cashIsNegative) {
+      throw new ValidationError({
+        kind:
+          `${existing.name}'s balance is currently recorded as money ` +
+          `${cashIsNegative ? "owed" : "held"}, and a ${labelOf(ACCOUNT_KINDS, input.kind)} ` +
+          "account records the other. " +
+          (existing.isClosed
+            ? "It would have to be recorded as zero first, and a closed account's history does " +
+              "not change — so while it is closed, this is not a kind it can take."
+            : "Record it as zero first if it really did turn around — from this account's page " +
+              "if it still takes a typed balance, or on Holdings if it does not."),
+      });
+    }
+  }
 
   await db
     .updateTable("account")

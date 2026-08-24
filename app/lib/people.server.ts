@@ -17,7 +17,13 @@
 import { z } from "zod";
 
 import { getDb, type Database } from "./db.server.ts";
-import { NotFoundError, ValidationError, parseInput, requiredText } from "./input.server.ts";
+import {
+  NotFoundError,
+  ValidationError,
+  listSentence,
+  parseInput,
+  requiredText,
+} from "./input.server.ts";
 
 import type { Kysely } from "kysely";
 
@@ -170,12 +176,6 @@ export async function removePerson(
   }
 
   await db.deleteFrom("person").where("id", "=", id).execute();
-}
-
-/** "A", "A and B", "A, B and C" — a refusal reads as a sentence, not a dump. */
-function listSentence(items: readonly string[]): string {
-  if (items.length <= 1) return items[0] ?? "";
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 /** Re-read the account count for a person a write has just returned. */

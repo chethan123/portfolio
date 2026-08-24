@@ -19,7 +19,7 @@ The consequence is not a missing screen. It is that **a brokerage account cannot
 all**:
 
 - **The set-balance form refuses securities by design.** `acceptsSetBalance`
-  (`app/lib/balances.server.ts:83`) allows `bank` and `liability` only, and `setBalance` leads with a
+  (`app/lib/account-options.ts:108`) allows `bank` and `liability` only, and `setBalance` leads with a
   form-level refusal for anything else — "recording one cash figure here would record everything
   else it holds as sold". Correctly: it writes a single `USD` row, and §5.2 makes a position set a
   photograph of the whole account.

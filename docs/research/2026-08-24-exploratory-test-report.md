@@ -1,8 +1,9 @@
 # Exploratory test report — 2026-08-24
 
 An adversarial pass over the whole running application, done by driving the real app rather than by
-reading it. **Nothing here is fixed.** Every entry is written so someone else can pick it up as a
-task: what happens, what should happen and why, a verified reproduction, and the evidence.
+reading it. **Nothing was fixed when this was written**, and two entries — `SET-1` and `SET-5` —
+have since been annotated where they were fixed. Every entry is written so someone else can pick it
+up as a task: what happens, what should happen and why, a verified reproduction, and the evidence.
 
 - **67 findings**: 1 critical, 11 high, 20 medium, 35 low.
 - Six testers worked in parallel, each with its own application instance and its own database, so
@@ -37,11 +38,12 @@ Severity is used as follows. **Critical** — data loss, corruption, or a securi
 
 If only a handful get picked up, these are the ones, in this order.
 
-1. **[SET-1] Changing an account's kind wipes it, irrecoverably.** Switch a brokerage holding seven
-   securities to *Bank* or *Loan*, and the Set-balance form appears on it. One submission records a
-   single `USD` row, which under "a missing row means sold" sells everything. $211,007.64 → −$1.00,
-   and **nothing in the application can undo it**. The invariant is written out in
-   `balances.server.ts:24-27` — a kind edit walks straight around it. *The only Critical.*
+1. **[SET-1] Changing an account's kind wipes it, irrecoverably.** — **fixed; see the entry.** Switch
+   a brokerage holding seven securities to *Bank* or *Loan*, and the Set-balance form appears on it.
+   One submission records a single `USD` row, which under "a missing row means sold" sells
+   everything. $211,007.64 → −$1.00, and **nothing in the application can undo it**. The invariant is
+   written out in `balances.server.ts:24-27` — a kind edit walked straight around it.
+   *The only Critical.*
 2. **[LEAD-8] A Postgres restart kills the server process.** `createPool` (`server/db.ts:62`) never
    attaches `pool.on('error')`, and `node-postgres` emits `error` on idle clients when the backend
    goes away. `docker compose restart db` — or a minor-version upgrade, or an OOM kill — exits the
@@ -1071,6 +1073,11 @@ Baseline net worth on the seeded household: **$687,247.44**.
 
 #### [SET-1] Changing an account's kind to `bank`/`liability` re-opens the Set-balance form on an account full of securities, and one submission wipes it — irrecoverably
 
+**Fixed.** Both writers now answer from what the account's current statement holds rather than from
+`kind` alone — `app/lib/current-statement.server.ts` is the one reader they share, `setBalance`
+refuses and repeats the refusal inside its own write statement, and `updateAccount` refuses the kind
+change itself. The entry below stands as it was written, as the record of what the defect was.
+
 - **Severity:** Critical
 - **Where:** `app/lib/accounts.server.ts:224` (`updateAccount` — kind is freely editable),
   `app/lib/balances.server.ts:60-85`/`:183` (the guard that gets bypassed),
@@ -1127,6 +1134,25 @@ Baseline net worth on the seeded household: **$687,247.44**.
 - **Notes:** The Set-balance panel's own helper line — "Recording a balance never overwrites an
   earlier one: each is kept on its own date" — is true of *rows* and badly misleading about
   *effect* in this state. The same door exists for `401k`/`ira` → `bank`.
+- **Left open by that fix**, deliberately, and each still reproducible. Nothing else in this report
+  was touched either.
+  1. `revisePosition`'s cash test (`positions.server.ts:318`) is `priceSource === "fixed"`, so it
+     holds `SPAXX` to two decimal places — a money-market share count is legitimately fractional.
+  2. Four comments assert that `fixed` belongs to the seeded `USD` row alone
+     (`instrument-resolution.server.ts:177,353`, `positions.server.ts:92`, `prices.server.ts:71`).
+     `scripts/seed-demo.ts:209` files `SPAXX` as `fixed` and disproves all four. Either the seed or
+     the comments are wrong, and the fix had to resolve cash on `symbol` **and** `price_source`
+     together to avoid choosing between them.
+  3. **The upload door is still open.** `commitUpload` never reads `kind`, so a statement can still
+     be uploaded to a `bank` account. It cannot silently empty one — the majority-removal tick
+     catches that — but it can commit *partial* removals with no confirmation, because the tick is
+     keyed on a strict majority (`uploads.server.ts:855,1029`) and a 4-of-7 statement drops three
+     positions silently.
+  4. `SET-9` stands. `sameDirection` (`positions.server.ts:263`) returns true whenever either side
+     is zero, so the $29,000 sign shape is still reachable through the Holdings editor in two
+     deliberate edits.
+  5. `bank`/`liability` → a securities kind still strands the account: the Set-balance panel
+     disappears and `/accounts/:id` is then left with no write control at all.
 
 ---
 
@@ -1232,6 +1258,9 @@ Baseline net worth on the seeded household: **$687,247.44**.
 ---
 
 #### [SET-5] `setBalance`'s form-level refusal is thrown, caught, and rendered nowhere — the submission is a silent no-op
+
+**Fixed.** `errors.form` is rendered from the page rather than from inside `SetBalance`, so a
+form-level refusal reaches the reader whether or not the panel is mounted. It was moved, not copied.
 
 - **Severity:** Medium
 - **Where:** `app/routes/account.tsx:562` (`{takesBalance ? <SetBalance …/> : null}`) vs
