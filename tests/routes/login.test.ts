@@ -106,6 +106,47 @@ describe("the return address the form carries", () => {
 
     expect(await redirectTo(() => loader(args(request)))).toBe("/");
   });
+
+  it("keeps a next carrying a control character on this instance", async () => {
+    // The `SEC-1` vector. The shipped check read the first two characters, so
+    // a tab reached the hidden field intact; the browser then strips it and
+    // follows `/evil.example` — off this origin, after a visitor typed the
+    // real password on the real login page.
+    for (const hostile of ["/\u0009evil.example", "\u0009/evil.example", "/..//evil.example"]) {
+      expect([hostile, await loader(args(loginFor(hostile)))]).toEqual([hostile, { next: "/" }]);
+    }
+  });
+});
+
+describe("a hostile next posted straight at the action", () => {
+  it("sends the visitor to this instance even though the loader never saw it", async () => {
+    // The hidden field is client-editable, and nothing in the suite covered
+    // this path. The action must not depend on the loader having cleaned the
+    // value — a form posted by hand skips the loader entirely.
+    for (const hostile of [
+      "//evil.example",
+      "https://evil.example",
+      "/\u0009evil.example",
+      "/..//evil.example.com",
+    ]) {
+      const response = await responseOf(() =>
+        action(args(post("/login", { password: PASSWORD, next: hostile }))),
+      );
+
+      expect([hostile, response.headers.get("Location")]).toEqual([hostile, "/"]);
+      // And the login still succeeded: refusing the return address is not
+      // refusing the password.
+      expect(response.headers.get("Set-Cookie")).toContain("__portfolio_session");
+    }
+  });
+
+  it("still honours a next that is genuinely on this instance", async () => {
+    const response = await responseOf(() =>
+      action(args(post("/login", { password: PASSWORD, next: "/holdings?account=7" }))),
+    );
+
+    expect(response.headers.get("Location")).toBe("/holdings?account=7");
+  });
 });
 
 describe("what a submission gets back", () => {
