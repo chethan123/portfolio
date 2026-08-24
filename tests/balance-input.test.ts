@@ -12,7 +12,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { ValidationError, moneyMagnitude, parseInput, recordedDate } from "~/lib/input.server";
+import {
+  ValidationError,
+  earliestRecordableDate,
+  moneyMagnitude,
+  parseInput,
+  recordedDate,
+} from "~/lib/input.server";
 import { z } from "zod";
 
 const amount = z.object({ amount: moneyMagnitude("A balance") });
@@ -141,5 +147,31 @@ describe("recordedDate", () => {
 
     expect(parseInput(date, { asOf: tomorrow }).asOf).toBe(tomorrow);
     expect(refusal(date, { asOf: dayAfter }, "asOf")).toMatch(/in the future/);
+  });
+
+  it("refuses a mistyped millennium, which the future check never saw", () => {
+    // The reproducing case. `1026` is one keystroke from `2026`, and it is not
+    // in the future, so the ceiling let it through. The set it wrote could not
+    // be corrected by recording the right date: it stayed a thousand years back
+    // and flattened the "All" net-worth chart to a single spike at the far left.
+    expect(refusal(date, { asOf: "1026-08-24" }, "asOf")).toMatch(/first day this application can price/);
+  });
+
+  it("refuses year zero, which the calendar check accepts and Postgres does not", () => {
+    // JavaScript has a year zero and round-trips this string unchanged, so it
+    // reached the driver and surfaced as a 500 rather than a sentence.
+    expect(new Date("0000-01-01T00:00:00Z").toISOString().slice(0, 10)).toBe("0000-01-01");
+    expect(refusal(date, { asOf: "0000-01-01" }, "asOf")).toMatch(/first day this application can price/);
+  });
+
+  it("accepts the floor itself, which is the day USD has a close", () => {
+    // Not an off-by-one: `0001_initial_schema.sql` seeds USD `1.00` on exactly
+    // this date, so it is the earliest date on which cash can be valued.
+    expect(parseInput(date, { asOf: earliestRecordableDate() }).asOf).toBe("1970-01-01");
+    expect(earliestRecordableDate()).toBe("1970-01-01");
+  });
+
+  it("refuses the day before the floor", () => {
+    expect(refusal(date, { asOf: "1969-12-31" }, "asOf")).toMatch(/first day this application can price/);
   });
 });

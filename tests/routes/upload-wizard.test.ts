@@ -28,6 +28,7 @@ import { z } from "zod";
 
 import { loader as resumeDraft } from "../../app/routes/upload/index.tsx";
 import { action as reviewAction, loader as reviewLoader } from "../../app/routes/upload/review.tsx";
+import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 import { lastRecorded } from "~/lib/balances.server";
 import { rememberMapping } from "~/lib/uploads.server";
 
@@ -195,6 +196,14 @@ describe("a draft's bare address", () => {
       // asked nothing is the bit the columns step wrote (brief §7.5).
       const page = await reviewPage(draftId);
       expect(page.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
+
+      // The date control's two boundaries reach the screen from the validator,
+      // so the picker cannot offer a date the commit then refuses. The floor
+      // matters more than the ceiling here: without it a mistyped millennium
+      // is a position set a thousand years back that nothing can reach.
+      expect(page.earliestAsOf).toBe(earliestRecordableDate());
+      expect(page.latestAsOf).toBe(latestRecordableDate());
+      expect(page.earliestAsOf).toBe("1970-01-01");
     }),
   );
 });

@@ -96,6 +96,8 @@ A statement is rejected outright, rather than partly imported, when it cannot be
 - **It is too large.** The cap is set by whoever runs the instance.
 - **A quantity makes no sense**, or rows disagree about what date the statement is. The message
   names the line, so open the file at that line.
+- **The statement dates itself before 1970-01-01.** That is the earliest date this application can
+  price anything, so a statement older than it could not be valued.
 
 Nothing is ever partly recorded. A refused file leaves the account exactly as it was, which is why
 it is safe to try again.
