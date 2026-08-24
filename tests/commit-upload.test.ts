@@ -23,7 +23,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { sql } from "kysely";
 
-import { NotFoundError, ValidationError } from "~/lib/input.server";
+import { FORM_ERROR, NotFoundError, ValidationError } from "~/lib/input.server";
 import { closeAccount } from "~/lib/accounts.server";
 import { lastRecorded } from "~/lib/balances.server";
 import {
@@ -34,7 +34,7 @@ import {
   requireDraft,
   uploadReceipt,
 } from "~/lib/uploads.server";
-import { accountHoldings, netWorth } from "~/lib/valuation.server";
+import { accountHoldings, holdingsAt, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import { makeFixtures, type SeededAccount } from "./support/fixtures.ts";
@@ -422,6 +422,129 @@ describe("diffForDraft", () => {
 
       const diff = await diffForDraft(draftId, db);
       expect(diff.asOf).toEqual({ source: "file", date: "2026-06-30" });
+    }),
+  );
+
+  it(
+    "flags a statement dated behind the one the account reads, and drops the tick",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const held = await seedInstrument({ symbol: "BH1", name: "Behind Held" });
+      const other = await seedInstrument({ symbol: "BH2", name: "Behind Other" });
+      const third = await seedInstrument({ symbol: "BH3", name: "Behind Third" });
+      for (const [instrument, raw] of [
+        [held, "BH1"],
+        [other, "BH2"],
+        [third, "BH3"],
+      ] as const) {
+        await seedInstrumentAlias({ instrument, rawString: raw });
+      }
+
+      // What the account reads now: three positions, as of June.
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: held, quantity: "10" },
+          { instrument: other, quantity: "5" },
+          { instrument: third, quantity: "2" },
+        ],
+      });
+
+      // A statement that dates itself to March — before the June one — and
+      // holds only one of the three. Against *current* holdings that reads as
+      // two removals out of three, which is a majority.
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,As of\nBH1,10,,2026-03-31\n",
+        { columns: { asOf: "As of" } },
+      );
+
+      const diff = await diffForDraft(draftId, db);
+
+      expect(diff.filedBehind).toBe(true);
+      expect(diff.removed).toHaveLength(2);
+      // `majorityRemoved` is the ratio and nothing else — two of three really
+      // are absent from this file — so `removesEverything` still implies it.
+      // Whether a tick is *demanded* is the separate question, and the screen
+      // answers it with `filedBehind`: these removals cannot happen, because
+      // `latest_position_set` orders on `as_of_date` and this set does not
+      // become the one the account reads.
+      expect(diff.majorityRemoved).toBe(true);
+      expect(diff.lastRecordedAsOf).toBe("2026-06-30");
+
+      // And the commit agrees, without a tick.
+      const written = await commitUpload(draftId, { accountId: account.id }, db);
+      expect(written.setId).toBeDefined();
+    }),
+  );
+
+  it(
+    "does not flag a statement dated on or after the one the account reads",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "FWD", name: "Forward Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "FWD" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: fund, quantity: "10" }],
+      });
+
+      // The 99% case, which the filed-behind path exercises none of.
+      const forward = await diffForDraft(
+        await stage(ctx, account, "Symbol,Quantity,Basis,As of\nFWD,12,,2026-07-31\n", {
+          columns: { asOf: "As of" },
+        }),
+        db,
+      );
+      expect(forward.filedBehind).toBe(false);
+
+      // The same date is a same-day correction, not a statement filed behind:
+      // the existing created_at tie-break already makes the later write win.
+      const sameDay = await diffForDraft(
+        await stage(ctx, account, "Symbol,Quantity,Basis,As of\nFWD,12,,2026-06-30\n", {
+          columns: { asOf: "As of" },
+        }),
+        db,
+      );
+      expect(sameDay.filedBehind).toBe(false);
+    }),
+  );
+
+  it(
+    "cannot flag a file that does not date itself, and hands the commit what it needs instead",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "UND", name: "Undated Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "UND" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: fund, quantity: "10" }],
+      });
+
+      // The date arrives at commit time from a control on the review screen, so
+      // it is not knowable here. That is a real limit of the *screen's* answer
+      // rather than an oversight — but it must not become a limit of the write,
+      // so the diff carries the account's current date and the commit re-asks
+      // the question against the date it resolves.
+      //
+      // `lastRecordedAsOf` is the assertion that earns this test: asserting
+      // `filedBehind === false` alone cannot fail, because dropping the
+      // `asOfDate !== null` guard leaves `null < "2026-06-30"` false anyway.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nUND,12,\n");
+      const diff = await diffForDraft(draftId, db);
+
+      expect(diff.asOf).toEqual({ source: "asked" });
+      expect(diff.filedBehind).toBe(false);
+      expect(diff.lastRecordedAsOf).toBe("2026-06-30");
     }),
   );
 
@@ -1175,7 +1298,8 @@ describe("uploadReceipt", () => {
         holdingCount: 2,
       });
 
-      // A set that is not the account's latest yields no receipt...
+      // A set the account neither reads nor wrote most recently yields no
+      // receipt — a stale bookmark still renders nothing...
       expect(await uploadReceipt(account.id, prior.id, db)).toBeNull();
       // ...nor does a set that is not the account's at all...
       expect(await uploadReceipt(other.id, written.setId, db)).toBeNull();
@@ -1204,6 +1328,281 @@ describe("uploadReceipt", () => {
         firstStatement: true,
         counts: { added: 1, updated: 0, unchanged: 0, removed: 0 },
         holdingCount: 1,
+      });
+    }),
+  );
+});
+
+describe("a statement filed behind the one the account reads", () => {
+  it(
+    "records without demanding the tick, leaves what the account reads alone, and moves history",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedDailyClose, seedInstrument, seedInstrumentAlias, seedPositionSet } =
+        ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const kept = await seedInstrument({ symbol: "FB1", name: "Filed Behind Kept" });
+      const gone = await seedInstrument({ symbol: "FB2", name: "Filed Behind Gone" });
+      for (const [instrument, raw] of [
+        [kept, "FB1"],
+        [gone, "FB2"],
+      ] as const) {
+        await seedInstrumentAlias({ instrument, rawString: raw });
+      }
+      await seedDailyClose({ instrument: kept, date: "2026-01-01", close: "10.0000" });
+      await seedDailyClose({ instrument: gone, date: "2026-01-01", close: "10.0000" });
+
+      // February, then June. The window this test watches is between them.
+      await seedPositionSet({
+        account,
+        asOf: "2026-02-28",
+        holdings: [{ instrument: kept, quantity: "1" }],
+      });
+      const june = await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: kept, quantity: "10" },
+          { instrument: gone, quantity: "5" },
+        ],
+      });
+
+      // What the middle of the window said before the upload.
+      const windowBefore = (await holdingsAt("2026-04-15", db)).map((h) => h.quantity);
+      expect(windowBefore).toEqual(["1.00000000"]);
+
+      // A March statement: inside the window, behind what the account reads,
+      // and holding only one of June's two positions.
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,As of\nFB1,7,,2026-03-31\n",
+        { columns: { asOf: "As of" } },
+      );
+
+      // No `confirmRemovals`. Before this change the ratio demanded one — two
+      // of two removed — for a removal that was never going to happen, and the
+      // commit refused without it.
+      const written = await commitUpload(draftId, { accountId: account.id }, db);
+
+      // What the account reads is untouched: June still wins on `as_of_date`.
+      expect((await lastRecorded(account.id, db))?.id).toBe(june.id);
+      expect((await accountHoldings(account.id, db)).map((h) => h.quantity).sort()).toEqual([
+        "10.00000000",
+        "5.00000000",
+      ].sort());
+
+      // But the window between March and June has moved, silently, which is
+      // the half of `ING-1` the report understated. This is history changing.
+      expect((await holdingsAt("2026-04-15", db)).map((h) => h.quantity)).toEqual([
+        "7.00000000",
+      ]);
+      // Before the statement's own date, nothing changed.
+      expect((await holdingsAt("2026-03-01", db)).map((h) => h.quantity)).toEqual([
+        "1.00000000",
+      ]);
+
+      // And the write now leaves a receipt, which is the finding: a set filed
+      // behind is never the set the account reads, so the old "is this the
+      // latest set" gate returned null and the change was confirmed nowhere.
+      const receipt = await uploadReceipt(account.id, written.setId, db);
+      expect(receipt).toMatchObject({
+        setId: written.setId,
+        asOf: "2026-03-31",
+        filedBehind: true,
+        holdingCount: 1,
+      });
+    }),
+  );
+
+  it(
+    "still gives an ordinary forward-dated upload a receipt that is not filed behind",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "FB3", name: "Forward Receipt" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "FB3" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+
+      // The 99% case, alongside the filed-behind one, because every change here
+      // runs through `assembleDiff` and the receipt gate — which every upload
+      // goes through — and the filed-behind path exercises neither normally.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFB3,9,\n");
+      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      expect(await uploadReceipt(account.id, written.setId, db)).toMatchObject({
+        filedBehind: false,
+        holdingCount: 1,
+      });
+      expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+    }),
+  );
+
+  it(
+    "drops the tick for a backdated date the reader typed, not only one the file carried",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const kept = await seedInstrument({ symbol: "FB5", name: "Typed Kept" });
+      const a = await seedInstrument({ symbol: "FB6", name: "Typed Gone A" });
+      const b = await seedInstrument({ symbol: "FB7", name: "Typed Gone B" });
+      for (const [instrument, raw] of [
+        [kept, "FB5"],
+        [a, "FB6"],
+        [b, "FB7"],
+      ] as const) {
+        await seedInstrumentAlias({ instrument, rawString: raw });
+      }
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: kept, quantity: "10" },
+          { instrument: a, quantity: "5" },
+          { instrument: b, quantity: "2" },
+        ],
+      });
+
+      // Same account, same rows, same target date as the filed-behind case
+      // above — the only difference is that the file carries no as-of column,
+      // so the date arrives from the review screen's control instead.
+      //
+      // `diff.filedBehind` cannot be true here and the notice cannot render,
+      // which is a known limit. What must NOT follow is a tick demanded for
+      // removals that will not happen: the commit resolves the real date before
+      // it enforces the tick, so it is the commit's question to answer.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFB5,7,\n");
+
+      const written = await commitUpload(
+        draftId,
+        { accountId: account.id, asOf: "2026-03-31" },
+        db,
+      );
+
+      expect((await lastRecorded(account.id, db))?.asOf).toBe("2026-06-30");
+      expect(await uploadReceipt(account.id, written.setId, db)).toMatchObject({
+        asOf: "2026-03-31",
+        filedBehind: true,
+      });
+    }),
+  );
+
+  it(
+    "still demands the tick when the typed date matches the one the account reads",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const kept = await seedInstrument({ symbol: "FBB", name: "Same Day Kept" });
+      const a = await seedInstrument({ symbol: "FBC", name: "Same Day Gone A" });
+      const b = await seedInstrument({ symbol: "FBD", name: "Same Day Gone B" });
+      for (const [instrument, raw] of [
+        [kept, "FBB"],
+        [a, "FBC"],
+        [b, "FBD"],
+      ] as const) {
+        await seedInstrumentAlias({ instrument, rawString: raw });
+      }
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: kept, quantity: "10" },
+          { instrument: a, quantity: "5" },
+          { instrument: b, quantity: "2" },
+        ],
+      });
+
+      // The boundary the suppression must not swallow. A same-day write is a
+      // correction, not a statement filed behind: `latest_position_set` breaks
+      // the tie on `created_at` then `id`, so this set *does* become the one the
+      // account reads and the two removals are real. Widening the comparison to
+      // `<=` would drop the tick on exactly the write that needs it.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFBB,7,\n");
+
+      const refusal = await refusalOf(() =>
+        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal.fieldErrors[FORM_ERROR]).toMatch(/removes 2 of the 3 positions/);
+    }),
+  );
+
+  it(
+    "still demands the tick for a forward-dated majority removal the reader typed",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const kept = await seedInstrument({ symbol: "FB8", name: "Forward Kept" });
+      const a = await seedInstrument({ symbol: "FB9", name: "Forward Gone A" });
+      const b = await seedInstrument({ symbol: "FBA", name: "Forward Gone B" });
+      for (const [instrument, raw] of [
+        [kept, "FB8"],
+        [a, "FB9"],
+        [b, "FBA"],
+      ] as const) {
+        await seedInstrumentAlias({ instrument, rawString: raw });
+      }
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: kept, quantity: "10" },
+          { instrument: a, quantity: "5" },
+          { instrument: b, quantity: "2" },
+        ],
+      });
+
+      // The other half, or the fix above would be a way to skip the tick
+      // entirely by typing a date. Forward-dated, so the removals are real.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFB8,7,\n");
+
+      const refusal = await refusalOf(() =>
+        commitUpload(draftId, { accountId: account.id, asOf: "2026-07-31" }, db),
+      );
+      expect(refusal.fieldErrors[FORM_ERROR]).toMatch(/removes 2 of the 3 positions/);
+    }),
+  );
+
+  it(
+    "keeps an upload's receipt when a backdated manual balance is written after it",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "FB4", name: "Union Arm" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "FB4" });
+
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFB4,9,\n");
+      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      // Written after the upload, dated before it. This is why the receipt gate
+      // is a union rather than "the set written most recently": that rule alone
+      // would hand the newest *write* to this set and take the upload's receipt
+      // away — a receipt that renders correctly today, on a page the reader may
+      // simply have reloaded.
+      const backdated = await seedPositionSet({
+        account,
+        asOf: "2026-04-30",
+        source: "manual",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+
+      // The account still reads the upload, so its receipt still stands...
+      expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+      expect(await uploadReceipt(account.id, written.setId, db)).toMatchObject({
+        setId: written.setId,
+        filedBehind: false,
+      });
+
+      // ...and the newer write, which the account does not read, gets one too.
+      expect(await uploadReceipt(account.id, backdated.id, db)).toMatchObject({
+        setId: backdated.id,
+        filedBehind: true,
       });
     }),
   );

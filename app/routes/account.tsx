@@ -220,6 +220,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // therefore cannot produce a confirmation for a balance nobody recorded —
     // the figure beside it is the loader's, so the message can only ever
     // describe what is stored (§13.7).
+    //
+    // Known gap, and it is `ING-1` on this path: a *backdated* manual balance
+    // is never the set the account reads, so this is false and no line appears,
+    // while the chart between its date and the next entry moves. The upload
+    // receipt stopped requiring "is this the latest set" for exactly that
+    // reason; this one still does. Closing it needs a read that can answer
+    // "was a balance recorded for this account on this date" independently of
+    // which set is latest, which is its own change rather than a line here.
+    // `docs/guide/account-detail.md` names the gap rather than promising past
+    // it.
     justRecorded:
       recorded !== null && new URL(request.url).searchParams.get("recorded") === recorded.asOf,
   };
@@ -331,10 +341,16 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
 
       {/* The upload flow's receipt, in the place the thing happened: directly
           under the page's header, above the first panel. Every figure is the
-          loader's — recomputed against the set the account is actually
-          reading — so a hand-typed ?uploaded= can only describe what is
-          stored, or nothing. No toast, no green flash: a sentence, until the
-          next navigation. */}
+          loader's, recomputed from the named set's own rows, so a hand-typed
+          ?uploaded= can only describe what is stored, or nothing. No toast, no
+          green flash: a sentence, until the next navigation.
+
+          Not "the set the account is actually reading", which is what this
+          said and what the gate used to require. A statement filed behind is
+          never that set, so requiring it meant a write that silently moved the
+          net-worth chart was confirmed nowhere (`ING-1`). The gate is a union
+          now — read, or written most recently — and `receipt.filedBehind` is
+          how the sentence below stays honest about which of the two it is. */}
       {receipt !== null ? (
         <p role="status">
           Recorded <b>{receipt.filename ?? "the statement"}</b>:{" "}
@@ -352,10 +368,28 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
           , as of <b className="u-data">{receipt.asOf}</b>.{" "}
           {/* The closing clause (brief §6.5): the count is the recorded set's
               own rows, read back from the database like every other figure in
-              this sentence — never the URL's claim. */}
-          {total.accountName} now holds{" "}
-          <b className="u-data">{receipt.holdingCount}</b>{" "}
-          {receipt.holdingCount === 1 ? "position" : "positions"}.
+              this sentence — never the URL's claim.
+
+              Which is why a set filed behind cannot use the same clause. Its
+              row count is its own, and the account is reading a later
+              statement, so "now holds N" would be a true count attached to a
+              false claim. It gets a sentence of its own instead — the whole
+              point of `ING-1` being that this write produced no sentence at
+              all while silently moving the chart. */}
+          {receipt.filedBehind ? (
+            <>
+              That is earlier than the statement {total.accountName} is reading, so what the
+              account holds is unchanged — this recorded{" "}
+              <b className="u-data">{receipt.holdingCount}</b>{" "}
+              {receipt.holdingCount === 1 ? "position" : "positions"} into its history.
+            </>
+          ) : (
+            <>
+              {total.accountName} now holds{" "}
+              <b className="u-data">{receipt.holdingCount}</b>{" "}
+              {receipt.holdingCount === 1 ? "position" : "positions"}.
+            </>
+          )}
         </p>
       ) : null}
 
