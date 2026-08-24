@@ -40,7 +40,7 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`developing.md`](developing.md) | a developer who has just cloned this | the mechanics of doing the work: a working checkout, the commands, the change loop, recipes, and the traps | the standards, which are `AGENTS.md`, and the structure, which is `ARCHITECTURE.md` |
 | [`specs/`](specs/) | whoever builds the slice | approved work, before it is built | anything not agreed yet |
 | [`design/`](design/) | whoever builds the screen | UI briefs a slice is drawn from | the decision to build it — that is a spec |
-| [`research/`](research/) | whoever revisits a decision | investigation, including options that were rejected | anything approved, which is a spec |
+| [`research/`](research/) | whoever revisits a decision | investigation, including options that were rejected, and test reports written to be picked up as work | anything approved, which is a spec |
 | [`agents/`](agents/) | agents, via the skills in `.claude/skills/` | this repo's answers to what a skill needs to know: issue tracker, triage labels, domain docs | project documentation — these are configuration |
 | [`screenshots/`](screenshots/) | the README | the images that file renders, and the editorial reasons behind them | the guide's images, which live beside the guide |
 | [`guide/images/`](guide/images/) | the guide | the images the guide renders | the README's images |
