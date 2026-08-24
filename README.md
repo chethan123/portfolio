@@ -2,11 +2,23 @@
 
 A self-hosted family portfolio and net worth tracker.
 
-- **[DESIGN.md](DESIGN.md)** — the design and the reasoning behind it: domain model, ingest,
-  pricing, screens, stack, and the accepted limitations.
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how the running system is put together: processes and
+Where to start, depending on why you are here:
+
+- **Using it** — [`docs/guide/`](docs/guide/) is for the person the numbers belong to: what each
+  screen means, how a statement gets in, and why a figure is sometimes withheld rather than guessed.
+- **Hosting it** — [`docs/operating.md`](docs/operating.md) covers installing, configuring, TLS,
+  backups, upgrading, and the security decisions that are yours rather than the code's. When
+  something is already broken, [`docs/runbook.md`](docs/runbook.md) is indexed by symptom instead.
+- **Changing it** — [`docs/developing.md`](docs/developing.md) is the mechanics: a checkout that
+  runs, the commands, what to run before you push, and the traps particular to this repository.
+  [AGENTS.md](AGENTS.md) is the standard the work is held to.
+- **Understanding it** — [DESIGN.md](DESIGN.md) is the design and the reasoning behind it: domain
+  model, ingest, pricing, screens, stack, and the accepted limitations.
+  [ARCHITECTURE.md](ARCHITECTURE.md) is how the running system is put together: processes and
   deployment topology, the layers and the invariants that hold them apart, the database schema and
   its derived views, and the dataflow behind ingest, pricing and every dashboard read.
+
+[`docs/README.md`](docs/README.md) says which of these any new document belongs in.
 
 ## Built by agents
 
