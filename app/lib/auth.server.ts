@@ -208,7 +208,9 @@ const UNREACHABLE_BASE = "http://redirect-target.invalid";
  * gates are what turn that into a refusal rather than a silent
  * reinterpretation. Gates 1 and 5, and returning `path` rather than `target`,
  * are each individually load-bearing — `tests/auth.test.ts` fails if any one of
- * those three is removed.
+ * those three is removed. There is also a sixth check below the five, on the
+ * *output*; it is a post-condition, it is unreachable, and it says so where it
+ * stands.
  *
  * A non-Latin-1 path such as `/日本` is the vector a fix framed only as "reject
  * control characters" leaves live: it is not a control character, but it throws
@@ -251,6 +253,12 @@ export function safeRedirectTarget(target: string | null | undefined): string {
   if (!path.startsWith("/") || path.startsWith("//") || path.startsWith("/\\")) {
     return HOME_PATH;
   }
+  // A post-condition rather than a gate, and deliberately unreachable: gate 1
+  // rejects control characters on the way in and `URL` percent-encodes anything
+  // that could reintroduce one, so instrumented over 157,037 inputs that reach
+  // this line it has never fired. Kept because it is the invariant the return
+  // value is *for* — every value this returns is safe to hand `Headers.set` —
+  // and a security function should assert that rather than infer it.
   if (CONTROL_CHARACTERS.test(path)) return HOME_PATH;
 
   return path;

@@ -204,6 +204,28 @@ describe("safeRedirectTarget", () => {
     expect(safeRedirectTarget(target)).toBe("/");
   });
 
+  it("is what the gate builds its own return address with", async () => {
+    // The gate mints `?next=` from the path it refused, and that path is
+    // request-controlled. Routing it through this function is what stops the
+    // gate handing the login form a return address it would itself reject —
+    // and it must run *before* the "is it just /" test, or a target that
+    // validates down to "/" produces a redundant `?next=%2F`.
+    const gate = closed();
+
+    const refusal = await refusalFor(gate, get("/..//evil.example"));
+    expect(refusal?.headers.get("Location")).toBe("/login");
+
+    // The ordinary case still keeps the caller's place.
+    const kept = await refusalFor(gate, get("/holdings?account=7"));
+    expect(kept?.headers.get("Location")).toBe(
+      `/login?next=${encodeURIComponent("/holdings?account=7")}`,
+    );
+
+    // And the root never becomes a parameter.
+    const root = await refusalFor(gate, get("/"));
+    expect(root?.headers.get("Location")).toBe("/login");
+  });
+
   it("refuses nothing at all", () => {
     expect(safeRedirectTarget(null)).toBe("/");
     expect(safeRedirectTarget(undefined)).toBe("/");

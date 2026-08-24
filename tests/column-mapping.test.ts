@@ -289,25 +289,34 @@ describe("rememberMapping", () => {
       //
       // Nothing pinned this before, and it is the whole argument for refusing
       // in the parser rather than on review.
-      const account = await seedAccount({ kind: "brokerage" });
+      // Named, so the institution-level read below asks about this account's
+      // institution rather than about `undefined`.
+      const account = await seedAccount({ kind: "brokerage", institution: "Vanguard" });
       const draft = await seedUploadDraft({
         account,
-        bytes: new TextEncoder().encode("Symbol,Quantity\n,100\n,50\n"),
+        // The `401k.csv` shape, which is what makes this test discriminate: one
+        // row does name an instrument, so the file has a position and the
+        // all-blank-instrument guard one layer up never fires. Before this
+        // change the file was accepted, `VTI` was the only holding carried
+        // forward, the 100 units vanished — and the mapping was remembered.
+        bytes: new TextEncoder().encode("Symbol,Quantity\nVTI,10\n,100\n"),
       });
 
       const outcome = await rememberMapping(draft.id, SIMPLE, db);
 
       expect("problems" in outcome).toBe(true);
       const problems = "problems" in outcome ? outcome.problems : [];
-      expect(problems).toHaveLength(2);
+      expect(problems).toHaveLength(1);
       expect(problems[0]?.column).toBe("Symbol");
       expect(problems[0]?.message).toMatch(/names nothing under "Symbol"/);
 
       // Neither write happened — not the draft's mapping, and not the
-      // institution's.
+      // institution's. The second is the one that decided the seam: a refusal
+      // on the review screen instead would have left this mapping stored, and
+      // the next statement from Vanguard would prefill the column that broke.
       expect((await requireDraft(draft.id, db)).mapping).toBeNull();
       expect(
-        await findMapping(account.institution, headerFingerprint(["Symbol", "Quantity"]), db),
+        await findMapping("Vanguard", headerFingerprint(["Symbol", "Quantity"]), db),
       ).toBeNull();
     }),
   );

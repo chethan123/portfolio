@@ -97,9 +97,12 @@ instead, so re-recording a stale number is never one click.
 
 ### The date
 
-**As of** opens on today and takes any past date. **A date in the future is refused** — a balance is
+**As of** opens on today. **A date in the future is refused** — a balance is
 recorded once it is true. Only tomorrow is allowed through, which covers a household in a time zone
-ahead of the server.
+ahead of the server. **A date before 1970-01-01 is refused** too — that is the first day this
+application can put a price on anything, so nothing dated earlier could be valued. It is the floor a
+mistyped millennium lands under: `1026` for `2026` is one keystroke, it is not in the future, and it
+used to be accepted.
 
 Under the box the form says which day the account is currently reading, and whether that came from a
 balance you set or from a statement.

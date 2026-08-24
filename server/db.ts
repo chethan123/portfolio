@@ -100,7 +100,7 @@ export function createPool(connectionString: string): pg.Pool {
   });
 
   // `connect`, not `acquire`. `acquire` fires *before* the idle listener is
-  // removed (`pg-pool/index.js:339` precedes `:344`), so a handler that checks
+  // removed (`pg-pool/index.js:340` precedes `:344`), so a handler that checks
   // `listenerCount("error")` there never sees zero and never attaches. And
   // because a pooled client is acquired many times, attaching on every acquire
   // adds a listener per checkout — measured at 13 after 13 acquires, past
@@ -110,9 +110,14 @@ export function createPool(connectionString: string): pg.Pool {
   // Swallowing is safe: `pg` calls `_errorAllQueries` immediately before
   // `emit('error')` (`pg/lib/client.js:421-422`), so an in-flight query is
   // already rejected by the time this runs and no caller is left hanging.
+  // The message deliberately does not say "while checked out". `connect` fires
+  // before the idle listener is removed too, so an *idle* client's error also
+  // reaches this handler — first, with the pool handler logging after it. Both
+  // lines on one drop is the expected shape, and neither may claim a state it
+  // cannot know.
   pool.on("connect", (client) => {
     client.on("error", (error) => {
-      console.error("Postgres client error while checked out; the client will be discarded.", error);
+      console.error("Postgres client error; the client will be discarded.", error);
     });
   });
 
