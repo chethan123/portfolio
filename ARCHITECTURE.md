@@ -267,14 +267,16 @@ counts of the last decimal place. Nothing adds a money value except through `mon
 A recurring shape in this codebase: a hazard is contained by making exactly one place able to cause
 it. These are the ones worth knowing before changing anything — but they are not all the same kind of
 guarantee, and treating them as one kind is how a reader ends up disproving the table with a single
-grep. They come in three tiers.
+grep. They come in three tiers. Every site below is cited by **symbol rather than by line number**:
+these are load-bearing claims, and a line number goes quietly wrong the first time someone edits the
+file above it, whereas a symbol name is greppable and stops resolving loudly when it is renamed.
 
 **Enforced by structure — a second site is not reachable without deleting the first.**
 
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
-| Postgres pool construction | `server/db.ts:62` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:302` | The provider swap stops being a day's work. The interface is also the test seam. |
+| Postgres pool construction | `server/db.ts` `createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts` `yahooClient` | The provider swap stops being a day's work. The interface is also the test seam. |
 | Writing a price | `app/lib/prices.server.ts` | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
 
 **Owned by a module, upheld by its callers.**
@@ -282,7 +284,7 @@ grep. They come in three tiers.
 | Invariant | The owner | The obligation |
 |---|---|---|
 | Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Three callers pass `process.env` in — `validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` — and none of them reads a variable itself. |
-| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:50`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design — `app/routes/login.tsx:33` is the one exception, and it reads no files. |
+| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx` `action`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design — `app/routes/login.tsx` `action` is the one exception, and it reads no files. |
 | Everything read off an account's kind | `app/lib/account-options.ts` | The kinds, their labels, and the two predicates derived from them — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints or from each other. The obligation is that it stays plain data: the client bundle imports it, so a rule needing a query cannot live here. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 
@@ -290,15 +292,15 @@ grep. They come in three tiers.
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:251` rounds the overflow-guard product inline instead of calling `divide`. |
+| Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts` `fitsTheMoneyColumn` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | Two, both real (below). The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
 
 **The two valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:357` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
+- `prices.server.ts` `priceFreshness` selects from `holding_valued` — not to value anything, but
   to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
-- `uploads.server.ts:614` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts` `valueAt` computes `quantity × price` **in JavaScript**, for the review
   diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -593,7 +595,7 @@ answer is a coin flip. Surrogate keys are `bigint generated always as identity` 
 The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping at
 the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1138`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts`) needs the
 *predecessor* of a given set — "what did this account hold before this upload landed" — which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -794,8 +796,8 @@ Problems present means the file must not be committed. Whether anything is still
 what went wrong, and the distinction matters: a *row's* problem does not discard the rows around it,
 so the screen has something to show beside the complaint. A problem with the **mapping itself** — a
 required column not named, a column name the header row does not carry — returns no positions at all
-(`statement.ts:283-290`), because nothing below it could be trusted. The second case is the ordinary
-one: a saved mapping meeting a renamed column.
+(`statement.ts` `parseStatement`, through its `refused` helper), because nothing below it could be
+trusted. The second case is the ordinary one: a saved mapping meeting a renamed column.
 
 #### The step machine
 
@@ -834,8 +836,8 @@ be a fifth step nobody asked to stand on.
 belonging-to-a-closed-account all reach the same expired-or-recorded boundary, because the reader's
 next move — start again from `/upload` — is the same in every case. The one variation is deliberate: a
 re-POSTed review knows which account the statement already landed in, so it throws
-`data({ accountId }, { status: 404 })` (`review.tsx:96`) and that rendering adds a second link to the
-account. Every other step throws a plain-string 404 and gets the single link.
+`data({ accountId }, { status: 404 })` (`upload/review.tsx` `action`) and that rendering adds a
+second link to the account. Every other step throws a plain-string 404 and gets the single link.
 
 #### Column mapping: how a brokerage is remembered
 
@@ -955,9 +957,10 @@ Three of those deserve emphasis:
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:1025-1032`, guarded by
-`where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
-itself on the first upload, and every later statement is checked against it.
+file carries one, the commit writes it onto the account (the `external_account_number` capture at the
+end of `commitUpload` in `uploads.server.ts`, guarded by `where external_account_number is null` so a
+concurrent upload cannot be overwritten). The guard arms itself on the first upload, and every later
+statement is checked against it.
 
 **Removals are listed in full, never counted.** A count alone is how a filtered export sells 28
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
@@ -1174,10 +1177,11 @@ those CTEs, so an account that changed underneath an open form produces no rows 
 set, no holding — and "nothing landed" is what becomes the refusal.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
-`account.kind` alone (`account.tsx:208`), and a `bank` account can be holding securities with no kind
-change behind it — `createDraft` (`uploads.server.ts:205`) reads only whether the account is closed,
-so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
-no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
+`account.kind` alone (`account.tsx` `loader`, `takesBalance: acceptsSetBalance(...)`), and a `bank`
+account can be holding securities with no kind change behind it — `createDraft`
+(`uploads.server.ts`) reads only whether the account is closed, so an upload lands wherever it is
+pointed. Hiding the panel in that state would leave the page with no write control and nothing
+saying why; drawing it earns a refusal that names what is in the way.
 
 Both differ from an upload only in carrying `source = 'manual'` and no filename. Nothing downstream
 learns a new shape: `latest_position_set` picks the new set up by the same tie-break, and every figure
@@ -1200,7 +1204,7 @@ Three error types, and the layer each one is answered at.
 | Type | Raised by | Carries | Answered by | Becomes |
 |---|---|---|---|---|
 | `ValidationError` | domain modules | `FieldErrors` — a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
-| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `upload/review.tsx:99` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
+| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `upload/review.tsx` `action` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
 | `DraftNotReadyError` | `uploads.server.ts` | the step still owed | the upload routes | a redirect to that step |
 
 **A refusal is an ordinary outcome of a form submission — never a 500.** That rule is what keeps
@@ -1321,7 +1325,7 @@ implying more.
 | Session storage | A signed cookie and nothing else. The container is `read_only`, which a file-backed store would discover on the first login |
 | TLS | **Not configured.** The app serves plain HTTP and never manages certificates; terminating TLS is Caddy's job once a real hostname is set |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
-| SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers (`valuation.server.ts:166,369` — the `accountId` there is bound behind a `/^\d+$/` guard) |
+| SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers (`valuation.server.ts` `isAccount` and `valuedAt` — the `accountId` in `isAccount` is bound behind a `/^\d+$/` guard, and the column name goes through `sql.ref`) |
 | Error disclosure | **Any uncaught error's `message` reaches the page** (`root.tsx:223-227`). On the default deployment, with `AUTH_PASSWORD` unset, that reader is unauthenticated, and a Postgres error is the likely text (§11.3) |
 
 **The forwarded-header decision, stated plainly.** The app trusts `X-Forwarded-*` unconditionally, and
