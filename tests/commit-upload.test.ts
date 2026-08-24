@@ -34,7 +34,7 @@ import {
   requireDraft,
   uploadReceipt,
 } from "~/lib/uploads.server";
-import { accountHoldings, netWorth } from "~/lib/valuation.server";
+import { accountHoldings, holdingsAt, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import { makeFixtures, type SeededAccount } from "./support/fixtures.ts";
@@ -422,6 +422,116 @@ describe("diffForDraft", () => {
 
       const diff = await diffForDraft(draftId, db);
       expect(diff.asOf).toEqual({ source: "file", date: "2026-06-30" });
+    }),
+  );
+
+  it(
+    "flags a statement dated behind the one the account reads, and drops the tick",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const held = await seedInstrument({ symbol: "BH1", name: "Behind Held" });
+      const other = await seedInstrument({ symbol: "BH2", name: "Behind Other" });
+      const third = await seedInstrument({ symbol: "BH3", name: "Behind Third" });
+      for (const [instrument, raw] of [
+        [held, "BH1"],
+        [other, "BH2"],
+        [third, "BH3"],
+      ] as const) {
+        await seedInstrumentAlias({ instrument, rawString: raw });
+      }
+
+      // What the account reads now: three positions, as of June.
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: held, quantity: "10" },
+          { instrument: other, quantity: "5" },
+          { instrument: third, quantity: "2" },
+        ],
+      });
+
+      // A statement that dates itself to March — before the June one — and
+      // holds only one of the three. Against *current* holdings that reads as
+      // two removals out of three, which is a majority.
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,As of\nBH1,10,,2026-03-31\n",
+        { columns: { asOf: "As of" } },
+      );
+
+      const diff = await diffForDraft(draftId, db);
+
+      expect(diff.filedBehind).toBe(true);
+      expect(diff.removed).toHaveLength(2);
+      // The tick is suppressed even though the ratio demands one, because the
+      // removal it asks about cannot happen: `latest_position_set` orders on
+      // `as_of_date`, so this set does not become the one the account reads.
+      // A tick demanded for an outcome that cannot occur is a tick nobody reads.
+      expect(diff.majorityRemoved).toBe(false);
+    }),
+  );
+
+  it(
+    "does not flag a statement dated on or after the one the account reads",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "FWD", name: "Forward Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "FWD" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: fund, quantity: "10" }],
+      });
+
+      // The 99% case, which the filed-behind path exercises none of.
+      const forward = await diffForDraft(
+        await stage(ctx, account, "Symbol,Quantity,Basis,As of\nFWD,12,,2026-07-31\n", {
+          columns: { asOf: "As of" },
+        }),
+        db,
+      );
+      expect(forward.filedBehind).toBe(false);
+
+      // The same date is a same-day correction, not a statement filed behind:
+      // the existing created_at tie-break already makes the later write win.
+      const sameDay = await diffForDraft(
+        await stage(ctx, account, "Symbol,Quantity,Basis,As of\nFWD,12,,2026-06-30\n", {
+          columns: { asOf: "As of" },
+        }),
+        db,
+      );
+      expect(sameDay.filedBehind).toBe(false);
+    }),
+  );
+
+  it(
+    "cannot flag a file that does not date itself, and says so as false",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "UND", name: "Undated Fund" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "UND" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: fund, quantity: "10" }],
+      });
+
+      // The date arrives at commit time from a control on the review screen, so
+      // it is not knowable here. Pinned because it is a real limit of this
+      // change and not an oversight: the receipt is what covers the reader who
+      // types a backdated date, and it reads the date actually written.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nUND,12,\n");
+      const diff = await diffForDraft(draftId, db);
+
+      expect(diff.asOf).toEqual({ source: "asked" });
+      expect(diff.filedBehind).toBe(false);
     }),
   );
 
@@ -1175,7 +1285,8 @@ describe("uploadReceipt", () => {
         holdingCount: 2,
       });
 
-      // A set that is not the account's latest yields no receipt...
+      // A set the account neither reads nor wrote most recently yields no
+      // receipt — a stale bookmark still renders nothing...
       expect(await uploadReceipt(account.id, prior.id, db)).toBeNull();
       // ...nor does a set that is not the account's at all...
       expect(await uploadReceipt(other.id, written.setId, db)).toBeNull();
@@ -1204,6 +1315,154 @@ describe("uploadReceipt", () => {
         firstStatement: true,
         counts: { added: 1, updated: 0, unchanged: 0, removed: 0 },
         holdingCount: 1,
+      });
+    }),
+  );
+});
+
+describe("a statement filed behind the one the account reads", () => {
+  it(
+    "records without demanding the tick, leaves what the account reads alone, and moves history",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedDailyClose, seedInstrument, seedInstrumentAlias, seedPositionSet } =
+        ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const kept = await seedInstrument({ symbol: "FB1", name: "Filed Behind Kept" });
+      const gone = await seedInstrument({ symbol: "FB2", name: "Filed Behind Gone" });
+      for (const [instrument, raw] of [
+        [kept, "FB1"],
+        [gone, "FB2"],
+      ] as const) {
+        await seedInstrumentAlias({ instrument, rawString: raw });
+      }
+      await seedDailyClose({ instrument: kept, date: "2026-01-01", close: "10.0000" });
+      await seedDailyClose({ instrument: gone, date: "2026-01-01", close: "10.0000" });
+
+      // February, then June. The window this test watches is between them.
+      await seedPositionSet({
+        account,
+        asOf: "2026-02-28",
+        holdings: [{ instrument: kept, quantity: "1" }],
+      });
+      const june = await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [
+          { instrument: kept, quantity: "10" },
+          { instrument: gone, quantity: "5" },
+        ],
+      });
+
+      // What the middle of the window said before the upload.
+      const windowBefore = (await holdingsAt("2026-04-15", db)).map((h) => h.quantity);
+      expect(windowBefore).toEqual(["1.00000000"]);
+
+      // A March statement: inside the window, behind what the account reads,
+      // and holding only one of June's two positions.
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,As of\nFB1,7,,2026-03-31\n",
+        { columns: { asOf: "As of" } },
+      );
+
+      // No `confirmRemovals`. Before this change the ratio demanded one — two
+      // of two removed — for a removal that was never going to happen, and the
+      // commit refused without it.
+      const written = await commitUpload(draftId, { accountId: account.id }, db);
+
+      // What the account reads is untouched: June still wins on `as_of_date`.
+      expect((await lastRecorded(account.id, db))?.id).toBe(june.id);
+      expect((await accountHoldings(account.id, db)).map((h) => h.quantity).sort()).toEqual([
+        "10.00000000",
+        "5.00000000",
+      ].sort());
+
+      // But the window between March and June has moved, silently, which is
+      // the half of `ING-1` the report understated. This is history changing.
+      expect((await holdingsAt("2026-04-15", db)).map((h) => h.quantity)).toEqual([
+        "7.00000000",
+      ]);
+      // Before the statement's own date, nothing changed.
+      expect((await holdingsAt("2026-03-01", db)).map((h) => h.quantity)).toEqual([
+        "1.00000000",
+      ]);
+
+      // And the write now leaves a receipt, which is the finding: a set filed
+      // behind is never the set the account reads, so the old "is this the
+      // latest set" gate returned null and the change was confirmed nowhere.
+      const receipt = await uploadReceipt(account.id, written.setId, db);
+      expect(receipt).toMatchObject({
+        setId: written.setId,
+        asOf: "2026-03-31",
+        filedBehind: true,
+        holdingCount: 1,
+      });
+    }),
+  );
+
+  it(
+    "still gives an ordinary forward-dated upload a receipt that is not filed behind",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "FB3", name: "Forward Receipt" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "FB3" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-03-31",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+
+      // The 99% case, alongside the filed-behind one, because every change here
+      // runs through `assembleDiff` and the receipt gate — which every upload
+      // goes through — and the filed-behind path exercises neither normally.
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFB3,9,\n");
+      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      expect(await uploadReceipt(account.id, written.setId, db)).toMatchObject({
+        filedBehind: false,
+        holdingCount: 1,
+      });
+      expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+    }),
+  );
+
+  it(
+    "keeps an upload's receipt when a backdated manual balance is written after it",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedPositionSet } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "FB4", name: "Union Arm" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "FB4" });
+
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nFB4,9,\n");
+      const written = await commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db);
+
+      // Written after the upload, dated before it. This is why the receipt gate
+      // is a union rather than "the set written most recently": that rule alone
+      // would hand the newest *write* to this set and take the upload's receipt
+      // away — a receipt that renders correctly today, on a page the reader may
+      // simply have reloaded.
+      const backdated = await seedPositionSet({
+        account,
+        asOf: "2026-04-30",
+        source: "manual",
+        holdings: [{ instrument: fund, quantity: "1" }],
+      });
+
+      // The account still reads the upload, so its receipt still stands...
+      expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
+      expect(await uploadReceipt(account.id, written.setId, db)).toMatchObject({
+        setId: written.setId,
+        filedBehind: false,
+      });
+
+      // ...and the newer write, which the account does not read, gets one too.
+      expect(await uploadReceipt(account.id, backdated.id, db)).toMatchObject({
+        setId: backdated.id,
+        filedBehind: true,
       });
     }),
   );

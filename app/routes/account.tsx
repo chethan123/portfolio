@@ -352,10 +352,28 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
           , as of <b className="u-data">{receipt.asOf}</b>.{" "}
           {/* The closing clause (brief §6.5): the count is the recorded set's
               own rows, read back from the database like every other figure in
-              this sentence — never the URL's claim. */}
-          {total.accountName} now holds{" "}
-          <b className="u-data">{receipt.holdingCount}</b>{" "}
-          {receipt.holdingCount === 1 ? "position" : "positions"}.
+              this sentence — never the URL's claim.
+
+              Which is why a set filed behind cannot use the same clause. Its
+              row count is its own, and the account is reading a later
+              statement, so "now holds N" would be a true count attached to a
+              false claim. It gets a sentence of its own instead — the whole
+              point of `ING-1` being that this write produced no sentence at
+              all while silently moving the chart. */}
+          {receipt.filedBehind ? (
+            <>
+              That is earlier than the statement {total.accountName} is reading, so what the
+              account holds is unchanged — this recorded{" "}
+              <b className="u-data">{receipt.holdingCount}</b>{" "}
+              {receipt.holdingCount === 1 ? "position" : "positions"} into its history.
+            </>
+          ) : (
+            <>
+              {total.accountName} now holds{" "}
+              <b className="u-data">{receipt.holdingCount}</b>{" "}
+              {receipt.holdingCount === 1 ? "position" : "positions"}.
+            </>
+          )}
         </p>
       ) : null}
 

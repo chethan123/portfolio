@@ -554,6 +554,19 @@ export type UploadDiff = {
   currentCount: number;
   /** No statement yet: the file reads as "14 added", not a diff against nothing. */
   firstStatement: boolean;
+  /**
+   * The statement is dated before the one this account currently reads.
+   *
+   * The diff above is still computed against what the account holds *now*, not
+   * against what it held on the statement's date — rebasing it is its own
+   * change (spec: *make the review diff baseline the statement's own date*).
+   * So this flag is what the screen needs to stop the diff being read as a
+   * prediction: committing will not remove anything on screen, but it does
+   * rewrite the chart between this statement's date and the next one.
+   *
+   * Always false when the file carries no date of its own; see `assembleDiff`.
+   */
+  filedBehind: boolean;
   /** More than half of what the account holds is removed — the commit demands a tick. */
   majorityRemoved: boolean;
   removesEverything: boolean;
@@ -838,7 +851,25 @@ async function assembleDiff(
   // "No statement yet" through `lastRecorded`, not through an empty holdings
   // read: an account sold down to nothing has a statement and gets an honest
   // three-count diff, while a first upload reads as "14 added".
-  const firstStatement = (await lastRecorded(draft.accountId, db)) === null;
+  const recorded = await lastRecorded(draft.accountId, db);
+  const firstStatement = recorded === null;
+
+  // Is this statement older than the one the account is currently reading?
+  //
+  // Only answerable when the file dates itself. In the other case the screen
+  // asks for a date, and the date the reader eventually types is not knowable
+  // here — deliberately, because the alternative is a GET round trip whose
+  // failure mode is the exact defect `ING-1` exists to kill: HTML forms cannot
+  // nest, so the date control would have to move to a sibling form, and a
+  // reader who types a date and presses Record without first pressing re-read
+  // would commit the previous date silently. The receipt, which reads the date
+  // that was actually written, is what covers that case instead.
+  //
+  // Strictly earlier. The same date is a same-day correction, not a statement
+  // filed behind, and `latest_position_set` already breaks that tie on
+  // `created_at` so the later write wins.
+  const filedBehind =
+    recorded !== null && parsed.asOfDate !== null && parsed.asOfDate < recorded.asOf;
 
   return {
     diff: {
@@ -852,7 +883,13 @@ async function assembleDiff(
       unchangedCount,
       currentCount: current.length,
       firstStatement,
-      majorityRemoved: removed.length * 2 > current.length,
+      filedBehind,
+      // Suppressed when the statement is filed behind, because the removal it
+      // is demanding confirmation for will not happen: `latest_position_set`
+      // orders on `as_of_date`, so a backdated set does not become what the
+      // account reads and nothing on screen is removed. A tick demanded for an
+      // outcome that cannot occur is how a tick stops being read.
+      majorityRemoved: !filedBehind && removed.length * 2 > current.length,
       removesEverything: current.length > 0 && removed.length === current.length,
       skipped: parsed.skipped.map(({ row, instrument }) => ({ row, instrument })),
       asOf:
@@ -1116,15 +1153,24 @@ export type UploadReceipt = {
    * How many positions the recorded set holds — the receipt's closing
    * "now holds N positions" (brief §6.5), counted from the set's own rows so
    * a hand-typed parameter can only ever describe what is stored.
+   *
+   * Read this with {@link filedBehind}: it is the *named set's* count, which
+   * for a set filed behind is not what the account now holds, and the sentence
+   * must not say "now holds" about it.
    */
   holdingCount: number;
+  /**
+   * The set was written, but the account reads a later one — so this receipt
+   * is confirming a change to history rather than to what is on screen.
+   */
+  filedBehind: boolean;
 };
 
 /**
  * The receipt for `?uploaded=<setId>` — recomputed from the database, never
  * trusted from the URL. The parameter names *which* set was written and says
  * nothing about what is in it, so a hand-typed value can only ever produce a
- * sentence describing what the account actually holds (the same guarantee the
+ * sentence describing what was actually stored (the same guarantee the
  * `?recorded=` receipt already has).
  *
  * The counts are the named set diffed against its predecessor under the same
@@ -1132,8 +1178,31 @@ export type UploadReceipt = {
  * implements — the function itself cannot answer "what was latest before this
  * one", so its ordering is cited here rather than re-derived as a new rule.
  *
- * @returns null for a set that is not the account's latest, not the account's
- *          at all, or not an id — a stale bookmark renders no receipt.
+ * **The gate is a union, and it used to be "is this the latest set".** That
+ * older rule read well — "a set the account is no longer reading gets no
+ * sentence" — and it is exactly what `ING-1` is: a statement filed behind is
+ * *never* the set the account reads, so committing one produced no receipt at
+ * all. It was written, it silently rewrote the net-worth chart between its own
+ * date and the next set, and the only screen that could have said so said
+ * nothing. A write with no receipt is the defect, so the rule is now:
+ *
+ * - the set the account currently **reads** (`latest_position_set`, by
+ *   `as_of_date`), or
+ * - the set most recently **written** (`created_at desc, id desc`).
+ *
+ * The `id desc` tiebreak is not optional: every test runs inside one
+ * transaction, so `now()` is identical for every row a test seeds and
+ * `created_at` alone does not order them.
+ *
+ * The union rather than replacing one rule with the other, because
+ * "most recently written" alone would take a receipt *away*: a backdated
+ * manual balance recorded after an upload is the newer write, and the upload's
+ * receipt — which renders correctly today — would start returning null. Both
+ * arms means nothing that renders now stops rendering.
+ *
+ * @returns null for a set the account neither reads nor wrote most recently,
+ *          not the account's at all, or not an id — a stale bookmark renders no
+ *          receipt.
  */
 export async function uploadReceipt(
   accountId: string,
@@ -1142,11 +1211,27 @@ export async function uploadReceipt(
 ): Promise<UploadReceipt | null> {
   if (!/^\d+$/.test(accountId) || !/^\d+$/.test(setId)) return null;
 
-  // "Latest" through the shared read, so the receipt and every figure on the
-  // page resolve the same set. A set the account is no longer reading gets no
-  // sentence — the receipt describes the holdings on screen or nothing.
+  // "Reads" through the shared read, so the receipt and every figure on the
+  // page that describes current holdings resolve the same set.
   const latest = await lastRecorded(accountId, db);
-  if (latest === null || latest.id !== setId) return null;
+
+  // "Wrote most recently" is a different question and is not expressible
+  // through `latest_position_set`, which orders on `as_of_date`. See the note
+  // above on why both arms are needed.
+  const newest = await sql<{ id: string }>`
+    select ps.id
+    from position_set ps
+    where ps.account_id = ${accountId}::bigint
+    order by ps.created_at desc, ps.id desc
+    limit 1
+  `.execute(db);
+
+  if (latest?.id !== setId && newest.rows[0]?.id !== setId) return null;
+
+  // The set was written but is not the one the account reads: it was filed
+  // behind. The page needs to know, because the closing count below is this
+  // set's own row count and that is *not* what the account now holds.
+  const filedBehind = latest !== null && latest.id !== setId;
 
   const set = await db
     .selectFrom("position_set")
@@ -1214,5 +1299,6 @@ export async function uploadReceipt(
     firstStatement: predecessorId === null,
     counts: { added, updated, unchanged, removed: before.size },
     holdingCount,
+    filedBehind,
   };
 }
