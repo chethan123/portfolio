@@ -626,6 +626,23 @@ describe("the as-of date", () => {
     expect(parsed.problems).toEqual([]);
   });
 
+  it("refuses a file that dates itself before the first day anything can be priced", () => {
+    // The floor reaches the parser through the shared validator, so a statement
+    // dating itself 1969 refuses here rather than committing a set the chart
+    // can never price. An intended behaviour change, so it gets a case.
+    const parsed = parseStatement(
+      [
+        ["Symbol", "Qty", "As of"],
+        ["AAPL", "50", "1969-12-31"],
+      ],
+      mapping({ columns: { instrument: "Symbol", quantity: "Qty", asOf: "As of" } }),
+    );
+
+    expect(parsed.asOfDate).toBeNull();
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]?.message).toMatch(/first day this application can price/);
+  });
+
   it("validates the date by the same rule a typed one faces", () => {
     // `recordedDate`'s rules, unchanged: the spelling, the calendar, and the
     // future — a statement dated 2126 would pin the account until 2126.

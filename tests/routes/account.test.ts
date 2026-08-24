@@ -23,6 +23,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { loader } from "../../app/routes/account.tsx";
+import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, responseOf } from "../support/routes.ts";
@@ -87,6 +88,31 @@ describe("the 404 gate", () => {
 
         expect(response.status).toBe(404);
       }
+    }),
+  );
+});
+
+describe("the date control's boundaries", () => {
+  it(
+    "hands the picker the same two dates the validator refuses by",
+    withDatabase(async (ctx) => {
+      // The picker's `min`/`max` and the refusal behind them are one rule stated
+      // once, so a control that silently disagreed with the validator — offering
+      // a date the write then rejects, or hiding one it would accept — cannot
+      // happen. Read from the validator here for the same reason the loader
+      // reads it rather than hard-coding: a literal in this test would be a
+      // second copy free to drift.
+      const { account } = await seedTwoStatements(ctx);
+      const data = await loader(
+        args(get(`/accounts/${account.id}`), { accountId: account.id }),
+      );
+
+      expect(data.earliestAsOf).toBe(earliestRecordableDate());
+      expect(data.latestAsOf).toBe(latestRecordableDate());
+      // Not a tautology: pin the floor's actual value, which is load-bearing —
+      // it is the date `0001_initial_schema.sql` seeds USD a close on.
+      expect(data.earliestAsOf).toBe("1970-01-01");
+      expect(data.earliestAsOf < data.latestAsOf).toBe(true);
     }),
   );
 });

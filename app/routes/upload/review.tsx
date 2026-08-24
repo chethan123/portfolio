@@ -6,6 +6,7 @@ import {
   FORM_ERROR,
   NotFoundError,
   ValidationError,
+  earliestRecordableDate,
   formFields,
   latestRecordableDate,
 } from "~/lib/input.server";
@@ -50,8 +51,9 @@ export async function loader({ params }: Route.LoaderArgs) {
       // Today in UTC, from the server, so the box does not open on a date the
       // reader's clock invented and the app then refuses (§4.1).
       today: new Date().toISOString().slice(0, 10),
-      // The date control's ceiling, read from the validator rather than
-      // guessed, so the picker and the refusal state one rule.
+      // The date control's two boundaries, read from the validator rather
+      // than guessed, so the picker and the refusal state one rule.
+      earliestAsOf: earliestRecordableDate(),
       latestAsOf: latestRecordableDate(),
     };
   } catch (error) {
@@ -134,7 +136,7 @@ function GroupHeading({ label }: { label: string }) {
 }
 
 export default function Review({ loaderData, actionData }: Route.ComponentProps) {
-  const { diff, today, latestAsOf } = loaderData;
+  const { diff, today, earliestAsOf, latestAsOf } = loaderData;
 
   const errors = actionData?.errors;
   // What was posted wins over every default on a refusal — a refusal must
@@ -362,6 +364,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   name="asOf"
                   type="date"
                   defaultValue={values?.asOf ?? today}
+                  min={earliestAsOf}
                   max={latestAsOf}
                   aria-invalid={errors?.asOf ? true : undefined}
                 />

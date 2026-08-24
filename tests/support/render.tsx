@@ -37,6 +37,36 @@ export type RootData = {
 const STUB_STYLESHEET_WARNING = 'An empty string ("") was passed to the';
 
 /**
+ * Render one route's own component, with data its real loader produced.
+ *
+ * Separate from {@link renderThroughLayout}, which renders the shell around a
+ * stand-in body: this renders the route module's default export itself, which
+ * is what a test about a *sentence on a screen* needs.
+ *
+ * Hydration data rather than a stub loader, deliberately. A loader resolves a
+ * tick later than `renderToStaticMarkup` reads the tree, so the markup would
+ * come back empty — and an empty string passes every `not.toContain` assertion
+ * written against it, which is the failure mode this helper exists to avoid.
+ *
+ * The caller is expected to pass output from the real loader rather than a
+ * hand-built object: a fixture of the loader's shape is a second copy free to
+ * drift from it, and the drift looks exactly like a passing test.
+ */
+export function renderRoute<T>(
+  Component: React.ComponentType<never>,
+  path: string,
+  loaderData: T,
+): string {
+  const Stub = createRoutesStub([
+    { id: "page", path, Component: Component as React.ComponentType },
+  ]);
+
+  return renderToStaticMarkup(
+    <Stub initialEntries={[path]} hydrationData={{ loaderData: { page: loaderData } }} />,
+  );
+}
+
+/**
  * Render `path` inside the real `Layout`, with root loader data.
  *
  * @throws whatever React warned about, if it warns about anything other than

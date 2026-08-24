@@ -103,8 +103,9 @@ Three spellings are read: `YYYY-MM-DD`, `MM/DD/YYYY` and `M/D/YYYY`.
 
 - **If the file dates itself**, the review screen states that date and offers no date box. The
   statement's own date is not something to override with an opinion.
-- **If it does not**, the review screen asks. It opens on today, and a date in the future is
-  refused.
+- **If it does not**, the review screen asks. It opens on today; a date in the future is refused,
+  and so is one before 1970-01-01 — the first day this application can put a price on anything.
+- **A file that dates itself before 1970-01-01 is refused**, by the same rule a typed date faces.
 - **Rows disagreeing about the date refuse the file**, naming both lines — a statement is one day,
   and the app will not pick between two. The same date written two ways in one file is one date.
 - A date that is not on the calendar is refused as such.
