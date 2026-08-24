@@ -395,11 +395,41 @@ export function parseStatement(
   for (let row = mapping.headerRow + 1; row < rows.length; row++) {
     const cells = rows[row] ?? [];
     const instrument = cells[instrumentIndex] ?? "";
-    if (instrument.trim() === "") continue;
-
     const line = row + 1;
     const quantityCell = (cells[quantityIndex] ?? "").trim();
     const quantity = normaliseFigure(quantityCell);
+
+    // A blank instrument cell is a spacer or a footer and is skipped in
+    // silence — unless the same row states a quantity, which makes it a
+    // position with no name, and dropping one of those is `ING-4`: uploading
+    // this repo's own `401k.csv` mapped to `Ticker` was accepted, and two rows
+    // worth $58,692.68 — 95.9% of the file — vanished with no notice on any
+    // screen. The quantity cell is the whole discriminator.
+    //
+    // Refused here in the parser rather than reported two screens later on
+    // review, because `rememberMapping` persists the institution's column
+    // mapping *after* this returns: a refusal on review would leave the broken
+    // `Ticker` mapping remembered and prefilled onto every future statement
+    // from that institution.
+    //
+    // Note there is no distinction to draw between a short row and a
+    // present-but-empty cell: the CSV reader never pads rows and this reads
+    // `(cells[i] ?? "").trim()`, so the two are byte-identical inputs. `""` is
+    // in `normaliseFigure`'s absence set, so every footer and spacer in the six
+    // shipped fixtures still skips silently.
+    if (instrument.trim() === "") {
+      if (quantity.kind === "figure") {
+        problems.push({
+          row,
+          column: columns.instrument,
+          message:
+            `Line ${line} states a quantity of ${quantityCell} but names nothing ` +
+            `under "${columns.instrument}", and a quantity is not a position ` +
+            "without an instrument.",
+        });
+      }
+      continue;
+    }
 
     if (quantity.kind === "absent") {
       skipped.push({ row, instrument });
