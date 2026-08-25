@@ -176,6 +176,22 @@ export function isNegative(decimal: string): boolean {
 }
 
 /**
+ * Whether a decimal string is strictly greater than zero.
+ *
+ * The counterpart to {@link isNegative}, and read off the digits the same way:
+ * a sign and one non-zero digit is the whole test. `Number(amount) > 0` would
+ * answer the same question by way of a float, which §4.1 keeps money out of end
+ * to end.
+ *
+ * Here rather than beside the one component that draws a ring from it: the two
+ * halves of "which way does this figure point" are a pair, and a copy of one of
+ * them living in a route or a component is how the pair comes apart.
+ */
+export function isPositive(decimal: string): boolean {
+  return !isNegative(decimal) && /[1-9]/.test(decimal);
+}
+
+/**
  * The number a chart needs to position a point.
  *
  * This is the one place a money value becomes a float, and it is safe here for
