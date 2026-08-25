@@ -701,6 +701,19 @@ a {
   }
 }
 
+/* A second figure beside the headline: the ratio the headline is the numerator
+ * of. Not a `.delta`, which is a chip for a *movement* — a yield takes no
+ * arrow, no leading plus and neither of the gain/loss hues, because there is
+ * nothing here for colour to be the redundant channel for (§12). */
+.kpi-aside {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Sign and arrow, never colour alone (§12). The hue is the redundant channel
  * here, not the carrier. */
 .delta {
@@ -1597,6 +1610,16 @@ code {
   margin: 0;
   max-width: 52ch;
   color: var(--on-surface-variant);
+}
+
+/* A sentence restating the table above it — the sheltered subtotal on Income.
+ * Set at body size rather than at `.coverage-note`'s, because it carries
+ * figures a household reads rather than a caveat about them, and it sits above
+ * the notes rather than among them. */
+.panel-statement {
+  margin: 0 0 var(--space-sm);
+  max-width: 60ch;
+  color: var(--on-surface);
 }
 
 .coverage-note,

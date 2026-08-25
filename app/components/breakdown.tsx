@@ -198,6 +198,18 @@ const NOTES: Record<BreakdownReading, { negative: string; empty: string }> = {
 };
 
 /**
+ * `1 person` / `4 people`, without an "(s)" anywhere on a finance page.
+ *
+ * Here rather than in either route because it exists to build one prop —
+ * {@link Breakdown}'s `count` — and both screens that draw these panels were
+ * about to hold their own copy of it. The plural is part of how a panel names
+ * itself, so it travels with the panel.
+ */
+export function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
  * One panel: a breakdown, its ring, and the rows the ring is drawn from.
  *
  * Written once for every breakdown on every screen because the only thing that

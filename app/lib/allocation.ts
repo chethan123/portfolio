@@ -4,6 +4,12 @@
  * array beneath them: unrealized gains by asset type, with the tax a taxable
  * one would attract. {@link unrealizedByAssetType} carries its own reasoning.
  *
+ * And the same array cut by a **second figure**: what it pays rather than what
+ * it is worth. {@link annualDividendBy} groups the annual dividend for the
+ * Income screen, {@link weightedYield} states a group's as a fraction of what
+ * it is worth, and {@link shelteredSubtotal} answers in two amounts the binary
+ * question the three-way breakdown refuses to draw as a chart.
+ *
  * Pure functions over the {@link ValuedHolding} rows the query layer already
  * returned. No database, deliberately, for two reasons. The screen renders its
  * holdings table from the same array it groups here, so a slice and the rows
@@ -61,7 +67,7 @@
  *     it is, and the caller should show the amounts alone.
  */
 import { ACCOUNT_KINDS, labelOf, type Option } from "./account-options.ts";
-import { formatPercent } from "./format.ts";
+import { formatPercent, isPositive } from "./format.ts";
 import { MONEY_SCALE, SHARE_SCALE, divide, render, sumMoney, toUnits } from "./money.ts";
 
 import type { AssetClass, Coverage, ValuedHolding } from "./valuation.server.ts";
@@ -144,6 +150,28 @@ export type AllocationAmount = {
 const VALUE: AllocationAmount = {
   of: (holding) => holding.value,
   isKnown: (holding) => holding.isPriced,
+};
+
+/**
+ * What the Income screen cuts by instead (DESIGN.md §8.1).
+ *
+ * **`isKnown` is a constant, and that is the whole point of it being a
+ * function.** Every other figure in this application is unknown for some
+ * holding — a trust nobody priced has no value, a 401k line with no basis has
+ * no gain — and the coverage count is how a screen says so. The annual dividend
+ * has no such case: `holding_valued` coalesces a missing rate to zero in SQL,
+ * so a holding whose dividend nobody knows does not reach here (DESIGN.md §14,
+ * limitation 9). Every slice therefore comes back complete, which is why the
+ * Income tables carry no coverage caption — there are no unknowns to count.
+ *
+ * What the codebase gives up for that is written down where the coalesce is:
+ * the total understates by every unquoted holding, by all interest on cash and
+ * by any interest on a loan, and both screens that print it say in place that
+ * it is a lower bound.
+ */
+const ANNUAL_DIVIDEND: AllocationAmount = {
+  of: (holding) => holding.annualDividend,
+  isKnown: () => true,
 };
 
 type Bucket = { label: string; amount: bigint; coverage: Coverage };
@@ -310,6 +338,119 @@ export function allocationByAssetClass(holdings: ValuedHolding[]): AllocationSli
     key: holding.assetClass,
     label: labelOf(ASSET_CLASSES, holding.assetClass),
   }));
+}
+
+/**
+ * The same array cut by what it **pays** rather than by what it is worth — the
+ * Income screen's two breakdowns, by tax treatment and by account (DESIGN.md
+ * §8.1).
+ *
+ * **One adapter taking a grouping, where the three above it take none, and the
+ * reason is a cycle.** The short labels those two breakdowns need — Taxable,
+ * Tax-deferred, Tax-free, and an account's own name — live in
+ * `holdings-view.ts`, written short precisely so they fit a table cell;
+ * `account-options.ts` carries only the long explanatory form, which is
+ * unusable in one. This module cannot import them, because `holdings-view.ts`
+ * already imports from here. So the caller hands the accessor in, and the
+ * dependency stays one-way.
+ *
+ * That is not only cycle-avoidance. It is what makes "Holdings grouped by tax
+ * treatment agrees with the Income breakdown" structural rather than
+ * coincidental: both screens read one accessor, so they cannot group the same
+ * way and label differently. A third copy of the label table is exactly the
+ * failure `tests/invariants/aggregates-agree.test.ts` exists to catch, and a
+ * pair of named adapters here — `annualDividendByTaxTreatment` beside
+ * `annualDividendByAccount` — would have had identical bodies and no way to
+ * reach the labels anyway.
+ *
+ * @param by what each holding is filed under — `holdings-view.ts`'s
+ *           `groupingBy`, which reads the one label table.
+ */
+export function annualDividendBy(holdings: ValuedHolding[], by: Grouping): AllocationSlice[] {
+  return allocationBy(holdings, by, ANNUAL_DIVIDEND);
+}
+
+/**
+ * What a set of holdings pays over the coming year as a fraction of what it is
+ * worth — the **weighted yield** CONTEXT.md reserves for a group, `"0.021874"`
+ * at {@link SHARE_SCALE} and for display only.
+ *
+ * A different figure from `holdings-view.ts`'s `holdingYield`, which is one
+ * row's own dividend over that row's own value. This one has a group's
+ * denominator, and therefore its own undefined cases.
+ *
+ * **The denominator is the gross positive value**, the sum of the holdings
+ * worth something, and never the net. It is the same denominator this module's
+ * header argues for and for the same two reasons: a household in net debt would
+ * divide a positive dividend by a negative net worth and report a negative
+ * yield on a portfolio that pays money, and a household whose debts nearly
+ * cancel its assets would divide by something near zero and report a yield in
+ * the thousands of percent. The numerator keeps every holding, liabilities
+ * included, because interest going out is part of what the group nets.
+ *
+ * Null, never `"0.000000"`, in the one case that covers both edges: nothing
+ * positive to divide by. That is a group whose only holding is an unquoted
+ * trust — a dividend of `0.0000` against a *null* value — and equally a group
+ * that has been sold out of, whose value really is `"0.0000"`. `money.ts`'s
+ * `divide` raises `RangeError` on a zero denominator, so the guard is what
+ * stops one such group taking the page down with it; and the zero rule of
+ * DESIGN.md §14 limitation 9 applies to the dividend, never to the value it is
+ * divided by. A group nobody can price has no yield rather than a yield of
+ * nothing.
+ */
+export function weightedYield(holdings: ReadonlyArray<ValuedHolding>): string | null {
+  const paid = sumMoney(holdings.map((holding) => holding.annualDividend));
+  const owned = sumMoney(
+    holdings.map((holding) =>
+      holding.value !== null && isPositive(holding.value) ? holding.value : null,
+    ),
+  );
+
+  if (owned.amount === 0n) return null;
+
+  return render(divide(paid.amount, owned.amount, SHARE_SCALE), SHARE_SCALE);
+}
+
+/**
+ * The binary question the three-way breakdown deliberately does not answer:
+ * how much of the annual dividend is sheltered, and how much is not.
+ *
+ * **Two figures, never a fraction.** "$9,800 of $14,200 is sheltered" is the
+ * obvious sentence and it is wrong on real data: a taxable brokerage beside a
+ * car loan whose note carries a rate sums the taxable slice to −522.20, because
+ * a liability account still has a tax treatment, and "$0 of −$522 is sheltered"
+ * is arithmetic nobody should be shown. So the caller gets the two amounts and
+ * states them separately.
+ *
+ * **Sheltered is a subtotal and nothing else** (CONTEXT.md). It is never a
+ * grouping key and never a slice of a chart — grouping by it would merge a
+ * dated liability with the absence of one, which is the distinction tax
+ * treatment exists to keep: a dividend in a Traditional account is untaxed now
+ * and the whole withdrawal is ordinary income later, and one in a Roth is never
+ * taxed at all.
+ *
+ * Both figures are amounts rather than `string | null`, for the reason
+ * `HoldingsTotal.annualDividend` is: under the zero rule a group where nothing
+ * pays is worth `$0` of dividend rather than an unknown amount of it.
+ */
+export type ShelteredSubtotal = {
+  /** Tax-deferred and tax-free taken together. */
+  sheltered: string;
+  /** What sits in taxable accounts, and is therefore taxed this year. */
+  taxable: string;
+};
+
+export function shelteredSubtotal(holdings: ReadonlyArray<ValuedHolding>): ShelteredSubtotal {
+  const paid = (rows: ReadonlyArray<ValuedHolding>) =>
+    render(sumMoney(rows.map((holding) => holding.annualDividend)).amount, MONEY_SCALE);
+
+  // Split off `taxable` rather than adding the other two together, so a fourth
+  // treatment — were one ever added — would arrive on the sheltered side and be
+  // visible in the sentence, instead of falling out of both figures silently.
+  return {
+    sheltered: paid(holdings.filter((holding) => holding.taxTreatment !== "taxable")),
+    taxable: paid(holdings.filter((holding) => holding.taxTreatment === "taxable")),
+  };
 }
 
 /**

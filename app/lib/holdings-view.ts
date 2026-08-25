@@ -45,7 +45,7 @@
  * either job by hand.
  */
 import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "./account-options.ts";
-import { ASSET_CLASSES, allocateShares } from "./allocation.ts";
+import { ASSET_CLASSES, allocateShares, type Grouping } from "./allocation.ts";
 import {
   MONEY_SCALE,
   QUANTITY_SCALE,
@@ -209,6 +209,40 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
 ];
 
 const DIMENSION_BY_ID = new Map(DIMENSIONS.map((dimension) => [dimension.id, dimension]));
+
+/**
+ * One dimension's accessor, for a breakdown built outside this module.
+ *
+ * The Income screen groups by tax treatment and by account, and it needs the
+ * short labels above — Taxable, Tax-deferred, Tax-free, and an account's own
+ * name — rather than `account-options.ts`'s canonical ones, which this file
+ * says in place wrap to two lines in a table cell. `allocation.ts` cannot reach
+ * them: it is imported *by* this module, so the other direction is a cycle. So
+ * the label table stays here, single, and the accessor travels to the caller.
+ *
+ * That is what makes the two screens' agreement structural. Holdings grouped by
+ * tax treatment and the Income breakdown read one `of`, so they cannot group
+ * the same way and label differently — which a third copy of the labels would
+ * have allowed, silently, on the one page where the words carry the tax rule.
+ *
+ * Typed as `allocation.ts`'s {@link Grouping}: a {@link Facet} is a `key` and a
+ * `label` with the dropdown's longer wording alongside, and a breakdown reads
+ * the first two.
+ *
+ * Throws on an id no dimension carries, which no caller can reach:
+ * {@link DimensionId} is a closed union, {@link DIMENSIONS} covers it, and the
+ * map is built from the second. `groupHoldings` answers the same impossible
+ * lookup with an empty table, because an empty table is still a legible screen.
+ * There is no such answer here — a grouping that filed every holding under one
+ * unnamed bucket would render as a plausible breakdown of a portfolio nobody
+ * owns.
+ */
+export function groupingBy(id: DimensionId): Grouping {
+  const dimension = DIMENSION_BY_ID.get(id);
+  if (dimension === undefined) throw new Error(`No such holdings dimension: ${id}`);
+
+  return dimension.of;
+}
 
 export type SortKey =
   | "asset"

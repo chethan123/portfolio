@@ -1,5 +1,6 @@
 /**
- * The three breakdowns the analysis screen draws (DESIGN.md §8.1).
+ * The three breakdowns the analysis screen draws, and the two the Income screen
+ * draws beside them (DESIGN.md §8.1).
  *
  * No database. `app/lib/allocation.ts` is pure by design — it groups the rows
  * the query layer already returned — so these are unit tests with a fixture
@@ -22,12 +23,16 @@ import {
   allocationByAccountKind,
   allocationByAssetClass,
   allocationByPerson,
+  annualDividendBy,
   formatRate,
   rateDigits,
   sharePercent,
+  shelteredSubtotal,
   unrealizedByAssetType,
+  weightedYield,
 } from "~/lib/allocation";
 import { formatPercent } from "~/lib/format";
+import { groupingBy } from "~/lib/holdings-view";
 import { SHARE_SCALE, toUnits } from "~/lib/money";
 
 import type { ValuedHolding } from "~/lib/valuation.server";
@@ -673,5 +678,195 @@ describe("formatRate", () => {
     expect(rateDigits("15.000000")).toBe("15");
     expect(rateDigits("0.000000")).toBe("0");
     expect(rateDigits("0.000100")).toBe("0.0001");
+  });
+});
+
+/**
+ * A household whose taxable side pays *out*.
+ *
+ * The shape both edges were found in, seeded against a real database and kept
+ * here as an array: a taxable brokerage beside a car loan whose note carries a
+ * rate, so the taxable slice nets to −522.20 — a liability account still has a
+ * tax treatment, and the interest lands in the same group as the dividend. And
+ * a tax-deferred group whose only holding is an unquoted trust, which has a
+ * dividend and no value at all.
+ */
+function aHouseholdWithALoan(): ValuedHolding[] {
+  return [
+    holding({
+      accountId: "1",
+      accountName: "Fidelity",
+      accountKind: "brokerage",
+      taxTreatment: "taxable",
+      value: "40000.0000",
+      annualDividend: "900.0000",
+    }),
+    holding({
+      accountId: "2",
+      accountName: "Car loan",
+      accountKind: "liability",
+      taxTreatment: "taxable",
+      value: "-24000.0000",
+      annualDividend: "-1422.2000",
+    }),
+    holding({
+      accountId: "3",
+      accountName: "Rollover IRA",
+      accountKind: "ira",
+      taxTreatment: "tax_deferred",
+      // An unquoted trust: a quantity, no price, and a dividend the view
+      // coalesced to zero.
+      value: null,
+      annualDividend: "0.0000",
+    }),
+    holding({
+      accountId: "4",
+      accountName: "Roth IRA",
+      accountKind: "ira",
+      taxTreatment: "tax_free",
+      value: "20000.0000",
+      annualDividend: "800.0000",
+    }),
+  ];
+}
+
+describe("the annual dividend, grouped", () => {
+  it("cuts three ways by tax treatment, with the labels Holdings shows", () => {
+    // The accessor comes from `holdings-view.ts` rather than from a grouping
+    // written here, because that is the arrangement under test: one label
+    // table, read by both screens. A copy in this file would let the test pass
+    // while the two screens labelled the same grouping differently.
+    const slices = annualDividendBy(aHouseholdWithALoan(), groupingBy("tax"));
+
+    expect(slices).toEqual([
+      {
+        key: "tax_free",
+        label: "Tax-free",
+        amount: "800.0000",
+        share: "1.000000",
+        coverage: { known: 1, total: 1 },
+      },
+      {
+        key: "tax_deferred",
+        label: "Tax-deferred",
+        amount: "0.0000",
+        share: "0.000000",
+        coverage: { known: 1, total: 1 },
+      },
+      {
+        // The edge the ring has to survive: a whole slice below zero, on the
+        // group the household cares most about. −$1,422.20 of interest against
+        // $900.00 of dividend, both taxable.
+        key: "taxable",
+        label: "Taxable",
+        amount: "-522.2000",
+        // A fraction of the gross positive dividend, never of the net total.
+        share: "-0.652750",
+        coverage: { known: 2, total: 2 },
+      },
+    ]);
+  });
+
+  it("counts every holding as known, because the zero rule leaves no unknowns", () => {
+    // The reason the Income tables carry no coverage caption. `isPriced` is
+    // false for the unquoted trust and its dividend is still a figure, so a
+    // dividend breakdown that reused the value predicate would report
+    // "3 of 4 holdings" on a column that is complete by construction.
+    const slices = annualDividendBy(aHouseholdWithALoan(), groupingBy("tax"));
+
+    expect(slices.every((slice) => slice.coverage.known === slice.coverage.total)).toBe(true);
+  });
+
+  it("cuts the same array by account, off the same accessor", () => {
+    const slices = annualDividendBy(aHouseholdWithALoan(), groupingBy("account"));
+
+    // Keyed on the account's id and labelled with its own name — the second
+    // breakdown answers "which statement does this land in".
+    expect(slices.map((slice) => [slice.key, slice.label, slice.amount])).toEqual([
+      ["1", "Fidelity", "900.0000"],
+      ["4", "Roth IRA", "800.0000"],
+      ["3", "Rollover IRA", "0.0000"],
+      ["2", "Car loan", "-1422.2000"],
+    ]);
+  });
+
+  it("groups a dividend, not a value, off the same rows", () => {
+    // The failure this adapter exists to prevent: `allocationBy` defaults to
+    // value, so an Income panel built on the default would render two rings of
+    // net worth under dividend headings.
+    const holdings = aHouseholdWithALoan();
+
+    expect(annualDividendBy(holdings, groupingBy("tax")).map((slice) => slice.amount)).not.toEqual(
+      allocationByAccountKind(holdings).map((slice) => slice.amount),
+    );
+  });
+});
+
+describe("the sheltered subtotal", () => {
+  it("states the two amounts separately rather than as a fraction", () => {
+    const { sheltered, taxable } = shelteredSubtotal(aHouseholdWithALoan());
+
+    // Tax-deferred and tax-free added together, and the taxable side left
+    // alone. "$800 of $277.80 is sheltered" is the sentence this shape refuses
+    // to make possible: the parts are larger than the total they came from,
+    // and neither figure is wrong.
+    expect({ sheltered, taxable }).toEqual({ sheltered: "800.0000", taxable: "-522.2000" });
+  });
+
+  it("keeps the taxable amount negative rather than flooring it at zero", () => {
+    // The screen reads the sign and says "a figure going out"; coercing it here
+    // would leave that sentence with nothing to switch on.
+    expect(shelteredSubtotal(aHouseholdWithALoan()).taxable.startsWith("-")).toBe(true);
+  });
+
+  it("is $0 rather than an absence when nothing pays", () => {
+    // The zero rule, in the subtotal: a household whose holdings all pay
+    // nothing is a household paid $0, not one nobody could work the figure out
+    // for.
+    expect(shelteredSubtotal([holding({ taxTreatment: "tax_free" })])).toEqual({
+      sheltered: "0.0000",
+      taxable: "0.0000",
+    });
+  });
+});
+
+describe("the weighted yield", () => {
+  it("divides what a group pays by what the group is worth", () => {
+    // $277.80 of dividend over $60,000 of gross positive value. Not over the
+    // $36,000 the household is actually worth, and not over the four holdings'
+    // values summed with the loan's included.
+    expect(weightedYield(aHouseholdWithALoan())).toBe("0.004630");
+  });
+
+  it("stays positive for a household in net debt", () => {
+    const holdings = [
+      holding({ accountKind: "bank", value: "100000.0000", annualDividend: "500.0000" }),
+      holding({ accountKind: "liability", value: "-150000.0000", annualDividend: "0.0000" }),
+    ];
+
+    // A net denominator of −50,000 would report −1.0% on a portfolio that pays
+    // $500 a year: the same wrong sign on the fastest-read figure that
+    // `netWorthChange` avoids by dividing by `abs(previous)`.
+    expect(weightedYield(holdings)).toBe("0.005000");
+  });
+
+  it("is absent, not zero, for a group with a dividend and no value", () => {
+    // The tax-deferred group in the fixture above, on its own: an unquoted
+    // trust has a quantity and no price, so there is nothing for the dividend
+    // to be a fraction of. `0.0%` here would be a claim about a holding nobody
+    // can price — the zero rule applies to the dividend, never to the value it
+    // is divided by.
+    expect(weightedYield([holding({ value: null, annualDividend: "120.0000" })])).toBeNull();
+  });
+
+  it("is absent, rather than throwing, when the value is exactly zero", () => {
+    // Nothing in the schema stops a quantity or a price being zero, and
+    // `money.ts`'s `divide` raises `RangeError` on a zero denominator. One
+    // sold-out position would otherwise take the whole page down.
+    expect(weightedYield([holding({ value: "0.0000", annualDividend: "0.0000" })])).toBeNull();
+  });
+
+  it("has no yield for no holdings at all", () => {
+    expect(weightedYield([])).toBeNull();
   });
 });

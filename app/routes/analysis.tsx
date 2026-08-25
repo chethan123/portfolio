@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 
-import { Breakdown } from "~/components/breakdown";
+import { Breakdown, plural } from "~/components/breakdown";
 import { Delta, Money } from "~/components/money-cell";
 import { EmptyState } from "~/components/empty-state";
 import {
@@ -192,11 +192,6 @@ export async function loader() {
     byAccountKind: allocationByAccountKind(holdings),
     byAssetClass: allocationByAssetClass(holdings),
   };
-}
-
-/** `1 person` / `4 people`, without an "(s)" anywhere on a finance page. */
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
 }
 
 export default function Analysis({ loaderData }: Route.ComponentProps) {
