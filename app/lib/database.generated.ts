@@ -68,6 +68,7 @@ export interface HoldingValued {
   account_id: Int8 | null;
   account_kind: string | null;
   account_name: string | null;
+  annual_dividend: Numeric | null;
   asset_class: string | null;
   classification: string | null;
   cost_basis: Numeric | null;

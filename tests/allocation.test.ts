@@ -81,6 +81,9 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
     unrealized: null,
     isPriced: true,
     isStale: false,
+    // Zero rather than null, because that is what the view emits for a holding
+    // whose instrument carries no rate: the coalesce is in the SQL.
+    annualDividend: "0.0000",
     ...overrides,
   };
 
