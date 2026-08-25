@@ -548,6 +548,7 @@ CREATE VIEW holding_valued AS
   --   → account → person
   --   → quote
   -- exposing: quantity, price, value, cost_basis, unrealized,
+  --           annual_dividend,
   --           owner, account, institution, kind, tax_treatment,
   --           classification, asset_class
 ```
@@ -559,7 +560,14 @@ That is a set-returning function:
 holding_valued_at(d date)
   -- per account: the position_set with max(as_of_date) <= d
   --   joined to price_daily on d, carrying forward the last close
+  --   annual_dividend is null: there is no historical yield to report
 ```
+
+**The `setof holding_valued` return type is a two-way contract, and PostgreSQL does not enforce it
+when you break it.** `create or replace view` accepts an appended column and reports success while
+leaving the function returning too few columns, which fails only when something calls it. A column
+added here is a column added to both, in one migration. See
+[ADR-0001](docs/adr/0001-holding-valued-row-type-contract.md).
 
 **Cost basis is nullable**, so any group's unrealized figure may be partial. The rule is **sum what
 is known and label the coverage** — "unrealized $47k, based on 8 of 12 holdings". Never coerce null
@@ -1141,3 +1149,16 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    negative balance records one. Lifting the limitation for the form itself means a per-kind
    decision about whether a negative is meaningful, not a change to the storage rule — the schema
    already holds a negative quantity against any account.
+9. **A holding with no dividend rate counts as paying nothing.** The projected annual dividend
+   (§8.1, Income) is `quantity × annual_dividend_per_share`, and a null rate contributes `$0` rather
+   than an unknown. Three unlike things produce that null — a provider answering "no dividend
+   fields" for a growth ETF, which is genuinely zero; a workplace-plan trust the refresh never asks
+   about, because it has no symbol; and the seeded `USD` row, which no provider will ever quote. The
+   figure therefore understates by every unquoted holding, by all cash interest, and by any interest
+   on a loan. This is the one place the codebase departs from §8.2's "sum what is known and label the
+   coverage": applied literally here, a portfolio where most holdings correctly pay nothing would
+   report "based on 4 of 23 holdings", and a caption that cries wolf on two-thirds of a table is one
+   nobody reads. Both screens label the total a **lower bound** instead, the way the unrealized panel
+   labels its tax figure an upper bound. Lifting this means deciding per row from whether the
+   instrument was ever quoted — a refreshed `quote` row means the provider answered, and `fixed` or
+   `manual` means it was never asked — which is a change to one derivation, not to the schema.
