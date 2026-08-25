@@ -113,6 +113,10 @@
    * relies on to see a column. */
   --content-max: 1280px;
   --control-h: 40px;
+  /* A field's caption block: one line of body-sm plus `label`'s gap. What an
+   * un-captioned member of a control row — the button that ends it, a standing
+   * note — drops by to stand on the same line as the controls beside it. */
+  --field-caption: 24px;
   --radius: 4px;
   --radius-lg: 8px;
   --radius-xl: 12px;
@@ -1417,8 +1421,14 @@ a.account-row:hover {
   border-color: var(--outline);
 }
 
+/*
+ * The third weight: no box at all, for an action that must not compete with
+ * the filled one beside it. It keeps `.button`'s height rather than collapsing
+ * to its text — the box is what this modifier drops, not the line — so a text
+ * action stands on the same line as the button it accompanies instead of on
+ * the bottom edge of the row.
+ */
 .button--text {
-  height: auto;
   padding: 0;
   border: 0;
   background: none;
@@ -1488,6 +1498,35 @@ select[aria-invalid="true"],
 textarea[aria-invalid="true"] {
   border-color: var(--loss);
   border-width: 2px;
+}
+
+/*
+ * The file input's own button.
+ *
+ * Left alone it is the browser's — 14px Arial on a grey ground, a 2px outset
+ * border, square corners — which makes it the one control in the application
+ * not drawn by this stylesheet, sitting inside a box that is. It takes
+ * `.button--quiet`'s treatment at the scale of a control nested in a control:
+ * short enough to sit *within* the box's 40px rather than fill it, and at the
+ * chip radius rather than the button's, because an 8px corner inside an 8px
+ * corner reads as two edges arguing.
+ */
+input[type="file"]::file-selector-button {
+  height: 28px;
+  margin: 0 var(--space-sm) 0 0;
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+input[type="file"]::file-selector-button:hover {
+  background: var(--panel-hover);
+  border-color: var(--outline);
 }
 
 label {
@@ -1756,13 +1795,80 @@ code {
   opacity: 0.6;
 }
 
+/*
+ * A control row: labelled fields, then the button that submits them.
+ *
+ * `.panel-form` aligns to the *top* of its items, and the reason is what a
+ * field is made of. Above every control sits a fixed 24px — one caption line
+ * plus `label`'s gap, which is `--field-caption`. Below it sits annotation: a
+ * `.field-note` saying what the control means, a `.field-error` saying why it
+ * was refused. Aligning the bottoms lined up the annotation instead of the
+ * controls, so a note under one box lifted that box 16px above its neighbours
+ * — the file input on `/upload`, Symbol against Name on the new-instruments
+ * step, the statement date against the button that commits it — and a refusal,
+ * being 20px, broke the row into three lines instead of two.
+ *
+ * The invariant this rests on: **a caption in a control row is one line.** A
+ * caption that wrapped would push its own control down, which is the same
+ * defect wearing the other hat. None wraps today, at any width; a longer one
+ * would need `.field-note`'s job doing by the caption, which is not the shape
+ * of any control here.
+ *
+ * `.record-form` deliberately states no alignment: it is never worn without
+ * `.record`, which centres. That row has no captions to align to — a box, the
+ * count beside it and two buttons — and centring is what puts the count on the
+ * box's line rather than on its bottom edge.
+ */
 .record-form,
 .panel-form {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
   gap: var(--space-md);
   padding: var(--space-lg);
+}
+
+.panel-form {
+  align-items: flex-start;
+}
+
+/*
+ * The row's un-captioned members, dropped past the caption block to reach the
+ * control line: the button that ends the row, and the note that sometimes
+ * stands where a field would (review, when the statement dates itself).
+ *
+ * `* ~` is what leaves a form whose only child is a button alone — the
+ * new-instruments step's submit row. There is nothing there to line up with,
+ * and the margin would be 24px of nothing.
+ */
+.panel-form > * ~ :is(button, .button) {
+  margin-top: var(--field-caption);
+}
+
+/* Centred in the control's band rather than sitting at the top of it: the note
+ * is one 16px line and the button beside it is 40px, and a sentence level with
+ * the top of a button reads as a caption for it. */
+.panel-form > .form-note {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h);
+  margin-top: var(--field-caption);
+}
+
+/*
+ * Three members of a row that are neither a field nor an action, each taking
+ * the line to itself.
+ *
+ * A radio group and a checkbox's sentence are decisions rather than boxes, and
+ * squeezed between two selects they read as a jumble — the columns step put
+ * "Cost basis is", its note, "This file lists what is owed…" and the submit
+ * button on one wrapped line, bottom-aligned to each other. A form-level
+ * refusal belongs above the row it refuses (ingest brief §2), never beside a
+ * field inside it.
+ */
+.panel-form > fieldset,
+.panel-form > label.choice,
+.panel-form > .form-error {
+  flex-basis: 100%;
 }
 
 /*
@@ -1787,6 +1893,40 @@ code {
  */
 .panel-body + .panel-form {
   padding-top: 0;
+}
+
+/*
+ * A control row on a phone.
+ *
+ * Until now the stylesheet said nothing about `.panel-form` at this width, and
+ * the result was not merely cramped: a `select` is as wide as its longest
+ * option and `.panel` clips (`overflow: hidden`), so the columns step's
+ * header-row select was 684px in a 308px column — its right border and its
+ * arrow cut off the screen, with nothing to scroll to reach them. One field to
+ * a line, every control filling it.
+ */
+@media (max-width: 767px) {
+  .record-form,
+  .panel-form {
+    padding: var(--space-md);
+  }
+
+  .panel-form > div,
+  .panel-form > fieldset {
+    flex-basis: 100%;
+  }
+
+  .panel-form :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Every row wraps here, so the button is always on a line of its own — and
+   * a line of its own has no caption above it to drop past. */
+  .panel-form > * ~ :is(button, .button),
+  .panel-form > .form-note {
+    margin-top: 0;
+  }
 }
 
 .danger-zone {

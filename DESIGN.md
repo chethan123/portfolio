@@ -1075,6 +1075,7 @@ changes width as it updates makes the whole row twitch.
 | `--rail` | 280px | Fixed sidebar, ≥1024px |
 | `--content-max` | 1152px | The canvas caps here and centres |
 | `--control-h` | 40px | Buttons, inputs, range chips |
+| `--field-caption` | 24px | A caption line plus its gap — what an un-captioned member of a control row drops by to reach the control line |
 | `--radius` | 4px | Chips |
 | `--radius-lg` | 8px | Buttons, rows, inputs |
 | `--radius-xl` | 12px | Panels |
