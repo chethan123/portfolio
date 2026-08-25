@@ -50,17 +50,23 @@ describe("the arcs", () => {
     ]);
   });
 
-  it("folds everything past the fifth colour into one wedge", () => {
-    // Six groups, five colours. The sixth and later rows do not extend the
-    // sequence — they merge into the last wedge and share the last colour, so
-    // the ring has five arcs and the table still has six rows.
+  it("folds everything past the fourth row into one wedge", () => {
+    // Six groups, five colours. The fold is by rank and starts at
+    // `SEQUENCE - 1`, so it is the FIFTH row and later that stop extending the
+    // sequence — they merge into the last wedge and share the last colour. The
+    // ring ends up with five arcs while the table still has six rows, which is
+    // what the panel's own note means by "everything past the fourth row".
+    //
+    // The amounts descend with the shares rather than contradicting them: the
+    // fold keys on rank, the caller sorts by amount, and a fixture whose two
+    // columns disagreed would read as though the fold keyed on the share.
     const wedges = ring([
       slice("A", "50.0000", "0.500000"),
       slice("B", "20.0000", "0.200000"),
       slice("C", "10.0000", "0.100000"),
       slice("D", "10.0000", "0.100000"),
-      slice("E", "60.0000", "0.060000"),
-      slice("F", "40.0000", "0.040000"),
+      slice("E", "6.0000", "0.060000"),
+      slice("F", "4.0000", "0.040000"),
     ]);
 
     expect(wedges).toHaveLength(5);

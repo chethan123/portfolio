@@ -118,7 +118,7 @@ export function ring(slices: AllocationSlice[]): Wedge[] {
  * the one figure on the panel that the table does not carry.
  *
  * `Total` is hard-coded, unlike the column heading above the amounts. It is the
- * word for the sum of whatever the rows are — a total value and a total payout
+ * word for the sum of whatever the rows are — a total value and a total annual dividend
  * are both totals — so there is nothing here for a caller to choose.
  */
 function Donut({ wedges, total }: { wedges: Wedge[]; total: string }) {
@@ -188,12 +188,12 @@ const NOTES: Record<BreakdownReading, { negative: string; empty: string }> = {
   },
   paid: {
     negative:
-      "The ring draws what is paid out. Interest going the other way is not a share of it, so a" +
-      " negative row is left unfilled and its percentage is of the gross payout rather than of" +
-      " the total in the centre.",
+      "The ring draws what the portfolio is paid. Interest going the other way is not a share" +
+      " of it, so a negative row is left unfilled and its percentage is of the gross annual" +
+      " dividend rather than of the total in the centre.",
     empty:
-      "Nothing in this breakdown pays out, so there is no whole for a share to be part of and no" +
-      " ring to draw. The amounts are the answer here.",
+      "Nothing in this breakdown pays anything, so there is no whole for a share to be part of" +
+      " and no ring to draw. The amounts are the answer here.",
   },
 };
 
@@ -209,9 +209,9 @@ const NOTES: Record<BreakdownReading, { negative: string; empty: string }> = {
  *
  * @param heading the first column: what the rows are.
  * @param amountHeading the second column: what the amounts are. A prop and not
- *                      the string `Value`, because a panel of payouts is a
+ *                      the string `Value`, because a panel of annual dividends is a
  *                      breakdown of the same shape with a different figure in
- *                      it, and a column headed Value over a column of payouts
+ *                      it, and a column headed Value over a column of dividends
  *                      is simply wrong.
  * @param reading which sentence the notes are written in — see
  *                {@link BreakdownReading}.

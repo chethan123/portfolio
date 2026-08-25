@@ -184,7 +184,7 @@ as $$
     false                                               as is_stale,
     -- Not `coalesce(..., 0)` over a column but the constant: there is no
     -- dividend to carry. See the header — the null is the answer here, not a
-    -- gap in it, and it is what stops a past date reporting today's payout.
+    -- gap in it, and it is what stops a past date reporting today's dividend.
     null::numeric(20, 4)                                as annual_dividend
 
   from account a

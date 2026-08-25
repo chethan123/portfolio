@@ -49,11 +49,10 @@ export function meta() {
 /**
  * Unrealized gains by asset type, and what settling them would cost.
  *
- * A table with no ring beside it, unlike the three `Breakdown` panels above
- * it. A gain is
- * signed, and a signed figure is not a share of anything — the same reason
- * `allocation.ts` gives for leaving a liability out of the donut — so a chart
- * here would either drop the losses or draw them as if they were gains.
+ * A table with no ring beside it, unlike the three `Breakdown` panels above it.
+ * A gain is signed, and a signed figure is not a share of anything — the same
+ * reason `allocation.ts` gives for leaving a liability out of the donut — so a
+ * chart here would either drop the losses or draw them as if they were gains.
  *
  * **Three columns, not four.** The taxable base belongs on the row, because it
  * is what makes the tax beside it checkable; it does not belong in a fourth

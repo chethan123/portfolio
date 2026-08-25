@@ -116,7 +116,7 @@ export type Grouping = (holding: ValuedHolding) => { key: string; label: string 
  * The two travel together rather than as two arguments, because they are one
  * decision. `value` is null exactly when `isPriced` is false, so for a value
  * breakdown either one implies the other — but that correspondence is a fact
- * about *value*, not about figures in general. A holding's payout says nothing
+ * about *value*, not about figures in general. What a holding pays says nothing
  * about whether it was priced, and a pair of arguments is a pair a caller can
  * mismatch: the amount off one column and the coverage off another produces a
  * caption counting the wrong holdings, which reads as correct on every screen
@@ -128,7 +128,7 @@ export type Grouping = (holding: ValuedHolding) => { key: string; label: string 
  *           omission being silent.
  * @property isKnown whether this holding contributed. Not `of(holding) !==
  *                   null`: a figure can be a real zero for a holding nobody
- *                   could compute it from — a payout coalesced to zero is the
+ *                   could compute it from — a dividend coalesced to zero is the
  *                   case in front of us — and counting that as known is the
  *                   coercion §8.2 refuses.
  */
