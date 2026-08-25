@@ -43,36 +43,34 @@ outstanding while shipping its content under another name.
 **One figure, computed once, in SQL.**
 
 ```
-annual_dividend = quantity × annual_dividend_per_share
+annual_dividend = quantity × coalesce(annual_dividend_per_share, 0)
 ```
 
-It enters through `valuedNow()`, which stops being the bare `holding_valued` table and becomes a
-derived table over it, left-joined to `quote`:
+It is a column on `holding_valued`, computed inside the view's existing `money` lateral so it is
+rounded to the money scale exactly once, in the same place and the same way as `value`:
 
 ```sql
-select hv.*,
-       q.annual_dividend_per_share,
-       cast(hv.quantity * coalesce(q.annual_dividend_per_share, 0)
-            as numeric(20, 4))                                    as annual_dividend
-from holding_valued hv
-left join quote q on q.instrument_id = hv.instrument_id
+cast(h.quantity * coalesce(q.annual_dividend_per_share, 0) as numeric(20, 4)) as annual_dividend
 ```
 
-still aliased `holding_valued`. `readHoldings` and `readTotal` need no change to their **bodies** —
-both are `selectAll()` or raw `sql` templates — but the source *type*, `toValuedHolding` and
-`ValuedHolding` all do. See "The row type is widened locally" below; that is where the real cost of
-"no migration" sits.
+The `coalesce` is in the SQL and not in JavaScript, because the zero rule is the figure's definition
+rather than a rendering choice.
 
-The `coalesce` is inside the SQL and not in JavaScript, because the zero rule is the figure's
-definition rather than a rendering choice. `valuedAt(date)` is untouched, which is what makes the
-historical answer carry nothing rather than something anachronistic.
+**One migration, replacing two objects.** The view's row type is a contract with
+`holding_valued_at`, which declares `returns setof holding_valued`, so both move together:
+`create or replace view` then `create or replace function`, the latter adding
+`null::numeric(20, 4) as annual_dividend`. **They must be in one migration.** Each migration runs in
+its own transaction, so replacing both is atomic; replacing only the view deploys green and breaks
+the net worth chart at first call. [ADR-0001](../adr/0001-holding-valued-row-type-contract.md) records why, with the reproduction.
 
-**Precedent:** `prices.server.ts` already selects from `holding_valued` and joins `quote` on
-`instrument_id` for the staleness summary, so this is the second use of the pattern, not the first.
-It also means `valuation.server.ts`'s module comment claiming to be the only reader of the view is
-already stale and should be corrected while we are here.
+Only one column is added, not two. Nothing on screen needs `annual_dividend_per_share` separately —
+the derived yield comes from the dividend and the value — so exposing it would widen the row type
+and the as-of function's null list for nothing.
 
-**No migration.** The view and the as-of function are both left exactly as they are.
+**Verified end to end** against Postgres 16 with all six migrations and a seeded household: a
+fractional position multiplies exactly (10.5 × 3.6000 = 37.8000), a quoted instrument with no rate
+and an instrument with no `quote` row at all both give `0.0000`, a negative quantity gives a negative
+dividend, and every row from `holding_valued_at` carries null.
 
 **Holdings** gains a last column, `Annual dividend`: sortable, subtotalled, with the derived yield
 as a `cell-sub` line beneath the amount.
@@ -167,79 +165,72 @@ accepted limitation in DESIGN.md §14.
 **Consequence on screen:** an unquoted trust renders a blank Value and a `$0` dividend in the same
 row. That is the rule working as chosen, not a fault.
 
-**Where the zero lives:** in the `coalesce` inside the derived table, and nowhere else. Two places
+**Where the zero lives:** in the `coalesce` inside the view, and nowhere else. Two places
 would otherwise quietly reintroduce a dash. `money-cell.tsx` renders a null as `—`, and `totalOf`'s
 `figure()` helper returns null whenever a sum's `known` count is zero — correct for value, wrong
 here, because a group where nothing pays is `$0` and not an unknown. The dividend total must not go
 through that branch.
 
-### The dividend enters through `valuedNow()`, not through the view
+### The figure is a schema column, and the history reports null
 
-The obvious move is to add the columns to `holding_valued`. It was tried against a real Postgres 16
-with all five migrations applied, and it fails in a way worth recording.
+The first draft of this spec joined `quote` outside the view to avoid a migration. The plan review
+killed it: `Database` is a straight alias of the kysely-codegen output, CI runs
+`npm run db:types -- --verify`, and with no migration there is nothing for it to generate — so the
+columns would have had to be hand-declared as a local intersection type, in direct tension with
+`AGENTS.md`'s rule that types are derived from `database.generated.ts` rather than written twice. The
+as-of path would also have returned `undefined` rather than `null`, because the function would not
+emit a column the type claimed, and `toEqual` treats an undefined property as equal to a missing one
+— so the row-shape tests would have passed straight over it.
 
-`create or replace view holding_valued` with two columns appended **succeeds**, reporting
-`CREATE VIEW`, despite `holding_valued_at` declaring `returns setof holding_valued`. The function is
-only checked when it is called:
+With the migration, none of that exists. `db:types` regenerates `annual_dividend: Numeric | null`,
+CI verifies it against the real schema, and the historical null is written in SQL where a reader can
+see it rather than arriving as an accident of a missing key.
+
+**What it costs is a trap for whoever edits the view next**, and that is what [ADR-0001](../adr/0001-holding-valued-row-type-contract.md) is for:
+appending a column to `holding_valued` succeeds silently while leaving `holding_valued_at` broken
+until something calls it.
+
+**`holding_valued_at` reports null, deliberately.** There is no historical dividend anywhere: `quote`
+is one row per instrument, overwritten on every refresh, and `price_daily` holds only a close. Null
+is the honest answer, and it follows the precedent the as-of function already sets for `is_stale`,
+where it returns the constant `false` because staleness describes a live quote and a historical close
+is simply the close. A projected forward dividend describes the portfolio now; it is not a fact about
+2019.
+
+**Consequence:** `ValuedHolding.annualDividend` is `string | null` — never null on the current path,
+because of the coalesce, and always null on an as-of one. It must not be narrowed with `required()`.
+
+### Both objects move in one migration, or the chart breaks
+
+Appending columns to `holding_valued` is the right shape, and it has one trap that has to be written
+down because nothing in the tooling will stop you falling into it. Reproduced against Postgres 16
+with the real migrations:
+
+```
+create or replace view holding_valued as ...   -- one column appended
+CREATE VIEW
+```
+
+It succeeds, reporting no error and no warning, despite `holding_valued_at` declaring
+`returns setof holding_valued`. The function is checked only when it is called:
 
 ```
 ERROR:  return type mismatch in function declared to return holding_valued
 DETAIL:  Final statement returns too few columns.
 ```
 
-So the migration goes green and the net worth chart throws the first time anyone opens it. Replacing
-both objects in one migration fixes it, and `tests/holdings-at.test.ts` would catch the omission —
-but the failure mode is call-time, and the whole reason to pay it would be to add a permanently null
-column to the historical row type to describe something with no historical meaning.
+So a migration that replaces only the view deploys green and throws the first time anyone opens the
+net worth chart. Replacing both in one file is atomic — the runner wraps each migration in its own
+transaction — and `tests/holdings-at.test.ts` catches the omission because it calls the function.
+Verified: view then function, one transaction, both callable afterwards.
 
-Joining `quote` outside the view avoids all of it. What §8.2 actually protects is the resolution of
-*which position set is current*, and that stays wholly inside the view.
+**Fan-out:** none. `quote.instrument_id` is the primary key and `holding` is unique on
+`(position_set_id, instrument_id)`, so the view's existing left join stays one row per holding.
 
-**Fan-out:** none. `quote.instrument_id` is the primary key, so the left join yields at most one row
-per holding.
+**`readHoldings` and `readTotal` need no change.** `readHoldings` is `selectAll()` over the source and
+`readTotal` is raw `sql` templates over `sum(value)` and two counts; a column added to the view
+appears in the generated types and flows through both. `toValuedHolding` gains one line.
 
-**Cost, named:** `quote` is joined twice for one row — once inside the view for the price, once
-outside for the rate. At household scale that is free, and the alternative is the paired migration
-above.
-
-**Consequence:** `ValuedHolding.annualDividend` is `string | null`, null on every `valuedAt` path.
-`toValuedHolding` must not narrow it with `required()`.
-
-### The row type is widened locally, not in the generated types
-
-`HoldingValuedRow` is `Selectable<Database["holding_valued"]>`, and `Database` is a straight alias
-of the kysely-codegen output. Kysely derives `selectAll()`'s result type entirely from the generic on
-the aliased raw builder, so the two new columns arrive at runtime and do not exist to the compiler.
-
-There is no legal place to put them in the generated file. CI runs `npm run db:types -- --verify`,
-so a hand-edit fails the build; and with no migration, regenerating from the live schema will never
-produce them. Widening `Database` itself is worse than either: `accountTotals` and `accountTotal`
-join the **real view**, and a widened `Database` would let someone select `annual_dividend` there —
-clean typecheck, runtime failure.
-
-So the widening is local to the query module:
-
-```ts
-type ValuedRow = HoldingValuedRow & {
-  annual_dividend_per_share: string | null;
-  annual_dividend: string | null;
-};
-type ValuedSource = AliasedRawBuilder<ValuedRow, "holding_valued">;
-```
-
-**This is a deliberate, narrowly-scoped exception to `AGENTS.md`'s rule that types are derived from
-`database.generated.ts` rather than hand-written.** It is justified only because these columns exist
-in a query and not in the schema — which is the whole point of taking the no-migration route — and it
-is the honest price of that route. It should not spread: nothing outside `valuation.server.ts` names
-`ValuedRow`.
-
-**And the as-of path returns `undefined`, not `null`.** `holding_valued_at` emits the view's columns
-and no others, so once `ValuedSource` is `ValuedRow`, `row.annual_dividend` on that path is a missing
-key. `toValuedHolding` must therefore use `?? null`, never `required()`, and never a bare read. This
-matters more than it looks: Vitest's `toEqual` treats an `undefined` property as equal to a missing
-one, so the exhaustive row-shape assertions in `tests/current-holdings.test.ts` and
-`tests/holdings-at.test.ts` would pass while the field was silently `undefined`. The as-of test must
-assert `annualDividend: null` explicitly.
 
 ### Three slices, not two, and never a boolean
 
@@ -288,10 +279,17 @@ the coverage predicate goes with it, since `isPriced` says nothing about a payou
 implementation and its doc comment says so; `allocationByPerson` and its two siblings are four-line
 adapters over it, not near-copies. Adding to that shape is right and collapsing it would be churn.
 
-**Negative slices are live, not dormant.** An earlier draft claimed the negative branch could never
-fire here. That was wrong and contradicted this spec's own test for a liability carrying a rate, and
-§8.1's "the one view where the loan's negative yield does something interesting". The branch stays
-reachable; only its prose, which talks about what is *owned*, needs to read correctly for a payout.
+**Negative slices are live, not dormant, and a whole slice can go negative.** An earlier draft
+claimed the negative branch could never fire here. It was wrong twice over. Seeded against a real
+database — a taxable brokerage holding VTI beside a car loan whose note carries a rate — the taxable
+*slice* came out at **−522.20**: the loan's interest outweighs the dividend, in the same group,
+because a liability account still has a tax treatment. So the branch fires, and it fires on the group
+the household cares most about.
+
+Its prose is what needs work. The note reads "the ring draws what is owned. A debt is not a share of
+it" — true for value and wrong here, where the negative is interest paid rather than a debt held.
+The note becomes a prop, or the panel takes a flag choosing between an ownership and a payout
+reading.
 
 **This is not a pure move**, and an earlier draft's claim that Analysis's screenshots are therefore
 exempt does not stand — see the testing section, where the safety net it assumed turns out not to
@@ -311,8 +309,9 @@ draft; the whole list is below, and two entries are substantive rather than book
 
 | File | Change |
 |---|---|
-| `app/lib/valuation.server.ts` | `ValuedRow`, the derived-table `valuedNow` |
-| `app/lib/valuation.server.ts` | `ValuedHolding.annualDividend`, and `?? null` in `toValuedHolding` |
+| `migrations/0006_*.sql` | the view and the as-of function, replaced together |
+| `app/lib/database.generated.ts` | regenerated by `npm run db:types` — never hand-edited |
+| `app/lib/valuation.server.ts` | `ValuedHolding.annualDividend`, and the line in `toValuedHolding` |
 | `app/lib/holdings-view.ts` | `SortKey`, `SORT_KEYS`, the `compareBy` case |
 | `app/lib/holdings-view.ts` | `HoldingsTotal` gains the field; **`totalOf`'s `figure()` must not dash it** |
 | `app/lib/holdings-view.ts` | the derived-yield helper, beside `formatQuantity` and `holdingNote` |
@@ -377,6 +376,19 @@ That is not only cycle-avoidance. It is what makes "Holdings grouped by tax trea
 Income breakdown" structural rather than coincidental, because both read one accessor. A third copy
 of the labels would let the two group identically and label differently — exactly the failure that
 test exists to catch.
+
+**Two edges, both found by seeding rather than by reading.**
+
+A slice can be **negative** — see the `Breakdown` decision above. The sheltered sentence has to read
+correctly when it is: with a taxable slice of −522.20 and a sheltered slice of 0.00, "$0 of −$522 is
+sheltered" is arithmetic nobody should be shown. The sentence states the sheltered amount and the
+taxable amount separately rather than as a fraction of a total that can be smaller than its parts.
+
+A group can have **a dividend and no value**. The tax-deferred group in that same fixture summed to
+`0.0000` of dividend against a *null* value, because its only holding was an unquoted trust. Its
+weighted yield is undefined — not zero — and the table says nothing rather than `0.0%`. This is the
+same null-is-not-zero rule the rest of the codebase follows; the zero rule of §14.9 applies to the
+dividend, never to the value it is divided by.
 
 **Empty state:** the existing `EmptyState` for a household with nothing uploaded. §8.4's rule holds
 — an instance with no data and a portfolio that genuinely pays nothing must not render the same
@@ -474,7 +486,7 @@ copy. And `isPositive`, currently private to the Analysis route, is the counterp
 `isNegative` and belongs beside it rather than travelling into a component file during the
 extraction.
 
-**Build order.** Five tracer bullets: the query, `ValuedRow` and the widened `ValuedHolding` (the
-figure exists, nothing renders it); the Holdings column; the `allocationBy` and `Breakdown`
+**Build order.** Five tracer bullets: the migration, the regenerated types and the widened
+`ValuedHolding` (the figure exists, nothing renders it); the Holdings column; the `allocationBy` and `Breakdown`
 extraction; the Income screen; the docs, the screenshot script and the captures. The extraction
 blocks the Income screen; the query blocks the column and the screen; the docs close it out.

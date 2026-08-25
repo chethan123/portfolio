@@ -548,6 +548,7 @@ CREATE VIEW holding_valued AS
   --   → account → person
   --   → quote
   -- exposing: quantity, price, value, cost_basis, unrealized,
+  --           annual_dividend,
   --           owner, account, institution, kind, tax_treatment,
   --           classification, asset_class
 ```
@@ -559,7 +560,14 @@ That is a set-returning function:
 holding_valued_at(d date)
   -- per account: the position_set with max(as_of_date) <= d
   --   joined to price_daily on d, carrying forward the last close
+  --   annual_dividend is null: there is no historical yield to report
 ```
+
+**The `setof holding_valued` return type is a two-way contract, and PostgreSQL does not enforce it
+when you break it.** `create or replace view` accepts an appended column and reports success while
+leaving the function returning too few columns, which fails only when something calls it. A column
+added here is a column added to both, in one migration. See
+[ADR-0001](docs/adr/0001-holding-valued-row-type-contract.md).
 
 **Cost basis is nullable**, so any group's unrealized figure may be partial. The rule is **sum what
 is known and label the coverage** — "unrealized $47k, based on 8 of 12 holdings". Never coerce null
