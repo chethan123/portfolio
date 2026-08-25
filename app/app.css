@@ -1854,22 +1854,48 @@ code {
  * control line: the button that ends the row, and the note that sometimes
  * stands where a field would (review, when the statement dates itself).
  *
- * `* ~` is what leaves a form whose only child is a button alone — the
- * new-instruments step's submit row. There is nothing there to line up with,
- * and the margin would be 24px of nothing.
+ * The sibling combinator is what leaves a form whose only child is a button
+ * alone — the new-instruments step's submit row, where there is nothing to line
+ * up with and the margin would be 24px of nothing. It is written against
+ * `:not([type="hidden"])` rather than `*` because a hidden input *is* a
+ * sibling, `display: none` and all, and half the forms here open with one:
+ * `columns.tsx` carries the header row that way and `people.tsx` the person id.
+ * With `*`, adding a hidden field to a one-button form would silently indent
+ * the button.
  */
-.panel-form > * ~ :is(button, .button) {
+.panel-form > :not([type="hidden"]) ~ :is(button, .button) {
   margin-top: var(--field-caption);
 }
 
-/* Centred in the control's band rather than sitting at the top of it: the note
- * is one 16px line and the button beside it is 40px, and a sentence level with
- * the top of a button reads as a caption for it. */
+/*
+ * ...but not below a member that took the whole line. The drop exists to clear
+ * a caption; a button that wrapped onto a line of its own has no caption above
+ * it, and dropping it there opens 40px where the row's own 16px gap is what is
+ * wanted. A full-line member is the only wrap CSS can actually see. A wrap the
+ * *content* forces — Settings → Tax, whose long note widens its field past the
+ * room the button needs — cannot be seen, and there the drop stands.
+ */
+.panel-form > :is(fieldset, label.choice, .form-error) ~ :is(button, .button) {
+  margin-top: 0;
+}
+
+/*
+ * The note that stands where a field would, centred on the control line: it is
+ * one 16px line and the button beside it is 40px, so it drops the caption block
+ * plus half the difference.
+ *
+ * Margin alone, deliberately. Centring it by making the paragraph a flex
+ * container costs it the collapsible space around its inline children — it ate
+ * the space after this very sentence's colon, printing "dates itself:2026-08-25"
+ * — and a flex row does not wrap between its items, so a longer note would come
+ * apart into columns instead of running on as prose.
+ *
+ * No sibling guard here, unlike the button above: this note is its row's *first*
+ * child in the one place it is used, so a guard would remove the very margin it
+ * needs.
+ */
 .panel-form > .form-note {
-  display: flex;
-  align-items: center;
-  min-height: var(--control-h);
-  margin-top: var(--field-caption);
+  margin-top: calc(var(--field-caption) + (var(--control-h) - 16px) / 2);
 }
 
 /*
@@ -1882,6 +1908,13 @@ code {
  * button on one wrapped line, bottom-aligned to each other. A form-level
  * refusal belongs above the row it refuses (ingest brief §2), never beside a
  * field inside it.
+ *
+ * It costs height, and on one screen that cost scales. The new-instruments
+ * step's Price source is a `fieldset` too, so every unresolved string on it
+ * grows by about 96px — a first import of a twenty-line export pays that twenty
+ * times over in scroll. Worth it: those two radios were otherwise jammed against
+ * the right of the Name box with their note running under three unrelated
+ * fields.
  */
 .panel-form > fieldset,
 .panel-form > label.choice,
@@ -1940,8 +1973,10 @@ code {
   }
 
   /* Every row wraps here, so the button is always on a line of its own — and
-   * a line of its own has no caption above it to drop past. */
-  .panel-form > * ~ :is(button, .button),
+   * a line of its own has no caption above it to drop past. Written against the
+   * same `:not([type="hidden"])` as the rule it overrides: `*` would score
+   * lower and lose to it. */
+  .panel-form > :not([type="hidden"]) ~ :is(button, .button),
   .panel-form > .form-note {
     margin-top: 0;
   }

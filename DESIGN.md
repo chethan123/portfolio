@@ -1073,7 +1073,7 @@ changes width as it updates makes the whole row twitch.
 | `--space-xl` | 40px | Page header to first panel |
 | `--canvas-margin` | 16px → 32px | Mobile → desktop |
 | `--rail` | 280px | Fixed sidebar, ≥1024px |
-| `--content-max` | 1152px | The canvas caps here and centres |
+| `--content-max` | 1280px | The canvas caps here and centres. Was 1152 until Holdings gained a ninth column |
 | `--control-h` | 40px | Buttons, inputs, range chips |
 | `--field-caption` | 24px | A caption line plus its gap — what an un-captioned member of a control row drops by to reach the control line |
 | `--radius` | 4px | Chips |
