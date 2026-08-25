@@ -5,6 +5,52 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-08-25 — Upload workflow UX review
+
+One document: [Upload UX review](./2026-08-25-upload-ux-review.md) — the statement workflow walked as
+a household, from an empty instance to four recorded statements and the quarter after, against
+`410a61f`. Twelve findings, all open, none of them a re-report of the exploratory pass.
+
+### The four things worth knowing without reading further
+
+1. **Adding a second account silently copies the first one's owner, kind, tax treatment and account
+   number.** The add form keeps every value after a *successful* add — the action returns `null`
+   precisely so the fields reset, and an uncontrolled input does not reset on a re-render. Filing an
+   account under the wrong tax treatment is wrong on every screen that reads the taxable/sheltered
+   split, and nothing anywhere suggests it happened.
+
+2. **A correct first run ends at `$0.00` net worth, and that is the guaranteed outcome rather than an
+   edge case.** Every instrument in a first statement is created during the upload, and the poller
+   has no immediate first tick and skips weekends — so the reward for a correct onboarding is a
+   headline of `$0.00` over four accounts of `$0.00`, on a screen whose own rule is that a zero is a
+   claim. The account page already refuses the figure; the Overview does not.
+
+3. **There is no column auto-detection at all**, though the header row itself is detected and
+   detected well. Six controls open on a placeholder against a header reading `Symbol`, `Quantity`,
+   `Description`. The design record forbids *skipping* the columns screen; it does not forbid
+   arriving with a proposal on it, and a remembered mapping already works exactly that way.
+
+4. **A repeat upload asks almost nothing, and the design intent holds.** Day one costs 130
+   interactions across 36 screens; the same account the next quarter costs 11. All six column choices
+   and the header row come back filled, and the instruments step dims to *· none*. The
+   never-skipped columns screen costs one glance, not one decision.
+
+### Evidence
+
+[`upload-ux-2026-08/`](./upload-ux-2026-08/) holds screenshots of the real application taken during
+the walk — the first-sighting columns screen, the cost-basis mistake as it reaches review, the
+unpriced first statement, the remembered mapping, both removal valves, and the `$0.00` overview that
+ends a correct first run. Every finding that has a picture links to it in place.
+
+### Status
+
+Nothing here is approved work. Three frictions were confirmed as **deliberate** and are recorded as
+decisions rather than findings — a refusal on the drop screen costs the file pick, a header-row
+change discards unsaved column choices, and a reordered export costs one re-map. The phone was
+measured and the accepted limitation holds: nothing is hidden at 390px. The closing section groups
+the twelve findings by what the change actually is — five are copy only, one is a one-line remount,
+three want a spec, and three are questions for the owner rather than proposals.
+
 ## 2026-08-24 — Exploratory test pass
 
 One document: [Exploratory test report](./2026-08-24-exploratory-test-report.md) — 67 findings from
