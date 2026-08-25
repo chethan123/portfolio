@@ -429,7 +429,7 @@ as-of function, or any total.
 
 There is exactly one place the sign is read: the allocation denominator. A slice's share is computed
 against the gross *positive* total rather than the net, because $8,000 of debt and $8,000 of assets
-are not the same slice of anything (`allocation.ts:132-165`), and the Analysis screen prints that
+are not the same slice of anything (`allocation.ts:169-202`), and the Analysis screen prints that
 caveat to the reader.
 
 Four seed rows in `migrations/0001_initial_schema.sql` are what make this hold end to end: a `Cash`
@@ -1601,7 +1601,6 @@ still live in the current code:
   ways. Note that `windowDays` should *not* be shared: the two differ for a documented domain reason.
 - **`inTransaction` exists three times** — in `prices.server.ts`, `instrument-resolution.server.ts`
   and `uploads.server.ts` — identically. All three already import from `db.server.ts`.
-- **`labelOf` exists three times**, in `account-options.ts`, `allocation.ts` and `holdings-view.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
   `accountInput` would produce a refusal nobody sees. It is why `updateAccount`'s kind refusals are
   keyed to `kind` rather than to the form, which is where they belong anyway; the gap itself is
@@ -1679,7 +1678,7 @@ still live in the current code:
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
 | `holdings-view.ts` | The Holdings table: seven dimensions, filtering, grouping, subtotals |
-| `allocation.ts` | Three allocation cuts plus unrealized gains by asset type |
+| `allocation.ts` | `allocationBy` — one grouper over any figure — the three cuts adapted from it, plus unrealized gains by asset type |
 | `market-hours.ts` | `isMarketOpen` (an optimisation) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |

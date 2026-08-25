@@ -44,7 +44,7 @@
  * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
  * either job by hand.
  */
-import { ACCOUNT_KINDS, TAX_TREATMENTS, type Option } from "./account-options.ts";
+import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "./account-options.ts";
 import { ASSET_CLASSES, allocateShares } from "./allocation.ts";
 import {
   MONEY_SCALE,
@@ -97,13 +97,6 @@ const SHORT_TAX: Record<TaxTreatment, string> = {
   tax_deferred: "Tax-deferred",
   tax_free: "Tax-free",
 };
-
-function labelOf<Value extends string>(
-  options: ReadonlyArray<Option<Value>>,
-  value: Value,
-): string {
-  return options.find((option) => option.value === value)?.label ?? value;
-}
 
 /** What a holding is filed under for one dimension. */
 type Facet = { key: string; label: string; optionLabel: string };
