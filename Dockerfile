@@ -7,8 +7,23 @@
 #   build   client and server bundles, then the dev dependencies pruned away.
 #   runtime node:24-slim with production dependencies and build output only —
 #           no compiler, no dev dependencies, no source tree, non-root.
+#
+# `deps` and `build` are pinned to $BUILDPLATFORM, so they run natively on the
+# builder's own architecture instead of under emulation. Only `runtime` varies
+# per target platform, and all it does is COPY and chmod. That is what makes the
+# linux/arm64 image nearly free to produce: without the pins, the arm64 leg runs
+# `npm ci` and the Vite build under QEMU, which is both slow and prone to
+# intermittent V8 faults on the release path where nobody is watching.
+#
+# THE INVARIANT THIS RESTS ON: nothing in the production dependency tree has a
+# native binary or a platform-specific install script, so a tree installed on
+# one architecture runs on the other. That holds today — no non-dev package in
+# package-lock.json declares `hasInstallScript`, `os` or `cpu`. A production
+# dependency that does breaks it, and breaks it *silently*: the arm64 image
+# builds and then fails at runtime on the box that pulled it. If that happens,
+# drop these two pins and build each platform natively instead.
 
-FROM node:24-slim AS deps
+FROM --platform=$BUILDPLATFORM node:24-slim AS deps
 WORKDIR /app
 
 # Only the lockfile and manifest, so this layer is invalidated by a dependency
@@ -17,7 +32,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --include=dev
 
 
-FROM node:24-slim AS build
+FROM --platform=$BUILDPLATFORM node:24-slim AS build
 WORKDIR /app
 ENV NODE_ENV=production
 

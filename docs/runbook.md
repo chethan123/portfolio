@@ -491,8 +491,9 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 - `docker compose restart app` — the fix for a wedged-but-alive app. An unhealthy container is not
   restarted for you: `restart: unless-stopped` fires on process exit, not on a failing healthcheck.
 - `docker compose down` — **without** `-v`. Stops and removes the containers and keeps `db-data`.
-- `docker compose up -d --build` — rebuilds and recreates. Note that Caddy's `/data` is not on a
-  volume, so a recreate discards any certificates it has issued.
+- `docker compose up -d` — pulls the tag `APP_VERSION` points at and recreates. Note that Caddy's
+  `/data` is not on a volume, so a recreate discards any certificates it has issued. It needs to
+  reach `ghcr.io`: with no network this fails rather than falling back to what is already here.
 - Re-running migrations, by restarting `app`. They are idempotent.
 - `curl -s localhost/healthz` — no credentials, no side effects.
 - Reading anything in `pg_stat_activity`.

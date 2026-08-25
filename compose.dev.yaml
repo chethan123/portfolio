@@ -1,0 +1,29 @@
+# The development override: build the `app` image from this checkout instead of
+# pulling the published one.
+#
+#     docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+#
+# compose.yaml is the deployment file and has no `build:` stanza on purpose — an
+# operator's `docker compose up -d` must never silently turn into a build. This
+# file is the other half of that decision, and the only place a build is
+# configured.
+#
+# Two readers use it. `scripts/smoke-test.sh` sets COMPOSE_FILE to both files, so
+# CI exercises the tree it was handed rather than the last published image. And
+# you want it locally whenever the change under test is to the Dockerfile, the
+# entrypoint, or compose.yaml itself — the three things the vitest suite cannot
+# see.
+
+name: portfolio
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # A separate local tag, so a development build never sits in the image cache
+    # wearing the name of a published release.
+    image: portfolio-app:dev
+    # Overrides the `always` in compose.yaml, which would otherwise try to pull
+    # a tag that only exists on this machine.
+    pull_policy: build

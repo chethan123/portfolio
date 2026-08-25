@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # Version tags publish the container image — see the `publish` job. The
+    # `[0-9]` rather than a bare `*` keeps a non-version tag from starting a run
+    # that can only end in "not a valid semver" and an image nobody asked for.
+    tags: ['v[0-9]*']
   pull_request:
 
 concurrency:
@@ -118,3 +122,73 @@ jobs:
 
       - name: Smoke test
         run: ./scripts/smoke-test.sh
+
+  # Publishing lives here rather than in a release workflow of its own so that a
+  # tag is gated on *everything* this file already checks. A separate workflow
+  # could only re-run the jobs or trust that they passed on main; this way the
+  # dependency is the real one, and there is one place to read what CI does.
+  publish:
+    name: Publish the container image
+    # All three, not just `smoke`: `check` is the typecheck and the test suite,
+    # `audit` is the production advisory gate, `smoke` is the container itself.
+    # Gating on all of them is what makes "a published image passed CI" a fact
+    # rather than a convention.
+    needs: [check, audit, smoke]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The only elevated permission in this file, and all GHCR needs: the
+      # built-in GITHUB_TOKEN can push to a package owned by this repository, so
+      # there is no PAT to create, store or rotate.
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      # No setup-qemu-action: the Dockerfile builds its `deps` and `build`
+      # stages on the runner's own architecture (see its header comment), so
+      # nothing here is emulated and the arm64 leg is a file copy.
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derives the image tags from the git tag: v1.2.3 publishes 1.2.3, 1.2, 1
+      # and `latest`. The leading `v` is stripped, which is why compose.yaml
+      # pins `1` and not `v1` — the two have to agree.
+      #
+      # `latest` is deliberately not listed. It comes from the default
+      # `latest=auto` flavour, which withholds it from a pre-release; spelling it
+      # out as `type=raw` would publish it unconditionally and let a v1.0.0-rc1
+      # become what every unpinned instance upgrades to.
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/portfolio-app
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - uses: docker/build-push-action@v7
+        with:
+          # The checkout, not the git context this action defaults to — which
+          # ignores .dockerignore and anything a previous step wrote.
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # A multi-platform image is a manifest list, and the package page reads
+          # its description from the index annotations rather than image labels.
+          annotations: ${{ steps.meta.outputs.annotations }}
+          # Public repositories get provenance attestations at mode=max by
+          # default. They arrive as extra manifest entries that GHCR renders as
+          # `unknown/unknown` architectures on the package page.
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

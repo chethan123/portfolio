@@ -48,10 +48,22 @@ services:
     # publishing it would put the database on the host's network for nothing.
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: portfolio-app
+    # Pulled, never built here. The image is published to GHCR by the `publish`
+    # job in .github/workflows/ci.yml when a `v*` tag is pushed. The tag is the
+    # floating major, so every v1.x.y release lands on `1`; set APP_VERSION to a
+    # full version to hold an instance still or to go back to a known-good image.
+    #
+    # There is deliberately no `build:` stanza. This is the deployment file, and
+    # a deploy that cannot reach the registry — an unreachable network, a typo'd
+    # tag — must fail loudly rather than quietly building a multi-minute image on
+    # whatever NAS or VPS happens to be running it. Building from source is
+    # `compose.dev.yaml`, which says so in one place.
+    image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
+    # This is what makes `docker compose up -d` an upgrade rather than a no-op.
+    # Under Compose's default `missing` policy a floating tag is fetched once and
+    # then never again, so a new release would install itself only on a machine
+    # that had never run the old one — silently, with no error to notice.
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       db:
