@@ -52,14 +52,25 @@ derived table over it, left-joined to `quote`:
 ```sql
 select hv.*,
        q.annual_dividend_per_share,
-       cast(hv.quantity * q.annual_dividend_per_share as numeric(20, 4)) as annual_dividend
+       cast(hv.quantity * coalesce(q.annual_dividend_per_share, 0)
+            as numeric(20, 4))                                    as annual_dividend
 from holding_valued hv
 left join quote q on q.instrument_id = hv.instrument_id
 ```
 
-still aliased `holding_valued`, so `readHoldings` and `readTotal` need no change at all —
-`selectAll()` picks the two new columns up. `valuedAt(date)` is untouched, which is what makes the
-historical answer null rather than anachronistic.
+still aliased `holding_valued`. `readHoldings` and `readTotal` need no change to their **bodies** —
+both are `selectAll()` or raw `sql` templates — but the source *type*, `toValuedHolding` and
+`ValuedHolding` all do. See "The row type is widened locally" below; that is where the real cost of
+"no migration" sits.
+
+The `coalesce` is inside the SQL and not in JavaScript, because the zero rule is the figure's
+definition rather than a rendering choice. `valuedAt(date)` is untouched, which is what makes the
+historical answer carry nothing rather than something anachronistic.
+
+**Precedent:** `prices.server.ts` already selects from `holding_valued` and joins `quote` on
+`instrument_id` for the staleness summary, so this is the second use of the pattern, not the first.
+It also means `valuation.server.ts`'s module comment claiming to be the only reader of the view is
+already stale and should be corrected while we are here.
 
 **No migration.** The view and the as-of function are both left exactly as they are.
 
@@ -156,6 +167,12 @@ accepted limitation in DESIGN.md §14.
 **Consequence on screen:** an unquoted trust renders a blank Value and a `$0` dividend in the same
 row. That is the rule working as chosen, not a fault.
 
+**Where the zero lives:** in the `coalesce` inside the derived table, and nowhere else. Two places
+would otherwise quietly reintroduce a dash. `money-cell.tsx` renders a null as `—`, and `totalOf`'s
+`figure()` helper returns null whenever a sum's `known` count is zero — correct for value, wrong
+here, because a group where nothing pays is `$0` and not an unknown. The dividend total must not go
+through that branch.
+
 ### The dividend enters through `valuedNow()`, not through the view
 
 The obvious move is to add the columns to `holding_valued`. It was tried against a real Postgres 16
@@ -188,6 +205,42 @@ above.
 **Consequence:** `ValuedHolding.annualDividend` is `string | null`, null on every `valuedAt` path.
 `toValuedHolding` must not narrow it with `required()`.
 
+### The row type is widened locally, not in the generated types
+
+`HoldingValuedRow` is `Selectable<Database["holding_valued"]>`, and `Database` is a straight alias
+of the kysely-codegen output. Kysely derives `selectAll()`'s result type entirely from the generic on
+the aliased raw builder, so the two new columns arrive at runtime and do not exist to the compiler.
+
+There is no legal place to put them in the generated file. CI runs `npm run db:types -- --verify`,
+so a hand-edit fails the build; and with no migration, regenerating from the live schema will never
+produce them. Widening `Database` itself is worse than either: `accountTotals` and `accountTotal`
+join the **real view**, and a widened `Database` would let someone select `annual_dividend` there —
+clean typecheck, runtime failure.
+
+So the widening is local to the query module:
+
+```ts
+type ValuedRow = HoldingValuedRow & {
+  annual_dividend_per_share: string | null;
+  annual_dividend: string | null;
+};
+type ValuedSource = AliasedRawBuilder<ValuedRow, "holding_valued">;
+```
+
+**This is a deliberate, narrowly-scoped exception to `AGENTS.md`'s rule that types are derived from
+`database.generated.ts` rather than hand-written.** It is justified only because these columns exist
+in a query and not in the schema — which is the whole point of taking the no-migration route — and it
+is the honest price of that route. It should not spread: nothing outside `valuation.server.ts` names
+`ValuedRow`.
+
+**And the as-of path returns `undefined`, not `null`.** `holding_valued_at` emits the view's columns
+and no others, so once `ValuedSource` is `ValuedRow`, `row.annual_dividend` on that path is a missing
+key. `toValuedHolding` must therefore use `?? null`, never `required()`, and never a bare read. This
+matters more than it looks: Vitest's `toEqual` treats an `undefined` property as equal to a missing
+one, so the exhaustive row-shape assertions in `tests/current-holdings.test.ts` and
+`tests/holdings-at.test.ts` would pass while the field was silently `undefined`. The as-of test must
+assert `annualDividend: null` explicitly.
+
 ### Three slices, not two, and never a boolean
 
 The Income breakdown groups by `tax_treatment` — Taxable, Tax-deferred, Tax-free — reusing the
@@ -214,20 +267,35 @@ Liability. It is not tax treatment, and the two must not be used for each other 
 to the Analysis route. Income needs the same panel, so they move to `app/components/breakdown.tsx`
 and Analysis imports them.
 
-`Breakdown` is already generic over `AllocationSlice` and formats with `formatMoney`, so a dividend
-slice needs no new props. Its own doc comment is the argument: written once for all three because a
-second copy is how one breakdown comes to treat a liability or a sixth group differently.
+`Breakdown` is generic over `AllocationSlice` and formats with `formatMoney`, which is most of the
+way there. Its own doc comment is the argument for sharing it: written once for all three because a
+second copy is how one breakdown comes to treat a liability or a sixth group differently. §13.3's
+rule — the same rank is the same colour in every panel, no breakdown gets a palette of its own — is
+enforced by there being one implementation and by nothing else.
 
-§13.3's rule — the same rank is the same colour in every panel, no breakdown gets a palette of its
-own — is enforced by there being one implementation and by nothing else.
+**It needs three changes, not none.** The second column heading is the hard-coded string `Value`, so
+it becomes a prop. `Donut` hard-codes the centre label `Total`, which reads correctly for a payout
+total and can stay. And the panel needs an optional slot beneath the table for the sheltered line;
+Analysis passes nothing.
 
-**Additions:** an optional slot beneath the table, for the sheltered line. Analysis passes nothing.
+**`allocation.ts` moves with it, because today it cannot produce a dividend slice at all.** `group()`
+sums `holding.value`, hard-coded, and counts coverage from `holding.isPriced`. Built on that,
+`allocationByAccount` would return a *value* breakdown, and Income would render two panels of net
+worth under dividend headings. `group()` gains an amount selector and is exported as `allocationBy`;
+the coverage predicate goes with it, since `isPriced` says nothing about a payout.
 
-**Dormant, not missing:** the negative-slice branch and its note exist for liabilities. Under the
-zero rule every dividend slice is non-negative, so the branch never fires on Income.
+**The three existing adapters stay as they are.** `group()` is already the one parameterised
+implementation and its doc comment says so; `allocationByPerson` and its two siblings are four-line
+adapters over it, not near-copies. Adding to that shape is right and collapsing it would be churn.
 
-**This must be a pure move.** Analysis renders identically afterwards, which is what makes its
-screenshots exempt from retaking and its route tests a check on the refactor.
+**Negative slices are live, not dormant.** An earlier draft claimed the negative branch could never
+fire here. That was wrong and contradicted this spec's own test for a liability carrying a rate, and
+§8.1's "the one view where the loan's negative yield does something interesting". The branch stays
+reachable; only its prose, which talks about what is *owned*, needs to read correctly for a payout.
+
+**This is not a pure move**, and an earlier draft's claim that Analysis's screenshots are therefore
+exempt does not stand — see the testing section, where the safety net it assumed turns out not to
+exist.
 
 ### The Holdings column
 
@@ -238,8 +306,33 @@ Sortable: one member on `SortKey`, one entry in `SORT_KEYS`, one `case` in `comp
 `compareDecimal` at `MONEY_SCALE`. No `isMissing` case is needed, because under the zero rule the
 figure is never missing.
 
-Subtotalled: `FIGURES` goes from three to four, with the matching cell in `Figures` and the row
-type it reads. No coverage caption on this column — there are no unknowns to count.
+Subtotalled: `FIGURES` goes from three to four. That phrase was doing too much work in an earlier
+draft; the whole list is below, and two entries are substantive rather than bookkeeping.
+
+| File | Change |
+|---|---|
+| `app/lib/valuation.server.ts` | `ValuedRow`, the derived-table `valuedNow` |
+| `app/lib/valuation.server.ts` | `ValuedHolding.annualDividend`, and `?? null` in `toValuedHolding` |
+| `app/lib/holdings-view.ts` | `SortKey`, `SORT_KEYS`, the `compareBy` case |
+| `app/lib/holdings-view.ts` | `HoldingsTotal` gains the field; **`totalOf`'s `figure()` must not dash it** |
+| `app/lib/holdings-view.ts` | the derived-yield helper, beside `formatQuantity` and `holdingNote` |
+| `app/routes/holdings.tsx` | the `COLUMNS` entry and `FIGURES` |
+| `app/routes/holdings.tsx` | the `Figures` cell — subtotals and grand total |
+| `app/routes/holdings.tsx` | **the `Row` cell** — the per-holding figure itself |
+
+No coverage caption on this column: there are no unknowns to count.
+
+The yield helper lives in `holdings-view.ts` rather than in the route, because Account detail renders
+the same cells — which is why `formatQuantity` and `holdingNote` live there too.
+
+**The yield derivation must guard its denominator.** `money.ts`'s `divide` takes bigints and divides
+them, so a zero denominator throws — and `value` can legitimately be `0.0000`, since nothing
+constrains a quantity or a price to be non-zero. A zeroed-out position would take the whole table
+down with a `RangeError`. Both a null value and a zero one yield no percentage.
+
+**Reuse `formatShare`; do not write a percent formatter.** `allocation.ts` already renders a fraction
+at `SHARE_SCALE` as a percentage, with this project's sign and minus-glyph handling. `formatPercent`
+alone would prefix `+` on every row, which `formatShare` exists to strip.
 
 The derived yield renders as a `cell-sub` line beneath the amount, the pattern the Asset and Account
 cells already use. The amount alone cannot be compared across rows, because it scales with position
@@ -258,9 +351,32 @@ headline cannot disagree with each other or with Holdings.
 where §8.1's "weighted yield" lands. It is one figure at the top rather than a column in each table,
 which keeps the tables to amount and share.
 
-**Two breakdowns:** by tax treatment, then by account. §8.1 promised both. `allocationByAccount` is
-new in `allocation.ts` alongside the three that exist; whether it should instead be one
-parameterised grouper is a question for the reviewer, not a decided thing.
+**The weighted yield's denominator is gross positive assets** — the denominator `allocation.ts` and
+`holdings-view.ts` both already argue for at length, and for the same reason. The standard test
+household is in net debt, so dividing a positive payout by net worth would report a negative yield on
+a portfolio that pays money, and a household whose debts nearly cancel its assets would divide by
+something near zero. Guarded against a zero denominator like every other derived yield here.
+
+The headline is summed in JavaScript with `sumMoney` over the one array, where Analysis calls
+`netWorth()` and sums its headline in SQL. A deliberate departure: `sumMoney` is exact BigInt
+arithmetic, and one read is what makes the headline and the breakdowns structurally unable to
+disagree.
+
+**Two breakdowns:** by tax treatment, then by account. §8.1 promised both, and **neither grouper
+exists** — there is no `allocationByTaxTreatment` either, which an earlier draft of this spec missed.
+Both are new adapters over `allocationBy`.
+
+**The labels come from `DIMENSIONS`, passed in by the loader.** The short labels Holdings shows —
+Taxable, Tax-deferred, Tax-free — are module-private to `holdings-view.ts`, and `TAX_TREATMENTS`
+carries only the long form, which that file says in place is unusable in a table cell. `allocation.ts`
+cannot import them: `holdings-view.ts` already imports from `allocation.ts`, so the reverse is a
+cycle. The Income loader therefore passes the `tax` and `account` dimension accessors into
+`allocationBy`, keeping the dependency one-way and the label table single.
+
+That is not only cycle-avoidance. It is what makes "Holdings grouped by tax treatment agrees with the
+Income breakdown" structural rather than coincidental, because both read one accessor. A third copy
+of the labels would let the two group identically and label differently — exactly the failure that
+test exists to catch.
 
 **Empty state:** the existing `EmptyState` for a household with nothing uploaded. §8.4's rule holds
 — an instance with no data and a portfolio that genuinely pays nothing must not render the same
@@ -290,8 +406,24 @@ What is worth testing, in the order it would hurt to break:
 - **Holdings grouped by tax treatment agrees with the Income breakdown**, holding for holding. Both
   read one array, so this is structural; the test is what keeps it structural. It belongs beside
   `tests/invariants/aggregates-agree.test.ts`.
-- **The `Breakdown` extraction changed nothing on Analysis** — its existing route tests pass
-  untouched, which is the whole claim.
+- **The `Breakdown` extraction did not change Analysis.** There is no safety net for this today:
+  `tests/routes/` has no `analysis.test.ts`, and the only Analysis coverage,
+  `tests/invariants/aggregates-agree.test.ts`, imports the *loader* and asserts arithmetic — it never
+  renders `Breakdown`, `Donut` or `ring`. So the extraction either writes a render test for
+  `Breakdown` against the existing `tests/support/render.tsx` seam, or Analysis's four screenshots get
+  retaken like everything else. It cannot claim to be verified by tests that do not exist.
+
+**Four existing tests break on the widened type, and each is a deliberate update:**
+
+- `tests/holdings-view.test.ts` and `tests/allocation.test.ts` each hand-write a `ValuedHolding`
+  factory, so both fail typecheck on the new field.
+- `tests/current-holdings.test.ts` and `tests/holdings-at.test.ts` assert exhaustive row shapes with
+  `toEqual`. These are the shape contracts that keep the current and as-of answers one row type, and
+  the as-of one must be updated to `annualDividend: null` — the assertion that actually catches the
+  `undefined` bug, since `toEqual` would otherwise pass on a missing key.
+
+The seam needs nothing new: `tests/support/fixtures.ts`'s `seedQuote` already accepts and writes
+`annualDividendPerShare`.
 
 Not worth testing: that the ring renders arcs, that the column sorts (the comparator is tested; the
 header is framework behaviour), that `formatMoney` formats.
@@ -318,15 +450,31 @@ header is framework behaviour), that `formatMoney` formats.
 
 **Documentation is inside this work, not after it.** Income stops being a placeholder, which makes
 three statements actively false: `README.md`'s "Not built yet" section, `docs/guide/README.md`, and
-`docs/guide/first-run.md`. `docs/guide/` carries a page per screen and has no `income.md`.
+`docs/guide/first-run.md`. `docs/guide/` carries a page per screen and has no `income.md`. A fourth
+file changes too: `docs/guide/holdings.md` lists the columns and explains the coverage captions, and
+both passages move with the new column.
 
-**Screenshots are part of it too.** `docs/README.md` is explicit that a change to a screen is not
-finished until they are retaken. `capture-screenshots.ts` already visits `/income`, so the guide's
-shot retakes itself; `docs/screenshots/` has no Income image and needs one, with its editorial
-reason recorded beside the others. Every Holdings shot changes. Analysis's do not, because the
-extraction is a pure move.
+**Screenshots are part of it, and one of them is a code change.** `docs/README.md` is explicit that a
+change to a screen is not finished until they are retaken. `capture-screenshots.ts` already visits
+`/income` for the guide, so that shot retakes itself — but the `docs/screenshots/` theme loop never
+visits `/income` at all, so the README's light and dark Income images need the script extended, not
+just re-run, with the editorial reason recorded beside the others. Every Holdings shot changes.
+Analysis's are only exempt if the extraction ships with the render test above; otherwise they are
+retaken too.
 
-**Build order.** Five tracer bullets: the query and the widened `ValuedHolding` (the figure exists,
-nothing renders it); the Holdings column; the `Breakdown` extraction; the Income screen; the docs
-and screenshots. The extraction blocks the Income screen; the query blocks the column and the
-screen; the docs close it out.
+**Lifting limitation 9 later is cheaper than it sounds.** The row-aware version of the zero rule
+needs `price_source`, and that is already a column on `holding_valued` — `prices.server.ts` reads it
+today. It is simply not surfaced on `ValuedHolding`. So the change is one field on the mapper and one
+branch in the derivation, not a schema change.
+
+**Two small near-copies to fix while passing through**, both named by the plan review rather than
+invented here. `labelOf` is written three times with the same signature and body —
+`account-options.ts` exports one, and `allocation.ts` and `holdings-view.ts` each keep a private
+copy. And `isPositive`, currently private to the Analysis route, is the counterpart to `format.ts`'s
+`isNegative` and belongs beside it rather than travelling into a component file during the
+extraction.
+
+**Build order.** Five tracer bullets: the query, `ValuedRow` and the widened `ValuedHolding` (the
+figure exists, nothing renders it); the Holdings column; the `allocationBy` and `Breakdown`
+extraction; the Income screen; the docs, the screenshot script and the captures. The extraction
+blocks the Income screen; the query blocks the column and the screen; the docs close it out.

@@ -43,8 +43,17 @@ carries no dividend by construction rather than by a null anyone has to maintain
 
 ## Consequences
 
-- `ValuedHolding.annualDividend` is nullable and is null on every as-of path. It must not be
-  narrowed with `required()`.
+- **The row type has to be widened by hand, and that is the real price.** `Database` is a straight
+  alias of the kysely-codegen output, CI verifies the generated file against the live schema, and
+  with no migration there is nothing for it to generate. So `valuation.server.ts` declares a local
+  `ValuedRow = HoldingValuedRow & { … }` — a deliberate, narrowly-scoped exception to `AGENTS.md`'s
+  rule that types are derived from `database.generated.ts` rather than hand-written. Adding the
+  columns to the view would not need this, and that is the strongest argument on the other side.
+- `ValuedHolding.annualDividend` is nullable and carries nothing on every as-of path. Because
+  `holding_valued_at` does not emit the column at all, the value there is `undefined` rather than
+  `null`, so the mapper must use `?? null` — not `required()`, and not a bare read. Vitest's
+  `toEqual` treats an `undefined` property as equal to a missing one, so the row-shape tests will
+  not catch this on their own; the as-of test asserts `annualDividend: null` explicitly.
 - `quote` is joined twice for one row — once inside the view for the price, once outside for the
   rate. At household scale that is free. It is the visible oddity this record exists to explain.
 - §8.2's concern is untouched: resolving *which position set is current* stays wholly inside the
