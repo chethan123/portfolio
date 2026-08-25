@@ -102,7 +102,16 @@
   --space-xl: 40px;
   --canvas-margin: 32px;
   --rail: 280px;
-  --content-max: 1152px;
+  /* Wide enough for the Holdings table, which is what it is measured against.
+   * That table is the widest thing the application draws — DESIGN.md §8.1 calls
+   * it the workhorse and gives it the columns that would otherwise be four more
+   * pages — so it is the one screen that decides this number. At 1152 it fitted
+   * exactly, to the pixel, until the annual dividend made a ninth column; the
+   * panel then gave 1086 to a table wanting 1206 and every desktop scrolled
+   * sideways to read the last column. `.data-table-scroll` still catches a
+   * narrow window, which is its job; it should not be what a full-size desktop
+   * relies on to see a column. */
+  --content-max: 1280px;
   --control-h: 40px;
   --radius: 4px;
   --radius-lg: 8px;
@@ -699,6 +708,19 @@ a {
     font-size: 36px;
     line-height: 44px;
   }
+}
+
+/* A second figure beside the headline: the ratio the headline is the numerator
+ * of. Not a `.delta`, which is a chip for a *movement* — a yield takes no
+ * arrow, no leading plus and neither of the gain/loss hues, because there is
+ * nothing here for colour to be the redundant channel for (§12). */
+.kpi-aside {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Sign and arrow, never colour alone (§12). The hue is the redundant channel
@@ -1597,6 +1619,16 @@ code {
   margin: 0;
   max-width: 52ch;
   color: var(--on-surface-variant);
+}
+
+/* A sentence restating the table above it — the sheltered subtotal on Income.
+ * Set at body size rather than at `.coverage-note`'s, because it carries
+ * figures a household reads rather than a caveat about them, and it sits above
+ * the notes rather than among them. */
+.panel-statement {
+  margin: 0 0 var(--space-sm);
+  max-width: 60ch;
+  color: var(--on-surface);
 }
 
 .coverage-note,

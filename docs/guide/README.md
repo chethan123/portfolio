@@ -26,6 +26,8 @@ Come back to these when you want to know what something on a screen means.
 - **[Holdings](holdings.md)** — every position, filtered and grouped however you ask. Also where you
   correct a figure.
 - **[Analysis](analysis.md)** — where the money sits, and what has been gained but not yet sold.
+- **[Income](income.md)** — what the portfolio is projected to pay over the coming year, and how
+  much of that is taxed.
 - **[An account](account-detail.md)** — one account end to end, and where you record a bank or loan
   balance.
 - **[Uploading statements](upload.md)** — what a file has to look like, and what the app does with
@@ -50,9 +52,8 @@ total and the screen says how much of the portfolio the total covers. A dash nev
 
 ## Not built yet
 
-So you are not left hunting for them: **Income** is in the navigation but is a placeholder, and
-Settings lists **Classifications**, **Instruments** and **History** as tabs that do not exist yet.
-There is also no export or download of any kind.
+So you are not left hunting for them: Settings lists **Classifications**, **Instruments** and
+**History** as tabs that do not exist yet. There is also no export or download of any kind.
 
 ---
 

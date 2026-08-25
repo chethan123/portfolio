@@ -742,6 +742,49 @@ describe("commitUpload", () => {
   );
 
   it(
+    "runs the same product guard against the instrument's dividend rate",
+    withDatabase(async (ctx) => {
+      const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedQuote } = ctx;
+      const account = await seedAccount({ kind: "brokerage" });
+      const fund = await seedInstrument({ symbol: "PNY", name: "Penny Income Trust" });
+      await seedInstrumentAlias({ instrument: fund, rawString: "PNY" });
+      // The third product migration 0006 added, and the case that gets past the
+      // other two: the price is small enough that `quantity × price` is 10^7,
+      // and the rate is a legal `numeric(20, 4)` figure — so an upload is a
+      // likelier way in than the editor, because it writes many rows at once
+      // and nobody reads any of them first.
+      await seedQuote({
+        instrument: fund,
+        price: "0.0001",
+        annualDividendPerShare: "1000000.0000",
+      });
+
+      const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nPNY,100000000000,\n");
+
+      const refusal = await refusalOf(() =>
+        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/Penny Income Trust/);
+      expect(refusal.fieldErrors.form).toMatch(/dividend rate/);
+
+      // Nothing partially applied, and — the point of refusing at all — the
+      // view still answers. Committed, this row made `holding_valued` raise
+      // `numeric field overflow` on every read, taking down the only screen
+      // from which it could have been corrected.
+      const sets = await db
+        .selectFrom("position_set")
+        .select("id")
+        .where("account_id", "=", account.id)
+        .execute();
+      expect(sets).toHaveLength(0);
+      await expect(
+        sql`select count(*) from holding_valued`.execute(db),
+      ).resolves.toBeDefined();
+      await expect(requireDraft(draftId, db)).resolves.toMatchObject({ id: draftId });
+    }),
+  );
+
+  it(
     "refuses a file whose account number disagrees with the account's, naming both",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;

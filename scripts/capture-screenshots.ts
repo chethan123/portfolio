@@ -63,8 +63,17 @@ const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:5173";
  */
 const EXECUTABLE = process.env.CHROMIUM_EXECUTABLE;
 
-/** The README's shots, at the size that file has always used. */
-const DESKTOP = { width: 1440, height: 1000 } as const;
+/**
+ * The README's shots.
+ *
+ * 1440 until Holdings gained a ninth column. The rail takes 280 and the canvas
+ * margins 64, so at 1440 the panel offers a table wanting 1214 about 1096 — it
+ * scrolls inside `.data-table-scroll`, and a full-page capture cuts the last
+ * column off. A shot that shows a reader less than the screen holds is worse
+ * than a wider shot: this is the narrowest round width at which the widest
+ * table the application draws is whole.
+ */
+const DESKTOP = { width: 1600, height: 1000 } as const;
 /** A phone, and not full-page: the bottom navigation is `position: fixed`. */
 const MOBILE = { width: 390, height: 900 } as const;
 
@@ -368,6 +377,8 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
 
     await visit(page, "/analysis");
     await shoot(page, `docs/screenshots/analysis-${theme}.png`);
+    await visit(page, "/income");
+    await shoot(page, `docs/screenshots/income-${theme}.png`);
     await visit(page, `/accounts/${brokerage}`);
     await shoot(page, `docs/screenshots/account-detail-${theme}.png`);
     await visit(page, `/accounts/${accounts.liability}`);

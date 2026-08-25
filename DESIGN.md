@@ -560,7 +560,7 @@ That is a set-returning function:
 holding_valued_at(d date)
   -- per account: the position_set with max(as_of_date) <= d
   --   joined to price_daily on d, carrying forward the last close
-  --   annual_dividend is null: there is no historical yield to report
+  --   annual_dividend is null: there is no historical dividend to report
 ```
 
 **The `setof holding_valued` return type is a two-way contract, and PostgreSQL does not enforce it

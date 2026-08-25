@@ -17,7 +17,7 @@ Note that `DESIGN.md` at the repo root is the authoritative design record for th
 
 Where every document in this repository goes — including `CONTEXT.md` and `docs/adr/` — is [`../README.md`](../README.md). It is the layout authority; this file covers only how to *consume* the domain docs while exploring.
 
-Two things worth repeating here, because they change what you do rather than where you look: neither `CONTEXT.md` nor `docs/adr/` exists yet, and the application lives in `app/`, not `src/`.
+Two things worth repeating here, because they change what you do rather than where you look: `CONTEXT.md` and `docs/adr/` both exist now and are deliberately small — each gets an entry only when a term or a decision is actually resolved, so a gap in either is not evidence that nothing was decided — and the application lives in `app/`, not `src/`.
 
 If this repo ever grows into a genuine multi-package monorepo, the multi-context layout is a root `CONTEXT-MAP.md` pointing at one `CONTEXT.md` per context, with context-scoped `app/<context>/docs/adr/` alongside the system-wide `docs/adr/`.
 

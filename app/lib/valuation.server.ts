@@ -80,6 +80,18 @@ export type ValuedHolding = {
   isPriced: boolean;
   /** A stale price is still used; this says so rather than hiding it. */
   isStale: boolean;
+  /**
+   * What the holding is projected to pay over the coming year — quantity times
+   * the instrument's current per-share rate, computed in the view.
+   *
+   * Never null on the current path and always null on an as-of one, and both
+   * halves of that are deliberate. The view coalesces a missing rate to zero,
+   * because "pays nothing" and "nobody asked" are the same null in `quote` and
+   * a caption could not tell them apart (DESIGN.md §14, limitation 9); the
+   * as-of function returns the constant null, because the projection describes
+   * the portfolio now and no historical rate is stored to derive one from.
+   */
+  annualDividend: string | null;
 };
 
 /**
@@ -139,6 +151,10 @@ function toValuedHolding(row: HoldingValuedRow): ValuedHolding {
     unrealized: row.unrealized,
     isPriced: required(row.is_priced, "is_priced"),
     isStale: required(row.is_stale, "is_stale"),
+    // Not `required`, even though the view cannot emit a null here: the as-of
+    // function reports null on purpose, and this mapper reads both. Narrowing
+    // it would turn every historical read into a 500 (ADR-0001).
+    annualDividend: row.annual_dividend,
   };
 }
 

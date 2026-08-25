@@ -106,6 +106,9 @@ describe("the valuation rule", () => {
           unrealized: "5000.0000",
           isPriced: true,
           isStale: false,
+          // No rate on the quote, so the figure is a zero and not a null: the
+          // view's coalesce is the whole definition of it.
+          annualDividend: "0.0000",
         },
       ]);
     }),
@@ -373,6 +376,131 @@ describe("partial data, told honestly", () => {
         amount: "25000.0000",
         coverage: { known: 1, total: 1 },
       });
+    }),
+  );
+});
+
+describe("what a holding is projected to pay", () => {
+  it(
+    "multiplies a fractional share count by the per-share rate at the money scale",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      const account = await seedAccount();
+      const fund = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity ETF" });
+      await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
+
+      // A dividend-reinvested holding against a rate carrying four decimals:
+      // scale 8 by scale 4, so the product is at scale 12 before the view's one
+      // cast brings it back to money.
+      await seedPositionSet({
+        account,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: fund, quantity: "10.50000000" }],
+      });
+
+      const [holding] = await currentHoldings(db);
+
+      // 10.5 × 3.6000, exact and at the stored scale. `toBeCloseTo` would pass
+      // just as happily on a figure that had been through a double, which is
+      // the coercion this whole seam exists to keep out.
+      expect(holding).toMatchObject({ quantity: "10.50000000", annualDividend: "37.8000" });
+    }),
+  );
+
+  it(
+    "counts a holding with no rate as paying nothing, whichever of the three nulls it is",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote, usdInstrument }) => {
+      const account = await seedAccount();
+      const usd = await usdInstrument();
+      // The provider answered, and its answer carried no dividend fields.
+      const growth = await seedInstrument({ symbol: "VUG", name: "A growth ETF" });
+      await seedQuote({ instrument: growth, price: "400.0000" });
+      // Nobody ever asked: no symbol, so no `quote` row at all.
+      const trust = await seedInstrument({
+        symbol: null,
+        name: "A workplace-plan trust",
+        priceSource: "manual",
+      });
+
+      await seedPositionSet({
+        account,
+        asOf: "2026-01-31",
+        holdings: [
+          { instrument: growth, quantity: "3.00000000" },
+          { instrument: trust, quantity: "42.00000000" },
+          { instrument: usd, quantity: "500.00000000" },
+        ],
+      });
+
+      const dividends = Object.fromEntries(
+        (await currentHoldings(db)).map((holding) => [
+          holding.instrumentName,
+          holding.annualDividend,
+        ]),
+      );
+
+      // Three unlike things arriving as one null, and deliberately flattened to
+      // one figure. Only the growth ETF genuinely pays nothing; the rule that
+      // says so about all three is why the total is a lower bound and why both
+      // screens have to label it one (DESIGN.md §14, limitation 9).
+      expect(dividends).toEqual({
+        "A growth ETF": "0.0000",
+        "A workplace-plan trust": "0.0000",
+        [usd.name]: "0.0000",
+      });
+    }),
+  );
+
+  it(
+    "reports a negative dividend for a negative quantity, so interest owed is not income",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      const loan = await seedAccount({ name: "Margin loan", kind: "liability" });
+      // Nothing carries a rate against a negative position today. The rule has
+      // to hold before something does: the sign lives in quantity and there is
+      // no branch anywhere between it and this figure.
+      const note = await seedInstrument({ symbol: "NOTE", name: "A note carrying a rate" });
+      await seedQuote({ instrument: note, price: "100.0000", annualDividendPerShare: "5.0000" });
+
+      await seedPositionSet({
+        account: loan,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: note, quantity: "-2.00000000" }],
+      });
+
+      const [holding] = await currentHoldings(db);
+
+      expect(holding).toMatchObject({ quantity: "-2.00000000", annualDividend: "-10.0000" });
+    }),
+  );
+
+  it(
+    "leaves the number of holdings unchanged, however many of them share an instrument",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote, usdInstrument }) => {
+      const usd = await usdInstrument();
+      const fund = await seedInstrument({ symbol: "SCHD" });
+      await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
+
+      const first = await seedAccount({ name: "A brokerage" });
+      const second = await seedAccount({ name: "B brokerage" });
+
+      await seedPositionSet({
+        account: first,
+        asOf: "2026-01-31",
+        holdings: [
+          { instrument: fund, quantity: "10.00000000" },
+          { instrument: usd, quantity: "500.00000000" },
+        ],
+      });
+      await seedPositionSet({
+        account: second,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: fund, quantity: "4.00000000" }],
+      });
+
+      // Three holdings in, three rows out. `quote.instrument_id` is the primary
+      // key, so the left join the dividend is computed over stays one row per
+      // holding — a second quote row for one instrument would double the
+      // dividend-paying rows and silently double every total taken over them.
+      expect(await currentHoldings(db)).toHaveLength(3);
     }),
   );
 });

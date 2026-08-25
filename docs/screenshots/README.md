@@ -22,6 +22,7 @@ This file carries what the script cannot: which shot is of what, and why.
 | `holdings-*.png` | `/holdings` | — · unfiltered and ungrouped, which is the state the URL with no query string produces |
 | `holdings-edit-*.png` | `/holdings` with one row open | the brokerage one, on a row that has a cost basis, so both boxes carry a figure. Scoped to the table rather than the page: the point of the shot is the two boxes sitting in their own columns, which a whole-page capture at this width renders too small to read |
 | `analysis-*.png` | `/analysis` | — |
+| `income-*.png` | `/income` | — · the demo household pays a dividend in all three tax treatments, so the first breakdown shows the three slices rather than the two a household with no Roth would produce |
 | `account-detail-*.png` | `/accounts/:id` | the `brokerage` one — it holds seven positions, including a stale price |
 | `account-balance-*.png` | `/accounts/:id` | the `liability` one — it carries the set-balance form |
 | `settings-*.png` | `/settings/accounts` | — |
@@ -37,6 +38,8 @@ This file carries what the script cannot: which shot is of what, and why.
 dark page looks broken. [The guide's images](../guide/images/) have no such constraint and are light
 only.
 
+**The desktop shots are 1600 wide, and were 1440.** Holdings is the widest thing the application draws, and it decides this number: with the rail and the canvas margins taken out, 1440 leaves its table about a hundred pixels short, so the last column falls inside the panel's own horizontal scroll and a capture cuts it off. `.data-table-scroll` is the right answer for a narrow window; it is the wrong thing for a README to photograph. The figure to keep these in step with is `--content-max` in the stylesheet — a column added to Holdings is the thing most likely to make both too small again.
+
 **Mobile shots are not full-page.** They are 390×900 with `isMobile`. The bottom navigation is
 `position: fixed`, so a full-page capture paints it across the middle of the image instead of at the
 foot of the screen where a phone shows it.
@@ -46,6 +49,8 @@ like, and hiding it would make the screenshots show a configuration the reader d
 
 **Account ids are never written down.** The seed renumbers accounts on every run, so the script
 looks them up by kind. A shot described above as "the brokerage one" means exactly that.
+
+**Income is shot for the README as well as the guide, and it was the guide's alone.** The guide walks every screen, so its loop already visited `/income` while the screen was still a placeholder; the README's theme loop never did, because there was nothing there worth a reader's attention. There is now, and a README that walks the screens with one of them missing reads as though that screen does not exist.
 
 **The upload flow is walked but never committed.** The draft dies with the commit, and recording the
 statement would change the household every other shot is of.

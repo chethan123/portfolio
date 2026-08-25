@@ -452,6 +452,35 @@ describe("partial data on a past date, told honestly", () => {
   );
 });
 
+describe("the projection a past date will not make", () => {
+  it(
+    "reports no dividend on a past date, even while the instrument pays one today",
+    withDatabase(
+      async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote, seedDailyClose }) => {
+        const account = await seedAccount();
+        const fund = await seedInstrument({ symbol: "SCHD" });
+        await seedPositionSet({
+          account,
+          asOf: "2026-01-31",
+          holdings: [{ instrument: fund, quantity: "10.50000000" }],
+        });
+        await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "27.5000" });
+        // Today's rate, and the only rate the database has ever held: `quote`
+        // is one row per instrument, overwritten on every refresh. It says
+        // nothing whatever about February.
+        await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
+
+        const [holding] = await holdingsAt("2026-02-13", db);
+
+        // Not "37.8000", and not "0.0000" either. A projection forward from
+        // today is not a fact about a date that has already happened, so the
+        // honest answer for it is nothing at all.
+        expect(holding).toMatchObject({ value: "288.7500", annualDividend: null });
+      },
+    ),
+  );
+});
+
 describe("the shape a past date returns", () => {
   it(
     "carries the account, owner and classification every dashboard grouping needs",
@@ -516,6 +545,11 @@ describe("the shape a past date returns", () => {
             unrealized: "5000.0000",
             isPriced: true,
             isStale: false,
+            // Written out rather than left off. `toEqual` reads a missing
+            // property as equal to an undefined one, so omitting this would
+            // pass just as happily on a function that emitted no such column —
+            // which is the failure ADR-0001 exists to keep out.
+            annualDividend: null,
           },
         ]);
       },

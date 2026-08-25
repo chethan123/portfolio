@@ -35,6 +35,7 @@ import {
   formatQuantity,
   groupHoldings,
   holdingNote,
+  holdingYield,
   parseQuery,
   parseRowKey,
   rowKey,
@@ -42,7 +43,7 @@ import {
   summarise,
   toSearch,
 } from "~/lib/holdings-view";
-import { SHARE_SCALE, toUnits } from "~/lib/money";
+import { MONEY_SCALE, SHARE_SCALE, render, sumMoney, toUnits } from "~/lib/money";
 
 import type { ValuedHolding } from "~/lib/valuation.server";
 
@@ -79,6 +80,9 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
     unrealized: null,
     isPriced: true,
     isStale: false,
+    // Zero rather than null, because that is what the view emits for a holding
+    // whose instrument carries no rate: the coalesce is in the SQL.
+    annualDividend: "0.0000",
     ...overrides,
   };
 
@@ -128,6 +132,14 @@ describe("parseQuery", () => {
   it("treats an empty select as `all`, not as a filter for the empty key", () => {
     // This is what a GET form submits for a `<select>` nobody touched.
     expect(query("owner=&kind=").filters.size).toBe(0);
+  });
+
+  it("accepts the dividend column as a sort", () => {
+    // Not framework behaviour: a key missing from `SORT_KEYS` is *ignored*
+    // rather than refused, so forgetting to list it would leave the new
+    // header's link ordering the table by value with a caret drawn on the
+    // wrong column and nothing anywhere reporting a fault.
+    expect(query("sort=annualDividend").sort).toBe("annualDividend");
   });
 
   it("keeps a filter key no holding carries", () => {
@@ -395,6 +407,31 @@ describe("sortHoldings", () => {
     }
   });
 
+  it("orders the dividend by magnitude, and a holding that pays nothing is not missing", () => {
+    // Two rules in one, because the second is the one a copy of the `value`
+    // column would get wrong. The dividend has no `isMissing` case: the view
+    // coalesces a missing rate to zero, so `$0` is a figure and belongs where
+    // the arithmetic puts it. Sorted ascending, a holding nobody can price
+    // leads the table here — and must, because it pays the least — where on
+    // the Value column the same row stays pinned to the bottom.
+    const rows = [
+      holding({ instrumentName: "Nine", annualDividend: "9.0000" }),
+      holding({ instrumentName: "Ten", annualDividend: "10.0000" }),
+      holding({ instrumentName: "Trust", value: null, annualDividend: "0.0000" }),
+    ];
+
+    expect(sortHoldings(rows, "annualDividend", "desc").map((row) => row.instrumentName)).toEqual([
+      "Ten",
+      "Nine",
+      "Trust",
+    ]);
+    expect(sortHoldings(rows, "annualDividend", "asc").map((row) => row.instrumentName)).toEqual([
+      "Trust",
+      "Nine",
+      "Ten",
+    ]);
+  });
+
   it("does not sort the caller's array", () => {
     const rows = [holding({ value: "1.0000" }), holding({ value: "2.0000" })];
     const before = [...rows];
@@ -446,6 +483,49 @@ describe("summarise", () => {
 
     expect(total.value).toBeNull();
     expect(total.valueCoverage).toEqual({ known: 0, total: 2 });
+  });
+
+  it("adds the dividend over rows the value total cannot cover", () => {
+    // The column that is complete beside one that is not. An unquoted trust
+    // has a quantity and no price, so it contributes nothing to the value and
+    // a real `$0` to the dividend — which is why this figure carries no
+    // coverage caption while the one beside it does.
+    const total = summarise([
+      holding({ value: "27000.0000", annualDividend: "340.0000" }),
+      holding({ value: "3000.0000", annualDividend: "0.1000" }),
+      holding({ value: null, annualDividend: "0.0000" }),
+    ]);
+
+    expect(total.annualDividend).toBe("340.1000");
+    expect(total.value).toBe("30000.0000");
+    expect(total.valueCoverage).toEqual({ known: 2, total: 3 });
+  });
+
+  it("is `$0` of dividend where nothing pays, never an unknown amount", () => {
+    // The one figure here that is not nulled when nothing behind it is known.
+    // `totalOf`'s `figure()` helper dashes a sum whose `known` count is zero,
+    // which is right for the three figures beside this one and wrong for this
+    // one: a set where nothing pays pays nothing, and a dash there would read
+    // as "we could not work out what this comes to" (DESIGN.md §14,
+    // limitation 9). The empty set is the sharpest case — every other figure
+    // on it is null.
+    expect(summarise([]).annualDividend).toBe("0.0000");
+    expect(summarise([]).value).toBeNull();
+    expect(summarise([holding(), holding()]).annualDividend).toBe("0.0000");
+  });
+
+  it("nets a liability's interest against what the assets pay", () => {
+    // Seeded against a real database while this feature was specced: a taxable
+    // brokerage holding beside a car loan whose note carries a rate came out
+    // *negative*, because a negative quantity times a rate is money going out.
+    // The subtotal on the group a household cares most about is the one that
+    // goes below zero.
+    const total = summarise([
+      holding({ value: "27000.0000", annualDividend: "340.0000" }),
+      holding({ accountKind: "liability", value: "-14500.0000", annualDividend: "-522.2000" }),
+    ]);
+
+    expect(total.annualDividend).toBe("-182.2000");
   });
 
   it("nets a liability against the assets", () => {
@@ -558,6 +638,33 @@ describe("groupHoldings", () => {
     expect(unpriced?.share).toBeNull();
   });
 
+  it("subtotals the dividend, and the grand total is the sum of the subtotals", () => {
+    // The screen prints the rows, the subtotals under them and the total under
+    // those, all from one array — so this asserts the arithmetic that makes
+    // the three unable to disagree, rather than three separate figures that
+    // happen to match. The third group pays nothing and subtotals to `$0`,
+    // which is the figure a dash would have replaced.
+    const paying = [
+      holding({ ownerId: "1", ownerName: "Alice", value: "27000.0000", annualDividend: "340.0000" }),
+      holding({ ownerId: "1", ownerName: "Alice", value: "3000.0000", annualDividend: "0.1000" }),
+      holding({ ownerId: "2", ownerName: "Bob", value: "12500.0000", annualDividend: "162.5000" }),
+      holding({ ownerId: "3", ownerName: "Cleo", value: "9000.0000", annualDividend: "0.0000" }),
+    ];
+
+    const groups = groupHoldings(paying, "owner", DEFAULT_SORT, DEFAULT_DIRECTION);
+
+    expect(groups.map((group) => [group.label, group.total.annualDividend])).toEqual([
+      ["Alice", "340.1000"],
+      ["Bob", "162.5000"],
+      ["Cleo", "0.0000"],
+    ]);
+
+    const subtotals = sumMoney(groups.map((group) => group.total.annualDividend));
+
+    expect(render(subtotals.amount, MONEY_SCALE)).toBe(summarise(paying).annualDividend);
+    expect(summarise(paying).annualDividend).toBe("502.6000");
+  });
+
   it("groups on every dimension, not just the ones with a column", () => {
     const rows = [
       holding({ institution: "Fidelity", taxTreatment: "taxable", assetClass: "equity" }),
@@ -601,6 +708,40 @@ describe("holdingNote", () => {
     // of the two is fixed by waiting.
     expect(holdingNote(holding({ isStale: true }))).toBe("Equity · price is stale");
     expect(holdingNote(holding({ value: null }))).toBe("Equity · never priced");
+  });
+});
+
+describe("holdingYield", () => {
+  it("states one holding's payout as a fraction of what it is worth", () => {
+    // Exact at `SHARE_SCALE`, computed on the digits: 340 / 27,000 is
+    // 1.259259…%, and the sixth place is where the rounding lands.
+    expect(holdingYield({ annualDividend: "340.0000", value: "27000.0000" })).toBe("0.012593");
+  });
+
+  it("has no percentage for a holding nobody can price", () => {
+    // The unquoted 401k trust: a quantity, no price, and therefore a `$0`
+    // dividend with nothing to state it as a fraction of. `0.0%` beneath a
+    // blank Value would be a claim about a holding no one can value.
+    expect(holdingYield({ annualDividend: "0.0000", value: null })).toBeNull();
+  });
+
+  it("has no percentage for a holding worth zero, and does not throw on one", () => {
+    // The crash this guard exists for. `money.ts`'s `divide` divides bigints,
+    // so a zero denominator raises `RangeError` — and nothing in the schema
+    // stops a quantity or a price being zero, so a position someone has sold
+    // out of arrives here as `"0.0000"`. Unguarded, one such row takes the
+    // whole Holdings table down rather than losing its own sub-line.
+    expect(() => holdingYield({ annualDividend: "0.0000", value: "0.0000" })).not.toThrow();
+    expect(holdingYield({ annualDividend: "0.0000", value: "0.0000" })).toBeNull();
+    expect(holdingYield({ annualDividend: "5.0000", value: "0.0000" })).toBeNull();
+  });
+
+  it("reads a liability's two negatives as the rate it is charged at", () => {
+    // A loan holds a negative quantity, so both figures are negative and the
+    // fraction between them comes out positive. That is the right answer and
+    // it is worth pinning: the row says −$522.20 at 3.6%, which is what the
+    // note costs and the rate it costs it at — not a payout of 3.6%.
+    expect(holdingYield({ annualDividend: "-522.0000", value: "-14500.0000" })).toBe("0.036000");
   });
 });
 

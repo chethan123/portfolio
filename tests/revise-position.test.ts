@@ -445,6 +445,67 @@ describe("revisePosition", () => {
   );
 
   it(
+    "refuses a quantity whose product with the dividend rate the view could not project",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The third axis, and the one that was unguarded until migration 0006's
+      // `annual_dividend` column was checked against the other two. Every
+      // operand here is individually legal — a quantity inside numeric(20, 8),
+      // a rate inside numeric(20, 4), and a price so small that
+      // `quantity × price` comfortably fits — so both of the older guards wave
+      // this write through, and the view's third cast then raises on every
+      // read. Nothing on any screen says why: the write reported success.
+      const account = await seedAccount({ kind: "brokerage" });
+      const penny = await seedInstrument({ symbol: "PENNY", name: "Penny Income Trust" });
+      await seedQuote({
+        instrument: penny,
+        price: "0.0001",
+        annualDividendPerShare: "1000000.0000",
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: penny, quantity: "1.00000000" }],
+      });
+
+      const refusal = await refusalOf(() =>
+        // 10^11 × 0.0001 is 10^7 and fits; 10^11 × 10^6 is 10^17 and does not.
+        revisePosition(account.id, penny.id, { quantity: "100000000000" }, db),
+      );
+      expect(refusal.fieldErrors.quantity).toMatch(/larger annual dividend/);
+
+      // The whole point of the refusal: the view still answers. Before the
+      // guard this read raised `numeric field overflow`, and with Holdings down
+      // there was no screen left from which to correct the row.
+      const holdings = await currentHoldings(db);
+      expect(holdings).toHaveLength(1);
+      expect(holdings[0]?.quantity).toBe("1.00000000");
+    }),
+  );
+
+  it(
+    "still records a position the dividend projection can express",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
+      // The guard bounds the product and nothing else. A real income holding
+      // pays a real rate, and the third check must not make it unrecordable.
+      const account = await seedAccount({ kind: "brokerage" });
+      const schd = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity" });
+      await seedQuote({ instrument: schd, price: "27.5000", annualDividendPerShare: "1.0300" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-30",
+        holdings: [{ instrument: schd, quantity: "100.00000000" }],
+      });
+
+      await revisePosition(account.id, schd.id, { quantity: "5000" }, db);
+
+      const [holding] = await currentHoldings(db);
+      expect(holding?.quantity).toBe("5000.00000000");
+      // 5,000 × $1.03, computed by the view rather than restated here.
+      expect(holding?.annualDividend).toBe("5150.0000");
+    }),
+  );
+
+  it(
     "still accepts a large position that does fit, right up to the edge",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
       // The guard must bound the product and nothing more: a household with a
@@ -619,6 +680,10 @@ describe("currentPosition", () => {
         // Null rather than absent: a collective trust nobody quotes is still
         // held, so the quote is joined left exactly as the view joins it.
         price: null,
+        // The third operand `holding_valued` multiplies this quantity by, read
+        // for the product guard and for nothing else — null here for the same
+        // reason the price is, since both come off the same absent quote row.
+        annualDividendPerShare: null,
         // Read alongside the price because the write needs it: anything but
         // `fixed` is a count of something rather than a sum of money.
         priceSource: "feed",

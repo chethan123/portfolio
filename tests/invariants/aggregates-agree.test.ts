@@ -11,8 +11,16 @@
  * `sum` is `sum`.
  *
  * What is left over is the pairs where the *shapes* genuinely differ — two SQL
- * statements, or a SQL statement and a JavaScript reduction, that nothing
- * couples. Those can come apart under an edit and nothing else would notice.
+ * statements, a SQL statement and a JavaScript reduction, or two JavaScript
+ * reductions over one array, that nothing couples. Those can come apart under
+ * an edit and nothing else would notice.
+ *
+ * The last of those three is what the Income block at the foot of this file is
+ * for. Holdings and Income group the same holdings by the same tax treatment
+ * through two different reductions, and the only thing making them agree is
+ * that both read one dimension accessor out of `holdings-view.ts`. That is a
+ * structural arrangement rather than a coincidence, and this is the test that
+ * keeps it structural.
  *
  * **What is deliberately not asserted here:** `netWorth()` and
  * `netWorthAt(today)` do not agree, and must not be made to. The current view
@@ -26,7 +34,19 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { loader as analysisPage } from "../../app/routes/analysis.tsx";
-import { netWorth, netWorthAt, netWorthSeries } from "~/lib/valuation.server";
+import { loader as incomePage } from "../../app/routes/income.tsx";
+import {
+  DEFAULT_DIRECTION,
+  DEFAULT_SORT,
+  groupHoldings,
+  summarise,
+} from "~/lib/holdings-view";
+import {
+  currentHoldings,
+  netWorth,
+  netWorthAt,
+  netWorthSeries,
+} from "~/lib/valuation.server";
 import { MONEY_SCALE, toUnits } from "~/lib/money";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -174,6 +194,179 @@ describe("the Analysis screen's own arithmetic", () => {
       const [page, headline] = await Promise.all([analysisPage(), netWorth(ctx.db)]);
 
       expect({ total: page.holdingCount, known: page.pricedCount }).toEqual(headline.coverage);
+    }),
+  );
+});
+
+/**
+ * A portfolio that pays, across all three tax treatments.
+ *
+ * The taxable side nets **negative**: a car loan whose note carries a rate sits
+ * in the same tax treatment as the brokerage, so $360.00 of dividend arrives
+ * against $522.00 of interest. That is the case the Income screen's sheltered
+ * sentence and the ring's unfilled row both exist for, and it only appears when
+ * a liability account is given a rate — which is why it is seeded here rather
+ * than assumed.
+ *
+ * The workplace plan holds an unquoted trust: a dividend of `0.0000` against a
+ * *null* value, which is the group that has a figure and nothing to state it as
+ * a fraction of.
+ */
+async function aPortfolioThatPays(ctx: TestContext) {
+  const owner = await ctx.seedPerson({ name: "Alice" });
+
+  const brokerage = await ctx.seedAccount({
+    owner,
+    kind: "brokerage",
+    taxTreatment: "taxable",
+    name: "Fidelity",
+  });
+  const workplace = await ctx.seedAccount({
+    owner,
+    kind: "401k",
+    taxTreatment: "tax_deferred",
+    name: "Workplace plan",
+  });
+  const roth = await ctx.seedAccount({
+    owner,
+    kind: "ira",
+    taxTreatment: "tax_free",
+    name: "Roth IRA",
+  });
+  const loan = await ctx.seedAccount({
+    owner,
+    kind: "liability",
+    taxTreatment: "taxable",
+    name: "Car loan",
+  });
+
+  const vti = await ctx.seedInstrument({ symbol: "VTI" });
+  const schd = await ctx.seedInstrument({ symbol: "SCHD" });
+  const trust = await ctx.seedInstrument({ symbol: "PRIVATE" });
+  const usd = await ctx.usdInstrument();
+
+  await ctx.seedQuote({ instrument: vti, price: "200.0000", annualDividendPerShare: "3.6000" });
+  await ctx.seedQuote({ instrument: schd, price: "27.5000", annualDividendPerShare: "1.0400" });
+  // The note's rate, on the instrument the debt is a position in.
+  await ctx.seedQuote({ instrument: usd, price: "1.0000", annualDividendPerShare: "0.0360" });
+
+  await ctx.seedPositionSet({
+    account: brokerage,
+    asOf: "2026-06-30",
+    holdings: [{ instrument: vti, quantity: "100.00000000" }],
+  });
+  await ctx.seedPositionSet({
+    account: workplace,
+    asOf: "2026-06-30",
+    holdings: [{ instrument: trust, quantity: "125.00000000" }],
+  });
+  await ctx.seedPositionSet({
+    account: roth,
+    asOf: "2026-06-30",
+    holdings: [{ instrument: schd, quantity: "300.00000000" }],
+  });
+  await ctx.seedPositionSet({
+    account: loan,
+    asOf: "2026-06-30",
+    holdings: [{ instrument: usd, quantity: "-14500.00000000" }],
+  });
+}
+
+/** Sorted on the grouping key, so two orderings of one set can be compared. */
+const byKey = <Row extends { key: string }>(rows: ReadonlyArray<Row>): Row[] =>
+  [...rows].sort((a, b) => (a.key === b.key ? 0 : a.key < b.key ? -1 : 1));
+
+describe("the Income screen and the Holdings table", () => {
+  it(
+    "group by tax treatment identically, holding for holding",
+    withDatabase(async (ctx) => {
+      // The pair this test exists for. Holdings groups through
+      // `groupHoldings`, which sums its own subtotals; Income groups through
+      // `annualDividendBy`, which sums `BigInt` units in `allocation.ts`. Two
+      // reductions, two label lookups, one array — and the *reason* they cannot
+      // disagree is that both read `holdings-view.ts`'s one dimension accessor.
+      // A third copy of the labels would let them group identically and label
+      // differently, which is what this assertion catches and nothing else
+      // would.
+      await aPortfolioThatPays(ctx);
+
+      const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ctx.db)]);
+      const groups = groupHoldings(holdings, "tax", DEFAULT_SORT, DEFAULT_DIRECTION);
+
+      expect(
+        byKey(page.byTaxTreatment).map((slice) => [
+          slice.key,
+          slice.label,
+          slice.amount,
+          slice.coverage.total,
+        ]),
+      ).toEqual(
+        byKey(groups).map((group) => [
+          group.key,
+          group.label,
+          group.total.annualDividend,
+          group.holdings.length,
+        ]),
+      );
+
+      // Not a tautology over an empty portfolio, and not two ways of writing
+      // one expression: the figures are real, one slice is negative, and the
+      // order the two arrive in genuinely differs — Holdings ranks its groups
+      // by value and Income ranks its slices by what they pay.
+      expect(page.byTaxTreatment.map((slice) => [slice.label, slice.amount])).toEqual([
+        ["Tax-free", "312.0000"],
+        ["Tax-deferred", "0.0000"],
+        ["Taxable", "-162.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "put the same total at the head of the page as at the foot of the table",
+    withDatabase(async (ctx) => {
+      await aPortfolioThatPays(ctx);
+
+      const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ctx.db)]);
+
+      // $360.00 + $0.00 + $312.00 − $522.00. The headline, the Holdings total
+      // row, and the slices under the ring are three renderings of one sum, so
+      // any of them drifting is one of them being computed a second way.
+      expect(page.total).toBe("150.0000");
+      expect(page.total).toBe(summarise(holdings).annualDividend);
+      expect(sumOf(page.byTaxTreatment.map((slice) => slice.amount))).toBe(
+        toUnits(page.total, MONEY_SCALE),
+      );
+      expect(sumOf(page.byAccount.map((slice) => slice.amount))).toBe(
+        toUnits(page.total, MONEY_SCALE),
+      );
+    }),
+  );
+
+  it(
+    "state the sheltered subtotal and the taxable one separately, signs intact",
+    withDatabase(async (ctx) => {
+      await aPortfolioThatPays(ctx);
+
+      const page = await incomePage();
+
+      // The two do not add up to the $150.00 in the centre of the ring, and
+      // they are not meant to: the taxable side is below zero, so a sentence
+      // dividing one by the other would read "$312 of $150 is sheltered".
+      expect(page.sheltered).toEqual({ sheltered: "312.0000", taxable: "-162.0000" });
+    }),
+  );
+
+  it(
+    "state the weighted yield over gross positive value, not over net worth",
+    withDatabase(async (ctx) => {
+      await aPortfolioThatPays(ctx);
+
+      const page = await incomePage();
+
+      // $150.00 over the $28,250.00 that is worth something — not over the
+      // $13,750.00 the household is worth, which would report 1.1%, and not
+      // over a denominator the unquoted trust could drag to nothing.
+      expect(page.weightedYield).toBe("0.005310");
     }),
   );
 });
