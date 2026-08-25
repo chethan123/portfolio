@@ -34,6 +34,8 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`../DESIGN.md`](../DESIGN.md) | anyone changing the system | the authoritative design record: domain model, ingest, pricing, screens, stack, accepted limitations | anything already settled and shipped that a reader would rather see in code |
 | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | a contributor finding their way around | how the code is arranged and why the seams sit where they do | user-facing behaviour |
 | [`../AGENTS.md`](../AGENTS.md) | agents working in this repo | how work here is done and judged | project documentation of any kind |
+| [`../CONTEXT.md`](../CONTEXT.md) | anyone naming a domain concept | the glossary: the word this project uses for each concept, and the ones it avoids | implementation detail, decisions, anything that is not a definition |
+| [`adr/`](adr/) | someone about to undo a decision | one record per decision that is hard to reverse, surprising without its context, and the result of a real trade-off | decisions that are none of those three — they belong in the code or the design record |
 | [`guide/`](guide/) | a family member using a running instance | how to do a thing, screen by screen and task by task | rationale, operations, anything needing a terminal |
 | [`operating.md`](operating.md) | whoever self-hosts the instance | how the deployment is put together and how to run it: installing, configuration, TLS, security posture, monitoring, backups, upgrades, growth | how to read a screen; what to do at 2am, which is the runbook's |
 | [`runbook.md`](runbook.md) | the same person, mid-incident | symptoms, in the words someone would use, with the commands that confirm and fix each | explanation — every entry links to `operating.md` for the why |
@@ -45,13 +47,14 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`screenshots/`](screenshots/) | the README | the images that file renders, and the editorial reasons behind them | the guide's images, which live beside the guide |
 | [`guide/images/`](guide/images/) | the guide | the images the guide renders | the README's images |
 
-## Two things this table names that do not exist yet
+## Two things this table names, created lazily
 
-`CONTEXT.md` at the repository root, and `docs/adr/`. [`agents/domain.md`](agents/domain.md)
-describes both, and [`../AGENTS.md`](../AGENTS.md) points at them. They are created lazily — the
-first time a term is genuinely resolved, or a decision genuinely needs recording — by the
-`/domain-modeling` skill. Their absence is not a gap to fill preemptively. If you create either,
-add its row here.
+`CONTEXT.md` at the repository root and `docs/adr/` both now exist, and both are in the table above.
+[`agents/domain.md`](agents/domain.md) describes them and [`../AGENTS.md`](../AGENTS.md) points at
+them. Neither is filled in preemptively: a term earns a glossary entry the first time it is
+genuinely resolved, and a decision earns an ADR only when it is hard to reverse, surprising without
+context, and the result of a real trade-off. Both were opened by the dividends work
+([`specs/0006-dividends.md`](specs/0006-dividends.md)), which is why they start small.
 
 ## Deliberate duplications, and why
 
