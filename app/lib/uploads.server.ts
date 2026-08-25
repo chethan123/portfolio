@@ -580,6 +580,12 @@ type FileRow = {
   accountNumber: string | null;
   /** The instrument's current quote, for the value column and the product guard. */
   price: string | null;
+  /**
+   * The instrument's projected annual dividend per share, for the product
+   * guard alone — the diff renders no dividend column. Null where no refresh
+   * has ever supplied one, which the view reads as zero.
+   */
+  annualDividendPerShare: string | null;
   /** How many file lines fed this row — parser combines and spelling folds both. */
   lineCount: number;
 };
@@ -689,7 +695,7 @@ async function assembleDiff(
 
   const combinedByRaw = new Map(parsed.combined.map((c) => [c.instrument, c.rowCount]));
 
-  type FoldedRow = Omit<FileRow, "name" | "price">;
+  type FoldedRow = Omit<FileRow, "name" | "price" | "annualDividendPerShare">;
   const folded: FoldedRow[] = [];
 
   for (const [instrumentId, group] of groups) {
@@ -729,7 +735,9 @@ async function assembleDiff(
   }
 
   // What each named instrument is, and what it currently quotes at — the
-  // Value column's other operand, and the second half of the product guard.
+  // Value column's other operand, and the two provider-supplied operands of
+  // the product guard. The dividend rate is read here and nowhere rendered:
+  // `holding_valued` multiplies it by whatever quantity this commit writes.
   const ids = folded.map((row) => row.instrumentId);
   const factRows =
     ids.length === 0
@@ -744,6 +752,7 @@ async function assembleDiff(
             "instrument.name as name",
             "classification.asset_class as assetClass",
             "quote.price as price",
+            "quote.annual_dividend_per_share as annualDividendPerShare",
             "quote.is_stale as isStale",
           ])
           .where("instrument.id", "in", ids)
@@ -763,7 +772,12 @@ async function assembleDiff(
     const fact = facts.get(row.instrumentId);
     if (fact === undefined) continue; // unreachable: the alias's foreign key guarantees it
 
-    rows.push({ ...row, name: fact.name, price: fact.price });
+    rows.push({
+      ...row,
+      name: fact.name,
+      price: fact.price,
+      annualDividendPerShare: fact.annualDividendPerShare,
+    });
     inFile.add(row.instrumentId);
 
     const isPriced = fact.price !== null;
@@ -921,10 +935,10 @@ export type CommittedUpload = {
  *   consulted — the review renders no control in that case, so a date can only
  *   arrive from a stale or hand-built post, and a statement's own date must
  *   not be overridable by one
- * - the product guard, per row: `quantity × cost_basis_per_share` and the same
- *   product against the instrument's current price where one exists, since
- *   `holding_valued` casts both. One failing row refuses the whole commit and
- *   names the instrument
+ * - the product guard, per row: `quantity × cost_basis_per_share`, and the
+ *   same product against the instrument's current price and against its
+ *   current dividend rate where those exist, since `holding_valued` casts all
+ *   three. One failing row refuses the whole commit and names the instrument
  * - the majority-removal tick, unticked: refused in the ratio's words, nothing
  *   written
  *
@@ -1004,11 +1018,11 @@ export async function commitUpload(
       : parseInput(z.object({ asOf: recordedDate("The statement date") }), { asOf: raw.asOf })
           .asOf;
 
-  // The product guard, both multiplications `holding_valued` will perform. A
-  // product past `numeric(20, 4)` does not fail the write — it succeeds, and
-  // then the view raises on every request, taking Holdings and Analysis down
-  // together. One failing row refuses the whole commit; nothing partially
-  // applied.
+  // The product guard, all three multiplications `holding_valued` will
+  // perform. A product past `numeric(20, 4)` does not fail the write — it
+  // succeeds, and then the view raises on every request, taking Holdings,
+  // Analysis, Overview and Account detail down together. One failing row
+  // refuses the whole commit; nothing partially applied.
   for (const row of rows) {
     if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
       throw ValidationError.form(
@@ -1022,6 +1036,13 @@ export async function commitUpload(
         `${row.name}'s quantity valued at its current price is a larger figure than this ` +
           "application can hold, so nothing was recorded. Check the quantity column against " +
           "the sample rows.",
+      );
+    }
+    if (!fitsTheMoneyColumn(row.quantity, row.annualDividendPerShare)) {
+      throw ValidationError.form(
+        `${row.name}'s quantity at its current dividend rate projects a larger annual ` +
+          "dividend than this application can hold, so nothing was recorded. Check the " +
+          "quantity column against the sample rows.",
       );
     }
   }

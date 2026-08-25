@@ -49,6 +49,33 @@
 -- No fan-out. `quote.instrument_id` is the primary key and `holding` is unique
 -- on (position_set_id, instrument_id), so the view's existing LEFT join stays
 -- one row per holding and no total doubles.
+--
+-- A THIRD PRODUCT, AND WHERE IT IS GUARDED. Before this migration the view
+-- multiplied the quantity by two things; it now multiplies it by three, and the
+-- new one is cast to the same `numeric(20, 4)`. Two operands each comfortably
+-- inside their own columns can still have a product outside that cast, and the
+-- cast raises in the READER: the write that stored the pair succeeds, and every
+-- screen going through this view — Holdings, Analysis, Overview, Account
+-- detail — throws on every request afterwards. Holdings is the only screen the
+-- position editor is reachable from, so such a row cannot be corrected from the
+-- application at all. That is why `fitsTheMoneyColumn`
+-- (`app/lib/positions.server.ts`) exists, and it now guards this product too,
+-- at both sites that write a quantity: `revisePosition` in that same file and
+-- `commitUpload` in `app/lib/uploads.server.ts`. Upstream of both,
+-- `app/lib/price-provider.server.ts` now drops a per-share rate its own column
+-- cannot hold instead of letting it abort a refresh — the guard `yield_pct`
+-- already had and the rate did not, unremarked while nothing multiplied the
+-- rate and worth having now that something does. A dropped rate is a null, and
+-- a null rate is the zero this header's first decision describes.
+--
+-- Neither guard is the whole answer, and the gap is worth stating plainly: both
+-- read the quote as it stands when a quantity is written, and a later refresh
+-- replaces the rate under a position nobody is editing. That is the same
+-- residual the price check has carried since it was written, and closing it
+-- would mean checking a new rate against every quantity already stored.
+--
+-- `holding_valued_at` needs none of this: its `annual_dividend` is the constant
+-- null below, not a product.
 
 
 create or replace view holding_valued as

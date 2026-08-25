@@ -89,6 +89,16 @@ export type CurrentPosition = {
    */
   price: string | null;
   /**
+   * The instrument's projected annual dividend per share, or null where no
+   * refresh has ever supplied one.
+   *
+   * Here for {@link CurrentPosition.price}'s reason and no other: since
+   * migration 0006 this is the third operand `holding_valued` multiplies the
+   * stored quantity by, so {@link revisePosition} has to know whether the
+   * figure it is about to store is one the view can express.
+   */
+  annualDividendPerShare: string | null;
+  /**
    * Where the price comes from, of which `fixed` is the seeded USD row's alone
    * (`instrument-resolution.server.ts`).
    *
@@ -154,15 +164,17 @@ export async function currentPosition(
     cost_basis_per_share: string | null;
     as_of_date: string;
     price: string | null;
+    annual_dividend_per_share: string | null;
     price_source: string;
   }>`
     select
-      i.name                 as instrument_name,
-      h.quantity             as quantity,
-      h.cost_basis_per_share as cost_basis_per_share,
-      ps.as_of_date          as as_of_date,
-      q.price                as price,
-      i.price_source         as price_source
+      i.name                        as instrument_name,
+      h.quantity                    as quantity,
+      h.cost_basis_per_share        as cost_basis_per_share,
+      ps.as_of_date                 as as_of_date,
+      q.price                       as price,
+      q.annual_dividend_per_share   as annual_dividend_per_share,
+      i.price_source                as price_source
     from position_set ps
     join holding h    on h.position_set_id = ps.id
     join instrument i on i.id = h.instrument_id
@@ -184,16 +196,19 @@ export async function currentPosition(
     costBasisPerShare: row.cost_basis_per_share,
     asOf: row.as_of_date,
     price: row.price,
+    annualDividendPerShare: row.annual_dividend_per_share,
     priceSource: row.price_source,
   };
 }
 
 /**
- * `numeric(20, 4)`, as the two figures `holding_valued` derives are cast to.
+ * `numeric(20, 4)`, as the three products `holding_valued` derives are cast to.
  *
- * Not the columns' own precision — `quantity` is `numeric(20, 8)` and
- * `cost_basis_per_share` is `numeric(20, 4)`, and a value inside both of them
- * can still have a *product* outside this. That gap is the whole reason
+ * Not the columns' own precision — `quantity` is `numeric(20, 8)`, and
+ * `cost_basis_per_share`, `quote.price` and `quote.annual_dividend_per_share`
+ * are each `numeric(20, 4)`. A quantity inside its column and a per-share
+ * figure inside its own can still have a *product* outside this, whichever of
+ * the three that figure is. That gap is the whole reason
  * {@link fitsTheMoneyColumn} exists.
  */
 const MONEY_PRECISION = 20;
@@ -218,20 +233,30 @@ const SCALE_GAP = 10n ** BigInt(QUANTITY_SCALE);
 /**
  * Whether `quantity × perShare` is a figure this application can hold.
  *
- * The view computes `cast(h.quantity * q.price as numeric(20, 4))` and
- * `cast(h.quantity * h.cost_basis_per_share as numeric(20, 4))`, and a product
- * that will not round to under 10^16 makes that cast raise. Which is a far worse
- * outcome than a refused form: the write succeeds, and every reader that goes
- * through `holding_valued` — Holdings and Analysis — then throws on *every*
- * request. Holdings is the only screen the editor is reachable from, so the row
- * that broke it could not be corrected from the application at all; only `psql`
+ * The view computes three products against the stored quantity —
+ * `cast(h.quantity * q.price as numeric(20, 4))`,
+ * `cast(h.quantity * h.cost_basis_per_share as numeric(20, 4))` and, since
+ * migration 0006, `cast(h.quantity * coalesce(q.annual_dividend_per_share, 0)
+ * as numeric(20, 4))` — and a product that will not round to under 10^16 makes
+ * that cast raise. Which is a far worse outcome than a refused form: the write
+ * succeeds, and every reader that goes through `holding_valued` — Holdings,
+ * Analysis, Overview and Account detail — then throws on *every* request.
+ * Holdings is the only screen the editor is reachable from, so the row that
+ * broke it could not be corrected from the application at all; only `psql`
  * would recover it.
  *
- * Bounding the fields cannot prevent it. Both are individually well inside
- * their columns — a twelve-digit quantity is legal, and so is a share priced in
- * the hundreds of thousands — and it is only their product that overflows. So
- * the check is on the product, with both operands in hand, at the moment of the
- * write.
+ * Bounding the fields cannot prevent it. Each operand is individually well
+ * inside its column — a twelve-digit quantity is legal, and so is a share
+ * priced in the hundreds of thousands — and it is only the product that
+ * overflows. So the check is on the product, with both operands in hand, at the
+ * moment of the write.
+ *
+ * The price and the dividend rate are the two operands this application never
+ * chose — both arrive from the provider, which bounds each to its own column in
+ * `price-provider.server.ts`. Neither bound reaches the product: a rate inside
+ * `numeric(20, 4)` and a quantity inside `numeric(20, 8)` multiply to as much
+ * as 10^28. So the product is checked here, where the quantity is the figure
+ * being chosen.
  *
  * Exact, in `bigint`, and rounded the way the cast rounds before it is
  * compared: half away from zero can carry a figure a hair under the limit up to
@@ -338,10 +363,11 @@ export async function revisePosition(
     });
   }
 
-  // The two multiplications `holding_valued` is about to perform, checked
+  // The three multiplications `holding_valued` is about to perform, checked
   // before they are stored rather than discovered when a screen tries to render
-  // them. A price the household cannot influence is one of the operands, so the
-  // refusal names the figure that *was* typed.
+  // them. Two of the operands are facts the household cannot influence — the
+  // instrument's price and its dividend rate, both from the provider — so those
+  // two refusals name the quantity that *was* typed.
   if (!fitsTheMoneyColumn(input.quantity, input.costBasisPerShare)) {
     throw new ValidationError({
       costBasisPerShare:
@@ -356,6 +382,14 @@ export async function revisePosition(
       quantity:
         `That quantity valued at ${before.instrumentName}'s price is a larger figure than this ` +
         "application can hold.",
+    });
+  }
+
+  if (!fitsTheMoneyColumn(input.quantity, before.annualDividendPerShare)) {
+    throw new ValidationError({
+      quantity:
+        `That quantity at ${before.instrumentName}'s dividend rate projects a larger annual ` +
+        "dividend than this application can hold.",
     });
   }
 

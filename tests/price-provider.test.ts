@@ -122,8 +122,45 @@ describe("the yield unit hazard", () => {
 
     expect(quote?.price).toBe("0.0200");
     expect(quote?.yieldPct).toBeNull();
-    // The per-share amount is a real figure and stays.
+    // The per-share amount is a real figure and stays. $2.50 against the widest
+    // legal quantity is 2.5 × 10^12, nowhere near the money column's 10^16, so
+    // dropping it would trade a true rate for a $0 lower bound and buy nothing.
     expect(quote?.annualDividendPerShare).toBe("2.5000");
+  });
+
+  it("drops a per-share rate too large for its own column, as it does a yield", () => {
+    // The asymmetry migration 0006 turned into a hazard. `yield_pct` has been
+    // bounded since it was added; `annual_dividend_per_share` was written
+    // straight through, and it is `numeric(20, 4)` in the same transaction — so
+    // a provider answering with a figure that is not a rate would abort the
+    // refresh and roll back every other instrument's price, the exact loss the
+    // yield ceiling above exists to prevent.
+    //
+    // Sixteen integer digits is the first figure the column cannot hold.
+    const quote = quoteFor({
+      symbol: "GARBAGE",
+      regularMarketPrice: 100,
+      dividendRate: 1e16,
+    });
+
+    // The price is real and is kept: one unusable field does not discard a quote.
+    expect(quote?.price).toBe("100.0000");
+    expect(quote?.annualDividendPerShare).toBeNull();
+    // Null, never clamped — a rate at the ceiling would read on the Holdings
+    // table as a projected payout somebody could act on.
+    expect(quote?.yieldPct).toBeNull();
+  });
+
+  it("keeps a rate that sits just inside the column", () => {
+    // The ceiling bounds what cannot be stored and nothing else. A guard that
+    // rounded honest data away would be the more expensive bug of the two.
+    const quote = quoteFor({
+      symbol: "WIDE",
+      regularMarketPrice: 1e15,
+      dividendRate: 9e15,
+    });
+
+    expect(quote?.annualDividendPerShare).toBe("9000000000000000.0000");
   });
 
   it("reads an ETF's dividend from trailingAnnualDividendRate", () => {

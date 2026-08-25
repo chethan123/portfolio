@@ -115,7 +115,18 @@ function decimal(value: unknown, scale: number): string | null {
 const YIELD_CEILING = 10000;
 
 /**
- * A yield the column can actually store, or null.
+ * The widest rate `quote.annual_dividend_per_share` can hold —
+ * `numeric(20, 4)`.
+ *
+ * Sixteen integer digits. No security pays anything near it, which is the
+ * point: a figure this big is not a rate at all, and the ceiling exists so that
+ * one such figure cannot abort a refresh rather than to express a view about
+ * dividends.
+ */
+const RATE_CEILING = 10 ** 16;
+
+/**
+ * A figure the `numeric` column it is bound for can actually store, or null.
  *
  * A distressed or mispriced instrument — a $0.02 price still carrying a $2.50
  * rate — derives a 12500% yield, and Postgres answers a `numeric` overflow by
@@ -128,10 +139,16 @@ const YIELD_CEILING = 10000;
  * presented as a real one, and §8.2's rule throughout this codebase is to
  * report what is not known as unknown rather than to substitute a plausible
  * figure.
+ *
+ * Two ceilings, one reading. The yield was the only figure that needed it while
+ * the per-share rate beside it was merely stored and never read;
+ * {@link RATE_CEILING} is here because that rate goes into a `numeric` column
+ * inside the same transaction, and an unguarded one loses the refresh in
+ * exactly the way described above.
  */
-function inRange(value: string | null): string | null {
+function inRange(value: string | null, ceiling: number): string | null {
   if (value === null) return null;
-  return Math.abs(Number(value)) < YIELD_CEILING ? value : null;
+  return Math.abs(Number(value)) < ceiling ? value : null;
 }
 
 /**
@@ -256,16 +273,36 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
   // per share in the quote's own currency, so preferring either is a matter of
   // which the payload carries rather than of units.
   const perShare = quote.dividendRate ?? quote.trailingAnnualDividendRate;
-  const annualDividendPerShare = decimal(perShare, 4);
+
+  // Bounded like the yield beside it, and for the identical reason: this is
+  // written to `numeric(20, 4)` inside the refresh transaction, so a provider
+  // sending a figure that is not a rate at all would abort that statement and
+  // roll back every other instrument's price with it. The rate went unguarded
+  // while nothing read it — an absurd one sat in the column doing no harm — and
+  // migration 0006 ended that: `holding_valued` now multiplies it by a quantity
+  // on every read.
+  //
+  // What this ceiling does not do is bound that product. It bounds the rate to
+  // what the rate's own column holds, 10^16, while `quantity` is
+  // `numeric(20, 8)` and reaches 10^12 — so a rate comfortably inside this can
+  // still carry `quantity × rate` past the view's cast. That product is checked
+  // where the quantity is chosen rather than here, by `fitsTheMoneyColumn` in
+  // `positions.server.ts`, which `revisePosition` and `commitUpload` both call.
+  //
+  // Dropped rather than clamped, for the reason `inRange` gives. A null rate is
+  // coalesced to $0 by the view — DESIGN.md §14's accepted limitation 9, a
+  // lower bound the screens already label as one — where a clamped rate would
+  // be a projected payout a household could read as real.
+  const annualDividendPerShare = inRange(decimal(perShare, 4), RATE_CEILING);
 
   // The unambiguous field first; otherwise derive it. Deriving divides two
   // numbers that are both already in the quote's own currency, so the unit
   // cannot be mistaken — which is the entire point of not reading the field
   // that could be either.
   const yieldPct =
-    inRange(decimal(quote.dividendYield, 6)) ??
+    inRange(decimal(quote.dividendYield, 6), YIELD_CEILING) ??
     (perShare !== undefined && quoted !== undefined
-      ? inRange(decimal((perShare / quoted) * 100, 6))
+      ? inRange(decimal((perShare / quoted) * 100, 6), YIELD_CEILING)
       : null);
 
   return {
