@@ -7,10 +7,13 @@ option is not rediscovered later.
 
 ## 2026-08-25 — Upload workflow UX review
 
-One document: [Upload UX review](./2026-08-25-upload-ux-review.md) — the statement workflow walked as
-a household, from an empty instance to four recorded statements and the quarter after, against
-`410a61f`. Thirteen findings, all open — eleven new, and two that disagree in place with behaviour
-the exploratory pass investigated and cleared.
+Two documents from one investigation: what the statement workflow costs a household, and how the
+columns screen could stop asking them to do the mapping by hand.
+
+| Document | What it answers |
+|---|---|
+| [Upload UX review](./2026-08-25-upload-ux-review.md) | What day one costs, what the quarter after costs, and the thirteen findings between them |
+| [Broker header aliases](./2026-08-25-broker-header-aliases.md) | If the columns screen should arrive with a proposed mapping — **matched how?** — and why not fuzzily |
 
 ### The four things worth knowing without reading further
 
@@ -27,15 +30,18 @@ the exploratory pass investigated and cleared.
    case; the Overview's headline prints it. `DASH-3` covers the per-account rows and says so; the
    headline is uncovered.
 
-3. **There is no column auto-detection at all**, though the header row itself is detected and
-   detected well. Every mapping control opens on a placeholder against a header reading `Symbol`,
-   `Quantity`, `Description`. The design record forbids *skipping* the columns screen; it does not forbid
-   arriving with a proposal on it, and a remembered mapping already works exactly that way.
-
-4. **A repeat upload asks almost nothing, and the design intent holds.** Day one costs 130
+3. **A repeat upload asks almost nothing, and the design intent holds.** Day one costs 130
    interactions across 36 screens; the same account the next quarter costs 11. Every column choice
    and the header row come back filled, and the instruments step dims to *· none*. The never-skipped
    columns screen costs one glance, not one decision.
+
+4. **Fuzzy-matching the column names would make things worse, and not for the obvious reason.** The
+   abbreviations such a matcher exists to catch sit *further away* than the collisions it must avoid:
+   normalised by length, `qty` → `quantity` is 0.625 while `units` → `unit price` is 0.600 and
+   `shares` → `share price` is 0.545, and this repository's own `401k.csv` carries the first pair. A
+   curated table instead — which also carries what a matcher cannot, since a cost-basis header usually
+   names whether it is per share or per position, and that is the control `UX-5` shows recording a
+   fifty-fold error on its default.
 
 ### Evidence
 
@@ -49,9 +55,17 @@ ends a correct first run. Every finding that has a picture links to it in place.
 Nothing here is approved work. Three frictions were confirmed as **deliberate** and are recorded as
 decisions rather than findings — a refusal on the drop screen costs the file pick, a header-row
 change discards unsaved column choices, and a reordered export costs one re-map. The phone was
-measured and the accepted limitation holds: nothing is hidden at 390px. The closing section groups
-the findings by what the change actually is — copy-only fixes, two one-line defects, three that want
-a spec of their own, and three that are questions for the owner rather than proposals.
+measured and the accepted limitation holds: nothing is hidden at 390px. `UX-4`, `UX-5` and `UX-6` now
+belong in one spec, because one alias table answers all three.
+
+Both documents were reviewed adversarially before landing and **both had to give ground**. The review
+withdrew its claim that a `$0.00` first run was guaranteed rather than a weekend case, and one
+recommendation that was arithmetically wrong. The alias document withdrew the proof of its own central
+argument — which was false under raw edit distance — and a cost-basis convention it had proved using
+two of this repository's fixtures while calling them independent; its §10 records all three, because
+each is the intuitive answer and will otherwise be rediscovered. Its evidence is graded, and what could
+not be verified is listed and must not be encoded: NetBenefits, Principal and Empower headers among
+them, so this repo's `401k.csv` stays a model rather than a format.
 
 ## 2026-08-24 — Exploratory test pass
 

@@ -6,6 +6,10 @@ deliberately **not** a second defect hunt — [the exploratory test
 pass](./2026-08-24-exploratory-test-report.md) already attacked this flow and filed eleven ingest
 findings. Where an observation here lands on one of those, it cites the id rather than re-filing it.
 
+Followed by [broker header aliases](./2026-08-25-broker-header-aliases.md), which answers the
+*matched how?* that `UX-4` raises and turns out to settle part of `UX-5`, `UX-6` and `UX-10` as well.
+Where that document changes what a finding recommends, the finding says so in place.
+
 Reviewed against `410a61f`. Thirteen findings, all open. Eleven are new; two — `UX-3` and `UX-6` —
 disagree with a behaviour the earlier pass investigated and cleared, and say so in place rather than
 filing it as a discovery.
@@ -264,6 +268,19 @@ what to do next rather than what went wrong. Nothing to change.
   rather than re-entered; the notice at `:352-358` is the pattern to copy, with a different sentence
   saying the choices were proposed from the header rather than recalled from a previous upload.
   Sized against the cheapest alternative: the cheapest is copy alone, and copy cannot fix this.
+  **How to match was investigated separately** and the answer is narrower than it looks:
+  [broker header aliases](./2026-08-25-broker-header-aliases.md) argues for a curated alias table with
+  normalised exact matching and **no fuzzy tier at any stage**. The reason is narrower than "the
+  strings are similar": the abbreviations a fuzzy matcher exists to catch sit *further away* than the
+  collisions it must avoid. Normalised by length, `qty` → `quantity` is 0.625 while
+  `units` → `unit price` is 0.600 and `shares` → `share price` is 0.545 — so any threshold admitting
+  the abbreviation admits both collisions beneath it, and this repository's own `401k.csv` carries the
+  first pair. Two further things belong with this ticket rather than after it: a header row must be
+  required to satisfy the mandatory roles before it is offered, because a real Vanguard export's
+  holdings and transactions sections share five column names; and the proposal should be cross-checked
+  against the file's own arithmetic, as a signal that demotes a proposal rather than a gate that blocks
+  one — measured against real exports it fails often enough that it cannot be trusted to be right, only
+  to be suspicious.
 
 #### [UX-5] The cost-basis per-share/total default records a fifty-fold wrong basis with nothing on screen to catch it
 
@@ -289,6 +306,18 @@ what to do next rather than what went wrong. Nothing to change.
   ascending cost. Copy alone: reword the note to say how to tell — a basis larger than the price is a
   total. Better: the columns screen already re-renders on a round trip for the header row, so the
   same round trip could show what the first sample row becomes per share under the current choice.
+  **The strongest option arrived with the alias research and is not on this screen at all.** A
+  cost-basis column's header names its own semantics — `average`, `unit`, `per share`, `price` and
+  `paid` mean per share, `total` and `money` mean whole position — so the same table that proposes the
+  mapping under `UX-4` can pre-set this control rather than leaving it on a default. That is not a
+  heuristic dressed up: a *price* is per-unit by definition, and Interactive Brokers' real export
+  demonstrates the pair arithmetically. Fidelity ships both `Average Cost Basis` and `Cost Basis Total`
+  in one file, which is what makes the pre-set worth having and a fuzzy match worth refusing.
+  **The rule has a gap that lands squarely on this finding.** Unqualified headers — `Cost`,
+  `Cost Basis`, `Cost (£)` — carry no magnitude token at all, and Schwab's is the bare form, so the
+  very file this finding is built on is the case the rule cannot pre-set. There it should stay a
+  visible decision rather than a silent default, which is itself a change: today's default is
+  per-share. See [broker header aliases §4](./2026-08-25-broker-header-aliases.md).
   A third option was drafted and withdrawn, and is recorded because it is the obvious one to reach
   for: have the review screen observe a per-share basis larger than the position's own value. It does
   not work. On this file's own rows it never fires — AAPL's mistaken `$8,533` basis is below the
@@ -320,7 +349,16 @@ what to do next rather than what went wrong. Nothing to change.
   among them, as working-as-intended (`2026-08-24-exploratory-test-report.md:1025-1027`). They do
   fire, correctly, for every pair but one. The duplicate-column rule is right in general: one column
   cannot be both Quantity and Cost basis. Name is the exception, because "the name is the instrument"
-  is a statement a file can truthfully make. Either permit that one pair, or say in the refusal that *Not in this file* is the
+  is a statement a file can truthfully make — and it is one several real exports make. Vanguard's
+  legacy mutual-fund platform has **no symbol column at all**; TIAA puts the ticker inside the name
+  string; thinkorswim uses one combined `Instrument` column. Collective investment trusts have no
+  ticker because they are not SEC-registered funds, so this is a domain fact rather than one
+  provider's quirk.
+  One design consequence is sharper than "allow it", and the research is what surfaced it: **the
+  fallback has to be per row, not per file.** DEGIRO and Ameriprise both carry an identifier column
+  that is populated for most rows and blank for some, so a file-level "this export has no ticker"
+  decision is wrong for exactly the rows that need it. See
+  [broker header aliases §7](./2026-08-25-broker-header-aliases.md). Either permit that one pair, or say in the refusal that *Not in this file* is the
   answer here and that the name will be taken from the instrument column — the second is copy only.
 
 #### [UX-7] The owed-as-positive sentence is phrased for a liability and shown on every account kind
@@ -462,6 +500,14 @@ Evidence: [`08-review-majority-removal.png`](./upload-ux-2026-08/08-review-major
   direction. Parsing dates out of preamble prose is more than this is worth; saying on the date
   control that the file was not read for a date, and that the reader should check the statement,
   is copy.
+  The alias research changes the weight of this finding rather than its content: **a position export
+  carrying no as-of column is the normal case, not the exceptional one.** Fidelity, Schwab, TIAA and
+  Ameriprise all put the statement date in a preamble line; Merrill has a column but calls it
+  `COB Date`, which shares no substring with "as of". Fidelity is the sharpest case and not in the way
+  the first draft of that document claimed: its **real** export has no preamble at all and puts a
+  *download* timestamp in a trailer, so the file carries no statement date anywhere a mapping could
+  reach. So the branch that defaults to today is the common path, and should be designed as one. See
+  [broker header aliases §8](./2026-08-25-broker-header-aliases.md).
 
 ## The receipt, and after
 
@@ -602,9 +648,13 @@ path as it already does on the POST path.
 
 **Flow changes worth a spec.** UX-4's proposed mapping is the one that changes the day-one experience
 most and needs its own ticket: where a proposal is confident enough to make, what the screen says
-about where the choices came from, and what happens when it is wrong. UX-5 deserves to be settled in
-the same spec, because both are about the columns screen having information it does not put in front
-of the reader. UX-8 is a seed-data decision and a short conversation about whether classification
+about where the choices came from, and what happens when it is wrong.
+[Broker header aliases](./2026-08-25-broker-header-aliases.md) is the input to that ticket and settles
+the mechanism — a curated table, exact matching, no fuzzy tier, with an arithmetic cross-check before
+anything is pre-applied. **UX-5 and UX-6 belong in the same spec**, not because they are similar but
+because one table answers all three: it proposes the column, it names whether a cost basis is per
+share or per position, and it is where the providers whose instrument and name are one column are
+recorded. UX-8 is a seed-data decision and a short conversation about whether classification
 should be required at creation at all.
 
 **Questions rather than proposals.** UX-3 — whether the drop screen should refuse a file that
