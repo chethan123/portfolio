@@ -316,7 +316,25 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
 }
 
 /**
- * An instantiated `yahoo-finance2` client.
+ * The one `yahoo-finance2` instance this process uses, created on first use.
+ *
+ * A fresh `new YahooFinance()` per call — the shape this held before — costs
+ * more than the object: the library redoes its cookie/crumb handshake with
+ * Yahoo on every instance, so a poll tick and, worse, `probeSymbol`'s
+ * once-per-symbol loop during an upload turned into a burst of fresh
+ * handshakes in quick succession, exactly the pattern an unofficial endpoint
+ * rate-limits. It also reset the library's own "shown once" notice tracking,
+ * which is per-instance — hence the same survey banner logging on every
+ * single tick and every single symbol instead of once per process.
+ *
+ * Held in module scope rather than passed around, and memoized as a promise
+ * so two calls racing before the import resolves still share one client
+ * rather than each constructing their own.
+ */
+let client: Promise<{ quote(symbols: string[]): Promise<unknown> }> | undefined;
+
+/**
+ * The shared `yahoo-finance2` client for this process.
  *
  * **The default export is a class, not a ready-made client.** Every module name
  * is also installed on the class as a static that throws
@@ -336,8 +354,13 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
  * the contract test.
  */
 export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise<unknown> }> {
-  const { default: YahooFinance } = await import("yahoo-finance2");
-  return new YahooFinance() as unknown as { quote(symbols: string[]): Promise<unknown> };
+  if (client === undefined) {
+    client = import("yahoo-finance2").then(
+      ({ default: YahooFinance }) =>
+        new YahooFinance() as unknown as { quote(symbols: string[]): Promise<unknown> },
+    );
+  }
+  return client;
 }
 
 /**
