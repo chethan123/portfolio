@@ -270,15 +270,17 @@ what to do next rather than what went wrong. Nothing to change.
   Sized against the cheapest alternative: the cheapest is copy alone, and copy cannot fix this.
   **How to match was investigated separately** and the answer is narrower than it looks:
   [broker header aliases](./2026-08-25-broker-header-aliases.md) argues for a curated alias table with
-  normalised exact matching and **no fuzzy tier at any stage**. In this domain the semantics live in
-  short qualifier tokens — `Total`, `Average`, `Unit`, `Change` — so edit distance is anti-correlated
-  with meaning: any threshold loose enough to catch `Qty` → `Quantity` also catches `Unit Price` →
-  `Units`, and this repository's own `401k.csv` carries that exact pair. Two further things belong
-  with this ticket rather than after it: a header row must be required to satisfy the mandatory roles
-  before it is offered, because one real Vanguard export carries four header rows and two of them
-  share five column names; and the proposal should be cross-checked against the file's own arithmetic
-  (`quantity × price ≈ value`) before it is pre-applied, which catches the costliest mistakes without
-  recognising the broker at all.
+  normalised exact matching and **no fuzzy tier at any stage**. The reason is narrower than "the
+  strings are similar": the abbreviations a fuzzy matcher exists to catch sit *further away* than the
+  collisions it must avoid. Normalised by length, `qty` → `quantity` is 0.625 while
+  `units` → `unit price` is 0.600 and `shares` → `share price` is 0.545 — so any threshold admitting
+  the abbreviation admits both collisions beneath it, and this repository's own `401k.csv` carries the
+  first pair. Two further things belong with this ticket rather than after it: a header row must be
+  required to satisfy the mandatory roles before it is offered, because a real Vanguard export's
+  holdings and transactions sections share five column names; and the proposal should be cross-checked
+  against the file's own arithmetic, as a signal that demotes a proposal rather than a gate that blocks
+  one — measured against real exports it fails often enough that it cannot be trusted to be right, only
+  to be suspicious.
 
 #### [UX-5] The cost-basis per-share/total default records a fifty-fold wrong basis with nothing on screen to catch it
 
@@ -306,12 +308,16 @@ what to do next rather than what went wrong. Nothing to change.
   same round trip could show what the first sample row becomes per share under the current choice.
   **The strongest option arrived with the alias research and is not on this screen at all.** A
   cost-basis column's header names its own semantics — `average`, `unit`, `per share`, `price` and
-  `paid` mean per share; `total`, `money`, `orig` and `book` mean whole position — so the same table
-  that proposes the mapping under `UX-4` can pre-set this control rather than leaving it on a default.
-  That is not a heuristic dressed up: a *price* is per-unit by definition. Fidelity ships both
-  `Average Cost Basis` and `Cost Basis Total` in one file, which is what makes the pre-set worth
-  having and a fuzzy match worth refusing. See
-  [broker header aliases §4](./2026-08-25-broker-header-aliases.md).
+  `paid` mean per share, `total` and `money` mean whole position — so the same table that proposes the
+  mapping under `UX-4` can pre-set this control rather than leaving it on a default. That is not a
+  heuristic dressed up: a *price* is per-unit by definition, and Interactive Brokers' real export
+  demonstrates the pair arithmetically. Fidelity ships both `Average Cost Basis` and `Cost Basis Total`
+  in one file, which is what makes the pre-set worth having and a fuzzy match worth refusing.
+  **The rule has a gap that lands squarely on this finding.** Unqualified headers — `Cost`,
+  `Cost Basis`, `Cost (£)` — carry no magnitude token at all, and Schwab's is the bare form, so the
+  very file this finding is built on is the case the rule cannot pre-set. There it should stay a
+  visible decision rather than a silent default, which is itself a change: today's default is
+  per-share. See [broker header aliases §4](./2026-08-25-broker-header-aliases.md).
   A third option was drafted and withdrawn, and is recorded because it is the obvious one to reach
   for: have the review screen observe a per-share basis larger than the position's own value. It does
   not work. On this file's own rows it never fires — AAPL's mistaken `$8,533` basis is below the
@@ -497,7 +503,9 @@ Evidence: [`08-review-majority-removal.png`](./upload-ux-2026-08/08-review-major
   The alias research changes the weight of this finding rather than its content: **a position export
   carrying no as-of column is the normal case, not the exceptional one.** Fidelity, Schwab, TIAA and
   Ameriprise all put the statement date in a preamble line; Merrill has a column but calls it
-  `COB Date`, which shares no token with "as of" and which no amount of fuzzy matching would ever
+  `COB Date`, which shares no substring with "as of". Fidelity is the sharpest case and not in the way
+  the first draft of that document claimed: its **real** export has no preamble at all and puts a
+  *download* timestamp in a trailer, so the file carries no statement date anywhere a mapping could
   reach. So the branch that defaults to today is the common path, and should be designed as one. See
   [broker header aliases §8](./2026-08-25-broker-header-aliases.md).
 
