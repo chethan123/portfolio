@@ -1519,12 +1519,13 @@ textarea[aria-invalid="true"] {
  *
  * `height: 100%` rather than a figure: it resolves against the box's content
  * height, so the inset still fits exactly when a refusal thickens the border
- * from 1px to 2px. `overflow: hidden` is what lets a square-cornered inset sit
- * inside the box's 8px radius without poking through it.
+ * from 1px to 2px. Nothing here has to clip the inset's square corner against
+ * the box's 8px one — the UA stylesheet already clips an `<input>`'s overflow
+ * and an author cannot override it, which an `overflow: hidden` written here
+ * only looked like it was doing.
  */
 input[type="file"] {
   padding: 0 var(--space-sm) 0 0;
-  overflow: hidden;
 }
 
 input[type="file"]::file-selector-button {
@@ -1541,10 +1542,14 @@ input[type="file"]::file-selector-button {
   cursor: pointer;
 }
 
-/* The one tonal step the app already uses for "this is the thing you act on" —
- * the same ground the current Settings tab wears. */
+/* One more step of the same ramp, derived rather than named: `--panel-hover` is
+ * spent on the resting ground here, and the tokens left are roles rather than
+ * steps — `--secondary-container` is the app's "you are here" (the active nav
+ * item, the current settings tab), which is not a thing a hover may say. Mixing
+ * toward `--on-surface` darkens in light and lightens in dark for free, which is
+ * how `.button:hover` already derives its own. */
 input[type="file"]::file-selector-button:hover {
-  background: var(--secondary-container);
+  background: color-mix(in srgb, var(--panel-hover) 92%, var(--on-surface));
 }
 
 label {
