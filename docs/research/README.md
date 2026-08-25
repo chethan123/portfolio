@@ -7,10 +7,24 @@ option is not rediscovered later.
 
 ## 2026-08-25 — Upload workflow UX review
 
-One document: [Upload UX review](./2026-08-25-upload-ux-review.md) — the statement workflow walked as
-a household, from an empty instance to four recorded statements and the quarter after, against
-`410a61f`. Thirteen findings, all open — eleven new, and two that disagree in place with behaviour
-the exploratory pass investigated and cleared.
+Two documents. The [Upload UX review](./2026-08-25-upload-ux-review.md) is the walk; [broker header
+aliases](./2026-08-25-broker-header-aliases.md) answers the question its `UX-4` raises — if the
+columns screen should arrive with a proposed mapping, matched how? — and turns out to settle part of
+`UX-5`, `UX-6` and `UX-10` as well.
+
+**The answer is narrower than it looks: a curated alias table with normalised exact matching, and no
+fuzzy tier at any stage.** In this domain the semantics live in short qualifier tokens, so edit
+distance is anti-correlated with meaning — `Units` and `Unit Price` sit six edits apart and are both
+in this repository's own `401k.csv`, and Fidelity ships `Average Cost Basis` and `Cost Basis Total`
+in one file. That second pair is also the fix for `UX-5`: a cost-basis header names whether it is per
+share or per position, so the table that proposes the mapping can pre-set the control that currently
+records a fifty-fold error on its default. Two findings the walk could not have reached: one real
+Vanguard export carries **four** header rows, two sharing five column names; and a position export
+with no as-of column is the normal case rather than the exceptional one.
+
+The walk itself went from an empty instance to four recorded statements and then the quarter after,
+against `410a61f`. Thirteen findings, all open — eleven new, and two that disagree in place with
+behaviour the exploratory pass investigated and cleared.
 
 ### The four things worth knowing without reading further
 
@@ -51,7 +65,14 @@ decisions rather than findings — a refusal on the drop screen costs the file p
 change discards unsaved column choices, and a reordered export costs one re-map. The phone was
 measured and the accepted limitation holds: nothing is hidden at 390px. The closing section groups
 the findings by what the change actually is — copy-only fixes, two one-line defects, three that want
-a spec of their own, and three that are questions for the owner rather than proposals.
+a spec of their own, and three that are questions for the owner rather than proposals. `UX-4`, `UX-5`
+and `UX-6` now belong in one spec, because one alias table answers all three.
+
+The alias document grades its own evidence and says plainly what it could not verify: no brokerage
+publishes its column names, so the strongest tier is a real export someone committed rather than a
+primary source. **Fidelity NetBenefits, Principal and Empower workplace headers are unverified and
+must not be encoded** — this repository's `401k.csv` is a plausible model of that shape, not an
+observed format. Robinhood, Betterment and Wealthfront have no native positions CSV at all.
 
 ## 2026-08-24 — Exploratory test pass
 
