@@ -38,6 +38,8 @@ This file carries what the script cannot: which shot is of what, and why.
 dark page looks broken. [The guide's images](../guide/images/) have no such constraint and are light
 only.
 
+**The desktop shots are 1600 wide, and were 1440.** Holdings is the widest thing the application draws, and it decides this number: with the rail and the canvas margins taken out, 1440 leaves its table about a hundred pixels short, so the last column falls inside the panel's own horizontal scroll and a capture cuts it off. `.data-table-scroll` is the right answer for a narrow window; it is the wrong thing for a README to photograph. The figure to keep these in step with is `--content-max` in the stylesheet — a column added to Holdings is the thing most likely to make both too small again.
+
 **Mobile shots are not full-page.** They are 390×900 with `isMobile`. The bottom navigation is
 `position: fixed`, so a full-page capture paints it across the middle of the image instead of at the
 foot of the screen where a phone shows it.
