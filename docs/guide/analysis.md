@@ -106,4 +106,4 @@ zero and an instance with nothing in it are different things. Start at [upload.m
 
 ---
 
-**Next:** [An account](account-detail.md) — one account end to end.
+**Next:** [Income](income.md) — what the same portfolio is projected to pay over the coming year.

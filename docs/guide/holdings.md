@@ -95,10 +95,14 @@ are counted as nothing and the total is a **lower bound**: it leaves out anythin
 interest on cash, and any interest on a loan. A holding worth nothing has an amount and no
 percentage, since there is nothing to be a percentage of.
 
-Something owed can pay a negative figure. A loan whose note carries a rate reads as money going
-out — `−$522.00` — at the rate it is charged at, `3.6%`.
+Something owed can show a negative figure. A loan whose note carries a rate reads as money going
+out rather than coming in, with the rate it is charged at underneath — the same two lines as any
+other row, with the other sign.
 
-## The totals, and three coverage counts
+This column added up — for the whole portfolio, and split by tax treatment and by account — is the
+[Income](income.md) screen.
+
+## The totals, and the coverage counts under them
 
 The Total row carries **its own count under each figure that can be short**, and they are genuinely
 different numbers.

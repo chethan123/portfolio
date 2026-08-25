@@ -56,6 +56,11 @@ Every position this account holds, with the count in the panel header.
 There is no "today's change" column, and no change figure beside the total. See [Account
 detail](../../README.md#account-detail--one-account-end-to-end) for why.
 
+There is no **Annual dividend** column either, though [Holdings](holdings.md#the-columns) has one.
+What this account is projected to pay is a row of the by-account breakdown on
+[Income](income.md#annual-dividend-by-account), and answering the same question on two screens is
+how the two come to disagree.
+
 An account with nothing recorded shows a short note in place of the table, pointing at whichever way
 in applies to it — a balance for a bank or loan, [an upload](upload.md) for anything else.
 

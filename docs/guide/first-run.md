@@ -52,10 +52,12 @@ Down the left side:
 - **Overview** — net worth, the trend line, and every account.
 - **Holdings** — every position you hold, filtered and grouped any way you ask.
 - **Analysis** — the same total broken down by person, account type and asset class.
-- **Income** — not built yet.
+- **Income** — what the portfolio is projected to pay over the coming year, and how much of that
+  is taxed.
 
-**Income** is reachable and renders an empty state saying so. Nothing records income in this
-version — see [Not built yet](../../README.md#not-built-yet) for what it will do.
+Like Overview and Analysis, Income draws nothing until a statement has been uploaded: one sentence
+saying so, and no ring, no zero and no empty chart frame. An instance with nothing in it and a
+portfolio that genuinely pays nothing must not look alike.
 
 **Settings** sits on its own at the foot, and the filled **Upload statement** button below it is how
 a statement gets in.

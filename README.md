@@ -68,7 +68,7 @@ so a chosen range survives a reload and can be bookmarked.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-dark.png">
-  <img alt="Holdings: a filter bar, a group-by strip and the full table of every position with its quantity, price, value, cost basis and unrealized gain" src="docs/screenshots/holdings-light.png">
+  <img alt="Holdings: a filter bar, a group-by strip and the full table of every position with its quantity, price, value, cost basis, unrealized gain and projected annual dividend" src="docs/screenshots/holdings-light.png">
 </picture>
 
 Every position the household holds, whichever account it sits in. Filter by owner, account,
@@ -140,6 +140,43 @@ beside the table it is drawn from, and beneath them what has been gained and not
   3.8% net investment income tax. A loss in one asset type is not netted against a gain in another
   the way a real return would net it, so the figure is an upper bound rather than a bill, and the
   panel says which.
+
+### Income — what the portfolio pays over the coming year
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/income-dark.png">
+  <img alt="Income: the total annual dividend with the weighted yield beside it, then the same figure as two donut-and-table breakdowns — by tax treatment, with the sheltered subtotal written out beneath the table, and by account" src="docs/screenshots/income-light.png">
+</picture>
+
+The annual dividend the portfolio is projected to pay, from the quantity held and the per-share rate
+the pricing loop already stores for every instrument it can quote. One headline figure with the
+weighted yield beside it, then the same figure cut two ways: by tax treatment, which answers how
+much of it is taxed this year, and by account, which answers which statement it lands in.
+
+- **One read, so no two figures on the page can disagree.** The headline, both breakdowns and the
+  sentence under the first all come off the array `currentHoldings()` returns — the same array the
+  Holdings table reads — rather than a query apiece. That seam is
+  [Reading what is held](#reading-what-is-held) below, and a screen that is nothing but totals of
+  the same rows is what it exists for: the way not to add a dashboard query that drifts apart from
+  its neighbours is not to add one.
+- **The total is a lower bound, and says so where it is read.** A holding with no dividend rate on
+  file counts as paying nothing, because nothing stored distinguishes an ETF that genuinely pays
+  nothing from a trust no provider was ever asked about. The consequence is that the figure leaves
+  out every unquoted holding, all interest on cash and any interest on a loan — the same treatment
+  the unrealized panel gives its own figure by calling it a ceiling.
+- **Three tax treatments, never a taxable/sheltered boolean.** A dividend in a taxable account is
+  taxed this year, one in a Traditional account is untaxed now and taxed as ordinary income on the
+  way out, and one in a Roth is never taxed. Sheltered merges a dated liability with the absence of
+  one, so it is a subtotal written out in words beneath the table and never a slice of the ring.
+- **That subtotal is two amounts and never a fraction.** A taxable group can net negative, because
+  a liability account has a tax treatment like any other and its interest can outweigh what the
+  holdings beside it pay. Written as a fraction, the sentence would then divide by a total smaller
+  than its own parts, so the sheltered figure and the taxable figure are stated separately and
+  neither is divided by the other.
+- **A ratio names its denominator.** The weighted yield divides by gross positive value rather than
+  by net worth, so a household in net debt is not told a portfolio that pays money has a negative
+  yield. A group that pays something and has nothing priced gets no percentage at all rather than a
+  0.0% that would read as an answer.
 
 ### Account detail — one account, end to end
 
@@ -241,23 +278,23 @@ withheld on a small screen: setting a balance and the whole of Settings are reac
 
 ### Not built yet
 
-One screen is reachable and still a placeholder — Income, from the navigation. It is listed here
-rather than screenshotted, because a picture of a placeholder says nothing a sentence does not:
+Nothing in the navigation is a placeholder any more. What is still missing sits behind a screen
+rather than in place of one.
 
-| Screen | What it will do |
-|---|---|
-| **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment |
+The pricing slice leaves its own UI unbuilt — the "as of" timestamp, the stale-price treatment, a
+"Refresh now" control, and the Settings → Instruments tab where a collective investment trust gets
+its price typed in by hand. Settings also lists Classifications and History as tabs that do not
+exist yet, and there is no export or download of any kind.
 
-Prices refresh on their own (below), so Income has the yield figures it needs; what it still lacks
-is the screen. The pricing slice also leaves its own UI unbuilt — the "as of" timestamp, the
-stale-price treatment, a "Refresh now" control and the Settings → Instruments tab, where a
-collective investment trust gets its price typed in by hand. Those are specified in
-[`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn in
-[`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md). Holdings and Upload above
-were built the same way — from [`docs/specs/0003-holdings.md`](docs/specs/0003-holdings.md) with
-[`docs/design/holdings-ui-brief.md`](docs/design/holdings-ui-brief.md), and from
+The pricing UI is specified in [`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn
+in [`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md). Every screen above was
+built the same way, from an approved spec: Holdings from
+[`docs/specs/0003-holdings.md`](docs/specs/0003-holdings.md) with
+[`docs/design/holdings-ui-brief.md`](docs/design/holdings-ui-brief.md), Upload from
 [`docs/specs/0004-ingest.md`](docs/specs/0004-ingest.md) with
-[`docs/design/ingest-ui-brief.md`](docs/design/ingest-ui-brief.md).
+[`docs/design/ingest-ui-brief.md`](docs/design/ingest-ui-brief.md), and Income from
+[`docs/specs/0006-dividends.md`](docs/specs/0006-dividends.md), which had no separate brief because
+it draws the panels Analysis already had.
 
 ## Running an instance
 
