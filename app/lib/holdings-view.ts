@@ -51,8 +51,10 @@ import {
   QUANTITY_SCALE,
   SHARE_SCALE,
   compareDecimal,
+  divide,
   render,
   sumMoney,
+  toUnits,
 } from "./money.ts";
 
 import type { AccountKind, Coverage, TaxTreatment, ValuedHolding } from "./valuation.server.ts";
@@ -216,7 +218,8 @@ export type SortKey =
   | "price"
   | "value"
   | "costBasis"
-  | "unrealized";
+  | "unrealized"
+  | "annualDividend";
 
 export type SortDirection = "asc" | "desc";
 
@@ -229,6 +232,7 @@ const SORT_KEYS: ReadonlyArray<SortKey> = [
   "value",
   "costBasis",
   "unrealized",
+  "annualDividend",
 ];
 
 /**
@@ -269,6 +273,12 @@ function compareBy(key: SortKey, a: ValuedHolding, b: ValuedHolding): number {
       return compareDecimal(a.costBasis, b.costBasis, MONEY_SCALE);
     case "unrealized":
       return compareDecimal(a.unrealized, b.unrealized, MONEY_SCALE);
+    // At the money scale like the four above it, and not at `SHARE_SCALE`: the
+    // column sorts on the amount it prints, never on the percentage printed
+    // under it. Sorting a money column by a derived ratio would order the table
+    // by something no cell in it adds up to.
+    case "annualDividend":
+      return compareDecimal(a.annualDividend, b.annualDividend, MONEY_SCALE);
   }
 }
 
@@ -276,6 +286,13 @@ function compareBy(key: SortKey, a: ValuedHolding, b: ValuedHolding): number {
  * Is the figure this column sorts on absent altogether? Only the four money
  * columns can be, and only because nothing could price the holding or nothing
  * recorded what it cost.
+ *
+ * The annual dividend is not among them, on purpose. The view coalesces a
+ * missing rate to zero, so on the current path — the only path this screen
+ * reads — every holding has a figure and a holding that pays nothing pays
+ * `$0`. A case here would sink those rows to the bottom of their own column as
+ * though nobody knew what they paid, which is the opposite of what the zero
+ * rule claims (DESIGN.md §14, limitation 9).
  */
 function isMissing(key: SortKey, holding: ValuedHolding): boolean {
   switch (key) {
@@ -510,6 +527,21 @@ export type HoldingsTotal = {
   value: string | null;
   costBasis: string | null;
   unrealized: string | null;
+  /**
+   * Never null, and the one figure here that is not. A group where nothing
+   * pays is worth `$0` of dividend rather than an unknown amount of it,
+   * because the view already resolved the ambiguity: a missing rate is
+   * coalesced to zero in SQL, so there is no such thing as a holding whose
+   * payout nobody knows (DESIGN.md §14, limitation 9). The three figures above
+   * are null when nothing behind them was known; dashing this one would
+   * reintroduce, in the totals row, exactly the distinction the coalesce was
+   * chosen to give up — and it would read as "we could not work out what this
+   * group pays" on a group that pays nothing.
+   *
+   * It is also why there is no dividend coverage: with no unknowns there is
+   * nothing to count.
+   */
+  annualDividend: string;
   valueCoverage: Coverage;
   basisCoverage: Coverage;
   unrealizedCoverage: Coverage;
@@ -519,6 +551,7 @@ function totalOf(holdings: ValuedHolding[]): { total: HoldingsTotal; units: bigi
   const value = sumMoney(holdings.map((holding) => holding.value));
   const basis = sumMoney(holdings.map((holding) => holding.costBasis));
   const unrealized = sumMoney(holdings.map((holding) => holding.unrealized));
+  const dividend = sumMoney(holdings.map((holding) => holding.annualDividend));
 
   const figure = (sum: { amount: bigint; known: number }) =>
     sum.known === 0 ? null : render(sum.amount, MONEY_SCALE);
@@ -529,6 +562,12 @@ function totalOf(holdings: ValuedHolding[]): { total: HoldingsTotal; units: bigi
       value: figure(value),
       costBasis: figure(basis),
       unrealized: figure(unrealized),
+      // Rendered straight, deliberately not through `figure()`. That helper
+      // reads a `known` count of zero as "nothing was known" and dashes the
+      // figure, which is right for the three above it and wrong here — see
+      // {@link HoldingsTotal.annualDividend}. An empty group sums to `$0`,
+      // which is the truthful answer to "what does nothing pay".
+      annualDividend: render(dividend.amount, MONEY_SCALE),
       valueCoverage: { known: value.known, total: value.total },
       basisCoverage: { known: basis.known, total: basis.total },
       unrealizedCoverage: { known: unrealized.known, total: unrealized.total },
@@ -680,6 +719,67 @@ export function holdingNote(holding: {
   else if (holding.isStale) parts.push("price is stale");
 
   return parts.join(" · ");
+}
+
+/**
+ * What one holding pays as a fraction of what it is worth — `$340` a year on a
+ * `$27,000` position is `"0.012593"`, at `SHARE_SCALE` and for display only.
+ *
+ * One holding's, never a group's. CONTEXT.md reserves *weighted yield* for a
+ * group's annual dividend over that group's value, which is a different figure
+ * with a different denominator; and this is not `quote.yield_pct` either. The
+ * stored yield was struck against the provider's own price snapshot rather
+ * than the price in our `quote` row, so reading it here would put two numbers
+ * for one thing in a single row — §8.2's named weak point. The dividend is the
+ * one stored figure and this is a view of it, exactly as `unrealized` is
+ * literally `value − cost_basis` rather than a second expression that can
+ * round its own way.
+ *
+ * **A percentage, because the amount alone cannot be compared.** `$340` a year
+ * says nothing about whether a holding pays well until you know it is a
+ * $27,000 position. The amount scales with position size; the fraction is what
+ * makes two rows comparable, which is why it goes under the amount rather than
+ * replacing it.
+ *
+ * Null in exactly two cases, and both mean "there is no percentage here"
+ * rather than "the percentage is zero":
+ *
+ *   * **No value.** An unquoted 401k trust has a quantity and no price, so it
+ *     has a dividend and nothing to state it as a fraction of. Its row shows a
+ *     blank Value and a `$0` dividend, and a `0.0%` beneath that would be a
+ *     claim about a holding nobody can price.
+ *   * **A value of zero.** `money.ts`'s `divide` takes bigints and divides
+ *     them, so a zero denominator raises `RangeError` — and nothing in the
+ *     schema stops a quantity or a price being zero, so a position someone has
+ *     sold out of reaches here as `"0.0000"`. Unguarded, one such row would
+ *     take the whole Holdings table down with it rather than losing its own
+ *     percentage.
+ *
+ * **A liability's two negatives cancel, and that is the right answer.** A loan
+ * holds a negative quantity, so both its dividend and its value are negative
+ * and the fraction between them comes out positive: the row reads `−$522.00`
+ * at `3.6%`, which is what the note costs and the rate it costs it at. Forcing
+ * a sign on it would be inventing one — and it is the amount, not the
+ * percentage, that says which way the money is moving.
+ *
+ * Here rather than in a route for the reason {@link formatQuantity} and
+ * {@link holdingNote} are: Account detail renders the same holding's cells, and
+ * a second copy of a guard like the one above is how one screen comes to throw
+ * where the other does not. The rendering is `formatShare`'s job, in
+ * `allocation.ts` — the same fraction-to-percentage rule the subtotal's share
+ * already goes through, minus on a negative and no plus on a positive.
+ */
+export function holdingYield(
+  holding: Pick<ValuedHolding, "annualDividend" | "value">,
+): string | null {
+  if (holding.annualDividend === null || holding.value === null) return null;
+
+  const value = toUnits(holding.value, MONEY_SCALE);
+  if (value === 0n) return null;
+
+  const dividend = toUnits(holding.annualDividend, MONEY_SCALE);
+
+  return render(divide(dividend, value, SHARE_SCALE), SHARE_SCALE);
 }
 
 /**

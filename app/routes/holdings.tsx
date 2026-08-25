@@ -18,6 +18,7 @@ import {
   formatQuantity,
   groupHoldings,
   holdingNote,
+  holdingYield,
   parseQuery,
   parseRowKey,
   rowKey,
@@ -281,10 +282,15 @@ const COLUMNS: ReadonlyArray<Column> = [
   { key: "value", label: "Value", numeric: true },
   { key: "costBasis", label: "Cost basis", numeric: true },
   { key: "unrealized", label: "Unrealized", numeric: true },
+  // Last, after Unrealized, rather than beside Value where it is most often
+  // read. `Cost basis` and `Unrealized` are a pair — what you paid, what you
+  // gained — and a forward projection wedged between them would break the one
+  // subtraction in the row a reader is meant to be able to do by eye.
+  { key: "annualDividend", label: "Annual dividend", numeric: true },
 ];
 
-/** The three money columns a subtotal and the grand total have figures for. */
-const FIGURES = 3;
+/** The four money columns a subtotal and the grand total have figures for. */
+const FIGURES = 4;
 
 /**
  * Grouping by owner puts the owner's name in the heading above the group, so
@@ -695,6 +701,22 @@ function Figures({ total }: { total: Total }) {
         {total.unrealized === null ? "—" : <Delta amount={total.unrealized} />}
         {note(total.unrealizedCoverage)}
       </td>
+      {/* No caption, and no weighted yield either.
+
+          No caption because there are no unknowns to count: the view coalesces
+          a missing rate to zero, so this figure is summed from every row above
+          it and "4 of 4" would be noise on a column that is complete by
+          construction.
+
+          No percentage because the one under a row is that row's own — a
+          fraction of a single holding's value. The same ratio taken over a
+          subtotal is a *weighted* yield, a different figure with the group's
+          value as its denominator and its own undefined cases, and the screen
+          it belongs on is Income. Printing it here in the same typeface as the
+          row percentages would invite them to be read as the same number. */}
+      <td className="is-numeric" role="cell" data-label="Annual dividend">
+        <Money amount={total.annualDividend} />
+      </td>
     </>
   );
 }
@@ -835,6 +857,11 @@ function Row({
     values?.costBasisPerShare ??
     (holding.costBasisPerShare === null ? "" : formatQuantity(holding.costBasisPerShare));
 
+  // Null where there is no percentage to state rather than a percentage of
+  // zero: a holding nobody can price, and one whose value has gone to zero —
+  // which would otherwise be divided by. See `holdingYield`.
+  const yieldOnValue = holdingYield(holding);
+
   return (
     <>
       <tr role="row" className={open ? "row-editing" : undefined}>
@@ -925,6 +952,29 @@ function Row({
         </td>
         <td className="is-numeric" role="cell" data-label="Unrealized">
           {holding.unrealized === null ? "—" : <Delta amount={holding.unrealized} />}
+        </td>
+        {/* `$0`, not a dash, for a holding whose instrument carries no rate —
+            including one nobody can price, which shows a blank Value and a `$0`
+            here in the same row. That pairing looks wrong and is the accepted
+            limitation working as chosen (DESIGN.md §14, limitation 9): `quote`
+            cannot tell "the provider said it pays nothing" from "nobody asked",
+            so both are read as nothing.
+
+            `Money` rather than `Delta`: a payout is not a movement, so it takes
+            no arrow and no leading plus, and a liability whose note carries a
+            rate keeps its minus through `formatMoney` like every other negative
+            figure in the table.
+
+            The amount and the percentage share a wrapper so that the phone gets
+            one right-aligned block against the card's `data-label`, rather than
+            two flex items pushed apart by it. */}
+        <td className="is-numeric" role="cell" data-label="Annual dividend">
+          <div>
+            <Money amount={holding.annualDividend} />
+            {yieldOnValue === null ? null : (
+              <span className="cell-sub u-data">{formatShare(yieldOnValue)}</span>
+            )}
+          </div>
         </td>
         <td className="is-actions" role="cell" data-label="">
           {open ? null : (

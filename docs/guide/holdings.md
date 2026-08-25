@@ -81,14 +81,27 @@ group already says it.
 - **Value** — quantity times price.
 - **Cost basis** — what the whole position cost.
 - **Unrealized** — value minus cost basis, with an arrow and a sign.
+- **Annual dividend** — what the position is projected to pay over the next year, with that as a
+  percentage of its own value underneath. The amount grows with the size of the position; the
+  percentage is the figure that compares one row against another.
 
 A dash is not a zero. A dash means the figure is not known: no price recorded, or no cost basis
 recorded.
 
-## Three totals, three coverage counts
+**Annual dividend is the exception, and it never shows a dash.** A holding with no dividend rate on
+file reads `$0` — including one nobody can price, which shows a blank Value and `$0` in the same
+row. There is no way to tell "this pays nothing" apart from "nobody was asked about it", so both
+are counted as nothing and the total is a **lower bound**: it leaves out anything unquoted, all
+interest on cash, and any interest on a loan. A holding worth nothing has an amount and no
+percentage, since there is nothing to be a percentage of.
 
-The Total row carries **its own count under each figure**, and they are genuinely different
-numbers.
+Something owed can pay a negative figure. A loan whose note carries a rate reads as money going
+out — `−$522.00` — at the rate it is charged at, `3.6%`.
+
+## The totals, and three coverage counts
+
+The Total row carries **its own count under each figure that can be short**, and they are genuinely
+different numbers.
 
 A workplace plan routinely reports a price and no cost basis at all. So the Value total can cover
 every holding while the Unrealized total covers far fewer. The sentence under the table spells out
@@ -101,7 +114,7 @@ Do not read one count as covering the row. A cost basis over 11 holdings sitting
 over 17 would look like a gain that nothing in the database supports.
 
 Where a column is complete, it says nothing. The absence of a count is the claim that nothing is
-missing.
+missing. Annual dividend never carries one: every row has a figure, so there is nothing to count.
 
 ## Notes on a row
 
