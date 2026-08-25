@@ -9,7 +9,8 @@ option is not rediscovered later.
 
 One document: [Upload UX review](./2026-08-25-upload-ux-review.md) — the statement workflow walked as
 a household, from an empty instance to four recorded statements and the quarter after, against
-`410a61f`. Twelve findings, all open, none of them a re-report of the exploratory pass.
+`410a61f`. Thirteen findings, all open — eleven new, and two that disagree in place with behaviour
+the exploratory pass investigated and cleared.
 
 ### The four things worth knowing without reading further
 
@@ -19,21 +20,22 @@ a household, from an empty instance to four recorded statements and the quarter 
    account under the wrong tax treatment is wrong on every screen that reads the taxable/sheltered
    split, and nothing anywhere suggests it happened.
 
-2. **A correct first run ends at `$0.00` net worth, and that is the guaranteed outcome rather than an
-   edge case.** Every instrument in a first statement is created during the upload, and the poller
-   has no immediate first tick and skips weekends — so the reward for a correct onboarding is a
-   headline of `$0.00` over four accounts of `$0.00`, on a screen whose own rule is that a zero is a
-   claim. The account page already refuses the figure; the Overview does not.
+2. **A first run done at a weekend ends at `$0.00` net worth.** The poller has no immediate first
+   tick — deliberately — and returns early whenever the market is shut, so a household that sits down
+   on a Sunday finishes a correct onboarding and is shown a headline of `$0.00` over four accounts of
+   `$0.00` until Monday. The account page already refuses that figure under a rule naming this exact
+   case; the Overview's headline prints it. `DASH-3` covers the per-account rows and says so; the
+   headline is uncovered.
 
 3. **There is no column auto-detection at all**, though the header row itself is detected and
-   detected well. Six controls open on a placeholder against a header reading `Symbol`, `Quantity`,
-   `Description`. The design record forbids *skipping* the columns screen; it does not forbid
+   detected well. Every mapping control opens on a placeholder against a header reading `Symbol`,
+   `Quantity`, `Description`. The design record forbids *skipping* the columns screen; it does not forbid
    arriving with a proposal on it, and a remembered mapping already works exactly that way.
 
 4. **A repeat upload asks almost nothing, and the design intent holds.** Day one costs 130
-   interactions across 36 screens; the same account the next quarter costs 11. All six column choices
-   and the header row come back filled, and the instruments step dims to *· none*. The
-   never-skipped columns screen costs one glance, not one decision.
+   interactions across 36 screens; the same account the next quarter costs 11. Every column choice
+   and the header row come back filled, and the instruments step dims to *· none*. The never-skipped
+   columns screen costs one glance, not one decision.
 
 ### Evidence
 
@@ -48,8 +50,8 @@ Nothing here is approved work. Three frictions were confirmed as **deliberate** 
 decisions rather than findings — a refusal on the drop screen costs the file pick, a header-row
 change discards unsaved column choices, and a reordered export costs one re-map. The phone was
 measured and the accepted limitation holds: nothing is hidden at 390px. The closing section groups
-the twelve findings by what the change actually is — five are copy only, one is a one-line remount,
-three want a spec, and three are questions for the owner rather than proposals.
+the findings by what the change actually is — copy-only fixes, two one-line defects, three that want
+a spec of their own, and three that are questions for the owner rather than proposals.
 
 ## 2026-08-24 — Exploratory test pass
 

@@ -6,7 +6,9 @@ deliberately **not** a second defect hunt — [the exploratory test
 pass](./2026-08-24-exploratory-test-report.md) already attacked this flow and filed eleven ingest
 findings. Where an observation here lands on one of those, it cites the id rather than re-filing it.
 
-Reviewed against `410a61f`. Twelve findings, all open, none previously reported.
+Reviewed against `410a61f`. Thirteen findings, all open. Eleven are new; two — `UX-3` and `UX-6` —
+disagree with a behaviour the earlier pass investigated and cleared, and say so in place rather than
+filing it as a discovery.
 
 ## Start here — the four that matter
 
@@ -17,19 +19,20 @@ Reviewed against `410a61f`. Twelve findings, all open, none previously reported.
    the wrong tax treatment without touching a control. This is the one that loses money quietly:
    tax treatment is the taxable/sheltered split every other screen reads.
 
-2. **[UX-11] A complete, correct first run ends at a net worth of `$0.00`.** Not an edge case — the
-   guaranteed outcome. Every instrument is created during the upload, the poller has no immediate
-   first tick and skips weekends, so the reward for a correct onboarding is a headline of `$0.00`
-   over four accounts of `$0.00`, for up to a whole weekend, on a screen whose own design rule is
-   that a zero is a claim.
+2. **[UX-11] A first run done at a weekend ends at a net worth of `$0.00`.** The poller has no
+   immediate first tick — deliberately — and returns early whenever the market is shut, so a
+   household that sits down on a Sunday evening, which is when this gets done, finishes a correct
+   onboarding and is shown a headline of `$0.00` over four accounts of `$0.00` until Monday morning.
+   Roughly sixty-five hours, on a screen whose own design rule is that a zero is a claim.
 
-3. **[UX-4] There is no column auto-detection of any kind.** All six controls open on the
-   placeholder for every new institution, against a header that says `Symbol`, `Quantity` and
-   `Description`. The design record forbids *skipping* the columns screen; it does not forbid
+3. **[UX-4] There is no column auto-detection of any kind.** Every control in `COLUMN_CONTROLS`
+   (`app/routes/upload/columns.tsx:43-50`) opens on the placeholder for each new institution, against
+   a header that says `Symbol`, `Quantity` and `Description`. The design record forbids *skipping* the columns screen; it does not forbid
    arriving with a proposal on it. This is the largest single saving available on day one and the
    only finding here that would change what the reader does most often.
 
-4. **[UX-5] Getting one radio button wrong records a cost basis fifty times too large, silently.**
+4. **[UX-5] Getting one radio button wrong records a cost basis fifty times too large, and nothing
+   on the way past remarks on it.**
    The repo's own `schwab.csv` states a cost basis as a position total; the control defaults to per
    share; nothing on either screen says which this file is, and the resulting `$8,533.0000` per
    share sits under a heading reading *cost basis / share* against a share that costs `$229.35`.
@@ -54,7 +57,7 @@ redone before one was accepted (UX-6, and `401k.csv` mapped the obvious way — 
 eight abandoned drafts the walk left behind, which no screen lists (UX-12).
 
 The last row is the good news and deserves saying plainly: **a repeat upload asks almost nothing.**
-All six column choices and the header row come back filled from the previous statement, the
+Every column choice and the header row come back filled from the previous statement, the
 instruments step dims to *· none* when the file raises no new name, and the whole flow is one
 confirming click per screen ([`07-columns-mapping-remembered.png`](./upload-ux-2026-08/07-columns-mapping-remembered.png)). The design intent — map once per institution, resolve a name once
 forever — holds, and the never-skipped columns screen costs one glance rather than one decision.
@@ -83,14 +86,19 @@ Two environment caveats, stated because they bound two findings:
 ## The design record already refuses much of what a UX review would propose
 
 Read before proposing anything: [`../design/ingest-ui-brief.md`](../design/ingest-ui-brief.md) §9 is
-eighteen numbered prohibitions, and this review takes them as binding. Never auto-select the account
+a numbered list of prohibitions, and this review takes every one of them as binding. Never auto-select the account
 from the file; never skip the columns screen even when prefilled; no client state and no
 unsaved-changes warning; no progress bar or spinner; no toast or modal; no editing figures on the
 review screen; the step count never changes; no drag-and-drop dependency. DESIGN.md §11 refuses
 mobile layout investment for this flow specifically.
 
-None of the twelve findings below asks for any of those. Where the obvious fix would be a refused
-one, the finding says so and proposes the nearest thing that is allowed.
+No finding below asks for any of those; each recommendation was checked against the list clause by
+clause. Two are worth naming because the check is not obvious. UX-4 keeps the columns screen, its
+provenance sentence and its manual submit — §9.5 forbids *skipping* the screen and expressly sanctions
+a mapping that "fills the controls" without passing the step. UX-12's discard control is a
+server-side POST, so it is none of the things §9.10 forbids; it is a write before the commit, which
+§9.6 speaks to, and the answer there is that `upload_draft` is the flow's own scratch table rather
+than a domain one — worth confirming with the owner rather than assuming.
 
 Three frictions were confirmed as **deliberate, and are not findings**: a refusal on the drop screen
 always costs the file pick, because a browser will not refill a file input; changing the header row
@@ -103,9 +111,9 @@ column that moved.
 | Severity | Id | Finding |
 |---|---|---|
 | High | `UX-1` | The add-account form keeps every value after a successful add, so the next account silently inherits owner, kind, tax treatment and account number |
-| High | `UX-5` | The cost-basis per-share/total default records a fifty-fold wrong basis with nothing on screen to catch it |
+| High | `UX-5` | The cost-basis per-share/total default records a fifty-fold wrong basis, printed but unremarked, with no guard that catches it |
 | High | `UX-11` | A correct first run ends at `$0.00` net worth, and stays there for up to a weekend |
-| Medium | `UX-4` | No column auto-detection at all — six placeholders against a header that names its own columns |
+| Medium | `UX-4` | No column auto-detection at all — every control opens on a placeholder against a header that names its own columns |
 | Medium | `UX-6` | When the instrument column *is* the fund name, the obvious mapping is refused and the workaround is unobvious |
 | Medium | `UX-8` | A first run has one classification, so every equity forces an invent-a-category decision mid-upload |
 | Medium | `UX-9` | The review screen — the flow's safety valve — carries no money on a first upload |
@@ -114,6 +122,7 @@ column that moved.
 | Low | `UX-2` | Nothing says the account number is a commit-time guard; the field's own note says the opposite |
 | Low | `UX-3` | A text file that is not a statement is accepted into a draft and only fails a screen later |
 | Low | `UX-7` | The owed-as-positive sentence is phrased for a liability and shown on every account kind |
+| Low | `UX-13` | Pressing Back after recording gives the expired page with no way to the statement just recorded |
 
 ## Overlaps with the 2026-08-24 pass — cite, do not re-file
 
@@ -122,7 +131,6 @@ column that moved.
 | `401k.csv` mapped to `Ticker` records 1 of 3 holdings; the two blank-`Ticker` rows, 96% of the file's value, vanish with no mention on any screen | `ING-4` | Reproduced exactly, still unfixed at `app/lib/statement.ts`. Approved for remediation as [`0005-report-remediation`](../specs/0005-report-remediation.md) item 4 |
 | The Overview prints `$0.00` for accounts holding only unpriced instruments | `DASH-3` | `UX-11` is the journey consequence, not a second report of the mechanism |
 | The account-number field's note claims it pre-selects the account | `SET-11` | `UX-2` is about what the *upload* screens do not say; the wrong note is `SET-11`'s |
-| Revisiting a recorded draft's URL gives the expired page with no link to what was just recorded | `ING-6`, `ING-7` | Both already cover the missing link on adjacent paths |
 
 ---
 
@@ -155,23 +163,31 @@ and `/settings/accounts` refuses its own add form until a person exists, saying 
 - **Repro:** on `/settings/accounts`, create an account filling all six fields — kind *IRA*, owner
   the second person, treatment *tax-free*, number `SECRET-0001`. The form comes back holding all
   six. Now type only a **Name** for the next account and submit.
-- **Evidence:** the second account is created as kind `ira`, owner `2`, `tax_free`, account number
-  `SECRET-0001` — none of which was typed for it. Two accounts now share one external account
+- **Evidence:** the second account is created as kind `ira`, owner `2`, `tax_free`, institution
+  `Probe Bank` and account number `SECRET-0001` — none of which was typed for it. Institution is
+  worth calling out separately: it is the key a saved column mapping is stored under
+  (`app/lib/column-mapping.server.ts:5`, keyed and looked up at `:62-70`, called from
+  `app/routes/upload/columns.tsx:102`), so an inherited one silently makes two accounts share one
+  mapping. Two accounts now share one external account
   number, which is the value the upload flow uses as a commit-time guard.
   On the first pass of this walk it produced a wrong account number on two of four accounts before
   it was noticed, which is how it was found —
   [`02-accounts-after-four-adds.png`](./upload-ux-2026-08/02-accounts-after-four-adds.png) is the
   screen those four adds leave behind.
-  The fix below was applied temporarily and tested rather than assumed: with a `key` on the form that
-  changes when a create succeeds, the same repro leaves every control empty, and the second submission
-  is refused for the missing required fields instead of silently inheriting them. The change was
-  reverted — this review proposes, it does not implement.
+  The fix below was applied temporarily and tested rather than assumed: with
+  `key={accounts.length}` on the form, the same repro leaves every control empty and the second
+  submission is refused for its missing required fields instead of silently inheriting them. The
+  change was reverted — this review proposes, it does not implement.
 - **Notes:** tax treatment is the finding's weight. `CONTEXT.md` fixes it as three values that are
   never a boolean, and it is the taxable/sheltered split every breakdown reads; an account filed
   under the wrong one is wrong on Analysis, on the Overview grouping and in every per-person total,
   with nothing anywhere to suggest it. Owner is the same shape of problem one level down. Two fixes:
-  the remount tested above, or making the six fields controlled and clearing them on success — the
-  first is a line, the second says what it means without relying on a remount to mean it.
+  the remount tested above, or making the fields controlled and clearing them on success — the first
+  is a line, the second says what it means without relying on a remount to mean it. If the remount is
+  taken, the key has to be the **account count from the loader**, not `useActionData()`: that returns
+  `undefined` before the first submit and `null` after every success, so it never changes between two
+  consecutive creates and keying off it ships a no-op. The count also stays put on a validation
+  refusal, which is what keeps the error echo at `app/routes/settings/accounts.tsx:34` working.
 
 #### [UX-2] Nothing in the upload flow says the account number is a commit-time guard, and the field's own note says the opposite
 
@@ -194,9 +210,9 @@ and `/settings/accounts` refuses its own add form until a person exists, saying 
 
 ## The file drop
 
-The four refusals on this screen are the best-judged copy in the flow and are working: a missing
-file, a missing account, a zero-byte export and a binary file each draw their own sentence, and each
-says what to do next rather than what went wrong. Nothing to change.
+The refusals on this screen are the best-judged copy in the flow and are working: a missing file, a
+missing account, a zero-byte export and a binary file each draw their own sentence, and each says
+what to do next rather than what went wrong. Nothing to change.
 
 #### [UX-3] A text file that is not a statement is accepted into a draft, and only fails a screen later
 
@@ -212,11 +228,15 @@ says what to do next rather than what went wrong. Nothing to change.
   flow advances to `/upload/:draftId/columns`.
 - **Evidence:** the walk's C5 probe lands on `/upload/14/columns` with the file's own words as the
   header row.
-- **Notes:** deliberately filed Low, and as a question. The parser's whole design is tolerance — a
-  preamble, a footer and an unknown delimiter are all meant to survive — and a sniff strict enough to
-  reject this could reject a real export from an institution nobody has tried yet. The cost today is
-  one wasted screen and one abandoned draft, which is small. Worth raising only because the same
-  screen already refuses four other things precisely.
+- **Notes:** **this disagrees with a cleared non-issue rather than reporting new ground.** The
+  earlier pass walked the same path and recorded it as working — a PDF, an HTML file named `.csv` and
+  a file with no extension "are accepted as text and then dead-end **harmlessly** at the columns
+  step" (`2026-08-24-exploratory-test-report.md:1003-1009`). Harmless is right about the data and, on
+  a walk rather than a probe, wrong about the reader: the dead end arrives a screen later, wearing a
+  mapping refusal that describes a column problem rather than a file problem, and it leaves a draft
+  behind. Filed Low and as a question because the counter-argument is strong: the parser's whole
+  design is tolerance, and a sniff strict enough to reject this could reject a real export from an
+  institution nobody has tried yet.
 
 ## Mapping the columns
 
@@ -226,9 +246,9 @@ says what to do next rather than what went wrong. Nothing to change.
 - **Where:** `app/routes/upload/columns.tsx:112-121` (with no remembered mapping every control
   defaults to the empty placeholder; only `costBasisIs` and the liability checkbox get a default),
   `app/lib/column-mapping.server.ts` (no name heuristic exists). URL: `/upload/:draftId/columns`
-- **What happens:** on the first statement from each institution the reader sets six controls by
-  hand against a header row that already reads `Symbol`, `Description`, `Quantity`,
-  `Average Cost Basis`, `Account Number`. The header row itself *is* detected, and well — the
+- **What happens:** on the first statement from each institution the reader sets every control in
+  `COLUMN_CONTROLS` by hand against a header row that already reads `Symbol`, `Description`,
+  `Quantity`, `Average Cost Basis`, `Account Number`. The header row itself *is* detected, and well — the
   Fidelity file's two-line preamble is handled with no intervention — so the screen demonstrates the
   capability on the one field it applies it to and then withholds it from the six beside it.
 - **What should happen:** the screen should open with a proposed mapping wherever the header names a
@@ -269,9 +289,13 @@ says what to do next rather than what went wrong. Nothing to change.
   ascending cost. Copy alone: reword the note to say how to tell — a basis larger than the price is a
   total. Better: the columns screen already re-renders on a round trip for the header row, so the
   same round trip could show what the first sample row becomes per share under the current choice.
-  Best and still cheap: the review screen may not *edit* figures per §9.13, but nothing forbids it
-  observing that a per-share basis exceeds the position's own value, which is arithmetically
-  impossible for a long position and is exactly what this mistake produces.
+  A third option was drafted and withdrawn, and is recorded because it is the obvious one to reach
+  for: have the review screen observe a per-share basis larger than the position's own value. It does
+  not work. On this file's own rows it never fires — AAPL's mistaken `$8,533` basis is below the
+  position's `$11,467.50`, and MSFT's is below its `$12,815.00` — a basis above a price is a loss
+  rather than an error, which the earlier pass already cleared in those words
+  (`2026-08-24-exploratory-test-report.md:1593`), and per UX-9 a first upload has no price to compare
+  against at all. The check has no operand at the moment it is needed.
 
 #### [UX-6] When the instrument column is the fund name, the obvious mapping is refused and the workaround is unobvious
 
@@ -291,9 +315,12 @@ says what to do next rather than what went wrong. Nothing to change.
   `Investment`. The refusal names the collision.
 - **Evidence:** the refusal is rendered against the Name control, and the mapping is not saved — so
   the institution-wide mapping from the previous, wrong attempt is still what stands.
-- **Notes:** the duplicate-column rule is right in general: one column cannot be both Quantity and
-  Cost basis. Name is the exception, because "the name is the instrument" is a statement a file can
-  truthfully make. Either permit that one pair, or say in the refusal that *Not in this file* is the
+- **Notes:** **this overturns a cleared non-issue and should be read as a disagreement.** The
+  earlier pass recorded that the column-mapping refusals "all fire", the same column mapped twice
+  among them, as working-as-intended (`2026-08-24-exploratory-test-report.md:1025-1027`). They do
+  fire, correctly, for every pair but one. The duplicate-column rule is right in general: one column
+  cannot be both Quantity and Cost basis. Name is the exception, because "the name is the instrument"
+  is a statement a file can truthfully make. Either permit that one pair, or say in the refusal that *Not in this file* is the
   answer here and that the name will be taken from the instrument column — the second is copy only.
 
 #### [UX-7] The owed-as-positive sentence is phrased for a liability and shown on every account kind
@@ -346,8 +373,11 @@ One structural problem sits underneath it.
   household first inventing the phrase for it.
 - **Repro:** on a migrated, unseeded instance, upload any equity statement and reach the instruments
   step. The classification control offers `Cash` and *New classification…*.
-- **Evidence:** the walk's resulting vocabulary: seven classifications, twelve instruments, eleven
-  aliases, all created during four uploads.
+- **Evidence:** counted in the database after the walk: seven classifications and eleven aliases
+  created by the four uploads, against a starting instance holding one classification and one
+  instrument. The instrument count reached twelve, which includes the seeded `USD` and a duplicate
+  `VBTIX` the walk produced by mapping one file two different ways — that duplicate is `ING-8`, and
+  is discussed with the empty states below rather than counted as vocabulary the household chose.
 - **Notes:** the two obvious fixes are opposite and either would do. Seed a small starter set of
   classifications alongside `Cash` — the demo seed already names a plausible twelve, so the project
   has an opinion about what they are. Or make the classification optional on creation, since the
@@ -366,12 +396,14 @@ Evidence: [`08-review-majority-removal.png`](./upload-ux-2026-08/08-review-major
 #### [UX-9] The flow's safety valve carries no money on a first upload
 
 - **Severity:** Medium
-- **Where:** `app/routes/upload/review.tsx:219-221` (the value column is computed from the current
-  quote), `app/lib/price-poller.server.ts:154-170` (a `setInterval` with no immediate tick), `:84`
-  (a tick returns early when the market is shut), `app/lib/market-hours.ts:142` (shut all weekend).
-  URL: `/upload/:draftId/review`
-- **What happens:** every instrument in a first statement was created two screens earlier, so none
-  has ever been quoted, so the whole **Value** column reads as an em dash. The screen the reader is
+- **Where:** `app/lib/uploads.server.ts:833` (`value: valueAt(row.quantity, fact.price)`, the price
+  read at `:754`) and `:620-626` (`valueAt` returns null with no quote), rendered at
+  `app/routes/upload/review.tsx:235`, `:273`, `:294`;
+  `app/lib/price-poller.server.ts:154-170` (a `setInterval` with no immediate tick, argued at
+  `:146-150`), `:84` (a tick returns early when the market is shut), `app/lib/market-hours.ts:142`
+  (shut all weekend). URL: `/upload/:draftId/review`
+- **What happens:** every instrument in a first statement was created on the screen immediately
+  before, so none has ever been quoted, so the whole **Value** column reads as an em dash. The screen the reader is
   asked to approve therefore shows quantities and cost bases and no money at all. The first
   opportunity for a price is one poll interval away — fifteen minutes by default — and if the upload
   happens on a Saturday or Sunday, which is when a household does this, the first tick that will do
@@ -385,20 +417,30 @@ Evidence: [`08-review-majority-removal.png`](./upload-ux-2026-08/08-review-major
 - **Notes:** the em dash is right and must stay; the brief's first prohibition is that a missing
   figure is never rendered as a zero, and this obeys it. What is missing is the sentence. This is
   distinct from `PRC-1`, which is that no screen says how *old* a price is: this is about there being
-  no price yet, and about the reader not being told that a poll is what changes it. The cheapest
-  honest fix is copy on this screen. The larger one is cheaper than it looks: creating a `feed`
+  no price yet, and about the reader not being told what would change it. That sentence has to be
+  written carefully, because "wait for the next poll" is only true of some rows: `refreshQuotes`
+  selects feed instruments carrying a symbol (`app/lib/prices.server.ts:161`), so an instrument
+  created **Manual**, or with no ticker — which is exactly what a workplace-plan file walks the
+  reader into, per UX-6 and UX-8 — is never polled at all and no interval will ever price it. Those
+  rows need a different sentence from the ones that are merely waiting. The cheapest honest fix is
+  copy on this screen that distinguishes the two. The larger one is cheaper than it looks: creating a `feed`
   instrument **already makes a provider call** — the USD probe at
   `app/lib/instrument-resolution.server.ts:525-556` — and keeps only the currency and the quote type
   from the answer, discarding the price it was quoted. Keeping that price would give a first
   statement its figures without a single extra request, and would fix UX-11 in the same stroke.
   Whether that is right is a pricing decision rather than a UX one, because the probe is deliberately
-  allowed to fail without blocking a statement and a stored price would inherit that path.
+  allowed to fail without blocking a statement and a stored price would inherit that path. Note the
+  reach: the probe runs only for a created instrument that takes a feed and has a symbol
+  (`app/lib/instrument-resolution.server.ts:533`), so it would price the Fidelity and Schwab rows and
+  none of the workplace-plan funds or the loan.
 
 #### [UX-10] The statement date defaults to today while the file's own date is on screen two controls away
 
 - **Severity:** Medium
 - **Where:** `app/routes/upload/review.tsx:352-380` (the date input, defaulting to today, shown when
-  no as-of column is mapped), `app/lib/statement.ts:272-276` (only a mapped *column* dates a file).
+  no as-of column is mapped); `app/lib/statement.ts:319` and `:379` (a file dates itself only through
+  a mapped column), `:493-495` and `:592-619` (the date is resolved from that column's sightings and
+  nowhere else).
   URL: `/upload/:draftId/review`
 - **What happens:** `fidelity.csv` announces its own date in its preamble — the columns screen even
   offers that line as a candidate header row, so the reader has already seen it — but the date is not
@@ -411,7 +453,10 @@ Evidence: [`08-review-majority-removal.png`](./upload-ux-2026-08/08-review-major
 - **Evidence:** the walk's review screen offered `2026-08-25` for a file whose first line reads
   *Account positions as of 07/31/2026*.
 - **Notes:** the interesting consequence is filed rather than new — a statement dated before the
-  account's latest set commits into a black hole, which is `ING-1`, approved for remediation as
+  account's latest set silently rewrites the net-worth chart between its own date and the next set,
+  which is `ING-1` as [`0005-report-remediation`](../specs/0005-report-remediation.md) corrects it
+  (`:214-217`: the earlier report was "wrong about the consequence in the mild direction" — history
+  changes with no confirmation, rather than nothing happening), approved for remediation as
   [`0005-report-remediation`](../specs/0005-report-remediation.md) item 5. This finding is the step
   before it: the default is what steers a reader into a wrong date in the first place, in either
   direction. Parsing dates out of preamble prose is more than this is worth; saying on the date
@@ -427,9 +472,10 @@ database. No toast, and none wanted.
 #### [UX-11] A correct first run ends at a net worth of `$0.00`
 
 - **Severity:** High
-- **Where:** `app/routes/overview.tsx:309` (accounts are listed with a figure regardless of coverage),
-  `app/routes/account.tsx:421` (the account's own page refuses the figure instead), and the poller
-  lines under UX-9. URL: `/`
+- **Where:** `app/routes/overview.tsx:409` (the headline figure, printed unconditionally) and `:441-446`
+  (the coverage note under it); `app/routes/account.tsx:311-315` (the rule the account page states,
+  which names an account "whose every holding is unpriced" exactly) and `:407-423` (where it refuses);
+  and the poller lines under UX-9. URL: `/`
 - **What happens:** after four statements, eleven holdings and 130 interactions, the Overview reads
   `TOTAL NET WORTH $0.00`, with all four accounts listed at `$0.00` and a coverage note underneath
   saying the figure is 0 of 11 holdings. The note is honest. The headline above it is not: it states
@@ -438,17 +484,27 @@ database. No toast, and none wanted.
 - **What should happen:** where no holding in scope has ever been priced, the Overview should decline
   the figure the way the account page already declines it — the sentence for it exists and is already
   written.
-- **Repro:** complete a first run against an unseeded instance and open `/` before the first
-  successful poll.
+- **Repro:** complete a first run against an unseeded instance at a weekend, and open `/`.
 - **Evidence:** [`09-overview-after-four-statements.png`](./upload-ux-2026-08/09-overview-after-four-statements.png).
-- **Notes:** the mechanism is `DASH-3` and is not re-filed. What is new is that this is not an edge
-  case reachable by an unlucky sequence: it is the *guaranteed* end state of a correct first run,
-  because every instrument in it was created minutes earlier and the poller neither fires on start
-  nor runs at a weekend. The two screens already disagree — one prints `$0.00`, the other refuses to
-  — and the disagreement is most visible at the exact moment a new household is deciding whether this
-  application works. Keeping the price the creation-time probe is already quoted (see UX-9) would
-  close the window for most households at no extra request; making the Overview defer to the account
-  page's existing rule removes the wrong claim regardless, and is the smaller of the two.
+- **Notes:** `DASH-3` covers the **per-account rows** and says so — its own notes limit it to "the
+  per-row case only". What is added here is the **headline**, `overview.tsx:409`, which no finding
+  has named, and the observation that a correct first run is a reliable way to reach it rather than
+  an unlucky one.
+  The scope needs stating precisely, because the first draft of this finding overreached. The poller's
+  interval starts at the **first page render** (`app/root.tsx:67`), not at instrument creation, and
+  the default interval is fifteen minutes — and a 130-interaction onboarding takes longer than that.
+  So on a **trading day** ticks fire mid-onboarding, `refreshQuotes` picks up instruments created
+  minutes earlier, and the headline is not `$0.00`. Two populations are left: a household onboarding
+  at a weekend or a holiday, and one whose statements resolve nothing to the seeded `USD` instrument
+  — which `migrations/0001_initial_schema.sql:266-283` gives a quote of `1.00` and a 1970 close, so a
+  cash row alone makes the headline non-zero. Both are ordinary; neither is universal. This walk saw
+  the `$0.00` on a Tuesday only because the sandbox could not reach the feed at all, which is why the
+  finding is argued from the weekend path and not from that screenshot.
+  The two screens still disagree — one prints `$0.00`, the other refuses to — and the disagreement is
+  most visible at the exact moment a new household is deciding whether this application works.
+  Making the Overview defer to the account page's existing rule removes the wrong claim regardless of
+  cadence, and is the smaller of the two fixes; keeping the price the creation-time probe is already
+  quoted (see UX-9) narrows the window that produces it.
 
 #### [UX-12] Abandoned drafts are invisible, uncancellable, and swept only by someone else's next upload
 
@@ -473,6 +529,27 @@ database. No toast, and none wanted.
   step must lose nothing, and it does not — but it does not follow that leaving should be
   unspeakable. A discard control on the draft steps is not client state and not a warning.
 
+#### [UX-13] Pressing Back after recording a statement gives the expired page with no way to the statement
+
+- **Severity:** Low
+- **Where:** `app/lib/uploads.server.ts:307` (`requireDraft` throws the expired error with no account
+  on it), `app/routes/upload/draft.tsx:91-94` (the link is rendered only when the error carries one).
+  URL: any `/upload/:draftId/review` after its statement has landed
+- **What happens:** a **GET** of a recorded draft's URL — the browser Back button, or a bookmarked
+  step — renders the expired page offering only *start a new upload*. The reader has just recorded a
+  statement, is one keystroke into looking at it, and is handed a dead end that does not mention it.
+- **What should happen:** the same page after a re-**POST** already does the right thing: it carries
+  the account id and offers a link to what the account now holds. The GET path should reach the same
+  place.
+- **Repro:** record a statement, then navigate back to the review URL, or open it in a new tab.
+- **Evidence:** the walk's C9 probe on a recorded draft rendered the expired page with a single link,
+  to a new upload.
+- **Notes:** **this was nearly lost as a duplicate and is not one.** `ING-6` and `ING-7` both concern
+  the expired page, and both show it *with* the "see what the account holds now" link
+  (`2026-08-24-exploratory-test-report.md:818-820`, `:857-858`) — because both are POST paths, which
+  carry the account id. The GET path is a different route to the same page and drops it. Small, and
+  the fix is to give `requireDraft`'s error the same shape the re-POST path already produces.
+
 ## The eight empty and partial states, and which were exercised
 
 [`../design/ingest-ui-brief.md`](../design/ingest-ui-brief.md) §7 enumerates the states this flow has
@@ -486,7 +563,7 @@ and every one behaves as specified; two were not, and are recorded as untested r
 | Empty or undecodable file | yes | zero bytes and a binary file each draw their own sentence naming what to do next |
 | Expired or already-recorded draft | yes | one uniform page for a recorded draft, a swept one and an id that never existed |
 | Nothing unresolved | yes | the instruments step is skipped by redirect and the strip dims it rather than renumbering |
-| A saved mapping whose column vanished | **no** | changing the header row changes the fingerprint, so this could not be provoked from the UI within the walk |
+| A saved mapping whose column vanished | **no** | not reached, and not for the reason first written here: the fingerprint governs only the institution lookup, while the draft's own saved mapping is reused whatever the header row, so review's *back to columns* link and a different header row would have provoked it in four clicks |
 | A majority removed | yes | all removals listed, the ratio stated in its own sentence, the commit refused until it is ticked |
 | Removes everything | yes | said in those words — every position listed, none summarised ([`11-review-removes-everything.png`](./upload-ux-2026-08/11-review-removes-everything.png)) |
 
@@ -515,11 +592,13 @@ Grouped by what the change actually is, because that is what decides who can do 
 
 **Copy only, no schema and no flow change.** UX-7's owed-as-positive sentence. UX-6's refusal
 message naming the way through. UX-9's sentence saying a price has not arrived yet and what brings
-one. UX-10's note on the date control. UX-2, which mostly disappears when `SET-11` is fixed. These
-are hours, independent of each other, and none of them touches a rule in §9.
+one — distinguishing the rows a poll will reach from the ones it never will. UX-10's note on the date
+control. UX-2, which mostly disappears when `SET-11` is fixed. These are hours, independent of each
+other, and none of them touches a rule in §9.
 
-**One-line defects.** UX-1 is a remount — a `key` that changes when a create succeeds — and it is the
-highest value per line in this document.
+**One-line defects.** UX-1 is a remount keyed on the loader's account count, and it is the highest
+value per line in this document. UX-13 is the expired-draft error carrying the account id on the GET
+path as it already does on the POST path.
 
 **Flow changes worth a spec.** UX-4's proposed mapping is the one that changes the day-one experience
 most and needs its own ticket: where a proposal is confident enough to make, what the screen says
