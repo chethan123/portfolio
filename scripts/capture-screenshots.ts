@@ -368,6 +368,8 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
 
     await visit(page, "/analysis");
     await shoot(page, `docs/screenshots/analysis-${theme}.png`);
+    await visit(page, "/income");
+    await shoot(page, `docs/screenshots/income-${theme}.png`);
     await visit(page, `/accounts/${brokerage}`);
     await shoot(page, `docs/screenshots/account-detail-${theme}.png`);
     await visit(page, `/accounts/${accounts.liability}`);

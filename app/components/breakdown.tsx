@@ -260,7 +260,16 @@ export function Breakdown({
   // percentages would be claiming each slice is nothing.
   const hasRing = wedges.length > 0;
   const owed = slices.some((slice) => isNegative(slice.amount));
-  const folded = slices.length > SEQUENCE;
+  // The fold note describes rows *sharing* one colour and one wedge, so it is
+  // said only where that sharing is something a reader can see. More slices
+  // than colours is when the fold is armed; what makes it visible is two or
+  // more slices past the sequence that are actually drawn. A breakdown whose
+  // tail is all zeros — six accounts of which the last two pay nothing — folds
+  // nothing, draws no merged wedge, and the note would be explaining an absence
+  // in small grey type.
+  const folded =
+    slices.length > SEQUENCE &&
+    slices.filter((slice, rank) => rank >= SEQUENCE - 1 && isPositive(slice.share)).length > 1;
 
   const notes = [
     hasRing ? (owed ? NOTES[reading].negative : null) : NOTES[reading].empty,
