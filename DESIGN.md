@@ -693,6 +693,7 @@ routing here, so it is not needed.
 | Area | Decision |
 |---|---|
 | **Packaging** | Docker Compose: Caddy + app + Postgres. All configuration via environment variables. |
+| **Distribution** | The app image is built once by CI and **pulled**, not built on the host. A `v*` tag publishes a multi-architecture image to GitHub Container Registry; the Compose file pins the floating major and pulls on every `up` (§10.1). |
 | **Ingress** | A bundled Caddy container is the only service that publishes a port. The app and the database are reachable only on the compose network, so the app's forwarded-header trust is never extended to whoever can reach the host. |
 | **TLS** | **Not configured yet.** The app serves plain HTTP and never manages certificates; terminating TLS is Caddy's job once it is set up, either by giving the site block a real hostname or by fronting Caddy with the operator's own proxy. |
 | **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. An instance served over plain HTTP at a LAN IP **cannot install as a PWA on a phone**. This is a deployment constraint to document, not something the app can work around. |
@@ -714,6 +715,19 @@ revisiting first.
 The deliverable is a **single application image plus a Compose file**. `docker compose up` on a
 fresh machine with an empty data directory must produce a working instance with no manual steps.
 
+The image is **published, not built on the host**. Pushing a `v*` tag builds it once for
+`linux/amd64` and `linux/arm64` and pushes it to GitHub Container Registry; the Compose file pulls
+it. This is what removes the Node build — and the memory to run it — from the list of things a NAS
+or a small VPS has to be able to do. Two consequences that are load-bearing:
+
+- **The deployment file cannot build.** `compose.yaml` has no `build:` stanza, so an unreachable
+  registry or a tag that does not exist fails immediately instead of quietly starting a
+  multi-minute build on the deployment host. Building from source is `compose.dev.yaml`, used by
+  the smoke test and when working on the container itself.
+- **The tag floats.** `APP_VERSION` defaults to the major, so every `v1.x.y` release lands on `1`
+  and `docker compose up -d` is the upgrade. Pinning a full version is how an instance is held
+  still, and is the "old image" half of the rollback described in `docs/operating.md`.
+
 **Three services:**
 
 ```
@@ -722,7 +736,8 @@ db      postgres:17-alpine
         · healthcheck: pg_isready
         · not published to the host — the app reaches it on the compose network
 
-app     built from ./Dockerfile
+app     ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
+        · pulled on every up; no build stanza in the deployment file
         · depends_on: db (condition: service_healthy)
         · not published to the host — caddy reaches it on the compose network
         · restart: unless-stopped
@@ -743,9 +758,16 @@ only container reachable from outside the compose network.
 
 | Stage | Contents |
 |---|---|
-| `deps` | `npm ci` against `package-lock.json` only, so dependency layers cache independently of source |
-| `build` | `react-router build` → client and server bundles |
+| `deps` | `npm ci` against `package-lock.json` only, so dependency layers cache independently of source. Runs on `$BUILDPLATFORM` |
+| `build` | `react-router build` → client and server bundles. Runs on `$BUILDPLATFORM` |
 | `runtime` | `node:24-slim`, production dependencies only, build output, migration `.sql` files. Runs as a **non-root user**. No compiler, no dev dependencies, no source tree |
+
+**Only `runtime` is architecture-specific.** `deps` and `build` are pinned to `$BUILDPLATFORM` and
+run natively on the builder; the per-platform stage does nothing but copy and `chmod`. That makes
+the `arm64` image nearly free instead of a slow, occasionally faulting emulated Node build. It is
+sound only while no production dependency carries a native binary or a platform-specific install
+script — which is true today and would break *silently* if it stopped being, so the Dockerfile
+names the invariant in place.
 
 **Startup sequence.** The entrypoint runs migrations to completion, then starts the server. Not
 concurrently, and not in a separate one-shot service — a single instance means no coordination

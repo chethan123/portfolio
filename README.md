@@ -265,10 +265,17 @@ were built the same way — from [`docs/specs/0003-holdings.md`](docs/specs/0003
 docker compose up -d
 ```
 
-That is the whole procedure on a fresh machine. Postgres comes up, the app waits for it to report
-healthy and applies the schema, and a bundled Caddy container fronts it on <http://localhost>. There
-is no manual setup step and no migration to run by hand — migrations are idempotent, so restarting
-the container is always safe.
+That is the whole procedure on a fresh machine. The app image is pulled from GitHub Container
+Registry — published for `linux/amd64` and `linux/arm64`, so a Raspberry Pi or an ARM NAS needs
+nothing special, and there is no build step to find memory for. Postgres comes up, the app waits for
+it to report healthy and applies the schema, and a bundled Caddy container fronts it on
+<http://localhost>. There is no manual setup step and no migration to run by hand — migrations are
+idempotent, so restarting the container is always safe.
+
+You do not need a checkout to run this: `compose.yaml`, `Caddyfile` and optionally `.env` are the
+whole deployment. The same command is also the upgrade — the pinned tag is the floating major, so
+`docker compose up -d` fetches the newest `v1.x.y` release. Take a backup first
+([Upgrading](docs/operating.md#upgrading)).
 
 Every setting an operator has is an environment variable and every one of them is documented in
 [`.env.example`](.env.example) with its default. Copy it to `.env` only if you want to change

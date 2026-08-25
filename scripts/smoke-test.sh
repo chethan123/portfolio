@@ -13,6 +13,17 @@
 # Run from the repository root:  ./scripts/smoke-test.sh
 set -euo pipefail
 
+# compose.yaml pulls the published image. This test exists to exercise the tree
+# it was handed, so it layers the development override on top and builds from
+# source — otherwise every run would silently certify the *last release* and go
+# green no matter what the working tree does to the Dockerfile or the entrypoint.
+#
+# Set once as COMPOSE_FILE rather than passed as `-f` on each call: there are a
+# dozen `docker compose` invocations below and the ones that would break if a
+# flag were forgotten are not the ones that would look broken. `ps`, `exec`,
+# `logs` and `restart` all resolve by project name and would keep working.
+export COMPOSE_FILE="compose.yaml:compose.dev.yaml"
+
 readonly BASE_URL="http://127.0.0.1"
 readonly HEALTH_URL="${BASE_URL}/healthz"
 readonly TIMEOUT_SECONDS=180
@@ -197,8 +208,12 @@ printf 'GET /healthz -> %s\n' "$health"
 # recreating the app container, which is why this runs last.
 log "Turning the login gate on"
 readonly TEST_PASSWORD="correct horse battery staple"
+# `--build` is redundant against compose.dev.yaml's `pull_policy: build` and is
+# here anyway: this is the one `up` that does not already carry it, and the cost
+# of the ambiguity is the whole login-gate section below silently running against
+# a published image instead of the one under test.
 AUTH_PASSWORD="$TEST_PASSWORD" SESSION_SECRET="smoke-test-signing-key" \
-  docker compose up -d --wait app
+  docker compose up -d --wait --build app
 wait_for_healthy
 
 # `/healthz` must stay reachable with no credentials, or monitoring goes blind

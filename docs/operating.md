@@ -38,10 +38,15 @@ publish the app's port yourself.
 
 They start in dependency order: `app` waits for `db` to report healthy, `caddy` waits for `app`.
 
-**`app` is stateless and enforced as such.** It is built from the [`Dockerfile`](../Dockerfile) in
-this repository — there is no published image — runs as a non-root user, and is mounted `read_only`
+**`app` is stateless and enforced as such.** It runs as a non-root user and is mounted `read_only`
 with a tmpfs `/tmp`. It writes nothing to its own filesystem, so it can be destroyed and recreated
 freely, and every upgrade does exactly that.
+
+**`app` is pulled, not built.** The image is `ghcr.io/chethan123/portfolio-app`, published by CI
+for `linux/amd64` and `linux/arm64` when a version tag is pushed. `compose.yaml` has no `build:`
+stanza on purpose: if the registry is unreachable or the tag does not exist, the deploy fails and
+says so, rather than starting a multi-minute Node build on this machine. Which tag it runs is
+[`APP_VERSION`](#environment-variables), and it defaults to the floating major.
 
 **`db-data` is the only named volume, and it is everything.** Every statement, every stored original
 CSV, every price. `docker compose down` leaves it alone; `docker compose down -v` deletes it.
@@ -51,10 +56,11 @@ CSV, every price. `docker compose down` leaves it alone; `docker compose down -v
 ## Installing
 
 **Host requirements.** Docker Engine with the Compose v2 plugin — `docker compose`, two words, not
-the older `docker-compose` script. Port 80 free. Enough memory to run a Node build inside Docker,
-because the `app` image is built on the host rather than pulled; on a small NAS or VPS that is the
-step that will hurt, and building elsewhere and shipping the image is the alternative. Node itself
-is a requirement for *working on* this, not for running it.
+the older `docker-compose` script. Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image
+is pulled. `linux/amd64` and `linux/arm64` are both published, so a Raspberry Pi or an ARM NAS needs
+nothing special. There is no build step and therefore no build-memory requirement — that is the
+whole point of publishing the image, and it is what makes a small NAS or VPS a reasonable host.
+Node itself is a requirement for *working on* this, not for running it.
 
 **Bringing it up is one command, and it belongs to the README:**
 [Running an instance](../README.md#running-an-instance). It is deliberately not repeated here — that
@@ -132,6 +138,15 @@ happens to need it.
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
 
+**Two more that Compose reads and the application never sees.** `POSTGRES_PASSWORD` is the `db`
+service's password, covered under [Running against your own Postgres](#running-against-your-own-postgres).
+`APP_VERSION` is the published image tag the `app` service runs — it defaults to `1`, the floating
+major, which is what makes `docker compose up -d` an upgrade. Pin a full version (`APP_VERSION=1.0.3`)
+to hold this instance where it is, or to go back to a known-good image; see
+[There is no rollback](#there-is-no-rollback) first, because the image alone is not one. Neither
+variable is validated at startup: they are resolved by Compose before a container exists, so a typo
+surfaces as a failed pull, not as the message naming the variable that the settings below get.
+
 **An empty value reads as unset, not as "configured to empty".** `AUTH_PASSWORD=` in `.env`, or a
 Compose variable that never got substituted, leaves the gate *off* — with no startup error, because
 nothing is malformed. [Security](#security) says why that particular one matters.
@@ -183,7 +198,7 @@ later, without ever having to publish the app's own port:
 `compose.yaml` mounts the Caddyfile and nothing else, so Caddy's `/data` is the container's own
 filesystem. `/data` is where it keeps the ACME account key and every certificate it has ever
 issued. Recreating the container throws all of it away — and recreating the container is exactly
-what the `docker compose up -d --build` in [Upgrading](#upgrading) does, every time. The next start
+what the `docker compose up -d` in [Upgrading](#upgrading) does, every time. The next start
 asks the certificate authority for everything again from scratch. Enough of those in a week and
 Let's Encrypt's rate limit refuses, which leaves the site with no certificate at all and a wait
 before it can have one.
@@ -580,11 +595,20 @@ Bringing up `db` alone avoids both.
 ```sh
 docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom \
   > "portfolio-pre-upgrade-$(date +%F).dump"
-git rev-parse HEAD          # write this down: it is half of your way back
-git pull
-docker compose up -d --build
+docker compose images app    # write the tag down: it is half of your way back
+docker compose up -d
 curl -sf http://localhost/healthz
 ```
+
+There is no `git pull` and no build. The `app` service is set `pull_policy: always`, so
+`docker compose up -d` fetches whatever the pinned tag currently points at and recreates the
+container; with the default floating `APP_VERSION=1` that is the newest `v1.x.y` release. A
+checkout of this repository is not needed to run or upgrade an instance — only `compose.yaml`,
+`Caddyfile` and your `.env`.
+
+**Upgrading across a major means changing `APP_VERSION`.** The floating tag deliberately does not
+cross `1` → `2`, because a major is where a breaking change would be. Read the release notes, set
+`APP_VERSION=2` in `.env`, then run the same procedure above.
 
 The entrypoint validates the configuration, applies any new migrations to completion, and only then
 starts serving — so a request is never served against a half-migrated schema. Migrations are
@@ -603,12 +627,15 @@ start. Ship a new file instead.
 
 **An older image against a newer database reports perfect health.** Nothing compares applied
 migrations against the ones on disk in that direction, so every check passes while the code queries a
-schema it has never seen ([Monitoring](#monitoring)). `docker compose up -d` on an older tag is
-therefore not a rollback — it is an instance that has stopped being able to tell you it is wrong.
+schema it has never seen ([Monitoring](#monitoring)). Setting `APP_VERSION` back to the previous
+version is therefore not a rollback — it is an instance that has stopped being able to tell you it
+is wrong. Pinning a tag is easy now, which makes this *easier* to do by accident than it used to be,
+not harder.
 
 **The only true rollback is the old image *plus* the backup taken before the upgrade.** That is why
-the dump and the `git rev-parse` are the first two lines above, and why "take a backup before
-upgrading" is not a formality here.
+the dump and the tag you wrote down are the first two lines above, and why "take a backup before
+upgrading" is not a formality here. Pin the old version with `APP_VERSION` in `.env` and restore the
+dump; either one alone leaves you worse off than before.
 
 ### Upgrading Postgres across a major version
 

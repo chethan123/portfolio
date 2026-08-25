@@ -303,6 +303,22 @@ each is [§8.2](../ARCHITECTURE.md#82-ci).
   thing that exercises `compose.yaml`, the `Dockerfile`, the entrypoint's migrate-then-serve ordering
   and the `.sql` files being present in the runtime image. **Never run it locally against anything
   you care about: it runs `docker compose down -v` at the start and again from an exit trap.**
+- **`publish`** — only on a `v*` tag, and only after all three of the above pass. Builds the image
+  for `linux/amd64` and `linux/arm64` and pushes it to `ghcr.io/chethan123/portfolio-app`. Cutting a
+  release is `git tag v1.2.3 && git push origin v1.2.3`; there is no release script and nothing to
+  run by hand. The git tag's leading `v` is stripped from the image tags, so `v1.2.3` publishes
+  `1.2.3`, `1.2`, `1` and `latest`.
+
+**Building the container locally.** `compose.yaml` pulls the published image and has no `build:`
+stanza, so building from source means layering the development override:
+
+```sh
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+```
+
+That is what the smoke test does — it sets `COMPOSE_FILE` to both files — and what you want whenever
+the change under test is to the `Dockerfile`, the entrypoint or `compose.yaml` itself. A plain
+`docker compose up -d` in a checkout runs the **last published release**, not your working tree.
 
 ---
 

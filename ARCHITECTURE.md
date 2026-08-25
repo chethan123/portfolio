@@ -101,6 +101,9 @@ one interface in §7.5, precisely because the endpoint is unofficial and expecte
 
 The deliverable is one application image plus a Compose file. `docker compose up -d` on a fresh
 machine with an empty volume produces a working instance with no manual steps (DESIGN.md §10.1).
+The image is pulled from GitHub Container Registry rather than built on the host: CI publishes a
+multi-architecture image on a `v*` tag, and `compose.yaml` deliberately carries no `build:` stanza
+so a deployment cannot silently become a build (§8.2).
 
 ### 3.1 Topology
 
@@ -110,7 +113,7 @@ graph TB
 
     subgraph compose["compose network — portfolio"]
         caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:80 → app:$PORT<br/>Caddyfile mounted read-only"]
-        app["<b>app</b><br/>built from ./Dockerfile<br/>read_only: true, tmpfs /tmp<br/>USER node, no published port<br/><i>in-process price poller</i>"]
+        app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>read_only: true, tmpfs /tmp<br/>USER node, no published port<br/><i>in-process price poller</i>"]
         db["<b>db</b><br/>postgres:17-alpine<br/>timezone=UTC<br/>no published port"]
         vol[("db-data<br/>named volume")]
     end
@@ -196,9 +199,11 @@ is a Zod schema, parsed once, with cross-field rules.
 | `MARKET_TIMEZONE` | `America/New_York` | no | Market-hours calculation and trading-day attribution. Validated as an IANA zone. |
 | `TZ` | `UTC` | no | Container clock. The database stores UTC regardless. |
 
-One more variable exists that the application never reads: **`POSTGRES_PASSWORD`** is Compose-level,
-consumed by the `db` service, and must be kept in sync with the credentials inside `DATABASE_URL`
-(`compose.yaml:21-25`).
+Two more variables exist that the application never reads, both Compose-level.
+**`POSTGRES_PASSWORD`** is consumed by the `db` service and must be kept in sync with the
+credentials inside `DATABASE_URL` (`compose.yaml:21-25`). **`APP_VERSION`** selects the published
+image tag the `app` service runs, defaulting to the floating major — it is resolved by Compose
+before a container exists, so `server/config.ts` never sees it and it is validated by nothing.
 
 Two properties of this module are structural rather than cosmetic:
 
@@ -1392,7 +1397,7 @@ migration runner.
 
 ### 8.2 CI
 
-`.github/workflows/ci.yml`, on every push to `main` and every PR:
+`.github/workflows/ci.yml`, on every push to `main`, every PR, and every `v*` tag:
 
 ```
 job: check
@@ -1428,11 +1433,30 @@ job: smoke                    ── runs in parallel, on a clean runner
        migrations running at startup, a restart skipping applied ones,
        the .sql files actually being present in the runtime image, and
        the §8.1 prune having removed what it claims and nothing more
+
+job: publish                  ── ONLY on a refs/tags/v* ref
+  needs: [check, audit, smoke]   ── all three, so "the published image passed
+    │                               CI" is a fact and not a convention
+    └─▶ buildx, no QEMU        ── deps/build run on the runner's own arch
+    └─▶ login ghcr.io          ── the built-in GITHUB_TOKEN, packages: write.
+    │                             No PAT to create, store or rotate.
+    └─▶ metadata-action        ── v1.2.3 ⟶ tags 1.2.3, 1.2, 1 and `latest`.
+    │                             The leading `v` is stripped, which is why
+    │                             compose.yaml pins `1`.
+    └─▶ build-push             ── linux/amd64 + linux/arm64, one manifest list
 ```
 
 The `db:types -- --verify` step is what makes regeneration after a migration mandatory rather than
 remembered. The `smoke` job is the only thing standing between a `compose.yaml` or `Dockerfile` edit
-and a broken deployment — the `vitest` suite cannot see either file.
+and a broken deployment — the `vitest` suite cannot see either file. It runs against a build of the
+tree under test rather than the published image: `scripts/smoke-test.sh` sets `COMPOSE_FILE` to
+layer `compose.dev.yaml` over `compose.yaml`, and without that it would certify the last release and
+go green regardless of the change in front of it.
+
+**What `publish` still does not prove.** The image it pushes is a second build of the same tree,
+not the artefact `smoke` exercised, and the `arm64` half is never executed anywhere before it is
+published. The cross-compilation invariant in the `Dockerfile` header is what carries that risk;
+nothing in CI checks it.
 
 ### 8.3 Adding a migration
 
