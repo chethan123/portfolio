@@ -299,6 +299,24 @@ a {
   color: var(--on-surface-variant);
 }
 
+/* A masked amount (spec 0007, story 8).
+ *
+ * The run of dots is a constant — ADR-0002 refuses to size it to the figure it
+ * replaces, because digit count is the magnitude being hidden — and it is
+ * narrower than most amounts. Left alone, every numeric column would visibly
+ * narrow the moment the screen was masked and a reader would lose their place
+ * mid-row. A minimum width in `ch` holds the common case still.
+ *
+ * It is a floor, not a fixed size: an unusually wide figure still sets its
+ * column's width, so a portfolio with an eight-figure balance in one column and
+ * a two-figure one in another will still move a little. Sizing every amount
+ * identically would mean a fixed table layout, which is a larger change than
+ * the complaint warrants. */
+.amount-dots {
+  display: inline-block;
+  min-width: 9ch;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

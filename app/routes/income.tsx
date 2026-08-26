@@ -1,3 +1,4 @@
+import { Amount } from "~/components/amount";
 import { Breakdown, plural } from "~/components/breakdown";
 import { EmptyState } from "~/components/empty-state";
 import {
@@ -6,7 +7,7 @@ import {
   shelteredSubtotal,
   weightedYield,
 } from "~/lib/allocation";
-import { formatMoney, isNegative } from "~/lib/format";
+import { isNegative } from "~/lib/format";
 import { groupingBy, summarise } from "~/lib/holdings-view";
 import { currentHoldings } from "~/lib/valuation.server";
 
@@ -96,13 +97,18 @@ export async function loader() {
  * because nobody reads it.
  */
 function ShelteredLine({ sheltered, taxable }: ShelteredSubtotal) {
+  // A sentence with two amounts in it, so the amounts are elements rather than
+  // interpolations: a template string cannot hold a component, and building
+  // one here would mean formatting an amount in a route — the leak spec 0007
+  // exists to close. The prose either side is unchanged.
   return (
     <p className="panel-statement">
-      Sheltered — tax-deferred and tax-free together — comes to {formatMoney(sheltered)} a year.
+      Sheltered — tax-deferred and tax-free together — comes to <Amount value={sheltered} /> a
+      year. Taxable accounts come to <Amount value={taxable} />
       {isNegative(taxable)
-        ? ` Taxable accounts come to ${formatMoney(taxable)}, a figure going out rather than` +
-          " coming in: interest on a liability there outweighs what the holdings beside it pay."
-        : ` Taxable accounts come to ${formatMoney(taxable)}, which is the part taxed this year.`}
+        ? ", a figure going out rather than coming in: interest on a liability there outweighs" +
+          " what the holdings beside it pay."
+        : ", which is the part taxed this year."}
     </p>
   );
 }
@@ -144,7 +150,7 @@ export default function Income({ loaderData }: Route.ComponentProps) {
             <div>
               <p className="kpi-eyebrow u-label">Total annual dividend</p>
               <p className="kpi-figure u-data">
-                {formatMoney(total)}
+                <Amount value={total} />
                 {/* The weighted yield, and nothing else, beside the figure it is
                     the ratio of. Absent rather than `0.0%` where there is no
                     positive value to divide by: the zero rule applies to the

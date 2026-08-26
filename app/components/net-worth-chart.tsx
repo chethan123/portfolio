@@ -14,10 +14,18 @@
  * JavaScript and nothing to re-resolve on the client. The gradient obeys the
  * same rule: its stops are classed, not filled, so the area re-derives from
  * `--chart-line` along with the line it sits under.
+ *
+ * **Masking arrives as a prop, not as a hook** (spec 0007). Everywhere else an
+ * amount is a component that asks for itself; here the two figures are an axis
+ * tick and an `aria-label`, and neither is a place a component can go. So this
+ * is the one file besides `amount.tsx` allowed to call a money formatter, and
+ * `masking-boundary.test.ts` names it. The line, the grid and the fill are
+ * unchanged either way: story 10 wants the shape of the year without the size
+ * of it.
  */
 import { useId } from "react";
 
-import { formatCompact, toPlotValue } from "~/lib/format";
+import { formatCompact, formatMoney, toPlotValue } from "~/lib/format";
 
 export type ChartPoint = { date: string; amount: string };
 
@@ -43,6 +51,15 @@ const PADDING = 0.08;
 const GRID = [1, 0.5, 0];
 
 const DAY_MS = 86_400_000;
+
+/**
+ * What an axis tick says while masked.
+ *
+ * Shorter than the cells' run of dots: an axis tick sits in a narrow margin,
+ * and the constant here only has to be unreadable rather than uniform with the
+ * table's.
+ */
+const AXIS_DOTS = "•••";
 
 /**
  * Under this span an x tick names the day; over it, the month.
@@ -113,12 +130,15 @@ export function buildScale(points: ChartPoint[]): Scale {
  * largest value in the series would put every tick 8% of the range out —
  * a quiet inaccuracy on an axis is still an inaccuracy.
  */
-export function gridRules(scale: Scale): { y: number; label: string }[] {
+export function gridRules(scale: Scale, masked = false): { y: number; label: string }[] {
   const { floor, span } = scale.domain;
 
   return GRID.map((fraction) => ({
     y: HEIGHT * (1 - fraction),
-    label: formatCompact((floor + span * fraction).toFixed(0)),
+    // A masked axis keeps its rules and loses its numbers. The ticks are
+    // already `aria-hidden`, so there is nothing to announce here — the label
+    // below is what carries the chart for anyone who cannot see it.
+    label: masked ? AXIS_DOTS : formatCompact((floor + span * fraction).toFixed(0)),
   }));
 }
 
@@ -160,14 +180,32 @@ export function NetWorthChart({
   computed,
   manual,
   label,
+  endingAt = null,
+  masked = false,
   id,
 }: {
   /** Points derived from real position sets. Solid line, and the filled one. */
   computed: ChartPoint[];
   /** Hand-typed pre-day-zero points (§7). Dashed, and never blended. */
   manual: ChartPoint[];
-  /** What the line is, for anyone who cannot see it. */
+  /**
+   * What the line is, for anyone who cannot see it — the descriptive half only.
+   * The figure it ends at is {@link endingAt}, so that this component decides
+   * how the figure is said and the caller never has to.
+   */
   label: string;
+  /**
+   * The last plotted amount, named in the accessible label — or null where
+   * there is none to name.
+   *
+   * Composed here rather than by the caller because the caller cannot format an
+   * amount: an `aria-label` is a string, so the route would have to call a
+   * money formatter to build it, which is exactly the leak the boundary exists
+   * to prevent (story 12's failure, in a place nobody looks).
+   */
+  endingAt?: string | null;
+  /** Whether this browser's amounts are hidden (spec 0007). */
+  masked?: boolean;
   /**
    * Distinguishes this instance's gradient from any other on the page.
    *
@@ -198,7 +236,13 @@ export function NetWorthChart({
   const firstComputed = computed[0];
   const manualRun = manual.length > 0 && firstComputed ? [...manual, firstComputed] : manual;
 
-  const rules = gridRules(scale);
+  const rules = gridRules(scale, masked);
+
+  // "an amount that is hidden" rather than a run of dots: story 6 asks for a
+  // masked figure to be announced as hidden rather than spelled out, and an
+  // `aria-label` is nothing but the announcement.
+  const ending =
+    endingAt === null ? "" : ` ending at ${masked ? "an amount that is hidden" : formatMoney(endingAt)}.`;
 
   const { start, end } = scale.time;
   const withDay = end - start < DAY_TICKS_UNDER;
@@ -221,7 +265,7 @@ export function NetWorthChart({
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           preserveAspectRatio="none"
           role="img"
-          aria-label={label}
+          aria-label={`${label}${ending}`}
         >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
