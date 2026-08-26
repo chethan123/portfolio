@@ -83,15 +83,43 @@ const FIRST_SIGHTING = "SCHD";
 type Theme = "light" | "dark";
 
 async function open(browser: Browser, theme: Theme, mobile = false): Promise<Page> {
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: mobile ? MOBILE : DESKTOP,
     deviceScaleFactor: 2,
     isMobile: mobile,
     hasTouch: mobile,
     colorScheme: theme,
   });
-  return page;
+
+  // Every shot is taken unmasked, and this line is what makes that true
+  // (spec 0007). The masking policy is seeded to *masked*, so a browser that
+  // has never been toggled — which is precisely what a fresh Playwright
+  // context is — opens with every amount replaced by dots. Without this the
+  // whole shot list would silently retake as a set of pictures of dots: the
+  // README, the guide, every figure this repository shows anyone. Nothing
+  // would fail, which is exactly the silent staleness this script exists to
+  // prevent.
+  //
+  // The masking shots themselves are the deliberate exception and set their
+  // own cookie back, below.
+  await context.addCookies([{ ...UNMASKED_COOKIE, url: BASE_URL }]);
+
+  return context.newPage();
 }
+
+/**
+ * What a browser that has been toggled to show its amounts carries.
+ *
+ * Spelled out here rather than imported from `app/lib/masking.ts`: this script
+ * runs against a *served* application over HTTP and shares no module with it,
+ * and the one thing worse than a second copy of two characters would be this
+ * file importing the app's client bundle to get them. If the vocabulary ever
+ * changes, `masking.test.ts` pins it and this line is the other end.
+ *
+ * No `path` here: Playwright refuses a cookie carrying both a `url` and a
+ * `path`, and the `url` is what scopes it.
+ */
+const UNMASKED_COOKIE = { name: "masked", value: "0" } as const;
 
 /**
  * Navigate and wait for the page to settle. The application renders on the
