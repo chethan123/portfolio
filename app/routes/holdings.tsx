@@ -399,11 +399,20 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
           // Not the empty state above. The instance has data; this particular
           // question has no answer, and saying "there is no data yet" would be
           // a different and false claim.
-          <div className="panel-body">
+          <div className="panel-body panel-body--empty">
             <p className="empty-note">
-              {describe(filters)} <Link to={cleared}>Clear filters</Link> to see all{" "}
-              <span className="u-data">{totalHoldings}</span> again.
+              {describe(filters)} <span className="u-data">{totalHoldings}</span>{" "}
+              {totalHoldings === 1 ? "holding is" : "holdings are"} recorded in all.
             </p>
+            {/* The `.button--text` §7.2 names, and not a link inside the
+                sentence. This screen already draws one "Clear filters" as a
+                40px text button in the bar above; drawn a second time as an
+                underlined 17px inline link — the only underlined-at-rest link
+                on the page — the same words pointing at the same URL were two
+                different components 280px apart. */}
+            <Link className="button button--text" to={cleared}>
+              Clear filters
+            </Link>
           </div>
         ) : (
           <>

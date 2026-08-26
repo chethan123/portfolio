@@ -1837,6 +1837,18 @@ code {
   color: var(--on-surface-variant);
 }
 
+/* The body of a panel whose filter matched nothing: the sentence, then the way
+ * out of it (holdings brief §7.2). `align-items: flex-start` is what keeps the
+ * `.button--text` to the width of its own words — it is an `inline-flex` box and
+ * would otherwise stretch the full panel, giving a 1166px hit area to two
+ * words. */
+.panel-body--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+}
+
 /* A sentence restating the table above it — the sheltered subtotal on Income.
  * Set at body size rather than at `.coverage-note`'s, because it carries
  * figures a household reads rather than a caveat about them, and it sits above
@@ -1857,6 +1869,22 @@ code {
   color: var(--on-surface-variant);
 }
 
+/*
+ * A note about one control takes that control's measure, not the panel's.
+ *
+ * Half of this is reading width — 12px prose running the full 1166px of a panel
+ * is the same defect `.empty-note` and `.panel-statement` already carry a cap
+ * for. The other half is layout, and it is why this cap belongs with the field
+ * rule below rather than with the type ramp: a field wrapper with no basis sizes
+ * to its widest child, and on Settings → Tax that child was this note, laid out
+ * on one line. The cap is the guard that stops it ever being that child again.
+ * With the basis in place it is inert at every width the application is used at,
+ * which is exactly what it should be.
+ */
+.field-note {
+  max-width: 60ch;
+}
+
 .field-error,
 .form-error,
 .login-error {
@@ -1864,6 +1892,36 @@ code {
   font-size: 14px;
   line-height: 20px;
   color: var(--loss);
+}
+
+/*
+ * A refusal that belongs to a page rather than to a field.
+ *
+ * Two of these exist — Settings → People refusing to remove someone who still
+ * owns accounts, and an account page refusing a balance for an account that
+ * takes none — and both render outside any panel, because the panel they would
+ * sit in is not always on the screen. Outside a panel there is no ground, and
+ * until this rule a 1216px line of unbounded red was the only text in the
+ * application making a claim on the raw canvas with nothing under it.
+ *
+ * The geometry is `.first-run`'s, the other canvas-level statement here: a tonal
+ * card at `--radius-xl` with the same padding. Only the ground and the border
+ * differ — `--loss-surface` behind a 1px `--loss`, the pair
+ * `.button--danger:hover` already draws — so a refusal and a prompt are one
+ * object in two registers rather than two inventions.
+ *
+ * The measure is `.panel-statement`'s 60ch, and it costs height: the sentence
+ * names every account the person owns, so what was two lines at 1216px is five
+ * at 60ch, and the list below moves further on a refusal than it did before.
+ * That shift is the other half of the finding, and its answer is the sentence
+ * moving inside the panel above the rows — a relocation, not a measure.
+ */
+.page > .form-error {
+  max-width: 60ch;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--loss-surface);
+  border: 1px solid var(--loss);
+  border-radius: var(--radius-xl);
 }
 
 /* --- Login ---------------------------------------------------------------- */
@@ -1955,17 +2013,49 @@ code {
   flex-direction: column;
 }
 
+/*
+ * One record on one row: the thing, what is known about it, then its actions.
+ *
+ * No `justify-content`. It was `space-between`, and `space-between` divides all
+ * of a row's slack into all of its gaps — so the declared `gap: var(--space-md)`
+ * below was never the gap drawn. At 1600 a person row's members stood 237px
+ * apart, which is not on the spacing scale and is not a decision: it is the
+ * viewport minus the content, over three. "4 accounts", a caption about the name
+ * box, floated a quarter of the screen from the box it describes, and Save and
+ * Remove — one pair of actions on one record — were drawn as far from each other
+ * as from anything else. `.record-actions` groups the pair and pushes it with
+ * `margin-left: auto` instead, which is `.filter-actions`' idiom and leaves the
+ * real gap holding everything to its left together.
+ *
+ * No `padding` either. It was `var(--space-md)`, and it never drew: the
+ * `.record-form, .panel-form` rule below sets `var(--space-lg)` at equal
+ * specificity and later in the file, and `.record` is only ever worn with
+ * `.record-form`. 24px is the figure the ingest brief asks for and 24px is what
+ * rendered; the 16px was a stale declaration that told the next reader the
+ * opposite of what the screen does.
+ */
 .record {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-md);
-  padding: var(--space-md);
   border-top: 1px solid var(--outline-variant);
 }
 
-.record:first-child {
+/* The divider between rows, and the one row that has none above it.
+ *
+ * `.record:first-child` was the previous spelling and it drew no hairline
+ * anywhere: each `.record` is a `<Form>` that is the only child of its own
+ * `<li>`, so every row is a first child and every row had its border suppressed.
+ * The list's own `li` is what "first" has to be asked about. */
+.record-list > li:first-child .record {
   border-top: 0;
+}
+
+.record-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-left: auto;
 }
 
 .record-row--closed {
@@ -2009,6 +2099,65 @@ code {
 }
 
 /*
+ * A field is 14rem wide, whatever happens to be written under it.
+ *
+ * A flex item with no basis sizes to its content, and a field's content is not
+ * its control: it is the widest of the caption, the box, the `.field-note`
+ * explaining the box and the `.field-error` refusing it. Two findings, one
+ * cause. On Settings → Tax the widest was a one-line 12px note, so a percentage
+ * with two digits in it was typed into a **1113px** box. On an account's Set
+ * balance the widest was a refusal, so the moment a typed amount was refused the
+ * box grew from 236px to 355px and the date and the button beside it jumped
+ * **119px** sideways — under the eye of the person who had just typed into it.
+ *
+ * `flex: 0 1`, deliberately, and not the `flex: 1 1` the filter bar carries a
+ * few hundred lines below. Grow distributes free space **per line**, and a form
+ * whose last line holds fewer fields than the first hands that line's fields all
+ * of it: the filter bar's own bug — one select reading "All" 616px wide beside
+ * six 225px siblings — reproduced here as 507px name boxes under 280px ones.
+ * Without grow every field is 224px on every line and the row simply ends where
+ * it ends.
+ *
+ * `min-width: 0` is what lets a `select` shrink below its widest option, the
+ * same argument the filter bar's rule makes at length: without it the intrinsic
+ * width wins and "Tax-deferred — tax due on withdrawal (Traditional)" sets the
+ * box's width again through the basis.
+ */
+.record-form > div:not(.record-actions),
+.panel-form > div {
+  flex: 0 1 14rem;
+  min-width: 0;
+}
+
+/*
+ * The one field that keeps its own width: a file input.
+ *
+ * Every other control in a row is a box the reader writes into, and 14rem is as
+ * much as any of them needs. A file input is a box the *browser* writes into:
+ * the chosen filename is a read-out, the UA draws it, and it neither wraps nor
+ * scrolls — it elides from the middle. At 224px `/upload`'s resting state reads
+ * "No fil...osen" and a chosen `statement.csv` reads "state...nt.csv". That is
+ * not a narrower control; it is a control that has stopped saying what it is
+ * for. Left to its intrinsic width it is the 315px the flow has always drawn.
+ *
+ * Restated in the phone block below rather than left to that block's
+ * `.panel-form > div`, which scores lower than this rule and would lose to it:
+ * on a phone this field has to fill the line like every other.
+ */
+.panel-form > div:has(input[type="file"]) {
+  flex-basis: auto;
+}
+
+/* A record row's box is beside its caption rather than inside it — the caption
+ * is `.visually-hidden` and cannot hold what it names — so nothing stretches the
+ * box to the wrapper the way `label`'s flex column stretches every other control
+ * here. Without this the input keeps the UA's 236px against a 224px field and
+ * hangs 12px into the gap. */
+.record-form > div > input {
+  width: 100%;
+}
+
+/*
  * The row's un-captioned members, dropped past the caption block to reach the
  * control line: the button that ends the row, and the note that sometimes
  * stands where a field would (review, when the statement dates itself).
@@ -2039,9 +2188,13 @@ code {
  * set removes. Adjacency is the question actually being asked.
  *
  * A full-line member is the only wrap CSS can see. A wrap the *content* forces
- * it cannot: Settings → Tax, whose long note widens its field past the room the
- * button needs, at every width; `/upload` at 768; Settings → Accounts and the
- * account editor at 800. There the drop stands, and the gap reads 40px.
+ * it cannot: `/upload` at 768 and 1024, Settings → Accounts and the account
+ * editor at 800 and 1100. There the drop stands, and the gap reads 40px.
+ *
+ * Settings → Tax used to head that list — its long note widened its field past
+ * the room the button needed, at every width. It no longer does: the field rule
+ * above gives a field a basis and the note a measure, so the note stops sizing
+ * anything, and the Save button now shares the rate box's line from 768 up.
  */
 .panel-form > :is(fieldset, label.choice, .form-error) + :is(button, .button) {
   margin-top: 0;
@@ -2118,6 +2271,36 @@ code {
 }
 
 /*
+ * The destructive half of an editor, below the form and inside the same panel.
+ *
+ * It is stated here, above the phone block rather than below it, and the reason
+ * is source order rather than taste: the phone block sets this padding to 16px
+ * at single-class specificity, and a media query adds none of its own. Left
+ * where it used to be — after that block — this rule won at every width and the
+ * account editor's two halves were set to two different left margins on a phone,
+ * with the panel's hairline running between them.
+ */
+.danger-zone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  border-top: 1px solid var(--outline-variant);
+}
+
+/* Its heading and its caption were butting: both are reset to `margin: 0`, so a
+ * 12px note started on a 20px heading's descender line. 4px is what the
+ * application's other title-and-caption pair uses (`.page-subtitle`), and 0px is
+ * not on the scale at all. The measure is the 60ch `.field-note` and
+ * `.panel-statement` take — without it this note ran 1166px. */
+.danger-zone .form-note {
+  margin-top: var(--space-xs);
+  max-width: 60ch;
+}
+
+/*
  * A control row on a phone.
  *
  * Until now the stylesheet said nothing about `.panel-form` at this width, and
@@ -2128,12 +2311,18 @@ code {
  * a line, every control filling it.
  */
 @media (max-width: 767px) {
+  /* `.danger-zone` is in this list because it is the same form grammar in the
+   * same panel: left out of it, the account editor's heading and its
+   * destructive button sat 8px right of every caption above them. */
   .record-form,
-  .panel-form {
+  .panel-form,
+  .danger-zone {
     padding: var(--space-md);
   }
 
+  .record-form > div:not(.record-actions),
   .panel-form > div,
+  .panel-form > div:has(input[type="file"]),
   .panel-form > fieldset {
     flex-basis: 100%;
   }
@@ -2151,16 +2340,6 @@ code {
   .panel-form > .form-note {
     margin-top: 0;
   }
-}
-
-.danger-zone {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-  padding: var(--space-lg);
-  border-top: 1px solid var(--outline-variant);
 }
 
 /* --- Holdings -------------------------------------------------------------
@@ -2207,9 +2386,18 @@ code {
  * the rest and, on a phone, wider than the panel holding it. The flex basis
  * sets the width and `min-width: 0` is what lets the box shrink below its
  * content — without it the intrinsic width wins and the bar overflows.
+ *
+ * `flex: 0 1`, not `flex: 1 1`, and that is the whole of what this rule used to
+ * get wrong. Grow distributes free space per *line*, and seven filters never
+ * divide evenly into one: whatever is left over on the short last line goes to
+ * the one or two controls standing on it. At 1100 that put a single "Asset
+ * class" select holding the word "All" at 616px beside six 225px siblings, and
+ * at 768 the same select at 596px — a bar whose stated intent, one line above,
+ * is that every filter is the same width. Without grow they are: 192px each at
+ * 1600, 1440, 1280, 1100, 900 and 768, on the first line and on the last.
  */
 .filter-bar > div:not(.filter-actions) {
-  flex: 1 1 12rem;
+  flex: 0 1 12rem;
   min-width: 0;
 }
 
@@ -2462,14 +2650,40 @@ code {
  * below them — which is the whole reason the editor is in the columns rather
  * than in a panel underneath. Shorter than a standalone control because a row
  * that grew by 40px on open would push the rest of the table down the screen.
+ *
+ * It did neither of those things, because the box was 18px narrower inside than
+ * the plain cell that printed the same string: the `td`'s 16px each side, then
+ * the box's own 8px each side and its border, all subtracted from a column whose
+ * width the box itself was setting through `min-width`. Opening the editor on
+ * VBTLX's `4,570.688555` gave a text area of 78px for 98px of digits, and the
+ * two least significant of them were behind the border — on the screen whose
+ * entire argument is that the figure can be checked against its neighbours
+ * before it is submitted.
+ *
+ * The two figures below are one decision. The cell gives up its horizontal
+ * padding while a box is in it and the box takes it: `7.5rem + 8px` is exactly
+ * the `6rem + 32px` the column asked for before, so the Quantity column is the
+ * same 128px it always was and the table's width does not move — which matters,
+ * because this table is already wider than the window between 768 and 1502.
+ * What changes is where the 128px goes. The typed digits now sit 17px from the
+ * cell's trailing edge against the printed ones' 16px, where they used to sit
+ * 25px from it, so the column reads as one column with a box in it.
  */
 .cell-input {
   width: 100%;
-  min-width: 6rem;
+  min-width: 7.5rem;
   height: 32px;
   padding: 0 var(--space-base);
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* Leading padding to zero rather than both to 8px: the figures are
+ * right-aligned, so the trailing side is the one that has to keep a gap for them
+ * to line up on. */
+.data-table td:has(> .cell-input) {
+  padding-left: 0;
+  padding-right: var(--space-base);
 }
 
 /* The open row keeps its ground while the pointer is elsewhere: it is the row
@@ -2693,9 +2907,15 @@ code {
   /* A box that shared its line with the field's label would be a third of a
    * phone wide. The card gives it the row instead — and the caption goes back
    * to the leading edge with it, since `.is-numeric` right-aligns the cell for
-   * a column of figures that no longer exists once the table is a card. */
+   * a column of figures that no longer exists once the table is a card.
+   *
+   * The padding is restated because the desktop rule gives the cell's trailing
+   * 8px to the box so the digits line up in their column. There is no column
+   * here — the card gives the box the whole row — so the 8px would only hold the
+   * box back from the card's edge. */
   .data-table--holdings tbody tr.row-editing td:has(> .cell-input) {
     display: block;
+    padding: 0;
     text-align: left;
   }
 
@@ -2721,10 +2941,26 @@ code {
     padding: 0;
   }
 
+  /* The bar's own contents were inset 8px further than every other panel's on
+   * this page — `.panel-header`, `.panel-body`, `.panel-form` and `.record-form`
+   * all drop to 16px below 768px and this one kept 24px, so a single-column
+   * phone layout had a step in its left margin running the whole length of the
+   * page. It is restated here rather than added to that rule because
+   * `.filter-bar` is declared after it at equal specificity and would win. */
+  .filter-bar {
+    padding: var(--space-md);
+  }
+
   /* Two filters to a row: seven stacked controls is most of a phone screen
-   * before the table it filters has started. */
+   * before the table it filters has started.
+   *
+   * `flex: 0 1` here for the same reason as above 768px, and it has to be said
+   * twice: this rule comes later in the file at equal specificity, so it is the
+   * one that decides the phone. Changing only the desktop rule leaves the bar
+   * at `2×146 · 2×146 · 2×146 · 1×218` — a last row half again as wide as the
+   * six controls above it. */
   .filter-bar > div:not(.filter-actions) {
-    flex: 1 1 calc(50% - var(--space-md));
+    flex: 0 1 calc(50% - var(--space-md));
   }
 
   .filter-actions {

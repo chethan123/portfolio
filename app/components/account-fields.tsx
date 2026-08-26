@@ -14,6 +14,13 @@ import type { FieldErrors } from "~/lib/input.server";
  * Each field is one element: `.panel-form` wraps its children across lines, so
  * a caption, a box and the note under it have to travel together or a refusal
  * message ends up beside the field after the one it is about.
+ *
+ * Inside that element the refusal comes before the note, which is the order
+ * `tax.tsx` already uses. The contract is that a field's refusal sits *under its
+ * control* (ingest brief §2): with the note first, the two fields that have one
+ * printed their refusal 16px lower than the other four — a grey explanatory line
+ * interposed between the box's 2px `--loss` border and the red sentence, which
+ * reads as the note being the first line of the refusal.
  */
 export type AccountFieldValues = {
   name?: string;
@@ -137,11 +144,11 @@ export function AccountFields({
             ))}
           </select>
         </label>
+        <Error_ name="taxTreatment" />
         <p className="field-note">
           A workplace plan holding both Traditional and Roth money is two accounts at the same
           institution, one of each treatment.
         </p>
-        <Error_ name="taxTreatment" />
       </div>
 
       <div>
@@ -155,11 +162,11 @@ export function AccountFields({
             autoComplete="off"
           />
         </label>
+        <Error_ name="externalAccountNumber" />
         <p className="field-note">
           Optional, and only ever used to pre-select this account when a statement carrying the
           same number is uploaded.
         </p>
-        <Error_ name="externalAccountNumber" />
       </div>
     </>
   );
