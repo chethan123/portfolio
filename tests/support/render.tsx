@@ -21,11 +21,21 @@ import { createRoutesStub } from "react-router";
 import { Layout } from "../../app/root.tsx";
 
 import type { FirstRunStep } from "~/lib/first-run.server";
+import type { MaskingPolicy } from "~/lib/masking";
 
 /** What the root loader returns, which is what `Layout` reads. */
 export type RootData = {
   authConfigured: boolean;
   firstRun: FirstRunStep;
+  /**
+   * Whether this browser's amounts are hidden (spec 0007). Optional here and
+   * only here: every test written before masking existed passes root data
+   * without it, and defaulting to *masked* in those would flip assertions those
+   * tests never made. `Layout` itself has no default — the loader always sends
+   * one.
+   */
+  masked?: boolean;
+  maskingPolicy?: MaskingPolicy;
 };
 
 /**

@@ -51,6 +51,12 @@ export default [
   // AUTH_PASSWORD is set; with the gate off it redirects to the overview.
   route("login", "routes/login.tsx"),
 
+  // The masking toggle's server-side writer (spec 0007). No UI: the control is
+  // in the chrome on every page, and this is the target its form posts to so
+  // that it keeps working with JavaScript off. Inside the gate like everything
+  // else — a display preference is not a reason to open a hole in §10.
+  route("masking", "routes/masking.ts"),
+
   // Resource route, no UI. Kept in the router rather than in a server wrapper
   // so it behaves identically in dev and in the container.
   route("healthz", "routes/healthz.ts"),
