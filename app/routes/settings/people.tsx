@@ -116,23 +116,31 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                   <Form method="post" className="record record-form">
                     <input type="hidden" name="personId" value={person.id} />
 
-                    <label className="visually-hidden" htmlFor={`name-${person.id}`}>
-                      Name
-                    </label>
-                    <input
-                      id={`name-${person.id}`}
-                      name="name"
-                      // What was typed survives a refusal; otherwise the stored
-                      // name is what the box shows.
-                      defaultValue={errors ? (actionData?.values.name ?? "") : person.name}
-                      aria-invalid={errors?.name ? true : undefined}
-                    />
+                    {/* The box and its refusal are one flex item, the shape
+                        `AccountFields` uses, so the sentence stacks under the
+                        box it is about. Loose in the row they were siblings:
+                        the refusal was laid out *beside* the box, 147px to the
+                        right of it, and it pushed the count and the buttons of
+                        that row out of line with every other row's. */}
+                    <div>
+                      <label className="visually-hidden" htmlFor={`name-${person.id}`}>
+                        Name
+                      </label>
+                      <input
+                        id={`name-${person.id}`}
+                        name="name"
+                        // What was typed survives a refusal; otherwise the stored
+                        // name is what the box shows.
+                        defaultValue={errors ? (actionData?.values.name ?? "") : person.name}
+                        aria-invalid={errors?.name ? true : undefined}
+                      />
 
-                    {errors?.name ? (
-                      <p className="field-error" role="alert">
-                        {errors.name}
-                      </p>
-                    ) : null}
+                      {errors?.name ? (
+                        <p className="field-error" role="alert">
+                          {errors.name}
+                        </p>
+                      ) : null}
+                    </div>
 
                     <p className="record-note">
                       {person.accountCount === 0 ? (
@@ -145,28 +153,34 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                       )}
                     </p>
 
-                    {/* Outlined, not filled: a list of five Saves would leave
-                        the page with five primary actions and no obvious one.
-                        The filled button belongs to "Add person" below. */}
-                    <button
-                      type="submit"
-                      name="intent"
-                      value="rename"
-                      className="button button--quiet"
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="submit"
-                      name="intent"
-                      value="remove"
-                      className="button button--danger"
-                      // Not disabled when they own accounts: the refusal explains
-                      // itself, and a dead button explains nothing.
-                      aria-label={`Remove ${person.name}`}
-                    >
-                      Remove
-                    </button>
+                    {/* Grouped, and pushed to the trailing edge by the group
+                        rather than by the row: two actions on one record read
+                        as a pair, and `space-between` on the row drew them a
+                        quarter of the screen apart. */}
+                    <div className="record-actions">
+                      {/* Outlined, not filled: a list of five Saves would leave
+                          the page with five primary actions and no obvious one.
+                          The filled button belongs to "Add person" below. */}
+                      <button
+                        type="submit"
+                        name="intent"
+                        value="rename"
+                        className="button button--quiet"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="submit"
+                        name="intent"
+                        value="remove"
+                        className="button button--danger"
+                        // Not disabled when they own accounts: the refusal explains
+                        // itself, and a dead button explains nothing.
+                        aria-label={`Remove ${person.name}`}
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </Form>
                 </li>
               );
