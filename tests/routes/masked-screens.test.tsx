@@ -19,19 +19,31 @@
  * the last because it is the largest set of figures the application ever puts
  * on one page, and therefore the worst one to leak (story 18).
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import Holdings, { loader as holdingsLoader } from "../../app/routes/holdings.tsx";
 import Overview, { loader as overviewLoader } from "../../app/routes/overview.tsx";
 import Review, { loader as reviewLoader } from "../../app/routes/upload/review.tsx";
+import { loader as rootLoader } from "../../app/root.tsx";
+import { MASKED, MASKING_COOKIE, UNMASKED } from "~/lib/masking";
 import { rememberMapping } from "~/lib/uploads.server";
 
-import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get } from "../support/routes.ts";
 
+import { stopPricePoller } from "~/lib/price-poller.server";
+
 import type { TestContext } from "../support/database.ts";
 import type { StatementMapping } from "~/lib/statement";
+
+// The shell's loader reads the deployment's configuration, and `getConfig()`
+// memoises its first read — so this has to be set before any loader here runs,
+// exactly as `root.test.ts` and `routes/masking.test.ts` do it.
+process.env.DATABASE_URL = TEST_DATABASE_URL;
+
+/** The shell's loader starts the refresh loop; `root.test.ts` explains. */
+afterEach(stopPricePoller);
 
 afterAll(closeTestDatabase);
 
@@ -66,6 +78,17 @@ const UPLOADED_QUANTITY = "241";
  * named strings are what makes a failure legible when it fires.
  */
 const MONEY_ANYWHERE = /\$\s*[\d(]/;
+
+/**
+ * The `<svg>` a signed figure draws beside itself, or "" if it drew none.
+ *
+ * Read out of the first delta cell in the markup, so the assertion can compare
+ * a masked render against an unmasked one instead of naming path data — §12's
+ * rule is that the arrow is there, not that it is any particular arrow.
+ */
+function arrowIn(markup: string): string {
+  return /<span class="delta[^"]*">(<svg.*?<\/svg>)/s.exec(markup)?.[1] ?? "";
+}
 
 /**
  * One brokerage account holding one priced fund.
@@ -118,14 +141,16 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
     "Overview — the trend line is still drawn and only its axis figures go",
     withDatabase(async (ctx) => {
       await seedPortfolio(ctx);
-      // A second dated close, so there are two points and therefore a line.
       const data = await overviewLoader(args(get("/")));
 
       const masked = renderRoute(Overview, "/", data, { masked: true });
 
-      // Story 10: the shape of the year without the size of it. The grid rules
-      // are what make the chart readable as a chart rather than as a smear.
+      // Story 10: the shape of the year without the size of it. The line and
+      // the rules are what make the chart readable as a chart rather than as a
+      // smear, and the polyline is the line itself — asserting only on the
+      // grid would pass on a chart that had stopped plotting anything.
       expect(masked).toContain("chart-grid");
+      expect(masked).toContain("chart-line");
       // Story 11: the allocation ring keeps its proportions, because a share is
       // a ratio and a ratio is never masked.
       expect(masked).toMatch(/width:\s*[\d.]+%/);
@@ -211,6 +236,45 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
   );
 });
 
+describe("the first paint", () => {
+  it(
+    "is already masked when the browser's cookie says so, with no figure anywhere in the markup",
+    withDatabase(async (ctx) => {
+      await seedPortfolio(ctx);
+
+      // The whole loop, in one test: a `Cookie` header goes in, the shell's
+      // loader resolves it, and its answer drives the render. Every other test
+      // in this file hands the flag to `renderRoute` directly, which proves the
+      // screens obey a flag and says nothing about where the flag came from —
+      // and the two halves being separately right is exactly how a feature
+      // like this ships broken. Story 30: the amounts are never briefly
+      // visible, because there is no first paint in which they were there.
+      const root = await rootLoader(args(get("/", `${MASKING_COOKIE}=${MASKED}`)));
+      const data = await overviewLoader(args(get("/")));
+
+      expect(root.masked).toBe(true);
+
+      const painted = renderRoute(Overview, "/", data, { masked: root.masked });
+
+      expect(painted).not.toContain(VALUE);
+      expect(painted).not.toMatch(MONEY_ANYWHERE);
+    }),
+  );
+
+  it(
+    "shows the figures when the same browser says the opposite",
+    withDatabase(async (ctx) => {
+      await seedPortfolio(ctx);
+
+      const root = await rootLoader(args(get("/", `${MASKING_COOKIE}=${UNMASKED}`)));
+      const data = await overviewLoader(args(get("/")));
+
+      expect(root.masked).toBe(false);
+      expect(renderRoute(Overview, "/", data, { masked: root.masked })).toContain(VALUE);
+    }),
+  );
+});
+
 describe("how a masked figure is announced", () => {
   it(
     "says an amount is hidden rather than spelling out a run of bullets",
@@ -248,11 +312,27 @@ describe("how a masked figure is announced", () => {
       if (data instanceof Response) throw new Error("The loader redirected instead of rendering.");
 
       const masked = renderRoute(Holdings, "/holdings", data, { masked: true });
+      const shown = renderRoute(Holdings, "/holdings", data, { masked: false });
+
+      // The fixture's cost basis sits below its price, so this row is a gain
+      // and every channel below should say so. Asserted against the unmasked
+      // render rather than against a literal, so a fixture that stopped
+      // producing a gain fails here rather than passing vacuously.
+      expect(shown).toContain("delta--gain");
 
       // §12: gain and loss are never carried by colour alone. Dropping the sign
       // while masked would leave the hue as the only channel saying which way
       // the figure points — so direction survives and magnitude does not.
-      expect(masked).toMatch(/delta--(gain|loss|flat)/);
+      expect(masked).toContain("delta--gain");
+      // The sign, kept. `+$••••••`, never a bare `$••••••`.
+      expect(masked).toMatch(/\+(<!-- -->)?\$(<!-- -->)?•{6}/);
+      // The arrow, kept — and asserted as *the same drawing* the unmasked row
+      // uses rather than as literal path data, which would pin this test to the
+      // icon set rather than to the rule.
+      expect(arrowIn(masked)).toBe(arrowIn(shown));
+      expect(arrowIn(masked)).not.toBe("");
+      // And the size, gone.
+      expect(masked).not.toMatch(MONEY_ANYWHERE);
     }),
   );
 });

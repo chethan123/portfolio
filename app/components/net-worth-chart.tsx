@@ -25,6 +25,7 @@
  */
 import { useId } from "react";
 
+import { MASKED_FIGURE } from "~/components/amount";
 import { formatCompact, formatMoney, toPlotValue } from "~/lib/format";
 
 export type ChartPoint = { date: string; amount: string };
@@ -51,15 +52,6 @@ const PADDING = 0.08;
 const GRID = [1, 0.5, 0];
 
 const DAY_MS = 86_400_000;
-
-/**
- * What an axis tick says while masked.
- *
- * Shorter than the cells' run of dots: an axis tick sits in a narrow margin,
- * and the constant here only has to be unreadable rather than uniform with the
- * table's.
- */
-const AXIS_DOTS = "•••";
 
 /**
  * Under this span an x tick names the day; over it, the month.
@@ -130,15 +122,20 @@ export function buildScale(points: ChartPoint[]): Scale {
  * largest value in the series would put every tick 8% of the range out —
  * a quiet inaccuracy on an axis is still an inaccuracy.
  */
-export function gridRules(scale: Scale, masked = false): { y: number; label: string }[] {
+export function gridRules(scale: Scale, masked: boolean): { y: number; label: string }[] {
   const { floor, span } = scale.domain;
 
   return GRID.map((fraction) => ({
     y: HEIGHT * (1 - fraction),
-    // A masked axis keeps its rules and loses its numbers. The ticks are
-    // already `aria-hidden`, so there is nothing to announce here — the label
-    // below is what carries the chart for anyone who cannot see it.
-    label: masked ? AXIS_DOTS : formatCompact((floor + span * fraction).toFixed(0)),
+    // A masked axis keeps its rules and loses its numbers. The same run of
+    // dots every other masked figure uses, rather than a shorter one of its
+    // own: "masked output is a constant" is the rule, and a second constant is
+    // how a reader learns to read one of them as a smaller number. No currency
+    // mark, because an unmasked tick has none either — it reads `58.4K`.
+    //
+    // The ticks are already `aria-hidden`, so there is nothing to announce
+    // here; the label below carries the chart for anyone who cannot see it.
+    label: masked ? MASKED_FIGURE : formatCompact((floor + span * fraction).toFixed(0)),
   }));
 }
 
@@ -181,7 +178,7 @@ export function NetWorthChart({
   manual,
   label,
   endingAt = null,
-  masked = false,
+  masked,
   id,
 }: {
   /** Points derived from real position sets. Solid line, and the filled one. */
@@ -204,8 +201,16 @@ export function NetWorthChart({
    * to prevent (story 12's failure, in a place nobody looks).
    */
   endingAt?: string | null;
-  /** Whether this browser's amounts are hidden (spec 0007). */
-  masked?: boolean;
+  /**
+   * Whether this browser is masked (spec 0007).
+   *
+   * Required, with no default. Everything else in this feature fails closed —
+   * `useMasked` and the root loader both answer *masked* when they cannot tell
+   * — and a default here could only fail the other way, drawing the figures for
+   * a caller who forgot the prop. Required makes forgetting a compile error
+   * instead, which is the only version of this that cannot go wrong quietly.
+   */
+  masked: boolean;
   /**
    * Distinguishes this instance's gradient from any other on the page.
    *

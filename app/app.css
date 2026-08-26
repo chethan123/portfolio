@@ -302,18 +302,29 @@ a {
 /* A masked amount (spec 0007, story 8).
  *
  * The run of dots is a constant — ADR-0002 refuses to size it to the figure it
- * replaces, because digit count is the magnitude being hidden — and it is
+ * replaces, because digit count is the magnitude being masked — and it is
  * narrower than most amounts. Left alone, every numeric column would visibly
  * narrow the moment the screen was masked and a reader would lose their place
- * mid-row. A minimum width in `ch` holds the common case still.
+ * mid-row.
  *
- * It is a floor, not a fixed size: an unusually wide figure still sets its
- * column's width, so a portfolio with an eight-figure balance in one column and
- * a two-figure one in another will still move a little. Sizing every amount
- * identically would mean a fixed table layout, which is a larger change than
- * the complaint warrants. */
+ * The floor is on the *cell* as well as on the dots, and it has to be both.
+ * Sizing only the dots holds a column of wide figures still and does nothing
+ * for a column of narrow ones: `$0.00` is five characters, so Annual dividend
+ * would still jump outward on masking. One shared floor means both states of
+ * every amount column start from the same width.
+ *
+ * It is a floor, not a fixed size: an unusually wide figure still sets its own
+ * column, so a portfolio with an eight-figure balance in one column will still
+ * move a little when that column is masked. Sizing every amount identically
+ * would mean a fixed table layout, which is a larger change than the complaint
+ * warrants. */
 .amount-dots {
   display: inline-block;
+  min-width: 9ch;
+}
+
+.data-table td.is-numeric,
+.data-table th.is-numeric {
   min-width: 9ch;
 }
 
@@ -565,7 +576,14 @@ a {
   /* On the phone the label is the first thing to go: the bar is 64px of a
    * 360px screen and it is already carrying the brand and Upload. The glyph
    * stays, and the accessible name comes off the label that is still in the
-   * markup rather than out of an attribute that could drift from it. */
+   * markup rather than out of an attribute that could drift from it.
+   *
+   * A DELIBERATE DUPLICATION of `.visually-hidden`, named here as
+   * `docs/README.md` asks. The class itself cannot be used: the label is
+   * visible in the rail and hidden in the bar, so which treatment applies is a
+   * question of viewport rather than of markup, and plain CSS has no way to
+   * borrow one rule inside a media query. If `.visually-hidden` changes, this
+   * changes with it. */
   .app-topbar .masking-toggle {
     width: auto;
     padding: var(--space-sm);

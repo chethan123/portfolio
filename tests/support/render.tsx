@@ -21,7 +21,6 @@ import { Outlet, createRoutesStub } from "react-router";
 import { Layout } from "../../app/root.tsx";
 
 import type { FirstRunStep } from "~/lib/first-run.server";
-import type { MaskingPolicy } from "~/lib/masking";
 
 /** What the root loader returns, which is what `Layout` reads. */
 export type RootData = {
@@ -35,7 +34,6 @@ export type RootData = {
    * one.
    */
   masked?: boolean;
-  maskingPolicy?: MaskingPolicy;
 };
 
 /**

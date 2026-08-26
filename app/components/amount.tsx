@@ -35,20 +35,30 @@ import { render, toUnits } from "~/lib/money";
  *
  * Six dots for twelve dollars and for twelve million. ADR-0002 states the rule
  * and the reason: digit count is magnitude, and magnitude is the thing being
- * hidden.
+ * masked.
+ *
+ * Exported because the chart cannot use this component — its axis ticks are
+ * strings — and a second constant there would be a second thing a reader could
+ * learn to read as a different size.
  */
-const DOTS = "••••••";
+export const MASKED_FIGURE = "••••••";
 
 /**
  * What a masked figure is announced as.
  *
- * The dots are hidden from assistive technology and this is said instead —
- * story 6 asks not to have a run of bullets read out, and story 7 asks for
- * masking to actually mask for a screen reader too, so that a person beside
- * them cannot hear the balances. What *kind* of amount it was still comes from
- * the column header, which is untouched.
+ * The dots are kept from assistive technology and this is said instead — story
+ * 6 asks not to have a run of bullets read out, and story 7 asks for masking to
+ * actually mask for a screen reader too, so that a person beside them cannot
+ * hear the balances. What *kind* of amount it was still comes from the column
+ * header, which is untouched.
+ *
+ * The wording is the spec's ("an accessible label saying an amount is hidden")
+ * and stays in plain English, even though `CONTEXT.md` avoids *hidden* for the
+ * concept: the glossary governs what this project calls masking among
+ * ourselves, not the plainest word for a stranger hearing one cell read out.
+ * The identifier is the project's word; the sentence is the reader's.
  */
-const HIDDEN = "Amount hidden";
+const MASKED_ANNOUNCEMENT = "Amount hidden";
 
 /**
  * How an amount is written when it is not masked.
@@ -127,12 +137,12 @@ export function Amount({
       <span className="amount-dots" aria-hidden="true">
         {shape === "signed" ? printedSign(value) : ""}
         {shape === "quantity" ? "" : "$"}
-        {DOTS}
+        {MASKED_FIGURE}
       </span>
       {/* Announced rather than spelled. Without this the row reads as a run of
           bullet characters, which is both meaningless and — story 7 — no
           quieter than reading the balance out. */}
-      <span className="visually-hidden">{HIDDEN}</span>
+      <span className="visually-hidden">{MASKED_ANNOUNCEMENT}</span>
     </>
   );
 }
