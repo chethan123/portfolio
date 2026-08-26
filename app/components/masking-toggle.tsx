@@ -26,7 +26,7 @@
  */
 import { useFetcher, useLocation, useRouteLoaderData } from "react-router";
 
-import { HiddenIcon, VisibleIcon } from "~/components/icons";
+import { MaskedIcon, UnmaskedIcon } from "~/components/icons";
 import {
   MASKED,
   MASKING_ACTION,
@@ -50,7 +50,7 @@ export function MaskingToggle({ className }: { className?: string }) {
 
   const next = masked ? UNMASKED : MASKED;
   const label = masked ? "Show amounts" : "Hide amounts";
-  const Glyph = masked ? HiddenIcon : VisibleIcon;
+  const Glyph = masked ? MaskedIcon : UnmaskedIcon;
 
   return (
     <fetcher.Form

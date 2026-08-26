@@ -219,14 +219,19 @@ export function EditIcon(props: IconProps) {
 }
 
 /**
- * Masking, off — the state the screen is in, drawn as the eye that can see.
+ * An unmasked screen, drawn as the eye that can see (spec 0007).
+ *
+ * Named for the glossary term rather than for what the eye is doing:
+ * `CONTEXT.md` lists *hidden* among the words this project avoids for masking,
+ * and an icon called `VisibleIcon` is how that vocabulary starts drifting back
+ * in one identifier at a time.
  *
  * Beside a text label like every other icon here, never instead of one: the
  * control it sits in is labelled with the action it will perform, and story 5
  * is explicit that a reader who has to infer the state from a glyph is one
  * click away from revealing their balances.
  */
-export function VisibleIcon(props: IconProps) {
+export function UnmaskedIcon(props: IconProps) {
   return (
     <Icon {...props}>
       <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z" />
@@ -235,8 +240,8 @@ export function VisibleIcon(props: IconProps) {
   );
 }
 
-/** Masking, on. The same eye, struck through. */
-export function HiddenIcon(props: IconProps) {
+/** A masked screen. The same eye, struck through. */
+export function MaskedIcon(props: IconProps) {
   return (
     <Icon {...props}>
       <path d="M3 3l18 18" />

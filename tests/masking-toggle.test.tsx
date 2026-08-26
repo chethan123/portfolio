@@ -63,12 +63,10 @@ describe("the masking toggle", () => {
   });
 
   it("is a real form, so the toggle works with JavaScript off", () => {
-    // Story 29. The `action` is what the no-JavaScript path posts to; without
-    // it the control is a button that does nothing at all in that browser.
-    const markup = renderChrome(false);
-
-    expect(markup).toContain('method="post"');
-    expect(markup).toContain('action="/masking"');
+    // Story 29. Asserted as one thing rather than as two attributes: what
+    // matters is that a browser running no script has somewhere to post to,
+    // and either half missing means the control does nothing at all there.
+    expect(renderChrome(false)).toMatch(/<form[^>]*action="\/masking"[^>]*method="post"/);
   });
 
   it("carries the screen it was pressed on, so that path can return there", () => {
