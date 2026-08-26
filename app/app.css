@@ -69,6 +69,42 @@
   --panel: var(--surface-container-lowest);
   --panel-hover: var(--surface-container-low);
 
+  /* The ground under a table header, a ticker badge, an account tile, a group
+   * heading or a total row: one legible step above `--panel`, in whichever
+   * direction the theme runs.
+   *
+   * It has to be its own role, because `--panel` is not the same step of the
+   * ramp in both themes — light's is `--surface-container-lowest`, two steps
+   * below `-high`, and dark's is `--surface-container`, one. All ten rules
+   * that draw one of those grounds used to name `--surface-container-high`
+   * directly, so a single declaration drew a legible 1.23:1 strip in light and
+   * a 1.02:1 nothing in dark, and the header band, the badges, the tile, the
+   * group heading and the grand total all collapsed into the panel. Dark
+   * spends the step it has spare (`-highest`, which nothing else claims);
+   * light keeps the value it already had, to the byte.
+   *
+   * `--panel-hover` deliberately does not move with it. It is the subtotal's
+   * ground as well as a row's hover, and lifting it too puts a group subtotal
+   * *further* from the panel than the grand total it rolls up into. Light
+   * orders these `panel < subtotal < header = group = total`; dark has to
+   * mirror that ordering, not merely find separation somewhere.
+   *
+   * The cost, knowingly accepted: dark row hover stays at 1.02:1. Above
+   * `--panel` dark has only `-high`, `-highest` and `--surface-bright`, and
+   * four roles want a step — hover, subtotal, group and total, header band.
+   * Hover is the one left flat: it is the only one of the four that is
+   * transient, and the only one that arrives with the cursor already pointing
+   * at the row it is describing. It is measured, and it is a decision rather
+   * than an oversight.
+   *
+   * One measured cost on the other side, also accepted: a *loss* figure in a
+   * grand total row now sits on `-highest` rather than `-high` in dark, and
+   * `--loss` (#f87171) measures 4.47:1 there against 5.18:1 before — 0.03 under
+   * the 4.5:1 §13.2 picked that value to clear on `--panel`. Only the grand
+   * total is affected (a subtotal keeps `--panel-hover`), and only when it is
+   * negative. Moving the value is §13.2's decision to make, not this rule's. */
+  --surface-emphasis: var(--surface-container-high);
+
   /* Light is the only theme with elevation; dark is flat (§13.5). */
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.05);
 
@@ -147,6 +183,7 @@
 
     --panel: var(--surface-container);
     --panel-hover: var(--surface-container-high);
+    --surface-emphasis: var(--surface-container-highest);
     --shadow-card: none;
 
     --chart-line: #0055ff;
@@ -186,6 +223,7 @@
 
   --panel: var(--surface-container);
   --panel-hover: var(--surface-container-high);
+  --surface-emphasis: var(--surface-container-highest);
   --shadow-card: none;
 
   --chart-line: #0055ff;
@@ -374,7 +412,7 @@ a {
 
 .app-nav-link:hover {
   color: var(--on-surface);
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
 }
 
 /* The active marker: the mock's 4px leading stroke over a
@@ -949,9 +987,16 @@ a {
   transform: rotate(-90deg);
 }
 
+/* `--surface-container-low` is the role DESIGN.md §13.2 gives that token —
+ * "row hover in light; the donut track" — and the holdings brief gives it the
+ * same one. The track was stroked a step higher, at the table-header tone,
+ * which is a louder ring than an empty track wants in either theme. Nothing on
+ * the demo data shows it, because `ring()` makes the positive slices sum to 1
+ * and the wedges cover the track completely; it is corrected here only because
+ * this change is already moving every other rule that named that token. */
 .donut-track {
   fill: none;
-  stroke: var(--surface-container-high);
+  stroke: var(--surface-container-low);
 }
 
 .donut-segment {
@@ -1047,7 +1092,7 @@ a {
 
 .data-table th {
   padding: var(--space-sm) var(--space-md);
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
   border-bottom: 1px solid var(--outline-variant);
   color: var(--on-surface-variant);
   font-size: 12px;
@@ -1141,7 +1186,7 @@ a.account-row:hover {
   width: 48px;
   height: 48px;
   border-radius: var(--radius-lg);
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
   color: var(--primary);
 }
 
@@ -1231,7 +1276,7 @@ a.account-row:hover {
 .alloc-track {
   height: 8px;
   border-radius: var(--radius-full);
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
   overflow: hidden;
 }
 
@@ -1364,7 +1409,7 @@ a.account-row:hover {
   height: 32px;
   padding-inline: var(--space-base);
   border-radius: var(--radius);
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
   color: var(--primary);
   font-size: 12px;
   line-height: 16px;
@@ -2125,13 +2170,13 @@ code {
   white-space: normal;
 }
 
-/* `--surface-container-high`, the same tone as the column headings, because a
- * group heading is the more senior of the two rows: `--panel-hover` resolves
- * *below* the header row in light mode, and reads as a lesser thing than the
- * subtotal it introduces. */
+/* `--surface-emphasis`, the same tone as the column headings, because a group
+ * heading is the more senior of the two rows: `--panel-hover` resolves *below*
+ * the header row — in both themes, now that emphasis is its own role — and
+ * reads as a lesser thing than the subtotal it introduces. */
 .data-table .row-group th {
   padding: var(--space-sm) var(--space-md);
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
   border-top: 1px solid var(--outline-variant);
   border-bottom: 1px solid var(--outline-variant);
 }
@@ -2153,7 +2198,7 @@ code {
  * not rows you can act on. Re-asserted rather than carved out of the shared
  * rule, so the other three tables in the app are untouched. */
 .data-table .row-group:hover th {
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
 }
 
 .data-table .row-subtotal:hover th,
@@ -2164,7 +2209,7 @@ code {
 .data-table .row-total th,
 .data-table .row-total td {
   padding: var(--space-md);
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
   border-top: 1px solid var(--outline);
   font-weight: 700;
 }
@@ -2297,7 +2342,7 @@ code {
 }
 
 .row-edit:hover {
-  background: var(--surface-container-high);
+  background: var(--surface-emphasis);
   color: var(--on-surface);
 }
 
@@ -2414,7 +2459,7 @@ code {
     flex-wrap: wrap;
     gap: var(--space-base) var(--space-md);
     padding: var(--space-sm) var(--space-md);
-    background: var(--surface-container-high);
+    background: var(--surface-emphasis);
     border-bottom: 1px solid var(--outline-variant);
   }
 
