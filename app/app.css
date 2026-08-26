@@ -299,6 +299,35 @@ a {
   color: var(--on-surface-variant);
 }
 
+/* A masked amount (spec 0007, story 8).
+ *
+ * The run of dots is a constant — ADR-0002 refuses to size it to the figure it
+ * replaces, because digit count is the magnitude being masked — and it is
+ * narrower than most amounts. Left alone, every numeric column would visibly
+ * narrow the moment the screen was masked and a reader would lose their place
+ * mid-row.
+ *
+ * The floor is on the *cell* as well as on the dots, and it has to be both.
+ * Sizing only the dots holds a column of wide figures still and does nothing
+ * for a column of narrow ones: `$0.00` is five characters, so Annual dividend
+ * would still jump outward on masking. One shared floor means both states of
+ * every amount column start from the same width.
+ *
+ * It is a floor, not a fixed size: an unusually wide figure still sets its own
+ * column, so a portfolio with an eight-figure balance in one column will still
+ * move a little when that column is masked. Sizing every amount identically
+ * would mean a fixed table layout, which is a larger change than the complaint
+ * warrants. */
+.amount-dots {
+  display: inline-block;
+  min-width: 9ch;
+}
+
+.data-table td.is-numeric,
+.data-table th.is-numeric {
+  min-width: 9ch;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -443,6 +472,41 @@ a {
   margin: 0 var(--space-lg) var(--space-lg);
 }
 
+/* The masking toggle (spec 0007). Drawn as a nav item rather than as a button
+ * so that the rail's foot reads as one column: it sits beside Settings, and a
+ * second filled button above the upload one would compete with it.
+ *
+ * Full width and left-aligned like the links above it, because the label
+ * changes length between its two states — "Hide amounts" and "Show amounts" —
+ * and a centred control would shift its own glyph every time it was pressed. */
+.app-rail-masking {
+  margin-inline: 0 var(--space-lg);
+}
+
+.masking-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: 0;
+  border-left: 4px solid transparent;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: none;
+  color: var(--on-surface-variant);
+  font: inherit;
+  font-size: 16px;
+  line-height: 24px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 150ms, background-color 150ms;
+}
+
+.masking-toggle:hover {
+  color: var(--on-surface);
+  background: var(--surface-emphasis);
+}
+
 .app-canvas {
   margin-left: var(--rail);
 }
@@ -499,6 +563,44 @@ a {
   .app-topbar .app-brand {
     padding: 0;
     border-bottom: 0;
+  }
+
+  /* The bar carries two controls below 1024px, so they need a row of their
+   * own — the bar itself is still justifying brand against actions. */
+  .app-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+  }
+
+  /* On the phone the label is the first thing to go: the bar is 64px of a
+   * 360px screen and it is already carrying the brand and Upload. The glyph
+   * stays, and the accessible name comes off the label that is still in the
+   * markup rather than out of an attribute that could drift from it.
+   *
+   * A DELIBERATE DUPLICATION of `.visually-hidden`, named here as
+   * `docs/README.md` asks. The class itself cannot be used: the label is
+   * visible in the rail and hidden in the bar, so which treatment applies is a
+   * question of viewport rather than of markup, and plain CSS has no way to
+   * borrow one rule inside a media query. If `.visually-hidden` changes, this
+   * changes with it. */
+  .app-topbar .masking-toggle {
+    width: auto;
+    padding: var(--space-sm);
+    border-left: 0;
+    border-radius: var(--radius-lg);
+    background: var(--surface-emphasis);
+  }
+
+  .app-topbar .masking-toggle span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .app-bottomnav {

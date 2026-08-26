@@ -1,9 +1,9 @@
 import { Form, Link, redirect } from "react-router";
 
-import { Delta, Money } from "~/components/money-cell";
+import { Amount, Delta } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
-import { formatMoney, isNegative } from "~/lib/format";
+import { isNegative } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
 import {
   DEFAULT_DIRECTION,
@@ -725,13 +725,13 @@ function Figures({ total }: { total: Total }) {
     <>
       <td className="is-numeric" role="cell" data-label="Value">
         <div>
-          <Money amount={total.value} />
+          <Amount value={total.value} />
           {note(total.valueCoverage)}
         </div>
       </td>
       <td className="is-numeric" role="cell" data-label="Cost basis">
         <div>
-          <Money amount={total.costBasis} />
+          <Amount value={total.costBasis} />
           {note(total.basisCoverage)}
         </div>
       </td>
@@ -755,7 +755,7 @@ function Figures({ total }: { total: Total }) {
           it belongs on is Income. Printing it here in the same typeface as the
           row percentages would invite them to be read as the same number. */}
       <td className="is-numeric" role="cell" data-label="Annual dividend">
-        <Money amount={total.annualDividend} />
+        <Amount value={total.annualDividend} />
       </td>
     </>
   );
@@ -952,17 +952,17 @@ function Row({
               autoFocus
             />
           ) : (
-            formatQuantity(holding.quantity)
+            <Amount value={holding.quantity} shape="quantity" />
           )}
         </td>
         {/* Null price and null value are the same holding: never quoted. A dash
             says so; a zero would understate the portfolio by the whole position
             and look deliberate. */}
         <td className="is-numeric" role="cell" data-label="Price">
-          <Money amount={holding.price} />
+          <Amount value={holding.price} />
         </td>
         <td className="is-numeric" role="cell" data-label="Value">
-          <Money amount={holding.value} />
+          <Amount value={holding.value} />
         </td>
         <td className="is-numeric" role="cell" data-label="Cost basis">
           {open ? (
@@ -987,7 +987,7 @@ function Row({
               autoComplete="off"
             />
           ) : (
-            <Money amount={holding.costBasis} />
+            <Amount value={holding.costBasis} />
           )}
         </td>
         <td className="is-numeric" role="cell" data-label="Unrealized">
@@ -1000,17 +1000,17 @@ function Row({
             cannot tell "the provider said it pays nothing" from "nobody asked",
             so both are read as nothing.
 
-            `Money` rather than `Delta`: a payout is not a movement, so it takes
-            no arrow and no leading plus, and a liability whose note carries a
-            rate keeps its minus through `formatMoney` like every other negative
-            figure in the table.
+            A plain `Amount` rather than a `Delta`: a payout is not a movement,
+            so it takes no arrow and no leading plus, and a liability whose note
+            carries a rate keeps its minus like every other negative figure in
+            the table.
 
             The amount and the percentage share a wrapper so that the phone gets
             one right-aligned block against the card's `data-label`, rather than
             two flex items pushed apart by it. */}
         <td className="is-numeric" role="cell" data-label="Annual dividend">
           <div>
-            <Money amount={holding.annualDividend} />
+            <Amount value={holding.annualDividend} />
             {yieldOnValue === null ? null : (
               <span className="cell-sub u-data">{formatShare(yieldOnValue)}</span>
             )}
@@ -1097,7 +1097,10 @@ function Row({
           <td colSpan={span} role="cell" data-label="">
             <p className="form-note" role="status">
               Recorded. {editor.written.accountName} now reads{" "}
-              <b className="u-data">{formatQuantity(editor.written.quantity)}</b> of{" "}
+              <b className="u-data">
+                <Amount value={editor.written.quantity} shape="quantity" />
+              </b>{" "}
+              of{" "}
               {editor.written.instrumentName}.
             </p>
           </td>

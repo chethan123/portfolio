@@ -19,6 +19,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
+import { args, get } from "../support/routes.ts";
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
@@ -45,11 +46,17 @@ describe("the shell's loader", () => {
     const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
 
     try {
-      const data = await withDb(unreachable, () => loader());
+      const data = await withDb(unreachable, () => loader(args(get("/"))));
 
       // Null, which the shell renders as "no prompt" — not a thrown Response,
       // and not an error page over the login form.
       expect(data.firstRun).toBeNull();
+
+      // The masking read is down the same well and has the same duty, with one
+      // extra: of the two ways to be wrong while the database is unreachable,
+      // this is the one that cannot put a household's balances on a screen
+      // (spec 0007).
+      expect(data.masked).toBe(true);
     } finally {
       await unreachable.destroy();
     }
@@ -62,7 +69,7 @@ describe("the shell's loader", () => {
       // loader that had stopped asking the question at all.
       await seedPerson();
 
-      expect((await loader()).firstRun).toBe("accounts");
+      expect((await loader(args(get("/")))).firstRun).toBe("accounts");
     }),
   );
 });

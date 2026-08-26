@@ -38,7 +38,7 @@ describe("the drawn value domain", () => {
 
     expect(scale.domain.floor).toBeLessThan(100000);
     expect(scale.domain.floor + scale.domain.span).toBeGreaterThan(200000);
-    expect(gridRules(scale)).toEqual([
+    expect(gridRules(scale, false)).toEqual([
       { y: 0, label: "208.0K" },
       { y: 150, label: "150.0K" },
       { y: 300, label: "92.0K" },
@@ -75,7 +75,7 @@ describe("a portfolio that has not moved", () => {
     // Documented and intended, not a defect: the rules are keyed by position,
     // so a flat series legitimately names the same number three times. Pinned
     // so that a future change to the keying has to be a deliberate one.
-    expect(gridRules(buildScale(flat)).map((rule) => rule.label)).toEqual([
+    expect(gridRules(buildScale(flat), false).map((rule) => rule.label)).toEqual([
       "50.0K",
       "50.0K",
       "50.0K",
@@ -132,7 +132,7 @@ describe("a household in net debt", () => {
   it("labels the rules with real minus signs, not hyphens", () => {
     // U+2212, from `formatCompact`. At tick size a hyphen reads as a dash in
     // the label rather than as the sign of the number.
-    expect(gridRules(buildScale(indebted)).map((rule) => rule.label)).toEqual([
+    expect(gridRules(buildScale(indebted), false).map((rule) => rule.label)).toEqual([
       "−12.8K",
       "−28.5K",
       "−44.2K",
@@ -141,9 +141,17 @@ describe("a household in net debt", () => {
 });
 
 describe("<NetWorthChart>", () => {
+  // Unmasked: these tests are about what the chart draws from its points, and
+  // masking changes only the figures beside the drawing (spec 0007).
   const render = (manual: ChartPoint[], computed: ChartPoint[]) =>
     renderToStaticMarkup(
-      <NetWorthChart manual={manual} computed={computed} label="Net worth" id="test" />,
+      <NetWorthChart
+        manual={manual}
+        computed={computed}
+        label="Net worth"
+        masked={false}
+        id="test"
+      />,
     );
 
   it.each([
@@ -169,7 +177,7 @@ describe("<NetWorthChart>", () => {
     // fail here.
     const markup = render([], rising);
 
-    for (const rule of gridRules(buildScale(rising))) {
+    for (const rule of gridRules(buildScale(rising), false)) {
       expect(markup).toContain(`<span>${rule.label}</span>`);
     }
     expect(markup).toContain('aria-label="Net worth"');

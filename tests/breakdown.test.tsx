@@ -1,7 +1,8 @@
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { Breakdown, ring } from "../app/components/breakdown.tsx";
+
+import { renderRoute } from "./support/render.tsx";
 
 import type { AllocationSlice } from "../app/lib/allocation.ts";
 
@@ -86,16 +87,23 @@ describe("<Breakdown>", () => {
     // hole of a ring is the figure §8.4 refuses, because it is what an instance
     // with nothing uploaded would show too. The amounts are the answer here,
     // and the percentage column says so with a dash rather than with `0.0%`.
-    const markup = renderToStaticMarkup(
-      <Breakdown
-        title="Value by account type"
-        count="1 account type"
-        heading="Account type"
-        amountHeading="Value"
-        slices={[slice("Liability", "-8000.0000", "0.000000")]}
-        total="0.0000"
-        reading="owned"
-      />,
+    // Through the route helper rather than bare, because the panel's amounts
+    // now ask the router whether this browser is masked (spec 0007). Rendered
+    // unmasked: the figures are what this test is about.
+    const markup = renderRoute(
+      () => (
+        <Breakdown
+          title="Value by account type"
+          count="1 account type"
+          heading="Account type"
+          amountHeading="Value"
+          slices={[slice("Liability", "-8000.0000", "0.000000")]}
+          total="0.0000"
+          reading="owned"
+        />
+      ),
+      "/",
+      null,
     );
 
     expect(markup).not.toContain("donut");

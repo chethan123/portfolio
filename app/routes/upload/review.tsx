@@ -1,7 +1,6 @@
 import { Form, Link, data, redirect } from "react-router";
 
-import { formatMoney } from "~/lib/format";
-import { formatQuantity } from "~/lib/holdings-view";
+import { Amount } from "~/components/amount";
 import {
   FORM_ERROR,
   NotFoundError,
@@ -105,8 +104,8 @@ export async function action({ params, request }: Route.ActionArgs) {
 }
 
 /** `$424.1200` — a per-share figure at the column's own four places, or the dash. */
-function basisFigure(value: string | null): string {
-  return value === null ? "—" : formatMoney(value, 4);
+function BasisFigure({ value }: { value: string | null }) {
+  return <Amount value={value} places={4} />;
 }
 
 function InstrumentCell({ row }: { row: DiffAdded | DiffUpdated | DiffRemoved }) {
@@ -229,10 +228,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {diff.added.map((row) => (
                 <tr key={row.instrumentId}>
                   <InstrumentCell row={row} />
-                  <td className="is-numeric">{formatQuantity(row.quantity)}</td>
-                  <td className="is-numeric">{basisFigure(row.costBasisPerShare)}</td>
+                  <td className="is-numeric"><Amount value={row.quantity} shape="quantity" /></td>
+                  <td className="is-numeric"><BasisFigure value={row.costBasisPerShare} /></td>
                   <td className="is-numeric">
-                    {row.value === null ? "—" : formatMoney(row.value)}
+                    <Amount value={row.value} />
                   </td>
                 </tr>
               ))}
@@ -252,25 +251,25 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
                   <td className="is-numeric">
                     {row.quantityChanged ? (
                       <>
-                        <span className="diff-was">{formatQuantity(row.quantityBefore)}</span>{" "}
-                        → {formatQuantity(row.quantityAfter)}
+                        <span className="diff-was"><Amount value={row.quantityBefore} shape="quantity" /></span>{" "}
+                        → <Amount value={row.quantityAfter} shape="quantity" />
                       </>
                     ) : (
-                      formatQuantity(row.quantityAfter)
+                      <Amount value={row.quantityAfter} shape="quantity" />
                     )}
                   </td>
                   <td className="is-numeric">
                     {row.basisChanged ? (
                       <>
-                        <span className="diff-was">{basisFigure(row.costBasisBefore)}</span> →{" "}
-                        {basisFigure(row.costBasisAfter)}
+                        <span className="diff-was"><BasisFigure value={row.costBasisBefore} /></span> →{" "}
+                        <BasisFigure value={row.costBasisAfter} />
                       </>
                     ) : (
-                      basisFigure(row.costBasisAfter)
+                      <BasisFigure value={row.costBasisAfter} />
                     )}
                   </td>
                   <td className="is-numeric">
-                    {row.value === null ? "—" : formatMoney(row.value)}
+                    <Amount value={row.value} />
                   </td>
                 </tr>
               ))}
@@ -286,12 +285,12 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {diff.removed.map((row) => (
                 <tr key={row.instrumentId}>
                   <InstrumentCell row={row} />
-                  <td className="is-numeric">{formatQuantity(row.quantity)}</td>
-                  <td className="is-numeric">{basisFigure(row.costBasisPerShare)}</td>
+                  <td className="is-numeric"><Amount value={row.quantity} shape="quantity" /></td>
+                  <td className="is-numeric"><BasisFigure value={row.costBasisPerShare} /></td>
                   {/* A dash, never $0.00, for a holding nothing ever priced —
                       $0.00 would claim the household sold something worthless. */}
                   <td className="is-numeric">
-                    {row.value === null ? "—" : formatMoney(row.value)}
+                    <Amount value={row.value} />
                   </td>
                 </tr>
               ))}

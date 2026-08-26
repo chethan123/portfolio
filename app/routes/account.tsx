@@ -1,5 +1,6 @@
 import { Form, Link, redirect } from "react-router";
 
+import { Amount } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
 import {
   AccountBalanceIcon,
@@ -20,8 +21,8 @@ import {
 import { getAccount } from "~/lib/accounts.server";
 import { lastRecorded, setBalance, type LastRecorded } from "~/lib/balances.server";
 import { uploadReceipt } from "~/lib/uploads.server";
-import { formatMoney } from "~/lib/format";
-import { formatQuantity, holdingNote } from "~/lib/holdings-view";
+import { holdingNote } from "~/lib/holdings-view";
+import { useMasked } from "~/lib/masking";
 import {
   NotFoundError,
   ValidationError,
@@ -308,6 +309,10 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
   const Tile = TILES[total.accountKind];
   const { known, total: counted } = total.coverage;
 
+  // The chart takes the state as a prop rather than asking for itself: its axis
+  // ticks and its accessible label are strings, not components (spec 0007).
+  const masked = useMasked();
+
   // §8.4's rule, applied to one account: a zero and an absence must not look
   // alike. `accountTotal` returns 0.0000 both for an account that holds nothing
   // and for one whose every holding is unpriced, and neither is a valuation —
@@ -406,7 +411,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
                 as a line, from the same series such a query would sum. */}
             {valued ? (
               <>
-                <p className="detail-figure u-data">{formatMoney(total.amount)}</p>
+                <p className="detail-figure u-data">
+                  <Amount value={total.amount} />
+                </p>
                 {known < counted ? (
                   <p className="coverage-note">
                     Based on {known} of {counted} holdings. The rest have never been priced
@@ -476,9 +483,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               // household's net worth before day zero (§7), and attributing it
               // to one account would be inventing that account's history.
               manual={[]}
-              label={`${total.accountName} over the last ${RANGES[range].label}, ending at ${formatMoney(
-                last.amount,
-              )}.`}
+              label={`${total.accountName} over the last ${RANGES[range].label},`}
+              endingAt={last.amount}
+              masked={masked}
             />
           ) : (
             <p className="empty-note">
@@ -552,15 +559,17 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
                         </div>
                       </div>
                     </td>
-                    <td className="is-numeric">{formatQuantity(holding.quantity)}</td>
+                    <td className="is-numeric">
+                      <Amount value={holding.quantity} shape="quantity" />
+                    </td>
                     {/* Null price and null value are the same holding: never
                         quoted. A dash says so; a zero would understate the
                         account by the whole position and look deliberate. */}
                     <td className="is-numeric">
-                      {holding.price === null ? "—" : formatMoney(holding.price)}
+                      <Amount value={holding.price} />
                     </td>
                     <td className="is-numeric">
-                      {holding.value === null ? "—" : formatMoney(holding.value)}
+                      <Amount value={holding.value} />
                     </td>
                   </tr>
                 ))}
@@ -681,7 +690,14 @@ function SetBalance({
         {justRecorded && recorded !== null ? (
           <p className="form-note" role="status">
             Recorded. {accountName} now reads{" "}
-            {valued ? <b className="u-data">{formatMoney(amount)}</b> : "no valuation"} as of{" "}
+            {valued ? (
+              <b className="u-data">
+                <Amount value={amount} />
+              </b>
+            ) : (
+              "no valuation"
+            )}{" "}
+            as of{" "}
             {recorded.asOf}.
           </p>
         ) : null}

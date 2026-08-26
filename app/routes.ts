@@ -45,11 +45,20 @@ export default [
     // domain rows: the capital gains rate the Analysis screen estimates with.
     // `0005_app_setting.sql` argues why it is not an environment variable.
     route("tax", "routes/settings/tax.tsx"),
+    // How the screens look before anyone touches them — today the masking
+    // policy, and §12's theme choice when it lands (spec 0007).
+    route("display", "routes/settings/display.tsx"),
   ]),
 
   // The optional login gate's one page (DESIGN.md §10). It renders only while
   // AUTH_PASSWORD is set; with the gate off it redirects to the overview.
   route("login", "routes/login.tsx"),
+
+  // The masking toggle's server-side writer (spec 0007). No UI: the control is
+  // in the chrome on every page, and this is the target its form posts to so
+  // that it keeps working with JavaScript off. Inside the gate like everything
+  // else — a display preference is not a reason to open a hole in §10.
+  route("masking", "routes/masking.ts"),
 
   // Resource route, no UI. Kept in the router rather than in a server wrapper
   // so it behaves identically in dev and in the container.

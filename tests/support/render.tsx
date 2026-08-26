@@ -16,7 +16,7 @@
  * known message and throws on anything else React has to say.
  */
 import { renderToStaticMarkup } from "react-dom/server";
-import { createRoutesStub } from "react-router";
+import { Outlet, createRoutesStub } from "react-router";
 
 import { Layout } from "../../app/root.tsx";
 
@@ -26,6 +26,14 @@ import type { FirstRunStep } from "~/lib/first-run.server";
 export type RootData = {
   authConfigured: boolean;
   firstRun: FirstRunStep;
+  /**
+   * Whether this browser's amounts are hidden (spec 0007). Optional here and
+   * only here: every test written before masking existed passes root data
+   * without it, and defaulting to *masked* in those would flip assertions those
+   * tests never made. `Layout` itself has no default — the loader always sends
+   * one.
+   */
+  masked?: boolean;
 };
 
 /**
@@ -56,13 +64,27 @@ export function renderRoute<T>(
   Component: React.ComponentType<never>,
   path: string,
   loaderData: T,
+  { masked = false }: { masked?: boolean } = {},
 ): string {
+  // A root route above the page, carrying the one field of root loader data
+  // every amount on every screen reads (spec 0007). Without it `useMasked`
+  // finds no root data and falls back to *masked* — which is the right
+  // fallback in an error boundary and the wrong default for a test asserting
+  // on a figure, so the flag is explicit and defaults to showing them.
   const Stub = createRoutesStub([
-    { id: "page", path, Component: Component as React.ComponentType },
+    {
+      id: "root",
+      path: "/",
+      Component: () => <Outlet />,
+      children: [{ id: "page", path, Component: Component as React.ComponentType }],
+    },
   ]);
 
   return renderToStaticMarkup(
-    <Stub initialEntries={[path]} hydrationData={{ loaderData: { page: loaderData } }} />,
+    <Stub
+      initialEntries={[path]}
+      hydrationData={{ loaderData: { root: { masked }, page: loaderData } }}
+    />,
   );
 }
 
