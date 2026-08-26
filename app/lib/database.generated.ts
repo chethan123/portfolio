@@ -41,6 +41,7 @@ export interface Account {
 export interface AppSetting {
   capital_gains_rate: Generated<Numeric>;
   id: Generated<boolean>;
+  masking_policy: Generated<string>;
 }
 
 export interface Classification {

@@ -34,6 +34,7 @@ import { z } from "zod";
 
 import { getDb, type Database } from "./db.server.ts";
 import { parseInput, percentRate } from "./input.server.ts";
+import { maskingPolicyValues, type MaskingPolicy } from "./masking.ts";
 
 import type { Kysely } from "kysely";
 
@@ -90,4 +91,79 @@ export async function saveCapitalGainsRate(
     .executeTakeFirstOrThrow();
 
   return row.capital_gains_rate;
+}
+
+/**
+ * What the Display form submits: which of the three answers the household gave.
+ *
+ * A `z.enum` over the one list of values rather than a second copy of them, so
+ * that the schema's check constraint, the form's options and this validator
+ * cannot disagree about what a policy is (`masking.ts`).
+ */
+export const maskingPolicyInput = z.object({
+  maskingPolicy: z.enum(maskingPolicyValues, {
+    message: "Choose a masking policy.",
+  }),
+});
+
+export type MaskingPolicyInput = z.infer<typeof maskingPolicyInput>;
+
+/**
+ * What a browser that has not been toggled yet opens in (spec 0007, ADR-0002).
+ *
+ * Read from the same single row as the rate above and with the same
+ * `executeTakeFirstOrThrow`, for the same reason: the migration seeds it, so a
+ * default invented here would make a settings row that had gone missing
+ * indistinguishable from a household that had chosen to open masked.
+ *
+ * This is only half of "is this screen masked" — it is the answer for a browser
+ * with nothing to say. What that browser last did is a cookie, and the two are
+ * combined by `resolveMasked` rather than here: this module reads a row, and
+ * the precedence between a row and a cookie is a rule about a request.
+ */
+export async function readMaskingPolicy(
+  db: Kysely<Database> = getDb(),
+): Promise<MaskingPolicy> {
+  const row = await db
+    .selectFrom("app_setting")
+    .select("masking_policy")
+    .executeTakeFirstOrThrow();
+
+  // The column is `text` with a check constraint, so it arrives typed as a
+  // string. The constraint is what makes this cast true, and `0007` and
+  // `masking.ts` are kept in step by hand — which is the same arrangement
+  // `AccountKind` already has with `account_kind_valid`.
+  return row.masking_policy as MaskingPolicy;
+}
+
+/**
+ * Record a new policy.
+ *
+ * An update rather than an upsert, and of this column alone: the row is seeded
+ * by the migration and shared with the capital gains rate, so a writer that set
+ * the whole row would silently reset a figure the Analysis screen reads.
+ *
+ * Note what this does *not* do. Changing the policy has to clear the browser's
+ * state cookie — otherwise the setting appears to do nothing on the browser that
+ * changed it, and the stale cookie keeps the lifetime the old policy gave it
+ * (ADR-0002). That is a header on a response, so it belongs to the route rather
+ * than here; this module never sees a request.
+ *
+ * @param raw the submitted fields, unvalidated.
+ * @throws {ValidationError} with a message per bad field.
+ * @returns the stored policy, as the column now holds it.
+ */
+export async function saveMaskingPolicy(
+  raw: unknown,
+  db: Kysely<Database> = getDb(),
+): Promise<MaskingPolicy> {
+  const input = parseInput(maskingPolicyInput, raw);
+
+  const row = await db
+    .updateTable("app_setting")
+    .set({ masking_policy: input.maskingPolicy })
+    .returning("masking_policy")
+    .executeTakeFirstOrThrow();
+
+  return row.masking_policy as MaskingPolicy;
 }
