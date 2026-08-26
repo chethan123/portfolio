@@ -1,5 +1,6 @@
 import { Form, redirect } from "react-router";
 
+import { Amount } from "~/components/amount";
 import {
   FORM_ERROR,
   NotFoundError,
@@ -13,7 +14,6 @@ import {
   resolveAll,
   sameRawStrings,
 } from "~/lib/instrument-resolution.server";
-import { formatQuantity } from "~/lib/holdings-view";
 import { parseDraft, requireDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
@@ -197,7 +197,10 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     {nameColumn}: {item.name} ·{" "}
                   </>
                 ) : null}
-                <span className="u-data">{formatQuantity(item.quantity)}</span> units
+                <span className="u-data">
+                  <Amount value={item.quantity} shape="quantity" />
+                </span>{" "}
+                units
               </p>
 
               {fieldError(`kind-${index}`)}

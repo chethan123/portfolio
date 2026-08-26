@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 
+import { Amount, Delta } from "~/components/amount";
 import { Breakdown, plural } from "~/components/breakdown";
-import { Delta, Money } from "~/components/money-cell";
 import { EmptyState } from "~/components/empty-state";
 import {
   allocationByAccountKind,
@@ -12,7 +12,7 @@ import {
   type GainRow,
   type GainGroups,
 } from "~/lib/allocation";
-import { formatMoney, isNegative } from "~/lib/format";
+import { isNegative } from "~/lib/format";
 import { readCapitalGainsRate } from "~/lib/settings.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
@@ -156,14 +156,16 @@ function GainsRow({ row, isTotal = false }: { row: GainRow; isTotal?: boolean })
             other gets a rate nobody set. The netting is explained in words
             under the table instead, which is where a rule belongs. */}
         {!isTotal && row.taxable !== null && row.taxable !== row.unrealized ? (
-          <span className="cell-sub">{formatMoney(row.taxable)} of it in taxable accounts</span>
+          <span className="cell-sub">
+            <Amount value={row.taxable} /> of it in taxable accounts
+          </span>
         ) : null}
       </Label>
       <td className="is-numeric">
         {row.unrealized === null ? "—" : <Delta amount={row.unrealized} />}
       </td>
       <td className="is-numeric">
-        <Money amount={row.tax} />
+        <Amount value={row.tax} />
       </td>
     </tr>
   );

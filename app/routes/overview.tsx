@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 
+import { Amount } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
 import {
   AccountBalanceIcon,
@@ -11,13 +12,8 @@ import {
 } from "~/components/icons";
 import { NetWorthChart } from "~/components/net-worth-chart";
 import { ACCOUNT_KINDS, labelOf } from "~/lib/account-options";
-import {
-  formatMoney,
-  formatPercent,
-  formatSignedMoney,
-  isNegative,
-  toPlotValue,
-} from "~/lib/format";
+import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
+import { useMasked } from "~/lib/masking";
 import {
   accountTotals,
   firstRecordedDate,
@@ -306,7 +302,9 @@ function AccountsPanel({ accounts }: { accounts: AccountRow[] }) {
                   account valued at a second date. The owner takes the slot the
                   mock gives the delta rather than the row inventing one. */}
               <div className="account-figures">
-                <p className="account-amount u-data">{formatMoney(account.amount)}</p>
+                <p className="account-amount u-data">
+                  <Amount value={account.amount} />
+                </p>
                 <span className="account-owner">{account.ownerName}</span>
               </div>
             </Link>
@@ -350,7 +348,9 @@ function AllocationPanel({
             <div className="alloc-row" key={account.accountId}>
               <div className="alloc-label">
                 {account.accountName}
-                <b className="u-data">{formatMoney(account.amount)}</b>
+                <b className="u-data">
+                  <Amount value={account.amount} />
+                </b>
               </div>
               <div className="alloc-track">
                 <div className="alloc-fill" style={{ width, background: colour }} />
@@ -389,6 +389,10 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
   const down = isNegative(change.difference);
   const Arrow = down ? TrendingDownIcon : TrendingUpIcon;
 
+  // The chart takes the state as a prop rather than asking for itself: its axis
+  // ticks and its accessible label are strings, not components (spec 0007).
+  const masked = useMasked();
+
   // Two points make a line; one is a dot. The panel still renders, because the
   // coverage note and the reason the line is missing are both worth saying —
   // what it does not render is an axis or a figure.
@@ -406,14 +410,17 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
         <div>
           <p className="kpi-eyebrow u-label">Total net worth</p>
           <p className="kpi-figure u-data">
-            {formatMoney(change.current)}
+            <Amount value={change.current} />
             {/* Sign, then arrow, then hue — readable with no colour
                 perception at all (§12). */}
             <span className={down ? "delta delta--loss" : "delta delta--gain"}>
               <Arrow />
-              {change.percent === null
-                ? formatSignedMoney(change.difference)
-                : `${formatPercent(change.percent)} / ${formatSignedMoney(change.difference)}`}
+              {/* The ratio is never masked and the amount always is, so the
+                  two are separate nodes rather than one interpolated string
+                  (`CONTEXT.md`, and spec 0007's "ratios are a deliberate
+                  hole"). */}
+              {change.percent === null ? null : `${formatPercent(change.percent)} / `}
+              <Amount value={change.difference} shape="signed" />
             </span>
           </p>
         </div>
@@ -452,9 +459,9 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               id="net-worth"
               computed={computed}
               manual={manual}
-              label={`Total value over the last ${RANGES[range].label}, ending at ${formatMoney(
-                change.current,
-              )}.`}
+              label={`Total value over the last ${RANGES[range].label},`}
+              endingAt={change.current}
+              masked={masked}
             />
           ) : (
             <p className="empty-note">

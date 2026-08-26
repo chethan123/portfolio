@@ -19,14 +19,12 @@
  * the allocation bars are measured against the gross positive total, so a
  * household with a mortgage bigger than its portfolio gets no negative bar.
  */
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { createRoutesStub } from "react-router";
 import { afterAll, describe, expect, it } from "vitest";
 
 import Overview, { loader } from "../../app/routes/overview.tsx";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { renderRoute } from "../support/render.tsx";
 import { args, get } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
@@ -67,15 +65,6 @@ async function seedDayZero(
     holdings: [{ instrument: vti, quantity: "100" }],
   });
 }
-
-/**
- * The props the framework hands the component.
- *
- * Cast for the same reason `support/routes.ts` casts a loader's arguments: the
- * generated `Route.ComponentProps` carries the framework's full shape, and this
- * page reads one field of it.
- */
-const PROPS = (loaderData: Awaited<ReturnType<typeof loader>>) => ({ loaderData }) as never;
 
 describe("the two series on one chart", () => {
   it(
@@ -169,10 +158,10 @@ describe("the allocation bars", () => {
 
       // The one rule in this file that lives in the component rather than the
       // loader, so it is the one that pays for a render.
-      const Stub = createRoutesStub([
-        { id: "overview", path: "/", Component: () => createElement(Overview, PROPS(data)) },
-      ]);
-      const markup = renderToStaticMarkup(createElement(Stub, { initialEntries: ["/"] }));
+      // Through the shared helper, which puts a root route above the page
+      // carrying the masking state every amount reads (spec 0007). Rendered
+      // unmasked, because the figures below are what this test is about.
+      const markup = renderRoute(Overview, "/", data);
 
       // One bar, the whole track wide: the only account that holds anything.
       expect(markup).toContain("width:100.0%");

@@ -12,8 +12,9 @@
  * The table is the screen and the ring is a picture of the table, which is why
  * it is the table that carries every figure and the ring that carries none.
  */
+import { Amount } from "~/components/amount";
 import { formatShare, type AllocationSlice } from "~/lib/allocation";
-import { formatMoney, isNegative, isPositive } from "~/lib/format";
+import { isNegative, isPositive } from "~/lib/format";
 
 /** The ring's geometry, in the 100×100 user space of the `viewBox`. */
 const RADIUS = 44;
@@ -57,7 +58,7 @@ export function categoryColor(rank: number): string {
  * the result is multiplied by a circumference and rounded to a screen
  * coordinate, so an error in the fifteenth significant digit cannot survive to
  * be seen. Every figure a person *reads* comes from `formatShare` and
- * `formatMoney`, which never leave the digits.
+ * `Amount`, which never leave the digits.
  */
 function fraction(share: string): number {
   return Number(share);
@@ -143,7 +144,9 @@ function Donut({ wedges, total }: { wedges: Wedge[]; total: string }) {
 
       <div className="donut-center">
         <span className="u-label">Total</span>
-        <span className="donut-total u-data">{formatMoney(total)}</span>
+        <span className="donut-total u-data">
+          <Amount value={total} />
+        </span>
       </div>
     </div>
   );
@@ -327,7 +330,9 @@ export function Breakdown({
                         {slice.label}
                       </span>
                     </td>
-                    <td className="is-numeric">{formatMoney(slice.amount)}</td>
+                    <td className="is-numeric">
+                      <Amount value={slice.amount} />
+                    </td>
                     <td className="is-numeric">{hasRing ? formatShare(slice.share) : "—"}</td>
                   </tr>
                 ))}
