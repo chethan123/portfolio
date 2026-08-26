@@ -688,7 +688,15 @@ a {
   color: var(--on-surface-variant);
 }
 
+/* `margin: 0` because this is rendered as a `<p>` on Holdings, Analysis and the
+ * income breakdowns and as a `<span>` on Overview and account detail, and there
+ * is no `p` reset in this stylesheet — the reset above covers `body`, `h1`–`h4`
+ * and `a`. So the UA's `margin: 1em 0` applied at 12px and the same panel header
+ * stood 89px tall on one screen and 77px on the next (105 against 81 at 390px,
+ * where the header stacks and the `<p>`'s margin replaces `.panel-header`'s own
+ * 4px gap with 16px). §2 specifies 77: 24px padding around a 28px title. */
 .panel-count {
+  margin: 0;
   font-size: 12px;
   line-height: 16px;
   font-weight: 600;
@@ -1061,6 +1069,60 @@ a {
   min-width: 0;
 }
 
+/*
+ * One column grid for every breakdown, rather than one per table.
+ *
+ * Analysis stacks three of these panels down the page and Income stacks two,
+ * and each drew the same three columns — a label, a money figure, a share —
+ * at whatever width its own longest label happened to want. `table-layout` is
+ * `auto` by default, so "Alex Rivera", "Workplace plan (401k, 403b)" and
+ * "Equity" each sized their own first column and the money column stepped right
+ * and back left as you read down: measured at 1600px its right edge landed at
+ * 1292.2, 1341.8 and 1274.3, a 67.5px spread between panels of identical
+ * structure. The `% of total` column is pinned to the panel edge in all of them,
+ * so the middle column was the only thing moving, which is what makes it read
+ * as a rendering wobble rather than as three tables.
+ *
+ * §13.5 gives the general principle when it explains why `--control-h` is a
+ * token at all: so that things in different columns line up across a dashboard.
+ * A fixed layout is what lets three separate tables share one grid.
+ *
+ * The two numeric columns are sized and the label takes what is left, because
+ * they are the two that cannot be given less than their content: both are
+ * `nowrap` by rule, a money figure broken across lines being unreadable. 34%
+ * holds `−$14,500.00` at 14px/600 tabular down to 320px, and 20% holds a
+ * two-line `% of total` over `−2.1%`. The label wraps instead, which is what a
+ * label can do.
+ */
+.breakdown .data-table {
+  table-layout: fixed;
+}
+
+.breakdown .data-table th:nth-child(2) {
+  width: 34%;
+}
+
+.breakdown .data-table th:nth-child(3) {
+  width: 20%;
+}
+
+/* The headings wrap, for the same reason `.data-table--gains`' do: a fixed grid
+ * hands each heading a width chosen for the figures under it, and `% of total`
+ * and `Annual dividend` are wider than that below about 1100px. Wrapping the
+ * words costs 16px of header height; leaving them `nowrap` costs a table that
+ * scrolls sideways behind its own edge. The figures underneath stay `nowrap`,
+ * which is the point of the exercise — a money figure broken across lines is
+ * unreadable, and a two-line heading over it still says what the column is.
+ *
+ * The second selector is the two headings this is actually about. `.data-table
+ * th.is-numeric` carries the `nowrap` further down this file at the same
+ * specificity as `.breakdown .data-table th`, so naming the class is what
+ * decides it here rather than which rule happens to come last. */
+.breakdown .data-table th,
+.breakdown .data-table th.is-numeric {
+  white-space: normal;
+}
+
 @media (min-width: 768px) {
   .breakdown {
     flex-direction: row;
@@ -1074,12 +1136,63 @@ a {
   }
 }
 
+/*
+ * …and on a phone the cells give back the padding the grid needs, exactly as
+ * the gains table's own rule does below.
+ *
+ * This is the companion the fixed grid does not work without, and the numbers
+ * are the argument for it. A fixed grid divides the canvas it is given; 16px on
+ * both sides of three columns takes 96px of a 356px phone canvas before a
+ * figure is drawn, and the two right-hand columns are the ones that cannot give
+ * any of it back. Without this rule the grid alone paints every share figure
+ * 5.8px past its own cell at 390px, and at 320px it puts every money figure
+ * 23.9px past its cell and all five tables 4px over their canvas. With it,
+ * every overflow and every spill on both screens is 0 at 320 as well as at 390
+ * — including Income's two tables, which scroll sideways by 50px and 28px today
+ * at 390 and which nobody filed.
+ */
+@media (max-width: 767px) {
+  .breakdown .data-table th,
+  .breakdown .data-table td {
+    padding-left: var(--space-sm);
+    padding-right: var(--space-sm);
+  }
+
+  .breakdown .data-table th.is-numeric,
+  .breakdown .data-table td.is-numeric {
+    padding-left: var(--space-xs);
+    padding-right: var(--space-xs);
+  }
+}
+
 /* --- Tables ---------------------------------------------------------------
  * No vertical rules. A hairline between rows, a header a tone up, and every
  * numeric column right-aligned so the digits stack (§13.4).
  */
 
+/*
+ * `position: relative` is not decoration here — it is what keeps the whole
+ * document from scrolling sideways.
+ *
+ * The Holdings actions column heads its column with a `.visually-hidden` span
+ * (the "Correct" label a screen reader needs and nobody else sees), and
+ * `.visually-hidden` is `position: absolute`. Every ancestor between that span
+ * and the root — the `th`, the `table`, this element, `.panel` — was `static`,
+ * so its containing block was the *initial* containing block: it laid out at
+ * the table's unclipped right edge, at the same document x whatever the
+ * viewport, and `overflow-x: auto` here could not clip a box it was not the
+ * containing block for. The span then extended the document's scrollable
+ * overflow to that edge — 1503px on the ungrouped table, 1387–1482px on the
+ * views that drop a column or open the row editor — so every window narrower
+ * than that scrolled the entire canvas, rail and all, and §5 of the holdings
+ * brief promises the opposite: "the page body never scrolls sideways".
+ *
+ * The one declaration gives the span a containing block inside the clip. It is
+ * safe to make this element a containing block because that span is the only
+ * absolutely positioned descendant any `.data-table-scroll` in the app has.
+ */
 .data-table-scroll {
+  position: relative;
   width: 100%;
   overflow-x: auto;
 }
@@ -1135,12 +1248,29 @@ a {
   gap: var(--space-sm);
 }
 
+/*
+ * A caption under a cell's primary line.
+ *
+ * The weight and the numeric variant are set rather than inherited, and both
+ * for the same reason: this class is used inside four different row roles and
+ * every one of them sets type of its own. Left to inherit, one caption class
+ * rendered at three weights on a single grouped table — 400 under a body row,
+ * 600 under a group heading and a subtotal, 700 under the grand total — so
+ * "17 of 18" beneath the total was bold and the identical caption two rows
+ * above it was not. §1.2 of the holdings brief gives the class one weight, 400,
+ * and §13.4 gives every figure `tabular-nums`; the captions that carry a figure
+ * were picking the variant up only when they happened to sit in an
+ * `.is-numeric` cell, which is how "$47,838.57 of it in taxable accounts" on
+ * Analysis ended up the one non-tabular figure in the app.
+ */
 .cell-sub {
   display: block;
   margin-top: 2px;
   font-size: 12px;
   line-height: 16px;
+  font-weight: 400;
   color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
 }
 
 .cell-change {
@@ -1400,12 +1530,33 @@ a.account-row:hover {
 }
 
 /* The ticker badge in a holdings row. A rounded rect rather than the mock's
- * circle: a four-character ticker does not fit a 32px circle at 12px. */
+ * circle: a four-character ticker does not fit a 32px circle at 12px.
+ *
+ * The floor is 60px rather than the 40px both briefs quote, because 40px is a
+ * floor only three-letter tickers ever reach: above it the badge sizes to its
+ * own text and the instrument name beside it starts wherever that lands.
+ * Measured on `/accounts/7`, seven rows put their name at seven different left
+ * edges spanning 18.5px, and across accounts the same column starts at 403px on
+ * one page and 421px on another. The name is the primary text of the widest
+ * column on the screen, and a primary text column that begins in a different
+ * place on every row is not a column.
+ *
+ * 60px is the widest badge a five-character ticker draws here — `VTSNX`
+ * measures exactly 60.0px at 12px/700 with this letter-spacing and 8px of
+ * inline padding, and five characters is the longest a US symbol gets. It is
+ * also the largest floor that costs nothing: at 62px the Asset column takes a
+ * fourth wrapped line on the longest instrument name, and at 64px the Holdings
+ * table stops fitting its panel at 1600px and starts scrolling inside itself.
+ *
+ * It stays a floor rather than becoming a fixed width because no width covers
+ * every symbol — `SWPPX` measures 61.9px and `VMMXX` 66.3px — and a ticker that
+ * exceeds the floor should widen its own badge and rag the column by those few
+ * pixels rather than spill its text over the name beside it. */
 .badge {
   flex: none;
   display: grid;
   place-items: center;
-  min-width: 40px;
+  min-width: 60px;
   height: 32px;
   padding-inline: var(--space-base);
   border-radius: var(--radius);
@@ -2139,12 +2290,29 @@ code {
   color: var(--on-surface);
 }
 
+/*
+ * The column the table is actually sorted by.
+ *
+ * `aria-sort` is already on the header — the markup has carried it since the
+ * table was built — and §5 makes it the whole state: the active column "sets
+ * its label in `--on-surface` rather than `--on-surface-variant`, and shows a
+ * 12px caret". Only the caret was ever drawn, so on a nine-column table the one
+ * sorted heading was byte-identical in colour to the other eight and an 8px
+ * glyph was carrying the entire signal. The rule sits on the `th` rather than on
+ * the link because `.sortable` already takes `color: inherit`, and because §10
+ * is explicit that the state keys off `th[aria-sort]` and not a second class.
+ */
+.data-table th[aria-sort] {
+  color: var(--on-surface);
+}
+
 /* The caret keeps its width whether or not it is drawn, so sorting a column
- * does not shift the heading beside it. */
+ * does not shift the heading beside it. 12px is §5's number; at 10px it drew
+ * 8.3px wide, which is smaller than the 12px label it annotates. */
 .sortable-caret {
   display: inline-block;
   min-width: 0.75em;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .data-table th.is-numeric .sortable {
@@ -2157,6 +2325,21 @@ code {
  * These three `th`s sit in the table body rather than in `thead`, so the
  * uppercase label treatment `.data-table th` applies has to be undone: a
  * person's name is not a column heading and setting it in caps reads as one.
+ *
+ * The bottom hairline is part of that treatment and was the one piece of it
+ * left standing, which cost two different defects. On the grand total it drew a
+ * rule under the label cell and nothing under the figures — 47% of the row on
+ * Analysis, 51% on Holdings — which reads as a rendering fault rather than a
+ * divider. And on a subtotal it collided with the grand total's own top border:
+ * `border-collapse: collapse` resolves a tie between two 1px solid borders in
+ * favour of the topmost cell, so on a grouped table the total's rule painted
+ * `--outline-variant` under the `th` the subtotal sat above and `--outline`
+ * under the figure cells, which have no subtotal border to lose to. One row,
+ * one rule, two colours — and ungrouped, where a plain body row sits above the
+ * `tfoot`, the same rule painted one colour across its full width, so the two
+ * views disagreed about how heavy the total's divider is.
+ *
+ * A group heading does want a bottom border, and re-asserts its own below.
  */
 .data-table .row-group th,
 .data-table .row-subtotal th,
@@ -2168,6 +2351,7 @@ code {
   text-transform: none;
   color: var(--on-surface);
   white-space: normal;
+  border-bottom: 0;
 }
 
 /* `--surface-emphasis`, the same tone as the column headings, because a group
