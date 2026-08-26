@@ -638,6 +638,7 @@ mutation. Everything else that writes lives behind Settings.
 | Instruments | Edit symbol, price source, classification. View aliases. **Set manual prices for CITs** |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
+| Display | How the screens look before anyone touches them: the masking policy (spec 0007), and the theme choice when §12's toggle lands |
 
 **Tax is the first tab that is a preference rather than a set of domain rows.** Every other tab
 creates or edits something the portfolio is made of; this one holds a single number that describes
@@ -647,6 +648,19 @@ the database is, which timezone a close is stamped in — and a bracket is not a
 is the household's own figure, it moves when their income or their state does, and the person who
 wants it changed is the one reading the number it produced rather than the one with a shell on the
 container. Behind a redeploy it would be stale in exactly the case the panel was built for.
+
+**Display is the second preference tab, and it holds a policy rather than a value.** The masking
+policy is the household's standing answer to what a browser nobody has toggled yet opens in — masked,
+unmasked, or as that browser last left it. It sits beside the capital gains rate for the same reason
+that one is a row: it describes the household rather than the deployment. What it does *not* hold is
+the masking control itself. Whether a given browser is masked right now is a fact about that browser
+and lives in a cookie that browser owns, because a phone in a queue and a desktop in a locked room
+want opposite answers; and the control that flips it sits in the chrome on every screen, not here.
+That placement is load-bearing rather than convenient: the policy is seeded to *masked*, so a first
+run is a page of dots, and dots whose only cure is three clicks into a configuration area is an app
+that looks broken. `docs/adr/0002-masking-is-a-display-state.md` records the split and the
+deliberately weak guarantee under it — masking defends against being read over the shoulder, and the
+login gate (§10) remains the only thing that keeps anyone out.
 
 **The Instruments tab carries real weight**, which is why it isn't just inline editing on a table
 row. It's the only place that answers "which manual-priced instruments have gone stale?" — a
@@ -855,6 +869,17 @@ correctly the first time. No flash, no blocking script, nothing to work around.
 In `system` mode the cookie holds `system`, the server emits no explicit theme attribute, and
 `prefers-color-scheme` decides. A client-side listener follows OS changes live.
 
+**Masking (spec 0007) reaches the same conclusion by the same argument, and the two are now a
+pair.** Whether a browser's amounts are hidden is resolved on the server from a cookie for exactly
+the reason the theme is: with the state in `localStorage` the page would paint the amounts and then
+hide them, which is the one failure that feature cannot have. Two differences are worth naming.
+Masking's cookie is not `HttpOnly`, because the toggle's own script writes it — the flip has to work
+at the speed of a hand rather than of a network, and it carries a display preference rather than a
+credential. And its default lives in a database row rather than in the cookie's absence, because a
+household's answer to "what should a new browser open in?" is a household fact, while a theme's is
+the OS's. When the theme toggle is built it joins the masking policy on Settings → Display (§8.4),
+which is why that tab is named for the screens rather than for either preference.
+
 **Tokens, defined once:**
 
 ```css
@@ -882,6 +907,9 @@ inverted background.
 **Never encode gain or loss in colour alone.** Red/green is the most common axis of colour-vision
 deficiency, and this app uses that pair for its single most important signal. Always pair it with
 the sign, and preferably a direction arrow, so the number is readable without perceiving hue at all.
+This is why a masked gain keeps its sign and its arrow and loses only its size (spec 0007): dropping
+them along with the digits would leave the hue as the only channel saying which way the figure
+points, which is precisely what this rule forbids.
 
 **Mobile chrome follows the theme.** `<meta name="theme-color">` drives the browser chrome and the
 installed PWA's status bar. Since the manifest's `theme_color` is static, supply media-scoped meta
