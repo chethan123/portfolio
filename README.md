@@ -266,6 +266,29 @@ Nothing here deletes anything. An account is *closed*, which stops it counting t
 worth while it keeps counting on every date before it closed; a person who still owns accounts
 cannot be removed, and the refusal names them.
 
+### Masking — reading the portfolio in public
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-masked-dark.png">
+  <img alt="The overview with every amount replaced by a run of dots: the net worth headline, the chart's axis figures and every account balance are hidden, while the trend line, the allocation bars, the account names and the dates are unchanged" src="docs/screenshots/overview-masked-light.png">
+</picture>
+
+One click in the sidebar replaces every amount on every screen with a run of dots, and another
+brings them back. It is for opening the app on a train, in a café, or in front of anyone who does
+not need to know what the household is worth.
+
+What goes is every **amount** — values, balances, cost bases, gains, share quantities. What stays is
+everything that says what the portfolio *is*: names, symbols, dates, the trend line's shape, the
+allocation ring's proportions and every percentage. A masked screen still answers "how am I split"
+and "what do I hold"; it just stops answering "how much".
+
+The click is instant and needs no network, because the moment it is needed is the moment there may
+not be one. Settings → Display chooses what a browser opens in — masked every time, showing every
+time, or however that browser was last left — and a browser nobody has answered for opens masked.
+
+**It is not a password.** The amounts are still in the page; masking defends against being read over
+someone's shoulder, and the login gate is the only thing that keeps anyone out.
+
 ### On a phone
 
 <picture>
