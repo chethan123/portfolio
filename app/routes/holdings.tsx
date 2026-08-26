@@ -600,26 +600,39 @@ function Filters({
  * The group-by strip — anchors, not buttons, exactly as the range control on
  * Overview and Account detail is. `aria-current` carries the active state and
  * every chip preserves whatever filters and sort are already in force.
+ *
+ * The caption is what brief §4.1 opens with, and it doubles as the strip's
+ * accessible name rather than sitting beside a second one. The strip stands on
+ * the canvas between two panels with no heading over it, so a screen reader had
+ * "Group holdings by" and everyone else had eight chips and nothing on screen
+ * saying what they group — the leading chip reading "No grouping" was the only
+ * hint. Pointing `aria-labelledby` at the visible words is also what stops the
+ * two names drifting apart the next time one of them is edited.
  */
 function GroupBy({ query }: { query: HoldingsQuery }) {
   const chip = (id: DimensionId | null) => toSearch({ ...query, group: id });
 
   return (
-    <nav className="segmented" aria-label="Group holdings by">
-      <Link to={chip(null) === "" ? "." : chip(null)} aria-current={query.group === null ? "true" : undefined} preventScrollReset>
-        No grouping
-      </Link>
-      {DIMENSIONS.map((dimension) => (
-        <Link
-          key={dimension.id}
-          to={chip(dimension.id)}
-          aria-current={query.group === dimension.id ? "true" : undefined}
-          preventScrollReset
-        >
-          {dimension.label}
+    <div className="segmented-group">
+      <span className="u-label" id="group-by">
+        Group by
+      </span>
+      <nav className="segmented" aria-labelledby="group-by">
+        <Link to={chip(null) === "" ? "." : chip(null)} aria-current={query.group === null ? "true" : undefined} preventScrollReset>
+          No grouping
         </Link>
-      ))}
-    </nav>
+        {DIMENSIONS.map((dimension) => (
+          <Link
+            key={dimension.id}
+            to={chip(dimension.id)}
+            aria-current={query.group === dimension.id ? "true" : undefined}
+            preventScrollReset
+          >
+            {dimension.label}
+          </Link>
+        ))}
+      </nav>
+    </div>
   );
 }
 
