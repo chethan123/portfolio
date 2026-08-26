@@ -222,30 +222,59 @@ function authorStatement(positions: Position[], accountNumber: string): string {
 }
 
 /**
- * Undo the one write the walk makes.
+ * Undo the two writes the walk makes.
  *
- * Resolving an instrument is the upload flow's only early write — it lands
- * before the statement is recorded, precisely so that the alias survives an
- * abandoned draft. That is right for the application and wrong for a capture
- * run: the first walk teaches the household what `SCHD` is, and every later
- * walk then skips the step the screenshot is of. Nothing references the row,
- * because the walk never commits a statement, so removing it puts the database
- * back where the shot needs it.
+ * Both are writes the application is right to make and a capture run is wrong
+ * to keep, for the same reason: each teaches the household something, and a
+ * household that has already been taught is not the one these shots are of.
+ *
+ * **The resolved instrument.** Resolving is the upload flow's only early write
+ * — it lands before the statement is recorded, precisely so that the alias
+ * survives an abandoned draft. The first walk teaches the household what `SCHD`
+ * is, and every later walk then skips the step the screenshot is of.
+ *
+ * **The saved column mapping.** "Save mapping and continue" remembers the
+ * mapping against the institution and the file's header, which is the feature
+ * the flow exists to have. It is also what makes the *blank* columns shot
+ * impossible to take twice: the second run arrives with all six selects
+ * prefilled and a banner explaining that a previous statement was uploaded, and
+ * the guide's "before anything is mapped" caption then sits under a picture of
+ * a fully mapped form. Deleted by id above a watermark taken before the walk,
+ * rather than by truncating the table, so a mapping the household legitimately
+ * has is never collateral.
+ *
+ * Neither row is referenced by anything — the walk never commits a statement —
+ * so removing both puts the database back where the shots need it.
  */
-async function forgetFirstSighting(pool: Pool): Promise<void> {
+async function mappingWatermark(pool: Pool): Promise<string> {
+  const { rows } = await pool.query<{ max: string }>(
+    `select coalesce(max(id), 0)::text as max from column_mapping`,
+  );
+  return rows[0]?.max ?? "0";
+}
+
+async function forgetWalkWrites(pool: Pool, watermark: string): Promise<void> {
   await pool.query(`delete from instrument where symbol = $1`, [FIRST_SIGHTING]);
+  await pool.query(`delete from column_mapping where id > $1`, [watermark]);
 }
 
 /**
  * Walk the four-step upload as far as a given step and shoot it. Stops short of
  * recording: see the header.
+ *
+ * The walk cleans up after itself rather than leaving that to the caller: its
+ * two writes are invisible from the call site, and a caller that forgets one
+ * does not fail — it quietly photographs the wrong screen on the next run.
  */
 async function walkUpload(
   page: Page,
+  pool: Pool,
   csv: string,
   accountId: number,
   shots: { columnsBlank?: string; columnsMapped?: string; instruments?: string; review?: string },
 ): Promise<void> {
+  const watermark = await mappingWatermark(pool);
+
   await visit(page, "/upload");
   await page.selectOption('select[name="accountId"]', String(accountId));
   await page.setInputFiles('input[type="file"]', {
@@ -291,6 +320,8 @@ async function walkUpload(
   }
 
   if (shots.review) await shoot(page, shots.review);
+
+  await forgetWalkWrites(pool, watermark);
 }
 
 /** The empty-instance shots, against a migrated but unseeded database. */
@@ -388,11 +419,10 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await visit(page, "/upload");
     await shoot(page, `docs/screenshots/upload-${theme}.png`);
 
-    await walkUpload(page, csv, brokerage, {
+    await walkUpload(page, pool, csv, brokerage, {
       columnsBlank: `docs/screenshots/upload-mapping-${theme}.png`,
       review: `docs/screenshots/upload-review-${theme}.png`,
     });
-    await forgetFirstSighting(pool);
     await page.close();
 
     const phone = await open(browser, theme, true);
@@ -448,13 +478,12 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
 
   await visit(page, "/upload");
   await shoot(page, "docs/guide/images/upload-1-account-and-file.png");
-  await walkUpload(page, csv, brokerage, {
+  await walkUpload(page, pool, csv, brokerage, {
     columnsBlank: "docs/guide/images/upload-2-columns-blank.png",
     columnsMapped: "docs/guide/images/upload-2-columns-mapped.png",
     instruments: "docs/guide/images/upload-3-instruments.png",
     review: "docs/guide/images/upload-4-review.png",
   });
-  await forgetFirstSighting(pool);
   await page.close();
 
   const phone = await open(browser, "light", true);

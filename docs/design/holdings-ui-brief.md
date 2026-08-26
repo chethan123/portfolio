@@ -180,7 +180,7 @@ Draw these exactly; they already exist in code under these names.
 | `.panel-title` | title-md, optional 20px leading icon in `--on-surface-variant` |
 | `.panel-count` | Right side of a panel header: label-md, tabular, e.g. "42 HOLDINGS · 6 ACCOUNTS" |
 | `.panel-body` | 24px padding (16px below 768px) |
-| `.panel-form` / `.record-form` | Flex wrap, `align-items: flex-end`, 16px gap, 24px padding — a row of labelled fields ending in a button. **`.panel-body + .panel-form` drops the form's top padding** so prose and the form it captions close up |
+| `.panel-form` / `.record-form` | Flex wrap, 16px gap, 24px padding — a row of labelled fields ending in a button. `.panel-form` aligns to `flex-start`, so the row lines up on its **controls**: above a control is a fixed 24px (`--field-caption`, a caption line plus `label`'s gap) and below it is annotation — a `.field-note`, a `.field-error` — which must not move it. It rests on captions being one line. The row's un-captioned members (the button, a `.form-note` standing where a field would) drop by `--field-caption` to reach that line; a `fieldset`, a `label.choice` and a `.form-error` take the whole line. Below 768px: 16px padding (`.record-form` too), one field per line, every control full width, and the drop goes to 0 for the button and the note alike. `.record-form` sets no alignment — it is only ever worn with `.record`, which centres. **`.panel-body + .panel-form` drops the form's top padding** so prose and the form it captions close up |
 | `.data-table` | Full width, `border-collapse: collapse`, no vertical rules. `th`: label-md on `--surface-container-high`, bottom hairline, nowrap. `td`: 16px padding, top hairline (none on the first row of a `tbody`), middle-aligned. Row hover `--panel-hover` |
 | `.data-table-scroll` | `width: 100%; overflow-x: auto` — the wrapper that keeps a wide table from widening the page |
 | `.is-numeric` | On `th` **and** `td`: right-aligned, tabular, nowrap; on a `td` also weight 600. Both get it or the column does not line up |
@@ -191,7 +191,7 @@ Draw these exactly; they already exist in code under these names.
 | `.badge` | Ticker tile: min-width 40px, height 32px, 8px inline padding, **4px radius — not a circle**, `--surface-container-high` ground, `--primary` text, 12px / 700 |
 | `.delta` | Pill: 4px/12px padding, full radius, 12px/600, 0.03em, 14px arrow. `--gain` / `--loss` text on `--gain-surface` / `--loss-surface`. **`--bare` drops the pill** for in-table use; `--flat` is `--on-surface-variant` |
 | `.button` | 40px tall, 0/16px padding, 8px radius, `--primary-container` fill, `--on-primary-container` text, 14px/600, 18px icon, 8px gap |
-| button modifiers | `--quiet`: transparent, 1px `--outline-variant`, `--primary` text. `--text`: no box, no height, `--primary`, underlines on hover. `--danger`: 1px `--loss`. `--block`: full width |
+| button modifiers | `--quiet`: transparent, 1px `--outline-variant`, `--primary` text. `--text`: no box, `--primary`, underlines on hover — it keeps `.button`'s 40px so a text action stands on the line of the button beside it. `--danger`: 1px `--loss`. `--block`: full width |
 | `select` / `input` | 40px tall, 12px inline padding, 8px radius, `--panel` ground, **1px `--outline`**, 14px text. Focus: 2px `--primary` outline and border |
 | `.cell-input` | The same `input`, inside a table cell: full width of its column, `min-width: 6rem`, **32px tall** rather than `--control-h`, right-aligned, `tabular-nums`. Border, radius and focus ring inherited unchanged |
 | `label` | **`display: flex; flex-direction: column; gap: 4px`**, 14px — the caption sits 4px above its control, and the whole pair is one hit target |
@@ -217,8 +217,10 @@ all seven optional and all seven combinable.
 **Shape.** A `.panel` whose only child is `<form method="get" class="filter-bar">`. **No panel
 header** — seven labelled controls announce themselves, and a "Filters" title above a row of things
 plainly labelled *Owner*, *Account*, *Brokerage* is a word explaining a word. The form follows
-`.panel-form`'s rule set exactly: flex, wrap, `align-items: flex-end`, 16px gap, 24px padding, every
-control 40px tall so that a wrapped second line still aligns with the first.
+`.panel-form`'s rule set closely — flex, wrap, 16px gap, 24px padding, every
+control 40px tall so that a wrapped second line still aligns with the first. `.filter-bar` keeps its
+own `align-items: flex-end`, which it can because no filter carries a note under it — the bottom of
+a filter *is* the bottom of its control.
 
 Each control is a `<select>` **nested inside its `<label>`**, not paired by `for`/`id` — the house
 convention, and the reason the caption sits exactly 4px above its box with no extra rule. Draw the
@@ -1007,7 +1009,7 @@ built routes. Stitch output that renames them creates a duplicate design system:
 
 | New thing | Suggested name | Note |
 |---|---|---|
-| The filter form | `.filter-bar` | Same rule set as `.panel-form` (flex, wrap, `align-items: flex-end`, 16px gap, 24px padding). Consider making it a modifier on `.panel-form` instead — but only if the wrap behaviour genuinely matches under seven controls |
+| The filter form | `.filter-bar` | Was the same rule set as `.panel-form`; the two have since diverged, and the divergence is the answer to the question this row asked. `.filter-bar` keeps `align-items: flex-end`, which it can because no filter carries a note under it, and below 768px it goes two filters to a row at `calc(50% - 16px)` while `.panel-form` goes one field to a row at 100% and drops its padding to 16px. Folding one into the other would now cost more than it saves |
 | The Apply / Clear pair | `.filter-actions` | Inline-flex, 12px gap, `align-items: center`, `margin-left: auto` at ≥768px so the pair sits at the row's end and wraps as a unit |
 | Sortable column header | `.sortable` | The `<a>` inside a `th`: inherits the `th`'s type, `text-decoration: none`, `color: inherit`, 4px gap to a 12px caret in `currentColor`. Active state keys off `th[aria-sort]`, not a second class |
 | Group header row | `.row-group` | Single `th[scope="rowgroup"][colspan]`, `--surface-container-high` ground, body-sm/600, count in `.cell-sub`. **No hover** — it is not a row you can act on |

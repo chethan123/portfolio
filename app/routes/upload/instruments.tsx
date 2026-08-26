@@ -216,7 +216,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                 This is an instrument already listed
               </label>
 
-              <div className="record-form">
+              <div className="panel-form">
                 <div>
                   <label htmlFor={`instrumentId-${index}`}>
                     Instrument
@@ -250,7 +250,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                 This is new
               </label>
 
-              <div className="record-form">
+              <div className="panel-form">
                 <div>
                   <label htmlFor={`symbol-${index}`}>
                     Symbol

@@ -138,7 +138,7 @@ Draw these exactly; they already exist in code under these names.
 | `.panel-title` | title-md, optional 20px leading icon in `--on-surface-variant` |
 | `.panel-count` | Right side of a panel header: label-md, tabular, e.g. "12 INSTRUMENTS" |
 | `.panel-body` | 24px padding (16px below 768px) |
-| `.panel-form` / `.record-form` | Flex wrap, `align-items: flex-end`, 16px gap, 24px padding — a row of labelled fields ending in a button |
+| `.panel-form` / `.record-form` | Flex wrap, 16px gap, 24px padding — a row of labelled fields ending in a button. `.panel-form` aligns to `flex-start` so the row lines up on its controls rather than on the annotation under them; `.record-form` sets no alignment and takes `.record`'s `center`. See the ingest brief §2 for the full contract |
 | `.data-table` | Full width, no vertical rules. `th`: label-md on `--surface-container-high`, bottom hairline, nowrap. `td`: 16px padding, top hairline, middle-aligned. Row hover `--panel-hover`. Wrapped in `.data-table-scroll` for horizontal overflow |
 | `.is-numeric` | On a `th`/`td`: right-aligned, tabular, nowrap; on a `td` also weight 600 |
 | `.cell-stack` | Row inside a cell: 12px gap, centred — badge + text block |
