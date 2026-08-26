@@ -217,3 +217,32 @@ export function EditIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/**
+ * Masking, off — the state the screen is in, drawn as the eye that can see.
+ *
+ * Beside a text label like every other icon here, never instead of one: the
+ * control it sits in is labelled with the action it will perform, and story 5
+ * is explicit that a reader who has to infer the state from a glyph is one
+ * click away from revealing their balances.
+ */
+export function VisibleIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </Icon>
+  );
+}
+
+/** Masking, on. The same eye, struck through. */
+export function HiddenIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 6.1A9.9 9.9 0 0 1 12 5.5c6.5 0 10 6.5 10 6.5a17 17 0 0 1-3.2 4" />
+      <path d="M6.4 8A17 17 0 0 0 2 12s3.5 6.5 10 6.5a10 10 0 0 0 4-.8" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </Icon>
+  );
+}

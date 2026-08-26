@@ -21,10 +21,13 @@ import {
   SettingsIcon,
   UploadIcon,
 } from "~/components/icons";
+import { MaskingToggle } from "~/components/masking-toggle";
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { authGate } from "~/lib/auth.server";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
+import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
 import { startPricePoller } from "~/lib/price-poller.server";
+import { readMaskingPolicy } from "~/lib/settings.server";
 
 import type { Route } from "./+types/root";
 
@@ -49,15 +52,28 @@ export const middleware: Route.MiddlewareFunction[] = [
 
 /**
  * What the shell around every page needs: whether the instance is password
- * protected, and whether it has been set up yet.
+ * protected, whether it has been set up yet, and whether this browser is
+ * masked.
  *
  * The first-run read is deliberately failure-tolerant. It is a hint, not data —
  * so a database that is down produces a page without a prompt rather than an
  * error page, and in particular leaves the login page working when the database
  * is unreachable. `/healthz` is what reports the database being down, and it
  * reports it without needing credentials.
+ *
+ * **Masking is resolved here, on the server, for the reason §12 gives for the
+ * theme.** The first paint has to be correct: a page that drew the amounts and
+ * then hid them is the one failure this feature cannot have, and it is exactly
+ * what reading the state from `localStorage` after hydration would produce.
+ * Resolving it in the loader means the markup is right before it leaves the
+ * server (story 30).
+ *
+ * The policy read is failure-tolerant for the same reason the first-run read is,
+ * and it fails to *masked*. A database that is down would otherwise take the
+ * login page with it; and of the two ways to be wrong while it is down, showing
+ * a page of dots is the one that cannot expose anything.
  */
-export async function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
   // The quote refresh loop (§6.2). Started from here because the application is
   // served by `react-router-serve` over the framework's build, so there is no
   // server entry file to hook — and root's loader is the one server-side path
@@ -74,7 +90,20 @@ export async function loader() {
     console.error("First-run check failed; continuing without the prompt:", error);
   }
 
-  return { authConfigured: authGate().enabled, firstRun };
+  let masked = true;
+  // Published alongside the answer because the toggle's own script needs it:
+  // the cookie's lifetime is the policy's, and the client writer has to produce
+  // a byte-identical cookie to the one the action would have written.
+  let maskingPolicy: MaskingPolicy = "masked";
+
+  try {
+    maskingPolicy = await readMaskingPolicy();
+    masked = resolveMasked(maskingPolicy, readMaskingCookie(request));
+  } catch (error) {
+    console.error("Masking policy read failed; masking this render:", error);
+  }
+
+  return { authConfigured: authGate().enabled, firstRun, masked, maskingPolicy };
 }
 
 /**
@@ -170,6 +199,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <ul className="app-nav app-nav--footer">
               <NavItems items={FOOTER_NAVIGATION} />
             </ul>
+            {/* In the rail's foot beside Settings rather than in its nav list:
+                it is a control, not a destination, and a `<li>` among the links
+                would announce it as one. */}
+            <MaskingToggle className="app-rail-masking" />
+
             <Link className="button app-rail-action" to="/upload">
               <UploadIcon />
               Upload statement
@@ -181,10 +215,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
              * the one action the rail's foot would have held. */}
             <header className="app-topbar">
               <Brand />
-              <Link className="button" to="/upload">
-                <UploadIcon />
-                Upload
-              </Link>
+              <div className="app-topbar-actions">
+                <MaskingToggle />
+                <Link className="button" to="/upload">
+                  <UploadIcon />
+                  Upload
+                </Link>
+              </div>
             </header>
 
             {rootData?.authConfigured === false ? <OpenInstanceBanner /> : null}

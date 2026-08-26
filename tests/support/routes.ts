@@ -17,13 +17,31 @@
  * argument reads the seeded rows and rolls back with everything else.
  */
 
-/** A GET, with search params if the route reads any. */
-export function get(path: string): Request {
-  return new Request(`http://portfolio.local${path}`);
+/**
+ * The `Cookie` header a browser would send, or nothing.
+ *
+ * Optional because almost no route reads one. The masking work (spec 0007) is
+ * the exception: whether a screen is masked is resolved from a cookie on the
+ * way in, so a test that cannot send one cannot drive the feature at all.
+ * Taking a bare value keeps the call sites reading as the question they are
+ * asking — `get("/", MASKED)` — rather than as header construction.
+ */
+function withCookie(request: Request, cookie?: string): Request {
+  if (cookie !== undefined) request.headers.set("Cookie", cookie);
+  return request;
+}
+
+/** A GET, with search params if the route reads any, and a cookie if it reads one. */
+export function get(path: string, cookie?: string): Request {
+  return withCookie(new Request(`http://portfolio.local${path}`), cookie);
 }
 
 /** A POST of form fields, encoded as a browser encodes them. */
-export function post(path: string, fields: Record<string, string | string[]>): Request {
+export function post(
+  path: string,
+  fields: Record<string, string | string[]>,
+  cookie?: string,
+): Request {
   const body = new FormData();
 
   for (const [name, value] of Object.entries(fields)) {
@@ -31,7 +49,7 @@ export function post(path: string, fields: Record<string, string | string[]>): R
     else body.set(name, value);
   }
 
-  return new Request(`http://portfolio.local${path}`, { method: "POST", body });
+  return withCookie(new Request(`http://portfolio.local${path}`, { method: "POST", body }), cookie);
 }
 
 /**
