@@ -606,9 +606,20 @@ a {
     gap: var(--space-sm);
   }
 
+  /* headline-sm entire, weight included.
+   *
+   * These declarations moved the size, the line height and the tracking and
+   * left `font-weight: 700` standing from the display-lg rule above, so a phone
+   * drew the title at 24/32/**700** — display-lg's weight at headline-sm's
+   * size, which is a step of neither ramp. §13.4 gives headline-sm weight 600,
+   * and the holdings brief §1.2 names this owner on the same line as the step
+   * ("`.page-title` below 768px"). A ramp step is a triple of size, weight and
+   * tracking; taking two thirds of one is how a component ends up between
+   * steps rather than on one. */
   .page-title {
     font-size: 24px;
     line-height: 32px;
+    font-weight: 600;
     letter-spacing: 0;
   }
 
@@ -739,6 +750,18 @@ a {
   margin: 0 0 var(--space-xs);
 }
 
+/* The closing half of the eyebrow's 4px. `.coverage-note` is `margin: 0`
+ * everywhere it is used, and everywhere else something around it opens the
+ * space: the account detail's `.detail-total` is a flex column with a
+ * `--space-xs` gap, and the breakdown panels and Overview's allocation list put
+ * it in a padded block of its own. Income's headline is a plain `div`, so the
+ * note landed flush against the figure — 4px above the figure, 0 below it, a
+ * block spaced on one side only. Written here rather than on the class so the
+ * places that already space it do not get 4px twice. */
+.kpi .coverage-note {
+  margin-top: var(--space-xs);
+}
+
 .kpi-figure {
   display: flex;
   align-items: baseline;
@@ -753,10 +776,24 @@ a {
   color: var(--on-surface);
 }
 
+/* On a phone the headline steps down to headline-lg — the whole step.
+ *
+ * It was 36px/44px, which is not a row of §13.4's ramp and not a line height
+ * the 4px grid pairs with any size in it: a figure invented between display-lg
+ * and headline-lg because 48px does not fit a 390px canvas. `.page-title` has
+ * the right answer to the same problem one screen up — it steps to a real step
+ * — so this takes headline-lg's weight and tracking along with its size, for
+ * the reason given there: two thirds of a step is between steps.
+ *
+ * The account detail's figure takes the same step in its own block below, so
+ * that the one role — the big money figure at the top of a screen — is one
+ * size on a phone rather than two. */
 @media (max-width: 767px) {
   .kpi-figure {
-    font-size: 36px;
-    line-height: 44px;
+    font-size: 32px;
+    line-height: 40px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
 }
 
@@ -1012,6 +1049,14 @@ a {
   transition: opacity 150ms;
 }
 
+/* The gap is `--space-xs` because a caption over a figure is the one job §13.5
+ * gives that token, and this is that pairing: `.u-label` "TOTAL" over
+ * `.donut-total`. It was 2px, which is off the 4px grid and half what the
+ * identical pairing gets on Overview, where `.kpi-eyebrow` sits 4px above
+ * `.kpi-figure`. Two panels drawing the same two elements at two gaps.
+ *
+ * `.cell-sub`'s 2px, the other sub-scale gap in this file, stays: the holdings
+ * brief §2 asks for that one by name. This one nothing asked for. */
 .donut-center {
   position: absolute;
   inset: 0;
@@ -1019,7 +1064,7 @@ a {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: var(--space-xs);
   pointer-events: none;
   text-align: center;
 }
@@ -1490,10 +1535,18 @@ a.account-row:hover {
   gap: var(--space-sm);
 }
 
+/* display-lg, and now its line height too.
+ *
+ * Size, weight and tracking were the step's already; the line height was 48px
+ * against the ramp's 56px. On a 48px Inter face that makes the half-leading
+ * *negative*, so the account's total sat about 10px tighter under "TOTAL VALUE"
+ * than `/income`'s headline — the same role, the same 4px `--space-xs` gap
+ * above it, two different amounts of air. `.kpi-figure` had the step right;
+ * this is the same step, written the same way. */
 .detail-figure {
   margin: 0;
   font-size: 48px;
-  line-height: 48px;
+  line-height: 56px;
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
@@ -1523,9 +1576,17 @@ a.account-row:hover {
     letter-spacing: 0;
   }
 
+  /* The same headline-lg step `.kpi-figure` takes above, and for the second
+   * half of the same finding: this was 36px/**40px** while `.kpi-figure` was
+   * 36px/**44px**, so one role — the screen's own money figure — was drawn at
+   * two line heights on a phone and neither of them was in the ramp. Now both
+   * are 32/40/600 at −0.01em, and the account total and the net-worth headline
+   * are the same size again. */
   .detail-figure {
-    font-size: 36px;
+    font-size: 32px;
     line-height: 40px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
 }
 
@@ -1663,6 +1724,24 @@ textarea {
 textarea {
   height: auto;
   padding: var(--space-base) var(--space-sm);
+}
+
+/* A box that a figure is typed into is a figure (§13.4: "**Every figure sets
+ * `font-variant-numeric: tabular-nums`.** … it is not optional").
+ *
+ * `inputmode="decimal"` is already how this application marks the boxes that
+ * take one — the balance, the amount owed, the capital gains rate, and the two
+ * in the holdings editor — so it is the selector rather than a new class or an
+ * id. `.cell-input` sets the same property for itself further down and keeps
+ * doing so: there it is half of a pair with `text-align: right`, and the reason
+ * given is the column it sits in rather than the digits alone.
+ *
+ * `#set-balance-amount` was the one money box in the application computing
+ * `normal` here — every displayed figure already had it and both editor boxes
+ * did — so the balance was the only figure in the app that changed width under
+ * the hand typing it. */
+input[inputmode="decimal"] {
+  font-variant-numeric: tabular-nums;
 }
 
 input:focus-visible,
@@ -1908,6 +1987,27 @@ code {
   color: var(--on-surface-variant);
 }
 
+/* The two of those four that are prose get a measure, like every other prose
+ * class here does.
+ *
+ * They were the only ones without one: `.empty-state-detail` and `.empty-note`
+ * cap at 52ch and `.panel-statement` at 60ch, while these ran as far as their
+ * container allowed — `/income`'s coverage note reached 1025.7px at 1600 and a
+ * `.form-note` on `/accounts/12` reached 1166px, one unbroken line of 12px type
+ * either way. On Income's first panel that put the 14px `.panel-statement`
+ * wrapping at 530px beside a 12px note that would run 765px: the smaller type
+ * with the wider measure, which is the wrong way round twice over.
+ *
+ * 60ch is `.panel-statement`'s number, and at 12px it resolves narrower in
+ * pixels than the same count does at 14px — which is the point. Not on
+ * `.field-note`: a note under a control sizes that control's flex item, so its
+ * measure belongs with the forms work rather than here. Not on `.record-note`
+ * either — it is a count beside a box, not a sentence. */
+.coverage-note,
+.form-note {
+  max-width: 60ch;
+}
+
 .field-error,
 .form-error,
 .login-error {
@@ -1971,9 +2071,56 @@ code {
   color: var(--primary);
 }
 
+/*
+ * The Settings index: four sections, each a name over the sentence describing
+ * it.
+ *
+ * It was a browser `<dl>` with a colour on it and nothing else, which made it
+ * the one panel in the application drawn by the UA stylesheet rather than by
+ * this one. Three consequences, all measured at 1600: every `dd` carried the
+ * UA's `margin-inline-start: 40px` — the only indented prose anywhere here, and
+ * a constant that lands near `--space-xl` by coincidence rather than by
+ * decision; there was **0px** between the four pairs, so eight elements ran as
+ * one unbroken 160px column of identical text; and `dt` and `dd` were both
+ * 14px/400 in `--on-surface-variant`, so a section's name was set exactly like
+ * the sentence about it and the one `dt` with no link in it — "Classifications,
+ * Instruments and History" — was indistinguishable from a description.
+ *
+ * So: the term takes body-sm at 600 in `--on-surface` and the description stays
+ * body-sm in `--on-surface-variant`, at `.panel-statement`'s 60ch measure. That
+ * is `.detail-meta`'s idiom one size down — "label and value differ by weight
+ * *and* colour", which is the note above that rule and the reason its pairs
+ * stay legible when they wrap. The three linked terms keep `--primary` from the
+ * `a` rule, so which of the four is not yet a destination is visible without
+ * hovering.
+ *
+ * Spacing is margins rather than a flex gap because the two gaps here differ:
+ * a term belongs to the description under it (`--space-xs`, the caption-to-
+ * figure step) and each pair is separated from the next by `--space-lg`. One
+ * `gap` cannot say both, and saying it with two nested containers would be more
+ * machinery than four pairs of text need.
+ */
 .settings-summary {
   margin: 0;
   color: var(--on-surface-variant);
+}
+
+.settings-summary dt {
+  margin-top: var(--space-lg);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.settings-summary dt:first-child {
+  margin-top: 0;
+}
+
+/* Physical `margin-left`, not `margin-inline-start`: it is what the rest of
+ * this stylesheet uses, the application is LTR-only, and it is the property
+ * that has to win against the UA's own logical 40px. */
+.settings-summary dd {
+  margin: var(--space-xs) 0 0;
+  max-width: 60ch;
 }
 
 .breadcrumb {
@@ -2396,6 +2543,42 @@ code {
   background: var(--surface-emphasis);
   border-top: 1px solid var(--outline);
   font-weight: 700;
+}
+
+/*
+ * In the gains table a delta takes its cell's type instead of its own.
+ *
+ * `.delta` is specified as a pill — 12px/600 at 0.03em tracking (holdings brief
+ * §1.2, pricing brief §1.2) — and that is the right type for the one on the
+ * Overview header, where a single movement carries the page. Inside this table
+ * it is a column of money beside another column of money, and the pill's type
+ * followed it in: Unrealized rendered at 12px/600/0.36px against Potential
+ * tax's 14px/600/normal, one column of the same figures set two sizes smaller
+ * than the one next to it.
+ *
+ * The `tfoot` is where it stops being a nicety. `.data-table .row-total th, …
+ * td { font-weight: 700 }` promotes the whole grand-total row, but the promotion
+ * lands on the `td` and `.delta` re-declares weight on the span *inside* it, so
+ * `+$110,203.88` — the largest claim on the panel — printed lighter and smaller
+ * than the `$16,526.36` beside it and than the word "Total" to its left.
+ * Inheriting is what lets the row's own promotion reach the figure; the holdings
+ * brief §5 puts it plainly for `.is-numeric`, "both get it or the column does
+ * not line up".
+ *
+ * **Scoped to this table on purpose.** `.data-table .delta` reads as the more
+ * general rule and it is the more expensive one: it re-types **twelve** cells on
+ * `/holdings` — that table's whole Unrealized column plus its grand total — on a
+ * nine-column table whose four money columns currently share their right edges
+ * to 0.1px, and type is what sets those widths. Holdings' column has the same
+ * 12px-beside-14px reading, and nobody has filed it; when someone does, it is a
+ * change to that table's column widths and belongs with the measurements that
+ * prove they still line up. This finding was written about Analysis.
+ */
+.data-table--gains .delta {
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
 }
 
 /* The gains table's headings wrap; every other table's do not.
