@@ -36,14 +36,15 @@ export type MaskingPolicy = "masked" | "unmasked" | "as_last_left";
  * value is the one a household with settled habits actually wants, and a
  * boolean has no way to say it.
  *
- * The labels say what each answer *does to a browser*, because "masked" alone
- * reads as a description of the current screen rather than as a rule about
- * every future one.
+ * Each label completes the Display tab's legend — "A browser opens" — so that
+ * the choice reads as a sentence about every future visit rather than as a
+ * description of the screen someone is looking at now. Getting that wrong is
+ * how a reader comes to believe this control masks the page in front of them.
  */
 export const MASKING_POLICIES: ReadonlyArray<Option<MaskingPolicy>> = [
-  { value: "masked", label: "Start masked — every browser opens with amounts hidden" },
-  { value: "unmasked", label: "Start unmasked — every browser opens showing amounts" },
-  { value: "as_last_left", label: "As last left — each browser keeps what it was set to" },
+  { value: "masked", label: "Masked — amounts hidden until shown, every time" },
+  { value: "unmasked", label: "Showing amounts, every time" },
+  { value: "as_last_left", label: "However it was last left on that browser" },
 ];
 
 /** The stored values alone, in the shape Zod's `enum` wants. */

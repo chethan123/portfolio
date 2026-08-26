@@ -45,6 +45,9 @@ export default [
     // domain rows: the capital gains rate the Analysis screen estimates with.
     // `0005_app_setting.sql` argues why it is not an environment variable.
     route("tax", "routes/settings/tax.tsx"),
+    // How the screens look before anyone touches them — today the masking
+    // policy, and §12's theme choice when it lands (spec 0007).
+    route("display", "routes/settings/display.tsx"),
   ]),
 
   // The optional login gate's one page (DESIGN.md §10). It renders only while
