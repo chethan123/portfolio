@@ -487,7 +487,12 @@ a {
     justify-content: space-between;
     height: 64px;
     padding-inline: var(--space-md);
-    background: var(--background);
+    /* The ground the rail this bar replaces has, and the one the bottom bar
+     * already takes. §13.5: depth is a tonal step plus a 1px border. On
+     * `--background` the bar took only the border, drew the same colour as the
+     * canvas it floats over in both themes, and read as part of the page
+     * rather than as chrome — while the bottom bar, its other half, stepped. */
+    background: var(--panel);
     border-bottom: 1px solid var(--outline-variant);
   }
 
@@ -518,10 +523,26 @@ a {
     display: contents;
   }
 
+  /*
+   * Content-sized, because the active item's `--primary-container` ground is a
+   * pill and a pill is the shape of what is in it. On `flex: 1` each item took
+   * a fifth of the bar whatever it held, so the app's one saturated fill was
+   * painted across 144px at 768 and 195px at 1023 — a fifth of the screen, and
+   * the largest area of colour on any page — while the same component was 68px
+   * at 390. `justify-content: space-around` on the bar was inert for the same
+   * reason, and now does the distributing it was written to do.
+   *
+   * `0 1 auto` and not `none`, which is the same thing with `flex-shrink: 0`:
+   * the five items measure 330px content-sized, and the bar has 288px of room
+   * at 320px and 328px at 360px, so with shrinking switched off the last item
+   * is drawn past the right edge of a bar it is fixed inside. Shrinking gives
+   * a 320px phone five even items again, as `flex: 1` did, and every width
+   * from 375 up — an iPhone SE is 375 — gets the pill at its content size.
+   */
   .app-bottomnav .app-nav-link {
     flex-direction: column;
     gap: 2px;
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     padding: var(--space-xs) var(--space-base);
     border-left: 0;
@@ -663,6 +684,12 @@ a {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* A panel is a query container so that its own header can lay itself out
+   * against the panel's width rather than the window's — see the container
+   * query under `.panel-header`. `inline-size` and not `size`: a panel's block
+   * size is whatever its rows add up to, and containing that would collapse
+   * every table to nothing. */
+  container-type: inline-size;
 }
 
 /* A panel that holds only prose or a chart pads itself; one that holds a table
@@ -725,6 +752,42 @@ a {
 
   /* Side by side, a title and the note qualifying it fight over a 390px row
    * and both wrap. Stacked, each gets the full width and neither breaks. */
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-xs);
+  }
+}
+
+/*
+ * The same stack, on the other signal: a panel too narrow to hold its own
+ * header on one row, whatever the window is doing.
+ *
+ * The rule above is right about the phone and blind to the bento grid. Overview
+ * puts a `2fr 1fr` pair below the chart, and the narrow column measures 218.7px
+ * at 1024, 237.3px at 768, 244px at 1100, 304px at 1280 and 377.3px at 1500 —
+ * narrow at every desktop width, and never once narrow at the same time as the
+ * window is. So "Allocation by account" wrapped to two lines from 768 to 1500
+ * and to three at 1024 with "SHARE OF / ASSETS" wrapping beside it, while the
+ * "Accounts" header in the wide column never wrapped, and two panels that share
+ * a top edge stopped sharing the header edge that makes them read as one row.
+ * No media query can express that, because the window is wide in every one of
+ * those cases; the panel is what is narrow, and a container query is what asks.
+ *
+ * 390px is measured, not chosen. That header needs 389.2px to lay itself out on
+ * one line — 24px of padding, a 209.7px title, the 12px gap, a 119.5px count
+ * and 24px of padding — and the narrow column is 377.3px at 1500 and 397.3px at
+ * 1600. So the threshold is the header's own requirement, and it happens to
+ * land in the only gap the measured column widths leave: everything that wraps
+ * stacks, and 1600 — the one width where the row genuinely fits — keeps it.
+ *
+ * Both rules, not one. Dropping the viewport rule and keying only on the panel
+ * looks tidier and is worse: a `.panel-count` is sometimes a whole sentence
+ * rather than a count, and at 500px the Net worth panel is 468px wide — over
+ * the threshold — where its note takes enough of the row to break the title
+ * across "Net / worth". The two rules answer two different questions.
+ */
+@container (max-width: 390px) {
   .panel-header {
     flex-direction: column;
     align-items: flex-start;
@@ -895,6 +958,26 @@ a {
   color: var(--on-primary-container);
 }
 
+/*
+ * A strip that has to say what it does, over the same 4px caption gap a `label`
+ * gives its control.
+ *
+ * Overview and Account detail put their range strip inside a `.kpi` row, where
+ * the figure beside it supplies the context and a caption would be repeating
+ * the obvious. The group-by strip on Holdings stands alone on the canvas
+ * between two panels, where nothing else on the page says what eight chips are
+ * for (holdings-ui-brief §4.1).
+ *
+ * The default `align-items: stretch` is load-bearing: the strip carries its own
+ * `overflow-x: auto` below 768px, and a nav shrink-wrapped to its content has
+ * nothing to scroll inside.
+ */
+.segmented-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
 /* On a phone the strip scrolls sideways rather than wrapping to two rows. */
 @media (max-width: 767px) {
   .segmented {
@@ -926,9 +1009,21 @@ a {
   }
 }
 
+/*
+ * Bled by half a label line at each end so that `space-between` centres every
+ * label on the rule it names.
+ *
+ * On `inset: 0` the column is exactly as tall as the plot, so `space-between`
+ * puts the first span's *top* on the top rule and the last span's *bottom* on
+ * the bottom rule; only the middle one lands centred. Measured at 1600, rules
+ * at y 280/440/600 carried labels centred at 288/440/592 — the top figure hung
+ * below its line and the bottom one floated above its own. Extending the box
+ * 8px past each end (half of the 16px line-height below) moves the two outer
+ * centres onto 280 and 600 exactly, and leaves the middle where it was.
+ */
 .chart-axis {
   position: absolute;
-  inset: 0 auto 0 0;
+  inset: -8px auto -8px 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -945,7 +1040,12 @@ a {
   display: flex;
   justify-content: space-between;
   gap: var(--space-base);
-  margin-top: var(--space-base);
+  /* 16px, not the 8px this row sat at, because the axis above it now bleeds
+   * 8px past the bottom of the plot: the lowest y label's box used to end on
+   * the plot's bottom edge and now ends level with this row's top, closing the
+   * gap between the two to nothing. 8px of separation plus the 8px of bleed is
+   * what keeps the y axis and the x axis as far apart as they looked before. */
+  margin-top: var(--space-md);
   font-size: 12px;
   line-height: 16px;
   font-weight: 600;
