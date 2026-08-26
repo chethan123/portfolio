@@ -11,7 +11,12 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { ValidationError } from "~/lib/input.server";
-import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.server";
+import {
+  readCapitalGainsRate,
+  readMaskingPolicy,
+  saveCapitalGainsRate,
+  saveMaskingPolicy,
+} from "~/lib/settings.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
@@ -70,6 +75,74 @@ describe("the capital gains rate", () => {
       await refusalOf(saveCapitalGainsRate({ capitalGainsRate: "500" }, db));
 
       expect(await readCapitalGainsRate(db)).toBe("23.800000");
+    }),
+  );
+});
+
+describe("the masking policy", () => {
+  it(
+    "starts masked, because a browser nobody has answered for is not one to show balances on",
+    withDatabase(async ({ db }) => {
+      // The migration seeds this, and the value it seeds is the one decision
+      // ADR-0002 calls the place safety beat convenience. A default invented in
+      // application code could be changed without anyone noticing that it had
+      // been; a seeded column cannot.
+      expect(await readMaskingPolicy(db)).toBe("masked");
+    }),
+  );
+
+  it(
+    "records each of the three answers a household can give",
+    withDatabase(async ({ db }) => {
+      // All three, rather than a representative one: the third is the only
+      // value that defers to the browser, and a schema constraint that had lost
+      // it would still pass a test that only ever stored the first two.
+      expect(await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db)).toBe("unmasked");
+      expect(await readMaskingPolicy(db)).toBe("unmasked");
+
+      expect(await saveMaskingPolicy({ maskingPolicy: "as_last_left" }, db)).toBe(
+        "as_last_left",
+      );
+      expect(await readMaskingPolicy(db)).toBe("as_last_left");
+
+      expect(await saveMaskingPolicy({ maskingPolicy: "masked" }, db)).toBe("masked");
+      expect(await readMaskingPolicy(db)).toBe("masked");
+    }),
+  );
+
+  it(
+    "files a refusal under the name this form's field actually has",
+    withDatabase(async ({ db }) => {
+      // The same rule `saveCapitalGainsRate` is held to above, for the same
+      // reason: filed under the wrong key the message renders nowhere and the
+      // Display tab refuses the write in silence.
+      const refusal = await refusalOf(saveMaskingPolicy({ maskingPolicy: "sometimes" }, db));
+
+      expect(refusal.maskingPolicy).toMatch(/masking policy/i);
+    }),
+  );
+
+  it(
+    "leaves the stored policy alone when it refuses",
+    withDatabase(async ({ db }) => {
+      await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
+      await refusalOf(saveMaskingPolicy({ maskingPolicy: "" }, db));
+
+      expect(await readMaskingPolicy(db)).toBe("unmasked");
+    }),
+  );
+
+  it(
+    "does not disturb the rate stored beside it",
+    withDatabase(async ({ db }) => {
+      // Both columns are on the one settings row, so a writer that set the
+      // whole row rather than its own column would silently reset the other.
+      // Neither screen would report it and the Analysis figure would just
+      // change.
+      await saveCapitalGainsRate({ capitalGainsRate: "15" }, db);
+      await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
+
+      expect(await readCapitalGainsRate(db)).toBe("15.000000");
     }),
   );
 });
