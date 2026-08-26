@@ -709,19 +709,37 @@ function Figures({ total }: { total: Total }) {
       </span>
     );
 
+  // A figure and its caption share a wrapper, exactly as the annual-dividend
+  // cell of a row already does, and below 768px that wrapper is the whole
+  // difference between the four figures sharing a right edge and not. There the
+  // cell becomes a `display: flex` label-and-figure row (§8), and
+  // `space-between` distributes however many items it is handed: bare, a
+  // partial column hands it three — label, figure, caption — and parks the
+  // money in the middle of the card, so three of the grand total's four figures
+  // sat at 236, 254 and 264px against a complete column's 357 and against every
+  // figure in the cards above them. Wrapped, it hands over two whatever the
+  // coverage is, and `.cell-sub`'s own `display: block` puts the count back
+  // directly beneath its figure — where §7.3 puts it, and where it already sits
+  // on desktop.
   return (
     <>
       <td className="is-numeric" role="cell" data-label="Value">
-        <Money amount={total.value} />
-        {note(total.valueCoverage)}
+        <div>
+          <Money amount={total.value} />
+          {note(total.valueCoverage)}
+        </div>
       </td>
       <td className="is-numeric" role="cell" data-label="Cost basis">
-        <Money amount={total.costBasis} />
-        {note(total.basisCoverage)}
+        <div>
+          <Money amount={total.costBasis} />
+          {note(total.basisCoverage)}
+        </div>
       </td>
       <td className="is-numeric" role="cell" data-label="Unrealized">
-        {total.unrealized === null ? "—" : <Delta amount={total.unrealized} />}
-        {note(total.unrealizedCoverage)}
+        <div>
+          {total.unrealized === null ? "—" : <Delta amount={total.unrealized} />}
+          {note(total.unrealizedCoverage)}
+        </div>
       </td>
       {/* No caption, and no weighted yield either.
 
