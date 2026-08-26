@@ -42,6 +42,23 @@ describe("saving a masking policy", () => {
   );
 
   it(
+    "answers a redirect, so a browser running no script actually repaints",
+    withDatabase(async () => {
+      // Story 25 wants the change to visibly take effect on the browser that
+      // made it. A bare 204 satisfies every other assertion in this file and
+      // leaves a no-JavaScript browser sitting on the page it submitted, with
+      // the old screen still in front of it. Post/redirect/get is what makes
+      // the repaint happen in both browsers.
+      const outcome = await action(args(post("/settings/display", { maskingPolicy: "unmasked" })));
+
+      expect(outcome).toBeInstanceOf(Response);
+      expect((outcome as Response).status).toBeGreaterThanOrEqual(300);
+      expect((outcome as Response).status).toBeLessThan(400);
+      expect((outcome as Response).headers.get("Location")).toBe("/settings/display");
+    }),
+  );
+
+  it(
     "clears this browser's state cookie, so the change takes effect where it was made",
     withDatabase(async () => {
       const outcome = await action(

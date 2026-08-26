@@ -1,4 +1,4 @@
-import { Form } from "react-router";
+import { Form, redirect } from "react-router";
 
 import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
 import { MASKING_POLICIES, clearedMaskingCookie } from "~/lib/masking";
@@ -39,16 +39,22 @@ export async function action({ request }: Route.ActionArgs) {
     await saveMaskingPolicy(values);
 
     // The state cookie goes with the write, and this is the whole reason this
-    // action returns a `Response` rather than null (ADR-0002). Without it the
-    // setting appears to do nothing on the browser that changed it — the old
-    // cookie still wins on every screen — and the lifetime the *old* policy
+    // action returns a `Response` where Tax returns null (ADR-0002). Without it
+    // the setting appears to do nothing on the browser that changed it — the
+    // old cookie still wins on every screen — and the lifetime the *old* policy
     // gave that cookie would outlive the policy itself.
     //
     // Cleared rather than rewritten to match the new policy: what a browser
     // opens in is a question the resolver answers from the policy, and it can
     // only answer it for a browser with nothing left to say.
-    return new Response(null, {
-      status: 204,
+    //
+    // A REDIRECT, not a bare 204. This was the version before, and with
+    // JavaScript off it made story 25 exactly false: a document POST answered
+    // 204 leaves the browser sitting on the page it submitted, so the row
+    // updated, the cookie cleared, and the screen behind the form did not
+    // change. Post/redirect/get repaints in both browsers, and it re-runs the
+    // shell's loader — which is what actually puts the new policy on screen.
+    return redirect("/settings/display", {
       headers: { "Set-Cookie": clearedMaskingCookie() },
     });
   } catch (error) {
