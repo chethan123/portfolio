@@ -6,12 +6,12 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
-  isRouteErrorResponse,
   useLocation,
   useRouteError,
   useRouteLoaderData,
 } from "react-router";
 
+import { ErrorPage } from "~/components/error-page";
 import { FirstRunPrompt } from "~/components/first-run-prompt";
 import {
   AnalysisIcon,
@@ -214,26 +214,10 @@ export default function App() {
   return <Outlet />;
 }
 
+/* Everything this used to do is in `ErrorPage` now, including the reasoning
+ * about what it must not print. It is a component rather than a function here
+ * because the upload flow's own boundary needs the identical page for
+ * everything that is not an expired draft, and it had a copy of the old one. */
 export function ErrorBoundary() {
-  const error = useRouteError();
-
-  const title = isRouteErrorResponse(error)
-    ? `${error.status} ${error.statusText}`
-    : "Something went wrong";
-  const detail = isRouteErrorResponse(error)
-    ? error.data
-    : error instanceof Error
-      ? error.message
-      : "Unknown error";
-
-  return (
-    <section className="page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">{title}</h1>
-          <p className="page-subtitle">{String(detail)}</p>
-        </div>
-      </header>
-    </section>
-  );
+  return <ErrorPage error={useRouteError()} />;
 }

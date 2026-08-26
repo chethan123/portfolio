@@ -430,6 +430,23 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(phone, `docs/screenshots/overview-mobile-${theme}.png`, false);
     await visit(phone, "/analysis");
     await shoot(phone, `docs/screenshots/analysis-mobile-${theme}.png`, false);
+    // Holdings is the one screen that stops being a table below 768px and
+    // becomes a stack of cards, and until now nothing photographed it. A
+    // reflow that large with no committed image is the one case the README's
+    // "a change to a screen is not finished until these are retaken" rule
+    // cannot catch — there is nothing to retake. Grouped, because the group
+    // heading, the subtotal strip and the grand total are three of the things
+    // the reflow has to get right and all three are only visible grouped.
+    await visit(phone, "/holdings?group=assetClass");
+    // Scrolled to a subtotal, not left at the top. A phone shot is one 900px
+    // viewport and the top of this page is the filter bar and the panel header
+    // — the cards do not start until below the fold, so an unscrolled shot
+    // photographs everything except the thing it is captioned as showing.
+    await phone.evaluate(() => {
+      document.querySelector(".row-subtotal")?.scrollIntoView({ block: "center" });
+    });
+    await phone.evaluate(() => document.fonts.ready);
+    await shoot(phone, `docs/screenshots/holdings-mobile-${theme}.png`, false);
     await phone.close();
   }
 }

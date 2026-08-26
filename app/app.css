@@ -627,9 +627,20 @@ a {
     gap: var(--space-sm);
   }
 
+  /* headline-sm entire, weight included.
+   *
+   * These declarations moved the size, the line height and the tracking and
+   * left `font-weight: 700` standing from the display-lg rule above, so a phone
+   * drew the title at 24/32/**700** — display-lg's weight at headline-sm's
+   * size, which is a step of neither ramp. §13.4 gives headline-sm weight 600,
+   * and the holdings brief §1.2 names this owner on the same line as the step
+   * ("`.page-title` below 768px"). A ramp step is a triple of size, weight and
+   * tracking; taking two thirds of one is how a component ends up between
+   * steps rather than on one. */
   .page-title {
     font-size: 24px;
     line-height: 32px;
+    font-weight: 600;
     letter-spacing: 0;
   }
 
@@ -715,7 +726,15 @@ a {
   color: var(--on-surface-variant);
 }
 
+/* `margin: 0` because this is rendered as a `<p>` on Holdings, Analysis and the
+ * income breakdowns and as a `<span>` on Overview and account detail, and there
+ * is no `p` reset in this stylesheet — the reset above covers `body`, `h1`–`h4`
+ * and `a`. So the UA's `margin: 1em 0` applied at 12px and the same panel header
+ * stood 89px tall on one screen and 77px on the next (105 against 81 at 390px,
+ * where the header stacks and the `<p>`'s margin replaces `.panel-header`'s own
+ * 4px gap with 16px). §2 specifies 77: 24px padding around a 28px title. */
 .panel-count {
+  margin: 0;
   font-size: 12px;
   line-height: 16px;
   font-weight: 600;
@@ -794,6 +813,18 @@ a {
   margin: 0 0 var(--space-xs);
 }
 
+/* The closing half of the eyebrow's 4px. `.coverage-note` is `margin: 0`
+ * everywhere it is used, and everywhere else something around it opens the
+ * space: the account detail's `.detail-total` is a flex column with a
+ * `--space-xs` gap, and the breakdown panels and Overview's allocation list put
+ * it in a padded block of its own. Income's headline is a plain `div`, so the
+ * note landed flush against the figure — 4px above the figure, 0 below it, a
+ * block spaced on one side only. Written here rather than on the class so the
+ * places that already space it do not get 4px twice. */
+.kpi .coverage-note {
+  margin-top: var(--space-xs);
+}
+
 .kpi-figure {
   display: flex;
   align-items: baseline;
@@ -808,10 +839,24 @@ a {
   color: var(--on-surface);
 }
 
+/* On a phone the headline steps down to headline-lg — the whole step.
+ *
+ * It was 36px/44px, which is not a row of §13.4's ramp and not a line height
+ * the 4px grid pairs with any size in it: a figure invented between display-lg
+ * and headline-lg because 48px does not fit a 390px canvas. `.page-title` has
+ * the right answer to the same problem one screen up — it steps to a real step
+ * — so this takes headline-lg's weight and tracking along with its size, for
+ * the reason given there: two thirds of a step is between steps.
+ *
+ * The account detail's figure takes the same step in its own block below, so
+ * that the one role — the big money figure at the top of a screen — is one
+ * size on a phone rather than two. */
 @media (max-width: 767px) {
   .kpi-figure {
-    font-size: 36px;
-    line-height: 44px;
+    font-size: 32px;
+    line-height: 40px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
 }
 
@@ -1104,6 +1149,14 @@ a {
   transition: opacity 150ms;
 }
 
+/* The gap is `--space-xs` because a caption over a figure is the one job §13.5
+ * gives that token, and this is that pairing: `.u-label` "TOTAL" over
+ * `.donut-total`. It was 2px, which is off the 4px grid and half what the
+ * identical pairing gets on Overview, where `.kpi-eyebrow` sits 4px above
+ * `.kpi-figure`. Two panels drawing the same two elements at two gaps.
+ *
+ * `.cell-sub`'s 2px, the other sub-scale gap in this file, stays: the holdings
+ * brief §2 asks for that one by name. This one nothing asked for. */
 .donut-center {
   position: absolute;
   inset: 0;
@@ -1111,7 +1164,7 @@ a {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: var(--space-xs);
   pointer-events: none;
   text-align: center;
 }
@@ -1161,6 +1214,60 @@ a {
   min-width: 0;
 }
 
+/*
+ * One column grid for every breakdown, rather than one per table.
+ *
+ * Analysis stacks three of these panels down the page and Income stacks two,
+ * and each drew the same three columns — a label, a money figure, a share —
+ * at whatever width its own longest label happened to want. `table-layout` is
+ * `auto` by default, so "Alex Rivera", "Workplace plan (401k, 403b)" and
+ * "Equity" each sized their own first column and the money column stepped right
+ * and back left as you read down: measured at 1600px its right edge landed at
+ * 1292.2, 1341.8 and 1274.3, a 67.5px spread between panels of identical
+ * structure. The `% of total` column is pinned to the panel edge in all of them,
+ * so the middle column was the only thing moving, which is what makes it read
+ * as a rendering wobble rather than as three tables.
+ *
+ * §13.5 gives the general principle when it explains why `--control-h` is a
+ * token at all: so that things in different columns line up across a dashboard.
+ * A fixed layout is what lets three separate tables share one grid.
+ *
+ * The two numeric columns are sized and the label takes what is left, because
+ * they are the two that cannot be given less than their content: both are
+ * `nowrap` by rule, a money figure broken across lines being unreadable. 34%
+ * holds `−$14,500.00` at 14px/600 tabular down to 320px, and 20% holds a
+ * two-line `% of total` over `−2.1%`. The label wraps instead, which is what a
+ * label can do.
+ */
+.breakdown .data-table {
+  table-layout: fixed;
+}
+
+.breakdown .data-table th:nth-child(2) {
+  width: 34%;
+}
+
+.breakdown .data-table th:nth-child(3) {
+  width: 20%;
+}
+
+/* The headings wrap, for the same reason `.data-table--gains`' do: a fixed grid
+ * hands each heading a width chosen for the figures under it, and `% of total`
+ * and `Annual dividend` are wider than that below about 1100px. Wrapping the
+ * words costs 16px of header height; leaving them `nowrap` costs a table that
+ * scrolls sideways behind its own edge. The figures underneath stay `nowrap`,
+ * which is the point of the exercise — a money figure broken across lines is
+ * unreadable, and a two-line heading over it still says what the column is.
+ *
+ * The second selector is the two headings this is actually about. `.data-table
+ * th.is-numeric` carries the `nowrap` further down this file at the same
+ * specificity as `.breakdown .data-table th`, so naming the class is what
+ * decides it here rather than which rule happens to come last. */
+.breakdown .data-table th,
+.breakdown .data-table th.is-numeric {
+  white-space: normal;
+}
+
 @media (min-width: 768px) {
   .breakdown {
     flex-direction: row;
@@ -1174,12 +1281,63 @@ a {
   }
 }
 
+/*
+ * …and on a phone the cells give back the padding the grid needs, exactly as
+ * the gains table's own rule does below.
+ *
+ * This is the companion the fixed grid does not work without, and the numbers
+ * are the argument for it. A fixed grid divides the canvas it is given; 16px on
+ * both sides of three columns takes 96px of a 356px phone canvas before a
+ * figure is drawn, and the two right-hand columns are the ones that cannot give
+ * any of it back. Without this rule the grid alone paints every share figure
+ * 5.8px past its own cell at 390px, and at 320px it puts every money figure
+ * 23.9px past its cell and all five tables 4px over their canvas. With it,
+ * every overflow and every spill on both screens is 0 at 320 as well as at 390
+ * — including Income's two tables, which scroll sideways by 50px and 28px today
+ * at 390 and which nobody filed.
+ */
+@media (max-width: 767px) {
+  .breakdown .data-table th,
+  .breakdown .data-table td {
+    padding-left: var(--space-sm);
+    padding-right: var(--space-sm);
+  }
+
+  .breakdown .data-table th.is-numeric,
+  .breakdown .data-table td.is-numeric {
+    padding-left: var(--space-xs);
+    padding-right: var(--space-xs);
+  }
+}
+
 /* --- Tables ---------------------------------------------------------------
  * No vertical rules. A hairline between rows, a header a tone up, and every
  * numeric column right-aligned so the digits stack (§13.4).
  */
 
+/*
+ * `position: relative` is not decoration here — it is what keeps the whole
+ * document from scrolling sideways.
+ *
+ * The Holdings actions column heads its column with a `.visually-hidden` span
+ * (the "Correct" label a screen reader needs and nobody else sees), and
+ * `.visually-hidden` is `position: absolute`. Every ancestor between that span
+ * and the root — the `th`, the `table`, this element, `.panel` — was `static`,
+ * so its containing block was the *initial* containing block: it laid out at
+ * the table's unclipped right edge, at the same document x whatever the
+ * viewport, and `overflow-x: auto` here could not clip a box it was not the
+ * containing block for. The span then extended the document's scrollable
+ * overflow to that edge — 1503px on the ungrouped table, 1387–1482px on the
+ * views that drop a column or open the row editor — so every window narrower
+ * than that scrolled the entire canvas, rail and all, and §5 of the holdings
+ * brief promises the opposite: "the page body never scrolls sideways".
+ *
+ * The one declaration gives the span a containing block inside the clip. It is
+ * safe to make this element a containing block because that span is the only
+ * absolutely positioned descendant any `.data-table-scroll` in the app has.
+ */
 .data-table-scroll {
+  position: relative;
   width: 100%;
   overflow-x: auto;
 }
@@ -1235,12 +1393,29 @@ a {
   gap: var(--space-sm);
 }
 
+/*
+ * A caption under a cell's primary line.
+ *
+ * The weight and the numeric variant are set rather than inherited, and both
+ * for the same reason: this class is used inside four different row roles and
+ * every one of them sets type of its own. Left to inherit, one caption class
+ * rendered at three weights on a single grouped table — 400 under a body row,
+ * 600 under a group heading and a subtotal, 700 under the grand total — so
+ * "17 of 18" beneath the total was bold and the identical caption two rows
+ * above it was not. §1.2 of the holdings brief gives the class one weight, 400,
+ * and §13.4 gives every figure `tabular-nums`; the captions that carry a figure
+ * were picking the variant up only when they happened to sit in an
+ * `.is-numeric` cell, which is how "$47,838.57 of it in taxable accounts" on
+ * Analysis ended up the one non-tabular figure in the app.
+ */
 .cell-sub {
   display: block;
   margin-top: 2px;
   font-size: 12px;
   line-height: 16px;
+  font-weight: 400;
   color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
 }
 
 .cell-change {
@@ -1460,10 +1635,18 @@ a.account-row:hover {
   gap: var(--space-sm);
 }
 
+/* display-lg, and now its line height too.
+ *
+ * Size, weight and tracking were the step's already; the line height was 48px
+ * against the ramp's 56px. On a 48px Inter face that makes the half-leading
+ * *negative*, so the account's total sat about 10px tighter under "TOTAL VALUE"
+ * than `/income`'s headline — the same role, the same 4px `--space-xs` gap
+ * above it, two different amounts of air. `.kpi-figure` had the step right;
+ * this is the same step, written the same way. */
 .detail-figure {
   margin: 0;
   font-size: 48px;
-  line-height: 48px;
+  line-height: 56px;
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
@@ -1493,19 +1676,48 @@ a.account-row:hover {
     letter-spacing: 0;
   }
 
+  /* The same headline-lg step `.kpi-figure` takes above, and for the second
+   * half of the same finding: this was 36px/**40px** while `.kpi-figure` was
+   * 36px/**44px**, so one role — the screen's own money figure — was drawn at
+   * two line heights on a phone and neither of them was in the ramp. Now both
+   * are 32/40/600 at −0.01em, and the account total and the net-worth headline
+   * are the same size again. */
   .detail-figure {
-    font-size: 36px;
+    font-size: 32px;
     line-height: 40px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
 }
 
 /* The ticker badge in a holdings row. A rounded rect rather than the mock's
- * circle: a four-character ticker does not fit a 32px circle at 12px. */
+ * circle: a four-character ticker does not fit a 32px circle at 12px.
+ *
+ * The floor is 60px rather than the 40px both briefs quote, because 40px is a
+ * floor only three-letter tickers ever reach: above it the badge sizes to its
+ * own text and the instrument name beside it starts wherever that lands.
+ * Measured on `/accounts/7`, seven rows put their name at seven different left
+ * edges spanning 18.5px, and across accounts the same column starts at 403px on
+ * one page and 421px on another. The name is the primary text of the widest
+ * column on the screen, and a primary text column that begins in a different
+ * place on every row is not a column.
+ *
+ * 60px is the widest badge a five-character ticker draws here — `VTSNX`
+ * measures exactly 60.0px at 12px/700 with this letter-spacing and 8px of
+ * inline padding, and five characters is the longest a US symbol gets. It is
+ * also the largest floor that costs nothing: at 62px the Asset column takes a
+ * fourth wrapped line on the longest instrument name, and at 64px the Holdings
+ * table stops fitting its panel at 1600px and starts scrolling inside itself.
+ *
+ * It stays a floor rather than becoming a fixed width because no width covers
+ * every symbol — `SWPPX` measures 61.9px and `VMMXX` 66.3px — and a ticker that
+ * exceeds the floor should widen its own badge and rag the column by those few
+ * pixels rather than spill its text over the name beside it. */
 .badge {
   flex: none;
   display: grid;
   place-items: center;
-  min-width: 40px;
+  min-width: 60px;
   height: 32px;
   padding-inline: var(--space-base);
   border-radius: var(--radius);
@@ -1612,6 +1824,24 @@ textarea {
 textarea {
   height: auto;
   padding: var(--space-base) var(--space-sm);
+}
+
+/* A box that a figure is typed into is a figure (§13.4: "**Every figure sets
+ * `font-variant-numeric: tabular-nums`.** … it is not optional").
+ *
+ * `inputmode="decimal"` is already how this application marks the boxes that
+ * take one — the balance, the amount owed, the capital gains rate, and the two
+ * in the holdings editor — so it is the selector rather than a new class or an
+ * id. `.cell-input` sets the same property for itself further down and keeps
+ * doing so: there it is half of a pair with `text-align: right`, and the reason
+ * given is the column it sits in rather than the digits alone.
+ *
+ * `#set-balance-amount` was the one money box in the application computing
+ * `normal` here — every displayed figure already had it and both editor boxes
+ * did — so the balance was the only figure in the app that changed width under
+ * the hand typing it. */
+input[inputmode="decimal"] {
+  font-variant-numeric: tabular-nums;
 }
 
 input:focus-visible,
@@ -1869,19 +2099,37 @@ code {
   color: var(--on-surface-variant);
 }
 
-/*
- * A note about one control takes that control's measure, not the panel's.
+/* The three of those four that are prose get a measure, like every other prose
+ * class here does.
  *
- * Half of this is reading width — 12px prose running the full 1166px of a panel
- * is the same defect `.empty-note` and `.panel-statement` already carry a cap
- * for. The other half is layout, and it is why this cap belongs with the field
- * rule below rather than with the type ramp: a field wrapper with no basis sizes
- * to its widest child, and on Settings → Tax that child was this note, laid out
- * on one line. The cap is the guard that stops it ever being that child again.
- * With the basis in place it is inert at every width the application is used at,
- * which is exactly what it should be.
- */
-.field-note {
+ * They were the only ones without one: `.empty-state-detail` and `.empty-note`
+ * cap at 52ch and `.panel-statement` at 60ch, while these ran as far as their
+ * container allowed — `/income`'s coverage note reached 1025.7px at 1600 and a
+ * `.form-note` on `/accounts/12` reached 1166px, one unbroken line of 12px type
+ * either way. On Income's first panel that put the 14px `.panel-statement`
+ * wrapping at 530px beside a 12px note that would run 765px: the smaller type
+ * with the wider measure, which is the wrong way round twice over.
+ *
+ * `.field-note` is here for a second reason as well as that one, and it is the
+ * reason this rule is load-bearing rather than cosmetic: a note under a control
+ * is a child of that control's flex item, and a flex item with no basis sizes to
+ * its widest child. On Settings → Tax that child was this note, laid out on one
+ * line, and a two-digit percentage was typed into a 1113px box. The field rule
+ * below gives the wrapper a basis; this cap is the guard that stops the note
+ * ever being what sets the width again. With both in place it is inert at every
+ * width the application is used at, which is exactly what it should be.
+ *
+ * The two halves arrived from opposite directions — the reading measure with the
+ * type ramp, the field measure with the forms work — and each deferred the
+ * other's selector to the other change. They are one rule because they are one
+ * number, and 60ch is `.panel-statement`'s: at 12px it resolves narrower in
+ * pixels than the same count does at 14px, which is the point.
+ *
+ * Not `.record-note`, the fourth of the group above. It is a count beside a box,
+ * not a sentence, and it has no measure to take. */
+.coverage-note,
+.field-note,
+.form-note {
   max-width: 60ch;
 }
 
@@ -1978,9 +2226,56 @@ code {
   color: var(--primary);
 }
 
+/*
+ * The Settings index: four sections, each a name over the sentence describing
+ * it.
+ *
+ * It was a browser `<dl>` with a colour on it and nothing else, which made it
+ * the one panel in the application drawn by the UA stylesheet rather than by
+ * this one. Three consequences, all measured at 1600: every `dd` carried the
+ * UA's `margin-inline-start: 40px` — the only indented prose anywhere here, and
+ * a constant that lands near `--space-xl` by coincidence rather than by
+ * decision; there was **0px** between the four pairs, so eight elements ran as
+ * one unbroken 160px column of identical text; and `dt` and `dd` were both
+ * 14px/400 in `--on-surface-variant`, so a section's name was set exactly like
+ * the sentence about it and the one `dt` with no link in it — "Classifications,
+ * Instruments and History" — was indistinguishable from a description.
+ *
+ * So: the term takes body-sm at 600 in `--on-surface` and the description stays
+ * body-sm in `--on-surface-variant`, at `.panel-statement`'s 60ch measure. That
+ * is `.detail-meta`'s idiom one size down — "label and value differ by weight
+ * *and* colour", which is the note above that rule and the reason its pairs
+ * stay legible when they wrap. The three linked terms keep `--primary` from the
+ * `a` rule, so which of the four is not yet a destination is visible without
+ * hovering.
+ *
+ * Spacing is margins rather than a flex gap because the two gaps here differ:
+ * a term belongs to the description under it (`--space-xs`, the caption-to-
+ * figure step) and each pair is separated from the next by `--space-lg`. One
+ * `gap` cannot say both, and saying it with two nested containers would be more
+ * machinery than four pairs of text need.
+ */
 .settings-summary {
   margin: 0;
   color: var(--on-surface-variant);
+}
+
+.settings-summary dt {
+  margin-top: var(--space-lg);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.settings-summary dt:first-child {
+  margin-top: 0;
+}
+
+/* Physical `margin-left`, not `margin-inline-start`: it is what the rest of
+ * this stylesheet uses, the application is LTR-only, and it is the property
+ * that has to win against the UA's own logical 40px. */
+.settings-summary dd {
+  margin: var(--space-xs) 0 0;
+  max-width: 60ch;
 }
 
 .breadcrumb {
@@ -2427,12 +2722,29 @@ code {
   color: var(--on-surface);
 }
 
+/*
+ * The column the table is actually sorted by.
+ *
+ * `aria-sort` is already on the header — the markup has carried it since the
+ * table was built — and §5 makes it the whole state: the active column "sets
+ * its label in `--on-surface` rather than `--on-surface-variant`, and shows a
+ * 12px caret". Only the caret was ever drawn, so on a nine-column table the one
+ * sorted heading was byte-identical in colour to the other eight and an 8px
+ * glyph was carrying the entire signal. The rule sits on the `th` rather than on
+ * the link because `.sortable` already takes `color: inherit`, and because §10
+ * is explicit that the state keys off `th[aria-sort]` and not a second class.
+ */
+.data-table th[aria-sort] {
+  color: var(--on-surface);
+}
+
 /* The caret keeps its width whether or not it is drawn, so sorting a column
- * does not shift the heading beside it. */
+ * does not shift the heading beside it. 12px is §5's number; at 10px it drew
+ * 8.3px wide, which is smaller than the 12px label it annotates. */
 .sortable-caret {
   display: inline-block;
   min-width: 0.75em;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .data-table th.is-numeric .sortable {
@@ -2445,6 +2757,21 @@ code {
  * These three `th`s sit in the table body rather than in `thead`, so the
  * uppercase label treatment `.data-table th` applies has to be undone: a
  * person's name is not a column heading and setting it in caps reads as one.
+ *
+ * The bottom hairline is part of that treatment and was the one piece of it
+ * left standing, which cost two different defects. On the grand total it drew a
+ * rule under the label cell and nothing under the figures — 47% of the row on
+ * Analysis, 51% on Holdings — which reads as a rendering fault rather than a
+ * divider. And on a subtotal it collided with the grand total's own top border:
+ * `border-collapse: collapse` resolves a tie between two 1px solid borders in
+ * favour of the topmost cell, so on a grouped table the total's rule painted
+ * `--outline-variant` under the `th` the subtotal sat above and `--outline`
+ * under the figure cells, which have no subtotal border to lose to. One row,
+ * one rule, two colours — and ungrouped, where a plain body row sits above the
+ * `tfoot`, the same rule painted one colour across its full width, so the two
+ * views disagreed about how heavy the total's divider is.
+ *
+ * A group heading does want a bottom border, and re-asserts its own below.
  */
 .data-table .row-group th,
 .data-table .row-subtotal th,
@@ -2456,6 +2783,7 @@ code {
   text-transform: none;
   color: var(--on-surface);
   white-space: normal;
+  border-bottom: 0;
 }
 
 /* `--surface-emphasis`, the same tone as the column headings, because a group
@@ -2500,6 +2828,42 @@ code {
   background: var(--surface-emphasis);
   border-top: 1px solid var(--outline);
   font-weight: 700;
+}
+
+/*
+ * In the gains table a delta takes its cell's type instead of its own.
+ *
+ * `.delta` is specified as a pill — 12px/600 at 0.03em tracking (holdings brief
+ * §1.2, pricing brief §1.2) — and that is the right type for the one on the
+ * Overview header, where a single movement carries the page. Inside this table
+ * it is a column of money beside another column of money, and the pill's type
+ * followed it in: Unrealized rendered at 12px/600/0.36px against Potential
+ * tax's 14px/600/normal, one column of the same figures set two sizes smaller
+ * than the one next to it.
+ *
+ * The `tfoot` is where it stops being a nicety. `.data-table .row-total th, …
+ * td { font-weight: 700 }` promotes the whole grand-total row, but the promotion
+ * lands on the `td` and `.delta` re-declares weight on the span *inside* it, so
+ * `+$110,203.88` — the largest claim on the panel — printed lighter and smaller
+ * than the `$16,526.36` beside it and than the word "Total" to its left.
+ * Inheriting is what lets the row's own promotion reach the figure; the holdings
+ * brief §5 puts it plainly for `.is-numeric`, "both get it or the column does
+ * not line up".
+ *
+ * **Scoped to this table on purpose.** `.data-table .delta` reads as the more
+ * general rule and it is the more expensive one: it re-types **twelve** cells on
+ * `/holdings` — that table's whole Unrealized column plus its grand total — on a
+ * nine-column table whose four money columns currently share their right edges
+ * to 0.1px, and type is what sets those widths. Holdings' column has the same
+ * 12px-beside-14px reading, and nobody has filed it; when someone does, it is a
+ * change to that table's column widths and belongs with the measurements that
+ * prove they still line up. This finding was written about Analysis.
+ */
+.data-table--gains .delta {
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
 }
 
 /* The gains table's headings wrap; every other table's do not.

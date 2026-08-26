@@ -31,6 +31,7 @@ This file carries what the script cannot: which shot is of what, and why.
 | `upload-review-*.png` | `/upload/:draftId/review` | the `brokerage` one · **the diff must show a removal listed in full.** The statement is authored against what the account currently holds so all three groups render and the removed row carries its quantity and last known value |
 | `overview-mobile-*.png` | `/` | — |
 | `analysis-mobile-*.png` | `/analysis` | — |
+| `holdings-mobile-*.png` | `/holdings?group=assetClass` | — · the card reflow, the only screen whose layout changes shape below 768px rather than merely narrowing. Grouped, so the group heading, the subtotal strip and the grand total are all in frame |
 
 ## The decisions behind them
 

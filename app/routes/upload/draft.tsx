@@ -1,5 +1,6 @@
 import { Link, Outlet, isRouteErrorResponse, useMatches, useRouteError } from "react-router";
 
+import { ErrorPage } from "~/components/error-page";
 import { UploadSteps, type UploadStepsData } from "~/components/upload-steps";
 
 /**
@@ -99,23 +100,11 @@ export function ErrorBoundary() {
     );
   }
 
-  const title = isRouteErrorResponse(error)
-    ? `${error.status} ${error.statusText}`
-    : "Something went wrong";
-  const detail = isRouteErrorResponse(error)
-    ? error.data
-    : error instanceof Error
-      ? error.message
-      : "Unknown error";
-
-  return (
-    <section className="page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">{title}</h1>
-          <p className="page-subtitle">{String(detail)}</p>
-        </div>
-      </header>
-    </section>
-  );
+  // Everything that is not an expired draft gets the same page it would have
+  // got from root. This was a copy of root's boundary, which meant it carried
+  // root's defect too: a `data()`-thrown 500 here would have titled itself
+  // "500 " with the trailing space, and a fault would have printed its own
+  // message. One page, one place, so a fix to it cannot reach one of them and
+  // miss the other.
+  return <ErrorPage error={error} />;
 }
