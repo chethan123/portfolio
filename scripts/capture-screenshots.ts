@@ -438,8 +438,6 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     // heading, the subtotal strip and the grand total are three of the things
     // the reflow has to get right and all three are only visible grouped.
     await visit(phone, "/holdings?group=assetClass");
-<<<<<<< HEAD
-=======
     // Scrolled to a subtotal, not left at the top. A phone shot is one 900px
     // viewport and the top of this page is the filter bar and the panel header
     // — the cards do not start until below the fold, so an unscrolled shot
@@ -448,7 +446,6 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
       document.querySelector(".row-subtotal")?.scrollIntoView({ block: "center" });
     });
     await phone.evaluate(() => document.fonts.ready);
->>>>>>> origin/claude/visual-sweep-tables
     await shoot(phone, `docs/screenshots/holdings-mobile-${theme}.png`, false);
     await phone.close();
   }
