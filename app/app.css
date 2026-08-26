@@ -1508,8 +1508,10 @@ textarea[aria-invalid="true"] {
  * not drawn by this stylesheet, sitting inside a box that is.
  *
  * It is drawn as the field's **leading action** rather than as a button placed
- * inside a field: full height, flush to the leading edge, a tonal step off the
- * field's own ground and one hairline dividing it from the filename beside it.
+ * inside a field: full height, flush to the field's left edge, a tonal step off
+ * its ground and one hairline dividing it from the filename beside it. Physical
+ * `border-right` and `margin-right` rather than logical properties, because that
+ * is what the rest of this stylesheet uses and the application is LTR-only.
  * A bordered button inside a bordered box is two edges arguing at 8px and 4px
  * radius over the same corner, which is what a first attempt here looked like;
  * an inset region has no second edge to argue with. The box keeps the standard
@@ -1545,9 +1547,16 @@ input[type="file"]::file-selector-button {
 /* One more step of the same ramp, derived rather than named: `--panel-hover` is
  * spent on the resting ground here, and the tokens left are roles rather than
  * steps — `--secondary-container` is the app's "you are here" (the active nav
- * item, the current settings tab), which is not a thing a hover may say. Mixing
- * toward `--on-surface` darkens in light and lightens in dark for free, which is
- * how `.button:hover` already derives its own. */
+ * item, the current settings tab), which is not a thing a hover may say.
+ *
+ * `color-mix` for a hover is `.button:hover`'s idiom, but the second colour is
+ * not: that one mixes toward black, which darkens in both themes and would sink
+ * this ground into the dark canvas. Mixing toward `--on-surface` moves away from
+ * the surface in whichever direction the theme runs — #f2f4f6 → #e1e3e5 in
+ * light, #222a3d → #333b4c in dark. It lands within a couple of units of dark's
+ * `--surface-bright`, which is a coincidence of the ramp rather than that
+ * token's role: `--surface-bright` is the tinted half of a split panel and has
+ * no light-theme value that would work here. */
 input[type="file"]::file-selector-button:hover {
   background: color-mix(in srgb, var(--panel-hover) 92%, var(--on-surface));
 }
@@ -1873,14 +1882,23 @@ code {
 }
 
 /*
- * ...but not below a member that took the whole line. The drop exists to clear
- * a caption; a button that wrapped onto a line of its own has no caption above
- * it, and dropping it there opens 40px where the row's own 16px gap is what is
- * wanted. A full-line member is the only wrap CSS can actually see. A wrap the
- * *content* forces — Settings → Tax, whose long note widens its field past the
- * room the button needs — cannot be seen, and there the drop stands.
+ * ...but not *directly* below a member that took the whole line. The drop exists
+ * to clear a caption; a button pushed onto a line of its own has no caption
+ * above it, and dropping it there opens 40px where the row's own 16px gap is
+ * what is wanted.
+ *
+ * `+` and not `~`: the general sibling combinator asks "is there a full-line
+ * member anywhere above me", which is also true when a narrow field follows one
+ * and the button shares *that* field's line — where zeroing the drop puts the
+ * button 24px above the control it submits, which is the defect this whole rule
+ * set removes. Adjacency is the question actually being asked.
+ *
+ * A full-line member is the only wrap CSS can see. A wrap the *content* forces
+ * it cannot: Settings → Tax, whose long note widens its field past the room the
+ * button needs, at every width; `/upload` at 768; Settings → Accounts and the
+ * account editor at 800. There the drop stands, and the gap reads 40px.
  */
-.panel-form > :is(fieldset, label.choice, .form-error) ~ :is(button, .button) {
+.panel-form > :is(fieldset, label.choice, .form-error) + :is(button, .button) {
   margin-top: 0;
 }
 
@@ -1900,6 +1918,9 @@ code {
  * needs.
  */
 .panel-form > .form-note {
+  /* The 16px is this note's own line-height, set with `.field-note` above; it is
+   * the one figure in the expression that is not a token, and it is here rather
+   * than as a token because nothing else needs to know it. */
   margin-top: calc(var(--field-caption) + (var(--control-h) - 16px) / 2);
 }
 

@@ -217,7 +217,7 @@ all seven optional and all seven combinable.
 **Shape.** A `.panel` whose only child is `<form method="get" class="filter-bar">`. **No panel
 header** — seven labelled controls announce themselves, and a "Filters" title above a row of things
 plainly labelled *Owner*, *Account*, *Brokerage* is a word explaining a word. The form follows
-`.panel-form`'s rule set exactly: flex, wrap, 16px gap, 24px padding, every
+`.panel-form`'s rule set closely — flex, wrap, 16px gap, 24px padding, every
 control 40px tall so that a wrapped second line still aligns with the first. `.filter-bar` keeps its
 own `align-items: flex-end`, which it can because no filter carries a note under it — the bottom of
 a filter *is* the bottom of its control.
