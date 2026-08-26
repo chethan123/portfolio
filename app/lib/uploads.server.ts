@@ -814,8 +814,6 @@ async function assembleDiff(
     }
 
     const basisDisappeared = before.costBasisPerShare !== null && row.costBasisPerShare === null;
-    // A dash on the right of an arrow is quiet in exactly the place it should
-    // not be, so the disappearance is said in words as well.
     if (basisDisappeared) noteParts.push("cost basis no longer reported");
 
     updated.push({

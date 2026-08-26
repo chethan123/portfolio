@@ -54,7 +54,9 @@ create table account (
     constraint account_tax_treatment_valid
     check (tax_treatment in ('taxable', 'tax_deferred', 'tax_free')),
 
-  -- Optional, captured from a CSV; used to auto-select the account on upload.
+  -- Optional, captured from a CSV. A guard against committing to the wrong
+  -- account, never a selector — nothing auto-selects the account from it
+  -- (app/lib/uploads.server.ts).
   external_account_number text,
 
   -- Closing preserves history: an account is never deleted, and it still counts

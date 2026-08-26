@@ -58,7 +58,6 @@ const configSchema = z.object({
   /** Setting this enables the optional login gate (DESIGN.md §10). */
   AUTH_PASSWORD: z.string().min(1).optional(),
 
-  /** HTTP listen port. */
   PORT: integerFromString("a TCP port")
     .refine((value) => value >= 1 && value <= 65535, {
       message: "must be a TCP port between 1 and 65535",
