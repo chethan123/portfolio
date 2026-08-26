@@ -477,11 +477,10 @@ export async function accountTotal(
       "account.kind as account_kind",
       "person.name as owner_name",
       sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
-      // `is_priced` is null on the row the left join manufactures for an
-      // account with no holdings, and a null does not pass the filter.
+      // `is_priced` is null on the manufactured row here too — see
+      // {@link accountTotals}, which runs the identical query shape.
       sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
-      // Counts the joined column rather than the row, for the same reason:
-      // `count(*)` would score that manufactured row as one holding.
+      // Counts the joined column, not the row, for the same reason as above.
       sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
     .where(isAccount("account.id", accountId))

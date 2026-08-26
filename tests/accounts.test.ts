@@ -559,7 +559,6 @@ describe("closing an account", () => {
       // a total computed from one, so nothing reads as an empty account.
       expect(await netWorth(db)).toEqual({ amount: "0.0000", coverage: { known: 0, total: 0 } });
 
-      // And unchanged for a date it was open on.
       expect(await netWorthAt("2026-02-14", db)).toEqual({
         amount: "12500.0000",
         coverage: { known: 1, total: 1 },

@@ -196,9 +196,6 @@ export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
   z
     .string({ message: `${label} is required.` })
     .trim()
-    // Shared with {@link signedQuantity} and {@link perShareAmount}: three
-    // boxes copied off the same statements, and one answer to what a person is
-    // allowed to write in them.
     .transform(bareDecimal)
     .superRefine((value, ctx) => {
       const refuse = (message: string) => ctx.addIssue({ code: "custom", message });

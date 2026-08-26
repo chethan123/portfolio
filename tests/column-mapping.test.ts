@@ -46,9 +46,9 @@ const MAPPING: StatementMapping = {
 };
 
 /**
- * Plant an alias row directly. The domain writer is step 04's resolution
- * screen and does not exist yet; until it does, this file is the one place
- * that knows the column names, the way `fixtures.ts` is for everything else.
+ * Plant an alias row directly, duplicating `fixtures.ts`'s
+ * `seedInstrumentAlias` — this predates that builder and was never moved
+ * over.
  */
 async function plantAlias(
   db: Kysely<Database>,

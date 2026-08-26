@@ -1172,8 +1172,6 @@ async function main(): Promise<void> {
   const client = await pool.connect();
 
   try {
-    // One transaction around the guard, the wipe and the insert. A failure at
-    // any point leaves the database exactly as it was found.
     await client.query("begin");
 
     const reseeding = await assertSafeToSeed(client);

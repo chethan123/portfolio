@@ -106,7 +106,7 @@ services:
       # app's own listen port rather than hardcoded.
       APP_PORT: ${PORT:-3000}
     # The only port published to the host. Plain HTTP on 80 for now — TLS
-    # termination is a follow-up, not part of this change.
+    # termination is a follow-up.
     ports:
       - "80:80"
     volumes:

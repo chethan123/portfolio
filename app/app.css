@@ -978,7 +978,6 @@ a {
   gap: var(--space-xs);
 }
 
-/* On a phone the strip scrolls sideways rather than wrapping to two rows. */
 @media (max-width: 767px) {
   .segmented {
     flex-wrap: nowrap;
@@ -3499,7 +3498,6 @@ code {
   text-decoration: underline;
 }
 
-/* The one place the reader is standing is the one thing at full strength. */
 .upload-steps li[aria-current="step"] {
   color: var(--on-surface);
   font-weight: 600;
