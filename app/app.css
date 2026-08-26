@@ -1249,6 +1249,55 @@ a {
 }
 
 /*
+ * …and on a phone it centres on the first line instead of on the block.
+ *
+ * `align-items: center` is the pricing brief's own word for this row
+ * (`pricing-ui-brief.md:144`), and it is right for exactly as long as the text
+ * block is about the chip's own height: an instrument name that fits one line
+ * makes a 38px block against a 32px badge, and the badge lands 9.5px under the
+ * line, which reads as centred. Below 768px the name wraps and the rule goes on
+ * centring against whatever that produces. On `/accounts/7` at 390px the SPAXX
+ * block is five lines and 118px tall, so its badge sits 49px low — level with
+ * the fourth line of the fund's own title, labelling nothing. `/income` does
+ * the same to the legend dots, which land beside the *second* line of "Ally
+ * Online Savings" and "Vanguard Roth IRA".
+ *
+ * So below the breakpoint the chip stops centring on the block and centres on
+ * the line. Flush tops would be the smaller change and it is the wrong one: a
+ * 12px dot top-aligned against a 20px line sits up at the ascender rather than
+ * beside the word, and a 32px badge top-aligned hangs 6px low. Each chip is
+ * instead offset by half the difference between its own height and the 20px
+ * line it labels — the badge up 6px, the dot down 4px — which is what `center`
+ * itself computes when the block is that one line and nothing more.
+ *
+ * The badge's rise costs nothing: there is 16px above it either way — on the
+ * cell, in every table that is still a table, and on the card itself once
+ * Holdings reflows — and the flex container's height is the text block's
+ * whatever the chip does, so no row grows and no card moves. Measured at 390px,
+ * the worst offset on `/accounts/7`, `/holdings` and `/income` goes from 49.5px
+ * to 0.5px and every block keeps the height it had.
+ *
+ * Scoped below 768px and left alone above it, including the one place above it
+ * where the same thing happens: at exactly 768px the Holdings table still has
+ * thirteen columns, so its names wrap and its badges run up to 65px low. That
+ * is the desktop table being too narrow for its columns, which is a different
+ * argument from this one, and it is not settled by moving a chip.
+ */
+@media (max-width: 767px) {
+  .cell-stack {
+    align-items: flex-start;
+  }
+
+  .cell-stack > .badge {
+    margin-top: -6px;
+  }
+
+  .cell-stack > .legend-dot {
+    margin-top: var(--space-xs);
+  }
+}
+
+/*
  * A caption under a cell's primary line.
  *
  * The weight and the numeric variant are set rather than inherited, and both
@@ -1526,6 +1575,23 @@ a.account-row:hover {
   .detail-figure {
     font-size: 36px;
     line-height: 40px;
+  }
+
+  /*
+   * The tile belongs to the title, not to the header block.
+   *
+   * `align-items: center` centres the tile against everything to its right —
+   * the `h1` *and* the four-pair meta list under it. On a desktop row that list
+   * is one line and the tile lands within 6px of the title's own centre, which
+   * is what the rule was written against. At 390px the pairs wrap to four rows,
+   * the block is 148px tall, and the tile settles 22px *below* the bottom of
+   * the title, level with the Institution row and reading as that row's icon.
+   * It also left 52px of empty gutter above and below itself, with the account
+   * name the one heading on the page indented off the left margin for a tile
+   * that was nowhere near it.
+   */
+  .detail-identity {
+    align-items: flex-start;
   }
 }
 
@@ -2653,11 +2719,24 @@ code {
     border: 0;
   }
 
-  /* The card padding is the card's. A group heading and a subtotal are
+  /*
+   * The card padding is the card's. A group heading and a subtotal are
    * full-width strips between cards, and inset by 16px they read as narrower
    * than the list they belong to — and their own top border doubles up with
-   * this one. */
-  .data-table--holdings tbody tr:not(.row-group):not(.row-subtotal) {
+   * this one. The open row's footer is excluded for a different reason: it is
+   * not a card at all, it is the last line of the card above it (§6.5), and it
+   * has a padding and a border of its own further down.
+   *
+   * One `:not()` taking a list, not three chained ones, and the difference is
+   * not cosmetic. `:not()` contributes the specificity of its argument, so
+   * `:not(a):not(b)` scored three classes here and silently outranked both of
+   * the rules that exist to make exceptions to it — the footer was given the
+   * card's 16px padding and a hairline it had been written `border-top: 0` to
+   * refuse, and the first card drew a border immediately under the heading
+   * strip's own, which is the doubled rule the comment above is about. The list
+   * form scores one class, so an exception can be written as an exception.
+   */
+  .data-table--holdings tbody tr:not(.row-group, .row-subtotal, .row-note) {
     padding: var(--space-md);
     border-top: 1px solid var(--outline-variant);
   }
@@ -2681,7 +2760,19 @@ code {
     border: 0;
   }
 
-  .data-table--holdings tbody td + td {
+  /*
+   * 8px between one card's fields, and none between a subtotal's.
+   *
+   * The gap is what makes a card a list of fields rather than a paragraph, and
+   * it is wrong on the two summary rows for the same reason it is right on a
+   * card: those rows are a single strip, with their own ground under them and
+   * their own padding around them. The rule was scoped to `tbody` and a
+   * subtotal lives in one, so it broke into four bands separated by 8px of bare
+   * panel, while the grand total — the same component, rendered in `<tfoot>`
+   * and so out of the rule's reach — drew as the one continuous block §8 asks
+   * both of them for.
+   */
+  .data-table--holdings tbody tr:not(.row-subtotal) td + td {
     margin-top: var(--space-base);
   }
 
@@ -2774,6 +2865,36 @@ code {
     margin-top: var(--space-sm);
   }
 
+  /*
+   * The tint is the card's, not its cells'.
+   *
+   * Above 768px the open row's cells tile it end to end, so painting the cells
+   * *is* painting the row, and `.row-editing td` is the natural place for it.
+   * Below 768px the `tr` is what owns the card's 16px padding and `td + td`
+   * opens 8px between one field and the next, so the same declaration drew ten
+   * tinted boxes inset from the card's edges with eight bare gutters through
+   * them: §6.3's "the one row that is different", rendered as a stack of grey
+   * stripes on a white card. The ground belongs to the card, so it goes on the
+   * card and the cells give it up.
+   *
+   * The footer takes the same ground across its own full width, which is what
+   * §6.5 means by the two reading as one block — a tinted box inset inside an
+   * untinted line is the fence the rule exists to remove. This covers the
+   * receipt too (§6.6): same row class, same treatment, under the row whose
+   * figure it is confirming.
+   */
+  .data-table--holdings tr.row-editing,
+  .data-table--holdings tr.row-note {
+    background: var(--panel-hover);
+  }
+
+  .data-table--holdings tr.row-editing td,
+  .data-table--holdings tr.row-editing:hover td,
+  .data-table--holdings tr.row-note td,
+  .data-table--holdings tr.row-note:hover td {
+    background: none;
+  }
+
   /* A box that shared its line with the field's label would be a third of a
    * phone wide. The card gives it the row instead — and the caption goes back
    * to the leading edge with it, since `.is-numeric` right-aligns the cell for
@@ -2794,10 +2915,11 @@ code {
 
   /* The note is the card's own last line rather than a row of its own: at 390px
    * the sentence is four lines and the padding between two cards would read as
-   * a break in the middle of one correction. */
+   * a break in the middle of one correction. It needs no `border-top: 0` of its
+   * own any more — the card rule above no longer claims it, so there is no
+   * border here to refuse. */
   .data-table--holdings tbody tr.row-note {
     padding: 0 var(--space-md) var(--space-md);
-    border-top: 0;
   }
 
   .data-table--holdings tr.row-note td {
