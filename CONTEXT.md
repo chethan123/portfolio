@@ -41,6 +41,14 @@ is never a stored value, never a grouping key, and never a slice of a chart — 
 discard the distinction tax treatment exists to keep.
 _Avoid_: tax-advantaged, non-taxable, unsheltered.
 
+### How a chart's time span is chosen
+
+**Chart range**:
+The named span of time a chart plots: one of the fixed presets (1W, 1M, 3M, YTD, 1Y, 5Y, All) or a
+custom start/end pair. Which dates a range can reach differs by screen — the Overview's range may
+include hand-typed pre-app data; an account's never does.
+_Avoid_: time range, period, date range, window, lookback.
+
 ### What a screen shows in public
 
 **Masked**:
