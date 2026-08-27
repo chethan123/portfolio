@@ -59,13 +59,13 @@ so a chosen range survives a reload and can be bookmarked.
 - **Every total says what it was computed from.** "The figure and the line are 17 of 18 holdings.
   The rest have never been priced." A holding nobody can quote is never silently dropped and never
   counted as zero — it is excluded and the exclusion is written down.
-- **The line names every point it plots, not just the three on the axis.** A readout under the
-  headline says what the line ends at, dated and in full — so a range ending last month reads last
-  month's value rather than today's — and pointing anywhere moves it to the nearest point, with a
-  guide line to say which. The axis rounds its figures and leaves the eye to interpolate between
-  rules; the readout does neither. A point typed in by hand for the years before the app says so in
-  words, because a dashed stroke is a claim about where a figure came from that identical text
-  would quietly undo.
+- **Every point on the line can say what it is worth.** A readout under the headline names what the
+  line ends at, dated and in full — so a range ending last month reads that month's value rather
+  than today's — and pointing anywhere moves the readout to the nearest point, with a guide line to
+  say which. The axis rounds its figures to a compact form and leaves the eye to interpolate
+  between rules; the readout does neither. A point typed in by hand for the years before the app
+  says so in words, because a dashed stroke is a claim about where a figure came from that
+  identical text would quietly undo.
 - **Liabilities are accounts.** The auto loan sits in the list at −$14,500 and subtracts from net
   worth, because a loan is a negative `USD` position rather than a special case in the arithmetic.
 - **A zero and an absence never look alike.** An account holding nothing, an account nothing can
@@ -192,9 +192,9 @@ much of it is taxed this year, and by account, which answers which statement it 
   <img alt="A brokerage account: its own header, its own valuation chart with the same readout above the line, and a holdings table" src="docs/screenshots/account-detail-light.png">
 </picture>
 
-Each account carries its own header, its own valuation line, and what it holds. The line reads the
-same way as the overview's, minus the hand-typed mark — an account has no pre-app history to
-attribute to it.
+Each account carries its own header, its own valuation line, and what it holds. That line carries
+the same readout and never a hand-typed mark: the pre-app series is the *household's* net worth,
+and attributing it to one account would invent that account's history.
 
 - **Price quality is on the row it applies to.** The real-estate ETF above reads "price is stale",
   meaning its last known price is being used rather than discarded. A holding that has never been
@@ -309,8 +309,9 @@ someone's shoulder, and the login gate is the only thing that keeps anyone out.
 
 The same pages, with the left rail becoming a bottom bar and the tables reflowing. Nothing is
 withheld on a small screen: setting a balance and the whole of Settings are reachable from a phone.
-A phone has no pointer to hover with, so the chart's readout names the latest point without being
-asked, and a tap pins any other one.
+The chart's readout is rendered before the page is sent rather than composed on hover, so a phone
+with no pointer still arrives with the readout filled in — and, like the screens above, it works
+with JavaScript turned off.
 
 ### Not built yet
 
