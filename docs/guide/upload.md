@@ -77,6 +77,28 @@ both.
 between the two, and getting it wrong is wrong by the size of the position. It only matters when a
 cost basis column is mapped.
 
+### No export? Copy the template
+
+When an institution offers no CSV download — a pension portal, a paper statement — copy
+[`example-statement.csv`](example-statement.csv) and fill it in by hand. Its header carries a column
+for every one of the six roles above, named so each choice is obvious, and its rows show the shapes
+the reader accepts: whole and fractional quantities, an instrument with no public ticker, and `n/a`
+where a cost basis is unknown (write `n/a`, never `0` — a zero basis reports a fake gain).
+
+Three rules when filling it in:
+
+- **One file is one account.** The account is chosen on the upload screen, not by the file, and a
+  statement is a photograph of the whole account — so list *everything* that account holds, and
+  make a separate file for each account.
+- **Every row carries the same as-of date**, the day the figures are true for. Rows disagreeing
+  refuse the file.
+- **Cost basis in the template is per share.** Map it and pick **Per share**; if you'd rather
+  record each position's total cost, keep the figures consistent and pick **Total for the
+  position** instead.
+
+The mapping is remembered against the header row, so once mapped it fills itself in on every later
+file built from the same template.
+
 **"lists what is owed as a positive number"** — a checkbox, captioned with the account's name. A
 loan statement usually prints the balance as a positive figure; ticking this is what turns it into
 something that counts against the household. It arrives pre-ticked on a loan account. Left unticked,
