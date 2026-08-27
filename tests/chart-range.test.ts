@@ -1,5 +1,6 @@
 /**
- * The range-resolution math both routes' loaders read (spec 0008).
+ * The range-resolution math both routes' loaders read (spec 0008), including
+ * the sampler's density rule since spec 0009 / ADR-0003.
  *
  * Pure — no Postgres and no render — for `masking.test.ts`'s reason: this is
  * the domain rule itself, `AGENTS.md` asks for a domain rule to be tested as
@@ -12,6 +13,7 @@ import {
   DEFAULT_RANGE,
   RANGE_COOKIE,
   RANGES,
+  SAMPLE_BUDGET,
   customRangeMin,
   decodeRangeCookieValue,
   encodeRangeCookieValue,
@@ -23,6 +25,7 @@ import {
   resolveRange,
   surfaceEarliestDate,
   type RangeKey,
+  type RangeWindow,
   type Surface,
 } from "~/lib/chart-range";
 
@@ -154,25 +157,169 @@ describe("the disabled-state rule", () => {
   });
 });
 
-describe("sampling: twenty-five points, deduped by calendar day", () => {
-  it("holds for a short window", () => {
+/**
+ * `until` minus `days` calendar days, for building spans of an exact `D`.
+ *
+ * Deliberately its own arithmetic rather than the module's `addDays`, which is
+ * not exported: a test that measured spans with the same helper the code under
+ * test builds them from could not catch that helper being wrong.
+ */
+function daysBefore(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** A custom span with no earliest-date floor, so `D` is under this test's own control. */
+function spanOf(since: string, until: string): RangeWindow {
+  return resolveRange("custom", {
+    today: until,
+    earliest: { positionSet: null },
+    surface: "household",
+    custom: { start: since, end: until },
+  });
+}
+
+/** Whole calendar days between two ISO dates (UTC, matching the module's own arithmetic). */
+function dayGap(a: string, b: string): number {
+  return Math.round(
+    (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000,
+  );
+}
+
+/**
+ * The gaps between consecutive sampled dates, in the order `dates` runs —
+ * ascending, so `gaps[0]` is the oldest gap and `gaps.at(-1)` the one at the
+ * anchor. Walked with a carried `previous` rather than by index, so no element
+ * access has to be asserted non-null past `noUncheckedIndexedAccess`.
+ */
+function gapsOf(dates: readonly string[]): number[] {
+  const gaps: number[] = [];
+  let previous: string | undefined;
+
+  for (const date of dates) {
+    if (previous !== undefined) gaps.push(dayGap(previous, date));
+    previous = date;
+  }
+
+  return gaps;
+}
+
+describe("sampling: every calendar day inside the budget, geometric decay beyond it", () => {
+  it("returns every calendar day, ascending, both ends included, for a short window", () => {
     const { dates } = resolveRange("1w", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
 
-    // A week has at most eight distinct calendar days in it; twenty-five
-    // samples spaced across seven days round several onto the same one.
-    expect(dates.length).toBeLessThanOrEqual(8);
-    expect(new Set(dates).size).toBe(dates.length);
-    expect(dates[0]).toBe("2026-08-19");
-    expect(dates.at(-1)).toBe(TODAY);
+    // A week is 8 distinct calendar days, all of them, exactly — no decay and
+    // nothing deduped away, unlike the fixed-count sampler this replaces.
+    expect(dates).toEqual([
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-22",
+      "2026-08-23",
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+    ]);
   });
 
-  it("holds for a long window", () => {
+  it("holds at the budget boundary itself: a span of exactly 180 days-plus-one is every calendar day, not decayed", () => {
+    const since = daysBefore(TODAY, SAMPLE_BUDGET - 1);
+    const { dates } = spanOf(since, TODAY);
+
+    expect(dates.length).toBe(SAMPLE_BUDGET);
+    expect(dates[0]).toBe(since);
+    expect(dates.at(-1)).toBe(TODAY);
+    // Every calendar day, so every gap is exactly one — no off-by-one at the
+    // seam from this side of it.
+    expect(gapsOf(dates)).toEqual(Array(SAMPLE_BUDGET - 1).fill(1));
+  });
+
+  it("crosses into decay exactly one day past the boundary, with no gap or duplicate at the seam", () => {
+    const since = daysBefore(TODAY, SAMPLE_BUDGET);
+    const { dates } = spanOf(since, TODAY);
+
+    // Still exactly the budget's worth of dates — one more day of span did
+    // not add an extra sample, it triggered decay instead.
+    expect(dates.length).toBe(SAMPLE_BUDGET);
+    expect(new Set(dates).size).toBe(SAMPLE_BUDGET);
+    expect(dates).toEqual([...dates].sort());
+    expect(dates[0]).toBe(since);
+    expect(dates.at(-1)).toBe(TODAY);
+    expect(gapsOf(dates).at(-1)).toBe(1);
+  });
+
+  it("returns exactly the budget's worth of dates for a span that exceeds it, decaying from `until`", () => {
     const { dates } = resolveRange("5y", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
 
-    expect(dates.length).toBe(25);
-    expect(new Set(dates).size).toBe(dates.length);
+    expect(dates.length).toBe(SAMPLE_BUDGET);
+    expect(new Set(dates).size).toBe(SAMPLE_BUDGET);
+    expect(dates).toEqual([...dates].sort());
+    // The earliest sample lands exactly on `since` — the ratio was solved so
+    // the accumulated gaps sum to precisely the span, not merely close to it.
     expect(dates[0]).toBe("2021-08-26");
     expect(dates.at(-1)).toBe(TODAY);
+
+    const gaps = gapsOf(dates);
+
+    // The gap right at the anchor is fixed at one calendar day, for every
+    // budget-exceeding span, regardless of how wide it is.
+    expect(gaps.at(-1)).toBe(1);
+
+    // Growth is asserted as a trend across quarters of the span, NOT pair by
+    // adjacent pair, and the difference is deliberate. Spec 01's acceptance
+    // criterion says "gaps strictly increasing walking backward"; that is not
+    // what a solved ratio of ~1.02 does once each offset is rounded to a whole
+    // day. Measured on this very span, only 56 of 178 adjacent pairs strictly
+    // increase, 100 are equal, and 22 actually decrease by a day — rounding a
+    // smooth curve to integers is not monotonic step to step. The property the
+    // chart actually depends on, and the one the spec was reaching for, is
+    // that resolution is dense near the anchor and coarse far from it. That is
+    // what this asserts. See the PR discussion: the criterion's literal wording
+    // is unachievable for any budget/span where the ratio is near one.
+    const bucket = (from: number, to: number) =>
+      gaps.slice(from, to).reduce((sum, gap) => sum + gap, 0) / (to - from);
+    const quarter = Math.floor(gaps.length / 4);
+    expect(bucket(0, quarter)).toBeGreaterThan(bucket(quarter, 2 * quarter));
+    expect(bucket(quarter, 2 * quarter)).toBeGreaterThan(bucket(2 * quarter, 3 * quarter));
+    expect(bucket(2 * quarter, 3 * quarter)).toBeGreaterThan(bucket(3 * quarter, gaps.length));
+  });
+
+  it("decays from `until` itself, not from the real current date, for a window ending in the past", () => {
+    const pastUntil = "2020-06-15";
+    const since = daysBefore(pastUntil, 900); // well over the budget
+
+    const { dates } = spanOf(since, pastUntil);
+
+    expect(dates.length).toBe(SAMPLE_BUDGET);
+    expect(dates[0]).toBe(since);
+    expect(dates.at(-1)).toBe(pastUntil);
+    // The one-day anchor gap holds relative to `pastUntil`, proving the decay
+    // took no implicit dependency on the wall clock beyond what was passed in.
+    expect(gapsOf(dates).at(-1)).toBe(1);
+  });
+
+  it("keeps two samples on or after a household's own history on every budget-exceeding preset — the spec 0009 regression", () => {
+    // The reported bug, set up as reported: a household that uploaded its
+    // first statement yesterday, so its whole recorded history is one calendar
+    // day old. `positionSet` is that history, not null, so this is the real
+    // household shape rather than a bare date comparison — the preset's own
+    // boundary ignores it (only "All" and "Custom" measure from the earliest
+    // date), which is exactly why the sampler had to be the thing that fixed
+    // this.
+    const historyStart = daysBefore(TODAY, 1);
+    const earliest = { positionSet: historyStart };
+
+    // Every preset whose span outruns the budget, not just the default: 5Y and
+    // All regressed the same way, one order of magnitude less visibly (spec
+    // 0009, "Testing Decisions").
+    for (const range of ["1y", "5y", "all"] as RangeKey[]) {
+      const { dates } = resolveRange(range, { today: TODAY, earliest, surface: "household" });
+
+      // Two points is the whole bug: one is what the old sampler left, and one
+      // point cannot draw a line.
+      expect(dates.filter((date) => date >= historyStart).length).toBeGreaterThanOrEqual(2);
+    }
   });
 });
 

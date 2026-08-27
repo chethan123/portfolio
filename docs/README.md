@@ -46,6 +46,7 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`agents/`](agents/) | agents, via the skills in `.claude/skills/` | this repo's answers to what a skill needs to know: issue tracker, triage labels, domain docs | project documentation — these are configuration |
 | [`screenshots/`](screenshots/) | the README | the images that file renders, and the editorial reasons behind them | the guide's images, which live beside the guide |
 | [`guide/images/`](guide/images/) | the guide | the images the guide renders | the README's images |
+| `specs/<slice>/screenshots/` | a pull request's reviewer | before/after captures proving one ticket's change, deleted once that pull request merges | anything a document renders — a lasting image is the README's or the guide's |
 
 ## Two things this table names, created lazily
 
