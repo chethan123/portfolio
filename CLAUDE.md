@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This repository documents itself deliberately; each document is authoritative for one thing. Start
 here rather than re-deriving:
 
-- **[AGENTS.md](AGENTS.md)** — how work here is done and judged: reply style, delegation, plans,
-  types, tests, PR sizing. Short, and binding.
+- @AGENTS.md — how work here is done and judged: reply style, delegation, plans, types, tests,
+  PR sizing. The `@` imports it, so its rules load with this file; everything below is a pointer
+  to consult, not an import.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — structure. §4 is the layering and the single-site
   invariants a change must keep; §5.6 is the numeric boundary; §6 walks ingest and pricing end to
   end; Appendix A maps every module.
