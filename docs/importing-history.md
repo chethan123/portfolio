@@ -31,8 +31,8 @@ prices the rows as what they say they are. Empower's per-account *balance* histo
 become one for an investment account: a balance says what the account was worth, not what it held,
 and recording it as a single cash row would file the equity side of the household under cash in
 every as-of valuation behind the charts, while the coverage counts report the figure as fully
-known. Where
-this document says "manual series" for something you might wish were computed, that rule is why.
+known. Where this document says "manual series" for something you might wish were computed, that
+rule is why.
 
 This section is the third telling of the two lines — [DESIGN.md §7](../DESIGN.md) holds the rules,
 [`guide/overview.md`](guide/overview.md) reads them off the screen — and the duplication is
@@ -205,8 +205,9 @@ much of it you do, so the notes here are only what matters at volume:
 - **Mistakes are corrected by re-uploading.** There is no screen for deleting an upload; a
   corrected upload for the same date simply wins, and the superseded set lingers unread. If one
   gets in the way — step 5's gap query still counts it — the schema is built for removing it: find
-  its id in `position_set` by account and date, and `delete from position_set where id = …` takes
-  its holdings with it.
+  its id in `position_set` by account and date (of the two rows a corrected date holds, the
+  superseded one is the earlier, by `created_at` then by `id`), and
+  `delete from position_set where id = …` takes its holdings with it.
 
 When the most recent statements are in, open Holdings beside the captured `getHoldings` response
 and check the two agree account by account — that is what the capture is for. Then upload the rest,
@@ -284,7 +285,8 @@ overwrite what the running system recorded live. Trading days only; a row for a 
 would state a close that never happened, where the carry-forward already answers those dates
 honestly.
 
-Re-run the gap query until it comes back empty.
+Re-run the gap query until it comes back empty, or until only rows you have decided to ignore
+remain.
 
 ## Step 6 — verify
 
@@ -316,7 +318,7 @@ means a missing statement, a missing account, or a spine gap the queries above w
 
 ## Clean up
 
-Delete the captured files — `histories.json`, the accounts and holdings captures, and any TSVs
-derived from them. Everything they held that matters is now in the database, which
+Delete the captured files — `histories.json`, any per-account history captures from step 3, the
+accounts and holdings captures, and any TSVs derived from them. Everything they held that matters is now in the database, which
 [`operating.md`](operating.md) already tells you how to back up; what remains in them is account
 numbers in plain text with no further use.
