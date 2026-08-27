@@ -154,25 +154,131 @@ describe("the disabled-state rule", () => {
   });
 });
 
-describe("sampling: twenty-five points, deduped by calendar day", () => {
-  it("holds for a short window", () => {
+/** `until` minus `days` calendar days, for building spans of an exact `D`. */
+function daysBefore(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** A custom span with no earliest-date floor, so `D` is under this test's own control. */
+function spanOf(since: string, until: string) {
+  return resolveRange("custom", {
+    today: until,
+    earliest: { positionSet: null },
+    surface: "household",
+    custom: { start: since, end: until },
+  });
+}
+
+/** Whole calendar days between two ISO dates (UTC, matching the module's own arithmetic). */
+function dayGap(a: string, b: string): number {
+  return Math.round(
+    (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000,
+  );
+}
+
+describe("sampling: every calendar day inside the budget, geometric decay beyond it", () => {
+  const CAP = 180;
+
+  it("returns every calendar day, ascending, both ends included, for a short window", () => {
     const { dates } = resolveRange("1w", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
 
-    // A week has at most eight distinct calendar days in it; twenty-five
-    // samples spaced across seven days round several onto the same one.
-    expect(dates.length).toBeLessThanOrEqual(8);
-    expect(new Set(dates).size).toBe(dates.length);
-    expect(dates[0]).toBe("2026-08-19");
-    expect(dates.at(-1)).toBe(TODAY);
+    // A week is 8 distinct calendar days, all of them, exactly — no decay and
+    // nothing deduped away, unlike the fixed-count sampler this replaces.
+    expect(dates).toEqual([
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-22",
+      "2026-08-23",
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+    ]);
   });
 
-  it("holds for a long window", () => {
+  it("holds at the budget boundary itself: a span of exactly 180 days-plus-one is every calendar day, not decayed", () => {
+    const since = daysBefore(TODAY, CAP - 1);
+    const { dates } = spanOf(since, TODAY);
+
+    expect(dates.length).toBe(CAP);
+    expect(dates[0]).toBe(since);
+    expect(dates.at(-1)).toBe(TODAY);
+    // Every calendar day, so every gap is exactly one — no off-by-one at the
+    // seam from this side of it.
+    for (let i = 1; i < dates.length; i++) expect(dayGap(dates[i - 1]!, dates[i]!)).toBe(1);
+  });
+
+  it("crosses into decay exactly one day past the boundary, with no gap or duplicate at the seam", () => {
+    const since = daysBefore(TODAY, CAP);
+    const { dates } = spanOf(since, TODAY);
+
+    // Still exactly the budget's worth of dates — one more day of span did
+    // not add an extra sample, it triggered decay instead.
+    expect(dates.length).toBe(CAP);
+    expect(new Set(dates).size).toBe(CAP);
+    expect(dates).toEqual([...dates].sort());
+    expect(dates[0]).toBe(since);
+    expect(dates.at(-1)).toBe(TODAY);
+    expect(dayGap(dates.at(-2)!, dates.at(-1)!)).toBe(1);
+  });
+
+  it("returns exactly the budget's worth of dates for a span that exceeds it, decaying from `until`", () => {
     const { dates } = resolveRange("5y", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
 
-    expect(dates.length).toBe(25);
-    expect(new Set(dates).size).toBe(dates.length);
+    expect(dates.length).toBe(CAP);
+    expect(new Set(dates).size).toBe(CAP);
+    expect(dates).toEqual([...dates].sort());
+    // The earliest sample lands exactly on `since` — the ratio was solved so
+    // the accumulated gaps sum to precisely the span, not merely close to it.
     expect(dates[0]).toBe("2021-08-26");
     expect(dates.at(-1)).toBe(TODAY);
+    // The gap right at the anchor is fixed at one calendar day, for every
+    // budget-exceeding span, regardless of how wide it is.
+    expect(dayGap(dates.at(-2)!, dates.at(-1)!)).toBe(1);
+    // The gaps widen walking backward: the oldest gap dwarfs the anchor's.
+    // Checked over the whole span rather than pair-by-pair, since rounding
+    // a smoothly growing real-valued offset to the nearest whole day is not
+    // itself perfectly monotonic step to step (two adjacent gaps can each
+    // round to the same day count) — the growth is in the trend, not in
+    // every single adjacent pair.
+    // `gaps[0]` is the oldest gap (nearest `since`); `gaps.at(-1)` is the
+    // anchor gap (nearest `until`) — the array runs widest-first because
+    // `dates` itself is ascending, oldest-first.
+    const gaps = dates.slice(1).map((date, i) => dayGap(dates[i]!, date));
+    const bucket = (from: number, to: number) =>
+      gaps.slice(from, to).reduce((sum, gap) => sum + gap, 0) / (to - from);
+    const quarter = Math.floor(gaps.length / 4);
+    expect(bucket(0, quarter)).toBeGreaterThan(bucket(quarter, 2 * quarter));
+    expect(bucket(quarter, 2 * quarter)).toBeGreaterThan(bucket(2 * quarter, 3 * quarter));
+    expect(bucket(2 * quarter, 3 * quarter)).toBeGreaterThan(bucket(3 * quarter, gaps.length));
+  });
+
+  it("decays from `until` itself, not from the real current date, for a window ending in the past", () => {
+    const pastUntil = "2020-06-15";
+    const since = daysBefore(pastUntil, 900); // well over the budget
+
+    const { dates } = spanOf(since, pastUntil);
+
+    expect(dates.length).toBe(CAP);
+    expect(dates[0]).toBe(since);
+    expect(dates.at(-1)).toBe(pastUntil);
+    // The one-day anchor gap holds relative to `pastUntil`, proving the decay
+    // took no implicit dependency on the wall clock beyond what was passed in.
+    expect(dayGap(dates.at(-2)!, dates.at(-1)!)).toBe(1);
+  });
+
+  it("keeps two samples on or after a household's own history even on a budget-exceeding span — the spec 0009 regression", () => {
+    // A household whose real history started one calendar day before `until`,
+    // viewed on the default 1Y range: today's default range spans roughly a
+    // year (D far past the budget), which is exactly the shape that used to
+    // spread twenty-five samples so thin the last day or two of real history
+    // fell entirely before the first checkpoint.
+    const historyStart = daysBefore(TODAY, 1);
+    const { dates } = resolveRange("1y", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
+
+    expect(dates.filter((date) => date >= historyStart).length).toBeGreaterThanOrEqual(2);
   });
 });
 

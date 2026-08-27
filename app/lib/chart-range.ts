@@ -49,11 +49,17 @@ export const RANGES: Record<RangeKey, { label: string }> = {
 export const DEFAULT_RANGE = "1y" as const satisfies RangeKey;
 
 /**
- * How many points the line is drawn from — unchanged by this spec, and
- * unaffected by span length: a 1W chart and a 5Y chart both sample 25 points,
- * deduped by calendar day where a short span rounds two onto the same one.
+ * The sampling budget (spec 0009, issue #74): how many dates a chart will
+ * ever check for one range.
+ *
+ * A span whose whole day-count-plus-one fits inside this budget is sampled
+ * at every calendar day — no gaps at all. A wider span is sampled at exactly
+ * this many dates, spaced by a decay that grows geometrically walking
+ * backward from `until`, so the day right next to the anchor is always
+ * checked regardless of how wide the range is. Raising or lowering chart
+ * density for every long-range preset at once is changing this one number.
  */
-export const SAMPLES = 25;
+export const CAP = 180;
 
 const DAY_MS = 86_400_000;
 
@@ -157,18 +163,81 @@ export function surfaceEarliestDate(surface: Surface, earliest: SurfaceEarliest)
 }
 
 /**
- * Twenty-five evenly spaced samples between `since` and `until`, deduped by
- * calendar day — unchanged from the four-preset control, and applied
- * identically regardless of span length.
+ * The ratio `r > 1` such that `n` geometrically growing terms starting at
+ * `r^0 = 1` sum to exactly `target` — i.e. `1 + r + r^2 + ... + r^(n-1) =
+ * target`. Solved by bisection rather than in closed form (ADR-0003): the sum
+ * is continuous and strictly increasing in `r` for `r > 1`, running from `n`
+ * (as `r → 1⁺`) to unbounded, and every caller here only asks for a `target`
+ * greater than `n`, so a solution always exists and bisection converges on
+ * it reliably.
+ */
+function solveGrowthRatio(n: number, target: number): number {
+  const sumAt = (r: number): number => {
+    let sum = 0;
+    let term = 1;
+    for (let i = 0; i < n; i++) {
+      sum += term;
+      term *= r;
+    }
+    return sum;
+  };
+
+  let low = 1;
+  let high = 2;
+  while (sumAt(high) < target) high *= 2;
+
+  // A tolerance this tight on `r` itself is what the spec calls for: loose
+  // enough to converge in a bounded number of steps, tight enough that every
+  // downstream day-offset (up to `CAP - 2` powers of `r`) rounds stably.
+  while (high - low > 1e-9) {
+    const mid = (low + high) / 2;
+    if (sumAt(mid) < target) low = mid;
+    else high = mid;
+  }
+
+  return (low + high) / 2;
+}
+
+/**
+ * Every calendar day from `since` to `until` when the span fits the budget;
+ * otherwise exactly `CAP` dates, geometrically decaying backward from
+ * `until` (spec 0009, issue #74, ADR-0003).
+ *
+ * The anchor is `until`, never the real current date — every fixed preset's
+ * `until` already equals today, so this only matters for a custom range
+ * ending in the past, which must decay away from its own end rather than
+ * from the wall clock.
  */
 function sampleWindow(since: IsoDate, until: IsoDate): Window {
   const start = parseIso(since);
   const end = parseIso(until);
-  const step = (end - start) / (SAMPLES - 1);
+  const spanDays = Math.round((end - start) / DAY_MS);
 
-  const dates = Array.from({ length: SAMPLES }, (_, index) => isoDate(start + index * step));
+  if (spanDays + 1 <= CAP) {
+    const dates = Array.from({ length: spanDays + 1 }, (_, index) => addDays(since, index));
+    return { since, dates };
+  }
 
-  return { since, dates: [...new Set(dates)] };
+  // `CAP - 1` gap terms (`r^0` through `r^(CAP-2)`), the first fixed at one
+  // calendar day by construction (`r^0 = 1`), solved to sum exactly to the
+  // span so the walk backward lands precisely on `since`.
+  const ratio = solveGrowthRatio(CAP - 1, spanDays);
+
+  // Cumulative day-offsets from `until`, nearest first: offset(0) = 0,
+  // offset(k) = offset(k-1) + ratio^(k-1). `offsets[CAP - 1]` equals
+  // `spanDays` by construction of `ratio`, landing exactly on `since`.
+  const offsets: number[] = [0];
+  let gap = 1;
+  for (let k = 1; k < CAP; k++) {
+    offsets.push(offsets[k - 1]! + gap);
+    gap *= ratio;
+  }
+
+  // Built nearest-to-`until` first above; reversed here into the ascending,
+  // oldest-first order every other caller of this function returns.
+  const dates = offsets.map((offset) => addDays(until, -Math.round(offset))).reverse();
+
+  return { since, dates };
 }
 
 /**
