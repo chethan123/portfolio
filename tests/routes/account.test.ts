@@ -22,18 +22,26 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import { loader } from "../../app/routes/account.tsx";
+import Account, { loader, middleware } from "../../app/routes/account.tsx";
+import { RANGE_COOKIE } from "~/lib/chart-range";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
-import { args, get, responseOf } from "../support/routes.ts";
+import { renderRoute } from "../support/render.tsx";
+import { args, get, responseOf, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
 afterAll(closeTestDatabase);
 
+const DAY_MS = 86_400_000;
+
 /** Today in UTC, the way the route computes the end of its window. */
 const today = (): string => new Date().toISOString().slice(0, 10);
+
+/** A date `days` before today, in UTC — the zone the loader samples in. */
+const daysAgo = (days: number): string =>
+  new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
 
 /**
  * An account with two statements behind it — a January one and the February
@@ -218,5 +226,192 @@ describe("the chart's range", () => {
 
         expect(data.range).toBe("1y");
       })(),
+  );
+});
+
+/** One bank account holding one balance, as of `asOf` — this account's own day zero. */
+async function seedAccountDayZero(
+  ctx: Pick<TestContext, "seedPerson" | "seedAccount" | "seedPositionSet" | "usdInstrument">,
+  asOf: string,
+) {
+  const owner = await ctx.seedPerson({ name: "Alice" });
+  const account = await ctx.seedAccount({ name: "Checking", owner, kind: "bank" });
+  const usd = await ctx.usdInstrument();
+
+  await ctx.seedPositionSet({
+    account,
+    asOf,
+    holdings: [{ instrument: usd, quantity: "12500.00000000" }],
+  });
+
+  return account;
+}
+
+describe("the persistence cookie (spec 0008)", () => {
+  it(
+    "lets an explicit ?range= win over a cookie naming a different range",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(400));
+      const data = await loader(
+        args(get(`/accounts/${account.id}?range=5y`, `${RANGE_COOKIE}=1m`), { accountId: account.id }),
+      );
+
+      expect(data.range).toBe("5y");
+    }),
+  );
+
+  it(
+    "uses the cookie's stored range when the URL carries none",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(400));
+      const data = await loader(
+        args(get(`/accounts/${account.id}`, `${RANGE_COOKIE}=5y`), { accountId: account.id }),
+      );
+
+      expect(data.range).toBe("5y");
+    }),
+  );
+
+  it(
+    "sets the cookie whenever the request carried an explicit range",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(400));
+      const response = await servedThrough(middleware, get(`/accounts/${account.id}?range=5y`), {
+        accountId: account.id,
+      });
+
+      expect(response.headers.get("Set-Cookie")).toContain(`${RANGE_COOKIE}=5y`);
+    }),
+  );
+
+  it(
+    "writes nothing when the request named no explicit range",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(400));
+      const response = await servedThrough(middleware, get(`/accounts/${account.id}`), {
+        accountId: account.id,
+      });
+
+      expect(response.headers.get("Set-Cookie")).toBeNull();
+    }),
+  );
+});
+
+describe("a custom range", () => {
+  it(
+    "resolves to exactly the span asked for and reports it back for the control to show",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(200));
+      const data = await loader(
+        args(
+          get(`/accounts/${account.id}?range=custom&start=${daysAgo(100)}&end=${daysAgo(10)}`),
+          { accountId: account.id },
+        ),
+      );
+
+      expect(data.range).toBe("custom");
+      expect(data.custom).toEqual({ start: daysAgo(100), end: daysAgo(10) });
+    }),
+  );
+
+  it(
+    "falls back to the default rather than erroring on an incomplete pair",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(200));
+      const data = await loader(
+        args(get(`/accounts/${account.id}?range=custom&start=2026-01-01`), { accountId: account.id }),
+      );
+
+      expect(data.range).toBe("1y");
+      expect(data.custom).toBeUndefined();
+    }),
+  );
+
+  it(
+    "falls back to the default rather than erroring on a span reaching before this account's own earliest data",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(30));
+      const data = await loader(
+        args(get(`/accounts/${account.id}?range=custom&start=2000-01-01&end=${daysAgo(0)}`), {
+          accountId: account.id,
+        }),
+      );
+
+      expect(data.range).toBe("1y");
+    }),
+  );
+
+  it(
+    "gives the custom form this account's own earliest date as its minimum, never the household's",
+    withDatabase(async (ctx) => {
+      // The household's earliest statement (an older, unrelated account)
+      // predates this account's own — the account-scoped query, not
+      // `firstRecordedDate`, must decide the minimum spec 0008 adds.
+      const owner = await ctx.seedPerson();
+      const older = await ctx.seedAccount({ name: "Older", owner });
+      await ctx.seedPositionSet({ account: older, asOf: daysAgo(900), holdings: [] });
+
+      const account = await seedAccountDayZero(ctx, daysAgo(200));
+      const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
+
+      expect(data.customMin).toBe(daysAgo(200));
+      expect(data.customMax).toBe(daysAgo(0));
+
+      // Not just the loader's own field — the two date inputs the reader
+      // actually sees have to carry the same bounds.
+      const markup = renderRoute(Account, `/accounts/${account.id}`, data);
+      expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="start"`);
+      expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="end"`);
+    }),
+  );
+
+  it(
+    "renders the applied span instead of the word Custom, once one is applied",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(200));
+      const data = await loader(
+        args(
+          get(`/accounts/${account.id}?range=custom&start=${daysAgo(100)}&end=${daysAgo(10)}`),
+          { accountId: account.id },
+        ),
+      );
+      const markup = renderRoute(Account, `/accounts/${account.id}`, data);
+
+      expect(markup).toContain(`${daysAgo(100)} – ${daysAgo(10)}`);
+      expect(markup).not.toMatch(/>Custom</);
+    }),
+  );
+});
+
+describe("a preset before this account's own earliest data", () => {
+  it(
+    "renders disabled, with no working link, using the account-scoped earliest date rather than the household's",
+    withDatabase(async (ctx) => {
+      // The household has older data (a different account); this account is
+      // eight months old. Before spec 0008's account-scoped query, "All" and
+      // the disabled rule both fell back to the household-wide earliest date
+      // and would have missed this.
+      const owner = await ctx.seedPerson();
+      const older = await ctx.seedAccount({ name: "Older", owner });
+      await ctx.seedPositionSet({ account: older, asOf: daysAgo(900), holdings: [] });
+
+      const account = await seedAccountDayZero(ctx, daysAgo(240));
+      const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
+
+      expect(data.rangeOptions.find((option) => option.key === "5y")?.disabled).toBe(true);
+
+      const markup = renderRoute(Account, `/accounts/${account.id}`, data);
+      expect(markup).not.toContain('href="?range=5y"');
+    }),
+  );
+
+  it(
+    "does not disable a preset whose start lands exactly on the earliest date",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(7));
+      const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
+
+      expect(data.rangeOptions.find((option) => option.key === "1w")?.disabled).toBe(false);
+    }),
   );
 });

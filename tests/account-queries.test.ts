@@ -17,6 +17,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
+  accountFirstRecordedDate,
   accountHoldings,
   accountSeries,
   accountTotal,
@@ -258,6 +259,39 @@ describe("accountHoldings", () => {
       expect(await accountHoldings(closed.id, db)).toEqual([]);
       expect(await accountHoldings("999999999", db)).toEqual([]);
       expect(await accountHoldings("not-an-id", db)).toEqual([]);
+    }),
+  );
+});
+
+describe("accountFirstRecordedDate", () => {
+  it(
+    "is this account's own earliest statement, not the household's — spec 0008's chart-range work",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet }) => {
+      const owner = await seedPerson();
+      // The household's earliest statement is January's, on an older account —
+      // the account-scoped query must not report that date for one that
+      // started later, the way the household-wide fallback used to.
+      const older = await seedAccount({ name: "Older", owner });
+      const younger = await seedAccount({ name: "Younger", owner });
+      await seedPositionSet({ account: older, asOf: "2026-01-31", holdings: [] });
+      await seedPositionSet({ account: younger, asOf: "2026-06-30", holdings: [] });
+
+      expect(await accountFirstRecordedDate(older.id, db)).toBe("2026-01-31");
+      expect(await accountFirstRecordedDate(younger.id, db)).toBe("2026-06-30");
+    }),
+  );
+
+  it(
+    "is null for an account with no statements, a closed one, and an id that is not an account",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const owner = await seedPerson();
+      const fresh = await seedAccount({ owner });
+      const closed = await seedAccount({ owner, closedAt: "2026-02-01" });
+
+      expect(await accountFirstRecordedDate(fresh.id, db)).toBeNull();
+      expect(await accountFirstRecordedDate(closed.id, db)).toBeNull();
+      expect(await accountFirstRecordedDate("999999999", db)).toBeNull();
+      expect(await accountFirstRecordedDate("not-an-id", db)).toBeNull();
     }),
   );
 });

@@ -21,11 +21,13 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import Overview, { loader } from "../../app/routes/overview.tsx";
+import Overview, { loader, middleware } from "../../app/routes/overview.tsx";
+
+import { RANGE_COOKIE } from "~/lib/chart-range";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get } from "../support/routes.ts";
+import { args, get, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -113,12 +115,14 @@ describe("the range in the query string", () => {
   it(
     "falls back to the default year when the range is not one the page offers",
     withDatabase(async () => {
-      // Reached by a hand-edited URL or a stale bookmark. The fallback matters
-      // beyond the label: an unrecognised key must not fall through to "All",
-      // which measures its window from day zero with an extra query.
-      expect((await loader(args(get("/?range=ytd")))).range).toBe("1y");
+      // Reached by a hand-edited URL or a stale bookmark. `6m` was never one
+      // of the eight the control offers, before or after spec 0008 widened it
+      // from four — unlike `ytd`, which spec 0008 turned from an unrecognised
+      // key into a real preset.
+      expect((await loader(args(get("/?range=6m")))).range).toBe("1y");
       expect((await loader(args(get("/?range=")))).range).toBe("1y");
       expect((await loader(args(get("/?range=1m")))).range).toBe("1m");
+      expect((await loader(args(get("/?range=ytd")))).range).toBe("ytd");
     }),
   );
 
@@ -133,6 +137,164 @@ describe("the range in the query string", () => {
         // string, with no authentication needed to send it.
         expect((await loader(args(get(`/?range=${inherited}`)))).range).toBe("1y");
       })(),
+  );
+});
+
+describe("the persistence cookie (spec 0008)", () => {
+  it(
+    "lets an explicit ?range= win over a cookie naming a different range",
+    withDatabase(async () => {
+      const data = await loader(args(get("/?range=5y", `${RANGE_COOKIE}=1m`)));
+      expect(data.range).toBe("5y");
+    }),
+  );
+
+  it(
+    "uses the cookie's stored range when the URL carries none",
+    withDatabase(async () => {
+      const data = await loader(args(get("/", `${RANGE_COOKIE}=5y`)));
+      expect(data.range).toBe("5y");
+    }),
+  );
+
+  it(
+    "falls back to the hardcoded 1Y default when neither the URL nor a cookie says anything",
+    withDatabase(async () => {
+      expect((await loader(args(get("/")))).range).toBe("1y");
+    }),
+  );
+
+  it(
+    "sets the cookie whenever the request carried an explicit range",
+    withDatabase(async () => {
+      const response = await servedThrough(middleware, get("/?range=5y"));
+      expect(response.headers.get("Set-Cookie")).toContain(`${RANGE_COOKIE}=5y`);
+    }),
+  );
+
+  it(
+    "sets the cookie for an applied custom span, not for one that falls back",
+    withDatabase(async () => {
+      const applied = await servedThrough(middleware, get("/?range=custom&start=2026-01-01&end=2026-03-01"));
+      expect(applied.headers.get("Set-Cookie")).toContain(
+        `${RANGE_COOKIE}=custom%3A2026-01-01%3A2026-03-01`,
+      );
+    }),
+  );
+
+  it(
+    "writes nothing when the request named no explicit range",
+    withDatabase(async () => {
+      expect((await servedThrough(middleware, get("/"))).headers.get("Set-Cookie")).toBeNull();
+      expect((await servedThrough(middleware, get("/", `${RANGE_COOKIE}=5y`))).headers.get("Set-Cookie")).toBeNull();
+    }),
+  );
+});
+
+describe("a custom range", () => {
+  it(
+    "resolves to exactly the span asked for and reports it back for the control to show",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      const data = await loader(args(get(`/?range=custom&start=${daysAgo(100)}&end=${daysAgo(10)}`)));
+
+      expect(data.range).toBe("custom");
+      expect(data.custom).toEqual({ start: daysAgo(100), end: daysAgo(10) });
+    }),
+  );
+
+  it(
+    "falls back to the default rather than erroring on an incomplete pair",
+    withDatabase(async () => {
+      const data = await loader(args(get("/?range=custom&start=2026-01-01")));
+      expect(data.range).toBe("1y");
+      expect(data.custom).toBeUndefined();
+    }),
+  );
+
+  it(
+    "falls back to the default rather than erroring on a span reaching before this household's earliest data",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(30));
+
+      const data = await loader(args(get(`/?range=custom&start=2000-01-01&end=${daysAgo(0)}`)));
+
+      expect(data.range).toBe("1y");
+    }),
+  );
+
+  it(
+    "gives the custom form the household's own earliest date as its minimum, and today as its maximum",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      const data = await loader(args(get("/")));
+
+      expect(data.customMin).toBe(daysAgo(200));
+      expect(data.customMax).toBe(daysAgo(0));
+
+      // Not just the loader's own field — the two date inputs the reader
+      // actually sees have to carry the same bounds, or a picker that let
+      // through a date the loader would then reject.
+      const markup = renderRoute(Overview, "/", data);
+      expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="start"`);
+      expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="end"`);
+    }),
+  );
+
+  it(
+    "reaches into the household's hand-typed pre-app history for its minimum, when that is earlier",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(60));
+      await ctx.seedManualNetWorth({ date: daysAgo(400), amount: "10000.0000" });
+
+      expect((await loader(args(get("/")))).customMin).toBe(daysAgo(400));
+    }),
+  );
+
+  it(
+    "renders the applied span instead of the word Custom, once one is applied",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      const data = await loader(args(get(`/?range=custom&start=${daysAgo(100)}&end=${daysAgo(10)}`)));
+      const markup = renderRoute(Overview, "/", data);
+
+      expect(markup).toContain(`${daysAgo(100)} – ${daysAgo(10)}`);
+      expect(markup).not.toMatch(/>Custom</);
+    }),
+  );
+});
+
+describe("a preset before this household's earliest data", () => {
+  it(
+    "renders disabled, with no working link, rather than silently acting like All",
+    withDatabase(async (ctx) => {
+      // Eight months of history: 5Y and All measure the same window, and 5Y
+      // must say so rather than let a click do nothing and leave the reader
+      // guessing why.
+      await seedDayZero(ctx, daysAgo(240));
+
+      const data = await loader(args(get("/")));
+      expect(data.rangeOptions.find((option) => option.key === "5y")?.disabled).toBe(true);
+
+      const markup = renderRoute(Overview, "/", data);
+      expect(markup).not.toContain('href="?range=5y"');
+    }),
+  );
+
+  it(
+    "does not disable a preset whose start lands exactly on the earliest date",
+    withDatabase(async (ctx) => {
+      // 1W's own boundary is exactly seven days ago; seeding day zero there
+      // makes the two land on the same date rather than one falling before
+      // the other.
+      await seedDayZero(ctx, daysAgo(7));
+
+      const data = await loader(args(get("/")));
+      expect(data.rangeOptions.find((option) => option.key === "1w")?.disabled).toBe(false);
+    }),
   );
 });
 

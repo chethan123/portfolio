@@ -1060,6 +1060,76 @@ a {
   color: var(--on-primary-container);
 }
 
+/* A preset before the surface's earliest date (spec 0008, story 9): shown
+ * rather than hidden, so a reader can see it exists and why it does nothing,
+ * but with no href to make disabled easy to miss on a quick click. */
+.segmented span[aria-disabled="true"] {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  color: var(--on-surface-variant);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Custom's disclosure (spec 0008): a native `<details>` so the picker opens
+ * with no script, positioned beside the strip rather than reflowing it. */
+.segmented-custom {
+  position: relative;
+}
+
+.segmented-custom summary {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--on-surface-variant);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  list-style: none;
+}
+
+.segmented-custom summary::-webkit-details-marker {
+  display: none;
+}
+
+.segmented-custom summary[aria-current="true"] {
+  background: var(--primary-container);
+  border-color: transparent;
+  color: var(--on-primary-container);
+}
+
+.segmented-custom-form {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + var(--space-xs));
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: max-content;
+  padding: var(--space-md);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-card);
+}
+
 /*
  * A strip that has to say what it does, over the same 4px caption gap a `label`
  * gives its control.
@@ -1087,7 +1157,9 @@ a {
     gap: var(--space-xs);
   }
 
-  .segmented a {
+  .segmented a,
+  .segmented span[aria-disabled="true"],
+  .segmented-custom summary {
     flex: none;
   }
 }

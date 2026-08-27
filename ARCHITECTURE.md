@@ -1620,9 +1620,6 @@ still live in the current code:
   computed inside `saveMapping` (to persist `had_first_sightings`) and again in the columns route (to
   choose the redirect). The bytes are parsed twice, and the two answers are taken at different
   moments. A single `rememberMapping(draftId, mapping, rows, db) -> { nextStep }` would close it.
-- **Chart-range primitives duplicated** across `routes/overview.tsx` and `routes/account.tsx` — the
-  range set, the sample count, the drawability rule. The drawability rule has already drifted three
-  ways. Note that `windowDays` should *not* be shared: the two differ for a documented domain reason.
 - **`inTransaction` exists three times** — in `prices.server.ts`, `instrument-resolution.server.ts`
   and `uploads.server.ts` — identically. All three already import from `db.server.ts`.
 - **Two settings routes never render a form-level refusal**, so a future `.superRefine` on
@@ -1680,7 +1677,7 @@ still live in the current code:
 | File | Role |
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, and `/healthz`'s report |
-| `valuation.server.ts` | **The only reader of `holding_valued` for valuation.** Twelve exports: ten valuation reads, seven of them over the `ValuedSource` seam, plus `manualNetWorth` and `firstRecordedDate`, which deliberately read elsewhere |
+| `valuation.server.ts` | **The only reader of `holding_valued` for valuation.** Thirteen exports: ten valuation reads, seven of them over the `ValuedSource` seam, plus `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
 | `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload` — the ingest flow's one write |
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |

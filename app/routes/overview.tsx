@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 
 import { Amount } from "~/components/amount";
+import { ChartRangeControl } from "~/components/chart-range-control";
 import { EmptyState } from "~/components/empty-state";
 import {
   AccountBalanceIcon,
@@ -12,6 +13,14 @@ import {
 } from "~/components/icons";
 import { NetWorthChart } from "~/components/net-worth-chart";
 import { ACCOUNT_KINDS, labelOf } from "~/lib/account-options";
+import {
+  chartRangeMiddleware,
+  customRangeMin,
+  rangeDescription,
+  rangeOptions,
+  readChartRange,
+  resolveRange,
+} from "~/lib/chart-range";
 import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
 import {
@@ -22,7 +31,6 @@ import {
   netWorthSeries,
   type AccountKind,
   type IsoDate,
-  type ManualPoint,
 } from "~/lib/valuation.server";
 
 import type { Route } from "./+types/overview";
@@ -53,41 +61,6 @@ export function meta() {
 }
 
 /**
- * The ranges the segmented control offers.
- *
- * "All" carries no fixed length: it is measured from day zero, the earliest
- * date any statement records (§7). A fixed wide window was the first attempt
- * and is wrong — over thirty years, twenty-four of twenty-five samples land in
- * the era before the app existed, come back uncovered, and are discarded,
- * leaving an all-time chart with no all-time line on it.
- *
- * The mock offers 1D, 1W, YTD and a custom picker as well. None of them are
- * here, because nothing in this loader can answer them honestly: a household
- * uploads a statement a quarter, so a day-long window is a window with one
- * point in it (§14, limitation 7).
- */
-const RANGES = {
-  "1m": { label: "1M", days: 30 },
-  "3m": { label: "3M", days: 90 },
-  "1y": { label: "1Y", days: 365 },
-  all: { label: "All", days: null },
-} as const;
-
-type RangeKey = keyof typeof RANGES;
-
-/** Left as a literal, not widened to `RangeKey`, so its `days` stays non-null. */
-const DEFAULT_RANGE = "1y" as const satisfies RangeKey;
-
-/**
- * How many points the line is drawn from.
- *
- * Each one is a separate evaluation of `holding_valued_at` inside a single
- * query, so this trades server work for line smoothness. Twenty-five is enough
- * to show the shape of a year and few enough to stay one cheap round trip.
- */
-const SAMPLES = 25;
-
-/**
  * How many accounts the allocation panel draws.
  *
  * The categorical sequence is five long and §13.3 refuses to extend it: a sixth
@@ -96,8 +69,6 @@ const SAMPLES = 25;
  * summed figure and this route does no money arithmetic.
  */
 const BARS = 5;
-
-const DAY_MS = 86_400_000;
 
 /**
  * UTC throughout, deliberately.
@@ -109,72 +80,33 @@ const DAY_MS = 86_400_000;
 const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
 
 /**
- * The window to report on: where it starts, and the dates to draw it from.
- *
- * `since` is returned alongside rather than read back off `dates[0]` — they are
- * the same instant by construction, but one is the boundary the headline's
- * delta is measured against and the other is a drawing detail, and the delta
- * should not silently move if the sampling ever changes.
+ * Remembers an explicit range choice in the persistence cookie (spec 0008).
+ * See {@link chartRangeMiddleware}'s own docstring for why this is a
+ * middleware rather than a header on the loader's own return.
  */
-function sampleWindow(days: number): { since: IsoDate; dates: IsoDate[] } {
-  const today = Date.parse(isoDate(Date.now()));
-  const step = (days * DAY_MS) / (SAMPLES - 1);
-
-  // A short range can round two samples onto the same calendar day. Deduped
-  // here rather than left to `group by` so the count going into the query is
-  // the count of points coming back.
-  const dates = Array.from({ length: SAMPLES }, (_, index) =>
-    isoDate(today - (SAMPLES - 1 - index) * step),
-  );
-
-  return { since: isoDate(today - days * DAY_MS), dates: [...new Set(dates)] };
-}
-
-/**
- * How many days back the chart reaches.
- *
- * Only "All" has to ask the database, and only ever for one `min()`. An
- * instance with nothing in it falls back to the default window, which is
- * academic — the empty state renders instead of a chart.
- */
-async function windowDays(range: RangeKey, manual: ManualPoint[]): Promise<number> {
-  const fixed = RANGES[range].days;
-  if (fixed !== null) return fixed;
-
-  // Whichever is earlier: day zero, or the oldest hand-typed point. The manual
-  // series is the part of the chart that reaches furthest back, so a window
-  // measured from day zero alone would cut off the very history "All" is for.
-  const earliest = [await firstRecordedDate(), manual[0]?.date]
-    .filter((date): date is IsoDate => Boolean(date))
-    .sort()[0];
-
-  if (earliest === undefined) return RANGES[DEFAULT_RANGE].days;
-
-  // A floor of one month keeps the sampler from collapsing to a single point
-  // on an instance whose first upload was this week.
-  return Math.max(Math.ceil((Date.now() - Date.parse(earliest)) / DAY_MS), 30);
-}
+export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const requested = new URL(request.url).searchParams.get("range");
-  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `?range=`
-  // naming anything on `Object.prototype` — `toString`, `constructor`,
-  // `valueOf` — passed this gate, and `RANGES[requested].days` then read
-  // `undefined` all the way to `isoDate(NaN)` and a 500 on the page. A query
-  // parameter must not be able to do that.
-  const range: RangeKey =
-    requested && Object.hasOwn(RANGES, requested) ? (requested as RangeKey) : DEFAULT_RANGE;
+  const requested = readChartRange(request);
+  const today = isoDate(Date.now());
 
-  // Read before the window is sized, because the "All" window is measured
-  // partly from it. It is a handful of hand-typed rows.
+  // Read before the window is sized: the household surface's earliest date
+  // (§7's "chart range" rule) is measured partly from it, and it is a handful
+  // of hand-typed rows either way.
   const manual = await manualNetWorth();
+  const earliest = { positionSet: await firstRecordedDate(), manual: manual[0]?.date };
 
-  const { since, dates } = sampleWindow(await windowDays(range, manual));
+  const resolved = resolveRange(requested.range, {
+    today,
+    earliest,
+    surface: "household",
+    custom: requested.custom,
+  });
 
   const [change, accounts, series] = await Promise.all([
-    netWorthChange(since),
+    netWorthChange(resolved.since),
     accountTotals(),
-    netWorthSeries(dates),
+    netWorthSeries(resolved.dates),
   ]);
 
   // A date before the first upload sums to 0.0000 over zero rows. That is
@@ -190,11 +122,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   // for into the last few pixels. ISO dates compare correctly as strings.
   const firstComputed = computed[0]?.date;
   const manualPrefix = manual.filter(
-    (point) => point.date >= since && (firstComputed === undefined || point.date < firstComputed),
+    (point) =>
+      point.date >= resolved.since && (firstComputed === undefined || point.date < firstComputed),
   );
 
   return {
-    range,
+    range: resolved.range,
+    custom: resolved.custom,
+    rangeOptions: rangeOptions({ today, earliest, surface: "household" }),
+    customMin: customRangeMin("household", earliest),
+    customMax: today,
     change,
     accounts,
     computed,
@@ -368,7 +305,19 @@ function AllocationPanel({
 }
 
 export default function Overview({ loaderData }: Route.ComponentProps) {
-  const { range, change, accounts, computed, manual, holdingCount, pricedCount } = loaderData;
+  const {
+    range,
+    custom,
+    rangeOptions: options,
+    customMin,
+    customMax,
+    change,
+    accounts,
+    computed,
+    manual,
+    holdingCount,
+    pricedCount,
+  } = loaderData;
 
   if (holdingCount === 0) {
     return (
@@ -425,18 +374,13 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
           </p>
         </div>
 
-        <nav className="segmented" aria-label="Chart range">
-          {Object.entries(RANGES).map(([key, { label }]) => (
-            <Link
-              key={key}
-              to={key === DEFAULT_RANGE ? "." : `?range=${key}`}
-              aria-current={key === range ? "true" : undefined}
-              preventScrollReset
-            >
-              {label}
-            </Link>
-          ))}
-        </nav>
+        <ChartRangeControl
+          range={range}
+          custom={custom}
+          options={options}
+          customMin={customMin}
+          customMax={customMax}
+        />
       </section>
 
       <section className="panel">
@@ -459,7 +403,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               id="net-worth"
               computed={computed}
               manual={manual}
-              label={`Total value over the last ${RANGES[range].label},`}
+              label={`Total value ${rangeDescription(range, custom)},`}
               endingAt={change.current}
               masked={masked}
             />

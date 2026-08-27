@@ -717,3 +717,30 @@ export async function firstRecordedDate(
 
   return row?.date ?? null;
 }
+
+/**
+ * The earliest date *this account's* own statements record, or null if it has
+ * none — the account-scoped counterpart to {@link firstRecordedDate} spec 0008
+ * adds.
+ *
+ * Read from `position_set` filtered to the account, for the same reason
+ * {@link firstRecordedDate} reads it rather than the view: this is a fact
+ * about what was uploaded, not about what is currently valued, and it stays
+ * correct for an account whose every statement predates today.
+ *
+ * Before this query existed, the account page's "All" and its disabled-preset
+ * rule fell back to the household-wide {@link firstRecordedDate} instead,
+ * which understated how new an account with a younger household actually is.
+ */
+export async function accountFirstRecordedDate(
+  accountId: string,
+  db: Kysely<Database> = getDb(),
+): Promise<IsoDate | null> {
+  const row = await db
+    .selectFrom("position_set")
+    .select(sql<string | null>`cast(min(as_of_date) as text)`.as("date"))
+    .where(isAccount("position_set.account_id", accountId))
+    .executeTakeFirst();
+
+  return row?.date ?? null;
+}

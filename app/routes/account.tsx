@@ -1,6 +1,7 @@
 import { Form, Link, redirect } from "react-router";
 
 import { Amount } from "~/components/amount";
+import { ChartRangeControl } from "~/components/chart-range-control";
 import { EmptyState } from "~/components/empty-state";
 import {
   AccountBalanceIcon,
@@ -20,6 +21,14 @@ import {
 } from "~/lib/account-options";
 import { getAccount } from "~/lib/accounts.server";
 import { lastRecorded, setBalance, type LastRecorded } from "~/lib/balances.server";
+import {
+  chartRangeMiddleware,
+  customRangeMin,
+  rangeDescription,
+  rangeOptions,
+  readChartRange,
+  resolveRange,
+} from "~/lib/chart-range";
 import { uploadReceipt } from "~/lib/uploads.server";
 import { holdingNote } from "~/lib/holdings-view";
 import { useMasked } from "~/lib/masking";
@@ -31,10 +40,10 @@ import {
   latestRecordableDate,
 } from "~/lib/input.server";
 import {
+  accountFirstRecordedDate,
   accountHoldings,
   accountSeries,
   accountTotal,
-  firstRecordedDate,
   type AccountKind,
   type IsoDate,
 } from "~/lib/valuation.server";
@@ -67,33 +76,6 @@ export function meta({ data }: Route.MetaArgs) {
 }
 
 /**
- * The ranges the segmented control offers.
- *
- * Deliberately the same four the overview offers, with the same `?range=` keys
- * and the same default: the control is the same control, and a person who
- * bookmarked `?range=3m` on one page should get three months on the other. That
- * makes this a copy of the overview's sampler rather than an import — a route
- * module cannot be imported for its constants without dragging its loader along
- * — and the pair should move into a shared module the next time either changes.
- */
-const RANGES = {
-  "1m": { label: "1M", days: 30 },
-  "3m": { label: "3M", days: 90 },
-  "1y": { label: "1Y", days: 365 },
-  all: { label: "All", days: null },
-} as const;
-
-type RangeKey = keyof typeof RANGES;
-
-/** Left as a literal, not widened to `RangeKey`, so its `days` stays non-null. */
-const DEFAULT_RANGE = "1y" as const satisfies RangeKey;
-
-/** As on the overview: one round trip, twenty-five evaluations of the as-of function. */
-const SAMPLES = 25;
-
-const DAY_MS = 86_400_000;
-
-/**
  * UTC throughout, deliberately.
  *
  * §4.1 and `valuation.server.ts` both warn about dates crossing a boundary and
@@ -102,39 +84,12 @@ const DAY_MS = 86_400_000;
  */
 const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
 
-/** The dates the line is drawn from, deduped so two samples cannot land on one day. */
-function sampleDates(days: number): IsoDate[] {
-  const today = Date.parse(isoDate(Date.now()));
-  const step = (days * DAY_MS) / (SAMPLES - 1);
-
-  const dates = Array.from({ length: SAMPLES }, (_, index) =>
-    isoDate(today - (SAMPLES - 1 - index) * step),
-  );
-
-  return [...new Set(dates)];
-}
-
 /**
- * How many days back the chart reaches.
- *
- * "All" is measured from day zero — the earliest date *any* statement records —
- * rather than from this account's own first one, which no query exposes. The
- * difference costs nothing: samples before this account existed come back over
- * zero rows, are dropped below, and the drawn line starts where the account's
- * history starts. The hand-typed pre-history plays no part, here or in the
- * chart: `manual_networth` is the household's net worth (§7), not an account's.
+ * Remembers an explicit range choice in the persistence cookie (spec 0008).
+ * See {@link chartRangeMiddleware}'s own docstring for why this is a
+ * middleware rather than a header on the loader's own return.
  */
-async function windowDays(range: RangeKey): Promise<number> {
-  const fixed = RANGES[range].days;
-  if (fixed !== null) return fixed;
-
-  const earliest = await firstRecordedDate();
-  if (earliest === null) return RANGES[DEFAULT_RANGE].days;
-
-  // A floor of one month keeps the sampler from collapsing to a single point on
-  // an instance whose first upload was this week.
-  return Math.max(Math.ceil((Date.now() - Date.parse(earliest)) / DAY_MS), 30);
-}
+export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   // First and alone, because it is the gate. `accountTotal` answers null for an
@@ -145,16 +100,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const total = await accountTotal(params.accountId);
   if (total === null) throw new Response("Not found", { status: 404 });
 
-  const requested = new URL(request.url).searchParams.get("range");
-  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `?range=`
-  // naming anything on `Object.prototype` — `toString`, `constructor`,
-  // `valueOf` — passed this gate, and `RANGES[requested].days` then read
-  // `undefined` all the way to `isoDate(NaN)` and a 500 on the page. A query
-  // parameter must not be able to do that.
-  const range: RangeKey =
-    requested && Object.hasOwn(RANGES, requested) ? (requested as RangeKey) : DEFAULT_RANGE;
+  const requested = readChartRange(request);
+  const today = isoDate(Date.now());
 
-  const dates = sampleDates(await windowDays(range));
+  // The account's own earliest statement (spec 0008) — never the household's:
+  // an account's range never reaches into the hand-typed pre-app history,
+  // which was never any one account's (`CONTEXT.md`'s "chart range" entry).
+  const earliest = { positionSet: await accountFirstRecordedDate(params.accountId) };
+
+  const resolved = resolveRange(requested.range, {
+    today,
+    earliest,
+    surface: "account",
+    custom: requested.custom,
+  });
 
   // The upload flow's landing receipt (`?uploaded=<setId>`, ingest brief
   // §6.5). Every figure in it is read back from the database, never from the
@@ -173,7 +132,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // answered is still there to answer again.
     getAccount(params.accountId),
     accountHoldings(params.accountId),
-    accountSeries(params.accountId, dates),
+    accountSeries(params.accountId, resolved.dates),
     // What the current figure was read from, so the set-balance panel can say
     // which day it is superseding rather than asking for a correction blind.
     lastRecorded(params.accountId),
@@ -188,7 +147,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     .map((point) => ({ date: point.date, amount: point.amount }));
 
   return {
-    range,
+    range: resolved.range,
+    custom: resolved.custom,
+    rangeOptions: rangeOptions({ today, earliest, surface: "account" }),
+    customMin: customRangeMin("account", earliest),
+    customMax: today,
     total,
     taxTreatment: account.taxTreatment,
     holdings,
@@ -211,7 +174,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     owed: isOwed(total.accountKind),
     // Today in UTC, from the server, so the box does not open on a date the
     // reader's clock invented and the app then refuses (§4.1).
-    today: isoDate(Date.now()),
+    today,
     // The date control's two boundaries, read from the validator rather than
     // guessed, so the picker and the refusal cannot drift apart.
     earliestAsOf: earliestRecordableDate(),
@@ -292,6 +255,10 @@ type Holding = Route.ComponentProps["loaderData"]["holdings"][number];
 export default function Account({ loaderData, actionData }: Route.ComponentProps) {
   const {
     range,
+    custom,
+    rangeOptions: options,
+    customMin,
+    customMax,
     total,
     taxTreatment,
     holdings,
@@ -458,18 +425,13 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
           {/* The range is a URL, so the control needs no JavaScript and a chosen
               range survives a reload — the same contract as the overview's, key
               for key, so the two pages behave identically. */}
-          <nav className="segmented" aria-label="Chart range">
-            {Object.entries(RANGES).map(([key, { label }]) => (
-              <Link
-                key={key}
-                to={key === DEFAULT_RANGE ? "." : `?range=${key}`}
-                aria-current={key === range ? "true" : undefined}
-                preventScrollReset
-              >
-                {label}
-              </Link>
-            ))}
-          </nav>
+          <ChartRangeControl
+            range={range}
+            custom={custom}
+            options={options}
+            customMin={customMin}
+            customMax={customMax}
+          />
         </header>
 
         <div className="panel-body">
@@ -483,7 +445,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               // household's net worth before day zero (§7), and attributing it
               // to one account would be inventing that account's history.
               manual={[]}
-              label={`${total.accountName} over the last ${RANGES[range].label},`}
+              label={`${total.accountName} ${rangeDescription(range, custom)},`}
               endingAt={last.amount}
               masked={masked}
             />
