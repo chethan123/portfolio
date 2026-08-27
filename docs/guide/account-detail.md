@@ -49,8 +49,10 @@ range ever pulls in the household's hand-typed pre-app figures — see below.
 A line needs two dated points. With fewer than two in the chosen range, the panel says how many it
 has — try **All**, or wait until a second statement or balance is recorded.
 
-The chart never draws the household's hand-typed pre-history. That figure is the household's net
-worth, not this account's.
+The readout above the line works exactly as it does on Overview: the point the line ends at until
+you point at the chart, then whichever point is nearest. Nothing here is ever marked hand-typed,
+because the chart never draws the household's hand-typed pre-history. That figure is the
+household's net worth, not this account's.
 
 ## The holdings table
 

@@ -43,6 +43,17 @@ household and they will see the same window you did. Absent an address-bar range
 reopens on whichever range you picked here last time, remembered in a cookie — a convenience, not a
 household setting, so it is not in Settings and does not follow you to another browser.
 
+## Reading a point off the line
+
+Above the line sits a readout. Before you touch anything it names the point the line ends at — its
+date, and its value in full rather than rounded the way the axis figures are. On a range ending
+today that is the headline figure again, written the same way; on a range ending last month it is
+last month's value, which the headline is not.
+
+Point at the chart and the readout follows, naming the point nearest your pointer and marking that
+point with a vertical line. A short range holds a point for every day; a longer one thins them out
+towards its old end. Either way the nearest point answers, so no stretch of the line is dead.
+
 ## The second, dashed line
 
 ![The Overview at the All range, with a dashed line ahead of the solid one](images/overview-range-all.png)
@@ -58,6 +69,10 @@ Two lines, and they mean different things.
 Where the two overlap, the computed line wins; the dashed one only fills the gap in front of it.
 You will normally see it only at the All range, because the shorter windows start after your first
 statement.
+
+Point at one of the hand-typed points and the readout says so, so a rough figure never reads as a
+priced valuation. One of them can answer for a wide stretch of chart — for months either side, it
+is the nearest thing recorded.
 
 **There is no screen for those points yet.** Settings lists History alongside Classifications and
 Instruments as something a later version builds. Until then the dashed prefix is whatever was
@@ -124,6 +139,9 @@ Two different empty screens, and they are not the same:
 
 The same page. The left rail becomes a bar along the bottom, and the panels stack. Nothing is
 withheld on a small screen.
+
+The readout above the line is filled in already, so the chart says where the line ends without
+being pointed at. Tap a point to read that one instead.
 
 ---
 

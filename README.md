@@ -50,7 +50,7 @@ Screenshots follow your GitHub theme; the app follows your system's.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-dark.png">
-  <img alt="The overview: total net worth, a three-year chart, the account list and allocation by account" src="docs/screenshots/overview-light.png">
+  <img alt="The overview: total net worth, the trend line with a readout above it naming the date and value of the point it ends at, the account list and allocation by account" src="docs/screenshots/overview-light.png">
 </picture>
 
 The one figure the household actually asks for, and the line behind it. The range control is a URL,
@@ -59,6 +59,13 @@ so a chosen range survives a reload and can be bookmarked.
 - **Every total says what it was computed from.** "The figure and the line are 17 of 18 holdings.
   The rest have never been priced." A holding nobody can quote is never silently dropped and never
   counted as zero — it is excluded and the exclusion is written down.
+- **Every point on the line can say what it is worth.** A readout under the headline names what the
+  line ends at, dated and in full — so a range ending last month reads that month's value rather
+  than today's — and pointing anywhere moves the readout to the nearest point, with a guide line to
+  say which. The axis rounds its figures to a compact form and leaves the eye to interpolate
+  between rules; the readout does neither. A point typed in by hand for the years before the app
+  says so in words, because a dashed stroke is a claim about where a figure came from that
+  identical text would quietly undo.
 - **Liabilities are accounts.** The auto loan sits in the list at −$14,500 and subtracts from net
   worth, because a loan is a negative `USD` position rather than a special case in the arithmetic.
 - **A zero and an absence never look alike.** An account holding nothing, an account nothing can
@@ -182,10 +189,12 @@ much of it is taxed this year, and by account, which answers which statement it 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/account-detail-dark.png">
-  <img alt="A brokerage account: its own header, its own valuation chart, and a holdings table" src="docs/screenshots/account-detail-light.png">
+  <img alt="A brokerage account: its own header, its own valuation chart with the same readout above the line, and a holdings table" src="docs/screenshots/account-detail-light.png">
 </picture>
 
-Each account carries its own header, its own valuation line, and what it holds.
+Each account carries its own header, its own valuation line, and what it holds. That line carries
+the same readout and never a hand-typed mark: the pre-app series is the *household's* net worth,
+and attributing it to one account would invent that account's history.
 
 - **Price quality is on the row it applies to.** The real-estate ETF above reads "price is stale",
   meaning its last known price is being used rather than discarded. A holding that has never been
@@ -270,7 +279,7 @@ cannot be removed, and the refusal names them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-masked-dark.png">
-  <img alt="The overview with every amount replaced by a run of dots: the net worth headline, the chart's axis figures and every account balance are hidden, while the trend line, the allocation bars, the account names and the dates are unchanged" src="docs/screenshots/overview-masked-light.png">
+  <img alt="The overview with every amount replaced by a run of dots: the net worth headline, the chart's axis figures, the amount in the chart's readout and every account balance are hidden, while the trend line, the readout's date, the allocation bars, the account names and the dates are unchanged" src="docs/screenshots/overview-masked-light.png">
 </picture>
 
 One click in the sidebar replaces every amount on every screen with a run of dots, and another
@@ -279,7 +288,9 @@ not need to know what the household is worth.
 
 What goes is every **amount** — values, balances, cost bases, gains, share quantities. What stays is
 everything that says what the portfolio *is*: names, symbols, dates, the trend line's shape, the
-allocation ring's proportions and every percentage. A masked screen still answers "how am I split"
+allocation ring's proportions and every percentage. The chart's readout splits the same way — the
+amount becomes dots, the date stays — and pointing at the line still moves the readout, because
+masking changes what a screen shows rather than what it does. A masked screen still answers "how am I split"
 and "what do I hold"; it just stops answering "how much".
 
 The click is instant and needs no network, because the moment it is needed is the moment there may
@@ -298,6 +309,9 @@ someone's shoulder, and the login gate is the only thing that keeps anyone out.
 
 The same pages, with the left rail becoming a bottom bar and the tables reflowing. Nothing is
 withheld on a small screen: setting a balance and the whole of Settings are reachable from a phone.
+The chart's readout is rendered before the page is sent rather than composed on hover, so a phone
+with no pointer still arrives with the readout filled in — and, like the screens above, it works
+with JavaScript turned off.
 
 ### Not built yet
 
