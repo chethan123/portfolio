@@ -34,10 +34,17 @@ Three things it can say instead of a figure:
 
 ## The chart
 
-**Performance** draws this account alone, over **1M**, **3M**, **1Y** or **All**. It opens on 1Y.
+**Performance** draws this account alone, over the same eight ranges Overview offers — **1W**,
+**1M**, **3M**, **YTD**, **1Y**, **5Y**, **All** or a **Custom** span you pick yourself. It opens on
+1Y, or on whichever range this browser last picked on either screen.
 
 The range is part of the address, so a chosen range survives a reload and can be bookmarked or sent
-to someone else in the household.
+to someone else in the household. A range this account's own history cannot reach yet — 5Y on an
+account eight months old — shows greyed out rather than doing what All already does.
+
+**All and Custom are measured from this account's own first statement, never the household's.** An
+older sibling account does not make this one's history look any longer than it is, and neither
+range ever pulls in the household's hand-typed pre-app figures — see below.
 
 A line needs two dated points. With fewer than two in the chosen range, the panel says how many it
 has — try **All**, or wait until a second statement or balance is recorded.

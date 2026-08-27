@@ -16,20 +16,32 @@ on screen to today.
 
 Sometimes there is nothing to measure from. If the window reaches back before your first
 statement, the earlier figure is zero, a percentage of zero says nothing, and the chip shows the
-amount alone. That is why the All range in the next picture reads `+$690,850.55` with no
+amount alone. That is why the All range in the next picture reads `+$687,516.13` with no
 percentage.
 
 ## The range control
 
-Four buttons, top right: **1M**, **3M**, **1Y**, **All**. You get 1Y unless you pick another.
+Eight options, top right: **1W**, **1M**, **3M**, **YTD**, **1Y**, **5Y**, **All**, **Custom**. You
+get 1Y unless you pick another, or unless a browser you have chosen a range on before opens here
+again — see below.
 
-- **1M / 3M / 1Y** are 30, 90 and 365 days back from today.
+- **1W / 1M / 3M / 1Y / 5Y** are trailing spans back from today — a week, a calendar month, a
+  calendar quarter, a year, five years.
+- **YTD** is January 1st of this year through today.
 - **All** starts at the earliest date anything is recorded — your first statement, or the oldest
   hand-typed point if that is older still. It is not a fixed number of years.
+- **Custom** opens a small form with a start and end date. Both boxes refuse a date before your
+  earliest data or after today, so you cannot pick a span that could only fail. Once applied, the
+  button shows the two dates you chose instead of the word "Custom".
 
-The choice lives in the address bar as `?range=3m`. So it survives a reload, you can bookmark it,
-and you can send the address to the other person in the household and they will see the same
-window you did.
+**A greyed-out option is one your data cannot reach yet** — a household eight months old sees 5Y
+disabled rather than a click that silently does the same thing All already does.
+
+The choice lives in the address bar as `?range=3m` (or, for Custom, `?start=`/`?end=`). So it
+survives a reload, you can bookmark it, and you can send the address to the other person in the
+household and they will see the same window you did. Absent an address-bar range, this browser
+reopens on whichever range you picked here last time, remembered in a cookie — a convenience, not a
+household setting, so it is not in Settings and does not follow you to another browser.
 
 ## The second, dashed line
 

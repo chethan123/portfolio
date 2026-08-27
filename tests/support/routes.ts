@@ -16,6 +16,7 @@
  * `getDb()` to the test's transaction — so a loader that queries with no
  * argument reads the seeded rows and rolls back with everything else.
  */
+import { RouterContextProvider } from "react-router";
 
 /**
  * The `Cookie` header a browser would send, or nothing.
@@ -130,4 +131,40 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
     throw new Error(`Expected a redirect, and the route answered ${response.status}.`);
   }
   return response.headers.get("Location") ?? "";
+}
+
+/**
+ * Runs a route's middleware chain the way the framework does, around a
+ * stand-in response.
+ *
+ * A route's middleware wraps the *response*, not the loader's return value —
+ * `root.tsx`'s auth gate and `chart-range.ts`'s `chartRangeMiddleware` both
+ * work this way, precisely so their loaders keep returning the plain object
+ * every other test in this suite reads fields off directly. What a
+ * middleware adds to (or refuses) that response is what this helper is for;
+ * what the loader underneath it returns is `loader(args(...))`'s question,
+ * not this one's. A middleware step may throw a `Response` instead of
+ * returning one — `outcomeOf`/`responseOf` above are what unwrap that.
+ */
+export async function servedThrough(
+  // Untyped against a generated `Route.MiddlewareFunction[]`, deliberately —
+  // there are as many of those types as there are routes, one per generated
+  // `+types` module, and no single import here could name all of them. Cast
+  // at the call site instead, for `args()`'s own reason above.
+  middleware: readonly unknown[],
+  request: Request,
+  params: Record<string, string> = {},
+): Promise<Response> {
+  const served = new Response("the page");
+  let response: Response = served;
+
+  for (const step of middleware) {
+    const run = step as (args: never, next: () => Promise<unknown>) => Promise<unknown>;
+    response = (await run(
+      { request, params, context: new RouterContextProvider(), url: new URL(request.url), pattern: "/" } as never,
+      async () => served,
+    )) as Response;
+  }
+
+  return response;
 }

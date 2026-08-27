@@ -1,5 +1,6 @@
-import { RouterContextProvider } from "react-router";
 import { describe, expect, it } from "vitest";
+
+import { servedThrough } from "./support/routes.ts";
 
 /**
  * The gate is wired to the root route, which is what makes it deny-by-default.
@@ -17,26 +18,6 @@ process.env.SESSION_SECRET = "signing-key";
 const { middleware } = await import("../app/root.tsx");
 const { createAuthGate } = await import("../app/lib/auth.server.ts");
 
-/** Run the root route's middleware chain the way the framework does. */
-async function handle(request: Request): Promise<Response> {
-  const served = new Response("the page", { status: 200 });
-
-  let response: Response = served;
-  for (const step of middleware) {
-    response = (await step(
-      {
-        request,
-        params: {},
-        context: new RouterContextProvider(),
-        url: new URL(request.url),
-        pattern: "/",
-      },
-      async () => served,
-    )) as Response;
-  }
-  return response;
-}
-
 /** The password above, signed into a cookie the same way the app would. */
 async function sessionCookie(): Promise<string> {
   const result = await createAuthGate({
@@ -50,7 +31,7 @@ async function sessionCookie(): Promise<string> {
 
 async function statusOf(request: Request): Promise<number> {
   try {
-    return (await handle(request)).status;
+    return (await servedThrough(middleware, request)).status;
   } catch (thrown) {
     if (thrown instanceof Response) return thrown.status;
     throw thrown;

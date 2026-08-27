@@ -1,0 +1,322 @@
+/**
+ * The range-resolution math both routes' loaders read (spec 0008).
+ *
+ * Pure — no Postgres and no render — for `masking.test.ts`'s reason: this is
+ * the domain rule itself, `AGENTS.md` asks for a domain rule to be tested as
+ * itself, and exhausting eight presets and their edge cases through
+ * database-backed renders would be slow and would prove less.
+ */
+import { describe, expect, it } from "vitest";
+
+import {
+  DEFAULT_RANGE,
+  RANGE_COOKIE,
+  RANGES,
+  customRangeMin,
+  decodeRangeCookieValue,
+  encodeRangeCookieValue,
+  isRangeDisabled,
+  rangeCookie,
+  rangeOptions,
+  readChartRange,
+  readRangeCookie,
+  resolveRange,
+  surfaceEarliestDate,
+  type RangeKey,
+  type Surface,
+} from "~/lib/chart-range";
+
+/** A Wednesday, chosen for no reason but to be a fixed, ordinary "today". */
+const TODAY = "2026-08-26";
+
+describe("each preset's boundary against a fixed today", () => {
+  const NO_DATA = { earliest: { positionSet: null }, surface: "household" as Surface, today: TODAY };
+
+  const BOUNDARIES: Record<Exclude<RangeKey, "all" | "custom">, string> = {
+    "1w": "2026-08-19",
+    "1m": "2026-07-26",
+    "3m": "2026-05-26",
+    ytd: "2026-01-01",
+    "1y": "2025-08-26",
+    "5y": "2021-08-26",
+  };
+
+  for (const [range, since] of Object.entries(BOUNDARIES) as [RangeKey, string][]) {
+    it(`resolves ${range} to ${since}`, () => {
+      expect(resolveRange(range, NO_DATA).since).toBe(since);
+    });
+  }
+
+  it("resolves YTD to January 1st even one day into the year", () => {
+    expect(resolveRange("ytd", { ...NO_DATA, today: "2026-01-02" }).since).toBe("2026-01-01");
+  });
+
+  it("rolls a month-end trailing boundary into the next month, rather than clamping", () => {
+    // 31 March minus one month: `Date` has no 31 February, so this is the
+    // accepted edge rather than a special case.
+    expect(resolveRange("1m", { ...NO_DATA, today: "2026-03-31" }).since).toBe("2026-03-03");
+  });
+
+  it("3M resolves as an ordinary, first-class preset", () => {
+    // Not dead code left over from the old four-option set: it appears in the
+    // vocabulary, and it resolves like every other calendar-offset preset.
+    expect(RANGES["3m"]).toEqual({ label: "3M" });
+    expect(resolveRange("3m", NO_DATA).since).toBe("2026-05-26");
+  });
+});
+
+describe("the per-surface data-source rule, applied to every preset", () => {
+  const EARLIEST = {
+    positionSet: "2026-06-01" as const,
+    manual: "2020-01-01" as const,
+  };
+
+  it("reaches into the household's hand-typed pre-app history on every preset, not only All", () => {
+    for (const range of ["all", "5y", "1y"] as RangeKey[]) {
+      const window = resolveRange(range, { today: TODAY, earliest: EARLIEST, surface: "household" });
+
+      // "All" is measured from the earlier date directly; the fixed presets'
+      // own boundary is unaffected, but the same earlier date is what the
+      // disabled rule below measures every one of them against.
+      if (range === "all") expect(window.since).toBe(EARLIEST.manual);
+    }
+
+    expect(surfaceEarliestDate("household", EARLIEST)).toBe(EARLIEST.manual);
+  });
+
+  it("never considers the manual series on the account surface", () => {
+    expect(surfaceEarliestDate("account", EARLIEST)).toBe(EARLIEST.positionSet);
+    expect(resolveRange("all", { today: TODAY, earliest: EARLIEST, surface: "account" }).since).toBe(
+      EARLIEST.positionSet,
+    );
+  });
+
+  it("falls back to the default preset's width when a surface has no data at all, while still reporting All", () => {
+    const empty = { positionSet: null };
+    const household = resolveRange("all", { today: TODAY, earliest: empty, surface: "household" });
+    const defaulted = resolveRange(DEFAULT_RANGE, { today: TODAY, earliest: empty, surface: "household" });
+
+    // The width matches the default preset's, but the identity does not: "All"
+    // never degrades into reporting itself as "1Y" the way an unusable custom
+    // span does below — it is a real, explicit selection either way.
+    expect(household.since).toBe(defaulted.since);
+    expect(household.dates).toEqual(defaulted.dates);
+    expect(household.range).toBe("all");
+  });
+});
+
+describe("the disabled-state rule", () => {
+  const earliest = { positionSet: "2026-06-01" as const };
+
+  it("disables a preset whose start falls before the surface's earliest date", () => {
+    // 5Y's boundary (2021-08-26) is well before an account eight months old.
+    expect(isRangeDisabled("5y", { today: TODAY, earliest, surface: "account" })).toBe(true);
+  });
+
+  it("does not disable a preset whose start lands exactly on the earliest date", () => {
+    // YTD opened on January 1st or 2nd: an account or household whose data
+    // starts that same day must show thin data, not a disabled control.
+    expect(
+      isRangeDisabled("ytd", { today: "2026-01-02", earliest: { positionSet: "2026-01-01" }, surface: "household" }),
+    ).toBe(false);
+    expect(
+      isRangeDisabled("ytd", { today: "2026-01-01", earliest: { positionSet: "2026-01-01" }, surface: "household" }),
+    ).toBe(false);
+  });
+
+  it("does not disable a preset whose start falls after the earliest date", () => {
+    expect(isRangeDisabled("1w", { today: TODAY, earliest, surface: "account" })).toBe(false);
+  });
+
+  it("never disables All or Custom", () => {
+    const ancient = { positionSet: "1970-01-01" as const };
+    expect(isRangeDisabled("all", { today: TODAY, earliest: ancient, surface: "household" })).toBe(false);
+    expect(isRangeDisabled("custom", { today: TODAY, earliest, surface: "account" })).toBe(false);
+  });
+
+  it("disables nothing on an instance with no data at all", () => {
+    // The empty state renders instead of a chart, so this is academic — but a
+    // preset must not read as disabled before there is anything to compare it
+    // against.
+    for (const range of Object.keys(RANGES) as RangeKey[]) {
+      expect(isRangeDisabled(range, { today: TODAY, earliest: { positionSet: null }, surface: "account" })).toBe(
+        false,
+      );
+    }
+  });
+
+  it("lists every option in order, each carrying its own disabled state", () => {
+    const options = rangeOptions({ today: TODAY, earliest, surface: "account" });
+
+    expect(options.map((option) => option.key)).toEqual(Object.keys(RANGES));
+    expect(options.find((option) => option.key === "5y")?.disabled).toBe(true);
+    expect(options.find((option) => option.key === "1w")?.disabled).toBe(false);
+  });
+});
+
+describe("sampling: twenty-five points, deduped by calendar day", () => {
+  it("holds for a short window", () => {
+    const { dates } = resolveRange("1w", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
+
+    // A week has at most eight distinct calendar days in it; twenty-five
+    // samples spaced across seven days round several onto the same one.
+    expect(dates.length).toBeLessThanOrEqual(8);
+    expect(new Set(dates).size).toBe(dates.length);
+    expect(dates[0]).toBe("2026-08-19");
+    expect(dates.at(-1)).toBe(TODAY);
+  });
+
+  it("holds for a long window", () => {
+    const { dates } = resolveRange("5y", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
+
+    expect(dates.length).toBe(25);
+    expect(new Set(dates).size).toBe(dates.length);
+    expect(dates[0]).toBe("2021-08-26");
+    expect(dates.at(-1)).toBe(TODAY);
+  });
+});
+
+describe("a custom range", () => {
+  const earliest = { positionSet: "2026-01-01" as const };
+
+  it("resolves to exactly the span asked for, when it is drawable", () => {
+    const window = resolveRange("custom", {
+      today: TODAY,
+      earliest,
+      surface: "household",
+      custom: { start: "2026-02-01", end: "2026-05-01" },
+    });
+
+    expect(window.since).toBe("2026-02-01");
+    expect(window.dates[0]).toBe("2026-02-01");
+    expect(window.dates.at(-1)).toBe("2026-05-01");
+  });
+
+  it("falls back to the default rather than erroring on an incomplete pair", () => {
+    const fallback = resolveRange(DEFAULT_RANGE, { today: TODAY, earliest, surface: "household" });
+
+    expect(resolveRange("custom", { today: TODAY, earliest, surface: "household" })).toEqual(fallback);
+  });
+
+  it("falls back to the default rather than drawing a span before the surface's earliest date", () => {
+    const fallback = resolveRange(DEFAULT_RANGE, { today: TODAY, earliest, surface: "household" });
+    const tooEarly = resolveRange("custom", {
+      today: TODAY,
+      earliest,
+      surface: "household",
+      custom: { start: "2020-01-01", end: "2026-05-01" },
+    });
+
+    expect(tooEarly).toEqual(fallback);
+  });
+
+  it("falls back to the default rather than drawing a span reaching into the future", () => {
+    const fallback = resolveRange(DEFAULT_RANGE, { today: TODAY, earliest, surface: "household" });
+    const future = resolveRange("custom", {
+      today: TODAY,
+      earliest,
+      surface: "household",
+      custom: { start: "2026-01-01", end: "2027-01-01" },
+    });
+
+    expect(future).toEqual(fallback);
+  });
+
+  it("falls back to the default rather than drawing an end before its own start", () => {
+    const fallback = resolveRange(DEFAULT_RANGE, { today: TODAY, earliest, surface: "household" });
+    const backwards = resolveRange("custom", {
+      today: TODAY,
+      earliest,
+      surface: "household",
+      custom: { start: "2026-05-01", end: "2026-02-01" },
+    });
+
+    expect(backwards).toEqual(fallback);
+  });
+
+  it("gives a custom date input the surface's own earliest date as its minimum", () => {
+    expect(customRangeMin("household", earliest)).toBe("2026-01-01");
+    expect(customRangeMin("account", { positionSet: null })).toBeNull();
+  });
+});
+
+describe("reading a request: URL, then cookie, then the hardcoded default", () => {
+  const requestWith = (search: string, cookie?: string): Request =>
+    new Request(`http://portfolio.local/${search}`, cookie ? { headers: { Cookie: cookie } } : undefined);
+
+  it("takes an explicit ?range= over a cookie naming a different range", () => {
+    expect(readChartRange(requestWith("?range=5y", `${RANGE_COOKIE}=1m`))).toEqual({
+      range: "5y",
+      explicit: true,
+    });
+  });
+
+  it("takes an explicit custom span over a cookie", () => {
+    expect(
+      readChartRange(requestWith("?range=custom&start=2026-01-01&end=2026-03-01", `${RANGE_COOKIE}=1m`)),
+    ).toEqual({ range: "custom", custom: { start: "2026-01-01", end: "2026-03-01" }, explicit: true });
+  });
+
+  it("uses the cookie's stored range when the URL carries none", () => {
+    expect(readChartRange(requestWith("", `${RANGE_COOKIE}=5y`))).toEqual({ range: "5y", explicit: false });
+  });
+
+  it("uses the hardcoded default when neither the URL nor the cookie says anything", () => {
+    expect(readChartRange(requestWith(""))).toEqual({ range: DEFAULT_RANGE, explicit: false });
+  });
+
+  it("does not mistake an inherited property name for a range, however much it looks like a key", () => {
+    for (const inherited of ["toString", "constructor", "valueOf", "hasOwnProperty"]) {
+      expect(readChartRange(requestWith(`?range=${inherited}`))).toEqual({
+        range: DEFAULT_RANGE,
+        explicit: false,
+      });
+    }
+  });
+
+  it("falls back to the default when the URL and the cookie both name nothing usable", () => {
+    expect(readChartRange(requestWith("?range=whenever", "not_the_cookie=5y"))).toEqual({
+      range: DEFAULT_RANGE,
+      explicit: false,
+    });
+  });
+});
+
+describe("the persistence cookie", () => {
+  it("is named distinctly from the masking cookie", () => {
+    expect(RANGE_COOKIE).not.toBe("masked");
+  });
+
+  it("round-trips a fixed preset", () => {
+    expect(decodeRangeCookieValue(encodeRangeCookieValue("5y"))).toEqual({ range: "5y" });
+  });
+
+  it("round-trips a custom span", () => {
+    const encoded = encodeRangeCookieValue("custom", { start: "2026-01-01", end: "2026-06-01" });
+    expect(decodeRangeCookieValue(encoded)).toEqual({
+      range: "custom",
+      custom: { start: "2026-01-01", end: "2026-06-01" },
+    });
+  });
+
+  it("decodes an unrecognised value to null rather than guessing", () => {
+    expect(decodeRangeCookieValue("whenever")).toBeNull();
+    expect(decodeRangeCookieValue("custom")).toBeNull();
+    expect(decodeRangeCookieValue("custom:2026-01-01")).toBeNull();
+    expect(decodeRangeCookieValue("toString")).toBeNull();
+  });
+
+  it("is scoped to the whole app, persistent, and not sent across sites", () => {
+    expect(rangeCookie("1y")).toContain("Path=/");
+    expect(rangeCookie("1y")).toMatch(/samesite=lax/i);
+    expect(rangeCookie("1y")).toMatch(/max-age=\d+/i);
+  });
+
+  it("finds its own value among the others a browser sends, whole-name matched", () => {
+    const requestWith = (cookie: string) => new Request("http://portfolio.local/", { headers: { Cookie: cookie } });
+
+    expect(readRangeCookie(requestWith(`__portfolio_session=abc; ${RANGE_COOKIE}=5y`))).toBe("5y");
+    expect(readRangeCookie(requestWith(`not_${RANGE_COOKIE}=5y`))).toBeUndefined();
+    expect(readRangeCookie(new Request("http://portfolio.local/"))).toBeUndefined();
+  });
+});
