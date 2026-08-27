@@ -446,7 +446,6 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               // to one account would be inventing that account's history.
               manual={[]}
               label={`${total.accountName} ${rangeDescription(range, custom)},`}
-              endingAt={last.amount}
               masked={masked}
             />
           ) : (

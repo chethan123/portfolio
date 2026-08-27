@@ -404,7 +404,6 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               computed={computed}
               manual={manual}
               label={`Total value ${rangeDescription(range, custom)},`}
-              endingAt={change.current}
               masked={masked}
             />
           ) : (

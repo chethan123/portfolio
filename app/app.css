@@ -1286,6 +1286,108 @@ a {
   pointer-events: none;
 }
 
+/* --- The point readout (spec 0010, ADR-0004) ------------------------------
+ * Every point's caption and guide are already in the markup; these rules
+ * choose which one shows. There is no JavaScript in this interaction.
+ *
+ * `.chart-readout` is the strip at rest, in flow at the top of the panel
+ * body. Each `.chart-point-readout` is one point's alternate, positioned
+ * over that same line — absolute against `.chart-hits`, not against its own
+ * hit (the hits are deliberately static), so one rule places all of them and
+ * `bottom` only has to clear the strip's own margin below.
+ */
+
+.chart-readout,
+.chart-point-readout {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin: 0 0 var(--space-md);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.chart-readout-date,
+.chart-readout-mark {
+  color: var(--on-surface-variant);
+}
+
+.chart-readout-value {
+  font-weight: 600;
+  color: var(--on-surface);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-hits {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+/* Each target's width is inline — it is geometry, like the polyline's own
+ * coordinates. No focus outline: the guide and the caption are the response,
+ * and the target is not keyboard-reachable (tabindex -1). */
+.chart-hit {
+  flex: none;
+  outline: none;
+}
+
+/* The vertical guide: which point the caption is talking about. An HTML
+ * element is naturally non-scaling — 1px regardless of how the drawing box is
+ * stretched — and its colour resolves from a custom property so a theme
+ * change re-colours it with nothing to re-resolve, same as the grid rules. */
+.chart-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--on-surface-variant);
+  pointer-events: none;
+}
+
+/* Absolute against `.chart-hits`, whose box is the plot's. `bottom: 100%`
+ * puts the caption's margin edge on the plot's top, and the margin it shares
+ * with the strip then lifts it exactly onto the strip's text line. */
+.chart-point-readout {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+}
+
+.chart-guide,
+.chart-point-readout {
+  display: none;
+}
+
+/* The pointer chooses a point. */
+.chart-hit:hover .chart-guide {
+  display: block;
+}
+
+.chart-hit:hover .chart-point-readout {
+  display: flex;
+}
+
+/* A tap pins one — focus, via the tabindex — until the pointer takes over:
+ * without the guard, a pinned point plus a hover would caption two points on
+ * one line. */
+.chart-hits:not(:has(:hover)) .chart-hit:focus-within .chart-guide {
+  display: block;
+}
+
+.chart-hits:not(:has(:hover)) .chart-hit:focus-within .chart-point-readout {
+  display: flex;
+}
+
+/* While any alternate shows, the resting caption yields the line. Visibility
+ * rather than display: the strip keeps its height, so the panel does not
+ * shift under the pointer. */
+.chart-readout:has(+ .chart .chart-hit:hover),
+.chart-readout:has(+ .chart .chart-hit:focus-within) {
+  visibility: hidden;
+}
+
 /* --- Donut ----------------------------------------------------------------
  * One ring per breakdown, drawn with dash offsets rather than arc paths: the
  * maths is a running total times the circumference, which is far easier to get

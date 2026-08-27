@@ -47,9 +47,16 @@ the top of the chart panel puts it in almost the same visual position for one ru
 - Keyboard users get no per-point interaction. The targets are focusable but deliberately outside
   the tab order, because the alternative is up to a hundred and eighty tab stops in the middle of a
   page; the chart's existing single text description is what serves assistive technology.
-- Touch support depends on tap-to-focus of a non-tabbable SVG element, which is well supported in
-  Chrome and Firefox and historically inconsistent in Safari. Where it does not hold, the feature
-  degrades to its resting state rather than breaking.
+- The groups are HTML overlays positioned in percentages, not SVG children. Implementation found
+  the SVG variant impossible on the geometry option two already names: the drawing box is stretched
+  non-uniformly, which a stroke survives (`non-scaling-stroke`) and rendered text does not, and the
+  readout text has to live inside the hovered group for the reveal to stay one rule. This is the
+  end-of-line marker's workaround applied to the whole interaction; the invisible target, the guide
+  and the caption per point, and the single-rule reveal on `:hover`/`:focus-within`, are unchanged.
+- Touch support depends on tap-to-focus of a non-tabbable element — HTML now, which also retires
+  the open question this record used to carry about SVG focus in Safari: tap focusing an element
+  with a `tabindex` holds across current Chrome, Firefox and Safari. Where it ever does not, the
+  feature degrades to its resting state rather than breaking.
 - Any future chart interaction — brushing, zooming, a range drag — will not fit this pattern, since
   its states are not finite at render time. That is the point at which this record should be
   reopened rather than worked around.
