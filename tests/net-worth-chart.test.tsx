@@ -1,7 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { NetWorthChart, buildScale, gridRules } from "../app/components/net-worth-chart.tsx";
+import { MASKED_FIGURE } from "../app/components/amount.tsx";
+import {
+  NetWorthChart,
+  buildScale,
+  gridRules,
+  hitTargets,
+} from "../app/components/net-worth-chart.tsx";
 
 import type { ChartPoint } from "../app/components/net-worth-chart.tsx";
 
@@ -180,6 +186,100 @@ describe("<NetWorthChart>", () => {
     for (const rule of gridRules(buildScale(rising), false)) {
       expect(markup).toContain(`<span>${rule.label}</span>`);
     }
-    expect(markup).toContain('aria-label="Net worth"');
+    expect(markup).toContain(
+      'aria-label="Net worth ending on 1 Jan 2025 at $200,000.00."',
+    );
+  });
+});
+
+describe("the point readout (spec 0010)", () => {
+  const render = (manual: ChartPoint[], computed: ChartPoint[], masked = false) =>
+    renderToStaticMarkup(
+      <NetWorthChart
+        manual={manual}
+        computed={computed}
+        label="Net worth"
+        masked={masked}
+        id="test"
+      />,
+    );
+
+  it("tiles the hit targets across the full box, split at the midpoints", () => {
+    // Deliberately uneven spacing — 3, 12 and 15 days over a 30-day span — so
+    // that even tiling would be visibly wrong. Full coverage with no gap and
+    // no overlap is what makes a position mean "the nearest point": a fixed
+    // target width would leave most of a long range inert, and the sparse old
+    // side of an "All" range has to resolve somewhere.
+    const series: ChartPoint[] = [
+      { date: "2024-01-01", amount: "100000.00" },
+      { date: "2024-01-04", amount: "104000.00" },
+      { date: "2024-01-16", amount: "112000.00" },
+      { date: "2024-01-31", amount: "120000.00" },
+    ];
+
+    // The points plot at x 0, 100, 500 and 1000; the boundaries between the
+    // targets sit halfway between each pair.
+    expect(hitTargets([], series, buildScale(series))).toEqual([
+      { left: 0, right: 50, point: series[0], manual: false },
+      { left: 50, right: 300, point: series[1], manual: false },
+      { left: 300, right: 750, point: series[2], manual: false },
+      { left: 750, right: 1000, point: series[3], manual: false },
+    ]);
+  });
+
+  it("marks a hand-typed point's readout, and only a hand-typed point's", () => {
+    // §7's rule about output rather than about strokes: a dashed line is a
+    // claim about provenance, and two identically-worded readouts would undo
+    // it in the medium a reader is actually looking at.
+    const markup = render(
+      [
+        { date: "2010-06-01", amount: "50000.00" },
+        { date: "2018-06-01", amount: "90000.00" },
+      ],
+      rising,
+    );
+
+    // Both hand-typed points carry the mark; neither computed point does, and
+    // nor does the resting strip, which captions the computed end of the line.
+    expect(markup.match(/hand-typed/g)).toHaveLength(2);
+    expect(markup).toContain(
+      '<span class="chart-readout-date">1 Jun 2010</span>' +
+        '<span class="chart-readout-value">$50,000.00</span>' +
+        '<span class="chart-readout-mark">hand-typed</span>',
+    );
+    expect(markup).toContain(
+      '<span class="chart-readout-date">1 Jan 2025</span>' +
+        '<span class="chart-readout-value">$200,000.00</span></span>',
+    );
+  });
+
+  it("masks every readout to the shared constant, and keeps the dates", () => {
+    // The complement of the import-boundary test, which polices which files
+    // may call a money formatter but not what they render when masked. The
+    // date survives — a date is not an amount — and the currency mark stays so
+    // the dots still read as money, exactly as `<Amount>` masks a cell.
+    const markup = render([{ date: "2010-06-01", amount: "50000.00" }], rising, true);
+
+    expect(markup).not.toMatch(/\$\d/);
+    // One masked figure per point, plus the resting strip's.
+    expect(markup.match(/\$••••••/g)).toHaveLength(4);
+    expect(markup).toContain('<span class="chart-readout-date">1 Jun 2010</span>');
+  });
+
+  it("describes the line as ending at the last plotted point, dated", () => {
+    // The reproducing case for the bug this spec fixes: the Overview used to
+    // pass the household's *current* net worth into this label, which is wrong
+    // whenever the range ends before today. The figure is derived from the
+    // last point actually plotted, so a range ending in June is announced with
+    // June's value — and with its date, which is what keeps hiding the visible
+    // strip from assistive technology from losing information.
+    const markup = render([], [
+      { date: "2024-03-01", amount: "120000.00" },
+      { date: "2024-06-01", amount: "150000.00" },
+    ]);
+
+    expect(markup).toContain(
+      'aria-label="Net worth ending on 1 Jun 2024 at $150,000.00."',
+    );
   });
 });

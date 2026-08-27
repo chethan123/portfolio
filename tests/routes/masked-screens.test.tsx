@@ -299,8 +299,9 @@ describe("how a masked figure is announced", () => {
       expect(masked).toContain('<span class="visually-hidden">Amount hidden</span>');
 
       // The chart's label is a string rather than a component, so it is the one
-      // that has to say this in prose.
-      expect(masked).toContain("ending at an amount that is hidden");
+      // that has to say this in prose. The date it now carries stays visible —
+      // a date is not an amount (spec 0010).
+      expect(masked).toContain("at an amount that is hidden");
     }),
   );
 

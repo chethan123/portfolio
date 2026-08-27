@@ -16,12 +16,12 @@
  * `--chart-line` along with the line it sits under.
  *
  * **Masking arrives as a prop, not as a hook** (spec 0007). Everywhere else an
- * amount is a component that asks for itself; here the two figures are an axis
- * tick and an `aria-label`, and neither is a place a component can go. So this
- * is the one file besides `amount.tsx` allowed to call a money formatter, and
- * `masking-boundary.test.ts` names it. The line, the grid and the fill are
- * unchanged either way: story 10 wants the shape of the year without the size
- * of it.
+ * amount is a component that asks for itself; here the figures are axis ticks,
+ * an `aria-label` and the per-point readouts of spec 0010, and none of those
+ * is a place a component can go. So this is the one file besides `amount.tsx`
+ * allowed to call a money formatter, and `masking-boundary.test.ts` names it.
+ * The line, the grid and the fill are unchanged either way: story 10 wants the
+ * shape of the year without the size of it.
  */
 import { useId } from "react";
 
@@ -143,6 +143,44 @@ const toPolyline = (points: ChartPoint[], scale: Scale) =>
   points.map((point) => `${scale.x(point.date)},${scale.y(point.amount)}`).join(" ");
 
 /**
+ * One plotted point's slice of the pointer plane (spec 0010, ADR-0004).
+ *
+ * `left` and `right` are drawing-box coordinates. `manual` is provenance: a
+ * hand-typed pre-app point says so in its readout, because a dashed stroke is
+ * a claim text worded identically would quietly undo (§7).
+ */
+export type HitTarget = {
+  left: number;
+  right: number;
+  point: ChartPoint;
+  manual: boolean;
+};
+
+/**
+ * Tile the drawing box from midpoint to midpoint, one target per point.
+ *
+ * Each target runs from halfway to its left neighbour to halfway to its right,
+ * the first and last extending to the edges — full coverage, no dead regions,
+ * no overlaps, so a position always selects the nearest point. Sampling is
+ * geometric (ADR-0003), so widths vary enormously; a fixed width would leave
+ * most of a long range inert.
+ */
+export function hitTargets(manual: ChartPoint[], computed: ChartPoint[], scale: Scale): HitTarget[] {
+  const points = [
+    ...manual.map((point) => ({ point, manual: true })),
+    ...computed.map((point) => ({ point, manual: false })),
+  ];
+  const xs = points.map(({ point }) => scale.x(point.date));
+
+  return points.map((entry, index) => ({
+    ...entry,
+    left: index === 0 ? 0 : ((xs[index - 1] ?? 0) + (xs[index] ?? 0)) / 2,
+    right:
+      index === points.length - 1 ? WIDTH : ((xs[index] ?? 0) + (xs[index + 1] ?? 0)) / 2,
+  }));
+}
+
+/**
  * The same run of points, closed down to the floor of the box so it can be
  * filled.
  *
@@ -173,11 +211,42 @@ function tickLabel(ms: number, withDay: boolean): string {
   return withDay ? `${Number(day)} ${name}` : `${name} ${year}`;
 }
 
+/**
+ * A readout's date always carries its year, unlike the x ticks, which drop it
+ * on short spans — a tick is read in the context of two others, and a readout
+ * is read alone (spec 0010).
+ */
+function readoutDate(date: string): string {
+  const [year = "", month = "", day = ""] = date.split("-");
+
+  return `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
+}
+
+/**
+ * One point's caption: its date, its value, and — for a hand-typed point — its
+ * provenance, in words.
+ *
+ * The amount is full precision, identical to the headline, so that on a range
+ * ending today the two agree digit for digit; masked, it is the same dollar
+ * sign and run of dots as every other masked money figure, because masking is
+ * a display state and this must not be the one place a figure survives it.
+ */
+function Readout({ target, masked }: { target: HitTarget; masked: boolean }) {
+  return (
+    <>
+      <span className="chart-readout-date">{readoutDate(target.point.date)}</span>
+      <span className="chart-readout-value">
+        {masked ? `$${MASKED_FIGURE}` : formatMoney(target.point.amount)}
+      </span>
+      {target.manual ? <span className="chart-readout-mark">hand-typed</span> : null}
+    </>
+  );
+}
+
 export function NetWorthChart({
   computed,
   manual,
   label,
-  endingAt = null,
   masked,
   id,
 }: {
@@ -187,20 +256,14 @@ export function NetWorthChart({
   manual: ChartPoint[];
   /**
    * What the line is, for anyone who cannot see it — the descriptive half only.
-   * The figure it ends at is {@link endingAt}, so that this component decides
-   * how the figure is said and the caller never has to.
+   * The figure and date it ends at are derived here, from the last point
+   * actually plotted, so that the label is true on every range: a caller once
+   * supplied the figure, the Overview passed current net worth, and a custom
+   * range ending in the past was announced with today's number (spec 0010).
+   * Deriving it also keeps money formatting out of the routes, which is the
+   * leak the masking boundary exists to prevent.
    */
   label: string;
-  /**
-   * The last plotted amount, named in the accessible label — or null where
-   * there is none to name.
-   *
-   * Composed here rather than by the caller because the caller cannot format an
-   * amount: an `aria-label` is a string, so the route would have to call a
-   * money formatter to build it, which is exactly the leak the boundary exists
-   * to prevent (story 12's failure, in a place nobody looks).
-   */
-  endingAt?: string | null;
   /**
    * Whether this browser is masked (spec 0007).
    *
@@ -243,11 +306,20 @@ export function NetWorthChart({
 
   const rules = gridRules(scale, masked);
 
+  const targets = hitTargets(manual, computed, scale);
+  const resting = targets.at(-1);
+
   // "an amount that is hidden" rather than a run of dots: story 6 asks for a
   // masked figure to be announced as hidden rather than spelled out, and an
-  // `aria-label` is nothing but the announcement.
+  // `aria-label` is nothing but the announcement. The date rides along because
+  // the visible strip is kept out of the accessibility tree, and hiding it
+  // must not lose information a sighted reader gets (spec 0010, story 20).
   const ending =
-    endingAt === null ? "" : ` ending at ${masked ? "an amount that is hidden" : formatMoney(endingAt)}.`;
+    last === undefined
+      ? ""
+      : ` ending on ${readoutDate(last.date)} at ${
+          masked ? "an amount that is hidden" : formatMoney(last.amount)
+        }.`;
 
   const { start, end } = scale.time;
   const withDay = end - start < DAY_TICKS_UNDER;
@@ -257,6 +329,17 @@ export function NetWorthChart({
 
   return (
     <>
+      {/* The readout at rest: the last point the line actually plots, dated
+          and at full precision, so that on a range ending today it agrees with
+          the headline digit for digit (spec 0010). Hidden from assistive
+          technology with the rest of the strip — the svg's own label below
+          carries the same fact as a sentence. */}
+      {resting ? (
+        <p className="chart-readout" aria-hidden="true">
+          <Readout target={resting} masked={masked} />
+        </p>
+      ) : null}
+
       <div className="chart">
         <div className="chart-axis" aria-hidden="true">
           {/* Keyed by position, not by value: a portfolio that has not moved
@@ -337,6 +420,43 @@ export function NetWorthChart({
             }}
           />
         ) : null}
+
+        {/* The pointer plane (spec 0010, ADR-0004). One invisible full-height
+            target per plotted point, tiled midpoint to midpoint so a position
+            always selects the nearest point; each carries its own guide and
+            caption, and the stylesheet chooses which shows. No client state.
+
+            HTML positioned in percentages, not SVG: the drawing box is
+            stretched non-uniformly, which is survivable for a line and fatal
+            for text — the same reason the marker above is not an SVG circle.
+            The guide and caption are absolute against this plane (the targets
+            themselves are static), so one class positions every caption on the
+            resting strip, with only each target's width and its guide's offset
+            computed per point.
+
+            `tabIndex={-1}`: focusable, so a tap can pin a readout, without
+            becoming one of up to 180 tab stops between the range control and
+            the next link. The whole plane is `aria-hidden` — the alternates
+            would read as stray sentences, and the svg's label already carries
+            the chart for anyone who cannot see it. */}
+        <div className="chart-hits" aria-hidden="true">
+          {targets.map((target, index) => (
+            <div
+              key={index}
+              className="chart-hit"
+              tabIndex={-1}
+              style={{ width: `${((target.right - target.left) / WIDTH) * 100}%` }}
+            >
+              <span
+                className="chart-guide"
+                style={{ left: `${(scale.x(target.point.date) / WIDTH) * 100}%` }}
+              />
+              <span className="chart-point-readout">
+                <Readout target={target} masked={masked} />
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Under the plot, not over it: the y labels can overlay their own rules
