@@ -49,6 +49,13 @@ custom start/end pair. Which dates a range can reach differs by screen — the O
 include hand-typed pre-app data; an account's never does.
 _Avoid_: time range, period, date range, window, lookback.
 
+**Range end value**:
+The value a plotted line actually ends at — the last point inside the chosen chart range. It equals
+current net worth only when the range ends today; a range ending in the past ends at a past value,
+and stating today's figure for it is simply wrong. A fact about one line over one range, not about
+the household now.
+_Avoid_: current value, latest value, ending balance, final value.
+
 ### What a screen shows in public
 
 **Masked**:
