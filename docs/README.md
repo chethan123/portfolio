@@ -69,6 +69,10 @@ context, and the result of a real trade-off. Both were opened by the dividends w
   is not a zero. The README states them at the altitude of a module seam for a contributor; the
   guide states them as consequences for a household.
 - **[`operating.md`](operating.md) restates parts of `.env.example`.** Named there, in place.
+- **[`importing-history.md`](importing-history.md) retells the two chart series** that `DESIGN.md`
+  §7 defines and the guide's Overview page describes, for a third reader: someone deciding where
+  outside history belongs before loading any of it. It carries the mapping and links to those two
+  for every rule's reason.
 - **[`runbook.md`](runbook.md) and [`operating.md`](operating.md) cover the same failures** at
   different moments: one indexed by symptom and read while something is broken, the other by topic
   and read while it is not. The seam that keeps them from drifting is that the runbook explains

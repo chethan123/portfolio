@@ -29,9 +29,15 @@ One rule governs everything below: **never fake a photograph.** A `position_set`
 complete truth of what an account held on a date — a missing row means sold, and every consumer
 prices the rows as what they say they are. Empower's per-account *balance* history cannot honestly
 become one for an investment account: a balance says what the account was worth, not what it held,
-and recording it as a single cash row would file the equity side of the household under cash on
-every historical Analysis view while the coverage counts report the figure as fully known. Where
+and recording it as a single cash row would file the equity side of the household under cash in
+every as-of valuation behind the charts, while the coverage counts report the figure as fully
+known. Where
 this document says "manual series" for something you might wish were computed, that rule is why.
+
+This section is the third telling of the two lines — [DESIGN.md §7](../DESIGN.md) holds the rules,
+[`guide/overview.md`](guide/overview.md) reads them off the screen — and the duplication is
+deliberate, named here and in [`README.md`](README.md): an importer has to hold both in one place
+before deciding where anything goes. For every rule's reason, those two are the authorities.
 
 What each thing Empower holds can become here:
 
@@ -41,12 +47,13 @@ What each thing Empower holds can become here:
 | Per-account balance history, bank and loan accounts | Recorded balances through the app's own form | A bank balance *is* a complete photograph — one cash row is the whole truth |
 | Per-account balance history, investment accounts | Nothing, directly | A balance is not a photograph; see the rule above. The manual series already carries its share of the total |
 | Current holdings | A checklist | To verify your first uploads against — not an import source; your brokerages' statements are |
-| Historic holdings | — | Empower does not keep point-in-time holdings. The computed line's past comes from brokerage statements, or not at all |
+| Historic holdings | — | The dashboard has nowhere to capture point-in-time holdings from. The computed line's past comes from brokerage statements, or not at all |
 
 ## Before you upload anything backdated: the price spine
 
-The computed line's second ingredient, `price_daily`, begins the day the instance's price poller
-first ran. Nothing backfills it today —
+For every instrument the poller quotes, the computed line's second ingredient begins late:
+`price_daily` holds no close for them from before the day the instance's poller first ran. Nothing
+backfills it today —
 [issue #83](https://github.com/chethan123/portfolio/issues/83) tracks both the consequence and the
 fix — and the consequence is worth understanding before any backdated statement lands:
 
@@ -76,8 +83,8 @@ meantime, and nothing on screen warns you.
 
 ## Step 1 — capture from Empower
 
-Empower's dashboard has no export for what you need, but the web application itself fetches it as
-JSON, and your browser will show you the responses.
+Empower's dashboard does not offer these series as downloads, but the web application fetches
+everything it draws as JSON, and your browser will show you the responses.
 
 1. Sign in to the dashboard at `home.personalcapital.com` in a desktop browser.
 2. Open the browser's developer tools, Network tab, filtered to Fetch/XHR.
@@ -93,8 +100,8 @@ Three cautions:
 
 - **These are unofficial endpoints.** Names, paths and field names have drifted across Empower's
   rebrands and will drift again. Trust what your own network log shows over any write-up of the
-  API, including this one — every recipe below tells you which fields to identify by eye rather
-  than assuming a name.
+  API — including this document's claims about what the dashboard does and does not serve — so
+  every recipe below tells you which fields to identify by eye rather than assuming a name.
 - **The responses are sensitive.** They carry account numbers, institution names and balances. Save
   them outside any git checkout, and delete them at the end (the last step below).
 - **Prefer copying individual responses over "save all as HAR".** A HAR file additionally records
@@ -126,8 +133,9 @@ liabilities. With those two names in hand:
 jq -r '.spData.networthHistories[] | "\(.date)\t\(.networth)"' histories.json > points.tsv
 ```
 
-substituting the path and field names your capture actually uses. To thin daily data to the first
-recorded day of each month:
+substituting the path and field names your capture actually uses. To thin daily data to one point
+per month by keeping the day-one rows — a month missing its first day is simply skipped, which a
+rough prefix can afford:
 
 ```sh
 awk -F'\t' 'substr($1, 9, 2) == "01"' points.tsv > monthly.tsv
@@ -160,9 +168,12 @@ account, the app's own balance form is the supported way in
 true**, accepts any date back to 1970, and writes exactly what a statement upload writes, so
 history entered this way is computed history — solid line, per-account chart, everything.
 
-The balances come from your `histories.json` capture, which carries them per account; monthly
-points are plenty, entered in any order, since each carries its own date. A loan is typed as the
-amount owed — the form owns the sign.
+The balances come out of Empower the same way as step 1's capture. Whether `histories.json`
+already carries per-account entries depends on what the chart you captured it from requested —
+check by eye; if it holds only the aggregate, open the account's own page in Empower and capture
+the history response *its* balance chart fetches, one file per account. Monthly points are plenty,
+entered in any order, since each carries its own date. A loan is typed as the amount owed — the
+form owns the sign.
 
 **Decide whether the per-account depth is worth the typing before you start.** The household total
 over those years is already covered by the manual series from step 2, and the computed total wins
@@ -191,8 +202,11 @@ much of it you do, so the notes here are only what matters at volume:
   the line between two statements moves on prices alone — real, but only part of the truth if
   money moved between them. Monthly statements make that gap a month; quarterly is often all a
   401k offers and is fine.
-- **Mistakes are cheap.** Deleting a bad upload is the design's undo, and a corrected re-upload for
-  the same date simply wins.
+- **Mistakes are corrected by re-uploading.** There is no screen for deleting an upload; a
+  corrected upload for the same date simply wins, and the superseded set lingers unread. If one
+  gets in the way — step 5's gap query still counts it — the schema is built for removing it: find
+  its id in `position_set` by account and date, and `delete from position_set where id = …` takes
+  its holdings with it.
 
 When the most recent statements are in, open Holdings beside the captured `getHoldings` response
 and check the two agree account by account — that is what the capture is for. Then upload the rest,
@@ -225,10 +239,15 @@ docker compose exec db psql -U portfolio -d portfolio -c "
 
 An empty result means the spine already covers everything held, and this step is done.
 
+One kind of row it can show needs no closes at all: the query reads every set ever uploaded,
+including ones a same-date correction has superseded, so an instrument held only in a superseded
+set keeps a row here that no valuation reads. Delete that set (step 4's last note) or ignore its
+row.
+
 **Sourcing closes for quoted instruments.** Historical daily closes for anything with a public
-ticker are available from the usual providers — the same Yahoo endpoints the app's own poller uses
-also serve history, and a custodian's own download is even better where offered. Two traps, both
-silent:
+ticker are available from the usual providers — the same unofficial Yahoo API the app's own poller
+quotes from serves history through a different endpoint, and a custodian's own download is even
+better where offered. Two traps, both silent:
 
 - **Split adjustment.** Most providers restate history through later stock splits, while your
   statements record shares as held on the day. For any symbol that split after a statement date,
@@ -244,8 +263,9 @@ at resolution for exactly this reason.
 
 **Sourcing closes for manually priced instruments.** A collective investment trust has no feed
 history anywhere, but the statements holding it print its unit price — that column is the source.
-One close per statement date is enough; the carry-forward holds it between statements, exactly as
-the live manual-price path does.
+One close per statement date is enough; the carry-forward holds it between statements — hand-set
+prices carrying forward is how the design prices these instruments generally, though the screen
+for setting one is among the tabs Settings lists as not built yet.
 
 **Loading.** However you assemble the closes, they land as rows of `(instrument_id, date, close)`,
 with the instrument id taken from the gap query above. For a handful of statement-dated CIT prices,
@@ -277,9 +297,10 @@ docker compose exec db psql -U portfolio -d portfolio -c "
   from holding_valued_at(date '2025-06-30');"
 ```
 
-Ask it at a few dates spread across the backfilled era. `unpriced` should be zero everywhere —
-except holdings you knowingly left without closes, which the Overview's coverage note will name as
-excluded, which is the honest outcome for them.
+Ask it at a few dates spread across the backfilled era. `unpriced` should be zero everywhere,
+except holdings you knowingly left without closes. This terminal check is the only one that
+counts: until issue #83 lands, no screen distinguishes a past date priced worse than today from
+one priced fully — the Overview's coverage sentence counts what is unpriced *now*, not then.
 
 **On the screens.** The Overview at the All range should now read as one story: dashed manual
 years, then a solid line from your earliest backfilled statement onward, with no cliff at the date
