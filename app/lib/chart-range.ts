@@ -1,5 +1,6 @@
 /**
- * The chart-range vocabulary, resolution and cookie, once (spec 0008).
+ * The chart-range vocabulary, resolution and cookie, once (spec 0008), with
+ * the sampler's own density rule since spec 0009 / ADR-0003.
  *
  * `overview.tsx` and `account.tsx` each carried their own `RANGES`/`windowDays`/
  * `sampleWindow` — `ARCHITECTURE.md` named the pair as debt, with one caveat:
@@ -59,7 +60,7 @@ export const DEFAULT_RANGE = "1y" as const satisfies RangeKey;
  * checked regardless of how wide the range is. Raising or lowering chart
  * density for every long-range preset at once is changing this one number.
  */
-export const CAP = 180;
+export const SAMPLE_BUDGET = 180;
 
 const DAY_MS = 86_400_000;
 
@@ -182,13 +183,19 @@ function solveGrowthRatio(n: number, target: number): number {
     return sum;
   };
 
+  // Bracket the root before bisecting. At the shipped budget this loop never
+  // runs — with 179 terms the first guess already sums past 1e53, dwarfing any
+  // real span — but it is what keeps the solve correct if `SAMPLE_BUDGET` is
+  // ever retuned far downward, where `2^(n-1)` stops outrunning a multi-year
+  // span and the bracket has to be widened for real.
   let low = 1;
   let high = 2;
   while (sumAt(high) < target) high *= 2;
 
   // A tolerance this tight on `r` itself is what the spec calls for: loose
   // enough to converge in a bounded number of steps, tight enough that every
-  // downstream day-offset (up to `CAP - 2` powers of `r`) rounds stably.
+  // downstream day-offset (up to `SAMPLE_BUDGET - 2` powers of `r`) rounds
+  // stably.
   while (high - low > 1e-9) {
     const mid = (low + high) / 2;
     if (sumAt(mid) < target) low = mid;
@@ -200,8 +207,8 @@ function solveGrowthRatio(n: number, target: number): number {
 
 /**
  * Every calendar day from `since` to `until` when the span fits the budget;
- * otherwise exactly `CAP` dates, geometrically decaying backward from
- * `until` (spec 0009, issue #74, ADR-0003).
+ * otherwise exactly `SAMPLE_BUDGET` dates, geometrically decaying backward
+ * from `until` (spec 0009, issue #74, ADR-0003).
  *
  * The anchor is `until`, never the real current date — every fixed preset's
  * `until` already equals today, so this only matters for a custom range
@@ -213,23 +220,27 @@ function sampleWindow(since: IsoDate, until: IsoDate): Window {
   const end = parseIso(until);
   const spanDays = Math.round((end - start) / DAY_MS);
 
-  if (spanDays + 1 <= CAP) {
+  if (spanDays + 1 <= SAMPLE_BUDGET) {
     const dates = Array.from({ length: spanDays + 1 }, (_, index) => addDays(since, index));
     return { since, dates };
   }
 
-  // `CAP - 1` gap terms (`r^0` through `r^(CAP-2)`), the first fixed at one
-  // calendar day by construction (`r^0 = 1`), solved to sum exactly to the
-  // span so the walk backward lands precisely on `since`.
-  const ratio = solveGrowthRatio(CAP - 1, spanDays);
+  // `SAMPLE_BUDGET - 1` gap terms (`r^0` through `r^(SAMPLE_BUDGET-2)`), the
+  // first fixed at one calendar day by construction (`r^0 = 1`), solved to sum
+  // exactly to the span so the walk backward lands precisely on `since`.
+  const ratio = solveGrowthRatio(SAMPLE_BUDGET - 1, spanDays);
 
   // Cumulative day-offsets from `until`, nearest first: offset(0) = 0,
-  // offset(k) = offset(k-1) + ratio^(k-1). `offsets[CAP - 1]` equals
-  // `spanDays` by construction of `ratio`, landing exactly on `since`.
+  // offset(k) = offset(k-1) + ratio^(k-1). The last equals `spanDays` by
+  // construction of `ratio`, landing exactly on `since`. Accumulated in a
+  // running total rather than read back out of the array, so the loop never
+  // has to index behind itself.
   const offsets: number[] = [0];
+  let offset = 0;
   let gap = 1;
-  for (let k = 1; k < CAP; k++) {
-    offsets.push(offsets[k - 1]! + gap);
+  for (let k = 1; k < SAMPLE_BUDGET; k++) {
+    offset += gap;
+    offsets.push(offset);
     gap *= ratio;
   }
 
