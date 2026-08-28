@@ -29,9 +29,10 @@ is a moment we were told about, and the quote is today's best answer.
 
 ## The payload is an archive, never an operand
 
-Each observation carries the provider's full validated response as `payload jsonb`, on the same
-precedent that keeps every uploaded CSV forever in `position_set.raw_file`: an audit artifact that
-may later be re-read, never computed from. **`price` is the only column in `price_observation` any
+Each observation carries the provider's raw entry as `payload jsonb` — archived only when the
+typed parse succeeded, so a shape change remains a refusal — on the same precedent that keeps
+every uploaded CSV forever in `position_set.raw_file`: an audit artifact that may later be
+re-read, never computed from. **`price` is the only column in `price_observation` any
 query may compute from.** A figure needed for arithmetic is promoted to a typed `numeric` column in
 its own migration; summing from `payload` is the §5.6 violation the numeric boundary exists to
 prevent. The honest rationale for hoarding is recorded here on purpose: option value — no consuming
