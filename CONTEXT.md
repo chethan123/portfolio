@@ -45,10 +45,16 @@ _Avoid_: tax-advantaged, non-taxable, unsheltered.
 ### How a chart's time span is chosen
 
 **Chart range**:
-The named span of time a chart plots: one of the fixed presets (1W, 1M, 3M, YTD, 1Y, 5Y, All) or a
-custom start/end pair. Which dates a range can reach differs by screen — the Overview's range may
-include hand-typed pre-app data; an account's never does.
+The named span of time a chart plots: one of the fixed presets (1D, 1W, 1M, 3M, YTD, 1Y, 5Y, All)
+or a custom start/end pair. Which dates a range can reach differs by screen — the Overview's range
+may include hand-typed pre-app data; an account's never does.
 _Avoid_: time range, period, date range, window, lookback.
+
+**1D**:
+The chart range that plots the most recent trading session's observations, open to close — or to
+now while the session is running. Always the latest session (a weekend shows Friday's), never an
+older one, and never a trailing twenty-four hours.
+_Avoid_: today, intraday range, last 24 hours, daily chart.
 
 **Range end value**:
 The value a plotted line actually ends at — the last point inside the chosen chart range. It equals
@@ -64,6 +70,17 @@ How often the app asks the price feed for fresh quotes while the market is open 
 dial, in whole minutes. Outside market hours no cadence spends anything, so the term speaks of
 refreshes rather than of the timer that drives them.
 _Avoid_: poll interval, polling frequency, update speed, refresh rate.
+
+**Observation**:
+A price the feed reported for one instrument, filed under the instant the provider says it was
+struck. Kept forever and never edited, one row per distinct instant; distinct from the quote (the
+current answer) and the daily close (a finished day).
+_Avoid_: tick, snapshot, price point, intraday price.
+
+**Poll**:
+One attempt to refresh quotes for every feed-priced instrument, recorded whether or not any new
+observation resulted. What tells a quiet market apart from a server that was not running.
+_Avoid_: refresh run, fetch, sync.
 
 ### Who gets in
 
