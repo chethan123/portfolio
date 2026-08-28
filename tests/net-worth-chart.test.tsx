@@ -156,6 +156,7 @@ describe("<NetWorthChart>", () => {
         computed={computed}
         label="Net worth"
         masked={false}
+        session={null}
         id="test"
       />,
     );
@@ -200,6 +201,7 @@ describe("the point readout (spec 0010)", () => {
         computed={computed}
         label="Net worth"
         masked={masked}
+        session={null}
         id="test"
       />,
     );
@@ -281,5 +283,81 @@ describe("the point readout (spec 0010)", () => {
     expect(markup).toContain(
       'aria-label="Net worth ending on 1 Jun 2024 at $150,000.00."',
     );
+  });
+});
+
+describe("an intra-session line (ADR-0006)", () => {
+  // Instants, not dates. `buildScale` already positions by `Date.parse`, so
+  // what changes is only how a moment is *named* — and the chart is told, never
+  // left to guess from the shape of the string.
+  const session: ChartPoint[] = [
+    { date: "2026-06-05T13:30:00.000Z", amount: "100000.0000" },
+    { date: "2026-06-05T16:45:00.000Z", amount: "101500.0000" },
+    { date: "2026-06-05T20:00:00.000Z", amount: "102000.0000" },
+  ];
+
+  const render = (points: ChartPoint[], masked = false) =>
+    renderToStaticMarkup(
+      <NetWorthChart
+        manual={[]}
+        computed={points}
+        label="Net worth over the latest trading session,"
+        masked={masked}
+        session={{ timeZone: "America/New_York" }}
+        id="test"
+      />,
+    );
+
+  it("names its axis by the time of day, on the market's clock", () => {
+    // 13:30 to 20:00 UTC is 09:30 to 16:00 in New York — the session as the
+    // market reckons it, and the same labels whichever zone the server or the
+    // browser happens to be in.
+    const markup = render(session);
+
+    expect(markup).toContain("<span>09:30</span>");
+    expect(markup).toContain("<span>12:45</span>");
+    expect(markup).toContain("<span>16:00</span>");
+  });
+
+  it("puts the time of day beside the date in every readout", () => {
+    const markup = render(session);
+
+    // Story 9: a readout has to say which moment it describes. The date stays,
+    // because a readout is read alone.
+    expect(markup).toContain(
+      '<span class="chart-readout-date">5 Jun 2026, 09:30</span>' +
+        '<span class="chart-readout-value">$100,000.00</span>',
+    );
+    expect(markup).toContain(
+      'aria-label="Net worth over the latest trading session, ending on 5 Jun 2026, 16:00 at $102,000.00."',
+    );
+  });
+
+  it("masks a session's amounts exactly as it masks every other range's", () => {
+    // Story 12. The time lives with the date and not with the amount, so
+    // masking has nothing new to reach: the figures go, the moments stay.
+    const markup = render(session, true);
+
+    expect(markup).not.toMatch(/\$\d/);
+    expect(markup).toContain('<span class="chart-readout-date">5 Jun 2026, 09:30</span>');
+  });
+
+  it("still names days when it is not drawing a session", () => {
+    // The other half of "the chart is told": the same instants, drawn as a
+    // day-granularity series, are labelled by day. Nothing is inferred from the
+    // strings themselves.
+    const markup = renderToStaticMarkup(
+      <NetWorthChart
+        manual={[]}
+        computed={session}
+        label="Net worth"
+        masked={false}
+        session={null}
+        id="test"
+      />,
+    );
+
+    expect(markup).toContain("<span>5 Jun</span>");
+    expect(markup).toContain('<span class="chart-readout-date">5 Jun 2026</span>');
   });
 });

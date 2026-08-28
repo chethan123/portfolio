@@ -17,10 +17,12 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   accountTotal,
   accountTotals,
+  latestObservedSession,
   manualNetWorth,
   netWorth,
   netWorthChange,
   netWorthSeries,
+  netWorthSessionSeries,
 } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -363,6 +365,188 @@ describe("manualNetWorth", () => {
         { date: "2022-12-31", amount: "500000.0000" },
         { date: "2024-12-31", amount: "820000.0000" },
       ]);
+    }),
+  );
+});
+
+describe("which session 1D plots", () => {
+  it(
+    "is the latest market date anything was observed on",
+    withDatabase(async ({ db, seedInstrument, seedObservation }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      await seedObservation({ instrument: vti, asOf: "2026-06-04T17:00:00Z", price: "100.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T17:00:00Z", price: "110.0000" });
+
+      expect(await latestObservedSession(db)).toBe("2026-06-05");
+    }),
+  );
+
+  it(
+    "answers with the last session observed, not with a calendar day",
+    withDatabase(async ({ db, seedInstrument, seedObservation }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      // Friday, and then a weekend nothing was polled through. Whatever today
+      // is when this runs, 1D shows Friday — the session comes from what was
+      // observed (ADR-0006), so the UTC-today versus market-day seam never
+      // decides what is drawn.
+      await seedObservation({
+        instrument: vti,
+        asOf: "2026-06-06T00:30:00Z",
+        marketDate: "2026-06-05",
+        price: "110.0000",
+      });
+
+      expect(await latestObservedSession(db)).toBe("2026-06-05");
+    }),
+  );
+
+  it(
+    "answers null on an instance that has never observed anything",
+    withDatabase(async ({ db }) => {
+      expect(await latestObservedSession(db)).toBeNull();
+    }),
+  );
+});
+
+describe("the 1D series", () => {
+  it(
+    "puts a point at every distinct instant of the session, priced at what was known then",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const account = await seedAccount();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+
+      for (const [at, price] of [
+        ["2026-06-05T13:30:00Z", "210.0000"],
+        ["2026-06-05T13:45:00Z", "205.0000"],
+        ["2026-06-05T14:00:00Z", "220.0000"],
+      ]) {
+        await seedObservation({ instrument: vti, asOf: at as string, price: price as string });
+      }
+
+      const series = await netWorthSessionSeries("2026-06-05", db);
+
+      // Unsampled: one point per observation, so the line is exactly as
+      // granular as the refresh cadence the household chose (story 3).
+      expect(series.map((point) => [point.at, point.amount])).toEqual([
+        ["2026-06-05T13:30:00.000Z", "21000.0000"],
+        ["2026-06-05T13:45:00.000Z", "20500.0000"],
+        ["2026-06-05T14:00:00.000Z", "22000.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "carries an instrument with no observation forward from the close before the session",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation, usdInstrument }) => {
+      const account = await seedAccount({ kind: "bank" });
+      const usd = await usdInstrument();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [
+          { instrument: usd, quantity: "5000.00000000" },
+          { instrument: vti, quantity: "10.00000000" },
+        ],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "300.0000" });
+
+      // Cash contributes its fixed dollar at every instant — it is quoted by
+      // nobody and carried forward from the 1970 row — so the point is
+      // $5,000 plus ten shares at the price the feed had given us.
+      expect(await netWorthSessionSeries("2026-06-05", db)).toEqual([
+        {
+          at: "2026-06-05T14:00:00.000Z",
+          amount: "8000.0000",
+          coverage: { known: 2, total: 2 },
+        },
+      ]);
+    }),
+  );
+
+  it(
+    "prices an instrument at the previous close for the instants before its first quote of the day",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const account = await seedAccount();
+      const early = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const late = await seedInstrument({ symbol: "BND", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [
+          { instrument: early, quantity: "10.00000000" },
+          { instrument: late, quantity: "10.00000000" },
+        ],
+      });
+      await seedDailyClose({ instrument: early, date: "2026-06-04", close: "100.0000" });
+      await seedDailyClose({ instrument: late, date: "2026-06-04", close: "50.0000" });
+
+      // The session's own provisional close, which converges on the last
+      // observation of the day. Reading it at 13:30 would price the open at the
+      // price of the close — the day's answer leaking backwards into its own
+      // line — so the carry-forward reaches strictly past it.
+      await seedDailyClose({ instrument: late, date: "2026-06-05", close: "80.0000" });
+
+      await seedObservation({ instrument: early, asOf: "2026-06-05T13:30:00Z", price: "110.0000" });
+      await seedObservation({ instrument: late, asOf: "2026-06-05T14:00:00Z", price: "80.0000" });
+
+      expect((await netWorthSessionSeries("2026-06-05", db)).map((point) => [point.at, point.amount])).toEqual([
+        // 10 × 110 + 10 × 50, the second still at yesterday's close.
+        ["2026-06-05T13:30:00.000Z", "1600.0000"],
+        // 10 × 110 + 10 × 80, once its own quote arrived.
+        ["2026-06-05T14:00:00.000Z", "1900.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "ends at the same figure the current holdings total, when quote and observation were written together",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation, seedQuote }) => {
+      const account = await seedAccount();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+
+      // The normal path: one refresh writes both, so the headline and the last
+      // point of the line are the same price by construction (story 8).
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "220.0000" });
+      await seedQuote({ instrument: vti, price: "220.0000" });
+
+      const series = await netWorthSessionSeries("2026-06-05", db);
+
+      expect(series.at(-1)?.amount).toBe((await netWorth(db)).amount);
+    }),
+  );
+
+  it(
+    "returns nothing at all for a session with no observations",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose }) => {
+      const account = await seedAccount();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [{ instrument: vti, quantity: "100.00000000" }],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+
+      // Not a flat line: nothing was observed, which is not the same claim as
+      // "nothing moved".
+      expect(await netWorthSessionSeries("2026-06-05", db)).toEqual([]);
     }),
   );
 });

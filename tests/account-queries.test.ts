@@ -20,6 +20,7 @@ import {
   accountFirstRecordedDate,
   accountHoldings,
   accountSeries,
+  accountSessionSeries,
   accountTotal,
   accountTotals,
   netWorth,
@@ -417,6 +418,98 @@ describe("accountSeries", () => {
     withDatabase(async ({ db, seedAccount }) => {
       const account = await seedAccount();
       expect(await accountSeries(account.id, [], db)).toEqual([]);
+    }),
+  );
+});
+
+describe("one account's 1D series", () => {
+  it(
+    "draws only this account's holdings, at the whole log's instants",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const mine = await seedAccount({ name: "Fidelity Brokerage" });
+      const theirs = await seedAccount({ name: "Schwab Brokerage" });
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      await seedPositionSet({
+        account: mine,
+        asOf: "2026-06-04",
+        holdings: [{ instrument: vti, quantity: "10.00000000" }],
+      });
+      await seedPositionSet({
+        account: theirs,
+        asOf: "2026-06-04",
+        holdings: [{ instrument: vti, quantity: "90.00000000" }],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "220.0000" });
+
+      // Ten shares, not a hundred: the surface narrows whose holdings are
+      // valued and nothing else.
+      expect(
+        (await accountSessionSeries(mine.id, "2026-06-05", db)).map((point) => [point.at, point.amount]),
+      ).toEqual([
+        ["2026-06-05T13:30:00.000Z", "2100.0000"],
+        ["2026-06-05T14:00:00.000Z", "2200.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "gives a cash-only account its flat line rather than an empty chart",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation, usdInstrument }) => {
+      const bank = await seedAccount({ name: "Ally Savings", kind: "bank" });
+      const usd = await usdInstrument();
+      await seedPositionSet({
+        account: bank,
+        asOf: "2026-06-04",
+        holdings: [{ instrument: usd, quantity: "5000.00000000" }],
+      });
+
+      // Observed on an instrument this account does not hold. The instants come
+      // from the log as a whole, so every account answers the same question at
+      // the same moments — even when its answer is that it did not move
+      // (story 10).
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "220.0000" });
+
+      expect(await accountSessionSeries(bank.id, "2026-06-05", db)).toEqual([
+        { at: "2026-06-05T13:30:00.000Z", amount: "5000.0000", coverage: { known: 1, total: 1 } },
+        { at: "2026-06-05T14:00:00.000Z", amount: "5000.0000", coverage: { known: 1, total: 1 } },
+      ]);
+    }),
+  );
+
+  it(
+    "reports an instant it holds nothing at rather than dropping it from the line",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedObservation, seedDailyClose }) => {
+      const empty = await seedAccount({ name: "Opened, never funded" });
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
+
+      // Zero over a coverage of zero rows — "nothing was recorded", which the
+      // caller must not draw as a real zero (DESIGN.md §7), exactly as the
+      // day-granularity series reports an uncovered date.
+      expect(await accountSessionSeries(empty.id, "2026-06-05", db)).toEqual([
+        { at: "2026-06-05T13:30:00.000Z", amount: "0.0000", coverage: { known: 0, total: 0 } },
+      ]);
+    }),
+  );
+
+  it(
+    "refuses an account id that is not one, rather than reading it as SQL",
+    withDatabase(async ({ db, seedInstrument, seedObservation, seedDailyClose }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
+
+      expect(await accountSessionSeries("1 or true", "2026-06-05", db)).toEqual([
+        { at: "2026-06-05T13:30:00.000Z", amount: "0.0000", coverage: { known: 0, total: 0 } },
+      ]);
     }),
   );
 });

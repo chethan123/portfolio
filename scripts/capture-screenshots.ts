@@ -423,6 +423,13 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     const page = await open(browser, theme);
     await visit(page, "/");
     await shoot(page, `docs/screenshots/overview-${theme}.png`);
+
+    // The one range that is not a span of days (ADR-0006). Shot separately
+    // because everything about it that is worth seeing — the time axis, the
+    // time-of-day readout, the granularity of the household's own cadence — is
+    // invisible on any other preset.
+    await visit(page, "/?range=1d");
+    await shoot(page, `docs/screenshots/overview-1d-${theme}.png`);
     await visit(page, "/holdings");
     await shoot(page, `docs/screenshots/holdings-${theme}.png`);
 
@@ -491,6 +498,8 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
   await shoot(page, "docs/guide/images/overview.png");
   await visit(page, "/?range=all");
   await shoot(page, "docs/guide/images/overview-range-all.png");
+  await visit(page, "/?range=1d");
+  await shoot(page, "docs/guide/images/overview-range-1d.png");
 
   await visit(page, "/holdings");
   await shoot(page, "docs/guide/images/holdings.png");

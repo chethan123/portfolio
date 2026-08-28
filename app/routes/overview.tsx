@@ -26,12 +26,16 @@ import { useMasked } from "~/lib/masking";
 import {
   accountTotals,
   firstRecordedDate,
+  latestObservedSession,
   manualNetWorth,
   netWorthChange,
   netWorthSeries,
+  netWorthSessionSeries,
   type AccountKind,
   type IsoDate,
 } from "~/lib/valuation.server";
+
+import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/overview";
 
@@ -96,17 +100,33 @@ export async function loader({ request }: Route.LoaderArgs) {
   const manual = await manualNetWorth();
   const earliest = { positionSet: await firstRecordedDate(), manual: manual[0]?.date };
 
+  // Which session 1D would plot, and — by its absence — whether the chip may be
+  // offered at all (ADR-0006, story 13).
+  const session = await latestObservedSession();
+
   const resolved = resolveRange(requested.range, {
     today,
     earliest,
     surface: "household",
     custom: requested.custom,
+    session,
   });
+
+  // The two series answer the same question at different granularities, so they
+  // are normalised to one shape here and there is one code path below. `at` is
+  // a date for every preset but 1D, where it is an instant; `resolved.session`
+  // is what says which, and the chart is told the same thing.
+  const points =
+    resolved.session === undefined
+      ? netWorthSeries(resolved.dates).then((series) =>
+          series.map((point) => ({ ...point, at: point.date })),
+        )
+      : netWorthSessionSeries(resolved.session);
 
   const [change, accounts, series] = await Promise.all([
     netWorthChange(resolved.since),
     accountTotals(),
-    netWorthSeries(resolved.dates),
+    points,
   ]);
 
   // A date before the first upload sums to 0.0000 over zero rows. That is
@@ -114,22 +134,33 @@ export async function loader({ request }: Route.LoaderArgs) {
   // would put a fictional climb from zero at the head of every chart (§7).
   const computed = series
     .filter((point) => point.coverage.total > 0)
-    .map((point) => ({ date: point.date, amount: point.amount }));
+    .map((point) => ({ date: point.at, amount: point.amount }));
 
   // §7 rule 2: computed wins on overlapping dates, manual only fills the gap
   // ahead of it. Bounded by the window at the other end too — a 1M chart
   // carrying a hand-typed point from 2022 would squeeze the month it was asked
   // for into the last few pixels. ISO dates compare correctly as strings.
   const firstComputed = computed[0]?.date;
-  const manualPrefix = manual.filter(
-    (point) =>
-      point.date >= resolved.since && (firstComputed === undefined || point.date < firstComputed),
-  );
+  const manualPrefix =
+    // Never under 1D. The hand-typed series is the household's net worth before
+    // day zero (§7); dropping a point from 2022 onto a line of this morning's
+    // instants would claim a session that never happened.
+    resolved.session !== undefined
+      ? []
+      : manual.filter(
+          (point) =>
+            point.date >= resolved.since &&
+            (firstComputed === undefined || point.date < firstComputed),
+        );
 
   return {
     range: resolved.range,
     custom: resolved.custom,
-    rangeOptions: rangeOptions({ today, earliest, surface: "household" }),
+    // Null on every range but 1D, which is how the chart is told which axis it
+    // is drawing. The zone is the market's, never the reader's — see
+    // `marketTimeOf`.
+    session: resolved.session === undefined ? null : { timeZone: getConfig().MARKET_TIMEZONE },
+    rangeOptions: rangeOptions({ today, earliest, surface: "household", session }),
     customMin: customRangeMin("household", earliest),
     customMax: today,
     change,
@@ -315,6 +346,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
     accounts,
     computed,
     manual,
+    session,
     holdingCount,
     pricedCount,
   } = loaderData;
@@ -405,7 +437,17 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               manual={manual}
               label={`Total value ${rangeDescription(range, custom)},`}
               masked={masked}
+              session={session}
             />
+          ) : session !== null ? (
+            // A session with one observation in it, which is a real state
+            // between the poller's first run and its second — and not the state
+            // the sentence below describes, since it has nothing to do with how
+            // many statements have been uploaded.
+            <p className="empty-note">
+              A line needs two observed moments and this session has {computed.length}. It
+              appears as the next refresh runs.
+            </p>
           ) : (
             <p className="empty-note">
               A trend needs two dated points and this instance has one. The line appears once a

@@ -21,10 +21,12 @@ percentage.
 
 ## The range control
 
-Eight options, top right: **1W**, **1M**, **3M**, **YTD**, **1Y**, **5Y**, **All**, **Custom**. You
-get 1Y unless you pick another, or unless a browser you have chosen a range on before opens here
-again — see below.
+Nine options, top right: **1D**, **1W**, **1M**, **3M**, **YTD**, **1Y**, **5Y**, **All**,
+**Custom**. You get 1Y unless you pick another, or unless a browser you have chosen a range on
+before opens here again — see below.
 
+- **1D** is the most recent trading session, and it is the one option that is not a span of days —
+  see below.
 - **1W / 1M / 3M / 1Y / 5Y** are trailing spans back from today — a week, a calendar month, a
   calendar quarter, a year, five years.
 - **YTD** is January 1st of this year through today.
@@ -35,7 +37,9 @@ again — see below.
   button shows the two dates you chose instead of the word "Custom".
 
 **A greyed-out option is one your data cannot reach yet** — a household eight months old sees 5Y
-disabled rather than a click that silently does the same thing All already does.
+disabled rather than a click that silently does the same thing All already does. 1D greys out for a
+different reason: an instance whose price refresh has never run during market hours has no session
+to draw yet.
 
 The choice lives in the address bar as `?range=3m` (or, for Custom, `?range=custom&start=…&end=…`). So it
 survives a reload, you can bookmark it, and you can send the address to the other person in the
@@ -53,6 +57,28 @@ last month's value, which the headline is not.
 Point at the chart and the readout follows, naming the point nearest your pointer and marking that
 point with a vertical line. A short range holds a point for every day; a longer one thins them out
 towards its old end. Either way the nearest point answers, so no stretch of the line is dead.
+
+## 1D — the day so far
+
+![The Overview at the 1D range, its axis labelled by time of day](images/overview-range-1d.png)
+
+1D plots one trading session, and it is the only range measured in moments rather than in days. Open
+the app mid-session and the line runs from the open to the last price fetched; open it after the
+close and the whole session is drawn; open it on a Saturday, on a market holiday, or before the bell
+and you get the most recent session there was — Friday's, usually. It is never a blank chart and
+never a trailing twenty-four hours.
+
+Three things read differently on it:
+
+- **The axis and the readouts name the time of day**, on the market's clock, rather than a date.
+- **The line has one point per price refresh**, unsampled — so it is exactly as detailed as the
+  refresh cadence you set at Settings → Prices, and no more.
+- **The change beside the headline is measured from yesterday's close**, which is what "today's
+  change" means at a brokerage.
+
+Two honest limits. A mutual fund strikes one price a day after the close, so a workplace-plan-heavy
+household sees much of its 1D line flat — that is the fund, not the chart. And the line is a
+snapshot taken when the page loaded: nothing updates in place, and reloading is how it advances.
 
 ## The second, dashed line
 

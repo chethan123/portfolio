@@ -8,6 +8,11 @@
  * worth" calls in here, and a dashboard that writes its own join to the
  * `holding` table has left the mitigation.
  *
+ * Since ADR-0006 it is also the only thing that *values* anything from
+ * `price_observation` — the intra-session readers at the foot of this file. The
+ * observation log is a third price tier rather than a fourth source of truth,
+ * and the rule that keeps it one is the same rule the view exists for.
+ *
  * It is a translation layer, not a service. No caching, no business rules
  * beyond assembling the coverage counts — every valuation rule lives in the
  * view, in SQL, where the arithmetic is exact.
@@ -610,6 +615,190 @@ export async function accountSeries(
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthPoint[]> {
   return readSeries(db, dates, isAccount("v.account_id", accountId));
+}
+
+/** One point on an intra-session line: the instant it describes, and the value then. */
+export type SessionPoint = {
+  /**
+   * An ISO instant, not a date — which is why this is `at` and not `date`. The
+   * points of a session are moments, and giving them the field name every other
+   * series uses would be an invitation to pass one where the other is meant.
+   */
+  at: string;
+  amount: string;
+  coverage: Coverage;
+};
+
+/**
+ * The most recent trading session the observation log carries, or null on an
+ * instance that has never observed anything.
+ *
+ * Read off what was observed rather than off the calendar (ADR-0006): the
+ * session is `max(market_date)`, a column stamped at write time by the same
+ * rule that files a daily close. So the UTC-today versus market-day seam never
+ * decides what 1D shows, a weekend answers with Friday's session because Friday
+ * is the last one anything was observed on, and a half-day simply ends where
+ * its observations end.
+ *
+ * Matched by `price_observation_market_date_idx`, whose leading column this is —
+ * a backward index scan stopping at row one.
+ */
+export async function latestObservedSession(
+  db: Kysely<Database> = getDb(),
+): Promise<IsoDate | null> {
+  const row = await db
+    .selectFrom("price_observation")
+    .select(sql<string>`cast(max(market_date) as text)`.as("session"))
+    .executeTakeFirst();
+
+  return row?.session ?? null;
+}
+
+/**
+ * What a surface was worth at each instant a session was observed at.
+ *
+ * The second reader of the observation log, and the only one that values
+ * anything from it — the same single-site rule §4.2 states for `holding_valued`,
+ * extended to the new tier. A screen that wrote its own join over
+ * `price_observation` would be the disagreement DESIGN.md §8.2 calls the
+ * weakest point in the design, arriving on a third tier.
+ *
+ * Three decisions are worth stating, because none of them is obvious from the
+ * SQL:
+ *
+ * **The instants come from the log as a whole, not from the surface.** A
+ * cash-only account observes nothing, and asking it for its own instants would
+ * give it an empty chart while the household drew a line — for an account whose
+ * honest answer is "it did not move". So both surfaces plot at the same
+ * moments, and the surface narrows only whose holdings are valued, exactly as
+ * the account series narrows the household one.
+ *
+ * **Each point values the positions held now, at the price known then.** The
+ * line is today's holdings walked back through today's prices, which is what
+ * makes an upload during the session leave the chart consistent with the
+ * headline above it: both are the same positions, and only the price moves.
+ *
+ * **An instrument with no observation at or before an instant is carried
+ * forward from the last close *before* the session.** Strictly before, and that
+ * is the load-bearing word: the session's own `price_daily` row is provisional
+ * and converges on the last observation of the day, so including it would price
+ * the open at the price of the close — the day's answer leaking backwards into
+ * every point of its own line. Reaching past it gives the previous close, which
+ * is the right price for cash (fixed at a dollar since 1970), for a
+ * workplace-plan trust nobody quotes, for a feed instrument whose fetch failed
+ * today, and for a feed instrument in the minutes before its first quote
+ * arrived.
+ *
+ * The arithmetic is `numeric` throughout and never leaves SQL; amounts cross
+ * the boundary as decimal strings like every other money value (§5.6).
+ *
+ * @param session `YYYY-MM-DD`, from {@link latestObservedSession}.
+ */
+async function readSessionSeries(
+  db: Kysely<Database>,
+  session: IsoDate,
+  where?: RawBuilder<SqlBool>,
+): Promise<SessionPoint[]> {
+  // Narrowed inside the lateral, never in the outer WHERE — the same reason
+  // `readSeries` gives: a filter out there would reject the all-null row the
+  // left join manufactures for an instant this surface holds nothing at, and
+  // take the instant down with it.
+  const narrowing = where === undefined ? sql`true` : where;
+
+  const rows = await sql<{ at: Date; amount: string; known: string; total: string }>`
+    select
+      instants.as_of as at,
+      cast(coalesce(sum(valued.value), 0) as numeric(20, 4)) as amount,
+      count(*) filter (where valued.price is not null) as known,
+      count(valued.instrument_id) as total
+
+    from (
+      select distinct as_of
+      from price_observation
+      where market_date = ${session}::date
+    ) instants
+
+    left join lateral (
+      select
+        held.instrument_id                                   as instrument_id,
+        resolved.price                                       as price,
+        cast(held.quantity * resolved.price
+             as numeric(20, 4))                              as value
+
+      from account a
+      join holding held
+        on held.position_set_id = latest_position_set(a.id)
+
+      -- The price the feed had told us by this instant, if any.
+      left join lateral (
+        select o.price
+        from price_observation o
+        where o.instrument_id = held.instrument_id
+          and o.as_of <= instants.as_of
+        order by o.as_of desc
+        limit 1
+      ) observed on true
+
+      -- Otherwise the last close from before this session. See the docstring
+      -- on why the comparison is strict.
+      left join lateral (
+        select pd.close
+        from price_daily pd
+        where pd.instrument_id = held.instrument_id
+          and pd.date < ${session}::date
+        order by pd.date desc
+        limit 1
+      ) carried on true
+
+      cross join lateral (
+        select coalesce(observed.price, carried.close) as price
+      ) resolved
+
+      where a.closed_at is null
+        and ${narrowing}
+    ) valued on true
+
+    group by instants.as_of
+    order by instants.as_of
+  `.execute(db);
+
+  return rows.rows.map((row) => ({
+    // UTC, deterministically — the chart labels these on the market's clock and
+    // must reach the browser saying the same thing the server rendered.
+    at: row.at.toISOString(),
+    amount: row.amount,
+    // Cardinalities of holdings, not money.
+    coverage: { known: Number(row.known), total: Number(row.total) },
+  }));
+}
+
+/**
+ * Net worth at each instant of the most recent observed session.
+ *
+ * The 1D line on the Overview. An instance with no observations for `session`
+ * returns an empty series rather than a flat one — nothing was observed, which
+ * is not the same claim as "nothing moved".
+ */
+export async function netWorthSessionSeries(
+  session: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<SessionPoint[]> {
+  return readSessionSeries(db, session);
+}
+
+/**
+ * One account's value at each instant of the same session, on the same terms.
+ *
+ * A cash-only account draws its flat line here rather than an empty one: the
+ * instants are the log's, so every account answers the same question at the
+ * same moments, even when the answer is that it did not move.
+ */
+export async function accountSessionSeries(
+  accountId: string,
+  session: IsoDate,
+  db: Kysely<Database> = getDb(),
+): Promise<SessionPoint[]> {
+  return readSessionSeries(db, session, isAccount("a.id", accountId));
 }
 
 /**

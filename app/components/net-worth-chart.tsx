@@ -27,8 +27,20 @@ import { useId } from "react";
 
 import { MASKED_FIGURE } from "~/components/amount";
 import { formatCompact, formatMoney, toPlotValue } from "~/lib/format";
+import { marketTimeOf } from "~/lib/market-hours";
 
-export type ChartPoint = { date: string; amount: string };
+export type ChartPoint = {
+  /**
+   * A calendar date, `YYYY-MM-DD` — or, when the chart is drawing a session, a
+   * full ISO instant. Both parse to a moment, which is all {@link buildScale}
+   * asks of it; what changes is how it is *labelled*, and that is decided by
+   * the `session` prop rather than by inspecting the string, because a chart
+   * that re-reads its own axis off punctuation is one that changes it by
+   * accident.
+   */
+  date: string;
+  amount: string;
+};
 
 /**
  * The drawing is done in an abstract 1000×300 box and stretched to fit, so the
@@ -204,7 +216,25 @@ function toArea(points: ChartPoint[], scale: Scale): string {
 /** UTC in, UTC out — the one conversion that cannot pick up a server's zone. */
 const isoDate = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
-function tickLabel(ms: number, withDay: boolean): string {
+/**
+ * What the chart is told about the session it is drawing, or null when it is
+ * drawing days.
+ *
+ * A single prop rather than a flag beside a zone, because the two are one fact:
+ * an intra-session line is always read on the market's clock, and neither half
+ * is meaningful without the other.
+ */
+export type SessionAxis = {
+  /** `MARKET_TIMEZONE`. A session is 09:30 to 16:00 in exactly one zone. */
+  timeZone: string;
+};
+
+function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): string {
+  // Every tick on a session's axis falls inside one trading day, so naming the
+  // day three times would spend the whole axis saying nothing. The time of day
+  // is the only part that varies, and it is the part being asked about.
+  if (session !== null) return marketTimeOf(new Date(ms), session.timeZone);
+
   const [year = "", month = "", day = ""] = isoDate(ms).split("-");
   const name = MONTHS[Number(month) - 1] ?? month;
 
@@ -216,10 +246,16 @@ function tickLabel(ms: number, withDay: boolean): string {
  * on short spans — a tick is read in the context of two others, and a readout
  * is read alone (spec 0010).
  */
-function readoutDate(date: string): string {
-  const [year = "", month = "", day = ""] = date.split("-");
+function readoutDate(date: string, session: SessionAxis | null): string {
+  const [year = "", month = "", day = ""] = date.slice(0, 10).split("-");
+  const stamp = `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
 
-  return `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
+  // The date still, and the time as well. A readout is read alone, and "which
+  // moment is this" is the whole question a session's line is asked (story 9).
+  // The time joins the date rather than the amount, so masking is untouched:
+  // an instant is not an amount, and the figure beside it masks exactly as it
+  // does on every other range.
+  return session === null ? stamp : `${stamp}, ${marketTimeOf(new Date(date), session.timeZone)}`;
 }
 
 /**
@@ -231,10 +267,18 @@ function readoutDate(date: string): string {
  * sign and run of dots as every other masked money figure, because masking is
  * a display state and this must not be the one place a figure survives it.
  */
-function Readout({ target, masked }: { target: HitTarget; masked: boolean }) {
+function Readout({
+  target,
+  masked,
+  session,
+}: {
+  target: HitTarget;
+  masked: boolean;
+  session: SessionAxis | null;
+}) {
   return (
     <>
-      <span className="chart-readout-date">{readoutDate(target.point.date)}</span>
+      <span className="chart-readout-date">{readoutDate(target.point.date, session)}</span>
       <span className="chart-readout-value">
         {masked ? `$${MASKED_FIGURE}` : formatMoney(target.point.amount)}
       </span>
@@ -248,6 +292,7 @@ export function NetWorthChart({
   manual,
   label,
   masked,
+  session,
   id,
 }: {
   /** Points derived from real position sets. Solid line, and the filled one. */
@@ -274,6 +319,16 @@ export function NetWorthChart({
    * instead, which is the only version of this that cannot go wrong quietly.
    */
   masked: boolean;
+  /**
+   * The session this line plots, or null when it plots days.
+   *
+   * Required, with no default, for the same reason `masked` is: a caller that
+   * forgot it would draw a session's instants labelled as three copies of one
+   * date, and nothing about the output would say that a prop had gone missing.
+   * The chart is *told* what it is drawing rather than inferring it from the
+   * points, so the axis can only change when a caller means it to.
+   */
+  session: SessionAxis | null;
   /**
    * Distinguishes this instance's gradient from any other on the page.
    *
@@ -317,14 +372,14 @@ export function NetWorthChart({
   const ending =
     last === undefined
       ? ""
-      : ` ending on ${readoutDate(last.date)} at ${
+      : ` ending on ${readoutDate(last.date, session)} at ${
           masked ? "an amount that is hidden" : formatMoney(last.amount)
         }.`;
 
   const { start, end } = scale.time;
   const withDay = end - start < DAY_TICKS_UNDER;
   const ticks = [0, 0.5, 1].map((fraction) =>
-    tickLabel(start + (end - start) * fraction, withDay),
+    tickLabel(start + (end - start) * fraction, withDay, session),
   );
 
   return (
@@ -336,7 +391,7 @@ export function NetWorthChart({
           carries the same fact as a sentence. */}
       {resting ? (
         <p className="chart-readout" aria-hidden="true">
-          <Readout target={resting} masked={masked} />
+          <Readout target={resting} masked={masked} session={session} />
         </p>
       ) : null}
 
@@ -452,7 +507,7 @@ export function NetWorthChart({
                 style={{ left: `${(scale.x(target.point.date) / WIDTH) * 100}%` }}
               />
               <span className="chart-point-readout">
-                <Readout target={target} masked={masked} />
+                <Readout target={target} masked={masked} session={session} />
               </span>
             </div>
           ))}

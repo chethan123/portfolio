@@ -26,11 +26,20 @@ import Account, { loader, middleware } from "../../app/routes/account.tsx";
 import { RANGE_COOKIE } from "~/lib/chart-range";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 
-import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get, responseOf, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
+
+/**
+ * Set before any loader runs: `account.tsx` reads `MARKET_TIMEZONE` through
+ * `getConfig()` to tell the chart which clock a session's instants are read on,
+ * and `getConfig()` validates the whole environment when it is first asked.
+ * `MARKET_TIMEZONE` itself defaults; the database URL is the one variable with
+ * no default, and it is the same one the harness already connects with.
+ */
+process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 afterAll(closeTestDatabase);
 
@@ -412,6 +421,63 @@ describe("a preset before this account's own earliest data", () => {
       const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
 
       expect(data.rangeOptions.find((option) => option.key === "1w")?.disabled).toBe(false);
+    }),
+  );
+});
+
+describe("the 1D range on an account", () => {
+  it(
+    "draws this account's own session line, at the whole log's instants",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(2));
+      const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await ctx.seedDailyClose({ instrument: vti, date: daysAgo(2), close: "200.0000" });
+
+      for (const [minute, price] of [
+        ["13:30", "210.0000"],
+        ["20:00", "220.0000"],
+      ]) {
+        await ctx.seedObservation({
+          instrument: vti,
+          asOf: `${daysAgo(1)}T${minute}:00Z`,
+          marketDate: daysAgo(1),
+          price: price as string,
+        });
+      }
+
+      const data = await loader(
+        args(get(`/accounts/${account.id}?range=1d`), { accountId: account.id }),
+      );
+
+      // Story 10: a cash-only account holds a fund nobody quoted for it, so its
+      // answer is that it did not move — drawn, at the same moments the
+      // household's line is drawn at, rather than left blank.
+      expect(data.range).toBe("1d");
+      expect(data.session).toEqual({ timeZone: "America/New_York" });
+      expect(data.computed.map((point) => [point.date, point.amount])).toEqual([
+        [`${daysAgo(1)}T13:30:00.000Z`, "12500.0000"],
+        [`${daysAgo(1)}T20:00:00.000Z`, "12500.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "disables the 1D chip on an instance whose observation log is empty",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(400));
+
+      const data = await loader(
+        args(get(`/accounts/${account.id}`), { accountId: account.id }),
+      );
+
+      expect(data.rangeOptions.find((option) => option.key === "1d")?.disabled).toBe(true);
+      // And asking for it anyway falls back to the default preset rather than
+      // captioning a chart 1D over a session that never existed.
+      const asked = await loader(
+        args(get(`/accounts/${account.id}?range=1d`), { accountId: account.id }),
+      );
+      expect(asked.range).toBe("1y");
+      expect(asked.session).toBeNull();
     }),
   );
 });
