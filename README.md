@@ -66,6 +66,17 @@ so a chosen range survives a reload and can be bookmarked.
   between rules; the readout does neither. A point typed in by hand for the years before the app
   says so in words, because a dashed stroke is a claim about where a figure came from that
   identical text would quietly undo.
+- **1D draws the trading session, not a day of it.** The one range measured in moments: it plots
+  the most recent session — open to now while it is running, Friday's on a weekend — with one point
+  per price refresh and no sampling, so the line is exactly as detailed as the cadence the household
+  chose and no more. The axis and the readout name the time of day on the market's clock, and the
+  change beside the headline is measured from yesterday's close.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-1d-dark.png">
+  <img alt="The overview at the 1D range: the same net worth headline over a line of the current session, its axis labelled 09:30, 12:45 and 16:00, and a readout naming the last observed moment and its value" src="docs/screenshots/overview-1d-light.png">
+</picture>
+
 - **Liabilities are accounts.** The auto loan sits in the list at −$14,500 and subtracts from net
   worth, because a loan is a negative `USD` position rather than a special case in the arithmetic.
 - **A zero and an absence never look alike.** An account holding nothing, an account nothing can

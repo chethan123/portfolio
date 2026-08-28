@@ -676,6 +676,14 @@ mounts it `read_only: true` so that stays true. Uploaded CSVs are kept in Postgr
 disk (DESIGN.md §5.2) precisely so that this stays a single target. The image is rebuildable and
 needs no backup.
 
+**Budget for the dump growing faster than it used to.** The price observation log is the largest
+table on an instance that has been running a while ([Growth and limits](#growth-and-limits)), and it
+is mostly archived JSON, which compresses well — so a custom-format dump is far smaller than the
+table, and still on a path to gigabytes rather than megabytes. Nothing about the commands below
+changes; what changes is how long they take and where you can afford to keep the output. If you keep
+a dump per day for a year, size the destination against the table, not against the 11 MB the demo
+household weighs.
+
 Dump the database without stopping the instance:
 
 ```sh
@@ -885,19 +893,49 @@ again — so it is the easy time to change it, and the time to make sure `DATABA
 Measured against the demo household in [`scripts/seed-demo.ts`](../scripts/seed-demo.ts) — two
 people, six accounts, sixteen instruments, three years of statements — the whole database is about
 11 MB, of which the daily price history is about 2 MB. That is the largest dataset this has actually
-been run against.
+been run against, and it seeds a single trading session's observations rather than years of them, so
+it does not measure the term below that actually grows.
 
-Nothing is ever pruned: no code deletes daily prices, anywhere. The table gains one row per priced
-instrument per trading day, so roughly 250 rows per instrument per year. At the design target of
-about a hundred instruments that is on the order of 25,000 rows a year, and low single-digit
+Nothing is ever pruned: no code deletes a price, anywhere. Two tables grow, at very different rates.
+
+**The daily spine grows slowly and is not worth thinking about.** `price_daily` gains one row per
+priced instrument per trading day, so roughly 250 rows per instrument per year. At the design target
+of about a hundred instruments that is on the order of 25,000 rows a year, and low single-digit
 megabytes.
 
-**So: disk is not worth engineering for at household scale, and there is deliberately no retention
-policy.** A household instance grows by a few megabytes a year. Any pruning scheme would cost more
-attention than the disk it saved, and would trade away the one thing the history is for. That is the
-whole of the capacity planning.
+**The observation log is the one that costs real disk, and it does so by decision.**
+[ADR-0006](adr/0006-intraday-quotes-are-an-observation-log.md) stopped the refresh discarding the
+prices it fetches between two closes: every distinct one is now kept forever in `price_observation`,
+with the provider's raw entry archived beside it. The arithmetic, at the design target of about a
+hundred feed instruments and the seeded fifteen-minute cadence:
 
-Two terms really are unbounded, and only one of them is data.
+| Cadence | Refreshes a session | Rows a year | Roughly |
+|---|---|---|---|
+| 15 minutes (the default) | ~26 | ~650,000 | half a gigabyte a year |
+| 5 minutes | ~78 | ~2,000,000 | one and a half gigabytes a year |
+| 1 minute | ~390 | ~10,000,000 | seven or eight gigabytes a year |
+
+Two things make those upper bounds rather than forecasts. A price that has not moved writes nothing —
+the log is keyed on the instant the provider stamped, so a mutual fund, which strikes one NAV a day,
+contributes one row a day whatever the cadence says. And the payload is the bulk of each row; it is
+stored out of line, so a query that reads only prices does not pay for it. A sibling `price_poll`
+table adds one row per refresh attempt — about twenty-six a day, which is nothing.
+
+**So: there is still deliberately no retention policy, but it is now a priced choice rather than a
+free one.** The premise this section used to rest on — that a household instance grows by a few
+megabytes a year — is superseded; the conclusion survives, because the owner would rather spend the
+disk than throw away data whose future use is unknown, and because any pruning scheme would cost
+more attention than the disk it saved. The dial that sets the price is the refresh cadence at
+Settings → Prices, and that screen states the figure where the choice is made. **Check the number
+against your own instance rather than against this table** — it is the design target, not a
+measurement:
+
+```sh
+docker compose exec -T db psql -U portfolio -d portfolio -c \
+  "select pg_size_pretty(pg_total_relation_size('price_observation'))"
+```
+
+Two more terms are unbounded, and only one of them is data.
 
 **Retained statement originals.** Every upload keeps its complete CSV in the database, forever, on
 purpose — it is what makes an old import auditable. A brokerage CSV is tens of kilobytes and the

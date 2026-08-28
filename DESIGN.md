@@ -445,15 +445,30 @@ Streaming was rejected on the grounds that mutual funds have no intraday price a
 one NAV after the close — so a live tick pipeline would leave a large share of the balance sheet
 frozen anyway.
 
-Two tiers, deliberately separate:
+Three tiers, deliberately separate:
 
 ```
-quote        (instrument_id, price, yield, annual_dividend, as_of, is_stale)  -- overwritten
-price_daily  (instrument_id, date, close)                                     -- immutable spine
+price_observation  (instrument_id, as_of, market_date, price, fetched_at, payload)  -- append-only log
+quote              (instrument_id, price, yield, annual_dividend, as_of, is_stale)  -- overwritten
+price_daily        (instrument_id, date, close)                                     -- immutable spine
 ```
+
+An observation is not history and a quote is not a fact: history is finished days, an observation is
+a moment we were told about, and the quote is today's best answer. A refresh writes all three in one
+transaction, so no two of them can disagree about one fetch.
+
+The observation log arrived with the 1D chart range ([ADR-0006](docs/adr/0006-intraday-quotes-are-an-observation-log.md)),
+and it is the one tier kept for a reason other than a screen: every distinct price the feed reports
+is retained forever, with the provider's raw entry archived beside it, because the owner values
+keeping rich data whose future use is unknown over the disk it costs. `price` is the only column in
+it anything may compute from. A sibling `price_poll` records each refresh attempt, so a silence in
+the log can be told apart from a server that was not running. The storage that buys — roughly half a
+gigabyte a year at a hundred instruments and the seeded fifteen-minute cadence — is stated at
+Settings → Prices, where the dial is.
 
 An intraday refresh can never corrupt history, and a missed day is a visible gap rather than a wrong
-close.
+close. `holding_valued_at` reads `price_daily` alone, so an observation can never move a line that
+has already been drawn.
 
 **Failure handling:** a failed fetch keeps the last known price and marks the instrument stale,
 surfaced in the UI. Never zero, never null into a sum.
@@ -1294,3 +1309,15 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     without asking Google again. There is deliberately no second login system to fall back to — one
     would be a password, which is the thing this replaced — so the break-glass path during an outage
     is the operator's shell on the box, not another way in through the front door.
+12. **1D always shows the latest session; an older one cannot be chosen.** The observations are
+    kept forever, so the data for last Tuesday's session exists — but drawing it is a separate
+    decision with its own cost, and one deliberately deferred
+    ([ADR-0006](docs/adr/0006-intraday-quotes-are-an-observation-log.md)): an instant-parameterised
+    sibling of `holding_valued_at` (a third object bound by ADR-0001's row-type contract), a second
+    time vocabulary in `chart-range.ts`, and a time axis that can name a day as well as an hour. The
+    data existing is not a promise that it will be drawn. Two smaller limits ride along with it. The
+    archive is snapshots at the household's own cadence, not market data — no OHLC bars, no volume,
+    permanent unbackfillable gaps for every stretch the server was down, and no corporate-action
+    adjustment — so it must not be mistaken for a backtest-grade series. And the 1D line is a
+    snapshot per page load: nothing updates in place, because a live tick pipeline was rejected in
+    §6 for a reason that has not changed.
