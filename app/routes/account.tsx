@@ -447,6 +447,9 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               manual={[]}
               label={`${total.accountName} ${rangeDescription(range, custom)},`}
               masked={masked}
+              // Null until the loaders learn to resolve a session: every range
+              // this page can currently draw is a span of days.
+              session={null}
             />
           ) : (
             <p className="empty-note">
