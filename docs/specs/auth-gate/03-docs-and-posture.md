@@ -11,12 +11,12 @@ for 2am — rather than receiving one pasted paragraph.
 
 **Blocked by:** 01 and 02 — this ticket documents shipped state, not intent.
 
-**Status:** blocked
+**Status:** ready-for-agent
 
 **DESIGN.md**
 
-- [ ] §10's environment table replaces the `AUTH_PASSWORD`/`SESSION_SECRET` rows with the gate-mode
-      variable and points at the compose gate for everything else
+- [ ] §10.1's environment table replaces the `AUTH_PASSWORD`/`SESSION_SECRET` rows with the
+      gate-mode variable and points at the compose gate for everything else
 - [ ] "Authentication is not multi-user" is rewritten: authentication is now *outside the app
       entirely*; what remains true — no per-person permissions, single-owner accounts, and that
       binding identity to `person` means revisiting §4.2 first — is restated around the gate
@@ -29,8 +29,9 @@ for 2am — rather than receiving one pasted paragraph.
       and the section says what enforces it and why `app` publishing no port is what makes it airtight
 - [ ] The authorisation row still says "none — every session sees everything", now citing the
       glossary's attribution-never-permission rule
-- [ ] The §2 trust table's "only Caddy can reach `app`" row extends to the house proxy hop that
-      ticket 01 configured, and the forwarded-email header joins the forwarded-header rows
+- [ ] The §2 trust table's forwarded-headers row (trusted unconditionally because `app` publishes
+      no port) extends to the house proxy hop that ticket 01 configured, and the forwarded-email
+      header joins the forwarded-header rows
 - [ ] The closing "an instance exposed to the internet needs…" paragraph is rewritten against the
       new posture
 
@@ -41,22 +42,28 @@ for 2am — rather than receiving one pasted paragraph.
 - [ ] "Reverse proxy and TLS" describes the house-proxy topology this slice assumes and what a
       single-Caddy operator must do differently
 - [ ] The security-posture section replaces the password story: what the gate checks, what the
-      allowlist is, the fail-closed contract, and what the five-things-the-code-does-not-do list
+      allowlist is, the fail-closed contract, and what the "Five things the code does not do" list
       looks like now that rate limiting and sessions are the gate's
-- [ ] Session lifetime, the sign-out URL, allowlist edits, and cookie-secret rotation are documented
-      as the operator's levers
+- [ ] Session lifetime, allowlist edits, and cookie-secret rotation are documented as the
+      operator's levers, stated at their real strength: an allowlist removal alone signs that
+      person out everywhere (the gate re-checks each request's email against the live-watched
+      file), rotation signs out everyone at once, and the sign-out URL clears only the gate's
+      cookie — the next visit re-admits silently
 
 **runbook.md**
 
-- [ ] "A family member's phone is lost or stolen" — remove the address from the allowlist, rotate
-      the cookie secret, restart the gate; states that rotation signs everyone out everywhere
+- [ ] "A family member's phone is lost or stolen" — remove the address from the allowlist, then
+      restart the gate: removal alone revokes that person's sessions, and the restart is insurance
+      because a single-file bind mount can stop following a file an editor replaces by rename.
+      Rotating the cookie secret is the wider lever, signing everyone out everywhere
 - [ ] "Nobody can log in" — is it Google, the gate container, or the allowlist file; the commands
       that tell them apart, and the reminder that existing sessions keep working through a Google
       outage
 - [ ] "The monitor says the instance is down but the app works" — the `/healthz` exemption and what
       to check when it regresses
-- [ ] The old "there is no sign-out control" entry now gives the gate's sign-out URL and links the
-      tracked issue for a real control
+- [ ] The old "there is no sign-out control" entry now gives the gate's sign-out URL *with its
+      limits* (own cookie only; silent re-admission on the next visit) and links the tracked issue
+      for a real control, which inherits those limits as its motivation
 
 **README.md and the guide**
 
@@ -68,6 +75,16 @@ for 2am — rather than receiving one pasted paragraph.
       are re-read against the new reality: any note about "the no-password banner left in" and any
       capture showing the old login or banner is retaken or re-justified, per the rule that a screen
       change is not finished until screenshots are
+
+**Superseded specs and ADRs** (the repo's precedent: stale claims in earlier specs are corrected in
+place, as `dynamic-chart-resolution/02` did to spec 0008)
+
+- [ ] `docs/specs/foundation/08-optional-password-gate.md` gets a supersession note pointing here
+      and at ADR-0005; the auth-cookie bullet in `foundation/09` gets the same in one line
+- [ ] Password and "inside the gate" mentions in `0001-foundation-day-zero.md`, `foundation/01`,
+      and `0007-masking.md` are checked and annotated where they now mislead
+- [ ] ADR-0002's sentence naming the login gate as "the only boundary this application has" gets a
+      bracketed pointer to ADR-0005 — the masking decision itself stands, only its scenery moved
 
 **Filing**
 

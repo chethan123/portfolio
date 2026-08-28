@@ -34,8 +34,11 @@ and binding identity to `person` remains the separate design DESIGN.md says it i
   (recipe in `.env.example` and `operating.md`).
 - The gate's cookie (`SameSite=Lax`, `Secure`, seven-day default) is now the instance's CSRF
   posture; the attribute is pinned in configuration, not assumed.
-- Revocation is allowlist edit plus cookie-secret rotation — everyone, everywhere, at once. There
-  is no per-device revocation and no sign-out control yet; the latter is tracked as an issue.
+- Revocation has two grains: removing an address from the allowlist revokes that person's existing
+  sessions (the gate re-validates every request's email against the live-watched file), and
+  rotating the cookie secret signs out everyone everywhere at once. There is no per-device
+  revocation and no sign-out control yet — the gate's sign-out URL clears only its own cookie and
+  the next visit re-admits silently — so a real control is tracked as an issue.
 - A Google outage defers new logins until it passes; existing sessions ride through. The break-glass
   path is the operator's shell, not a second login system.
 - Local development and the test suite run with no gate and no Google credentials; the app shows its

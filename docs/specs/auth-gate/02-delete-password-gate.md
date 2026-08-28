@@ -15,7 +15,7 @@ rewrite rather than an extension"; this ticket honours that by rewriting.
 **Blocked by:** 01 — the new lock must be on the door before this one comes off. A deploy of this
 ticket without the gate in front is an open instance (with the banner showing, but open).
 
-**Status:** blocked
+**Status:** ready-for-agent
 
 **Configuration**
 
@@ -37,8 +37,15 @@ ticket without the gate in front is an open instance (with the banner showing, b
 - [ ] The `login` route file and its entry in `app/routes.ts` are deleted; `npm run typecheck`
       regenerates the route types
 - [ ] The root route (`app/root.tsx`) no longer calls `requireSession`; its middleware block goes
-- [ ] The masking route's session check goes with the gate that backed it — masking remains a
-      display preference, now behind the external gate like every other request
+- [ ] The masking route carries no session check of its own — only comments deferring to the root
+      gate and to `auth.server.ts`'s cookie reasoning; those comments are rewritten against the new
+      reality rather than left pointing at deleted code
+- [ ] `app/lib/forwarded.server.ts` and its test go too: after the gate and the login page leave,
+      it has no production importer — the masking cookie deliberately never carried `Secure` and
+      reads nothing from it, and future attribution will read the gate's email header, not this
+      module. Deleting beats keeping it dead "for later"
+- [ ] `compose.yaml` drops the `SESSION_SECRET` and `AUTH_PASSWORD` interpolations from the app's
+      environment — stale but harmless is still stale
 - [ ] A repo-wide grep for the deleted names (`authGate`, `requireSession`, `AUTH_PASSWORD`,
       `SESSION_SECRET`, `LOGIN_PATH`, the cookie name) turns up only documentation slated for
       ticket 03
@@ -59,8 +66,6 @@ ticket without the gate in front is an open instance (with the banner showing, b
 - [ ] The app reads nothing new: `X-Auth-Request-Email` arrives (ticket 01) and is deliberately
       unread — attribution, never permission, per `CONTEXT.md`. A comment where the old gate was
       wired (the root route) is the one place the code says so, pointing at the glossary
-- [ ] `forwarded.server.ts` stays: the failed-login log line it served is gone, but the masking
-      cookie's `Secure` decision and any future attribution still read the forwarded headers
 
 **Dev and tests after the deletion**
 
