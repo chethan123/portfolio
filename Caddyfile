@@ -1,6 +1,82 @@
-# Ingress front door — DESIGN.md §10.1, compose.yaml. Plain HTTP for now;
-# TLS termination is a follow-up.
+# Ingress front door — DESIGN.md §10.1, compose.yaml. Plain HTTP: TLS and the
+# public hostname belong to the operator's house-wide Caddy, which this one
+# sits behind.
+#
+# It is also where the gate is enforced. Every request except /healthz is
+# checked against the `gate` sidecar before it is allowed to reach `app`, and
+# this is the only place that happens: the house proxy is deliberately not
+# trusted with enforcement, because a device on the LAN can dial this box's
+# published port and land here directly.
+
+{
+	servers {
+		# Without this, Caddy discards the house proxy's X-Forwarded-Proto and
+		# X-Forwarded-For and tells `app` that every request arrived over plain
+		# HTTP from the proxy's own address — ARCHITECTURE.md §2's "believed
+		# unconditionally" row, which now has to survive one more hop.
+		#
+		# `private_ranges` rather than the proxy's address because that address
+		# is the operator's, not this repository's. It is the honest bound: it
+		# says a LAN peer can forge these headers, which is exactly the LAN this
+		# gate exists because of. That is affordable only because nothing below
+		# decides anything on them — the gate's verdict comes from a session
+		# cookie it decrypts itself, and its redirect URL is pinned in
+		# compose.yaml rather than read from a Host header.
+		trusted_proxies static private_ranges
+	}
+}
 
 :80 {
-	reverse_proxy app:{$APP_PORT:3000}
+	# The one exemption. `/healthz` is read by machines, answers a pinned body,
+	# and carries no household data, so uptime monitoring keeps working without
+	# a Google account. Everything else — static assets included — is
+	# challenged.
+	handle /healthz {
+		reverse_proxy app:{$APP_PORT:3000}
+	}
+
+	# Sign-in, callback and sign-out belong to the sidecar and must not be
+	# gated themselves. `handle` rather than a path matcher on `reverse_proxy`:
+	# reverse_proxy sorts after handle, so a matcher here would lose to the
+	# catch-all block below and these paths would reach `app`.
+	handle /oauth2/* {
+		reverse_proxy gate:4180 {
+			# reverse_proxy sets X-Forwarded-{For,Proto,Host}; the sidecar also
+			# wants the client address and the original path to build its
+			# redirects from.
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Uri {uri}
+		}
+	}
+
+	handle {
+		forward_auth gate:4180 {
+			uri /oauth2/auth
+
+			header_up X-Real-IP {remote_host}
+
+			# The verified address, and nothing else from the gate's response.
+			# `app` ignores it today — it is attribution for later, never
+			# permission. copy_headers deletes any client-supplied value of
+			# this header first, so a browser cannot assert its own identity by
+			# sending one.
+			copy_headers X-Auth-Request-Email
+
+			# On anything but a 2xx, forward_auth copies the gate's response
+			# straight back to the browser — and the gate answers a bare 401
+			# with nowhere to go. So the handoff to Google is built here.
+			#
+			# `rd` is relative on purpose. The upstream example passes
+			# {scheme}://{host}{uri}, but inside this stack {scheme} is `http`,
+			# and the sidecar rejects an absolute redirect whose origin is not
+			# whitelisted; a path is accepted unconditionally and is always
+			# same-origin.
+			@unauthenticated status 401
+			handle_response @unauthenticated {
+				redir * /oauth2/sign_in?rd={uri}
+			}
+		}
+
+		reverse_proxy app:{$APP_PORT:3000}
+	}
 }
