@@ -80,25 +80,31 @@ only login UI anyone ever sees is Google's.
 
 **The allowlist is one flat file, and the only authorization.** `allowed-emails.txt`, one address
 per line, gitignored (real family addresses never enter a public repo), mounted read-only into the
-sidecar, with a committed `.example` showing the format. oauth2-proxy reads individual emails only
-from a file, which settles where the list lives. The Google consent screen is published (basic
+sidecar, with a committed `.example` showing the format. oauth2-proxy takes its list of individual
+emails from a file — its only alternative would put the addresses into the committed Caddyfile —
+which settles where the list lives. The Google consent screen is published (basic
 scopes only, no review needed), so Google's console holds no second copy of the list — a stranger
 can reach Google's account picker and gets refused by the allowlist, which costs nothing.
 
 **Sessions are the sidecar's encrypted cookie.** Seven-day lifetime (the default), `SameSite=Lax`
 pinned — after the app's own cookie is deleted this attribute is the instance's CSRF posture, so it
 is set explicitly rather than inherited — and `Secure` set explicitly, since the browser only ever
-meets this instance over the house proxy's TLS. Revocation is removing the address from the
-allowlist plus rotating the cookie secret in `.env`, which invalidates every session on every device
-at once; both are runbook entries.
+meets this instance over the house proxy's TLS. Revocation has two levers, both runbook entries:
+removing an address from the allowlist signs that one person out everywhere on their next request —
+the gate re-validates every request's session email against the file, and watches the file for
+changes — and rotating the cookie secret in `.env` signs out everyone on every device at once. The
+runbook still says to restart the gate after editing the file, because a single-file bind mount can
+silently stop following a file an editor replaces by rename.
 
 **The redirect URI is LAN-only and that is fine.** Google redirects the *browser*, and the browser
 is on the LAN or VPN; Google's servers never call the URI. The one server-to-server exchange is
 outbound from the sidecar. The URI must merely be `https://` on the real domain the house proxy
 serves.
 
-**Only `/healthz` bypasses the gate.** It is read by machines, answers a pinned body, and leaks
-nothing. Everything else — static assets included, which the old in-app gate left open — is
+**Only `/healthz` bypasses the gate.** It is read by machines, answers a pinned body, and exposes
+no household data — the pending-migrations list it carries is the "version fingerprint" that
+`operating.md` already documents, its exposure unchanged from today's gate exempting the same path.
+Everything else — static assets included, which the old in-app gate left open — is
 challenged. The compose-internal healthcheck already reaches the app directly and never crosses
 Caddy.
 
@@ -122,8 +128,10 @@ up` with a message naming it, before any container runs half-configured.
 ## Testing Decisions
 
 The gate itself is infrastructure — compose and Caddy configuration — and is not exercised by the
-vitest suite; its ticket carries a manual smoke recipe instead. What the suite does pin is the app's
-side of the seam:
+vitest suite. It is exercised by CI's container smoke test running the real gate with throwaway
+credentials (the sidecar never contacts Google at startup), plus an operator-only recipe for the
+one leg no agent can complete: the round trip through a real Google account. What the suite does
+pin is the app's side of the seam:
 
 - Config: the new gate-mode value parses, defaults to "no external gate", and the deleted variables
   are genuinely gone from the schema (a config test naming them would now fail to compile).
@@ -140,7 +148,9 @@ side of the seam:
   single-owner model stands.
 - **A sign-out control in the UI.** Deliberately deferred, not rejected — the household finds its
   absence slightly iffy, so it is tracked as its own issue when this slice is filed with the
-  tracker. The runbook documents the sidecar's sign-out URL in the meantime.
+  tracker. The runbook documents the sidecar's sign-out URL in the meantime, and says plainly what
+  it is worth: it clears only the gate's own cookie, and with straight-to-Google sign-in the next
+  visit re-admits silently, so the real levers are the allowlist and the cookie secret.
 - **TLS inside this stack.** The house proxy owns TLS; this stack still speaks plain HTTP behind it.
 - **Any second authentication factor, rate limiting beyond what the gate provides, or lockout.**
   Google's own account security is the factor story.

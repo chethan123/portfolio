@@ -19,7 +19,12 @@ fail-closed until a Google OAuth client exists — as clearly as they argue the 
 **The `gate` service**
 
 - [ ] oauth2-proxy from the official image, pinned to an exact released version checked current at
-      implementation time; no volume and no database — sessions live in its encrypted cookie
+      implementation time, and specifically the `-alpine` flavour: the default image is distroless
+      (no shell, no wget), and a compose healthcheck execs inside the container; no volume and no
+      database — sessions live in its encrypted cookie
+- [ ] The gate publishes no port, same as `app`, and the compose comment says why it is
+      load-bearing here too: with its reverse-proxy setting on, the sidecar trusts forwarded
+      headers from whatever reaches it, so "only Caddy can" must hold for the gate as well
 - [ ] Google is the provider; client ID, client secret, and cookie secret arrive from `.env` via
       compose `${VAR:?}` interpolation, so `docker compose up` without them stops with a message
       naming the missing variable rather than starting a crash-looping container
@@ -27,16 +32,18 @@ fail-closed until a Google OAuth client exists — as clearly as they argue the 
       proxy serves this instance at); `.env.example` documents it beside the other gate variables
 - [ ] The allowlist is `authenticated_emails_file` pointing at a mounted `./allowed-emails.txt`
       (read-only), one address per line; `email_domains` is not set — the file is the whole policy
-- [ ] `allowed-emails.txt` is gitignored; a committed `allowed-emails.example.txt` shows the format,
-      and compose fails comprehensibly when the real file is absent
+- [ ] `allowed-emails.txt` is gitignored; a committed `allowed-emails.example.txt` shows the format
+- [ ] The allowlist mount uses long-form bind syntax with `create_host_path: false`, so a missing
+      file stops `docker compose up` with a message — Docker's short syntax would instead create a
+      *directory* at that path and hand the sidecar a crash loop plus junk in the deploy dir
 - [ ] Cookie attributes are explicit, not defaulted: `SameSite=Lax` (the instance's CSRF posture
       once ticket 02 deletes the app cookie), `Secure` on (the browser only meets this instance over
       the house proxy's TLS), expiry left at the seven-day default
 - [ ] `skip_provider_button` is on: an unauthenticated browser goes straight to Google, never to an
       interstitial page
-- [ ] The sidecar is told it is behind reverse proxies (its reverse-proxy setting), and exposes its
-      ping endpoint as the compose healthcheck; `caddy` depends on it being healthy, same as it does
-      `app`
+- [ ] The sidecar is told it is behind reverse proxies (its reverse-proxy setting), and its ping
+      endpoint backs the compose healthcheck (`wget` against it, which is why the image flavour
+      above matters); `caddy` depends on it being healthy, same as it does `app`
 - [ ] Restart policy and read-only-container posture match the neighbouring services where the image
       permits
 
@@ -53,9 +60,10 @@ fail-closed until a Google OAuth client exists — as clearly as they argue the 
       + oauth2-proxy documentation, checked at implementation time, not recalled
 - [ ] The verified email header (`X-Auth-Request-Email`) is copied from the gate's response onto the
       request forwarded to `app`; nothing else from the gate's response is
-- [ ] This stack's Caddy trusts the house proxy it sits behind, so the original
-      `X-Forwarded-Proto`/`X-Forwarded-For` survive to the app — the trust argument in
-      ARCHITECTURE.md §2 ("only Caddy can reach `app`") now extends one hop and must keep holding
+- [ ] This stack's Caddy trusts the house proxy it sits behind (`trusted_proxies`), so the original
+      `X-Forwarded-Proto`/`X-Forwarded-For` survive to the app — ARCHITECTURE.md §2's trust row
+      (forwarded headers believed unconditionally *because* `app` publishes no port) now extends
+      one hop and must keep holding
 - [ ] The Caddyfile's header comment still tells the truth about what the file does
 
 **`.env.example` and `.gitignore`**
@@ -67,11 +75,38 @@ fail-closed until a Google OAuth client exists — as clearly as they argue the 
 - [ ] The section states the fail-closed contract in one sentence: nothing starts until these exist
 - [ ] `allowed-emails.txt` is gitignored, and the example file is not
 
-**Smoke recipe (manual, in the PR description — this ticket has no vitest surface)**
+**CI's smoke test keeps passing — with the gate in the stack, not around it**
+
+The fail-closed `${VAR:?}` interpolation breaks `scripts/smoke-test.sh` as it stands (CI runs it
+via the workflow, and the publish job gates on it): the script composes up with no gate variables
+and asserts `/healthz` through Caddy. oauth2-proxy never contacts Google at startup, so CI can run
+the real gate with throwaway values.
+
+- [ ] The workflow (or the script) supplies dummy gate variables — a well-formed cookie secret,
+      fake client ID and secret, a `PUBLIC_ORIGIN` — and writes a CI `allowed-emails.txt`
+- [ ] The script's own header prose stops promising no-manual-steps, matching compose.yaml's
+      rewritten contract, and its failure-path `docker compose logs` line includes `gate`
+- [ ] The script is reworked for a gated front door, in this ticket: `/healthz` through Caddy
+      still passes (exempt); the page-render assertion (the nav-rail check on `/`) moves behind
+      the gate, exercised against `app` directly with `docker compose exec`; and the script's
+      in-app login-gate section (the redirect-to-`/login` and password-cookie checks) is deleted
+      here — those paths are unreachable through Caddy once `forward_auth` fronts them, and their
+      subject is removed by ticket 02 regardless
+- [ ] The script gains the gate assertions from the agent-runnable recipe below, which need no
+      Google account
+
+**Smoke recipe — agent-runnable with dummy credentials (real client optional until the last group)**
 
 - [ ] Fresh `docker compose up` with no gate variables fails naming the first missing one
+- [ ] `curl` of `/healthz` through Caddy answers without credentials
+- [ ] `curl` of `/` through Caddy is refused and the redirect points at Google's authorization
+      endpoint with the configured client ID and redirect URL in it
+- [ ] `/oauth2/*` paths answer from the sidecar, not the app
+
+**Smoke recipe — operator-only, needs the real client and an allowlisted account (in the PR
+description; no agent can complete the Google leg)**
+
 - [ ] With credentials and an allowlisted address: browser reaches Google, returns, sees the app
 - [ ] A non-allowlisted Google account is refused after Google, by the gate
-- [ ] `curl` of `/healthz` through Caddy answers without credentials; `curl` of `/` does not
 - [ ] The app receives `X-Auth-Request-Email` (visible with a temporary log line or header echo,
       removed before merge)
