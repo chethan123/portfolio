@@ -12,10 +12,10 @@
  *   price_observation  one row per instrument per provider instant — append-only
  *   price_poll         one row per refresh attempt, whether or not it wrote anything
  *
- * A refresh writes both tiers. What keeps the second one honest is which date it
- * writes under: **the date inside the quote's own timestamp, in the market's
- * zone — never today's date.** Two failures follow from getting that wrong, and
- * both are silent:
+ * A refresh writes both tiers, the log and the poll record. What keeps
+ * `price_daily` honest is which date it writes under: **the date inside the
+ * quote's own timestamp, in the market's zone — never today's date.** Two
+ * failures follow from getting that wrong, and both are silent:
  *
  *   * A mutual fund strikes one NAV after the close (§6.2). An afternoon poll
  *     sees yesterday's NAV still standing; filed under today, it becomes a
@@ -33,9 +33,25 @@
  * Today's row is provisional and converges on the close as the session runs.
  *
  * The observation log and the poll record are written in that same transaction,
- * so no two of the four tables can ever disagree about one fetch — and, in the
- * other direction, so the 1D chart's last point and the headline above it agree
- * by construction rather than by luck.
+ * so a committed fetch is recorded in all four tables or in none — which is what
+ * makes the 1D chart's last point and the headline above it agree on the normal
+ * path. Three divergences remain, all narrow, all deliberate, and named here so
+ * that nobody looks for a fourth:
+ *
+ *   * A provider re-stating an instant it has already given us with a different
+ *     price. `quote` upserts to the new price; the deduped observation keeps the
+ *     first. Accepted by ADR-0006 rather than reconciled.
+ *   * A hand-typed manual price, once the Settings → Instruments form exists to
+ *     type one (DESIGN.md §6). It writes a quote with no observation behind it,
+ *     so the headline moves and the 1D line does not.
+ *   * A provider returning the same symbol twice in one response. Both entries
+ *     become observations; `quote` keeps whichever came last, which need not be
+ *     the one with the later instant.
+ *
+ * A refresh whose writes fail commits nothing at all, the poll row included. So
+ * the poll table distinguishes a quiet market from a server that was not
+ * running, but not from a refresh that ran and could not commit — an attempt
+ * that dies leaves no trace of having been made.
  *
  * A past date's row *can* be rewritten, and deliberately so: an afternoon poll
  * returning yesterday's NAV, and a holiday poll returning Friday's, are exactly

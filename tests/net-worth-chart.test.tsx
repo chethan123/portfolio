@@ -342,6 +342,21 @@ describe("an intra-session line (ADR-0006)", () => {
     expect(markup).toContain('<span class="chart-readout-date">5 Jun 2026, 09:30</span>');
   });
 
+  it("dates a readout on the same clock it times it on", () => {
+    // 00:30 UTC on the 6th is 20:30 on the 5th in New York. Reading the day off
+    // the ISO string would print "6 Jun 2026, 20:30" — a date and a time from
+    // two different clocks, one of them a day out. The reproducing case for
+    // that, and the reason the day comes from `market-hours.ts` rather than
+    // from a slice.
+    const markup = render([
+      { date: "2026-06-05T19:45:00.000Z", amount: "100000.0000" },
+      { date: "2026-06-06T00:30:00.000Z", amount: "101000.0000" },
+    ]);
+
+    expect(markup).toContain('<span class="chart-readout-date">5 Jun 2026, 20:30</span>');
+    expect(markup).not.toContain("6 Jun 2026");
+  });
+
   it("still names days when it is not drawing a session", () => {
     // The other half of "the chart is told": the same instants, drawn as a
     // day-granularity series, are labelled by day. Nothing is inferred from the

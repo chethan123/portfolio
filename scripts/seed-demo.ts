@@ -567,6 +567,15 @@ function makeGaussian(random: () => number): () => number {
 }
 
 const SEED = 20260318;
+
+/**
+ * A second seed, for the session walk alone.
+ *
+ * Distinct from {@link SEED} so the two draw orders cannot interfere: the
+ * portfolio's three years of closes and quantities must not move because the
+ * intra-session line was retuned.
+ */
+const SESSION_SEED = 20260828;
 const MARKET_DRIFT = 0.2;
 const MARKET_VOL = 0.0068;
 
@@ -867,8 +876,13 @@ async function seed(
   timeZone: string,
 ): Promise<Written[]> {
   const random = makeRandom(SEED);
-  const gauss = makeGaussian(random);
-  const prices = buildPrices(calendar, gauss);
+  const prices = buildPrices(calendar, makeGaussian(random));
+  // Its own stream, not a share of the one above. Drawing the session walk from
+  // `random` would spend a few hundred draws before `buildQuantities` reaches
+  // it, silently re-rolling every bank balance in the demo — and would do it
+  // again on any future tweak to the walk. Two streams, and each one's output
+  // depends only on its own consumer.
+  const sessionGauss = makeGaussian(makeRandom(SESSION_SEED));
   const written: Written[] = [];
 
   const people = new Map<string, string>();
@@ -1055,16 +1069,17 @@ async function seed(
       const close = at(series, series.length - 1).close;
       const previous = at(series, Math.max(0, series.length - 2)).close;
 
-      // A mutual fund strikes one NAV after the close and has no intraday price
-      // at all (DESIGN.md §6.2). ADR-0006 accepts that a workplace-plan-heavy
-      // household therefore sees a largely flat 1D line, and the demo data is
-      // the honest picture of it rather than a prettier one.
+      // A mutual fund strikes one NAV after the close and is not quoted again
+      // until the next one (DESIGN.md §6.2). ADR-0006 accepts that a
+      // workplace-plan-heavy household therefore sees a largely flat 1D line,
+      // and the demo data is the honest picture of it rather than a prettier
+      // one.
       const instants =
         instrument.quoteType === "MUTUALFUND"
           ? [at(session.instants, session.instants.length - 1)]
           : session.instants;
 
-      const walk = walkSession(previous, close, instants.length, gauss);
+      const walk = walkSession(previous, close, instants.length, sessionGauss);
 
       for (const [index, instant] of instants.entries()) {
         observationIds.push(id);
@@ -1088,11 +1103,18 @@ async function seed(
     // No payloads: this script has no provider response to archive, and an
     // invented one would be the one thing in the demo database that is not a
     // real shape (ADR-0006 makes it nullable for exactly this).
-    const priced = INSTRUMENTS.filter(
+    //
+    // Both counts are over the *feed* instruments, which are the only ones a
+    // refresh asks about. Counting `priced` over the price map instead would
+    // include the fixed-price money market fund the feed is never asked for,
+    // and the two errors would cancel into `stale: 0` — a poll row asserting
+    // every request succeeded, filed beside a log with no observation for the
+    // instrument the Prices screen shows as stale. The one table whose whole
+    // job is making a silence interpretable is the last one that may lie.
+    const feed = INSTRUMENTS.filter((instrument) => instrument.priceSource === "feed");
+    const requested = feed.length;
+    const priced = feed.filter(
       (instrument) => prices.has(instrument.key) && instrument.stale !== true,
-    ).length;
-    const requested = INSTRUMENTS.filter(
-      (instrument) => instrument.priceSource === "feed",
     ).length;
 
     await client.query(

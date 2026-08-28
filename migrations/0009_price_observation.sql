@@ -128,7 +128,6 @@ create table price_poll (
   check (requested >= 0 and priced >= 0 and stale >= 0)
 );
 
-create index price_poll_started_at_idx on price_poll (started_at);
 
 -- The one-line contract for each tier, stated where the schema is read.
 comment on table price_observation is

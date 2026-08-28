@@ -590,7 +590,7 @@ erDiagram
     }
 ```
 
-Five tables stand outside the graph because they reference nothing:
+These tables stand outside the graph because they reference nothing:
 
 | Table | Shape | Purpose |
 |---|---|---|
@@ -714,7 +714,6 @@ anywhere.
 | `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at` — an index scan stopping at the first row, executed once per holding per plotted date. |
 | `price_observation_pkey` | `(instrument_id, as_of)` | Two jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. And it is matched exactly by the 1D reader's "latest observation at or before this instant" lateral, once per holding per plotted instant. |
 | `price_observation_market_date_idx` | `(market_date, as_of)` | Session resolution, both halves: `max(market_date)` finds the most recent session observed at all (a backward index scan stopping at row one), and the leading-column range scan then walks that session's distinct instants in order. |
-| `price_poll_started_at_idx` | `(started_at)` | Reading the attempt record back over a span — which no screen does today. The one index here that serves a person with `psql` rather than a query in the codebase, and it is cheap on a table gaining twenty-six rows a day. |
 
 ### 5.6 The numeric boundary
 
@@ -1171,10 +1170,10 @@ would make Compose restart a perfectly healthy app.
 
 ### 6.3 Read path — dashboards
 
-Every screen that shows money reads through `valuation.server.ts`. It exports sixteen reads. Seven
-of them go through the `ValuedSource` seam — `readHoldings`, `readTotal` and `readSeries`, written
-once and pointed at either source; the other nine are their own queries inside the same module, which is
-the point: they are in the module, not scattered across routes.
+Every screen that shows money reads through `valuation.server.ts`. Seven of its reads go through
+the `ValuedSource` seam — `readHoldings`, `readTotal` and `readSeries`, written once and pointed at
+either source; the rest are their own queries inside the same module, which is the point: they are
+in the module, not scattered across routes.
 
 ```ts
 currentHoldings()              // every holding held right now, valued
@@ -1189,8 +1188,8 @@ manualNetWorth() / netWorthChange() / firstRecordedDate() / accountFirstRecorded
 ```
 
 The seam is `ValuedSource` — `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
-type, so a read built on it works for both. Nine reads sit beside it rather than on it, in three
-groups. `accountTotals`, `accountTotal` and `netWorthChange` hand-write aggregates the seam cannot
+type, so a read built on it works for both. The reads that sit beside it rather than on it fall
+into three groups. `accountTotals`, `accountTotal` and `netWorthChange` hand-write aggregates the seam cannot
 express. `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` deliberately read
 elsewhere — `manual_networth` for the pre-app series, and `position_set` for "when does history
 start", which must not depend on anything being priced. And `latestObservedSession`,
@@ -1703,6 +1702,7 @@ three years of statements — is the largest dataset anything here has actually 
 | Filtering and grouping in JavaScript over the full array | Seven dimensions over a few hundred rows; agreement between a row and its subtotal is structural | A table that cannot be sent to the browser whole |
 | One batched provider call per refresh cadence (seeded 15 minutes) | ~100 symbols; the endpoint is unofficial and a queue of pending fetches is how an instance gets rate-limited | Thousands of symbols, or a real-time requirement |
 | Every distinct quote retained forever, payload and all | The owner would rather spend the disk than discard data whose future use is unknown (ADR-0006). At ~100 feed instruments and the seeded cadence it is roughly half a gigabyte a year, stated at Settings → Prices where the dial is | A faster cadence on a much larger instrument set — 1 minute is ~15× — or a host where the database is not the largest thing on the disk |
+| The 1D line unsampled, one point per observation | The whole point of it: the line is as granular as the cadence the household chose, and no sampler decides otherwise. At the seeded cadence a session is ~27 instants, against `SAMPLE_BUDGET`'s 180 dates for a long range | A much faster cadence. The refresh cadence is therefore a *latency* dial as well as a storage one, and linearly: ~390 instants at 1 minute puts the query in the hundreds of milliseconds on a full household, paid on every Overview load with 1D selected |
 | In-process scheduler | One process to deploy, one place to read logs | Horizontal scaling — two app containers would both poll, and only the advisory lock keeps that correct rather than efficient |
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
@@ -1813,7 +1813,7 @@ still live in the current code:
 | File | Role |
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, and `/healthz`'s report |
-| `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Sixteen exports: ten valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; three intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
+| `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
 | `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload` — the ingest flow's one write |
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |

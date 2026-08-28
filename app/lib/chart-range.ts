@@ -23,7 +23,7 @@
  */
 import type { IsoDate } from "./valuation.server.ts";
 
-/** The nine options the segmented control offers, in display order. */
+/** Every option the segmented control offers, in display order. */
 export type RangeKey = "1d" | "1w" | "1m" | "3m" | "ytd" | "1y" | "5y" | "all" | "custom";
 
 /**
@@ -124,6 +124,17 @@ export interface RangeWindow extends Window {
    */
   session?: IsoDate;
 }
+
+/**
+ * Has anything been observed at all?
+ *
+ * Two spellings of "no session" reach here — `null` from a reader that looked
+ * and found nothing, and `undefined` from a caller that did not pass one — and
+ * both mean the same thing to 1D. Named once so the two functions that branch
+ * on it cannot come to disagree about which spellings count.
+ */
+const hasSession = (session?: IsoDate | null): session is IsoDate =>
+  session !== undefined && session !== null;
 
 /** UTC throughout, deliberately — the one conversion that cannot pick up a server's zone. */
 const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
@@ -320,7 +331,7 @@ export function resolveRange(
     // Nothing observed yet, so there is no session to plot. The same fallback
     // an undrawable custom span takes, and for the same reason: a caller cannot
     // draw a chart captioned "1D" from a session it never had.
-    if (opts.session === undefined || opts.session === null) return resolveRange(DEFAULT_RANGE, opts);
+    if (!hasSession(opts.session)) return resolveRange(DEFAULT_RANGE, opts);
 
     // `dates` is empty on purpose — 1D bypasses the day-granularity sampler
     // entirely, and its points come from the observation log's own instants
@@ -334,6 +345,19 @@ export function resolveRange(
     // from it would report every session as flat. Strictly before the session,
     // carried forward by `holding_valued_at`, is the previous close — "today's
     // change" in the sense a brokerage means it.
+    //
+    // One consequence, stated because 1D is where it first shows: the change
+    // reader compares *today's* positions against the positions held on
+    // `since`, while the 1D line holds today's positions constant across the
+    // whole session. On every other preset those agree, because the line's
+    // first point is the same `holding_valued_at(since)` call the change reads.
+    // Under 1D a statement uploaded during the session moves the delta by the
+    // whole change in holdings while the line moves only by the change in
+    // price. That is DESIGN.md §14's second accepted limitation — this app
+    // cannot separate market movement from contributions — arriving on a span
+    // short enough to notice it. Reconciling it would mean a change reader that
+    // values `since` at today's positions, which is a different figure from the
+    // one every other range shows, and is not what issue #94 asked for.
     return { range, session: opts.session, since: addDays(opts.session, -1), dates: [] };
   }
 
@@ -377,7 +401,7 @@ export function isRangeDisabled(
   // draw, and story 13 asks for the chip to say so the way an out-of-reach
   // preset already does. A log with a single observation is not empty: the chip
   // is offered and the panel explains what it is short of.
-  if (range === "1d") return opts.session === undefined || opts.session === null;
+  if (range === "1d") return !hasSession(opts.session);
 
   if (range === "all" || range === "custom") return false;
 

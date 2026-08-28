@@ -45,6 +45,7 @@ import {
   accountSeries,
   accountSessionSeries,
   accountTotal,
+  asSessionPoints,
   latestObservedSession,
   type AccountKind,
   type IsoDate,
@@ -107,16 +108,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const requested = readChartRange(request);
   const today = isoDate(Date.now());
 
-  // The account's own earliest statement (spec 0008) — never the household's:
-  // an account's range never reaches into the hand-typed pre-app history,
-  // which was never any one account's (`CONTEXT.md`'s "chart range" entry).
-  const earliest = { positionSet: await accountFirstRecordedDate(params.accountId) };
+  // Two independent reads, joined because both are needed before the window can
+  // be sized and neither needs the other. The first is the account's own
+  // earliest statement (spec 0008) — never the household's: an account's range
+  // never reaches into the hand-typed pre-app history, which was never any one
+  // account's (`CONTEXT.md`'s "chart range" entry). The second is the
+  // observation log as a whole, not this account's slice of it: an account that
+  // holds nothing the feed quotes still draws its flat line at the household's
+  // observed instants (ADR-0006, story 10), and the chip is disabled only where
+  // the log is empty outright.
+  const [positionSet, session] = await Promise.all([
+    accountFirstRecordedDate(params.accountId),
+    latestObservedSession(),
+  ]);
 
-  // The observation log as a whole, not this account's slice of it: an account
-  // that holds nothing the feed quotes still draws its flat line at the
-  // household's observed instants (ADR-0006, story 10), and the chip is
-  // disabled only where the log is empty outright.
-  const session = await latestObservedSession();
+  const earliest = { positionSet };
 
   const resolved = resolveRange(requested.range, {
     today,
@@ -139,9 +145,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // every preset but 1D, where it is an instant. See the Overview's loader.
   const points =
     resolved.session === undefined
-      ? accountSeries(params.accountId, resolved.dates).then((series) =>
-          series.map((point) => ({ ...point, at: point.date })),
-        )
+      ? accountSeries(params.accountId, resolved.dates).then(asSessionPoints)
       : accountSessionSeries(params.accountId, resolved.session);
 
   const [account, holdings, series, recorded] = await Promise.all([
@@ -473,13 +477,16 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               masked={masked}
               session={session}
             />
-          ) : session !== null ? (
-            // A session the poller has only run once in. Nothing to do with how
+          ) : session !== null && computed.length > 0 ? (
+            // A session only one price has arrived in. Nothing to do with how
             // many statements this account has, which is what the sentence
-            // below would otherwise claim.
+            // below would otherwise claim — but guarded on there being a moment
+            // at all, because an account with no statements has nothing to draw
+            // at any price, and telling it to wait for one would be the same
+            // mistake in the other direction.
             <p className="empty-note">
               A line needs two observed moments and this session has {computed.length}. It
-              appears as the next refresh runs.
+              appears once another price arrives.
             </p>
           ) : (
             <p className="empty-note">

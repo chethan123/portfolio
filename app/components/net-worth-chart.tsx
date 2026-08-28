@@ -27,7 +27,7 @@ import { useId } from "react";
 
 import { MASKED_FIGURE } from "~/components/amount";
 import { formatCompact, formatMoney, toPlotValue } from "~/lib/format";
-import { marketTimeOf } from "~/lib/market-hours";
+import { marketDateOf, marketTimeOf } from "~/lib/market-hours";
 
 export type ChartPoint = {
   /**
@@ -247,7 +247,14 @@ function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): s
  * is read alone (spec 0010).
  */
 function readoutDate(date: string, session: SessionAxis | null): string {
-  const [year = "", month = "", day = ""] = date.slice(0, 10).split("-");
+  // Both halves of a session's stamp are read on the same clock. Slicing the
+  // ISO instant would take its *UTC* day while the time beside it came from the
+  // market's, so a session whose instants cross UTC midnight — any market east
+  // of it, and New York's own evening if the window ever widened — would date a
+  // point a day out from the time printed next to it. `market-hours.ts` exists
+  // to stop exactly that, so the day comes from there too.
+  const stamped = session === null ? date.slice(0, 10) : marketDateOf(new Date(date), session.timeZone);
+  const [year = "", month = "", day = ""] = stamped.split("-");
   const stamp = `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
 
   // The date still, and the time as well. A readout is read alone, and "which

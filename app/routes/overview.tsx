@@ -25,6 +25,7 @@ import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
 import {
   accountTotals,
+  asSessionPoints,
   firstRecordedDate,
   latestObservedSession,
   manualNetWorth,
@@ -97,12 +98,20 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Read before the window is sized: the household surface's earliest date
   // (§7's "chart range" rule) is measured partly from it, and it is a handful
   // of hand-typed rows either way.
-  const manual = await manualNetWorth();
-  const earliest = { positionSet: await firstRecordedDate(), manual: manual[0]?.date };
+  // Three reads that need nothing from each other, and all three are needed
+  // before the window can be sized: the household surface's earliest date (§7's
+  // "chart range" rule) is measured from the first two, and the third is which
+  // session 1D would plot — or, by its absence, whether the chip may be offered
+  // at all (ADR-0006, story 13). Every page load pays for the third whether or
+  // not 1D is selected, which is why it joins the others rather than queueing
+  // behind them.
+  const [manual, positionSet, session] = await Promise.all([
+    manualNetWorth(),
+    firstRecordedDate(),
+    latestObservedSession(),
+  ]);
 
-  // Which session 1D would plot, and — by its absence — whether the chip may be
-  // offered at all (ADR-0006, story 13).
-  const session = await latestObservedSession();
+  const earliest = { positionSet, manual: manual[0]?.date };
 
   const resolved = resolveRange(requested.range, {
     today,
@@ -118,9 +127,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // is what says which, and the chart is told the same thing.
   const points =
     resolved.session === undefined
-      ? netWorthSeries(resolved.dates).then((series) =>
-          series.map((point) => ({ ...point, at: point.date })),
-        )
+      ? netWorthSeries(resolved.dates).then(asSessionPoints)
       : netWorthSessionSeries(resolved.session);
 
   const [change, accounts, series] = await Promise.all([
@@ -439,14 +446,17 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               masked={masked}
               session={session}
             />
-          ) : session !== null ? (
-            // A session with one observation in it, which is a real state
-            // between the poller's first run and its second — and not the state
-            // the sentence below describes, since it has nothing to do with how
-            // many statements have been uploaded.
+          ) : session !== null && computed.length > 0 ? (
+            // A session with one observed moment in it, which is a real state
+            // between the poller's first attempt and its second — and not the
+            // state the sentence below describes, since it has nothing to do
+            // with how many statements have been uploaded. Guarded on there
+            // being a moment at all: with none, nothing has been uploaded and
+            // no amount of waiting for prices will change that, so the sentence
+            // below is the true one.
             <p className="empty-note">
               A line needs two observed moments and this session has {computed.length}. It
-              appears as the next refresh runs.
+              appears once another price arrives.
             </p>
           ) : (
             <p className="empty-note">

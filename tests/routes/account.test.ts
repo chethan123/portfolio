@@ -449,9 +449,10 @@ describe("the 1D range on an account", () => {
         args(get(`/accounts/${account.id}?range=1d`), { accountId: account.id }),
       );
 
-      // Story 10: a cash-only account holds a fund nobody quoted for it, so its
-      // answer is that it did not move — drawn, at the same moments the
-      // household's line is drawn at, rather than left blank.
+      // Story 10: this account holds cash and nothing else, so nothing the feed
+      // reported all session touches it. Its answer is that it did not move —
+      // drawn, at the same moments the household's line is drawn at, rather
+      // than left blank.
       expect(data.range).toBe("1d");
       expect(data.session).toEqual({ timeZone: "America/New_York" });
       expect(data.computed.map((point) => [point.date, point.amount])).toEqual([

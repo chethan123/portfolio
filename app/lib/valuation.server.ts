@@ -620,9 +620,13 @@ export async function accountSeries(
 /** One point on an intra-session line: the instant it describes, and the value then. */
 export type SessionPoint = {
   /**
-   * An ISO instant, not a date — which is why this is `at` and not `date`. The
-   * points of a session are moments, and giving them the field name every other
-   * series uses would be an invitation to pass one where the other is meant.
+   * An ISO instant, not a date — which is why this is `at` and not `date`.
+   *
+   * A signpost inside this module rather than a guarantee across it: the field
+   * name keeps the two series distinguishable where they are produced, and a
+   * caller that hands one to the other will notice. It does not follow the
+   * value to the screen. The chart widens its own `date` to hold either, and is
+   * told which it is drawing rather than inferring it — see `ChartPoint`.
    */
   at: string;
   amount: string;
@@ -686,8 +690,23 @@ export async function latestObservedSession(
  * every point of its own line. Reaching past it gives the previous close, which
  * is the right price for cash (fixed at a dollar since 1970), for a
  * workplace-plan trust nobody quotes, for a feed instrument whose fetch failed
- * today, and for a feed instrument in the minutes before its first quote
- * arrived.
+ * today, and for a feed instrument in the minutes before its first quote of the
+ * day arrived.
+ *
+ * One case the fallback cannot answer, and does not pretend to: an instrument
+ * whose *first close of any kind* is the session's own — bought this morning,
+ * or resolved and priced for the first time today. Before its first observation
+ * there is genuinely no price for it, so it contributes no value and is counted
+ * out of `known`. The alternative is inventing one, which the design refuses
+ * everywhere. It surfaces as a step in the line where a holding appears rather
+ * than moves; `coverage` is what reports it, and a caller that wants to say so
+ * has to read `coverage` per point rather than the whole-portfolio figure.
+ *
+ * A second case worth stating: an account closed *during* the plotted session
+ * is absent from the whole 1D line, because "the positions held now" is what
+ * this values and a closed account holds none. `holding_valued_at` still counts
+ * it on that day, so 1D and a 1W line can disagree about it — the price of
+ * valuing today's positions rather than the day's.
  *
  * The arithmetic is `numeric` throughout and never leaves SQL; amounts cross
  * the boundary as decimal strings like every other money value (§5.6).
@@ -770,6 +789,22 @@ async function readSessionSeries(
     // Cardinalities of holdings, not money.
     coverage: { known: Number(row.known), total: Number(row.total) },
   }));
+}
+
+/**
+ * A day-granularity series in the intra-session series' shape.
+ *
+ * The two readers answer the same question at different granularities, and a
+ * chart wants one contract rather than two. Here rather than in each loader
+ * because there are two loaders, and a rule copied into both is a rule free to
+ * drift — the reason `chart-range.ts` exists one layer up.
+ *
+ * The direction is deliberate. Widening a date into the instant field is honest
+ * — a date names a moment, coarsely — where narrowing an instant to a date
+ * would throw away the time of day the session line is drawn for.
+ */
+export function asSessionPoints(series: NetWorthPoint[]): SessionPoint[] {
+  return series.map((point) => ({ at: point.date, amount: point.amount, coverage: point.coverage }));
 }
 
 /**

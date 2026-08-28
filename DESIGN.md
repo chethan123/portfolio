@@ -1262,7 +1262,13 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
 1. **No realized gains, dividend history, or tax lots.** Consequence of positions-only (§3). Adding
    them means a transaction ledger — a substantially different ingest problem.
 2. **The net worth chart cannot separate market movement from contributions.** Consequence of no
-   cash-flow tracking (§3). Labelling mitigates; it does not solve.
+   cash-flow tracking (§3). Labelling mitigates; it does not solve. It is sharpest on 1D, where a
+   statement uploaded during the session moves the change figure beside the headline by the whole
+   change in holdings while the line beside it moves only by the change in price — the line holds
+   today's positions constant across the session, and the change reader compares today's positions
+   against the previous session's. Every other range agrees with its own line because the line's
+   first point *is* what the change reads; a session is simply short enough for the difference to be
+   visible.
 3. **Hand-rolled dashboard queries can disagree.** Consequence of no materialisation (§8.2).
    `holding_valued` mitigates.
 4. **No joint accounts.** Consequence of single-owner (§4.2). Adding them is a join table plus
@@ -1316,8 +1322,8 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     sibling of `holding_valued_at` (a third object bound by ADR-0001's row-type contract), a second
     time vocabulary in `chart-range.ts`, and a time axis that can name a day as well as an hour. The
     data existing is not a promise that it will be drawn. Two smaller limits ride along with it. The
-    archive is snapshots at the household's own cadence, not market data — no OHLC bars, no volume,
-    permanent unbackfillable gaps for every stretch the server was down, and no corporate-action
-    adjustment — so it must not be mistaken for a backtest-grade series. And the 1D line is a
-    snapshot per page load: nothing updates in place, because a live tick pipeline was rejected in
-    §6 for a reason that has not changed.
+    archive holds only what was observed at the household's own cadence, which is not market data —
+    no OHLC bars, no volume, permanent unbackfillable gaps for every stretch the server was down,
+    and no corporate-action adjustment — so it must not be mistaken for a backtest-grade series. And
+    the 1D line is drawn once, when the page loads: nothing updates in place, because a live tick
+    pipeline was rejected in §6 for a reason that has not changed.

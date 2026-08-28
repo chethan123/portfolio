@@ -58,7 +58,7 @@ Point at the chart and the readout follows, naming the point nearest your pointe
 point with a vertical line. A short range holds a point for every day; a longer one thins them out
 towards its old end. Either way the nearest point answers, so no stretch of the line is dead.
 
-## 1D — the day so far
+## 1D — the latest trading session
 
 ![The Overview at the 1D range, its axis labelled by time of day](images/overview-range-1d.png)
 
@@ -77,8 +77,8 @@ Three things read differently on it:
   change" means at a brokerage.
 
 Two honest limits. A mutual fund strikes one price a day after the close, so a workplace-plan-heavy
-household sees much of its 1D line flat — that is the fund, not the chart. And the line is a
-snapshot taken when the page loaded: nothing updates in place, and reloading is how it advances.
+household sees much of its 1D line flat — that is the fund, not the chart. And the line is drawn
+once, when the page loads: nothing updates in place, and reloading is how it advances.
 
 ## The second, dashed line
 
