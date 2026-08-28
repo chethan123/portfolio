@@ -18,8 +18,9 @@ Go to **Settings → People**. On a fresh instance it says **Nobody is recorded 
 Under **Add a person**, type a **Name** and select **Add person**. Repeat for everyone whose money
 you want counted here.
 
-A name is all there is. Nobody gets a login, an email address or permissions of their own — a person
-here is a label for whose money it is. Two people may share a name if they really do.
+A name is all there is. Nobody gets a sign-in, an email address or permissions of their own — a
+person here is a label for whose money it is, and it has nothing to do with the Google address
+anyone signed in with. Two people may share a name if they really do.
 
 ![Settings → People with two people recorded](images/settings-people.png)
 

@@ -12,8 +12,8 @@ same screens darker.
 
 Three pages, in this order. Together they take an empty instance to one showing a real net worth.
 
-1. **[First run](first-run.md)** — what a new instance looks like, signing in, and finding your way
-   around.
+1. **[First run](first-run.md)** — signing in with Google, what a new instance looks like, and
+   finding your way around.
 2. **[People and accounts](people-and-accounts.md)** — who is in the household and what they own.
    Nothing else works until this is done.
 3. **[Your first statement](first-statement.md)** — the four-step upload, once, end to end.
@@ -61,6 +61,6 @@ download of any kind.
 
 ---
 
-Running the instance — backups, upgrades, putting it behind a password — is
-[operating](../operating.md). Why the app behaves as it does is
+Running the instance — backups, upgrades, the Google sign-in in front of it and who is let
+through — is [operating](../operating.md). Why the app behaves as it does is
 [the README](../../README.md#what-it-looks-like).

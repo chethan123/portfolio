@@ -297,8 +297,9 @@ The click is instant and needs no network, because the moment it is needed is th
 not be one. Settings → Display chooses what a browser opens in — masked every time, showing every
 time, or however that browser was last left — and a browser nobody has answered for opens masked.
 
-**It is not a password.** The amounts are still in the page; masking defends against being read over
-someone's shoulder, and the login gate is the only thing that keeps anyone out.
+**It is not a lock.** The amounts are still in the page; masking defends against being read over
+someone's shoulder, and the sign-in gate in front of the instance is the only thing that keeps
+anyone out.
 
 ### On a phone
 
@@ -337,42 +338,80 @@ it draws the panels Analysis already had.
 ## Running an instance
 
 ```sh
+cp .env.example .env                                # fill in the gate settings
+cp allowed-emails.example.txt allowed-emails.txt    # one family address per line
 docker compose up -d
 ```
 
-That is the whole procedure on a fresh machine. The app image is pulled from GitHub Container
+**Setup is fail-closed: one manual step, done once, and nothing starts until it is done.** Create a
+Google OAuth client, put its credentials in `.env`, and list the family's addresses in
+`allowed-emails.txt`. Leave any of that out and `docker compose up` stops before a container runs,
+naming what is missing, rather than bringing up an instance anyone who can reach it can read. The
+click-by-click recipe is in [`docs/operating.md`](docs/operating.md); the short form is the gate
+section of [`.env.example`](.env.example).
+
+Everything else still has a working default. The app image is pulled from GitHub Container
 Registry — published for `linux/amd64` and `linux/arm64`, so a Raspberry Pi or an ARM NAS needs
 nothing special, and there is no build step to find memory for. Postgres comes up, the app waits for
-it to report healthy and applies the schema, and a bundled Caddy container fronts it on
-<http://localhost>. There is no manual setup step and no migration to run by hand — migrations are
-idempotent, so restarting the container is always safe.
+it to report healthy and applies the schema, and a bundled Caddy container fronts it on port 80.
+There is no migration to run by hand — migrations are idempotent, so restarting the container is
+always safe.
 
 One caveat today: no `v*` release tag has been cut yet, so CI has never published that image. Until
 the first release exists, run from a checkout instead —
 `docker compose -f compose.yaml -f compose.dev.yaml up -d --build`.
 
-You do not need a checkout to run this: `compose.yaml`, `Caddyfile` and optionally `.env` are the
-whole deployment. The same command is also the upgrade — the pinned tag is the floating major, so
-`docker compose up -d` fetches the newest `v1.x.y` release. Take a backup first
+You do not need a checkout to run this: `compose.yaml`, `Caddyfile`, `.env` and `allowed-emails.txt`
+are the whole deployment. The same command is also the upgrade — the pinned tag is the floating
+major, so `docker compose up -d` fetches the newest `v1.x.y` release. Take a backup first
 ([Upgrading](docs/operating.md#upgrading)).
 
+### Who gets in, and where that is decided
+
+Sign-in sits *in front of* the app rather than inside it. A sidecar container speaks to Google on
+the instance's behalf, and the bundled Caddy asks it about every request before one is allowed
+through; anything unvouched-for is handed to Google's own account chooser and comes back only if
+the address that signed in is on the operator's list. The sidecar's own interstitial page is
+skipped, so the only sign-in screen anyone in the household ever sees is Google's.
+
+The app therefore has no password, no login page and no session cookie of its own, and it makes no
+authorization decision at all: the list is the whole of it, and everyone admitted sees and can do
+everything. The verified address arrives on every request as a header the app deliberately ignores —
+attribution for a later feature, never permission.
+
+Enforcement lives in this stack rather than in whatever proxy terminates TLS in front of it, because
+a device on the same LAN can dial this box's published port and land on the bundled Caddy directly.
+That is the threat this exists for, so the gate travels with the app.
+
+The one thing the app knows about any of this is whether something in front of it authenticates.
+When nothing does — a checkout under `npm run dev`, or a deployment assembled by hand — it draws an
+undismissable warning on every page saying so, which is why that strip sits across the top of most
+of the screenshots above. The setting protects nothing on its own; it exists only so the warning is
+never a lie, because a warning a household learns to scroll past is worse than none at all.
+
+### Settings, health and the front door
+
 Every setting an operator has is an environment variable and every one of them is documented in
-[`.env.example`](.env.example) with its default. Copy it to `.env` only if you want to change
-something. Configuration is validated once at startup: a missing or malformed value stops the
-container immediately with a message naming the variable. The one setting that is not an operator's
-is the capital gains rate the Analysis screen estimates with: it is a database row, edited at
-Settings → Tax rather than in the environment.
+[`.env.example`](.env.example) with its default — with one exception named there: who may enter is a
+file of addresses rather than a variable, because it is a list that grows. Configuration is
+validated once at startup: a missing or malformed value stops the container immediately with a
+message naming the variable. The one setting that is not an operator's is the capital gains rate the
+Analysis screen estimates with: it is a database row, edited at Settings → Tax rather than in the
+environment.
 
 `GET /healthz` returns 200 while the instance is genuinely serving and a non-200 when it is not —
 which includes the case where the database is reachable but a migration shipped in the image has
-never been applied. It never requires authentication, so monitoring needs no credentials.
+never been applied. It is the one path the gate lets through unchallenged, so monitoring needs no
+Google account and no credentials.
 
-The app itself is not reachable directly — only the bundled `caddy` service publishes a port, and it
-serves plain HTTP for now, with TLS termination left as a follow-up. `caddy` sets `X-Forwarded-*`,
-which the app trusts. [`docs/operating.md`](docs/operating.md) has the proxy configuration, the
-`pg_dump` backup and restore procedure, the full environment table, the security posture an operator
-has to decide about, and why no instance installs as an app on a phone yet. When something is
-actually broken, [`docs/runbook.md`](docs/runbook.md) is indexed by symptom instead of by topic.
+Neither the app nor the sidecar is reachable directly — only the bundled `caddy` service publishes a
+port, which is what makes it the single place the gate can be enforced. It speaks plain HTTP: TLS
+and the public hostname belong to the reverse proxy the operator runs in front of the stack, and the
+`X-Forwarded-*` headers arriving through it are trusted. [`docs/operating.md`](docs/operating.md)
+has the proxy topology, the Google setup, the `pg_dump` backup and restore procedure, the full
+environment table, the security posture an operator has to decide about, and why no instance
+installs as an app on a phone yet. When something is actually broken,
+[`docs/runbook.md`](docs/runbook.md) is indexed by symptom instead of by topic.
 
 Once it is running, [`docs/guide/`](docs/guide/) is the household's guide to using it — the same
 screens as above, but as instructions rather than as reasons.

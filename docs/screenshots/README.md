@@ -45,8 +45,20 @@ only.
 `position: fixed`, so a full-page capture paints it across the middle of the image instead of at the
 foot of the screen where a phone shows it.
 
-**The `AUTH_PASSWORD` banner is left in deliberately.** It is what a default instance actually looks
-like, and hiding it would make the screenshots show a configuration the reader does not have.
+**The warning strip is left in deliberately, and it no longer warns about a password.** It is the
+application's own notice that nothing in front of it is authenticating anyone, and a capture run is
+exactly that state: the script drives a development server with nothing in front of it. The only
+ways to take the strip out are to stand the real gate in front of that run — signing a browser in to
+Google in order to take a photograph — or to tell the app it is gated when it is not, and both
+publish a configuration assembled for the camera. Cropping is not on the table either; these are
+never hand-edited. So the images show an ungated instance while the documented deployment is a
+gated one, and that is the honest trade: what is photographed is what the code does, with
+[the README](../../README.md#who-gets-in-and-where-that-is-decided) carrying what the strip means.
+
+**Its words belong to the application, not to this file**, which is why the strip is a retake
+trigger of its own: when the wording changes, every shot carrying it is stale in one commit. That
+has already happened once, when the gate replaced the password. Not every shot carries it — a
+capture framed on a single table, or below the top of a page, never had it in frame.
 
 **Account ids are never written down.** The seed renumbers accounts on every run, so the script
 looks them up by kind. A shot described above as "the brokerage one" means exactly that.
