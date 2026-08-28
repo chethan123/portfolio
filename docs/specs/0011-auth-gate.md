@@ -128,8 +128,10 @@ up` with a message naming it, before any container runs half-configured.
 ## Testing Decisions
 
 The gate itself is infrastructure — compose and Caddy configuration — and is not exercised by the
-vitest suite; its ticket carries a manual smoke recipe instead. What the suite does pin is the app's
-side of the seam:
+vitest suite. It is exercised by CI's container smoke test running the real gate with throwaway
+credentials (the sidecar never contacts Google at startup), plus an operator-only recipe for the
+one leg no agent can complete: the round trip through a real Google account. What the suite does
+pin is the app's side of the seam:
 
 - Config: the new gate-mode value parses, defaults to "no external gate", and the deleted variables
   are genuinely gone from the schema (a config test naming them would now fail to compile).

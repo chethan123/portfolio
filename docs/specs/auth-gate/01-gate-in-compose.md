@@ -86,8 +86,14 @@ the real gate with throwaway values.
       fake client ID and secret, a `PUBLIC_ORIGIN` — and writes a CI `allowed-emails.txt`
 - [ ] The script's own header prose stops promising no-manual-steps, matching compose.yaml's
       rewritten contract, and its failure-path `docker compose logs` line includes `gate`
-- [ ] The script's existing assertion set still passes (`/healthz` is exempt), and gains the two
-      cheap gate assertions from the recipe below that need no Google account
+- [ ] The script is reworked for a gated front door, in this ticket: `/healthz` through Caddy
+      still passes (exempt); the page-render assertion (the nav-rail check on `/`) moves behind
+      the gate, exercised against `app` directly with `docker compose exec`; and the script's
+      in-app login-gate section (the redirect-to-`/login` and password-cookie checks) is deleted
+      here — those paths are unreachable through Caddy once `forward_auth` fronts them, and their
+      subject is removed by ticket 02 regardless
+- [ ] The script gains the gate assertions from the agent-runnable recipe below, which need no
+      Google account
 
 **Smoke recipe — agent-runnable with dummy credentials (real client optional until the last group)**
 
