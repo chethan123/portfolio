@@ -1,9 +1,8 @@
 # Operating an instance
 
 Everything a self-hoster needs that is not in the [README](../README.md): what the containers are,
-the one-time Google setup this stack cannot start without, what to put in `.env`, how it sits behind
-your own proxy, the security decisions that are yours rather than the code's, what to watch, backing
-the data up, restoring it, and upgrading.
+what to put in `.env`, how it sits behind your own proxy, the security decisions that are yours
+rather than the code's, what to watch, backing the data up, restoring it, and upgrading.
 
 When something is already broken and you want a procedure, that is [`runbook.md`](runbook.md). This
 file is how the instance is meant to be run.
@@ -83,58 +82,43 @@ reader has installed nothing and needs the whole shape; you are at a terminal an
 after.
 
 **It will refuse to start until the gate is configured, and that is the design.** There is no mode
-in which this stack boots open: the four gate variables are interpolated with Compose's `${VAR:?}`
-form, so a missing or empty one stops `docker compose up` before any container runs, with a message
-naming the variable. A missing `allowed-emails.txt` stops it the same way. Everything in this
-section up to [Verify it actually worked](#verify-it-actually-worked) is therefore prerequisite, not
-optional hardening.
+in which this stack boots open: every variable in the gate section of `.env` is interpolated with
+Compose's `${VAR:?}` form, so a missing or empty one stops `docker compose up` before any container
+runs, with a message naming the variable. A missing `allowed-emails.txt` stops it the same way.
+Everything in this section up to [Verify it actually worked](#verify-it-actually-worked) is
+therefore prerequisite, not optional hardening.
 
 ### One-time Google setup
 
-Done once per instance, before the first `up`. You need the public origin your house proxy will
-serve this instance at first, because step 3 registers it with Google character for character.
+**[`google-sign-in.md`](google-sign-in.md) is the walkthrough, and it is deliberately not repeated
+here.** It is the one document for standing the gate up: the Google Cloud project, the consent
+screen and why it is published, the OAuth client and the redirect URI Google matches character for
+character, the gate's settings, the allowlist, and how to prove that a real sign-in and a real
+refusal both work. Read it before the first `up` — you need the public origin your house proxy will
+serve this instance at decided first, because the redirect URI is built from it.
 
-1. **Console → APIs & Services → OAuth consent screen.** Choose "External", fill in an app name and
-   your own email as the contact, and **publish it**. The gate asks only for the `profile` and
-   `email` scopes, which are basic scopes — no verification review is required for them. Publishing
-   means any Google account can reach the account picker; the [allowlist](#who-may-enter) is what
-   refuses them afterwards, and that is the whole authorization story.
-2. **Credentials → Create credentials → OAuth client ID → Web application.**
-3. **Add one Authorized redirect URI:** your `PUBLIC_ORIGIN` with `/oauth2/callback` on the end —
-   `https://portfolio.example.com/oauth2/callback`. Google matches it exactly and refuses the
-   sign-in on any mismatch, trailing slash included. The path is the gate's, and it is not
-   configurable here without also changing `compose.yaml`.
-4. **Copy the client ID and client secret** into `GATE_CLIENT_ID` and `GATE_CLIENT_SECRET`.
-
-Google redirects the *browser*, never its own servers, so this URI only has to resolve for the
-family's devices — a LAN or VPN hostname behind your own proxy is fine. The one server-to-server
-call is outbound from `gate`.
-
-> This recipe is also in [`.env.example`](../.env.example), beside the variables it fills in. That
-> duplication is deliberate: this file is read before an instance exists, that one while `.env` is
-> open. If they ever disagree, `.env.example` sits next to the code and is the one to believe.
+What it leaves here: the credentials it produces are `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`,
+`GATE_COOKIE_SECRET` and `PUBLIC_ORIGIN` in `.env` ([Environment variables](#environment-variables)),
+and none of them reaches the application — they configure the `gate` service alone.
 
 ### Who may enter
 
-`./allowed-emails.txt`, beside `compose.yaml`, one Google address per line; blank lines and lines
-starting with `#` are ignored. It is gitignored, and
+`./allowed-emails.txt`, beside `compose.yaml`, one Google address per line, bind-mounted read-only
+into the gate and re-checked on every request. It is gitignored;
 [`allowed-emails.example.txt`](../allowed-emails.example.txt) is the committed copy showing the
-format:
-
-```sh
-cp allowed-emails.example.txt allowed-emails.txt
-$EDITOR allowed-emails.txt
-```
+format, and [`google-sign-in.md`](google-sign-in.md#step-5--the-allowlist) is where it gets written.
 
 There is no domain rule and deliberately no option for one: the narrowest domain that would admit
 this household also admits every other Gmail account on earth. The file is the only authorization
-this instance has. Editing it is [a lever with real teeth](#revocation-and-the-levers-you-have).
+this instance has, and everyone on it sees and can do everything. Editing it is
+[a lever with real teeth](#revocation-and-the-levers-you-have).
 
 ### What to put in `.env`
 
-`cp .env.example .env`, then fill in the four gate variables above. Beyond those, every setting has
-a working default except `DATABASE_URL`, which Compose supplies. One more is worth deciding before
-the first `up`:
+`cp .env.example .env`, then fill in its gate section — [`google-sign-in.md`](google-sign-in.md)
+walks you through where each of those values comes from. Beyond them, every setting has a working
+default except `DATABASE_URL`, which Compose supplies. One more is worth deciding before the first
+`up`:
 
 - `POSTGRES_PASSWORD` — because it is read only when the data directory is first created. Setting it
   later is a different, more annoying operation ([Environment variables](#environment-variables)).
@@ -222,7 +206,7 @@ only while the market is open). An environment that still sets the old
 `PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
 once on that screen after upgrading.
 
-**The gate's four are Compose-level too, and they are the required ones.** `GATE_CLIENT_ID`,
+**The gate's own settings are Compose-level too, and they are the required ones.** `GATE_CLIENT_ID`,
 `GATE_CLIENT_SECRET`, `GATE_COOKIE_SECRET` and `PUBLIC_ORIGIN` configure the `gate` service; the
 application never sees any of them. They have no defaults on purpose, and `compose.yaml`
 interpolates them with `${VAR:?}`, so `docker compose up` stops on the first one that is unset *or
@@ -249,7 +233,7 @@ surfaces as a failed pull, not as the message naming the variable that the setti
 **An empty value reads as unset, not as "configured to empty" — on both sides, in opposite
 directions.** For the application's own variables an empty assignment falls back to the default, so
 `AUTH_GATE=` in `.env` means `none` and the app draws its warning banner: it errs towards claiming
-less protection than it has, never more. For the gate's four, empty is a refusal to start. Neither
+less protection than it has, never more. For the gate's own settings, empty is a refusal to start. Neither
 can leave you quietly unprotected.
 
 **`MAX_UPLOAD_MB` does not reach the container under the bundled Compose file.** It is validated and

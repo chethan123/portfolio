@@ -39,6 +39,7 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`guide/`](guide/) | a family member using a running instance | how to do a thing, screen by screen and task by task, and files the guide hands out to do it (the example statement CSV) | rationale, operations, anything needing a terminal |
 | [`operating.md`](operating.md) | whoever self-hosts the instance | how the deployment is put together and how to run it: installing, configuration, TLS, security posture, monitoring, backups, upgrades, growth | how to read a screen; what to do at 2am, which is the runbook's |
 | [`runbook.md`](runbook.md) | the same person, mid-incident | symptoms, in the words someone would use, with the commands that confirm and fix each | explanation — every entry links to `operating.md` for the why |
+| [`google-sign-in.md`](google-sign-in.md) | the self-hoster, once, before the first `docker compose up` | the walkthrough of standing the gate up: the Google Cloud project, the consent screen and publishing it, the OAuth client and its redirect URI, the gate's settings, the allowlist, and proving a sign-in and a refusal both work | how the gate is built and what it enforces, which is `ARCHITECTURE.md`'s and `operating.md`'s; why it is a forward-auth gate at all, which is the ADR's |
 | [`importing-history.md`](importing-history.md) | the self-hoster, once, moving pre-app history into the instance | where each kind of outside history belongs, how to get it out of the old tracker, and the terminal work of loading and verifying it | how to use a screen, which is the guide's; running the instance day to day, which is `operating.md`'s |
 | [`developing.md`](developing.md) | a developer who has just cloned this | the mechanics of doing the work: a working checkout, the commands, the change loop, recipes, and the traps | the standards, which are `AGENTS.md`, and the structure, which is `ARCHITECTURE.md` |
 | [`specs/`](specs/) | whoever builds the slice | approved work, before it is built | anything not agreed yet |
@@ -69,6 +70,11 @@ context, and the result of a real trade-off. Both were opened by the dividends w
   is not a zero. The README states them at the altitude of a module seam for a contributor; the
   guide states them as consequences for a household.
 - **[`operating.md`](operating.md) restates parts of `.env.example`.** Named there, in place.
+- **[`google-sign-in.md`](google-sign-in.md) restates the shapes of the gate's settings**, which
+  `.env.example` owns beside the blanks they fill — the cookie secret's length and the command that
+  generates one, and the origin's form. Named there, in place, with `.env.example` given as the one
+  to believe. The walkthrough itself is not duplicated: `operating.md` and `.env.example` both point
+  at that file rather than carrying a second copy of the console steps.
 - **[`importing-history.md`](importing-history.md) retells the two chart series** that `DESIGN.md`
   §7 defines and the guide's Overview page describes, for a third reader: someone deciding where
   outside history belongs before loading any of it. It carries the mapping and links to those two

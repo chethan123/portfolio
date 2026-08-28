@@ -236,9 +236,9 @@ More variables exist that the application never reads, all Compose-level and non
 by `server/config.ts`, which never sees them. **`POSTGRES_PASSWORD`** is consumed by the `db`
 service and must be kept in sync with the credentials inside `DATABASE_URL`. **`APP_VERSION`**
 selects the published image tag the `app` service runs, defaulting to the floating major. **The
-gate's four** — its Google client id and secret, its cookie encryption key, and `PUBLIC_ORIGIN`, the
+gate's own settings** — its Google client id and secret, its cookie encryption key, and `PUBLIC_ORIGIN`, the
 `https://` origin the house proxy serves and the gate builds its redirect from — configure the
-`gate` service. Those four are the only settings anywhere with no default, and they are interpolated
+`gate` service. They are the only settings anywhere with no default, and they are interpolated
 with `${VAR:?}` so a missing one stops `docker compose up` naming it, before any container runs. Who
 may enter is not a variable at all: it is `allowed-emails.txt`, bind-mounted into `gate` with
 `create_host_path: false`, so a missing file stops `up` the same way rather than becoming an empty
