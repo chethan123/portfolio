@@ -452,7 +452,9 @@ docker compose up -d gate       # after changing anything in .env
 There is no break-glass account and no second sign-in path. Repairing the gate is the only way in.
 
 Why: [Security](operating.md#security),
-[Environment variables](operating.md#environment-variables).
+[Environment variables](operating.md#environment-variables),
+[Setting up Google sign-in](google-sign-in.md#when-it-does-not-work) for what each of Google's own
+refusals means.
 
 ---
 

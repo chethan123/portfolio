@@ -16,8 +16,9 @@
 # starting something half-protected.
 #
 # The manual step is therefore exactly one, done once: create a Google OAuth
-# client and put its credentials in `.env`. Copy .env.example and follow its
-# gate section. Every other setting still has a working default.
+# client and put its credentials in `.env`. Copy .env.example and follow
+# docs/google-sign-in.md, which walks it from the console to a first sign-in.
+# Every other setting still has a working default.
 
 name: portfolio
 

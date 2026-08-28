@@ -347,8 +347,8 @@ docker compose up -d
 Google OAuth client, put its credentials in `.env`, and list the family's addresses in
 `allowed-emails.txt`. Leave any of that out and `docker compose up` stops before a container runs,
 naming what is missing, rather than bringing up an instance anyone who can reach it can read. The
-click-by-click recipe is in [`docs/operating.md`](docs/operating.md); the short form is the gate
-section of [`.env.example`](.env.example).
+walkthrough, console to first sign-in, is [`docs/google-sign-in.md`](docs/google-sign-in.md); the
+variables it fills in are the gate section of [`.env.example`](.env.example).
 
 Everything else still has a working default. The app image is pulled from GitHub Container
 Registry — published for `linux/amd64` and `linux/arm64`, so a Raspberry Pi or an ARM NAS needs
@@ -410,10 +410,11 @@ Neither the app nor the sidecar is reachable directly — only the bundled `cadd
 port, which is what makes it the single place the gate can be enforced. It speaks plain HTTP: TLS
 and the public hostname belong to the reverse proxy the operator runs in front of the stack, and the
 `X-Forwarded-*` headers arriving through it are trusted. [`docs/operating.md`](docs/operating.md)
-has the proxy topology, the Google setup, the `pg_dump` backup and restore procedure, the full
-environment table, the security posture an operator has to decide about, and why no instance
-installs as an app on a phone yet. When something is actually broken,
-[`docs/runbook.md`](docs/runbook.md) is indexed by symptom instead of by topic.
+has the proxy topology, the `pg_dump` backup and restore procedure, the full environment table, the
+security posture an operator has to decide about, and why no instance installs as an app on a phone
+yet; [`docs/google-sign-in.md`](docs/google-sign-in.md) is the one-time Google setup those depend
+on. When something is actually broken, [`docs/runbook.md`](docs/runbook.md) is indexed by symptom
+instead of by topic.
 
 Once it is running, [`docs/guide/`](docs/guide/) is the household's guide to using it — the same
 screens as above, but as instructions rather than as reasons.
