@@ -56,6 +56,14 @@ and stating today's figure for it is simply wrong. A fact about one line over on
 the household now.
 _Avoid_: current value, latest value, ending balance, final value.
 
+### How prices stay fresh
+
+**Refresh cadence**:
+How often the app asks the price feed for fresh quotes while the market is open — the household's
+dial, in whole minutes. Outside market hours no cadence spends anything, so the term speaks of
+refreshes rather than of the timer that drives them.
+_Avoid_: poll interval, polling frequency, update speed, refresh rate.
+
 ### What a screen shows in public
 
 **Masked**:

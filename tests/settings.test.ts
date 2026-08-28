@@ -1,6 +1,7 @@
 /**
- * The household's capital gains rate — the one setting that is a row rather
- * than an environment variable (DESIGN.md §8.1, §8.4).
+ * The household's settings rows — the capital gains rate, the masking policy
+ * and the refresh cadence, each a row rather than an environment variable
+ * (DESIGN.md §8.1, §8.4).
  *
  * Driven through `settings.server.ts` against a real Postgres, like every other
  * module that writes. The schema's own refusals are exercised here too rather
@@ -14,8 +15,10 @@ import { ValidationError } from "~/lib/input.server";
 import {
   readCapitalGainsRate,
   readMaskingPolicy,
+  readRefreshCadence,
   saveCapitalGainsRate,
   saveMaskingPolicy,
+  saveRefreshCadence,
 } from "~/lib/settings.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -141,6 +144,67 @@ describe("the masking policy", () => {
       // change.
       await saveCapitalGainsRate({ capitalGainsRate: "15" }, db);
       await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
+
+      expect(await readCapitalGainsRate(db)).toBe("15.000000");
+    }),
+  );
+});
+
+describe("the refresh cadence", () => {
+  it(
+    "starts at the migration's default rather than at nothing",
+    withDatabase(async ({ db }) => {
+      // 15 — the cadence every deployment ran at while this was an environment
+      // variable, so moving the dial into the database moved nobody's dial.
+      expect(await readRefreshCadence(db)).toBe(15);
+    }),
+  );
+
+  it(
+    "records a cadence a person typed and hands it back as the whole number it is",
+    withDatabase(async ({ db }) => {
+      expect(await saveRefreshCadence({ refreshCadenceMinutes: "5" }, db)).toBe(5);
+      expect(await readRefreshCadence(db)).toBe(5);
+    }),
+  );
+
+  it(
+    "refuses a cadence outside a minute and a day, under the name the form's field has",
+    withDatabase(async ({ db }) => {
+      // Filed under the wrong key the message would render nowhere and the
+      // Prices tab would refuse the write in silence — the same rule the two
+      // writers above are held to.
+      const refusal = await refusalOf(saveRefreshCadence({ refreshCadenceMinutes: "0" }, db));
+
+      expect(refusal.refreshCadenceMinutes).toMatch(/between 1 and 1440/);
+    }),
+  );
+
+  it(
+    "refuses a cadence that is not a whole number of minutes",
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(
+        saveRefreshCadence({ refreshCadenceMinutes: "7.5" }, db),
+      );
+
+      expect(refusal.refreshCadenceMinutes).toMatch(/whole number/);
+    }),
+  );
+
+  it(
+    "leaves the stored cadence alone when it refuses",
+    withDatabase(async ({ db }) => {
+      await refusalOf(saveRefreshCadence({ refreshCadenceMinutes: "1441" }, db));
+
+      expect(await readRefreshCadence(db)).toBe(15);
+    }),
+  );
+
+  it(
+    "does not disturb the rate stored beside it",
+    withDatabase(async ({ db }) => {
+      await saveCapitalGainsRate({ capitalGainsRate: "15" }, db);
+      await saveRefreshCadence({ refreshCadenceMinutes: "30" }, db);
 
       expect(await readCapitalGainsRate(db)).toBe("15.000000");
     }),

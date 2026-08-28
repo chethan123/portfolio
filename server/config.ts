@@ -64,16 +64,12 @@ const configSchema = z.object({
     })
     .default(3000),
 
-  /**
-   * Quote refresh cadence. Read by the in-process poller (DESIGN.md §6.2),
-   * which ticks on this interval and does nothing on a tick outside market
-   * hours.
-   */
-  PRICE_POLL_INTERVAL_MINUTES: integerFromString("minutes")
-    .refine((value) => value >= 1 && value <= 1440, {
-      message: "must be between 1 and 1440 minutes",
-    })
-    .default(15),
+  // The quote refresh cadence is deliberately absent here: it is the
+  // household's dial rather than the deployment's, so it lives in
+  // `app_setting.refresh_cadence_minutes` and is edited at Settings → Prices —
+  // `0008_refresh_cadence.sql` carries the argument, including why the old
+  // `PRICE_POLL_INTERVAL_MINUTES` was removed outright rather than kept as a
+  // fallback.
 
   /**
    * The most a statement upload may carry, in whole megabytes. A brokerage CSV

@@ -211,7 +211,8 @@ left stale. So:
   market hours. Expected.
 - **No lines at all since the last restart, and the market is open.** The poller starts from a page
   render, not from boot — `/healthz` does not start it. Load any page in a browser, then wait one
-  full `PRICE_POLL_INTERVAL_MINUTES`; there is deliberately no immediate first tick.
+  full refresh cadence (Settings → Prices; seeded to 15 minutes); there is deliberately no
+  immediate first tick.
 - **The poller failed to start.** Grep for the stem `Price poller did not start`. Restart `app`.
 
   ```sh

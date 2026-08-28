@@ -1,6 +1,6 @@
 /**
- * The household's own settings — today that is one figure, the capital gains
- * rate (DESIGN.md §8.1, §8.4).
+ * The household's own settings — the capital gains rate (DESIGN.md §8.1, §8.4),
+ * the masking policy (ADR-0002), and the refresh cadence (§6.2).
  *
  * Read and written like `people.server.ts`: the route above translates a form
  * into arguments and a refusal into a message, and every rule about what a rate
@@ -166,4 +166,95 @@ export async function saveMaskingPolicy(
     .executeTakeFirstOrThrow();
 
   return row.masking_policy as MaskingPolicy;
+}
+
+/** The bounds the schema's check constraint enforces, stated once and read by
+ * the validator and the form's `min`/`max` alike. A day is the ceiling because
+ * a cadence longer than one is a poller that has been turned off without
+ * saying so. */
+export const REFRESH_CADENCE_BOUNDS = { min: 1, max: 1440 } as const;
+
+/**
+ * What the Prices form submits: a whole number of minutes.
+ *
+ * `Number.parseInt` rather than the decimal-string discipline every money field
+ * keeps, because a cadence is not money — the column is `integer`, the driver
+ * hands it over as a JavaScript number, and nothing ever multiplies it into a
+ * figure a person reads.
+ */
+export const refreshCadenceInput = z.object({
+  refreshCadenceMinutes: z
+    .string({ message: "A refresh cadence is required." })
+    .trim()
+    .superRefine((value, ctx) => {
+      const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
+
+      if (value === "") {
+        refuse("A refresh cadence is required.");
+      } else if (!/^\d+$/.test(value)) {
+        refuse("A refresh cadence must be a whole number of minutes, like 15.");
+      } else {
+        const minutes = Number.parseInt(value, 10);
+        if (minutes < REFRESH_CADENCE_BOUNDS.min || minutes > REFRESH_CADENCE_BOUNDS.max) {
+          refuse(
+            `A refresh cadence must be between ${REFRESH_CADENCE_BOUNDS.min} and ` +
+              `${REFRESH_CADENCE_BOUNDS.max} minutes.`,
+          );
+        }
+      }
+    })
+    .transform((value) => Number.parseInt(value, 10)),
+});
+
+export type RefreshCadenceInput = z.infer<typeof refreshCadenceInput>;
+
+/**
+ * How many minutes the poller waits between quote refreshes while the market is
+ * open (DESIGN.md §6.2).
+ *
+ * Read from the same single row with the same `executeTakeFirstOrThrow` as the
+ * rate above, for the same reason: the migration seeds it, so a default
+ * invented here would make a settings row that had gone missing
+ * indistinguishable from a household that had chosen the default.
+ *
+ * The poller reads this before scheduling every tick rather than once at
+ * start-up, which is the whole of how a save takes effect: there is no restart
+ * to perform and no signal to send, in this process or any other holding the
+ * advisory lock. The cost is one single-row read per cycle, and the honest
+ * consequence — a change applies when the *next* refresh is scheduled, up to
+ * one old cadence away — is printed on the form that edits it.
+ */
+export async function readRefreshCadence(db: Kysely<Database> = getDb()): Promise<number> {
+  const row = await db
+    .selectFrom("app_setting")
+    .select("refresh_cadence_minutes")
+    .executeTakeFirstOrThrow();
+
+  return row.refresh_cadence_minutes;
+}
+
+/**
+ * Record a new cadence.
+ *
+ * An update rather than an upsert, of this column alone, like the two writers
+ * above: the row is seeded and shared, and a writer that set the whole row
+ * would silently reset figures other screens read.
+ *
+ * @param raw the submitted fields, unvalidated.
+ * @throws {ValidationError} with a message per bad field.
+ * @returns the stored cadence, as the column now holds it.
+ */
+export async function saveRefreshCadence(
+  raw: unknown,
+  db: Kysely<Database> = getDb(),
+): Promise<number> {
+  const input = parseInput(refreshCadenceInput, raw);
+
+  const row = await db
+    .updateTable("app_setting")
+    .set({ refresh_cadence_minutes: input.refreshCadenceMinutes })
+    .returning("refresh_cadence_minutes")
+    .executeTakeFirstOrThrow();
+
+  return row.refresh_cadence_minutes;
 }

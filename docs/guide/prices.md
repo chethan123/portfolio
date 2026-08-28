@@ -15,8 +15,10 @@ So a total that has not moved usually means the market has not moved it:
 - **Quantities only change when you record them.** A price moving is automatic; you holding more of
   something is not. That comes from [an uploaded statement](upload.md) or
   [a correction](holdings.md).
-- **How often prices refresh during the day is set by whoever runs the instance.** If you think it
-  is genuinely stuck, that is the person to ask — see [operating](../operating.md).
+- **How often prices refresh during the day is the refresh cadence**, set at Settings → Prices in
+  whole minutes. A change is picked up when the next refresh runs, so it can take up to one old
+  cadence to apply. If a total looks genuinely stuck beyond that, see
+  [operating](../operating.md).
 
 Two things you may see on a row instead of a fresh figure:
 

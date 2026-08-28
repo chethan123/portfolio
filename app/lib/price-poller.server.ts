@@ -1,10 +1,20 @@
 /**
- * The fifteen-minute refresh loop (DESIGN.md §6.2), in the app's own process.
+ * The refresh loop (DESIGN.md §6.2), in the app's own process, on the cadence
+ * the household chose at Settings → Prices.
  *
  * §10 chose an in-process scheduler over a worker container — "one process to
  * deploy, one place to read logs" — and states the trade-off it accepts: a
  * restart mid-session misses a poll until the next tick. That is why there is
  * no third service in `compose.yaml`.
+ *
+ * **The cadence is a row, not an environment variable** (`0008_refresh_cadence.sql`
+ * has the argument), so a tick re-reads it and re-arms the timer when it moved.
+ * That is the whole of how a save takes effect: no restart, no signal between
+ * processes — every process holding a timer converges within one old cadence,
+ * because each one's next tick reads the same row. The read sits behind the
+ * market-hours gate with the rest of the work, so a weekend stays free of
+ * database traffic and a cadence saved on one applies at the first in-session
+ * tick, which is also the first moment it could matter.
  *
  * Nothing in this codebase had a background timer before, so the three hazards
  * a timer brings are handled here rather than assumed away:
@@ -40,6 +50,7 @@ import { getDb, getPool } from "./db.server.ts";
 import { isMarketOpen } from "./market-hours.ts";
 import { refreshQuotes } from "./prices.server.ts";
 import { yahooPriceProvider, type PriceProvider } from "./price-provider.server.ts";
+import { readRefreshCadence } from "./settings.server.ts";
 
 /**
  * The lock every poller tick contends for.
@@ -59,12 +70,45 @@ const ADVISORY_LOCK_KEY = "7295380114023642";
  */
 const SLOT = Symbol.for("portfolio.pricePoller");
 
+/**
+ * What the timer assumes the cadence is until a tick has read the row — the
+ * value `0008_refresh_cadence.sql` seeds, kept in step by hand the way
+ * `masking.ts` keeps step with its check constraint. Reading the row here
+ * instead would make starting the poller an async database operation on the
+ * first page render's path; assuming the seed makes it a property write, and
+ * the first tick corrects the assumption within fifteen minutes of boot.
+ */
+const SEEDED_CADENCE_MINUTES = 15;
+
 type PollerState = {
-  timer: ReturnType<typeof setInterval>;
+  /** Undefined only in the moment between construction and arming, which the
+   * tick's closure needs the state object to exist for. */
+  timer: ReturnType<typeof setInterval> | undefined;
+  /** What the current timer was armed with, so a tick can tell a moved dial. */
+  minutes: number;
   running: boolean;
 };
 
 type PollerHost = typeof globalThis & { [SLOT]?: PollerState };
+
+/**
+ * Re-arm the timer at a cadence the household just moved.
+ *
+ * Replacing the interval resets its phase — the next tick lands one *new*
+ * cadence after the one that noticed, which is what the Settings form promises.
+ * The identity check is what keeps a re-arm from resurrecting a stopped poller:
+ * a tick in flight when `stopPricePoller` ran holds a state object the slot has
+ * already forgotten, and arming a timer on it would poll forever with no handle
+ * left to clear it by.
+ */
+function retime(state: PollerState, provider: PriceProvider, minutes: number): void {
+  if ((globalThis as PollerHost)[SLOT] !== state) return;
+
+  clearInterval(state.timer);
+  state.timer = setInterval(() => void tick(state, provider), minutes * 60 * 1000);
+  state.timer.unref?.();
+  state.minutes = minutes;
+}
 
 /**
  * Run one refresh, if this process is the one that should.
@@ -80,10 +124,24 @@ async function tick(state: PollerState, provider: PriceProvider): Promise<void> 
   const config = getConfig();
 
   // The calendar decides only whether to spend a request. Being wrong here
-  // cannot corrupt anything — see `market-hours.ts`.
+  // cannot corrupt anything — see `market-hours.ts`. It sits above the cadence
+  // read on purpose: a weekend must not cost a database round trip every
+  // interval, so a cadence saved while the market is shut applies at the first
+  // in-session tick — the first moment it could matter.
   if (!isMarketOpen(new Date(), config.MARKET_TIMEZONE)) return;
 
   state.running = true;
+
+  // The dial, as the household last left it. Read with its own catch rather
+  // than the tick's: a database that is briefly unreachable will fail the
+  // refresh below in its own well-handled way, and a read that failed must
+  // not change the cadence — the last known value is the household's answer
+  // until the row says otherwise.
+  const minutes = await readRefreshCadence().catch((error: unknown) => {
+    console.error("Refresh cadence could not be read; keeping the current one:", error);
+    return state.minutes;
+  });
+  if (minutes !== state.minutes) retime(state, provider, minutes);
 
   // A dedicated connection: an advisory lock belongs to the session that took
   // it, so taking and releasing it have to happen on the same client. The work
@@ -156,12 +214,17 @@ export function startPricePoller(provider: PriceProvider = yahooPriceProvider())
   if (host[SLOT] !== undefined) return;
 
   try {
-    const minutes = getConfig().PRICE_POLL_INTERVAL_MINUTES;
-
+    // Armed at the seeded cadence rather than the row's: reading the row here
+    // would make this an async database call on a page render's path. The
+    // first tick reads the row and re-arms if the household had moved the
+    // dial, so a non-default cadence is honoured within one seeded interval
+    // of boot.
     const state: PollerState = {
       running: false,
-      timer: setInterval(() => void tick(state, provider), minutes * 60 * 1000),
+      minutes: SEEDED_CADENCE_MINUTES,
+      timer: undefined,
     };
+    state.timer = setInterval(() => void tick(state, provider), SEEDED_CADENCE_MINUTES * 60 * 1000);
 
     // Node holds the event loop open for a pending interval, which would keep a
     // container alive through a shutdown it had already been asked to perform.
@@ -171,10 +234,8 @@ export function startPricePoller(provider: PriceProvider = yahooPriceProvider())
   } catch (error) {
     // Swallowed on purpose. The caller is a page render, and a background
     // refresh loop failing to start is not a reason a family member cannot see
-    // their net worth. `getConfig()` is the realistic thrower here — the
-    // container validates configuration before serving, so reaching this means
-    // something unusual, and the operator wants it in the log rather than on
-    // the page.
+    // their net worth. Nothing above throws in any run anyone has seen — the
+    // guard survives because this is called with no caller to catch it.
     console.error("Price poller did not start; prices will not refresh:", error);
   }
 }

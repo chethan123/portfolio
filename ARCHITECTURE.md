@@ -194,7 +194,6 @@ is a Zod schema, parsed once, with cross-field rules.
 | `AUTH_PASSWORD` | unset | no | Setting it **enables** the login gate. Unset means no auth, with a persistent UI banner. |
 | `SESSION_SECRET` | unset | conditionally | Cookie signing key. Becomes required the moment `AUTH_PASSWORD` is set. |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
-| `PRICE_POLL_INTERVAL_MINUTES` | `15` | no | Poller cadence, 1–1440. |
 | `MAX_UPLOAD_MB` | `10` | no | Upload body cap. **Not wired through `compose.yaml`** — under the documented deployment it is permanently 10 MB (§11.3). |
 | `MARKET_TIMEZONE` | `America/New_York` | no | Market-hours calculation and trading-day attribution. Validated as an IANA zone. |
 | `TZ` | `UTC` | no | Container clock. The database stores UTC regardless. |
@@ -214,10 +213,13 @@ Two properties of this module are structural rather than cosmetic:
 - **Empty string reads as unset.** `FOO=` in a `.env` file, or an unsubstituted Compose variable,
   must not read as "configured to empty".
 
-The one setting that is deliberately *not* an environment variable is the capital gains rate. It
-lives in the `app_setting` table, because it is the household's own number rather than a description
-of the deployment, and the person who wants it changed is the person reading the screen — not the
-person with a shell on the container (`migrations/0005_app_setting.sql`).
+The settings that are deliberately *not* environment variables are the household's own: the capital
+gains rate, the masking policy and the refresh cadence, each a column on the single-row
+`app_setting` table. They are the household's numbers rather than descriptions of the deployment,
+and the person who wants one changed is the person reading the screen — not the person with a shell
+on the container (`migrations/0005_app_setting.sql`; `0008_refresh_cadence.sql` for why the
+cadence's old `PRICE_POLL_INTERVAL_MINUTES` variable was removed outright rather than kept as a
+fallback).
 
 ---
 
@@ -1071,6 +1073,12 @@ were live" failure this application refuses. Two more properties of `priceFreshn
 | Two timers in two processes — a restart overlapping a shutdown | Postgres advisory lock per tick, with a key distinct from the migration runner's |
 | A tick outliving its interval — a slow provider | Serialised by a flag; an overlapping tick is **dropped, not queued** — a queue of pending fetches against an unofficial API is how an instance gets rate-limited |
 
+The interval itself is the household's refresh cadence (`app_setting.refresh_cadence_minutes`,
+edited at Settings → Prices). The timer is armed at the seeded 15 and each in-session tick re-reads
+the row, re-arming when the value moved — which is the entire propagation mechanism: no restart, no
+cross-process signal, every process converges within one old cadence because every process's next
+tick reads the same row.
+
 `/healthz` deliberately reports none of this. A health check that failed during a third-party outage
 would make Compose restart a perfectly healthy app.
 
@@ -1568,7 +1576,7 @@ three years of statements — is the largest dataset anything here has actually 
 |---|---|---|
 | `holding_valued` is **not** materialised | The data changes on upload and the row count is in the hundreds. A refresh step whose omission shows up as silently stale totals costs more than the scan | Tens of thousands of holdings, or a read-heavy multi-tenant load |
 | Filtering and grouping in JavaScript over the full array | Seven dimensions over a few hundred rows; agreement between a row and its subtotal is structural | A table that cannot be sent to the browser whole |
-| One batched provider call every 15 minutes | ~100 symbols; the endpoint is unofficial and a queue of pending fetches is how an instance gets rate-limited | Thousands of symbols, or a real-time requirement |
+| One batched provider call per refresh cadence (seeded 15 minutes) | ~100 symbols; the endpoint is unofficial and a queue of pending fetches is how an instance gets rate-limited | Thousands of symbols, or a real-time requirement |
 | In-process scheduler | One process to deploy, one place to read logs | Horizontal scaling — two app containers would both poll, and only the advisory lock keeps that correct rather than efficient |
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
@@ -1630,9 +1638,10 @@ still live in the current code:
   untestable where it currently sits (§9.3).
 - **`<FieldError>` is open-coded at roughly fifteen sites**, behind three differently-named local
   helpers.
-- **The poller's tick/lock/release discipline has no test.** There is no `tests/price-poller.test.ts`,
-  so the three hazards §6.2 lists and the two rows §7.2 gives them are argued rather than verified.
-  Of everything on this page, that is the claim to trust least.
+- **The poller's advisory-lock skip path has no test.** `tests/price-poller.test.ts` verifies the
+  connection lifecycle, the market-hours gate, drop-not-queue and the cadence re-arm, but the
+  cross-process case — a second holder of the lock making a tick skip — is still argued rather
+  than verified.
 
 **Found while writing this document**, not from the review:
 

@@ -441,9 +441,9 @@ first upload (DESIGN.md §7).
 
 ## Where prices come from
 
-Quotes are fetched by an in-process loop on `PRICE_POLL_INTERVAL_MINUTES`, and only while the market
-is open — there is no worker container, which DESIGN.md §10 chose deliberately for the single
-deployment target. [`app/lib/price-provider.server.ts`](app/lib/price-provider.server.ts) is the only
+Quotes are fetched by an in-process loop on the refresh cadence set at Settings → Prices (seeded to
+every 15 minutes), and only while the market is open — there is no worker container, which
+DESIGN.md §10 chose deliberately for the single deployment target. [`app/lib/price-provider.server.ts`](app/lib/price-provider.server.ts) is the only
 module that imports `yahoo-finance2`, behind the one-method interface §6.1 mandates, so swapping
 providers touches one file. [`app/lib/prices.server.ts`](app/lib/prices.server.ts) is the only module
 that writes a price.

@@ -133,10 +133,16 @@ happens to need it.
 | `AUTH_PASSWORD` | No | unset | Setting it turns on the login gate: one password, one cookie, one login page. Unset means the instance is open to anyone who can reach it, and the UI shows a permanent warning banner saying so. |
 | `SESSION_SECRET` | **When `AUTH_PASSWORD` is set** | — | Signs the login cookie. Startup fails naming this variable if you set a password without it. Use a long random string: `openssl rand -hex 32`. |
 | `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port: that is the fixed `80:80` in [`compose.yaml`](../compose.yaml), and moving it means editing that line. |
-| `PRICE_POLL_INTERVAL_MINUTES` | No | `15` | Quote refresh cadence, 1–1440. The refresh runs in the app process and only while the market is open. |
 | `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`** — see below. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
+
+**One variable this table used to carry is gone.** How often quotes are refreshed is the
+household's dial rather than the deployment's, so it moved into the application: set it at
+Settings → Prices (whole minutes, 1–1440, default 15; the refresh still runs in the app process and
+only while the market is open). An environment that still sets the old
+`PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
+once on that screen after upgrading.
 
 **Two more that Compose reads and the application never sees.** `POSTGRES_PASSWORD` is the `db`
 service's password, covered under [Running against your own Postgres](#running-against-your-own-postgres).
@@ -445,8 +451,9 @@ Only one of them is a fault:
 3. **The poller failed to start.** That one *does* log, once, at error level.
 
 There is also a quiet period by design: the first tick is one full interval after the first page
-view, with no immediate poll, so a freshly recreated container is silent for up to
-`PRICE_POLL_INTERVAL_MINUTES` even with somebody looking at it.
+view, with no immediate poll, so a freshly recreated container is silent for up to the refresh
+cadence even with somebody looking at it. (The timer boots at the seeded 15 minutes and picks up a
+different saved cadence on its first in-session tick.)
 
 What to do about any of this is [`runbook.md`](runbook.md).
 

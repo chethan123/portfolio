@@ -520,6 +520,8 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
   await shoot(page, "docs/guide/images/settings-account-edit.png");
   await visit(page, "/settings/tax");
   await shoot(page, "docs/guide/images/settings-tax.png");
+  await visit(page, "/settings/prices");
+  await shoot(page, "docs/guide/images/settings-prices.png");
 
   await visit(page, "/upload");
   await shoot(page, "docs/guide/images/upload-1-account-and-file.png");

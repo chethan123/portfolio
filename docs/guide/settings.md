@@ -3,7 +3,7 @@
 Everything that changes what the app knows, apart from [uploading a statement](upload.md).
 
 **Settings** sits at the foot of the left-hand navigation. Inside it, a strip of tabs: **Overview**,
-**People**, **Accounts** and **Tax**.
+**People**, **Accounts**, **Tax**, **Prices** and **Display**.
 
 ## Overview
 
@@ -114,6 +114,21 @@ One field: the capital gains rate, as a percentage. It starts at **23.8%**.
 [Analysis](analysis.md) for what it estimates and the limits on that estimate.
 
 Type a new rate and save. The box then shows what is stored, which is the confirmation.
+
+## Prices
+
+![The refresh cadence, in minutes](images/settings-prices.png)
+
+One field: the **refresh cadence** — how often prices are fetched, in whole minutes from 1 to 1440.
+It starts at **15**.
+
+The refresh only runs while the market is open, so a lower number costs more requests against the
+price feed during trading hours and nothing at all on evenings, weekends and market holidays.
+
+Type a new cadence and save. The box then shows what is stored, which is the confirmation — and the
+change is picked up when the next refresh runs, so it can take up to one old cadence to apply. No
+restart is needed. See [Why a number did not change](prices.md) for what a cadence can and cannot
+make fresher.
 
 ---
 
