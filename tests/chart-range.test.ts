@@ -4,7 +4,7 @@
  *
  * Pure — no Postgres and no render — for `masking.test.ts`'s reason: this is
  * the domain rule itself, `AGENTS.md` asks for a domain rule to be tested as
- * itself, and exhausting eight presets and their edge cases through
+ * itself, and exhausting nine presets and their edge cases through
  * database-backed renders would be slow and would prove less.
  */
 import { describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ import {
   encodeRangeCookieValue,
   isRangeDisabled,
   rangeCookie,
+  rangeDescription,
   rangeOptions,
   readChartRange,
   readRangeCookie,
@@ -35,7 +36,9 @@ const TODAY = "2026-08-26";
 describe("each preset's boundary against a fixed today", () => {
   const NO_DATA = { earliest: { positionSet: null }, surface: "household" as Surface, today: TODAY };
 
-  const BOUNDARIES: Record<Exclude<RangeKey, "all" | "custom">, string> = {
+  // 1D is excluded: it is the one preset whose boundary is not a calendar
+  // offset from today but the session the observation log last carried.
+  const BOUNDARIES: Record<Exclude<RangeKey, "1d" | "all" | "custom">, string> = {
     "1w": "2026-08-19",
     "1m": "2026-07-26",
     "3m": "2026-05-26",
@@ -127,6 +130,8 @@ describe("the disabled-state rule", () => {
     ).toBe(false);
   });
 
+  const NO_DATA = { earliest: { positionSet: null }, surface: "household" as Surface, today: TODAY };
+
   it("does not disable a preset whose start falls after the earliest date", () => {
     expect(isRangeDisabled("1w", { today: TODAY, earliest, surface: "account" })).toBe(false);
   });
@@ -137,15 +142,28 @@ describe("the disabled-state rule", () => {
     expect(isRangeDisabled("custom", { today: TODAY, earliest, surface: "account" })).toBe(false);
   });
 
-  it("disables nothing on an instance with no data at all", () => {
-    // The empty state renders instead of a chart, so this is academic — but a
-    // preset must not read as disabled before there is anything to compare it
-    // against.
+  it("disables nothing but 1D on an instance with no data at all", () => {
+    // The empty state renders instead of a chart, so this is academic for the
+    // date-bounded presets — but one must not read as disabled before there is
+    // anything to compare it against. 1D is the exception because it is not
+    // bounded by a date at all: with an empty observation log there is no
+    // session to draw, which is a different claim from "your history is short".
+    const noData = { today: TODAY, earliest: { positionSet: null }, surface: "account" as Surface };
+
     for (const range of Object.keys(RANGES) as RangeKey[]) {
-      expect(isRangeDisabled(range, { today: TODAY, earliest: { positionSet: null }, surface: "account" })).toBe(
-        false,
-      );
+      expect(isRangeDisabled(range, noData)).toBe(range === "1d");
     }
+  });
+
+  it("offers 1D once anything at all has been observed, however little", () => {
+    // One observation is not two points and the panel says so in words — but
+    // the chip is not the place to say it. Story 13 disables it only where the
+    // log is empty outright.
+    const observed = { ...NO_DATA, session: "2026-08-26" };
+
+    expect(isRangeDisabled("1d", observed)).toBe(false);
+    expect(isRangeDisabled("1d", { ...NO_DATA, session: null })).toBe(true);
+    expect(isRangeDisabled("1d", NO_DATA)).toBe(true);
   });
 
   it("lists every option in order, each carrying its own disabled state", () => {
@@ -154,6 +172,73 @@ describe("the disabled-state rule", () => {
     expect(options.map((option) => option.key)).toEqual(Object.keys(RANGES));
     expect(options.find((option) => option.key === "5y")?.disabled).toBe(true);
     expect(options.find((option) => option.key === "1w")?.disabled).toBe(false);
+  });
+});
+
+describe("1D, the preset that is a session rather than a span", () => {
+  const HOUSEHOLD = { earliest: { positionSet: "2020-01-01" }, surface: "household" as Surface, today: TODAY };
+
+  it("resolves to the session the observation log last carried, and to no dates at all", () => {
+    const window = resolveRange("1d", { ...HOUSEHOLD, session: "2026-08-25" });
+
+    expect(window.range).toBe("1d");
+    expect(window.session).toBe("2026-08-25");
+    // Empty on purpose: the points come from the log's own instants, and the
+    // day-granularity sampler is bypassed entirely. A loader that missed
+    // `session` and read the day series draws nothing rather than the wrong
+    // thing.
+    expect(window.dates).toEqual([]);
+  });
+
+  it("measures its change from the day before the session, never from the session itself", () => {
+    // Today's own `price_daily` row converges on the last observation of the
+    // day, so measuring against it would report every session as flat. The day
+    // before, carried forward, is the previous close.
+    expect(resolveRange("1d", { ...HOUSEHOLD, session: "2026-08-25" }).since).toBe("2026-08-24");
+  });
+
+  it("names the latest session it was given, whatever today is", () => {
+    // A Sunday. 1D shows Friday's session because Friday is what was observed —
+    // the session comes from the log, never from the calendar.
+    const window = resolveRange("1d", { ...HOUSEHOLD, today: "2026-08-30", session: "2026-08-28" });
+
+    expect(window.session).toBe("2026-08-28");
+    expect(window.since).toBe("2026-08-27");
+  });
+
+  it("falls back to the default preset when nothing has been observed", () => {
+    // The same fallback an undrawable custom span takes, and reported back the
+    // same way: a caller cannot caption a chart "1D" from a session it never had.
+    for (const session of [null, undefined]) {
+      const window = resolveRange("1d", { ...HOUSEHOLD, session });
+
+      expect(window.range).toBe(DEFAULT_RANGE);
+      expect(window.session).toBeUndefined();
+      expect(window.dates.length).toBeGreaterThan(1);
+    }
+  });
+
+  it("describes itself as a session rather than as a span", () => {
+    expect(rangeDescription("1d")).toBe("over the latest trading session");
+  });
+
+  it("is remembered and re-read like any other preset key", () => {
+    // The whole of what 1D inherits unchanged: the URL parameter, the cookie
+    // and the segmented control know it as one more key.
+    expect(encodeRangeCookieValue("1d")).toBe("1d");
+    expect(decodeRangeCookieValue("1d")).toEqual({ range: "1d" });
+    expect(readChartRange(new Request("https://x/?range=1d"))).toEqual({ range: "1d", explicit: true });
+
+    const request = new Request("https://x/", { headers: { Cookie: "chart_range=1d" } });
+    expect(readChartRange(request)).toEqual({ range: "1d", explicit: false });
+  });
+
+  it("leaves every other preset resolving exactly as it did", () => {
+    // The new key must not reach a range that is already history.
+    const withSession = resolveRange("1m", { ...HOUSEHOLD, session: "2026-08-25" });
+    const without = resolveRange("1m", HOUSEHOLD);
+
+    expect(withSession).toEqual(without);
   });
 });
 
