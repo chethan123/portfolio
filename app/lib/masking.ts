@@ -56,9 +56,9 @@ export const maskingPolicyValues = MASKING_POLICIES.map((policy) => policy.value
 /**
  * The cookie's name.
  *
- * Short and unprefixed, unlike `__portfolio_session`: this one is read and
- * written by the toggle's own script, so it is typed out in client code as well
- * as here, and it carries nothing that a prefix would be protecting.
+ * Short and unprefixed: this one is read and written by the toggle's own
+ * script, so it is typed out in client code as well as here, and it carries
+ * nothing that a `__Host-`/`__Secure-` prefix would be protecting.
  */
 export const MASKING_COOKIE = "masked";
 
@@ -140,11 +140,13 @@ export function resolveMasked(policy: MaskingPolicy, cookie: string | undefined)
  *
  * **Not `HttpOnly`**, which is correct rather than merely convenient: this is a
  * display preference, not a credential, and the script that owns the toggle has
- * to be able to write it. Not `Secure` either, for the reason `auth.server.ts`
- * gives at length — the app serves plain HTTP behind a terminating proxy, and
- * only the browser's own connection settles that question. Nothing here is a
- * secret and nothing here grants anything; the session cookie is a separate
- * thing and stays `HttpOnly`.
+ * to be able to write it. **Not `Secure` either.** The app serves plain HTTP
+ * behind a terminating proxy, so the request's own scheme describes the last
+ * hop rather than the browser's connection; marking the cookie `Secure` on an
+ * instance genuinely reached over http would have the browser drop it, which
+ * looks exactly like a toggle that stops working on reload. Nothing here is a
+ * secret and nothing here grants anything — the app issues no credential of its
+ * own for this to be confused with.
  */
 export function maskingCookie(masked: boolean, policy: MaskingPolicy): string {
   const attributes = ["Path=/", "SameSite=Lax"];

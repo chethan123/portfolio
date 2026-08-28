@@ -52,11 +52,27 @@ const configSchema = z.object({
         "must be a Postgres connection URL, for example 'postgres://user:pass@db:5432/portfolio'",
     }),
 
-  /** Cookie signing key. Required only once the login gate is switched on. */
-  SESSION_SECRET: z.string().min(1).optional(),
-
-  /** Setting this enables the optional login gate (DESIGN.md §10). */
-  AUTH_PASSWORD: z.string().min(1).optional(),
+  /**
+   * Whether something in front of this instance authenticates the people who
+   * reach it. `external` says a gate does — the Compose stack's forward-auth
+   * sidecar (ADR-0005) — and `none` says nothing does.
+   *
+   * The app authenticates nobody either way, and this changes exactly one
+   * thing: whether the unprotected-instance banner is drawn. That is the whole
+   * reason the value exists. Behind the gate the banner is a lie, and a warning
+   * a family learns to scroll past is worse than no warning at all — so the app
+   * is told what fronts it rather than left to guess and cry wolf.
+   *
+   * It is therefore a *description of the deployment, not a switch*: setting it
+   * to `external` protects nothing, it only stops the app claiming otherwise.
+   *
+   * A union rather than a boolean, so that a third posture later is a value
+   * here rather than a redesign. `none` is the default because a checkout with
+   * nothing in front of it is what a developer has.
+   */
+  AUTH_GATE: z
+    .enum(["external", "none"], { error: "must be either 'external' or 'none'" })
+    .default("none"),
 
   PORT: integerFromString("a TCP port")
     .refine((value) => value >= 1 && value <= 65535, {
@@ -140,16 +156,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     throw new ConfigError(problems);
   }
 
-  const config = result.data;
-
-  // Cross-field rule: the login gate needs something to sign its cookie with.
-  if (config.AUTH_PASSWORD !== undefined && config.SESSION_SECRET === undefined) {
-    throw new ConfigError([
-      "SESSION_SECRET is required but not set (it becomes required as soon as AUTH_PASSWORD is set)",
-    ]);
-  }
-
-  return config;
+  return result.data;
 }
 
 let cached: Config | undefined;

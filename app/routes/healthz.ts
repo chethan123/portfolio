@@ -16,7 +16,9 @@ import { checkHealth } from "~/lib/db.server";
  * - It does not check the price provider. A health check that fails on a
  *   third-party outage would make Compose restart a perfectly healthy app.
  * - It never requires authentication, so monitoring needs no credentials. The
- *   optional login gate must exempt this path.
+ *   app enforces nothing either way; the gate in front is what has to exempt
+ *   this path, and its Caddyfile is now the only list of such exemptions
+ *   anywhere in the deployment.
  */
 export async function loader() {
   const health = await checkHealth();

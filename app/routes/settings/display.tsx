@@ -128,7 +128,7 @@ export default function Display({ loaderData, actionData }: Route.ComponentProps
             <p className="field-note">
               A browser nobody has answered for opens masked, including one whose policy is{" "}
               <em>as last left</em> — clearing cookies puts a browser back to that. Masking
-              hides the amounts from anyone reading over your shoulder. It is not a password
+              hides the amounts from anyone reading over your shoulder. It is not the gate
               and it keeps nobody out: whoever can open a masked screen can unmask it.
             </p>
 

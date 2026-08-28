@@ -1,20 +1,18 @@
 /**
- * The one loader that runs on every page render, including the login page.
+ * The one loader that runs on every page render.
  *
  * Its first-run read is a hint, not data, and `root.tsx` says so: a database
  * that is down must produce a page without a prompt rather than an error page.
  * That sentence is load-bearing and nothing enforces it. `firstRunStep()` is a
  * query like any other and will throw when Postgres is unreachable; propagated
  * from *this* loader it becomes an error boundary on the root route — which is
- * every route — so an instance whose database is down would refuse the login
- * page too. Someone would then be locked out of a running app by a container
- * that is merely restarting, with `/healthz` next door reporting the real
+ * every route — so an instance whose database is merely restarting would answer
+ * every screen with an error page, with `/healthz` next door reporting the real
  * cause to nobody. One `try` is the difference, and a `try` is the easiest
  * thing in a file to tidy away.
  *
  * The environment is configured before the import because `getConfig()`
- * memoises its first read — the same reason `root-gate.test.ts` does it, and
- * the same order the container uses.
+ * memoises its first read, which is the order the container uses too.
  */
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
@@ -49,7 +47,7 @@ describe("the shell's loader", () => {
       const data = await withDb(unreachable, () => loader(args(get("/"))));
 
       // Null, which the shell renders as "no prompt" — not a thrown Response,
-      // and not an error page over the login form.
+      // and not an error page over every screen in the application.
       expect(data.firstRun).toBeNull();
 
       // The masking read is down the same well and has the same duty, with one

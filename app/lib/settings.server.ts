@@ -9,7 +9,7 @@
  *
  * **Why a table rather than an environment variable.** Everything in
  * `.env.example` describes the deployment — where the database is, which
- * timezone a close is stamped in, whether the login gate is on — and changing
+ * timezone a close is stamped in, whether a gate fronts the app — and changing
  * one of those is a restart either way. A tax rate is not that: it is the
  * household's own number, it moves when their bracket or their state does, and
  * the person who wants it changed is the person reading the figure it produced.

@@ -24,7 +24,8 @@ import type { FirstRunStep } from "~/lib/first-run.server";
 
 /** What the root loader returns, which is what `Layout` reads. */
 export type RootData = {
-  authConfigured: boolean;
+  /** Whether a gate fronts the instance; false is what draws the warning. */
+  gated: boolean;
   firstRun: FirstRunStep;
   /**
    * Whether this browser's amounts are hidden (spec 0007). Optional here and

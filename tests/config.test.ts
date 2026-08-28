@@ -43,7 +43,10 @@ describe("configuration validation", () => {
     expect(config.MAX_UPLOAD_MB).toBe(10);
     expect(config.MARKET_TIMEZONE).toBe("America/New_York");
     expect(config.TZ).toBe("UTC");
-    expect(config.AUTH_PASSWORD).toBeUndefined();
+
+    // "Nothing is in front of me" is the honest default: it is what a checkout
+    // is, and it is the answer that leaves the warning banner showing.
+    expect(config.AUTH_GATE).toBe("none");
   });
 
   it("validates the market timezone and parses it rather than merely tolerating it", () => {
@@ -65,16 +68,21 @@ describe("configuration validation", () => {
     expect(() => loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "0" })).toThrow(/MAX_UPLOAD_MB/);
   });
 
-  it("requires a session secret once the login gate is switched on", () => {
-    expect(() => loadConfig({ ...MINIMAL, AUTH_PASSWORD: "hunter2" })).toThrow(/SESSION_SECRET/);
-    expect(() =>
-      loadConfig({ ...MINIMAL, AUTH_PASSWORD: "hunter2", SESSION_SECRET: "s3cr3t" }),
-    ).not.toThrow();
+  it("takes the two gate postures and refuses anything else by name", () => {
+    expect(loadConfig({ ...MINIMAL, AUTH_GATE: "external" }).AUTH_GATE).toBe("external");
+    expect(loadConfig({ ...MINIMAL, AUTH_GATE: "none" }).AUTH_GATE).toBe("none");
+
+    // A typo, and a plausible guess at a boolean. Both have to fail loudly:
+    // silently reading either as "a gate fronts me" would hide the warning on
+    // an instance with nothing in front of it, which is the one wrong answer
+    // this setting can give.
+    expect(() => loadConfig({ ...MINIMAL, AUTH_GATE: "externl" })).toThrow(/AUTH_GATE/);
+    expect(() => loadConfig({ ...MINIMAL, AUTH_GATE: "true" })).toThrow(/AUTH_GATE/);
   });
 
   it("treats an empty value as unset rather than as a configured empty string", () => {
     // An unsubstituted Compose variable or a bare `PORT=` in a .env file.
     expect(loadConfig({ ...MINIMAL, PORT: "" }).PORT).toBe(3000);
-    expect(loadConfig({ ...MINIMAL, AUTH_PASSWORD: "" }).AUTH_PASSWORD).toBeUndefined();
+    expect(loadConfig({ ...MINIMAL, AUTH_GATE: "" }).AUTH_GATE).toBe("none");
   });
 });
