@@ -65,13 +65,31 @@ dial, in whole minutes. Outside market hours no cadence spends anything, so the 
 refreshes rather than of the timer that drives them.
 _Avoid_: poll interval, polling frequency, update speed, refresh rate.
 
+### Who gets in
+
+**Gate**:
+The Google sign-in step enforced at the instance's front door, before any request reaches the app.
+The app authenticates no one: a request that arrives at all is a family member's.
+_Avoid_: login, log-in screen, SSO, auth wall, password gate.
+
+**Allowlist**:
+The list of family email addresses the gate admits. It is the whole of who may enter; there is no
+registration and no account to create.
+_Avoid_: user list, members, whitelist, accounts.
+
+**Authenticated email**:
+The verified address the gate attaches to each admitted request, naming which family member is
+acting. Attribution, never permission: it may say who did a thing, and it never decides what anyone
+may do — every family member sees and can do everything.
+_Avoid_: user, account, login, principal, role.
+
 ### What a screen shows in public
 
 **Masked**:
 The display state in which every amount on a screen is replaced by a fixed run of dots. An amount is
 any absolute figure — a value, a balance, a cost basis, a gain, a share quantity; a ratio is never
 masked, and neither is a name, a symbol or a date. It is a state of the display and nothing more:
-the login gate is the only thing that keeps anyone out.
+the gate is the only thing that keeps anyone out.
 _Avoid_: private, privacy mode, hidden, secure, locked, redacted.
 
 **Masking policy**:
