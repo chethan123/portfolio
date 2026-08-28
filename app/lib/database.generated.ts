@@ -132,6 +132,23 @@ export interface PriceDaily {
   instrument_id: Int8;
 }
 
+export interface PriceObservation {
+  as_of: Timestamp;
+  fetched_at: Timestamp;
+  instrument_id: Int8;
+  market_date: string;
+  payload: Json | null;
+  price: Numeric;
+}
+
+export interface PricePoll {
+  id: Generated<Int8>;
+  priced: number;
+  requested: number;
+  stale: number;
+  started_at: Timestamp;
+}
+
 export interface Quote {
   annual_dividend_per_share: Numeric | null;
   as_of: Timestamp;
@@ -170,6 +187,8 @@ export interface DB {
   person: Person;
   position_set: PositionSet;
   price_daily: PriceDaily;
+  price_observation: PriceObservation;
+  price_poll: PricePoll;
   quote: Quote;
   schema_migrations: SchemaMigrations;
   upload_draft: UploadDraft;

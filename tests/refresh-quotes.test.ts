@@ -9,6 +9,7 @@
  * DESIGN.md §6.1 mandates — CI never reaches the network, and every awkward
  * response a real provider could give can be stated in one line here.
  */
+import { sql } from "kysely";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { refreshQuotes, priceFreshness } from "~/lib/prices.server";
@@ -56,6 +57,9 @@ const quote = (overrides: Partial<ProviderQuote> & { symbol: string }): Provider
   yieldPct: null,
   annualDividendPerShare: null,
   asOf: new Date("2026-06-05T20:00:00Z"),
+  // A few seconds after the instant it says it struck — a fake knows what time
+  // it answered, which is why `fetchedAt` is required and `payload` is not.
+  fetchedAt: new Date("2026-06-05T20:00:05Z"),
   ...overrides,
 });
 
@@ -530,6 +534,302 @@ describe("how fresh the prices are", () => {
       // different facts, and only one of them is alarming.
       expect(freshness.oldest).toBeNull();
       expect(freshness.priced).toBe(0);
+    }),
+  );
+});
+
+describe("the observation log", () => {
+  it(
+    "writes one observation per provider instant, beside the quote and the close",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      await refreshQuotes(
+        fakeProvider([
+          quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T17:00:00Z") }),
+        ]),
+        NEW_YORK,
+        db,
+      );
+
+      const rows = await db
+        .selectFrom("price_observation")
+        .selectAll()
+        .where("instrument_id", "=", vti.id)
+        .execute();
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.price).toBe("271.5000");
+      expect(rows[0]?.as_of).toEqual(new Date("2026-06-05T17:00:00Z"));
+      expect(rows[0]?.fetched_at).toEqual(new Date("2026-06-05T20:00:05Z"));
+    }),
+  );
+
+  it(
+    "files the observation under the market date inside the instant, not under the day it arrived",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      // The same 21:30 New York evening NAV the daily close is filed by. An
+      // observation stamped with the UTC day would land the whole session on
+      // the wrong side of midnight, and 1D resolves its session off this
+      // column.
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
+        NEW_YORK,
+        db,
+      );
+
+      const rows = await db
+        .selectFrom("price_observation")
+        .select("market_date")
+        .where("instrument_id", "=", vti.id)
+        .execute();
+
+      expect(rows.map((row) => row.market_date)).toEqual(["2026-06-05"]);
+    }),
+  );
+
+  it(
+    "writes nothing for an instant it already holds, keeping the price it first recorded",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const asOf = new Date("2026-06-05T17:00:00Z");
+
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf })]), NEW_YORK, db);
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf })]), NEW_YORK, db);
+
+      const rows = await db
+        .selectFrom("price_observation")
+        .selectAll()
+        .where("instrument_id", "=", vti.id)
+        .execute();
+
+      // One instant, one row. The second price is the divergence ADR-0006
+      // accepts rather than reconciles: `quote` upserts to it and the log
+      // keeps the first.
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.price).toBe("270.0000");
+
+      const current = await db
+        .selectFrom("quote")
+        .select("price")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+
+      expect(current.price).toBe("271.5000");
+    }),
+  );
+
+  it(
+    "appends a second row when the provider states a new instant",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf: new Date("2026-06-05T17:00:00Z") })]),
+        NEW_YORK,
+        db,
+      );
+      await refreshQuotes(
+        fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T17:15:00Z") })]),
+        NEW_YORK,
+        db,
+      );
+
+      const rows = await db
+        .selectFrom("price_observation")
+        .select(["as_of", "price"])
+        .where("instrument_id", "=", vti.id)
+        .orderBy("as_of")
+        .execute();
+
+      expect(rows.map((row) => row.price)).toEqual(["270.0000", "271.5000"]);
+    }),
+  );
+
+  it(
+    "archives the provider's raw entry when it is offered, and stores null when it is not",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const withRaw = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const withoutRaw = await seedInstrument({ symbol: "BND", priceSource: "feed" });
+
+      await refreshQuotes(
+        fakeProvider([
+          quote({ symbol: "VTI", payload: { symbol: "VTI", regularMarketPrice: 271.5, marketState: "REGULAR" } }),
+          quote({ symbol: "BND" }),
+        ]),
+        NEW_YORK,
+        db,
+      );
+
+      const archived = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", withRaw.id)
+        .executeTakeFirstOrThrow();
+
+      // Round-tripped as jsonb, and read back only to assert it survived —
+      // ADR-0006 makes `price` the only column anything may compute from.
+      expect(archived.payload).toEqual({
+        symbol: "VTI",
+        regularMarketPrice: 271.5,
+        marketState: "REGULAR",
+      });
+
+      const bare = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", withoutRaw.id)
+        .executeTakeFirstOrThrow();
+
+      // A fake has no raw entry to hand over, and one absent is not one
+      // missing: the observation is still an observation.
+      expect(bare.payload).toBeNull();
+    }),
+  );
+
+  it(
+    "writes no observation for a provider that failed, though the price is kept and flagged",
+    withDatabase(async ({ db, seedInstrument, seedQuote }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedQuote({ instrument: vti, price: "271.5000", isStale: false });
+
+      await refreshQuotes(brokenProvider(), NEW_YORK, db);
+
+      // The absence is the truth about that instant. A carried-forward price is
+      // the current answer, not something the feed said.
+      const rows = await db.selectFrom("price_observation").selectAll().execute();
+      expect(rows).toEqual([]);
+
+      const stored = await db
+        .selectFrom("quote")
+        .select("is_stale")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+
+      expect(stored.is_stale).toBe(true);
+    }),
+  );
+
+  it(
+    "rolls back with the quote and the close when a later write in the same refresh fails",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const good = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedInstrument({ symbol: "BAD", priceSource: "feed" });
+
+      // A savepoint, because the refusal below aborts the transaction this test
+      // body runs in, and every assertion after it would then fail on that
+      // rather than on the rule. Rolling back to the savepoint recovers the
+      // transaction and leaves exactly the question worth asking: what survived?
+      await sql`savepoint before_refresh`.execute(db);
+
+      await expect(
+        refreshQuotes(
+          fakeProvider([
+            quote({ symbol: "VTI", price: "271.5000" }),
+            // Five integer digits into `quote.yield_pct`, which is
+            // numeric(10, 6) and holds four. Chosen because it is a column the
+            // *quote* tier has and the observation log does not: the batched
+            // observation insert runs first and succeeds, so both instruments'
+            // observations are on disk when this refusal lands. Anything the
+            // observation insert itself rejected would make the assertions below
+            // true for a refresh that never wrote an observation at all.
+            quote({ symbol: "BAD", yieldPct: "99999.000000" }),
+          ]),
+          NEW_YORK,
+          db,
+        ),
+      ).rejects.toThrow();
+
+      await sql`rollback to savepoint before_refresh`.execute(db);
+
+      // All three tiers, or none. Writing them in one transaction is what makes
+      // an observation without the quote it was written beside impossible.
+      expect(await db.selectFrom("price_observation").selectAll().execute()).toEqual([]);
+      expect(
+        await db.selectFrom("quote").select("instrument_id").where("instrument_id", "=", good.id).execute(),
+      ).toEqual([]);
+      expect(
+        await db.selectFrom("price_daily").select("instrument_id").where("instrument_id", "=", good.id).execute(),
+      ).toEqual([]);
+    }),
+  );
+});
+
+describe("the poll record", () => {
+  it(
+    "records the attempt with the report the refresh assembled",
+    withDatabase(async ({ db, seedInstrument, seedQuote }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const gone = await seedInstrument({ symbol: "GONE", priceSource: "feed" });
+      await seedQuote({ instrument: gone, price: "42.0000" });
+
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
+
+      const polls = await db.selectFrom("price_poll").selectAll().execute();
+
+      expect(polls).toHaveLength(1);
+      expect(polls[0]?.requested).toBe(2);
+      expect(polls[0]?.priced).toBe(1);
+      expect(polls[0]?.stale).toBe(1);
+    }),
+  );
+
+  it(
+    "records the attempt that found nothing to ask about, without asking",
+    withDatabase(async ({ db }) => {
+      const provider = fakeProvider([]);
+
+      const report = await refreshQuotes(provider, NEW_YORK, db);
+
+      // Nothing to price, so nothing is asked — but the attempt happened, and a
+      // log with no observations for an hour has to be able to say why.
+      expect(provider.asked).toEqual([]);
+      expect(report).toEqual({ requested: 0, priced: 0, stale: 0, closes: 0 });
+
+      const polls = await db.selectFrom("price_poll").selectAll().execute();
+      expect(polls).toHaveLength(1);
+      expect(polls[0]?.requested).toBe(0);
+    }),
+  );
+
+  it(
+    "records the attempt whose provider threw",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      await refreshQuotes(brokenProvider(), NEW_YORK, db);
+
+      const polls = await db.selectFrom("price_poll").selectAll().execute();
+
+      // The row that tells a failed provider apart from a quiet market: one
+      // instrument asked about, none priced, one stale.
+      expect(polls).toHaveLength(1);
+      expect(polls[0]?.requested).toBe(1);
+      expect(polls[0]?.priced).toBe(0);
+      expect(polls[0]?.stale).toBe(1);
+    }),
+  );
+
+  it(
+    "writes one row per attempt, so two quiet refreshes are two rows",
+    withDatabase(async ({ db, seedInstrument, seedPoll }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const asOf = new Date("2026-06-05T17:00:00Z");
+
+      // An attempt from before this test's two, so that "appends" is what is
+      // being read rather than "wrote exactly two".
+      await seedPoll({ startedAt: new Date("2026-06-05T16:45:00Z") });
+
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, db);
+      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, db);
+
+      // Dedup means the second refresh wrote no observation at all. Three polls
+      // and one observation is exactly the shape that makes the log's silences
+      // readable.
+      expect(await db.selectFrom("price_poll").selectAll().execute()).toHaveLength(3);
+      expect(await db.selectFrom("price_observation").selectAll().execute()).toHaveLength(1);
     }),
   );
 });

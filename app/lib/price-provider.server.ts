@@ -47,9 +47,32 @@ export type ProviderQuote = {
    * rather than a string (§4.1 leaves `timestamptz` alone).
    *
    * Load-bearing beyond the audit trail: it decides which `price_daily` row
-   * this quote becomes. See `marketDateOf` in `market-hours.ts`.
+   * this quote becomes, and which `price_observation` row — one per instrument
+   * per instant, which is what makes an unchanged quote write nothing. See
+   * `marketDateOf` in `market-hours.ts` and ADR-0006.
    */
   asOf: Date;
+  /**
+   * When we learned this price, as distinct from when it was struck.
+   *
+   * Required, unlike `payload`, because it is a fact about *us*: every
+   * implementation and every test fake knows what time it asked, so none of
+   * them has an excuse to omit it. It is archived beside the observation and
+   * computed from by nothing.
+   */
+  fetchedAt: Date;
+  /**
+   * The provider's raw entry for this symbol, kept opaque.
+   *
+   * Optional because it is a fact about the *provider*: a fake has no raw entry
+   * to hand over, and one absent is not one missing. Present only when the
+   * typed parse above it succeeded, so a shape change stays a refusal rather
+   * than becoming a stored surprise.
+   *
+   * `unknown` on purpose. ADR-0006: the payload is an archive, never an
+   * operand — nothing may compute from it, so nothing may need its type.
+   */
+  payload?: unknown;
 };
 
 /**
@@ -312,6 +335,13 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
     yieldPct,
     annualDividendPerShare,
     asOf: instantOf(quote.regularMarketTime, fetchedAt),
+    fetchedAt,
+
+    // The entry as it arrived, not the parsed narrowing of it: `parsed.data` is
+    // the eight fields this module reads, and the point of the archive is
+    // everything it does not. Attached here, past every refusal above, so a
+    // payload is only ever stored for a quote that parsed — ADR-0006.
+    payload: raw,
   };
 }
 

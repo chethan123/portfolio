@@ -135,6 +135,43 @@ export type Fixtures = {
   }): Promise<void>;
 
   /**
+   * One row of the observation log (ADR-0006) — a price the feed reported for
+   * one instrument at one instant.
+   *
+   * `marketDate` defaults to the calendar day inside `asOf`, which is what the
+   * refresh stamps for a market in UTC and what a test wanting the ordinary
+   * case means. A test about the instant-to-day rule itself — an evening NAV
+   * belonging to the previous session — states it.
+   *
+   * Append-only in production; upserting here for the same reason `seedQuote`
+   * does, so a test may re-price an instant it has already seeded.
+   */
+  seedObservation(options: {
+    instrument: SeededInstrument;
+    /** The provider's own instant. Half of the primary key. */
+    asOf: Date | string;
+    /** Decimal string. The only column anything may compute from. */
+    price: string;
+    /** `YYYY-MM-DD`. Defaults to the UTC day inside `asOf`. */
+    marketDate?: string;
+    /** When we learned it. Defaults to `asOf`. */
+    fetchedAt?: Date | string;
+    /** The provider's raw entry. Absent unless a test is about the archive. */
+    payload?: unknown;
+  }): Promise<void>;
+
+  /**
+   * One recorded refresh attempt (ADR-0006) — what tells a quiet market apart
+   * from a server that was not running.
+   */
+  seedPoll(options: {
+    startedAt: Date | string;
+    requested?: number;
+    priced?: number;
+    stale?: number;
+  }): Promise<void>;
+
+  /**
    * A hand-typed point on the pre-day-zero net worth series (DESIGN.md §7).
    *
    * Has no position set behind it and never gets one: the whole point of the
@@ -347,6 +384,50 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .execute();
   };
 
+  const seedObservation: Fixtures["seedObservation"] = async ({
+    instrument,
+    asOf,
+    price,
+    marketDate,
+    fetchedAt,
+    payload,
+  }) => {
+    const instant = typeof asOf === "string" ? new Date(asOf) : asOf;
+
+    const values = {
+      instrument_id: instrument.id,
+      as_of: instant,
+      // The UTC day inside the instant, which is `marketDateOf` for a market in
+      // UTC. Spelled out rather than borrowed from `market-hours.ts` so that a
+      // test seeding a session cannot be quietly re-dated by a change to the
+      // rule it is not testing.
+      market_date: marketDate ?? instant.toISOString().slice(0, 10),
+      price,
+      fetched_at: fetchedAt ?? instant,
+      payload: payload === undefined ? null : JSON.stringify(payload),
+    };
+
+    await db
+      .insertInto("price_observation")
+      .values(values)
+      .onConflict((conflict) =>
+        conflict.columns(["instrument_id", "as_of"]).doUpdateSet(values),
+      )
+      .execute();
+  };
+
+  const seedPoll: Fixtures["seedPoll"] = async ({
+    startedAt,
+    requested = 1,
+    priced = 1,
+    stale = 0,
+  }) => {
+    await db
+      .insertInto("price_poll")
+      .values({ started_at: startedAt, requested, priced, stale })
+      .execute();
+  };
+
   const seedManualNetWorth: Fixtures["seedManualNetWorth"] = async ({ date, amount }) => {
     const values = { date, amount };
 
@@ -380,6 +461,8 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedUploadDraft,
     seedQuote,
     seedDailyClose,
+    seedObservation,
+    seedPoll,
     seedManualNetWorth,
     usdInstrument,
   };
