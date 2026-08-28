@@ -36,6 +36,7 @@
  * *reports* on them — every total this script prints — is done in SQL, in
  * `numeric`, by the same view the application reads.
  */
+import { isMarketOpen, marketDateOf } from "../app/lib/market-hours.ts";
 import { ConfigError, loadConfig } from "../server/config.ts";
 import { createPool } from "../server/db.ts";
 import { pendingMigrations } from "../server/migrations.ts";
@@ -396,6 +397,23 @@ const STATEMENT_LAG_DAYS = 4;
 /** Closes start before day zero, so an as-of query on it has a price to find. */
 const PRICE_LEAD_DAYS = 45;
 
+/**
+ * The cadence the demo household is pretending to have run at, in minutes.
+ *
+ * The seeded default (`app_setting.refresh_cadence_minutes`), so the 1D line the
+ * screenshots show has the granularity a fresh instance actually produces.
+ */
+const SESSION_CADENCE_MINUTES = 15;
+
+/**
+ * How long ago the one deliberately stale instrument last answered.
+ *
+ * Read by three places that have to agree: its quote's `as_of`, its quote's
+ * price, and where its daily spine stops. A stale instrument whose spine ran to
+ * today would put a close on the board that no refresh could have written.
+ */
+const STALE_QUOTE_DAYS = 3;
+
 const isoOf = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
 const msOf = (date: IsoDate): number => Date.parse(`${date}T00:00:00Z`);
 const endOfMonth = (year: number, month: number): IsoDate => isoOf(Date.UTC(year, month + 1, 0));
@@ -470,6 +488,69 @@ function buildCalendar(now: Date): Calendar {
   };
 }
 
+/**
+ * The instants a session was observed at, latest trading day first found.
+ *
+ * Walked backwards from the last priced date rather than assumed, because
+ * `priceDates` is every weekday and a weekday can be a market holiday — on
+ * which `isMarketOpen` refuses every instant of the day and the session simply
+ * is not that one. Built through `isMarketOpen` rather than by adding hours to
+ * midnight for the reason `market-hours.ts` exists: New York is UTC-4 in August
+ * and UTC-5 in December, so a fixed offset would seed a December session that
+ * opens at 08:30 local.
+ *
+ * The close is appended by hand, because `isMarketOpen` is a half-open window —
+ * 16:00 is not "open" and is exactly the instant a day's last price is struck.
+ */
+function findSession(
+  priceDates: readonly IsoDate[],
+  timeZone: string,
+): { date: IsoDate; instants: Date[] } | null {
+  const step = SESSION_CADENCE_MINUTES * 60 * 1000;
+
+  for (let index = priceDates.length - 1; index >= 0; index--) {
+    const date = at(priceDates, index);
+    const instants: Date[] = [];
+
+    for (let ms = msOf(date); ms < msOf(date) + DAY_MS; ms += step) {
+      const instant = new Date(ms);
+      if (isMarketOpen(instant, timeZone) && marketDateOf(instant, timeZone) === date) {
+        instants.push(instant);
+      }
+    }
+
+    if (instants.length > 0) {
+      instants.push(new Date(at(instants, instants.length - 1).getTime() + step));
+      return { date, instants };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * One instrument's prices across a session, ending exactly on its close.
+ *
+ * Walked from the previous close to the session's own, with the same seeded
+ * noise the daily series uses, so the line has a shape rather than a slope. The
+ * last value is the close itself and not an interpolation of it: the refresh
+ * writes the observation and the quote in one transaction, so the last point of
+ * the 1D line and the headline above it are the same figure (issue #94, story
+ * 8), and a demo household that missed by a cent would be a picture of a bug.
+ */
+function walkSession(from: number, to: number, instants: number, gauss: () => number): number[] {
+  const prices: number[] = [];
+
+  for (let index = 0; index < instants - 1; index++) {
+    const progress = (index + 1) / instants;
+    const drift = from + (to - from) * progress;
+    prices.push(round(drift * (1 + gauss() * 0.0009), 4));
+  }
+
+  prices.push(round(to, 4));
+  return prices;
+}
+
 /** mulberry32. Seeded, so two runs of this script produce the same portfolio. */
 function makeRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -486,6 +567,15 @@ function makeGaussian(random: () => number): () => number {
 }
 
 const SEED = 20260318;
+
+/**
+ * A second seed, for the session walk alone.
+ *
+ * Distinct from {@link SEED} so the two draw orders cannot interfere: the
+ * portfolio's three years of closes and quantities must not move because the
+ * intra-session line was retuned.
+ */
+const SESSION_SEED = 20260828;
 const MARKET_DRIFT = 0.2;
 const MARKET_VOL = 0.0068;
 
@@ -670,7 +760,9 @@ const PRISTINE_PROBE = `
     (select count(*) from price_daily pd join instrument i on i.id = pd.instrument_id
        where i.symbol is distinct from 'USD')                                  as "daily closes",
     (select count(*) from quote q join instrument i on i.id = q.instrument_id
-       where i.symbol is distinct from 'USD')                                  as quotes
+       where i.symbol is distinct from 'USD')                                  as quotes,
+    (select count(*) from price_observation)                                   as observations,
+    (select count(*) from price_poll)                                          as polls
 `;
 
 class RefusedError extends Error {
@@ -721,6 +813,8 @@ const WIPE = [
   `delete from instrument_alias`,
   `delete from quote where instrument_id <> (select id from instrument where symbol = 'USD')`,
   `delete from price_daily where instrument_id <> (select id from instrument where symbol = 'USD')`,
+  `delete from price_observation`,
+  `delete from price_poll`,
   `delete from instrument where symbol is distinct from 'USD'`,
   `delete from classification where name <> 'Cash'`,
   `delete from manual_networth`,
@@ -776,9 +870,19 @@ function redact(url: string): string {
 
 type Written = { table: string; rows: number };
 
-async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> {
+async function seed(
+  client: PoolClient,
+  calendar: Calendar,
+  timeZone: string,
+): Promise<Written[]> {
   const random = makeRandom(SEED);
   const prices = buildPrices(calendar, makeGaussian(random));
+  // Its own stream, not a share of the one above. Drawing the session walk from
+  // `random` would spend a few hundred draws before `buildQuantities` reaches
+  // it, silently re-rolling every bank balance in the demo — and would do it
+  // again on any future tweak to the walk. Two streams, and each one's output
+  // depends only on its own consumer.
+  const sessionGauss = makeGaussian(makeRandom(SESSION_SEED));
   const written: Written[] = [];
 
   const people = new Map<string, string>();
@@ -866,10 +970,24 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
   const closeIds: string[] = [];
   const closeDates: IsoDate[] = [];
   const closeValues: string[] = [];
+  const staleKeys = new Set(
+    INSTRUMENTS.filter((instrument) => instrument.stale === true).map(
+      (instrument) => instrument.key,
+    ),
+  );
+  // The last day a stale instrument's fetch succeeded. One refresh writes the
+  // quote and the close together, so an instrument whose quote is three days old
+  // cannot have a close from this morning: it would be a spine row written by a
+  // refresh that, by the quote beside it, never happened. Trimming the tail is
+  // what makes "stale" mean the same thing in every tier — including the
+  // observation log, where the same instrument records nothing (ADR-0006).
+  const staleThrough = isoOf(Date.now() - STALE_QUOTE_DAYS * DAY_MS);
+
   for (const [key, series] of prices) {
     const id = byKey.get(key);
     if (id === undefined) continue;
     for (const point of series) {
+      if (staleKeys.has(key) && point.date > staleThrough) continue;
       closeIds.push(id);
       closeDates.push(point.date);
       closeValues.push(point.close.toFixed(4));
@@ -901,7 +1019,14 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
     const series = prices.get(instrument.key);
     const id = byKey.get(instrument.key);
     if (series === undefined || id === undefined) continue;
-    const close = at(series, series.length - 1).close;
+    // The last price this instrument actually answered with: today's for
+    // everything that refreshed, and the one from before it went stale for the
+    // one that did not. §6.2's "the last known price is kept and used".
+    const answered =
+      instrument.stale === true
+        ? (series.findLast((point) => point.date <= staleThrough) ?? at(series, series.length - 1))
+        : at(series, series.length - 1);
+    const close = answered.close;
     const percent = instrument.yieldPct;
     quoteIds.push(id);
     quotePrices.push(close.toFixed(4));
@@ -909,7 +1034,9 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
     // Derived from the price rather than typed beside it, so the two agree.
     quoteDividends.push(percent === undefined ? null : ((close * Number(percent)) / 100).toFixed(4));
     // A stale quote is one that failed to refresh: the price is old, and used.
-    quoteAsOf.push(new Date(nowMs - (instrument.stale === true ? 3 * DAY_MS : 12 * 60 * 1000)));
+    quoteAsOf.push(
+      new Date(nowMs - (instrument.stale === true ? STALE_QUOTE_DAYS * DAY_MS : 12 * 60 * 1000)),
+    );
     quoteStale.push(instrument.stale === true);
   }
   await client.query(
@@ -919,6 +1046,84 @@ async function seed(client: PoolClient, calendar: Calendar): Promise<Written[]> 
     [quoteIds, quotePrices, quoteYields, quoteDividends, quoteAsOf, quoteStale],
   );
   written.push({ table: "quote", rows: quoteIds.length });
+
+  /* the observation log and the poll record (ADR-0006) — one session of them */
+  const session = findSession(calendar.priceDates, timeZone);
+
+  if (session !== null) {
+    const observationIds: string[] = [];
+    const observationAsOf: Date[] = [];
+    const observationPrices: string[] = [];
+    const observationFetched: Date[] = [];
+
+    for (const instrument of INSTRUMENTS) {
+      const series = prices.get(instrument.key);
+      const id = byKey.get(instrument.key);
+      if (series === undefined || id === undefined) continue;
+
+      // The one instrument left stale never came back today, so it observed
+      // nothing — which is what makes the demo household show the carry-forward
+      // an unobserved holding is priced through.
+      if (instrument.stale === true) continue;
+
+      const close = at(series, series.length - 1).close;
+      const previous = at(series, Math.max(0, series.length - 2)).close;
+
+      // A mutual fund strikes one NAV after the close and is not quoted again
+      // until the next one (DESIGN.md §6.2). ADR-0006 accepts that a
+      // workplace-plan-heavy household therefore sees a largely flat 1D line,
+      // and the demo data is the honest picture of it rather than a prettier
+      // one.
+      const instants =
+        instrument.quoteType === "MUTUALFUND"
+          ? [at(session.instants, session.instants.length - 1)]
+          : session.instants;
+
+      const walk = walkSession(previous, close, instants.length, sessionGauss);
+
+      for (const [index, instant] of instants.entries()) {
+        observationIds.push(id);
+        observationAsOf.push(instant);
+        observationPrices.push(at(walk, index).toFixed(4));
+        // A few seconds after the instant, because a poll learns a price after
+        // it was struck. Distinct columns because they are distinct facts.
+        observationFetched.push(new Date(instant.getTime() + 4000));
+      }
+    }
+
+    await client.query(
+      `insert into price_observation (instrument_id, as_of, market_date, price, fetched_at)
+       select instrument_id, as_of, $5::date, price, fetched_at
+       from unnest($1::bigint[], $2::timestamptz[], $3::numeric[], $4::timestamptz[])
+         as t (instrument_id, as_of, price, fetched_at)`,
+      [observationIds, observationAsOf, observationPrices, observationFetched, session.date],
+    );
+    written.push({ table: "price_observation", rows: observationIds.length });
+
+    // No payloads: this script has no provider response to archive, and an
+    // invented one would be the one thing in the demo database that is not a
+    // real shape (ADR-0006 makes it nullable for exactly this).
+    //
+    // Both counts are over the *feed* instruments, which are the only ones a
+    // refresh asks about. Counting `priced` over the price map instead would
+    // include the fixed-price money market fund the feed is never asked for,
+    // and the two errors would cancel into `stale: 0` — a poll row asserting
+    // every request succeeded, filed beside a log with no observation for the
+    // instrument the Prices screen shows as stale. The one table whose whole
+    // job is making a silence interpretable is the last one that may lie.
+    const feed = INSTRUMENTS.filter((instrument) => instrument.priceSource === "feed");
+    const requested = feed.length;
+    const priced = feed.filter(
+      (instrument) => prices.has(instrument.key) && instrument.stale !== true,
+    ).length;
+
+    await client.query(
+      `insert into price_poll (started_at, requested, priced, stale)
+       select unnest($1::timestamptz[]), $2, $3, $4`,
+      [session.instants, requested, priced, requested - priced],
+    );
+    written.push({ table: "price_poll", rows: session.instants.length });
+  }
 
   const accounts = new Map<string, string>();
   for (const row of await all<{ id: string; name: string }>(
@@ -1137,7 +1342,7 @@ async function report(client: PoolClient, written: Written[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { DATABASE_URL } = loadConfig(process.env);
+  const { DATABASE_URL, MARKET_TIMEZONE } = loadConfig(process.env);
 
   let pending: string[];
   try {
@@ -1202,7 +1407,7 @@ async function main(): Promise<void> {
        'disposable demo instance whose contents that script may overwrite.'`,
     );
 
-    const written = await seed(client, buildCalendar(new Date()));
+    const written = await seed(client, buildCalendar(new Date()), MARKET_TIMEZONE);
     await report(client, written);
 
     await client.query("commit");

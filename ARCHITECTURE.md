@@ -321,7 +321,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:62` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:358` | The provider swap stops being a day's work. The interface is also the test seam. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:388` | The provider swap stops being a day's work. The interface is also the test seam. |
 | Writing a price | `app/lib/prices.server.ts` | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
 
 **Owned by a module, upheld by its callers.**
@@ -329,7 +329,7 @@ grep. They come in three tiers.
 | Invariant | The owner | The obligation |
 |---|---|---|
 | Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Three callers pass `process.env` in — `validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` — and none of them reads a variable itself. |
-| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:50`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
+| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off an account's kind | `app/lib/account-options.ts` | The kinds, their labels, and the two predicates derived from them — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints or from each other. The obligation is that it stays plain data: the client bundle imports it, so a rule needing a query cannot live here. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 
@@ -342,7 +342,7 @@ grep. They come in three tiers.
 
 **The two valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:357` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
+- `prices.server.ts:520` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
   to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `uploads.server.ts:620` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
@@ -350,6 +350,14 @@ grep. They come in three tiers.
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
   the view, and it is worth watching.
+- `valuation.server.ts:697` (`readSessionSeries`) values holdings from `price_observation` rather
+  than through `holding_valued` — the 1D chart's line, and the only valuation anywhere that reads the
+  observation log. Not an escape from the invariant but an extension of it: the same module owns
+  both, so the rule stays "one module values holdings" rather than becoming "one view does". It
+  hand-writes the join to `holding` that §11.1 warns about, because no view can express "priced at
+  an instant", and it earns that by living beside the readers it must agree with — the last point of
+  its line and `netWorth()` are the same figure by construction (ADR-0006). A screen writing its own
+  join over `price_observation` has left the mitigation exactly as one over `holding` has.
 
 ### 4.3 The `.server` convention
 
@@ -499,6 +507,7 @@ erDiagram
     INSTRUMENT ||--o{ INSTRUMENT_ALIAS : "is known by"
     INSTRUMENT ||--o| QUOTE : "priced now"
     INSTRUMENT ||--o{ PRICE_DAILY : "priced historically"
+    INSTRUMENT ||--o{ PRICE_OBSERVATION : "was quoted at"
     CLASSIFICATION ||--o{ INSTRUMENT : "labels"
 
     PERSON {
@@ -561,6 +570,14 @@ erDiagram
         date date PK
         numeric close "numeric(20,4)"
     }
+    PRICE_OBSERVATION {
+        bigint instrument_id PK "composite with as_of"
+        timestamptz as_of PK "the provider's own instant, never the poll time"
+        date market_date "the trading day as_of belongs to, stamped at write time"
+        numeric price "numeric(20,4) — the only column any query may compute from"
+        timestamptz fetched_at "when we learned it"
+        jsonb payload "nullable — the raw entry, an archive and never an operand"
+    }
     UPLOAD_DRAFT {
         bigint id PK
         bigint account_id FK "on delete cascade"
@@ -573,13 +590,14 @@ erDiagram
     }
 ```
 
-Four tables stand outside the graph because they reference nothing:
+These tables stand outside the graph because they reference nothing:
 
 | Table | Shape | Purpose |
 |---|---|---|
 | `manual_networth` | `date` PK, `amount numeric(20,4)` | Hand-typed points covering the period before the app existed. Computed values always win on overlapping dates. |
 | `column_mapping` | `id bigint PK`, unique `(institution, header_fingerprint)`, `mapping jsonb` | How a brokerage's export format is remembered once and applied to every later file. |
 | `app_setting` | `id boolean PK check (id)`, `capital_gains_rate numeric(9,6) default 23.8 check (0–100)`, `masking_policy text default 'masked' check (masked / unmasked / as_last_left)`, `refresh_cadence_minutes integer default 15 check (1–1440)` | Singleton, enforced by the schema. A second row is a constraint violation, not a silent ambiguity. |
+| `price_poll` | `id bigint PK`, `started_at timestamptz`, `requested`/`priced`/`stale integer` | One refresh attempt, recorded whether or not any observation resulted. Deliberately references no instrument: it describes the attempt, not a price. |
 | `schema_migrations` | `filename` PK, `applied_at` | The migration ledger. Created by the runner, since it must exist before anything else. |
 
 ### 5.3 What deletion does — the history policy, read off the FKs
@@ -595,7 +613,7 @@ split is exact and each side is a decision:
 | `instrument.classification_id` → `classification` | `RESTRICT` | Not-null, so a row would be orphaned. |
 | `holding.position_set_id` → `position_set` | `CASCADE` | Holdings have no meaning apart from their set. |
 | `instrument_alias.instrument_id` → `instrument` | `CASCADE` | An alias is vocabulary about a row that no longer exists. |
-| `quote` / `price_daily` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. |
+| `quote` / `price_daily` / `price_observation` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. The observation log is append-only and never pruned, but it is not history in the sense a position set is: it describes an instrument, and an instrument that never existed was never quoted. |
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
 
 **Only two of those deletes are reachable from the application at all:** a person who owns no
@@ -694,6 +712,8 @@ anywhere.
 | `upload_draft_created_at_idx` | `(created_at)` | The 24-hour draft sweep. |
 | `column_mapping_one_per_fingerprint` | unique `(institution, header_fingerprint)` | One saved mapping per exact header, per institution. |
 | `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at` — an index scan stopping at the first row, executed once per holding per plotted date. |
+| `price_observation_pkey` | `(instrument_id, as_of)` | Two jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. And it is matched exactly by the 1D reader's "latest observation at or before this instant" lateral, once per holding per plotted instant. |
+| `price_observation_market_date_idx` | `(market_date, as_of)` | Session resolution, both halves: `max(market_date)` finds the most recent session observed at all (a backward index scan stopping at row one), and the leading-column range scan then walks that session's distinct instants in order. |
 
 ### 5.6 The numeric boundary
 
@@ -745,7 +765,7 @@ Three rules follow, and the codebase holds all three:
   two deliberate exceptions, and both are narrow enough to state: `format.ts:203` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
   and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
-  and `price-provider.server.ts:151` floats a yield or a per-share dividend rate only to decide
+  and `price-provider.server.ts:172` floats a yield or a per-share dividend rate only to decide
   whether the column it is bound for can hold it, returning the original string when it fits and
   null when it does not.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
@@ -760,7 +780,7 @@ The generated types carry the **read** half of this: `npm run db:types` runs `ky
   is a string, but an insert or update still *accepts* a JavaScript number. On the write path the
   rule is a convention, not a compile-time guarantee.
 - Postgres reports every column of a view as nullable regardless of the underlying column, so
-  `holding_valued` comes out entirely `| null`. That is why `valuation.server.ts:111-123` exists: a
+  `holding_valued` comes out entirely `| null`. That is why `valuation.server.ts:117-128` exists: a
   `required()` narrower that throws, wrapped around fourteen columns in `toValuedHolding`. The view is
   typed *from* a table, not typed *like* one.
 
@@ -1013,7 +1033,7 @@ itself on the first upload, and every later statement is checked against it.
 holdings nobody read about. `UploadDiff.removed` carries every removed position individually, and a
 majority removal demands an explicit tick.
 
-### 6.2 Pricing — quotes into two tiers
+### 6.2 Pricing — quotes into three tiers
 
 ```mermaid
 sequenceDiagram
@@ -1023,6 +1043,7 @@ sequenceDiagram
     participant P as PriceProvider
     participant Q as quote table
     participant D as price_daily
+    participant O as price_observation
 
     T->>T: state.running?
     Note right of T: In-process serialisation. An overlapping<br/>tick is DROPPED, never queued.
@@ -1040,25 +1061,47 @@ sequenceDiagram
     end
     P-->>T: ProviderQuote[] — every number a decimal STRING
     T->>PG: BEGIN
+    T->>O: ONE batched insert, on conflict (instrument, as_of) DO NOTHING
+    Note right of O: The log first, then the tiers derived from it.<br/>An unchanged instant writes nothing at all.
     loop each returned quote
         T->>Q: upsert price, yield, dividend, as_of, is_stale := false
         T->>PG: update instrument.quote_type (only when the provider said something)
         T->>D: upsert close AT marketDateOf(quote.asOf, tz)
     end
     T->>Q: is_stale := true for everything that did not come back
+    T->>PG: insert price_poll — the attempt, whatever came of it
     T->>PG: COMMIT
 ```
 
-A refresh writes three tables, not two: the two tiers below, plus `instrument.quote_type` when the
-provider names one, which is what keeps the Analysis screen's stocks-versus-funds split correct for
-instruments created before that column was filled in.
+A refresh writes five tables: the three tiers below, plus `price_poll` and `instrument.quote_type`
+when the provider names one — the latter is what keeps the Analysis screen's stocks-versus-funds
+split correct for instruments created before that column was filled in.
 
-**The two tiers, and why the split exists:**
+**The three tiers, and why the split exists** (ADR-0006 fixes the vocabulary: an observation is not
+history and a quote is not a fact):
 
 | Table | Cardinality | Lifecycle | Read by |
 |---|---|---|---|
+| `price_observation` | one row per instrument per provider instant | append-only, deduped, never pruned | `netWorthSessionSeries` / `accountSessionSeries` — the 1D line, and nothing else |
 | `quote` | one row per instrument | overwritten in place | `holding_valued` — today's figures |
 | `price_daily` | **at most** one row per instrument per trading day | the immutable spine | `holding_valued_at(d)` — every historical figure |
+
+`quote` is deliberately **not** a projection of the log and is not derivable from it: the seeded
+`USD` row that prices every bank balance and liability will never generate an observation, and
+`is_stale` asserts the *absence* of one — something an append-only log cannot represent.
+
+The whole write is one transaction, so a committed fetch is recorded in all of them or in none. The
+one thing that does not follow from it: a refresh whose writes fail leaves no `price_poll` row
+either, so the table separates a quiet market from a server that was not running, but not from a
+refresh that ran and could not commit.
+
+**`price_observation.payload` is an archive, never an operand.** The provider's raw entry is kept on
+the same precedent that keeps every uploaded CSV in `position_set.raw_file` — an audit artifact that
+may later be re-read, never computed from. `price` is the only column in that table any query may
+compute from; a figure needed for arithmetic is promoted to a typed `numeric` column in its own
+migration, because summing out of `payload` is precisely the §5.6 violation the numeric boundary
+exists to prevent. The honest rationale for keeping it is option value, and no consuming feature
+exists or is planned — a future reader should not go hunting for one.
 
 **The single most important line in the pricing subsystem** is which date a close is filed under: *the
 date inside the quote's own timestamp, in the market's zone — never today's date.* Two silent failures
@@ -1127,10 +1170,10 @@ would make Compose restart a perfectly healthy app.
 
 ### 6.3 Read path — dashboards
 
-Every screen that shows money reads through `valuation.server.ts`. It exports thirteen reads. Seven
-of them go through the `ValuedSource` seam — `readHoldings`, `readTotal` and `readSeries`, written
-once and pointed at either source; the other six are their own queries inside the same module, which is
-the point: they are in the module, not scattered across routes.
+Every screen that shows money reads through `valuation.server.ts`. Seven of its reads go through
+the `ValuedSource` seam — `readHoldings`, `readTotal` and `readSeries`, written once and pointed at
+either source; the rest are their own queries inside the same module, which is the point: they are
+in the module, not scattered across routes.
 
 ```ts
 currentHoldings()              // every holding held right now, valued
@@ -1139,21 +1182,38 @@ holdingsAt('2026-02-14')       // the same, for any past date
 netWorthAt('2026-02-14')
 accountTotals() / accountTotal(id) / accountHoldings(id)
 netWorthSeries(dates) / accountSeries(id, dates)
+latestObservedSession()        // which session 1D plots, off the observation log
+netWorthSessionSeries(session) / accountSessionSeries(id, session)
 manualNetWorth() / netWorthChange() / firstRecordedDate() / accountFirstRecordedDate(id)
 ```
 
 The seam is `ValuedSource` — `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
-type, so a read built on it works for both. `accountTotals`, `accountTotal`, `netWorthChange`,
-`manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` sit beside it rather than on
-it: the first three hand-write aggregates the seam cannot express, and the last three deliberately
-read elsewhere — `manual_networth` for the pre-app series, and `position_set` for "when does
-history start", which must not depend on anything being priced.
+type, so a read built on it works for both. The reads that sit beside it rather than on it fall
+into three groups. `accountTotals`, `accountTotal` and `netWorthChange` hand-write aggregates the seam cannot
+express. `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` deliberately read
+elsewhere — `manual_networth` for the pre-app series, and `position_set` for "when does history
+start", which must not depend on anything being priced. And `latestObservedSession`,
+`netWorthSessionSeries` and `accountSessionSeries` read the observation log, which the seam cannot
+reach at all: `ValuedSource`'s two adapters both price per *date*, and a session is priced per
+instant.
 
-`netWorthSeries` deserves one note, because it is the only read whose SQL *shape* is load-bearing for
+`netWorthSeries` deserves one note, because its SQL *shape* is load-bearing for
 correctness rather than for speed: the dates are joined laterally against `holding_valued_at(d.date)`
 with the narrowing pushed **inside** the lateral. A `WHERE` in the outer query would be evaluated
 after the join and would reject the all-null row a `LEFT JOIN` manufactures for an uncovered date,
 taking the uncovered date down with it. See §10.
+
+**The three intra-session reads are the module's second front** (ADR-0006). `latestObservedSession`
+resolves which trading session 1D plots — `max(price_observation.market_date)`, so the session comes
+from what was observed rather than from a calendar, and the UTC-today versus market-day seam never
+decides what is drawn. `netWorthSessionSeries` and `accountSessionSeries` then value the positions
+held *now* at each of that session's distinct instants, taking each instrument's latest observation
+at or before the instant and falling back to the last close from **strictly before** the session.
+That strictness is the load-bearing word: the session's own `price_daily` row is provisional and
+converges on the last observation of the day, so including it would price the open at the price of
+the close. Their query is inline here for the same reason `readSeries`'s is, and deliberately did
+*not* become a migration-defined object: a third one would be bound by ADR-0001's row-type contract
+for no gain. They mirror `readSeries`'s lateral shape, narrowing and all, and for the same reason.
 
 ```
    Screen                Reads                            Shape it groups by
@@ -1641,16 +1701,28 @@ three years of statements — is the largest dataset anything here has actually 
 | `holding_valued` is **not** materialised | The data changes on upload and the row count is in the hundreds. A refresh step whose omission shows up as silently stale totals costs more than the scan | Tens of thousands of holdings, or a read-heavy multi-tenant load |
 | Filtering and grouping in JavaScript over the full array | Seven dimensions over a few hundred rows; agreement between a row and its subtotal is structural | A table that cannot be sent to the browser whole |
 | One batched provider call per refresh cadence (seeded 15 minutes) | ~100 symbols; the endpoint is unofficial and a queue of pending fetches is how an instance gets rate-limited | Thousands of symbols, or a real-time requirement |
+| Every distinct quote retained forever, payload and all | The owner would rather spend the disk than discard data whose future use is unknown (ADR-0006). At ~100 feed instruments and the seeded cadence it is roughly half a gigabyte a year, stated at Settings → Prices where the dial is | A faster cadence on a much larger instrument set — 1 minute is ~15× — or a host where the database is not the largest thing on the disk |
+| The 1D line unsampled, one point per observation | The whole point of it: the line is as granular as the cadence the household chose, and no sampler decides otherwise. At the seeded cadence a session is ~27 instants, against `SAMPLE_BUDGET`'s 180 dates for a long range | A much faster cadence. The refresh cadence is therefore a *latency* dial as well as a storage one, and linearly: ~390 instants at 1 minute puts the query in the hundreds of milliseconds on a full household, paid on every Overview load with 1D selected |
 | In-process scheduler | One process to deploy, one place to read logs | Horizontal scaling — two app containers would both poll, and only the advisory lock keeps that correct rather than efficient |
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
 
-**Two indexes carry the read path.** `latest_position_set` runs once per account per read, and
-`position_set_account_as_of_idx` matches its ordering exactly, so it is an index scan stopping at the
-first row; adding a column to that ordering without adding it to the index would turn every dashboard
-read into a sort. The carry-forward lateral inside `holding_valued_at` runs far more often — once per
-holding per plotted date — and rides `price_daily`'s primary key for the same stop-at-the-first-row
-reason.
+**Three indexes carry the read path**, and every one of them is a stop-at-the-first-row scan rather
+than a sort. `latest_position_set` runs once per account per read, and
+`position_set_account_as_of_idx` matches its ordering exactly; adding a column to that ordering
+without adding it to the index would turn every dashboard read into a sort. The carry-forward lateral
+inside `holding_valued_at` runs far more often — once per holding per plotted date — and rides
+`price_daily`'s primary key. And the 1D reader's per-instant price lookup rides
+`price_observation`'s primary key, `(instrument_id, as_of)`, which it matches exactly; that key is
+also the dedup that keeps the log a record of distinct instants rather than of polls, which is the
+one place in the schema where an index and a rule are the same object.
+
+**The 1D line is one round trip too, and its cost is per instant rather than per date.** Its inner
+laterals ride `price_observation`'s primary key and `price_daily`'s, both stopping at the first row,
+executed once per holding per plotted instant — about twenty-seven instants a session at the seeded
+cadence, against `SAMPLE_BUDGET`'s 180 dates for a long range. The session itself resolves from
+`price_observation_market_date_idx` in one backward index scan. What grows here is the table, not the
+query: the log gains rows forever, and the index is what keeps a session lookup from caring.
 
 **`netWorthSeries` is one round trip, not one per point.** The dates are joined laterally against
 `holding_valued_at(d.date)`, with the narrowing pushed *inside* the lateral — a `WHERE` in the outer
@@ -1741,12 +1813,12 @@ still live in the current code:
 | File | Role |
 |---|---|
 | `db.server.ts` | The process-wide Kysely handle, and `/healthz`'s report |
-| `valuation.server.ts` | **The only reader of `holding_valued` for valuation.** Thirteen exports: ten valuation reads, seven of them over the `ValuedSource` seam, plus `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
+| `valuation.server.ts` | **The only reader of `holding_valued` for valuation, and the only valuation reader of `price_observation`.** Valuation reads over `holding_valued`, seven of them through the `ValuedSource` seam; the intra-session reads over the observation log (ADR-0006); and `manualNetWorth`, `firstRecordedDate` and `accountFirstRecordedDate` (spec 0008), which deliberately read elsewhere |
 | `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload` — the ingest flow's one write |
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
-| `prices.server.ts` | **The only writer of a price.** Both tiers, and the freshness read |
-| `price-provider.server.ts` | **The only importer of `yahoo-finance2`.** The provider interface and the symbol probe |
+| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, and the freshness read |
+| `price-provider.server.ts` | **The only importer of `yahoo-finance2`.** The provider interface — including the raw entry it hands on for the archive, attached past every refusal — and the symbol probe |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
 | `balances.server.ts` | Setting a single-position balance: the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
@@ -1764,7 +1836,7 @@ still live in the current code:
 | `allocation.ts` | `allocationBy` — one grouper over any figure — the three cuts adapted from it, plus unrealized gains by asset type |
 | `market-hours.ts` | `isMarketOpen` (an optimisation) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
-| `chart-range.ts` | The chart's range vocabulary: the presets, the sampled date grid under its point budget, and the range cookie middleware (ADR-0003). Pure, and in the client bundle |
+| `chart-range.ts` | The chart's range vocabulary: the presets, the sampled date grid under its point budget, and the range cookie middleware (ADR-0003). 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `masking.ts` | The masking vocabulary: policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 
@@ -1786,6 +1858,7 @@ verified email rides in on every request and is read by nothing.
 | `0006_annual_dividend.sql` | `annual_dividend` through `holding_valued` and `holding_valued_at`, recreated in place (ADR-0001) |
 | `0007_masking_policy.sql` | The `masking_policy` column on `app_setting` |
 | `0008_refresh_cadence.sql` | The `refresh_cadence_minutes` column on `app_setting` |
+| `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
 
 ---
 
@@ -1803,4 +1876,8 @@ verified email rides in on every request and is read by nothing.
 | **Stale** | A price that exists and failed to refresh. Distinct from **unpriced**, which is a price that has never existed |
 | **Carry-forward** | Resolving a date to the last `price_daily` close at or before it. Why Saturday is worth Friday's close, and why USD prices at 1.00 on any date |
 | **The spine** | `price_daily` — at most one row per instrument per trading day. Non-trading days get no row at all, and a missed poll is a visible gap the carry-forward closes |
+| **Observation** | One price the feed reported for one instrument, filed under the instant the provider says it was struck. Kept forever, never edited, one row per distinct instant. Not history — history is finished days |
+| **The log** | `price_observation` — every observation, append-only. Read by the 1D chart and by nothing else, and invisible to every valuation of a past date |
+| **Poll** | One refresh attempt, recorded whether or not any observation resulted. What tells a quiet market apart from a server that was not running |
+| **Session** | One trading day as 1D plots it: the instants the log holds for the latest `market_date` in it. Derived from what was observed, never from a calendar |
 | **Draft** | An in-progress upload. Scaffolding, not history: swept at 24 hours, deleted by its own commit, and unreachable the moment its account closes. The FK cascades on account delete, which nothing in the application does |

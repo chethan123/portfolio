@@ -93,6 +93,13 @@ context, and the result of a real trade-off. Both were opened by the dividends w
 - **[`../README.md`](../README.md)'s "Working on it" is the short version of
   [`developing.md`](developing.md).** The README's reader may not have decided to contribute yet, so
   it keeps a handful of commands and defers the rest.
+- **The price archive's storage figure is stated in four places**, because it is a number four
+  different people need at four different moments: [`adr/0006-intraday-quotes-are-an-observation-log.md`](adr/0006-intraday-quotes-are-an-observation-log.md)
+  argues why the cost is worth paying, [`../DESIGN.md`](../DESIGN.md) §6 records it as part of the
+  pricing design, [`operating.md`](operating.md)'s "Growth and limits" carries the arithmetic and the
+  query that measures the real instance, and Settings → Prices states it at the dial, where the
+  household actually turns it. **The ADR is the one to believe**; the other three are derived from it
+  and none of them may quietly disagree. A revised figure changes all four in one commit.
 
 ## Screenshots
 
