@@ -583,3 +583,74 @@ describe("the shape a past date returns", () => {
     }),
   );
 });
+
+describe("what the observation log may not touch", () => {
+  it(
+    "answers a past date from the daily close, whatever the observation log holds for it",
+    withDatabase(
+      async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+        const account = await seedAccount();
+        const fund = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+        await seedPositionSet({
+          account,
+          asOf: "2026-01-31",
+          holdings: [{ instrument: fund, quantity: "10.00000000" }],
+        });
+
+        // The finished day, and a third price the feed reported during it. The
+        // observation is real and correctly filed; it is simply not history.
+        await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
+        await seedObservation({
+          instrument: fund,
+          asOf: new Date("2026-02-13T18:30:00Z"),
+          marketDate: "2026-02-13",
+          price: "300.0000",
+        });
+
+        // ADR-0006's historical-line invariant, from its second front: a line
+        // already drawn cannot move because a new tier arrived under it.
+        expect(await netWorthAt("2026-02-13", db)).toEqual({
+          amount: "2500.0000",
+          coverage: { known: 1, total: 1 },
+        });
+      },
+    ),
+  );
+
+  it(
+    "leaves a past date alone while a later session is being observed",
+    withDatabase(
+      async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+        const account = await seedAccount();
+        const fund = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+        await seedPositionSet({
+          account,
+          asOf: "2026-01-31",
+          holdings: [{ instrument: fund, quantity: "10.00000000" }],
+        });
+        await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
+
+        // Tuesday's session, running. Every fifteen minutes it writes another
+        // observation, and none of them is a fact about the Friday before —
+        // which is a line already drawn, and stays drawn.
+        for (const [minute, price] of [
+          ["14:30", "300.0000"],
+          ["15:30", "310.0000"],
+          ["16:30", "320.0000"],
+        ]) {
+          await seedObservation({
+            instrument: fund,
+            asOf: new Date(`2026-02-17T${minute}:00Z`),
+            marketDate: "2026-02-17",
+            price: price as string,
+          });
+        }
+
+        expect(await netWorthAt("2026-02-13", db)).toEqual({
+          amount: "2500.0000",
+          coverage: { known: 1, total: 1 },
+        });
+      },
+    ),
+  );
+});
