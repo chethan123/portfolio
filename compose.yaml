@@ -74,7 +74,6 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       PORT: ${PORT:-3000}
-      PRICE_POLL_INTERVAL_MINUTES: ${PRICE_POLL_INTERVAL_MINUTES:-15}
       MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
       TZ: ${TZ:-UTC}
     # No `ports:` by design, same as `db` above. Only `caddy` is reachable from

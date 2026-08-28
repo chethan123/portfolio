@@ -3,10 +3,10 @@ import { Link } from "react-router";
 /**
  * What Settings holds, and what it will hold.
  *
- * DESIGN.md §8.4 names five tabs; two of them exist in this slice. Saying which
- * three are still coming is the honest version of a fresh install — a family
- * member who cannot find Instruments should learn that it is not built yet
- * rather than conclude they are looking in the wrong place.
+ * DESIGN.md §8.4 names the tabs; not all of them exist yet. Saying which are
+ * still coming is the honest version of a fresh install — a family member who
+ * cannot find Instruments should learn that it is not built yet rather than
+ * conclude they are looking in the wrong place.
  */
 export function meta() {
   return [{ title: "Settings · Portfolio" }];
@@ -46,6 +46,21 @@ export default function SettingsIndex() {
             <dd>
               The capital gains rate the Analysis screen uses to estimate what settling an
               unrealized gain in a taxable account would cost.
+            </dd>
+
+            <dt>
+              <Link to="/settings/prices">Prices</Link>
+            </dt>
+            <dd>
+              How often quotes are refreshed from the price feed while the market is open.
+            </dd>
+
+            <dt>
+              <Link to="/settings/display">Display</Link>
+            </dt>
+            <dd>
+              What a browser nobody has touched yet opens in — amounts masked, shown, or as
+              that browser last left them.
             </dd>
 
             <dt>Classifications, Instruments and History</dt>

@@ -40,30 +40,18 @@ describe("configuration validation", () => {
     const config = loadConfig(MINIMAL);
 
     expect(config.PORT).toBe(3000);
-    expect(config.PRICE_POLL_INTERVAL_MINUTES).toBe(15);
     expect(config.MAX_UPLOAD_MB).toBe(10);
     expect(config.MARKET_TIMEZONE).toBe("America/New_York");
     expect(config.TZ).toBe("UTC");
     expect(config.AUTH_PASSWORD).toBeUndefined();
   });
 
-  it("validates the pricing settings even though nothing reads them yet", () => {
-    expect(() => loadConfig({ ...MINIMAL, PRICE_POLL_INTERVAL_MINUTES: "0" })).toThrow(
-      /PRICE_POLL_INTERVAL_MINUTES/,
-    );
+  it("validates the market timezone and parses it rather than merely tolerating it", () => {
     expect(() => loadConfig({ ...MINIMAL, MARKET_TIMEZONE: "not/a/zone" })).toThrow(
       /MARKET_TIMEZONE/,
     );
-  });
 
-  it("parses the pricing settings, it does not merely tolerate them", () => {
-    const config = loadConfig({
-      ...MINIMAL,
-      PRICE_POLL_INTERVAL_MINUTES: "30",
-      MARKET_TIMEZONE: "Europe/London",
-    });
-
-    expect(config.PRICE_POLL_INTERVAL_MINUTES).toBe(30);
+    const config = loadConfig({ ...MINIMAL, MARKET_TIMEZONE: "Europe/London" });
     expect(config.MARKET_TIMEZONE).toBe("Europe/London");
   });
 

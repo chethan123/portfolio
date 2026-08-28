@@ -48,7 +48,8 @@ process.env.DATABASE_URL = TEST_DATABASE_URL;
 /** Refused immediately, which is how "the database went away" arrives here. */
 const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
-/** `PRICE_POLL_INTERVAL_MINUTES`, at the default this file leaves in place. */
+/** The seeded refresh cadence the timer is first armed with, which the
+ * databases these tests run against also hold — so no tick re-arms it. */
 const INTERVAL_MS = 15 * 60 * 1000;
 
 /** A Thursday, 11:00 in New York: inside the regular session, not a holiday. */
@@ -231,6 +232,60 @@ describe("the connection a tick borrows", () => {
         expect(provider.asked).toEqual([]);
         expect(watched.pool.totalCount).toBe(0);
       } finally {
+        await watched.close();
+      }
+    }),
+  );
+});
+
+describe("a cadence the household moved", () => {
+  it(
+    "re-arms the timer at the next tick, so a save needs no restart",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      // Saved before the poller ever starts: the boot case, where the timer is
+      // armed at the seeded 15 and the row already says otherwise. The mid-run
+      // save is the same mechanism — every tick reads the row.
+      await db.updateTable("app_setting").set({ refresh_cadence_minutes: 60 }).execute();
+
+      const watched = watchedPool();
+      const provider = fakeProvider();
+
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: TRADING_HOUR });
+      try {
+        await withDb(
+          db,
+          async () => {
+            startPricePoller(provider);
+
+            vi.advanceTimersByTime(INTERVAL_MS);
+            await watched.handedBack(1);
+
+            // That tick read 60 and re-armed. Fifteen more minutes must now
+            // fire nothing — a second refresh here is exactly what the old
+            // timer would have done. Absence is asserted with a real-time
+            // grace period rather than a fake advance, because a fire would
+            // reach the pool by real IO; the grace only ever falsely passes,
+            // never falsely fails.
+            vi.advanceTimersByTime(INTERVAL_MS);
+            const early = await Promise.race([
+              watched.handedBack(2).then(() => "ticked" as const),
+              new Promise<"quiet">((resolve) => setTimeout(() => resolve("quiet"), 300)),
+            ]);
+            expect(early).toBe("quiet");
+
+            // Completing the hour fires the re-armed timer.
+            vi.advanceTimersByTime(45 * 60 * 1000);
+            await watched.handedBack(2);
+          },
+          watched.pool,
+        );
+
+        expect(provider.asked).toHaveLength(2);
+        expect(watched.destroyed).toEqual([false, false]);
+      } finally {
+        stopPricePoller();
+        vi.useRealTimers();
         await watched.close();
       }
     }),

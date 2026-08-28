@@ -45,6 +45,9 @@ export default [
     // domain rows: the capital gains rate the Analysis screen estimates with.
     // `0005_app_setting.sql` argues why it is not an environment variable.
     route("tax", "routes/settings/tax.tsx"),
+    // The refresh cadence — how often the poller asks the feed for quotes.
+    // `0008_refresh_cadence.sql` argues why it moved out of the environment.
+    route("prices", "routes/settings/prices.tsx"),
     // How the screens look before anyone touches them — today the masking
     // policy, and §12's theme choice when it lands (spec 0007).
     route("display", "routes/settings/display.tsx"),

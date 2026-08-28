@@ -435,7 +435,8 @@ foreign-listed instrument cannot silently sum GBP into a USD total.
 
 ### 6.2 Freshness and storage
 
-Background polling every **15 minutes during market hours**, plus a manual "Refresh now" button.
+Background polling on the **household's refresh cadence during market hours** — a whole number of
+minutes set at Settings → Prices, seeded to 15 (§8.4) — plus a manual "Refresh now" button.
 Pages read the database and never fan out to the API on render.
 
 Streaming was rejected on the grounds that mutual funds have no intraday price at all — they strike
@@ -638,6 +639,7 @@ mutation. Everything else that writes lives behind Settings.
 | Instruments | Edit symbol, price source, classification. View aliases. **Set manual prices for CITs** |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
+| Prices | The refresh cadence — how often the poller (§6.2) asks the feed for quotes while the market is open |
 | Display | How the screens look before anyone touches them: the masking policy (spec 0007), and the theme choice when §12's toggle lands |
 
 **Tax is the first tab that is a preference rather than a set of domain rows.** Every other tab
@@ -648,6 +650,16 @@ the database is, which timezone a close is stamped in — and a bracket is not a
 is the household's own figure, it moves when their income or their state does, and the person who
 wants it changed is the one reading the number it produced rather than the one with a shell on the
 container. Behind a redeploy it would be stale in exactly the case the panel was built for.
+
+**Prices holds the refresh cadence, and it is the tab that moved a setting out of the
+environment.** The cadence began life as `PRICE_POLL_INTERVAL_MINUTES`, filed on the deployment side
+on the argument that request spend against an unofficial feed is the operator's business. In a
+self-hosted household the operator and the person watching the prices are the same person minus a
+shell, so the argument collapsed into Tax's: the person who wants the dial moved is the person
+reading the screen it drives. The variable was removed outright rather than kept as a fallback —
+two places to set a figure is two places to read a different answer from — and the poller reads the
+row before each tick, so a save takes effect by the next refresh with no restart in any process
+(`0008_refresh_cadence.sql`).
 
 **Display is the second preference tab, and it holds a policy rather than a value.** The masking
 policy is the household's standing answer to what a browser nobody has toggled yet opens in — masked,
@@ -796,16 +808,17 @@ Migrations must be idempotent so a restart is always safe.
 | `SESSION_SECRET` | if auth on | — | Cookie signing key |
 | `AUTH_PASSWORD` | no | unset | Enables the login gate; unset shows the warning banner (§10) |
 | `PORT` | no | `3000` | HTTP listen port |
-| `PRICE_POLL_INTERVAL_MINUTES` | no | `15` | Quote refresh cadence |
 | `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation |
 | `TZ` | no | `UTC` | Container clock; the database stores UTC regardless |
 
-**One setting is deliberately not in that table.** Environment variables remain the whole of what an
-*operator* configures — everything validated at startup, everything that needs a restart to change.
-The household's capital gains rate is none of those, so it lives in `app_setting`, a single-row
-table seeded by its own migration and edited at Settings → Tax (§8.4). There is no `CAPITAL_GAINS_RATE`
-variable and there should not be one: two places to set a figure is two places to read a different
-answer from.
+**The household's settings are deliberately not in that table.** Environment variables remain the
+whole of what an *operator* configures — everything validated at startup, everything that needs a
+restart to change. The capital gains rate, the masking policy and the refresh cadence are none of
+those, so they live in `app_setting`, a single-row table seeded by its own migrations and edited
+under Settings (§8.4). There is no `CAPITAL_GAINS_RATE` variable and there is no longer a
+`PRICE_POLL_INTERVAL_MINUTES` one: two places to set a figure is two places to read a different
+answer from. (An upgrade that still sets the old variable is ignored without error; the cadence is
+re-entered once at Settings → Prices.)
 
 **Volumes.** One named volume for Postgres data. The application container is otherwise
 **stateless** — it writes nothing to its own filesystem, so it can be destroyed and recreated
