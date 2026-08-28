@@ -732,7 +732,7 @@ routing here, so it is not needed.
 | **Distribution** | The app image is built once by CI and **pulled**, not built on the host. A `v*` tag publishes a multi-architecture image to GitHub Container Registry; the Compose file pins the floating major and pulls on every `up` (§10.1). |
 | **Ingress** | The bundled Caddy container is the only service that publishes a port. The app, the database and the gate are reachable only on the compose network, so neither the app's forwarded-header trust nor the gate's verdict is ever extended to whoever can reach the host. |
 | **TLS** | **The operator's, in front of this stack.** Everything inside the stack speaks plain HTTP and the app never manages certificates; the public hostname and its certificate belong to the house-wide proxy this stack sits behind, and `PUBLIC_ORIGIN` (§10.1) is the `https://` origin it serves. |
-| **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. The house proxy's TLS is what supplies it, so a phone reaching the instance at `PUBLIC_ORIGIN` can install it. Reaching the box by LAN IP over plain HTTP still cannot, and the gate would refuse that request anyway. |
+| **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. The house proxy's TLS supplies it at `PUBLIC_ORIGIN`, which removes the blocker the PWA slice (§11) faced; the slice itself is still unbuilt, so nothing is installable yet. Reaching the box by LAN IP over plain HTTP supplies no secure context, and the gate would refuse that request anyway. |
 | **Auth** | **Outside the app.** Caddy asks a Google sign-in gate about every request before it reaches the app, and the app authenticates nobody (see below). It keeps one honest fact about its own deployment — whether a gate fronts it — and draws a persistent warning banner when nothing does. |
 | **Job scheduler** | In-process, inside the app container. One process to deploy, one place to read logs. Trade-off: a restart mid-session misses a poll until the next tick — acceptable at 15-minute granularity. |
 | **Market calendar** | Weekday + `America/New_York` session check plus a small hardcoded NYSE holiday table. A wrongly skipped poll costs nothing; a wrongly attempted one costs one request. |
@@ -885,7 +885,7 @@ device on the LAN can dial this box's published port and land on this stack's Ca
 that device is exactly the threat. The consequence for the app is one hop more of forwarded headers
 to survive, which `ARCHITECTURE.md` §2 and §7.6 are the place for. The consequence for the operator
 is that `PUBLIC_ORIGIN` must be the `https://` origin their proxy serves — which is also what
-supplies the secure context §10 says a phone needs to install this as a PWA.
+supplies the secure context §10 says the unbuilt PWA slice will need.
 
 ---
 
@@ -1286,8 +1286,9 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     silently — which looks, to the person who used it, exactly like it did not work. The levers that
     do revoke are the operator's: taking an address off the allowlist ends that one person's
     sessions everywhere, and rotating the gate's cookie secret ends everyone's at once. A real
-    control is tracked separately rather than rejected; it inherits this as its motivation, and
-    `docs/runbook.md` carries the URL with its limits stated in the meantime.
+    control is tracked as [issue #89](https://github.com/chethan123/portfolio/issues/89) rather than
+    rejected; it inherits this as its motivation, and `docs/runbook.md` carries the URL with its
+    limits stated in the meantime.
 11. **Signing in depends on Google being reachable.** An outage there defers *new* sign-ins until it
     passes; sessions already established ride through it, because the gate validates its own cookie
     without asking Google again. There is deliberately no second login system to fall back to — one
