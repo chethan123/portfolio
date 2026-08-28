@@ -25,11 +25,20 @@ import Overview, { loader, middleware } from "../../app/routes/overview.tsx";
 
 import { RANGE_COOKIE } from "~/lib/chart-range";
 
-import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
 import { args, get, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
+
+/**
+ * Set before any loader runs: `overview.tsx` reads `MARKET_TIMEZONE` through
+ * `getConfig()` to tell the chart which clock a session's instants are read on,
+ * and `getConfig()` validates the whole environment when it is first asked.
+ * `MARKET_TIMEZONE` itself defaults; the database URL is the one variable with
+ * no default, and it is the same one the harness already connects with.
+ */
+process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 afterAll(closeTestDatabase);
 
@@ -334,6 +343,186 @@ describe("the allocation bars", () => {
       // with the note beside the bars saying why it has no share.
       expect(markup).toContain("−$50,000.00");
       expect(markup).toContain("has no bar.");
+    }),
+  );
+});
+
+describe("the 1D range on the Overview", () => {
+  /**
+   * Day zero, plus a session of observations on `session`.
+   *
+   * The daily close on the day before is what an unobserved instant carries
+   * forward from, and the quote is what the headline reads — both written the
+   * way one refresh writes them, which is the path story 8 is about.
+   */
+  async function seedSession(ctx: TestContext, session: string, previous: string): Promise<void> {
+    const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
+    const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+    await ctx.seedPositionSet({
+      account,
+      asOf: previous,
+      holdings: [{ instrument: vti, quantity: "100" }],
+    });
+    await ctx.seedDailyClose({ instrument: vti, date: previous, close: "100.0000" });
+
+    for (const [minute, price] of [
+      ["13:30", "101.0000"],
+      ["17:00", "104.0000"],
+      ["20:00", "110.0000"],
+    ]) {
+      await ctx.seedObservation({
+        instrument: vti,
+        asOf: `${session}T${minute}:00Z`,
+        marketDate: session,
+        price: price as string,
+      });
+    }
+
+    await ctx.seedQuote({ instrument: vti, price: "110.0000" });
+    await ctx.seedDailyClose({ instrument: vti, date: session, close: "110.0000" });
+  }
+
+  it(
+    "plots the latest observed session, one point per observation, when 1D is asked for",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      const data = await loader(args(get("/?range=1d")));
+
+      expect(data.range).toBe("1d");
+      expect(data.computed.map((point) => [point.date, point.amount])).toEqual([
+        [`${daysAgo(1)}T13:30:00.000Z`, "10100.0000"],
+        [`${daysAgo(1)}T17:00:00.000Z`, "10400.0000"],
+        [`${daysAgo(1)}T20:00:00.000Z`, "11000.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "ends the line at the figure the headline states",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      const data = await loader(args(get("/?range=1d")));
+
+      // Story 8, and the reason the refresh writes the quote and the
+      // observation in one transaction: the screen never shows two totals that
+      // disagree.
+      expect(data.computed.at(-1)?.amount).toBe(data.change.current);
+    }),
+  );
+
+  it(
+    "measures the change from the close of the session before the one it plots",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      const data = await loader(args(get("/?range=1d")));
+
+      // Yesterday's close was $100 a share, and the session ended at $110 —
+      // "today's change" in the sense a brokerage means it. Measured against
+      // the session's own provisional close it would read zero.
+      expect(data.change.previous).toBe("10000.0000");
+      expect(data.change.difference).toBe("1000.0000");
+    }),
+  );
+
+  it(
+    "tells the chart it is drawing a session, and tells it nothing of the sort otherwise",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      // The market's zone, never the reader's: the axis has to say the same
+      // thing on the server and in the browser after hydration.
+      expect((await loader(args(get("/?range=1d")))).session).toEqual({
+        timeZone: "America/New_York",
+      });
+      expect((await loader(args(get("/?range=1m")))).session).toBeNull();
+    }),
+  );
+
+  it(
+    "keeps the hand-typed prefix off a session's line",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+      await ctx.seedManualNetWorth({ date: daysAgo(400), amount: "50000.0000" });
+
+      // §7's series is the household's net worth before day zero. Dropping a
+      // point from last year onto a line of this morning's instants would claim
+      // a session that never happened.
+      expect((await loader(args(get("/?range=1d")))).manual).toEqual([]);
+      expect((await loader(args(get("/?range=all")))).manual).not.toEqual([]);
+    }),
+  );
+
+  it(
+    "offers the 1D chip once anything has been observed and disables it before that",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(10));
+
+      const before = await loader(args(get("/")));
+      expect(before.rangeOptions.find((option) => option.key === "1d")?.disabled).toBe(true);
+
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      const after = await loader(args(get("/")));
+      expect(after.rangeOptions.find((option) => option.key === "1d")?.disabled).toBe(false);
+    }),
+  );
+
+  it(
+    "falls back to the default preset when 1D is asked for and nothing has been observed",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(400));
+
+      const data = await loader(args(get("/?range=1d")));
+
+      // Reported back as what was actually drawn, the way an undrawable custom
+      // span already is — a chart captioned 1D from a session that never
+      // existed is the thing being refused.
+      expect(data.range).toBe("1y");
+      expect(data.session).toBeNull();
+    }),
+  );
+
+  it(
+    "remembers 1D the way it remembers every other range",
+    withDatabase(async (ctx) => {
+      await seedSession(ctx, daysAgo(1), daysAgo(2));
+
+      const response = await servedThrough(middleware, get("/?range=1d"));
+      expect(response.headers.get("Set-Cookie")).toContain(`${RANGE_COOKIE}=1d`);
+
+      // Story 11: the app reopens on the view in use.
+      expect((await loader(args(get("/", `${RANGE_COOKIE}=1d`)))).range).toBe("1d");
+    }),
+  );
+
+  it(
+    "leaves every other range drawing exactly what it drew before",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(60));
+      const before = await loader(args(get("/?range=1m")));
+
+      // Observations and nothing else — no new close, no new position set — so
+      // the only thing that changed between the two reads is the new tier.
+      const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      for (const minute of ["13:30", "17:00", "20:00"]) {
+        await ctx.seedObservation({
+          instrument: vti,
+          asOf: `${daysAgo(1)}T${minute}:00Z`,
+          marketDate: daysAgo(1),
+          price: "999.0000",
+        });
+      }
+
+      const after = await loader(args(get("/?range=1m")));
+
+      // Story 19. A new tier under the chart must change nothing about a line
+      // that is already history — the day series reads `price_daily` alone.
+      expect(after.computed).toEqual(before.computed);
+      expect(after.change).toEqual(before.change);
     }),
   );
 });

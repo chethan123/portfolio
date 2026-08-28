@@ -43,10 +43,15 @@ import {
   accountFirstRecordedDate,
   accountHoldings,
   accountSeries,
+  accountSessionSeries,
   accountTotal,
+  asSessionPoints,
+  latestObservedSession,
   type AccountKind,
   type IsoDate,
 } from "~/lib/valuation.server";
+
+import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/account";
 
@@ -103,16 +108,28 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const requested = readChartRange(request);
   const today = isoDate(Date.now());
 
-  // The account's own earliest statement (spec 0008) — never the household's:
-  // an account's range never reaches into the hand-typed pre-app history,
-  // which was never any one account's (`CONTEXT.md`'s "chart range" entry).
-  const earliest = { positionSet: await accountFirstRecordedDate(params.accountId) };
+  // Two independent reads, joined because both are needed before the window can
+  // be sized and neither needs the other. The first is the account's own
+  // earliest statement (spec 0008) — never the household's: an account's range
+  // never reaches into the hand-typed pre-app history, which was never any one
+  // account's (`CONTEXT.md`'s "chart range" entry). The second is the
+  // observation log as a whole, not this account's slice of it: an account that
+  // holds nothing the feed quotes still draws its flat line at the household's
+  // observed instants (ADR-0006, story 10), and the chip is disabled only where
+  // the log is empty outright.
+  const [positionSet, session] = await Promise.all([
+    accountFirstRecordedDate(params.accountId),
+    latestObservedSession(),
+  ]);
+
+  const earliest = { positionSet };
 
   const resolved = resolveRange(requested.range, {
     today,
     earliest,
     surface: "account",
     custom: requested.custom,
+    session,
   });
 
   // The upload flow's landing receipt (`?uploaded=<setId>`, ingest brief
@@ -124,6 +141,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const receipt =
     uploadedParam === null ? null : await uploadReceipt(params.accountId, uploadedParam);
 
+  // Normalised to one shape so there is one code path below: `at` is a date on
+  // every preset but 1D, where it is an instant. See the Overview's loader.
+  const points =
+    resolved.session === undefined
+      ? accountSeries(params.accountId, resolved.dates).then(asSessionPoints)
+      : accountSessionSeries(params.accountId, resolved.session);
+
   const [account, holdings, series, recorded] = await Promise.all([
     // Read for one field: the tax treatment. `AccountTotal` carries what a
     // figure is computed from and no more, and a tax treatment is a fact about
@@ -132,7 +156,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // answered is still there to answer again.
     getAccount(params.accountId),
     accountHoldings(params.accountId),
-    accountSeries(params.accountId, resolved.dates),
+    points,
     // What the current figure was read from, so the set-balance panel can say
     // which day it is superseding rather than asking for a correction blind.
     lastRecorded(params.accountId),
@@ -144,12 +168,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // (§7), which is why the filter is on the coverage count and not the amount.
   const computed = series
     .filter((point) => point.coverage.total > 0)
-    .map((point) => ({ date: point.date, amount: point.amount }));
+    .map((point) => ({ date: point.at, amount: point.amount }));
 
   return {
     range: resolved.range,
     custom: resolved.custom,
-    rangeOptions: rangeOptions({ today, earliest, surface: "account" }),
+    // Null on every range but 1D, which is how the chart is told which axis it
+    // is drawing.
+    session: resolved.session === undefined ? null : { timeZone: getConfig().MARKET_TIMEZONE },
+    rangeOptions: rangeOptions({ today, earliest, surface: "account", session }),
     customMin: customRangeMin("account", earliest),
     customMax: today,
     total,
@@ -259,6 +286,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
     rangeOptions: options,
     customMin,
     customMax,
+    session,
     total,
     taxTreatment,
     holdings,
@@ -447,10 +475,19 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               manual={[]}
               label={`${total.accountName} ${rangeDescription(range, custom)},`}
               masked={masked}
-              // Null until the loaders learn to resolve a session: every range
-              // this page can currently draw is a span of days.
-              session={null}
+              session={session}
             />
+          ) : session !== null && computed.length > 0 ? (
+            // A session only one price has arrived in. Nothing to do with how
+            // many statements this account has, which is what the sentence
+            // below would otherwise claim — but guarded on there being a moment
+            // at all, because an account with no statements has nothing to draw
+            // at any price, and telling it to wait for one would be the same
+            // mistake in the other direction.
+            <p className="empty-note">
+              A line needs two observed moments and this session has {computed.length}. It
+              appears once another price arrives.
+            </p>
           ) : (
             <p className="empty-note">
               A line needs two dated points and this range holds {computed.length}. It appears
