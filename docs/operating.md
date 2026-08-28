@@ -119,9 +119,11 @@ Any other body on that endpoint means something, and [Monitoring](#monitoring) s
 
 ## Environment variables
 
-The complete configuration surface. Every setting is an environment variable — nothing is
-configured in a file, a database row or a UI toggle — and [`.env.example`](../.env.example) is this
-same table with the reasoning attached. Copy it to `.env` only to change something.
+The complete configuration surface an operator has. Every deployment setting is an environment
+variable — the household's own settings (the capital gains rate, the masking policy, the refresh
+cadence) are database rows edited under Settings instead, not here — and
+[`.env.example`](../.env.example) is this same table with the reasoning attached. Copy it to `.env`
+only to change something.
 
 All of them are validated once at startup. A missing or malformed value stops the container
 immediately with a message naming the variable, rather than failing hours later on the request that
@@ -287,7 +289,7 @@ allows. The length and randomness of the password is the entire defence.
 
 **There is no CSRF token anywhere.** `SameSite=Lax` on the session cookie is the whole of it. Against
 a logged-in household that covers the ordinary cross-site form post. What it does not cover is the
-*open* instance: with no password there is no cookie at all, so `SameSite` has nothing to protect,
+*open* instance: with no password there is no session cookie at all, so `SameSite` has nothing to protect,
 and any page anybody in the house happens to open can POST to your instance and be obeyed. **That is
 a concrete reason to set `AUTH_PASSWORD` even on a LAN you completely trust** — the password is not
 only about who can look.
@@ -419,8 +421,7 @@ able to *act*, not only to alert — or you have to be the one who acts.
 ### Logs
 
 `docker compose logs -f app` is the entire pipeline; there is no metrics endpoint, no tracing and no
-log shipping. Five kinds of line are in there. The stems below are for grepping and may drift —
-the code owns the wording:
+log shipping. The stems below are for grepping and may drift — the code owns the wording:
 
 - **One line per HTTP request** from the server's built-in request logger: method, path, status,
   duration. Note that the container healthcheck hits `/healthz` every ten seconds, and on an idle
@@ -428,8 +429,12 @@ the code owns the wording:
 - **One line per price refresh attempt, always** — stem `Price refresh`. Informational when
   everything priced, a warning when anything came back stale. It is emitted on every tick precisely
   so that "prices stopped updating" is answerable from the log alone.
-- **Refresh and provider failures** at error level — stem `Price refresh failed` — stating that the
-  last known prices are kept. A failed refresh never zeroes anything.
+- **A provider outage** at error level — stem `Price provider failed` — every selected instrument
+  is marked stale and the last known prices are kept. Other refresh failures (the pool, the
+  advisory lock, the transaction) log `Price refresh failed` instead, keeping prices the same way;
+  a single symbol refused over its currency logs `Price refused`. None of them zeroes anything.
+- **Database trouble on the page path** at error level — stems `Database health check failed` and
+  `Migration status check failed` — the lines behind a `/healthz` 503.
 - **Failed logins** at warning level, one per attempt, with the forwarded address — stem
   `Failed login`. This is the only intrusion signal the instance produces, and nothing counts or
   correlates them for you.

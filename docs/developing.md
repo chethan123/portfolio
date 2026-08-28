@@ -40,8 +40,8 @@ The current [README](../README.md#working-on-it) gives the two-line version. Thi
 that actually produces a working checkout. It is a deliberate overlap with the README: that reader is
 deciding whether to install anything, you are at a terminal with a clone.
 
-Node 24 is required (`engines` in [`../package.json`](../package.json)), plus Docker with the
-Compose v2 plugin.
+Node 24.12 or newer is required (`engines` in [`../package.json`](../package.json)), plus Docker
+with the Compose v2 plugin.
 
 ```sh
 npm install
@@ -201,7 +201,9 @@ what changes how you run and write things.
   the one cast, because the generated `Route.LoaderArgs` carries the framework's whole shape and
   cannot be constructed by hand — and `any` never ships, so do not invent a second cast. Routes
   signal a redirect or a 404 by **throwing a `Response`**: `outcomeOf`, `responseOf` and `redirectTo`
-  are how a test reads one without a `try`.
+  are how a test reads one without a `try`. `servedThrough(middleware, request, params)` runs a
+  route's middleware chain the way the framework would — the seam for the root gate and
+  `chartRangeMiddleware`.
 - **There is no `globals`.** Every file imports `describe`/`expect`/`it` from `vitest` itself, and
   every file that touches the database calls `afterAll(closeTestDatabase)` itself. The pool and the
   Kysely instance are module-level and opened once per file, and `closeTestDatabase` is the only thing
@@ -209,10 +211,12 @@ what changes how you run and write things.
   which is exactly why it is a convention rather than an error.
 - **There is no DOM.** No jsdom, no `@testing-library/react`, no `screen.getByText`; a component test
   calls `renderToStaticMarkup` on the component and asserts against the string.
-  [`../tests/support/render.tsx`](../tests/support/render.tsx) is for the other case — rendering a
-  path through the real shell with root loader data, to test what `Layout` does. That one swaps
-  `console.error` and throws on anything React says, with one known stub artefact allowed by exact
-  prefix, so a React warning there is a failure.
+  [`../tests/support/render.tsx`](../tests/support/render.tsx) covers the two cases beyond a bare
+  component: `renderRoute` renders a route module's default export through `createRoutesStub` with
+  hydration data and a `masked` flag, and `renderThroughLayout` renders a path through the real
+  shell with root loader data, to test what `Layout` does. The second swaps `console.error` and
+  throws on anything React says, with one known stub artefact allowed by exact prefix, so a React
+  warning there is a failure.
 - **Coverage has no threshold and is not a CI gate**, deliberately. The useful reading is which files
   are dark, not what the total says.
 
@@ -473,8 +477,10 @@ already-applied migration file changes nothing — the runner will never look at
 **`.env` is read by some of these commands and not others, which is the confusing part.** There is
 no `dotenv` dependency; what you get is whatever the thing running your code does.
 
-- **`npm run dev` and `npm run build` read `.env`.** Both go through Vite, which loads it. Put
-  `DATABASE_URL` there and the dev server picks it up with nothing on the command line.
+- **`npm run dev` and `npm run build` read `.env`.** Both go through the React Router Vite plugin,
+  which loads every variable in it into `process.env` — bare Vite alone would not, which is why
+  vitest does not read it. Put `DATABASE_URL` there and the dev server picks it up with nothing on
+  the command line.
 - **Which files Vite reads.** `.env`, `.env.local` and `.env.<mode>` — `development` for `dev`,
   `production` for `build`. It does not read arbitrary names, which is why this document keeps
   everything in `.env` rather than inventing a per-purpose filename that only `--env-file` would

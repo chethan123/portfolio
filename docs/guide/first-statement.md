@@ -82,8 +82,9 @@ the name exactly as the file wrote it. Answer either:
 - **This is an instrument already listed** — pick it from the **Instrument** list. Use this when your
   brokerage writes a name differently from another one you already hold.
 - **This is new** — give it a **Symbol** (leave empty if it has no public ticker), a **Name**, a
-  **Price source** (Feed, or a manual price you type from the statement and that carries forward
-  until you change it) and a **Classification**. Choosing **New classification…** lets you name one
+  **Price source** (**Feed** for anything with a public quote, or **Manual price** for something
+  without one — typing the price in is not built yet, so the holding shows a dash until it is; see
+  [Prices](prices.md)) and a **Classification**. Choosing **New classification…** lets you name one
   and give it an asset class.
 
 Select **Save and continue**.
@@ -121,7 +122,7 @@ Ticking it is you saying that is what really happened.
 ### The statement date
 
 If the file dates itself, the screen says so and there is nothing to fill in. If it does not, a
-**Statement date** box appears, starting at today. It does not accept a future date.
+**Statement date** box appears, starting at today. It accepts nothing later than tomorrow.
 
 ### Record it
 

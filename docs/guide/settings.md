@@ -14,7 +14,7 @@ built yet**, so nobody hunts for them:
 - **Instruments** — managing tickers, and typing a price by hand for something with no public quote.
 - **History** — the hand-typed net worth series from before this instance existed.
 
-They are listed with a sentence apiece and nothing to click. See [Not built
+They are named together, with a sentence and nothing to click. See [Not built
 yet](../../README.md#not-built-yet).
 
 ## People
@@ -129,6 +129,18 @@ Type a new cadence and save. The box then shows what is stored, which is the con
 change is picked up when the next refresh runs, so it can take up to one old cadence to apply. No
 restart is needed. See [Why a number did not change](prices.md) for what a cadence can and cannot
 make fresher.
+
+## Display
+
+What a browser that has never pressed the **Show amounts** control opens showing. Three choices:
+masked every time, showing every time, or however that browser was last left — and it starts at
+masked.
+
+This is the household's standing answer, not the control itself. The control — **Show amounts** /
+**Hide amounts**, in the navigation on every screen — flips this one browser right now, and needs
+no network to do it. Masking hides every amount behind dots while names, dates, the shape of the
+chart and every percentage stay readable. It is not a password: the amounts are still in the page,
+and the login gate is the only thing that keeps anyone out.
 
 ---
 

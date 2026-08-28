@@ -12,8 +12,8 @@ A self-hosted family portfolio and net worth tracker.
 
 **Almost all of this — the code, the SQL, the tests and the documents you are reading — was written
 by an AI agent rather than typed by me.** I set the direction, wrote the specs, reviewed the diffs
-and sent a good number of them back. Half the commits on `main` name Claude as their author and most
-of the rest carry it as a co-author.
+and sent a good number of them back. Two thirds of the commits on `main` name Claude as their
+author, and most of the rest are merges of that work.
 
 That is the experiment rather than a shortcut on the way to one. I wanted to find out what it takes
 to build *and then keep maintaining* a real application this way — not a weekend demo, but something
@@ -80,7 +80,7 @@ so a chosen range survives a reload and can be bookmarked.
 
 Every position the household holds, whichever account it sits in. Filter by owner, account,
 brokerage, account type, tax treatment, classification or asset class; group by any of the same
-seven, with subtotals. "Everything Priya holds at Fidelity", "the whole taxable side", "all the
+seven, with subtotals. "Everything Alex holds at Fidelity", "the whole taxable side", "all the
 bonds, wherever they are" — each is this table with the arguments changed rather than a screen of
 its own.
 
@@ -318,10 +318,11 @@ with JavaScript turned off.
 Nothing in the navigation is a placeholder any more. What is still missing sits behind a screen
 rather than in place of one.
 
-The pricing slice leaves its own UI unbuilt — the "as of" timestamp, the stale-price treatment, a
+The pricing slice leaves its own UI unbuilt — the "as of" timestamp, the page-level stale summary, a
 "Refresh now" control, and the Settings → Instruments tab where a collective investment trust gets
-its price typed in by hand. Settings also lists Classifications and History as tabs that do not
-exist yet, and there is no export or download of any kind.
+its price typed in by hand; a stale or never-priced holding is already labelled on its own row.
+Settings names Classifications, Instruments and History on its index page as what later slices
+build — they are not drawn as tabs — and there is no export or download of any kind.
 
 The pricing UI is specified in [`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn
 in [`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md). Every screen above was
@@ -345,6 +346,10 @@ nothing special, and there is no build step to find memory for. Postgres comes u
 it to report healthy and applies the schema, and a bundled Caddy container fronts it on
 <http://localhost>. There is no manual setup step and no migration to run by hand — migrations are
 idempotent, so restarting the container is always safe.
+
+One caveat today: no `v*` release tag has been cut yet, so CI has never published that image. Until
+the first release exists, run from a checkout instead —
+`docker compose -f compose.yaml -f compose.dev.yaml up -d --build`.
 
 You do not need a checkout to run this: `compose.yaml`, `Caddyfile` and optionally `.env` are the
 whole deployment. The same command is also the upgrade — the pinned tag is the floating major, so
@@ -423,7 +428,7 @@ holdingsAt('2026-02-14')   // the same, for any past date
 netWorthAt('2026-02-14')   // dates are 'YYYY-MM-DD' strings, both directions
 ```
 
-DESIGN.md §8.2 names three dashboards drifting on the definition of "current holdings" as the
+DESIGN.md §8.2 names dashboards drifting on the definition of "current holdings" as the
 weakest point in the design; the view and this one module over it are the mitigation. A screen that
 writes its own join over `holding` has left it. Partial data is reported as partial — an unpriced
 holding still appears with `isPriced: false`, is left out of the total, and is counted in the

@@ -87,7 +87,7 @@ account (
   kind,                    -- brokerage | 401k | ira | bank | liability
   owner_id      → person,  -- single owner; see 4.2
   tax_treatment,           -- taxable | tax_deferred | tax_free
-  external_account_number, -- optional, captured from CSV; used to auto-select the dropdown
+  external_account_number, -- optional, captured from CSV; guards a commit against the wrong account
   closed_at                -- nullable; closing preserves history
 )
 
@@ -276,8 +276,9 @@ typing on every upload, forever.
 
 **An in-progress upload is a row, not client state.** The flow above runs over an `upload_draft`
 table — the file's bytes, the chosen account and the half-finished mapping — so every step is a URL
-that survives a reload, the back button and a closed laptop. It is the one table §4.1's list does
-not carry, deliberately: it stages what is *becoming* a statement and holds nothing any other
+that survives a reload, the back button and a closed laptop. It is one of two tables §4.1's list
+does not carry (the other is `app_setting`, §10.1), deliberately: it stages what is *becoming* a
+statement and holds nothing any other
 screen reads, and the row is deleted the moment its statement lands (or swept after a day).
 
 ### 5.2 Uploads append, never mutate
@@ -436,7 +437,8 @@ foreign-listed instrument cannot silently sum GBP into a USD total.
 ### 6.2 Freshness and storage
 
 Background polling on the **household's refresh cadence during market hours** — a whole number of
-minutes set at Settings → Prices, seeded to 15 (§8.4) — plus a manual "Refresh now" button.
+minutes set at Settings → Prices, seeded to 15 (§8.4) — plus a manual "Refresh now" button, which
+belongs to the pricing UI that is specified and not built yet.
 Pages read the database and never fan out to the API on render.
 
 Streaming was rejected on the grounds that mutual funds have no intraday price at all — they strike
@@ -459,8 +461,9 @@ surfaced in the UI. Never zero, never null into a sum.
 **Non-trading days** get no `price_daily` row. History queries carry forward the last close, so
 Saturday's net worth equals Friday's.
 
-**Manual-priced instruments** are edited in a form which writes a `price_daily` row; the value
-carries forward until changed.
+**Manual-priced instruments** are to be edited in a form which writes a `price_daily` row, the
+value carrying forward until changed. The form belongs to the unbuilt Settings → Instruments tab
+(§8.4), so today a `manual` instrument stays unpriced until that lands.
 
 ---
 
@@ -470,7 +473,8 @@ carries forward until changed.
 position backfill.
 
 **A manual net worth series prefixes the chart.** Hand-typed `(date, amount)` points cover the
-period before the app existed.
+period before the app existed. The series is read and drawn today; the Settings → History screen
+that would type the points in is not built yet (§8.4).
 
 Three rules govern how the two series coexist, so the chart never overstates what it knows:
 
@@ -487,12 +491,12 @@ Three rules govern how the two series coexist, so the chart never overstates wha
 
 ### 8.1 Dashboards
 
-The four daily-use, read-only pages. The management screens that create the data they read are
-in §8.4.
+The four daily-use pages — read-only but for the one inline write Holdings carries (§5.4). The
+management screens that create the data they read are in §8.4.
 
 | Page | Contents |
 |---|---|
-| **Overview** | Net worth headline · trend line (dashed manual prefix, solid computed) · allocation donut by asset class · assets vs liabilities |
+| **Overview** | Net worth headline · trend line (dashed manual prefix, solid computed) · the accounts rollup · allocation by account, drawn as bars (the asset-class cut lives on Analysis) |
 | **Holdings** | The workhorse. Full column set on desktop, cards on mobile. Filter by person / account / tax treatment / classification; group by any of them, with subtotals |
 | **Analysis** | Net worth cut three ways — by person, by account kind, by asset class — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment. The one view where the loan's negative yield does something interesting |
@@ -502,7 +506,9 @@ by account, tax view, unrealized. Those are the same table with the grouping cha
 features.
 
 **Deliberately not in v1:** per-account drill-down (the filtered Holdings table already is one) and a
-dedicated tax page (a group-by plus a chart on Overview).
+dedicated tax page (a group-by plus a chart on Overview). The drill-down exclusion was later
+reversed — §13.1 makes the argument, and `/accounts/:id` is built; the tax one is half reversed,
+below.
 
 **The tax exclusion is half reversed: there is still no tax page, but there is a tax-aware panel.**
 The argument above was that a tax view is a grouping and a chart over columns the other screens
@@ -516,7 +522,7 @@ one — the tax is computed per row and totalled from the rows, so a loss in one
 netted against a gain in another the way a real return would net it, which makes the figure an
 upper bound. The panel says that on the page.
 
-**Mobile shape matters.** The full column set is a desktop grid; thirteen columns on a phone is a
+**Mobile shape matters.** The full column set is a desktop grid; nine columns on a phone is a
 horizontal scroll nobody uses. Mobile gets a card list with a few fields visible and tap-to-expand.
 
 **The four filter dimensions above are seven as built.** This section predates §8.3, whose `View`
@@ -539,8 +545,8 @@ as owed rather than quietly dropped.
 Each dashboard writes its **own SQL** against the normalised tables. There is **no materialised fact
 table and no daily rollup job**.
 
-The shared join is factored into a plain (non-materialised) SQL view so the three dashboards cannot
-drift on how they resolve "current holdings":
+The shared join is factored into a plain (non-materialised) SQL view so the screens that read it
+cannot drift on how they resolve "current holdings":
 
 ```sql
 CREATE VIEW holding_valued AS
@@ -574,7 +580,7 @@ added here is a column added to both, in one migration. See
 is known and label the coverage** — "unrealized $47k, based on 8 of 12 holdings". Never coerce null
 to zero, which would report a fake gain equal to the entire untracked position.
 
-> **Weakest point in the design.** Three hand-rolled queries can disagree on edge cases — null cost
+> **Weakest point in the design.** Hand-rolled queries can disagree on edge cases — null cost
 > basis, stale prices, an account whose first position set starts mid-chart. You will not get an
 > error; you will get two pages showing different totals. `holding_valued` is the mitigation and the
 > first place to look.
@@ -622,8 +628,8 @@ but not before it, since the builder handles every case above as a form.
 **Navigation is ordered by frequency of use**, not by entity count:
 
 ```
-Overview   Holdings   Income   Upload                              ⚙ Settings
-└──────── daily ────────┘   └─ weekly ─┘                      └─ a few times ever ─┘
+Overview   Holdings   Analysis   Income   Upload                   ⚙ Settings
+└────────────── daily ─────────────┘   └─ weekly ─┘           └─ a few times ever ─┘
 ```
 
 Upload is a primary workflow rather than configuration, so it stays top-level despite being a
@@ -641,6 +647,9 @@ mutation. Everything else that writes lives behind Settings.
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
 | Prices | The refresh cadence — how often the poller (§6.2) asks the feed for quotes while the market is open |
 | Display | How the screens look before anyone touches them: the masking policy (spec 0007), and the theme choice when §12's toggle lands |
+
+Classifications, Instruments and History are not built yet: the strip today is People, Accounts,
+Tax, Prices and Display, and the Settings index names the other three as what later slices build.
 
 **Tax is the first tab that is a preference rather than a set of domain rows.** Every other tab
 creates or edits something the portfolio is made of; this one holds a single number that describes
@@ -674,8 +683,9 @@ that looks broken. `docs/adr/0002-masking-is-a-display-state.md` records the spl
 deliberately weak guarantee under it — masking defends against being read over the shoulder, and the
 login gate (§10) remains the only thing that keeps anyone out.
 
-**The Instruments tab carries real weight**, which is why it isn't just inline editing on a table
-row. It's the only place that answers "which manual-priced instruments have gone stale?" — a
+**The Instruments tab will carry real weight**, which is why it isn't planned as just inline
+editing on a table row. It will be the only place that answers "which manual-priced instruments
+have gone stale?" — a
 question you must revisit on a schedule, since CIT prices don't update themselves. It's also where a
 ticker change (§4.3) gets applied and where a bad alias gets repointed. Buried as row affordances,
 those are undiscoverable exactly when needed.
@@ -704,7 +714,7 @@ since nothing else can be created until at least one of each exists.
 |---|---|---|
 | Runtime | **Node 24 LTS** | Bun is production-viable and faster, but Node is the fewer-surprises target for software other people deploy, and `Bun.SQL` would lock the data layer to the runtime. Throughput is not a constraint here — one family, ~100 symbols every 15 minutes. Native TypeScript type stripping is stable as of v24.12.0, which lets **standalone scripts** (migration runner, seeds, one-off CLI tasks) run as `.ts` directly. It does *not* remove the app's build step: React Router builds both client and server bundles through Vite. Types are stripped, never checked — `tsc --noEmit` stays in CI. |
 | Framework | **React Router 7** | Full-stack, SSR + client routing, Vite-based, good self-host story. Single codebase, single container, shared types. Chosen over SvelteKit purely on existing familiarity, which outweighs any technical edge for a solo-maintained project. Next.js rejected as the fiddliest to self-host. |
-| PWA | **`vite-plugin-pwa`** | Manifest, service worker, precaching |
+| PWA | **`vite-plugin-pwa`** | Manifest, service worker, precaching. Not adopted yet — the PWA slice (§11) is unbuilt and the dependency is not installed |
 | Database | **Postgres** | |
 | Access | **Kysely** | Typed SQL builder, not an ORM. `kysely-codegen` derives types from the live database **including views**, so `holding_valued` is typed like a table. Drizzle was the runner-up — better migration ergonomics, but it wants the schema to live in TypeScript, and this design puts a SQL view at the centre, which is exactly where TS-schema-first tools force you to maintain a definition twice. |
 | Migrations | **Plain `.sql` files** | The database is the source of truth. Run on container start, before serving. |
@@ -808,7 +818,8 @@ Migrations must be idempotent so a restart is always safe.
 | `SESSION_SECRET` | if auth on | — | Cookie signing key |
 | `AUTH_PASSWORD` | no | unset | Enables the login gate; unset shows the warning banner (§10) |
 | `PORT` | no | `3000` | HTTP listen port |
-| `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation |
+| `MAX_UPLOAD_MB` | no | `10` | Largest statement upload accepted, in whole MB |
+| `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation, and the trading day a quote's close is filed under |
 | `TZ` | no | `UTC` | Container clock; the database stores UTC regardless |
 
 **The household's settings are deliberately not in that table.** Environment variables remain the
@@ -847,7 +858,7 @@ Every mutation except balance editing and position correction is a desktop-shape
 → mapping → resolution → diff → commit is four screens with real state, and designing it for a 390px
 viewport would compromise the desktop version that will actually be used.
 
-- **Read:** all three pages.
+- **Read:** every read page.
 - **Write:** manual balance updates (checking, loan) and single-position corrections on Holdings
   (§5.4) — one or two number inputs, and no screen-to-screen state in either. A correction qualifies
   on exactly the test the balance form passes: it is a number typed into a box, and everything that
@@ -856,8 +867,9 @@ viewport would compromise the desktop version that will actually be used.
 - **Everything else:** still renders on mobile and still works if you are determined; it simply gets
   no mobile-specific layout investment. Not hidden — hiding it means being stuck on a tablet.
 
-**Caching:** stale-while-revalidate on the three read pages. Cached render first, background refresh.
-If the server is unreachable you see last-known numbers rather than an error page.
+**Caching:** stale-while-revalidate on the read pages — cached render first, background refresh,
+last-known numbers rather than an error page when the server is unreachable. Owed with the rest of
+the PWA slice; no service worker exists yet.
 
 **The "as of" timestamp is non-negotiable.** Silently showing yesterday's net worth as though it were
 live is the one genuinely dangerous failure mode in a finance app.
@@ -928,7 +940,7 @@ points, which is precisely what this rule forbids.
 installed PWA's status bar. Since the manifest's `theme_color` is static, supply media-scoped meta
 tags so the installed app doesn't sit under a light status bar in dark mode.
 
-The toggle lives in the header, persistent across all three pages.
+The toggle will live in the header, persistent across every page; it has not landed yet (§13.8).
 
 ---
 
@@ -980,7 +992,7 @@ it. What is taken is the *shape* — a mark, a name, a subtitle, and one filled 
 page's primary action — and what fills the button is this app's only write action, **Upload
 statement**.
 
-**The mock's nav is three items (Home / Views / Settings); §8.4's is five.** Unchanged from the
+**The mock's nav is three items (Home / Views / Settings); §8.4's is six.** Unchanged from the
 previous extraction: §8.4 wins, because its ordering is a decision about how often each page is
 opened and the routes already exist.
 
@@ -1093,6 +1105,9 @@ and a per-visit request to a third party is both a privacy leak and an offline f
 | `--type-body-sm` | 14px / 20px | 400 | — |
 | `--type-label-md` | 12px / 16px | 600 | 0.05em, uppercase |
 
+These names are roles, not shipped custom properties: `app.css` defines only `--font-ui` for type
+and applies the ramp as literal values per component.
+
 `--type-headline-sm` is the mock's `headline-lg-mobile`, renamed: it is a size in the ramp, not a
 device, and a card title on a wide screen wants it too.
 
@@ -1138,8 +1153,9 @@ mock's mobile screens uses, with no drawer or hamburger anywhere in the set.
 
 Both the Overview trend and the Account Details performance chart draw the same way.
 
-- **Line:** 3px, `--primary-container` (`#0055ff`) in both themes — it is a fill, and the one value
-  Stitch keeps identical across the two palettes.
+- **Line:** 3px, `--chart-line` — `#0041c8` in light and `#0055ff` in dark: the pale dark-theme
+  primary would vanish as a line, so each theme names the colour that draws well on its canvas
+  (`app.css` records the split).
 - **Area:** a vertical gradient below the line, from the line colour at 0.25 alpha to fully
   transparent at the baseline. This reverses the old brief's "no area fills" rule.
 - **Grid:** horizontal only, 1px, `--outline-variant`, `stroke-dasharray: 4 4`.
@@ -1193,7 +1209,7 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    them means a transaction ledger — a substantially different ingest problem.
 2. **The net worth chart cannot separate market movement from contributions.** Consequence of no
    cash-flow tracking (§3). Labelling mitigates; it does not solve.
-3. **Three hand-rolled dashboard queries can disagree.** Consequence of no materialisation (§8.2).
+3. **Hand-rolled dashboard queries can disagree.** Consequence of no materialisation (§8.2).
    `holding_valued` mitigates.
 4. **No joint accounts.** Consequence of single-owner (§4.2). Adding them is a join table plus
    reworking person-grouped queries.
