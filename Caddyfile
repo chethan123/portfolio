@@ -68,9 +68,18 @@
 			#
 			# `rd` is relative on purpose. The upstream example passes
 			# {scheme}://{host}{uri}, but inside this stack {scheme} is `http`,
-			# and the sidecar rejects an absolute redirect whose origin is not
-			# whitelisted; a path is accepted unconditionally and is always
-			# same-origin.
+			# and the sidecar refuses an absolute redirect to an origin outside
+			# its own `whitelist_domains`, which is deliberately unset; a path
+			# is accepted unconditionally and is always same-origin.
+			#
+			# Known limit: {uri} is interpolated raw and Caddy has no
+			# placeholder that percent-encodes, so a target carrying more than
+			# one query parameter splits at its first `&` and the sidecar reads
+			# only the head of it. The visitor lands signed in, on the right
+			# screen, having lost the later parameters — a custom chart range
+			# comes back as its start alone. The upstream example has the same
+			# flaw; fixing it properly means handing the target over as a
+			# header instead of a query parameter, which is issue #92.
 			@unauthenticated status 401
 			handle_response @unauthenticated {
 				redir * /oauth2/sign_in?rd={uri}

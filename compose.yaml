@@ -1,4 +1,4 @@
-# Four services — DESIGN.md §10.1. The price poller runs in-process inside
+# The whole deployment — DESIGN.md §10.1. The price poller runs in-process inside
 # `app`, which is why there is no separate worker: a worker container would
 # mean two images, two deployments and two places to read logs. `caddy` is a
 # different kind of service — the ingress front door — and is the only one
@@ -81,8 +81,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
       # Not a switch and not a variable: in this file it is a fact. The `gate`
       # service below fronts the app, so the app must not draw its
-      # unprotected-instance banner — a warning a family learns to scroll past
-      # is worse than no warning at all. It still authenticates nobody.
+      # unprotected-instance banner. It still authenticates nobody.
+      # `server/config.ts` carries the argument for why the app is told this
+      # rather than left to guess.
       AUTH_GATE: external
       PORT: ${PORT:-3000}
       MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
@@ -147,7 +148,7 @@ services:
       # copies it onto the request it forwards to `app`, which ignores it
       # today: attribution for later, never permission.
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
-      # Skip the sidecar's own sign-in page. The only login screen anyone in
+      # Skip the sidecar's own sign-in page. The only sign-in screen anyone in
       # this household ever sees is Google's.
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       # The entire authorization policy: one address per line. `email_domains`

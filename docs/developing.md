@@ -202,8 +202,7 @@ what changes how you run and write things.
   cannot be constructed by hand — and `any` never ships, so do not invent a second cast. Routes
   signal a redirect or a 404 by **throwing a `Response`**: `outcomeOf`, `responseOf` and `redirectTo`
   are how a test reads one without a `try`. `servedThrough(middleware, request, params)` runs a
-  route's middleware chain the way the framework would — the seam for the root gate and
-  `chartRangeMiddleware`.
+  route's middleware chain the way the framework would — the seam for `chartRangeMiddleware`.
 - **There is no `globals`.** Every file imports `describe`/`expect`/`it` from `vitest` itself, and
   every file that touches the database calls `afterAll(closeTestDatabase)` itself. The pool and the
   Kysely instance are module-level and opened once per file, and `closeTestDatabase` is the only thing

@@ -37,4 +37,11 @@ describe("the open-instance warning banner", () => {
     expect(markup).not.toContain(WARNING);
     expect(markup).toContain("page body");
   });
+
+  it("never offers the configuration value as the way to make it go away", () => {
+    // Naming AUTH_GATE would teach the one action that silences the warning
+    // while leaving the instance open to anyone who can reach it. The fix the
+    // banner points at is a gate in front, which is a deploy-time act.
+    expect(renderPage("/", false)).not.toContain("AUTH_GATE");
+  });
 });

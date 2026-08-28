@@ -387,7 +387,9 @@ The one thing the app knows about any of this is whether something in front of i
 When nothing does — a checkout under `npm run dev`, or a deployment assembled by hand — it draws an
 undismissable warning on every page saying so, which is why that strip sits across the top of most
 of the screenshots above. The setting protects nothing on its own; it exists only so the warning is
-never a lie, because a warning a household learns to scroll past is worse than none at all.
+never a lie, because a warning a household learns to scroll past is worse than none at all. (Said
+here for someone deciding whether to install this; `server/config.ts` says it again, for whoever
+is about to change what the value does.)
 
 ### Settings, health and the front door
 

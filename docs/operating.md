@@ -24,7 +24,7 @@ file is how the instance is meant to be run.
 
 ## What runs here
 
-Four services, defined in [`compose.yaml`](../compose.yaml) under the project name `portfolio`.
+The services defined in [`compose.yaml`](../compose.yaml), under the project name `portfolio`.
 
 | Service | What it is | Published port |
 |---|---|---|

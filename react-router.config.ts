@@ -5,10 +5,13 @@ export default {
   ssr: true,
 
   future: {
-    // Route middleware. The optional login gate (DESIGN.md §10) is one
-    // middleware on the root route, which is what makes it deny-by-default:
-    // every route is a child of root, so a route added in a later slice is
-    // covered the moment it is routable rather than when someone remembers it.
+    // Route middleware. `chart-range.ts`'s `chartRangeMiddleware` is what
+    // needs it: a middleware wraps the *response*, which is how a route can
+    // write the range cookie while its loader keeps returning the plain object
+    // every test reads fields off directly.
+    //
+    // Authentication was the original reason and is no longer a reason at all —
+    // it happens in front of the app now (ADR-0005), so nothing here is a gate.
     v8_middleware: true,
   },
 } satisfies Config;
