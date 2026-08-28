@@ -219,7 +219,7 @@ left stale. So:
   docker compose logs --tail=500 app | grep -i "Price poller did not start"
   ```
 
-- **The provider is unreachable.** Grep for the stem `Price refresh failed`, or for `Price refresh`
+- **The provider is unreachable.** Grep for the stem `Price provider failed`, or for `Price refresh`
   lines reporting stale instruments. Last-known prices are kept and marked stale — never zeroed —
   and `/healthz` deliberately stays `200`, because a third-party outage must not make Compose
   restart a healthy app. Nothing to do but check egress.
@@ -357,7 +357,7 @@ this entry lists only what people get wrong.
   so a truncated dump looks exactly like a backup. Check the exit status, and:
 
   ```sh
-  pg_restore --list portfolio-2026-08-23.dump | head
+  docker compose exec -T db pg_restore --list < portfolio-2026-08-23.dump | head
   ```
 
 - **On a fresh machine, bring up `db` alone first** — `docker compose up -d db` — so `app` does not
@@ -428,9 +428,10 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
   records nothing at all — there is no partly-recorded state to find.
 - Migrations fail closed: a failure rolls that file back whole and the server refuses to start, so a
   half-applied schema is not a thing that exists.
-- Nothing in the application deletes anything. An account is closed rather than deleted; a
-  correction is a new record rather than an overwrite. What looks like missing data is usually a
-  screen filtered to a date or an account.
+- Almost nothing in the application deletes anything: an account is closed rather than deleted, and
+  a correction is a new record rather than an overwrite. The one real delete is removing a person
+  who owns no accounts. What looks like missing data is usually a screen filtered to a date or an
+  account.
 - An in-progress upload draft is not data. Drafts are swept after 24 hours, and only when the next
   upload starts.
 

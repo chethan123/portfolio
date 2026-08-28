@@ -37,7 +37,7 @@ again — see below.
 **A greyed-out option is one your data cannot reach yet** — a household eight months old sees 5Y
 disabled rather than a click that silently does the same thing All already does.
 
-The choice lives in the address bar as `?range=3m` (or, for Custom, `?start=`/`?end=`). So it
+The choice lives in the address bar as `?range=3m` (or, for Custom, `?range=custom&start=…&end=…`). So it
 survives a reload, you can bookmark it, and you can send the address to the other person in the
 household and they will see the same window you did. Absent an address-bar range, this browser
 reopens on whichever range you picked here last time, remembered in a cookie — a convenience, not a

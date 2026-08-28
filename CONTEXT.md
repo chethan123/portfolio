@@ -32,7 +32,8 @@ _Avoid_: account type, tax status, taxable/non-taxable.
 **Account type**:
 Which of five kinds an account is — brokerage, workplace plan, IRA, bank, liability. Distinct from
 tax treatment, and the two are not interchangeable: a workplace plan may be tax-deferred or tax-free.
-The schema calls this column `account_kind`; the screens call it Account type.
+The schema calls this column `kind` (the `holding_valued` view exposes it as `account_kind`); the
+screens call it Account type.
 _Avoid_: using it to mean tax treatment.
 
 **Sheltered**:

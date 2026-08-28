@@ -10,7 +10,8 @@ figure is shown.
 
 ## If a warning strip says the instance has no password
 
-**This instance has no password.** Anyone who can reach the address can read and change your data.
+**This instance has no password.** Anyone who can reach it can read and change your data. Set
+`AUTH_PASSWORD` (and `SESSION_SECRET`) to put it behind a login.
 
 That strip sits on every page and cannot be dismissed. Nothing you can do in the app removes it —
 a password is set by whoever runs the instance, not from a screen in here. Ask them, and point them
@@ -59,8 +60,16 @@ Like Overview and Analysis, Income draws nothing until a statement has been uplo
 saying so, and no ring, no zero and no empty chart frame. An instance with nothing in it and a
 portfolio that genuinely pays nothing must not look alike.
 
-**Settings** sits on its own at the foot, and the filled **Upload statement** button below it is how
-a statement gets in.
+**Settings** sits on its own at the foot, with the **Show amounts** / **Hide amounts** control
+beneath it, and the filled **Upload statement** button below that is how a statement gets in.
+
+## If every amount shows as dots
+
+Amounts start hidden on a browser nobody has answered for: each shows a run of dots, while names,
+dates and the shape of the chart stay readable. Press **Show amounts** in the navigation to reveal
+them on this browser; hiding them again is the same control. What a fresh browser opens showing is
+a household choice at [Settings → Display](settings.md#display). It is a defence against being read
+over your shoulder, not a lock — the password above is the only thing that keeps anyone out.
 
 ## Light and dark
 

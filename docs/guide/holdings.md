@@ -46,7 +46,8 @@ the screen names the pair rather than leaving you to work it out:
 > No holding matches every filter at once. Nothing in the portfolio is owned by Jordan Rivera and
 > at Fidelity.
 
-A **Clear filters** link sits in that sentence, with the number of holdings it will bring back.
+The sentence also says how many holdings are recorded in all, and a **Clear filters** button sits
+beneath it.
 
 An old link can also point at something that no longer exists — an account you have since closed.
 That reads differently, as a filter naming something the portfolio does not hold, and the
@@ -76,6 +77,9 @@ group already says it.
 
 - **Asset** — the instrument, with its symbol as a badge, its classification and its asset class
   underneath.
+- **Account** — the account that holds it, with the institution underneath. The name is a link to
+  that account's page.
+- **Owner** — whose account that is.
 - **Quantity** — units held. Negative for something owed.
 - **Price** — the last price known for it.
 - **Value** — quantity times price.

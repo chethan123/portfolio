@@ -24,7 +24,7 @@ header is nearer the code and probably right.
 
 ## Commands
 
-Node 24 required. Most tests and all database work need the throwaway Postgres:
+Node 24.12+ required. Most tests and all database work need the throwaway Postgres:
 
 ```sh
 docker compose -f compose.test.yaml up -d --wait     # Postgres on :55432, tmpfs — dies with the container
@@ -85,13 +85,15 @@ concluding a grep found a violation):
 - `app/lib/price-provider.server.ts` is the only importer of `yahoo-finance2`;
   `app/lib/prices.server.ts` is the only price writer.
 - `app/lib/valuation.server.ts` is the only valuation reader of `holding_valued` — every screen
-  reads holdings through `currentHoldings()`/`netWorth()`/`holdingsAt()`/`netWorthAt()`. A screen
-  writing its own join over `holding` has left the design.
+  reads holdings through its readers (`currentHoldings()`, `netWorth()`, `holdingsAt()`,
+  `netWorthAt()`, `accountHoldings()`, `accountTotals()`). A screen writing its own join over
+  `holding` has left the design.
 
 **History is append-only.** Uploads, balance sets, and position corrections each write a new
 `position_set`; nothing edits or deletes one, because `holding_valued_at` reads them for every date
-the chart plots. There is no delete anywhere in the app beyond two narrow cases; accounts are
-*closed* (`closed_at`), never removed.
+the chart plots. The only deletes in the app are two narrow cases — a person owning no accounts, an
+instrument that lost an alias race — plus `upload_draft` scaffolding rows (swept at 24h, consumed
+at commit), which are not history. Accounts are *closed* (`closed_at`), never removed.
 
 **`app/routes.ts` is hand-written route configuration, not file-based routing.** Dropping a file
 into `app/routes/` does nothing until an entry is added there — the most common wasted hour in this
@@ -121,7 +123,7 @@ which disappear under a mock. House style (docs/developing.md has the rest):
 - Wrap database test bodies in `withDatabase` (transaction, always rolled back; `getDb()` resolves
   to it at any depth). Call `afterAll(closeTestDatabase)` in files that touch the database.
 - Seed through the builders in `tests/support/fixtures.ts` (`seedPerson`, `seedAccount`,
-  `seedPositionSet`, `seedQuote`, `seedDailyClose`). Raw `INSERT`s belong in the builder, nowhere else.
+  `seedPositionSet`, `seedQuote`, `seedDailyClose`, …). Raw `INSERT`s belong in the builder, nowhere else.
 - Call loaders/actions through `tests/support/routes.ts` (`get`, `post`, `args`, `outcomeOf`) —
   routes signal redirects/404s by throwing a `Response`.
 - Money assertions are exact decimal strings at the stored scale (`"250.0000"`), never

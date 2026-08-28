@@ -32,12 +32,15 @@ Come back to these when you want to know what something on a screen means.
   balance.
 - **[Uploading statements](upload.md)** — what a file has to look like, and what the app does with
   it.
-- **[Settings](settings.md)** — people, accounts, closing an account, and the tax rate.
+- **[Settings](settings.md)** — people, accounts, closing an account, the tax rate, and how
+  amounts start hidden.
 
 ## Worth knowing
 
 - **[Why a number did not change](prices.md)** — how prices refresh, and why some holdings show a
   dash instead of a value.
+- **Every amount shows as dots?** That is masking: press **Show amounts** in the navigation, and
+  see [Settings → Display](settings.md#display) for how a fresh browser opens.
 - **[When something is refused](when-something-is-refused.md)** — the refusals whose cause is not
   on the screen in front of you.
 
@@ -52,8 +55,9 @@ total and the screen says how much of the portfolio the total covers. A dash nev
 
 ## Not built yet
 
-So you are not left hunting for them: Settings lists **Classifications**, **Instruments** and
-**History** as tabs that do not exist yet. There is also no export or download of any kind.
+So you are not left hunting for them: Settings names **Classifications**, **Instruments** and
+**History** as what later slices build — they are not drawn as tabs. There is also no export or
+download of any kind.
 
 ---
 
