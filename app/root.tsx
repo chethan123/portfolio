@@ -23,43 +23,39 @@ import {
 } from "~/components/icons";
 import { MaskingToggle } from "~/components/masking-toggle";
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
-import { authGate } from "~/lib/auth.server";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
 import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
 import { startPricePoller } from "~/lib/price-poller.server";
 import { readMaskingPolicy } from "~/lib/settings.server";
+import { getConfig } from "../server/config.ts";
 
 import type { Route } from "./+types/root";
 
 import "./app.css";
 
-/**
- * The login gate, DESIGN.md §10 — one middleware, on the route every other
- * route descends from.
+/*
+ * The gate used to be wired here, as root-route middleware, and nothing
+ * replaces it: authentication happens in front of the app now, so a request
+ * that reaches this process has already been admitted and there is nothing left
+ * for a middleware to decide.
  *
- * This is the whole enforcement point. It is deny-by-default: it refuses any
- * request without a session except the handful of paths `auth.server.ts` lists
- * as open, so a route added by a later slice needs nothing done to it to be
- * protected. With `AUTH_PASSWORD` unset the gate lets everything through and
- * the banner below says so.
+ * One thing does ride in on every request, and the only place the code says so
+ * is here. The gate attaches the verified address of whoever is acting as
+ * `X-Auth-Request-Email`, and the app reads it nowhere — deliberately. It is
+ * attribution, never permission (CONTEXT.md, "Authenticated email"): every
+ * family member sees and can do everything, so a screen that consulted it would
+ * be inventing a rule the household has not made. A later feature may read it
+ * to record *who* did a thing; none may read it to decide *whether* they may.
  */
-export const middleware: Route.MiddlewareFunction[] = [
-  async ({ request }, next) => {
-    await authGate().requireSession(request);
-    return next();
-  },
-];
 
 /**
- * What the shell around every page needs: whether the instance is password
- * protected, whether it has been set up yet, and whether this browser is
- * masked.
+ * What the shell around every page needs: whether anything guards the instance,
+ * whether it has been set up yet, and whether this browser is masked.
  *
  * The first-run read is deliberately failure-tolerant. It is a hint, not data —
  * so a database that is down produces a page without a prompt rather than an
- * error page, and in particular leaves the login page working when the database
- * is unreachable. `/healthz` is what reports the database being down, and it
- * reports it without needing credentials.
+ * error page over every screen in the application. `/healthz` is what reports
+ * the database being down, and it reports it without crossing the gate.
  *
  * **Masking is resolved here, on the server, for the reason §12 gives for the
  * theme.** The first paint has to be correct: a page that drew the amounts and
@@ -69,9 +65,8 @@ export const middleware: Route.MiddlewareFunction[] = [
  * server (story 30).
  *
  * The policy read is failure-tolerant for the same reason the first-run read is,
- * and it fails to *masked*. A database that is down would otherwise take the
- * login page with it; and of the two ways to be wrong while it is down, showing
- * a page of dots is the one that cannot expose anything.
+ * and it fails to *masked*. Of the two ways to be wrong while the database is
+ * down, showing a page of dots is the one that cannot expose anything.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   // The quote refresh loop (§6.2). Started from here because the application is
@@ -103,7 +98,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     console.error("Masking policy read failed; masking this render:", error);
   }
 
-  return { authConfigured: authGate().enabled, firstRun, masked, maskingPolicy };
+  // Read here rather than in the banner, because a component cannot: the value
+  // is an environment variable and the browser has no environment.
+  return { gated: getConfig().AUTH_GATE === "external", firstRun, masked, maskingPolicy };
 }
 
 /**
@@ -224,7 +221,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </div>
             </header>
 
-            {rootData?.authConfigured === false ? <OpenInstanceBanner /> : null}
+            {rootData?.gated === false ? <OpenInstanceBanner /> : null}
             <main className="app-main">
               {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
               {children}

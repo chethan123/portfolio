@@ -2,6 +2,13 @@
 
 _Part of [0001-foundation-day-zero.md](../0001-foundation-day-zero.md)._
 
+**Superseded.** The gate this ticket built shipped and has since been deleted — no `AUTH_PASSWORD`,
+no login page, no session cookie of the app's own. Authentication now happens outside the app
+entirely, in a forward-auth gate in front of it: see
+[0011-auth-gate.md](../0011-auth-gate.md) and
+[ADR-0005](../../adr/0005-auth-is-a-forward-auth-gate.md). What follows is the record of what was
+built here and why, not how the system works.
+
 **What to build:** A self-hoster whose instance is reachable beyond their LAN can set one password
 and have the whole app sit behind a login page. Leaving it unset keeps the app open, but says so
 loudly and permanently, so it cannot be forgotten. This is not multi-user authentication and is not

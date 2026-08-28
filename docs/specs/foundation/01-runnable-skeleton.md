@@ -2,6 +2,12 @@
 
 _Part of [0001-foundation-day-zero.md](../0001-foundation-day-zero.md)._
 
+**Superseded in part** by the gate ([0011-auth-gate.md](../0011-auth-gate.md),
+[ADR-0005](../../adr/0005-auth-is-a-forward-auth-gate.md)): `docker compose up` no longer promises a
+working instance with no manual steps — the stack now refuses to start until the operator's Google
+OAuth client exists, because an instance that boots without its gate is an open one — and the
+environment surface no longer carries the password gate's variables. The rest of the ticket stands.
+
 **What to build:** A self-hoster clones the repo, runs `docker compose up` on a fresh machine with
 an empty data directory, and gets a working instance with no manual steps. Postgres comes up, the
 app waits for it, and `/healthz` answers 200. Opening the published port in a browser shows the

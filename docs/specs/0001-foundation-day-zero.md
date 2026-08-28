@@ -94,6 +94,11 @@ positions, and the sign lives in quantity.
 
 **Access control**
 
+_Stories 20–22 are superseded: the password gate they asked for has been deleted, and authentication
+now happens outside the app in a forward-auth gate ([0011-auth-gate.md](0011-auth-gate.md),
+[ADR-0005](../adr/0005-auth-is-a-forward-auth-gate.md)). 23 and 24 still hold — the health endpoint
+is still exempt, and forwarded headers are still trusted._
+
 20. As a self-hoster, I want to optionally set a password that gates the whole app, so that an
     instance reachable beyond my LAN is not wide open.
 21. As a self-hoster, I want a login page and a signed cookie when that password is set, so that I
@@ -372,6 +377,12 @@ Settings → People, then at Settings → Accounts once a person exists.
 
 ### Authentication
 
+_Superseded. None of this is still true: the app authenticates nobody, and a forward-auth gate in
+front of it does, with Google sign-in against an allowlist of family addresses
+([0011-auth-gate.md](0011-auth-gate.md),
+[ADR-0005](../adr/0005-auth-is-a-forward-auth-gate.md)). Only the `/healthz` exemption survives, now
+enforced at the gate. This section records what day zero shipped._
+
 One optional gate, exactly as §10 describes: setting `AUTH_PASSWORD` enables a middleware, a signed
 cookie and a single login page. No user table, no sessions table, no per-person permissions.
 `SESSION_SECRET` becomes required when `AUTH_PASSWORD` is set, and startup fails loudly if it is
@@ -404,6 +415,10 @@ with the process exiting on a validation failure. The two pricing variables are 
 in this slice even though nothing reads them yet, so that the configuration surface is complete and
 stable from the first release. Every variable is documented in an example environment file, which is
 the configuration API.
+
+_The password gate's two variables have since been removed from that table; the app now takes only a
+description of what fronts it. `.env.example` and DESIGN.md §10.1 remain the authority
+([0011-auth-gate.md](0011-auth-gate.md))._
 
 ## Testing Decisions
 

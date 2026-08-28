@@ -138,9 +138,9 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
  * stand-in response.
  *
  * A route's middleware wraps the *response*, not the loader's return value —
- * `root.tsx`'s auth gate and `chart-range.ts`'s `chartRangeMiddleware` both
- * work this way, precisely so their loaders keep returning the plain object
- * every other test in this suite reads fields off directly. What a
+ * `chart-range.ts`'s `chartRangeMiddleware` works this way, precisely so its
+ * loaders keep returning the plain object every other test in this suite reads
+ * fields off directly. What a
  * middleware adds to (or refuses) that response is what this helper is for;
  * what the loader underneath it returns is `loader(args(...))`'s question,
  * not this one's. A middleware step may throw a `Response` instead of

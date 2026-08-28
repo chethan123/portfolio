@@ -14,9 +14,9 @@
  * the cookie's name, its vocabulary or its lifetime: all three live in
  * `masking.ts`, so the two cannot drift.
  *
- * The gate above still applies. This route descends from root like every other,
- * so `authGate` refuses it without a session — a display preference is not a
- * reason to open a hole in §10.
+ * Nothing guards this route in particular and nothing needs to: the gate in
+ * front of the app admits or refuses a request before the router ever sees it,
+ * so a resource route with no screen is exactly as protected as a screen is.
  */
 import { redirect } from "react-router";
 

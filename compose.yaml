@@ -1,15 +1,23 @@
-# Three services — DESIGN.md §10.1. The price poller runs in-process inside
+# The whole deployment — DESIGN.md §10.1. The price poller runs in-process inside
 # `app`, which is why there is no separate worker: a worker container would
 # mean two images, two deployments and two places to read logs. `caddy` is a
 # different kind of service — the ingress front door — and is the only one
-# that publishes a port; `app` and `db` are reachable only on the compose
-# network.
+# that publishes a port; `app`, `db` and `gate` are reachable only on the
+# compose network.
 #
 #   docker compose up -d
 #
-# on a fresh machine with an empty volume produces a working instance with no
-# manual steps. Copy .env.example to .env first only if you want to change
-# something; every setting has a working default except the ones with none.
+# no longer produces a working instance with no manual steps, and that is the
+# point. The old promise came with an instance open to anyone who could reach
+# it, on a home LAN that also carries guest phones and IoT. What replaces it is
+# Google sign-in at `gate`, and a gate that can be skipped by forgetting to
+# configure it is not a gate — so the `${VAR:?}` interpolations below stop
+# `docker compose up` with the name of the first missing variable rather than
+# starting something half-protected.
+#
+# The manual step is therefore exactly one, done once: create a Google OAuth
+# client and put its credentials in `.env`. Copy .env.example and follow its
+# gate section. Every other setting still has a working default.
 
 name: portfolio
 
@@ -71,8 +79,12 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
-      SESSION_SECRET: ${SESSION_SECRET:-}
-      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      # Not a switch and not a variable: in this file it is a fact. The `gate`
+      # service below fronts the app, so the app must not draw its
+      # unprotected-instance banner. It still authenticates nobody.
+      # `server/config.ts` carries the argument for why the app is told this
+      # rather than left to guess.
+      AUTH_GATE: external
       PORT: ${PORT:-3000}
       MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
       TZ: ${TZ:-UTC}
@@ -94,18 +106,120 @@ services:
       retries: 5
       start_period: 20s
 
+  gate:
+    # oauth2-proxy: the forward-auth sidecar `caddy` asks about every request
+    # before it reaches `app` (Caddyfile). Pinned to an exact release rather
+    # than a floating major — unlike `app`, nobody here is watching this image
+    # for a breaking change, and the thing it guards is the whole picture.
+    #
+    # The `-alpine` flavour specifically. The default image is distroless: no
+    # shell and no wget, which the healthcheck below needs, because a
+    # healthcheck runs inside the container it checks.
+    #
+    # Stateless — the session is an encrypted cookie in the browser — so there
+    # is no volume and no database here, only the allowlist it reads.
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: google
+      # The fail-closed contract, in three lines. `:?` is evaluated before any
+      # container starts, so a missing credential is a message naming the
+      # variable rather than a sidecar crash-looping behind a Caddy that has
+      # already bound :80 and is refusing everything.
+      OAUTH2_PROXY_CLIENT_ID: "${GATE_CLIENT_ID:?missing GATE_CLIENT_ID — see the gate section of .env.example}"
+      OAUTH2_PROXY_CLIENT_SECRET: "${GATE_CLIENT_SECRET:?missing GATE_CLIENT_SECRET — see the gate section of .env.example}"
+      OAUTH2_PROXY_COOKIE_SECRET: "${GATE_COOKIE_SECRET:?missing GATE_COOKIE_SECRET — see the gate section of .env.example}"
+      # Google redirects the *browser* here, so this is the origin the house
+      # proxy serves — never anything on the compose network. It must also be
+      # the redirect URI registered on the Google OAuth client, character for
+      # character, or Google refuses the sign-in.
+      OAUTH2_PROXY_REDIRECT_URL: "${PUBLIC_ORIGIN:?missing PUBLIC_ORIGIN — see the gate section of .env.example}/oauth2/callback"
+      # The default is 127.0.0.1:4180, which inside a container means `caddy`
+      # cannot reach it at all.
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      # Believe Caddy's X-Forwarded-* headers. Without it the sidecar reads the
+      # container-internal host and builds sign-in redirects nobody can follow.
+      # It is also what makes the missing `ports:` below load-bearing: with this
+      # on, the sidecar trusts those headers from whatever reaches it, so "only
+      # Caddy can reach it" has to hold for the gate exactly as it does for
+      # `app`.
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      # Puts X-Auth-Request-Email on the /oauth2/auth response. The Caddyfile
+      # copies it onto the request it forwards to `app`, which ignores it
+      # today: attribution for later, never permission.
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      # Skip the sidecar's own sign-in page. The only sign-in screen anyone in
+      # this household ever sees is Google's.
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # The entire authorization policy: one address per line. `email_domains`
+      # is deliberately not set — the narrowest domain rule that would admit
+      # the family also admits every other Gmail account on earth.
+      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/allowed-emails.txt
+      # Both are spelled out rather than inherited. SameSite=Lax is this
+      # instance's entire CSRF posture now that the app carries no cookie of
+      # its own, and it is not a default (the image leaves SameSite unset).
+      # Secure is a default, and is stated because it is a claim about the
+      # deployment — the browser only ever meets this instance over the house
+      # proxy's TLS — rather than a preference. Expiry is left at the seven-day
+      # default, which is what makes sign-in a once-per-device event.
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Long syntax purely for `create_host_path: false`. Docker's short
+      # `./allowed-emails.txt:/…:ro` form creates a *directory* at the source
+      # path when the file is missing, which hands the operator a crash-looping
+      # sidecar and a junk directory in their deploy dir. This way a missing
+      # allowlist stops `up` with a message, like every other missing input.
+      - type: bind
+        source: ./allowed-emails.txt
+        target: /etc/oauth2-proxy/allowed-emails.txt
+        read_only: true
+        bind:
+          create_host_path: false
+    # No `ports:` by design, and here it is enforcement rather than tidiness —
+    # see OAUTH2_PROXY_REVERSE_PROXY above.
+    #
+    # Read-only for the same reason `app` is: the sidecar keeps no state on
+    # disk, and this says so in a way that would fail loudly if that changed.
+    #
+    # It does run as root, which `app` does not: the published alpine image
+    # sets no USER, and pinning one here would decide on the operator's behalf
+    # that their allowlist file is readable by that uid — a file mode nobody
+    # mentioned to them, discovered as a sidecar that will not start. Root in a
+    # read-only container with no port and no volume is the smaller of those
+    # two risks, and it is written down rather than left to be noticed.
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      # `/ping` is the sidecar's own liveness endpoint and is not routed
+      # through Caddy, so it is reachable only from inside this container.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4180/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
       app:
         condition: service_healthy
+      # Caddy refuses every request the gate has not vouched for, so a Caddy
+      # that binds :80 before the gate answers is an instance that is down
+      # rather than one that is open — but "down for a few seconds on boot" is
+      # still worth avoiding, and it is the same reason `app` is here.
+      gate:
+        condition: service_healthy
     environment:
       # Caddy substitutes this into the Caddyfile below. Kept in sync with the
       # app's own listen port rather than hardcoded.
       APP_PORT: ${PORT:-3000}
-    # The only port published to the host. Plain HTTP on 80 for now — TLS
-    # termination is a follow-up.
+    # The only port published to the host, which is what makes this container
+    # the single place the gate can be enforced. Plain HTTP: TLS and the public
+    # hostname belong to the operator's house-wide Caddy in front of it.
     ports:
       - "80:80"
     volumes:

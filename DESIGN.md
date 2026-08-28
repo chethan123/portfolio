@@ -681,7 +681,7 @@ That placement is load-bearing rather than convenient: the policy is seeded to *
 run is a page of dots, and dots whose only cure is three clicks into a configuration area is an app
 that looks broken. `docs/adr/0002-masking-is-a-display-state.md` records the split and the
 deliberately weak guarantee under it — masking defends against being read over the shoulder, and the
-login gate (§10) remains the only thing that keeps anyone out.
+gate in front of the instance (§10) remains the only thing that keeps anyone out.
 
 **The Instruments tab will carry real weight**, which is why it isn't planned as just inline
 editing on a table row. It will be the only place that answers "which manual-priced instruments
@@ -728,12 +728,12 @@ routing here, so it is not needed.
 
 | Area | Decision |
 |---|---|
-| **Packaging** | Docker Compose: Caddy + app + Postgres. All configuration via environment variables. |
+| **Packaging** | Docker Compose: Caddy + the sign-in gate + app + Postgres. All configuration via environment variables, with one exception — who may enter is a file (§10.1). |
 | **Distribution** | The app image is built once by CI and **pulled**, not built on the host. A `v*` tag publishes a multi-architecture image to GitHub Container Registry; the Compose file pins the floating major and pulls on every `up` (§10.1). |
-| **Ingress** | A bundled Caddy container is the only service that publishes a port. The app and the database are reachable only on the compose network, so the app's forwarded-header trust is never extended to whoever can reach the host. |
-| **TLS** | **Not configured yet.** The app serves plain HTTP and never manages certificates; terminating TLS is Caddy's job once it is set up, either by giving the site block a real hostname or by fronting Caddy with the operator's own proxy. |
-| **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. An instance served over plain HTTP at a LAN IP **cannot install as a PWA on a phone**. This is a deployment constraint to document, not something the app can work around. |
-| **Auth** | Optional. Setting `AUTH_PASSWORD` enables a login gate — one middleware, one cookie, one login page. Unset means no auth, with a persistent warning banner in the UI. |
+| **Ingress** | The bundled Caddy container is the only service that publishes a port. The app, the database and the gate are reachable only on the compose network, so neither the app's forwarded-header trust nor the gate's verdict is ever extended to whoever can reach the host. |
+| **TLS** | **The operator's, in front of this stack.** Everything inside the stack speaks plain HTTP and the app never manages certificates; the public hostname and its certificate belong to the house-wide proxy this stack sits behind, and `PUBLIC_ORIGIN` (§10.1) is the `https://` origin it serves. |
+| **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. The house proxy's TLS supplies it at `PUBLIC_ORIGIN`, which removes the blocker the PWA slice (§11) faced; the slice itself is still unbuilt, so nothing is installable yet. Reaching the box by LAN IP over plain HTTP supplies no secure context, and the gate would refuse that request anyway. |
+| **Auth** | **Outside the app.** Caddy asks a Google sign-in gate about every request before it reaches the app, and the app authenticates nobody (see below). It keeps one honest fact about its own deployment — whether a gate fronts it — and draws a persistent warning banner when nothing does. |
 | **Job scheduler** | In-process, inside the app container. One process to deploy, one place to read logs. Trade-off: a restart mid-session misses a poll until the next tick — acceptable at 15-minute granularity. |
 | **Market calendar** | Weekday + `America/New_York` session check plus a small hardcoded NYSE holiday table. A wrongly skipped poll costs nothing; a wrongly attempted one costs one request. |
 | **Timezone** | UTC everywhere in the database. `America/New_York` only for market-hours logic. Browser-local for display. |
@@ -742,14 +742,32 @@ routing here, so it is not needed.
 
 ### Authentication is not multi-user
 
-One password, one cookie. No user table, no per-person permissions, no per-user sessions. Real
-multi-user auth is a separate design, and the single-owner-per-account model (§4.2) would need
-revisiting first.
+**Authentication happens in front of the app, and the app does none of it.** The gate signs each
+family member in with Google and admits only the addresses on the allowlist; a request that reaches
+the app has already been admitted, so the app carries no sign-in page, no password and no session of
+its own. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this
+stack rather than in the operator's proxy, and `docs/operating.md` is where an operator runs it.
+
+**That is per-person at the door and nowhere behind it.** The gate knows which family member is
+acting and forwards the verified address on every request; the app reads it nowhere. It is
+attribution, never permission (`CONTEXT.md`) — there is no user table, no per-person permissions
+and no per-user view. Every family member sees and can do everything, which is the household this
+was built for.
+
+**So binding identity to `person` is still a separate design.** `person` is an ownership label
+(§4.2), not an account anyone signs in as, and the two are deliberately unjoined: a screen that
+filtered by who is looking would need the single-owner-per-account model revisited first, and that
+revisit is the design work, not the plumbing. A later feature may record *who* did something. None
+may decide *whether* they may.
 
 ### 10.1 Container specification
 
 The deliverable is a **single application image plus a Compose file**. `docker compose up` on a
-fresh machine with an empty data directory must produce a working instance with no manual steps.
+fresh machine with an empty data directory produces a working instance once the gate has its Google
+credentials, and refuses to start until it does. That prerequisite replaced an older promise of no
+manual steps at all, deliberately: the old promise was kept by booting an instance anyone on the
+network could read, and a gate that can be skipped by forgetting to configure it is not a gate.
+Compose names the first missing value and stops, so a half-configured instance never runs.
 
 The image is **published, not built on the host**. Pushing a `v*` tag builds it once for
 `linux/amd64` and `linux/arm64` and pushes it to GitHub Container Registry; the Compose file pulls
@@ -764,7 +782,7 @@ or a small VPS has to be able to do. Two consequences that are load-bearing:
   and `docker compose up -d` is the upgrade. Pinning a full version is how an instance is held
   still, and is the "old image" half of the rollback described in `docs/operating.md`.
 
-**Three services:**
+**The services:**
 
 ```
 db      postgres:17-alpine
@@ -779,16 +797,25 @@ app     ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
         · restart: unless-stopped
         · healthcheck: GET /healthz
 
+gate    oauth2-proxy, pinned to an exact release
+        · the forward-auth sidecar caddy asks about every request
+        · stateless — the session is an encrypted cookie in the browser
+        · reads the allowlist file, mounted read-only
+        · not published to the host, which is what keeps its verdict honest
+
 caddy   caddy:2-alpine
-        · depends_on: app (condition: service_healthy)
-        · the only service that publishes a port
+        · depends_on: app and gate (condition: service_healthy)
+        · the only service that publishes a port, and therefore the one place
+          the gate can be enforced
         · restart: unless-stopped
 ```
 
 The in-process scheduler (§10) is why there is no separate worker service. A worker container would
 mean two images, two deployments, and two places to read logs, to save a missed poll on restart.
 `caddy` is a different kind of service — the ingress front door, not application logic — and is the
-only container reachable from outside the compose network.
+only container reachable from outside the compose network. `gate` is there because that front door
+is where sign-in has to be decided: every path to the app runs through it, including a device on the
+LAN dialling this box's published port directly, which is the threat the gate exists for.
 
 **Dockerfile — multi-stage:**
 
@@ -815,12 +842,19 @@ Migrations must be idempotent so a restart is always safe.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `DATABASE_URL` | yes | — | Postgres connection string |
-| `SESSION_SECRET` | if auth on | — | Cookie signing key |
-| `AUTH_PASSWORD` | no | unset | Enables the login gate; unset shows the warning banner (§10) |
+| `AUTH_GATE` | no | `none` | Whether something in front of the app authenticates: `external` or `none`. It guards nothing — it only decides whether the warning banner (§10) is drawn, so that the app neither cries wolf behind the gate nor stays quiet without one. Compose sets `external`, because in that file it is a fact |
 | `PORT` | no | `3000` | HTTP listen port |
 | `MAX_UPLOAD_MB` | no | `10` | Largest statement upload accepted, in whole MB |
 | `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation, and the trading day a quote's close is filed under |
 | `TZ` | no | `UTC` | Container clock; the database stores UTC regardless |
+
+**The gate's own settings are not in that table, because the app never reads them.** Its Google
+client, its cookie secret and `PUBLIC_ORIGIN` — the `https://` origin the house proxy serves, which
+the gate builds its redirect from and which must match the URI registered with Google — are
+Compose-level variables consumed by the `gate` service. They are the only settings anywhere with no
+default, and a missing one stops `up`. Who may enter is not a variable at all: a file of addresses
+beside the Compose file, one per line, because it is a list that grows rather than a value that
+changes. `.env.example`'s gate section is the operator-facing recipe for all of it.
 
 **The household's settings are deliberately not in that table.** Environment variables remain the
 whole of what an *operator* configures — everything validated at startup, everything that needs a
@@ -837,16 +871,21 @@ freely, and backups have exactly one target (§10, `pg_dump`). Uploaded CSVs are
 Postgres rather than on disk (§5.2) specifically to preserve this property.
 
 **Reverse proxy.** Ingress runs through the bundled `caddy` service, configured by a `Caddyfile` at
-the repository root. It is the only container that publishes a port, which is what keeps the app off
-the host's network — the app listens on plain HTTP and trusts `X-Forwarded-*`, and that trust is
-only sound while the set of things that can connect to it is the proxy alone. Caddy sets those
-headers itself.
+the repository root. It is the only container that publishes a port, which is what keeps the app and
+the gate off the host's network — everything inside speaks plain HTTP and believes what Caddy puts on
+a request, and that is only sound while the set of things that can connect to them is Caddy alone.
+It is also what makes the gate airtight, by the same fact: there is no way to the app that does not
+pass the front door.
 
-TLS is deliberately not configured yet, so what the proxy currently buys is topology, not
-confidentiality. The certificate lifecycle and any external hostname remain the operator's concern:
-either name a real host in the `Caddyfile` and let Caddy issue for it, or front Caddy with an
-existing TLS-terminating proxy. Note the PWA consequence in §10: until one of those is done, phones
-cannot install it.
+**Two proxies, and the split is deliberate.** This stack's Caddy enforces sign-in and nothing else
+touches it. The operator's house-wide proxy in front owns TLS and the public hostname — this is a
+household that already runs one for every other self-hosted app, and duplicating certificate
+lifecycle inside the stack would buy nothing. It is deliberately *not* trusted with enforcement: a
+device on the LAN can dial this box's published port and land on this stack's Caddy directly, and
+that device is exactly the threat. The consequence for the app is one hop more of forwarded headers
+to survive, which `ARCHITECTURE.md` §2 and §7.6 are the place for. The consequence for the operator
+is that `PUBLIC_ORIGIN` must be the `https://` origin their proxy serves — which is also what
+supplies the secure context §10 says the unbuilt PWA slice will need.
 
 ---
 
@@ -1242,3 +1281,16 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
    labels its tax figure an upper bound. Lifting this means deciding per row from whether the
    instrument was ever quoted — a refreshed `quote` row means the provider answered, and `fixed` or
    `manual` means it was never asked — which is a change to one derivation, not to the schema.
+10. **There is no sign-out control, and the gate's sign-out URL is not one.** It clears the gate's
+    own cookie and nothing else, so with sign-in going straight to Google the next visit re-admits
+    silently — which looks, to the person who used it, exactly like it did not work. The levers that
+    do revoke are the operator's: taking an address off the allowlist ends that one person's
+    sessions everywhere, and rotating the gate's cookie secret ends everyone's at once. A real
+    control is tracked as [issue #89](https://github.com/chethan123/portfolio/issues/89) rather than
+    rejected; it inherits this as its motivation, and `docs/runbook.md` carries the URL with its
+    limits stated in the meantime.
+11. **Signing in depends on Google being reachable.** An outage there defers *new* sign-ins until it
+    passes; sessions already established ride through it, because the gate validates its own cookie
+    without asking Google again. There is deliberately no second login system to fall back to — one
+    would be a password, which is the thing this replaced — so the break-glass path during an outage
+    is the operator's shell on the box, not another way in through the front door.

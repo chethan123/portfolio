@@ -2,33 +2,47 @@
 
 What a brand-new instance shows you, and the two things to do before it can hold anything.
 
+## Signing in with Google
+
+Open the address whoever runs the instance gave you. Before the app draws anything you are handed
+to Google's own sign-in — there is no password to type and no sign-in screen belonging to this app.
+Choose the Google account whose address you gave to whoever runs the instance, and you arrive on
+**Overview**.
+
+On a phone already signed in to that account it is usually one tap, and often nothing at all. Every
+so often the app asks again; while your browser is still signed in to Google, that renewal happens
+without showing you a screen.
+
+What is not there, so you do not go looking for it:
+
+- **No password**, and nothing to reset. Whatever protects your Google account protects this.
+- **No sign-up.** You are let in because your address is on a short list whoever runs the instance
+  keeps. Nothing in the app adds you to it.
+- **No account each, inside the app.** Everyone who gets in sees the same screens and can change the
+  same things — see [People and accounts](people-and-accounts.md#add-the-people).
+- **No sign-out control.** Closing the tab does not sign you out. If a phone is lost or a device
+  should stop getting in, tell whoever runs the instance — that is done from outside the app.
+
+**If sign-in finishes and you get an error instead of the app**, you signed in with an address that
+is not on the list. There is nothing to retry: ask whoever runs the instance to add the address you
+actually use, or sign in to Google with the one they already have.
+
+## What a new instance shows
+
 ![The Overview before anything is recorded](images/first-run-overview.png)
 
-Open the address whoever runs the instance gave you. You land on **Overview**, and it says
-**There is no data yet.** That is correct on a fresh instance: nothing has been uploaded, so no
-figure is shown.
+Overview is where sign-in leaves you, and on a fresh instance it says **There is no data yet.** That
+is correct: nothing has been uploaded, so no figure is shown.
 
-## If a warning strip says the instance has no password
+## If a warning strip says nothing is in front of the instance
 
-**This instance has no password.** Anyone who can reach it can read and change your data. Set
-`AUTH_PASSWORD` (and `SESSION_SECRET`) to put it behind a login.
+A yellow strip across the top of every page means you reached the app without being asked to sign
+in — so anyone who can reach it on the same network can read and change your data too. It is the
+state the screenshots in this guide were taken in, which is why most of them carry it.
 
-That strip sits on every page and cannot be dismissed. Nothing you can do in the app removes it —
-a password is set by whoever runs the instance, not from a screen in here. Ask them, and point them
-at [Operating an instance](../operating.md#environment-variables).
-
-## If you get a sign-in screen instead
-
-The instance is password protected. Type the password and select **Sign in**. There is no username.
-
-Three things that are not there, so you do not go looking:
-
-- **No sign-up.** There is one password for the whole household, not an account each.
-- **No password reset.** A forgotten password is changed by whoever runs the instance.
-- **No sign-out control.** Signing in lasts about a month, then asks again. To end a session sooner,
-  clear the site's cookies in your browser.
-
-A wrong password comes back as **Incorrect password.** and nothing else.
+The strip cannot be dismissed, and nothing you can do in the app removes it: putting the sign-in
+gate in front of the instance is a job for whoever runs it. Ask them, and point them at
+[Operating an instance](../operating.md).
 
 ## The "Start here" prompt
 
@@ -69,7 +83,7 @@ Amounts start hidden on a browser nobody has answered for: each shows a run of d
 dates and the shape of the chart stay readable. Press **Show amounts** in the navigation to reveal
 them on this browser; hiding them again is the same control. What a fresh browser opens showing is
 a household choice at [Settings → Display](settings.md#display). It is a defence against being read
-over your shoulder, not a lock — the password above is the only thing that keeps anyone out.
+over your shoulder, not a lock — the sign-in above is the only thing that keeps anyone out.
 
 ## Light and dark
 

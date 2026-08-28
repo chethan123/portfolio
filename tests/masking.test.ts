@@ -121,9 +121,7 @@ describe("reading the cookie off a request", () => {
     new Request("http://portfolio.local/", { headers: { Cookie: cookie } });
 
   it("finds its own value among the others a browser sends", () => {
-    expect(readMaskingCookie(requestWith(`__portfolio_session=abc; masked=${MASKED}`))).toBe(
-      MASKED,
-    );
+    expect(readMaskingCookie(requestWith(`_oauth2_proxy=abc; masked=${MASKED}`))).toBe(MASKED);
   });
 
   it("is undefined when the browser sent no cookies at all", () => {

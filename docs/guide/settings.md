@@ -24,8 +24,9 @@ yet](../../README.md#not-built-yet).
 Who is in the household. Every account belongs to exactly one person, so this is the first thing to
 fill in — accounts cannot be created until someone is here to own them.
 
-- **Add** with the form at the foot. A name and nothing else: no email, no login, no role. This is a
-  label for whose money it is.
+- **Add** with the form at the foot. A name and nothing else: no email, no sign-in, no role. This is
+  a label for whose money it is, and it is unrelated to the Google address anyone signs in with —
+  adding a person here lets nobody in, and being let in makes nobody a person here.
 - **Rename** by editing the box on the row and saving it. Names are not required to be unique.
 - **Remove** with the button on the row.
 
@@ -139,8 +140,8 @@ masked.
 This is the household's standing answer, not the control itself. The control — **Show amounts** /
 **Hide amounts**, in the navigation on every screen — flips this one browser right now, and needs
 no network to do it. Masking hides every amount behind dots while names, dates, the shape of the
-chart and every percentage stay readable. It is not a password: the amounts are still in the page,
-and the login gate is the only thing that keeps anyone out.
+chart and every percentage stay readable. It is not a lock: the amounts are still in the page, and
+the sign-in at the front door is the only thing that keeps anyone out.
 
 ---
 

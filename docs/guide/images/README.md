@@ -16,11 +16,20 @@ light, and the guide says so once rather than doubling a set that already has to
 The application follows your system's setting and has no in-app toggle, so a reader on a dark system
 sees a darker version of the same screen — same layout, same words, same figures.
 
-## The no-password banner stays in
+## The warning strip stays in, and it is no longer about a password
 
-The yellow banner across the top of most shots is what an instance with no password actually looks
-like. Cropping it would show the reader a configuration they may not have, and the guide's first
-page explains it.
+The yellow strip across the top of most shots is the application warning that nothing in front of it
+is authenticating anyone — which is precisely what a capture run is, since the script drives a
+development server with no gate. Removing it would mean either running the real gate to take a
+photograph, which puts a Google sign-in between the script and every screen, or telling the app it
+is gated when it is not. Both photograph a configuration that exists only for the camera, and
+cropping is out because nothing here is hand-edited.
+
+The reader the guide is written for will not see the strip on a deployment set up as documented, so
+[the guide's first page](../first-run.md) says what it means and who removes it. The wording is the
+application's own, so a change to it makes every shot carrying the strip stale at once — that has
+happened once already, when the gate replaced the password. Shots framed on a single table or below
+the top of a page never had it in frame and are unaffected.
 
 ## Two databases
 

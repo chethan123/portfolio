@@ -1,0 +1,13 @@
+# The gate's allowlist, and the only authorization this instance has: one
+# Google account address per line. Copy this file to `allowed-emails.txt`,
+# which is gitignored, and put the household's real addresses in it.
+#
+# Anyone can reach Google's account picker; only an address listed here gets
+# past the gate afterwards. Removing a line signs that person out everywhere
+# on their next request — restart `gate` after editing, because a single-file
+# bind mount stops following a file an editor replaces by rename.
+#
+# Blank lines and lines starting with # are ignored.
+
+alice@gmail.com
+bob@gmail.com

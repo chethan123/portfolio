@@ -2,6 +2,12 @@
 
 _Part of [0001-foundation-day-zero.md](../0001-foundation-day-zero.md)._
 
+**Superseded in one clause:** the app issues no cookie of its own now, so the auth-cookie half of the
+forwarded-header criterion below is the forward-auth gate's concern
+([0011-auth-gate.md](../0011-auth-gate.md),
+[ADR-0005](../../adr/0005-auth-is-a-forward-auth-gate.md)). Everything else here — forwarded-header
+trust, plain HTTP, backups, the environment table, the PWA constraint — still holds.
+
 **What to build:** A self-hoster puts their own TLS-terminating reverse proxy in front of the
 instance and it behaves correctly — correct scheme, correct client address, secure cookies. They can
 also find, without reading source, how to back the instance up, what every setting does, and why

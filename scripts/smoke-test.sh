@@ -3,10 +3,16 @@
 # CI-only container smoke test.
 #
 # It exists for the things a unit or integration test structurally cannot reach:
-# that `docker compose up` on an empty volume produces a working instance with
-# no manual steps, that the app waits for Postgres rather than racing it, that a
-# restart is safe, and that the runtime image actually contains what it is
+# that `docker compose up` on an empty volume produces a working instance once
+# the gate is configured — and refuses to start at all until it is — that the
+# app waits for Postgres rather than racing it, that a restart is safe, that the
+# front door is shut, and that the runtime image actually contains what it is
 # specified to contain and nothing it is specified not to.
+#
+# The gate values below are throwaway. oauth2-proxy never contacts Google at
+# startup, so the real sidecar boots on fake credentials and everything short of
+# the round trip through a real Google account is exercisable here; that last
+# leg is an operator's checklist, not CI's.
 #
 # It is slow and it is deliberately thin. Behaviour gets tested elsewhere.
 #
@@ -27,14 +33,22 @@ export COMPOSE_FILE="compose.yaml:compose.dev.yaml"
 readonly BASE_URL="http://127.0.0.1"
 readonly HEALTH_URL="${BASE_URL}/healthz"
 readonly TIMEOUT_SECONDS=180
+readonly ALLOWLIST="allowed-emails.txt"
 
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 
+# Set before the trap, because the trap reads it.
+allowlist_is_ours=false
+
 cleanup() {
   log "Tearing down"
-  docker compose logs --no-color app db caddy 2>&1 | tail -80 || true
+  docker compose logs --no-color app db caddy gate 2>&1 | tail -80 || true
   docker compose down -v --remove-orphans || true
+  # Only the one this script wrote. A developer running this on their own
+  # machine has a real allowlist sitting there.
+  [[ "$allowlist_is_ours" == true ]] && rm -f "$ALLOWLIST"
+  return 0
 }
 trap cleanup EXIT
 
@@ -61,7 +75,42 @@ expect_status() {
   printf 'GET /healthz -> %s\n' "$actual"
 }
 
-# --- A fresh machine with an empty volume, and no manual steps ----------------
+# --- The stack refuses to start half-protected --------------------------------
+# Before anything is configured: compose must stop rather than bring up an
+# instance with no gate in front of it. `config` rather than `up` because
+# interpolation is the first thing `up` does and it needs no daemon; `--env-file
+# /dev/null` so a developer's own .env cannot quietly satisfy the variables and
+# turn this assertion green for the wrong reason.
+log "Checking the stack refuses to start without gate credentials"
+if refusal="$(env -u GATE_CLIENT_ID -u GATE_CLIENT_SECRET -u GATE_COOKIE_SECRET \
+  -u PUBLIC_ORIGIN docker compose --env-file /dev/null config --quiet 2>&1)"; then
+  fail "compose accepted a configuration with no gate credentials"
+fi
+[[ "$refusal" == *"GATE_CLIENT_ID"* || "$refusal" == *"GATE_CLIENT_SECRET"* ||
+   "$refusal" == *"GATE_COOKIE_SECRET"* || "$refusal" == *"PUBLIC_ORIGIN"* ]] ||
+  fail "compose refused without naming the missing variable: ${refusal}"
+printf 'compose refused: %s\n' "$refusal"
+
+# --- Throwaway gate configuration ---------------------------------------------
+# Exported rather than written to .env: the environment wins over .env, so the
+# run is identical on a bare CI runner and on a machine with a real instance
+# configured beside it.
+export GATE_CLIENT_ID="smoke-test.apps.googleusercontent.com"
+export GATE_CLIENT_SECRET="smoke-test-client-secret"
+# The generation command from .env.example, run rather than quoted: the sidecar
+# builds an AES cipher from this and refuses to start unless it decodes to 16,
+# 24 or 32 bytes, and a hand-written placeholder of the wrong length would fail
+# in a way that reads like a gate bug.
+GATE_COOKIE_SECRET="$(openssl rand -base64 32 | tr -- '+/' '-_')"
+export GATE_COOKIE_SECRET
+export PUBLIC_ORIGIN="https://smoke.example.test"
+
+if [[ ! -e "$ALLOWLIST" ]]; then
+  printf 'smoke-test@example.test\n' > "$ALLOWLIST"
+  allowlist_is_ours=true
+fi
+
+# --- A fresh machine with an empty volume -------------------------------------
 log "Starting from an empty volume"
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 docker compose up -d --build
@@ -177,6 +226,12 @@ printf 'db port not published\n'
 [[ "$(published_ports app)" != *HostPort* ]] || fail "the app port is published to the host"
 printf 'app port not published\n'
 
+# The gate believes the X-Forwarded-* headers of whatever reaches it, so a
+# published port here would be a way to walk around the gate by asserting your
+# own identity to it.
+[[ "$(published_ports gate)" != *HostPort* ]] || fail "the gate port is published to the host"
+printf 'gate port not published\n'
+
 [[ "$(published_ports caddy)" == *'"HostPort":"80"'* ]] ||
   fail "caddy is not published on port 80"
 printf 'caddy published on 80\n'
@@ -186,9 +241,16 @@ printf 'caddy published on 80\n'
 # it is: `react-router-serve` over the real build, the route manifest, and the
 # server render. The vitest suite deliberately skips all of that — it loads no
 # React Router plugin — so this is the one place it is exercised at all.
-log "Fetching a real page"
+#
+# Asked of `app` from inside its own container rather than through Caddy,
+# because the gate now refuses `/` to anyone without a Google session and this
+# assertion is about the renderer, not the front door. `node -e` for the same
+# reason the healthcheck uses it: the runtime image carries no curl.
+log "Fetching a real page from the app container"
 
-page="$(curl -sS --max-time 30 --retry 10 --retry-connrefused --retry-delay 1 "$BASE_URL/" || true)"
+page="$(docker compose exec -T app node -e \
+  'fetch("http://127.0.0.1:"+(process.env.PORT||3000)+"/").then(r=>r.text()).then(t=>process.stdout.write(t))' ||
+  true)"
 [[ "$page" == *'aria-label="Primary"'* ]] || fail "GET / did not render the navigation rail"
 [[ "$page" == *"Portfolio"* ]] || fail "GET / did not render the brand"
 printf 'GET / rendered a page\n'
@@ -201,62 +263,56 @@ health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
   fail "GET /healthz did not report the schema current: ${health}"
 printf 'GET /healthz -> %s\n' "$health"
 
-# --- The login gate, end to end -----------------------------------------------
-# The gate is one middleware on the root route, so "every page is behind it" is
-# a property of the whole running stack rather than of the middleware function
-# that `auth.test.ts` and `root-gate.test.ts` call directly. Turning it on means
-# recreating the app container, which is why this runs last.
-log "Turning the login gate on"
-readonly TEST_PASSWORD="correct horse battery staple"
-# `--build` is redundant against compose.dev.yaml's `pull_policy: build` and is
-# here anyway: this is the one `up` that does not already carry it, and the cost
-# of the ambiguity is the whole login-gate section below silently running against
-# a published image instead of the one under test.
-AUTH_PASSWORD="$TEST_PASSWORD" SESSION_SECRET="smoke-test-signing-key" \
-  docker compose up -d --wait --build app
-wait_for_healthy
-
-# `/healthz` must stay reachable with no credentials, or monitoring goes blind
-# the moment an operator sets a password.
-expect_status 200
+# --- The front door is shut ---------------------------------------------------
+# "Every path is behind the gate" is a property of the running stack — of Caddy
+# consulting the sidecar — rather than of anything the vitest suite can call, so
+# this is the only place it is checked at all. None of it needs a Google account:
+# the browser is turned away before Google is ever consulted.
+log "Checking the gate refuses an unauthenticated request"
 
 status_of() {
   curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$@"
 }
 
-gated="$(status_of "$BASE_URL/holdings")"
-[[ "$gated" == "302" ]] || fail "with a password set, GET /holdings returned ${gated}, expected 302"
+location_of() {
+  curl -sS -o /dev/null -D - --max-time 30 "$@" |
+    tr -d '\r' | awk 'tolower($1) == "location:" { print $2 }'
+}
 
-location="$(curl -sS -o /dev/null -D - --max-time 30 "$BASE_URL/holdings" |
-  tr -d '\r' | awk 'tolower($1) == "location:" { print $2 }')"
-[[ "$location" == /login* ]] || fail "GET /holdings redirected to '${location}', expected /login"
-[[ "$location" == *"next=%2Fholdings"* || "$location" == *"next=/holdings" ]] ||
-  fail "the redirect to /login did not carry where the visitor was going: ${location}"
-printf 'GET /holdings -> 302 %s\n' "$location"
+refused_status="$(status_of "$BASE_URL/")"
+[[ "$refused_status" == "302" ]] ||
+  fail "GET / through Caddy returned ${refused_status}, expected the gate's 302"
 
-readonly COOKIE_JAR="$(mktemp)"
-signed_in="$(status_of -c "$COOKIE_JAR" --data-urlencode "password=${TEST_PASSWORD}" \
-  --data-urlencode "next=/holdings" "$BASE_URL/login")"
-[[ "$signed_in" == "302" ]] || fail "POST /login with the right password returned ${signed_in}"
-# curl writes an HttpOnly cookie with a `#HttpOnly_` prefix, so the jar is also
-# where that flag can be checked — and a session cookie readable from JavaScript
-# would be the whole point of the gate given away.
-grep -qi "__portfolio_session" "$COOKIE_JAR" || fail "POST /login issued no session cookie"
-grep -qi "^#HttpOnly_.*__portfolio_session" "$COOKIE_JAR" ||
-  fail "the session cookie was not issued HttpOnly"
-printf 'POST /login -> 302 with an HttpOnly session cookie\n'
+sign_in="$(location_of "$BASE_URL/")"
+[[ "$sign_in" == /oauth2/sign_in* ]] ||
+  fail "GET / redirected to '${sign_in}', expected the gate's sign-in"
+[[ "$sign_in" == *"rd=/"* ]] ||
+  fail "the redirect to the gate did not carry where the visitor was going: ${sign_in}"
+printf 'GET / -> 302 %s\n' "$sign_in"
 
-after="$(status_of -b "$COOKIE_JAR" "$BASE_URL/holdings")"
-[[ "$after" == "200" ]] || fail "with the session cookie, GET /holdings returned ${after}"
-printf 'GET /holdings with the cookie -> 200\n'
+# Following that hop proves two things at once: that /oauth2/* is answered by
+# the sidecar rather than the app — the app has no such route and would 404 —
+# and that skip_provider_button is on, so the next thing a family member sees is
+# Google itself rather than an interstitial.
+google="$(location_of "$BASE_URL$sign_in")"
+[[ "$google" == https://accounts.google.com/o/oauth2/auth\?* ]] ||
+  fail "the gate's sign-in went to '${google}', expected Google's authorization endpoint"
+[[ "$google" == *"client_id=${GATE_CLIENT_ID}"* ]] ||
+  fail "the redirect to Google did not carry the configured client id: ${google}"
+# The redirect URI is percent-encoded in the query, but the host survives intact.
+[[ "$google" == *"redirect_uri="* && "$google" == *"smoke.example.test"* ]] ||
+  fail "the redirect to Google did not carry the configured redirect URL: ${google}"
+printf 'GET %s -> 302 Google, carrying the client id\n' "$sign_in"
 
-# A wrong password must not issue one. Same page, no cookie, no redirect.
-readonly REFUSED_JAR="$(mktemp)"
-refused="$(status_of -c "$REFUSED_JAR" --data-urlencode "password=not the password" \
-  "$BASE_URL/login")"
-[[ "$refused" == "200" ]] || fail "POST /login with a wrong password returned ${refused}"
-grep -qi "__portfolio_session" "$REFUSED_JAR" &&
-  fail "POST /login issued a session cookie for a wrong password"
-printf 'POST /login with a wrong password -> 200, no cookie\n'
+# The gate's verdict endpoint, which Caddy consults on every request. The app
+# would answer 404 here; a 401 can only have come from the sidecar.
+auth_status="$(status_of "$BASE_URL/oauth2/auth")"
+[[ "$auth_status" == "401" ]] ||
+  fail "GET /oauth2/auth returned ${auth_status}, expected the gate's 401"
+printf 'GET /oauth2/auth -> %s from the gate\n' "$auth_status"
+
+# And the one exemption still holds. If this ever needs credentials, every
+# uptime monitor pointed at this instance goes blind at once.
+expect_status 200
 
 log "Smoke test passed"

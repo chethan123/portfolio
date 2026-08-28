@@ -2475,8 +2475,7 @@ code {
 }
 
 .field-error,
-.form-error,
-.login-error {
+.form-error {
   margin: 0;
   font-size: 14px;
   line-height: 20px;
@@ -2511,32 +2510,6 @@ code {
   background: var(--loss-surface);
   border: 1px solid var(--loss);
   border-radius: var(--radius-xl);
-}
-
-/* --- Login ---------------------------------------------------------------- */
-
-.login {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: var(--space-lg);
-}
-
-.login-form {
-  width: 100%;
-  max-width: 22rem;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-  padding: var(--space-lg);
-  background: var(--panel);
-  border: 1px solid var(--outline-variant);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-card);
-}
-
-.login-label {
-  font-weight: 600;
 }
 
 /* --- Settings ------------------------------------------------------------- */

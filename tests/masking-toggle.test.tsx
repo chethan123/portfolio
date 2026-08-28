@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { renderThroughLayout } from "./support/render.tsx";
 
 const renderChrome = (masked: boolean) =>
-  renderThroughLayout("/", { authConfigured: true, firstRun: null, masked });
+  renderThroughLayout("/", { gated: true, firstRun: null, masked });
 
 /**
  * The value each toggle button would submit.
@@ -71,7 +71,7 @@ describe("the masking toggle", () => {
 
   it("carries the screen it was pressed on, so that path can return there", () => {
     const markup = renderThroughLayout("/holdings", {
-      authConfigured: true,
+      gated: true,
       firstRun: null,
       masked: false,
     });

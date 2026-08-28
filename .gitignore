@@ -13,6 +13,11 @@ build/
 .env
 .env.local
 
+# The gate's allowlist: the family's real email addresses, which never enter a
+# public repository. `allowed-emails.example.txt` shows the format and is
+# committed — a different filename, so this line does not catch it.
+allowed-emails.txt
+
 logs
 *.log
 npm-debug.log*

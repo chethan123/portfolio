@@ -485,10 +485,10 @@ export function readChartRange(request: Request): RequestedRange {
  * `data(value, { headers })` only when a cookie needs writing would make the
  * loader's result type (and its runtime shape, for a test calling it
  * directly rather than through the router) a union most of those tests never
- * asked for. A middleware wraps the *response* instead, the way the root
- * route's auth gate already does, leaving each loader returning one shape
- * always. One factory here rather than one hand-copied array per route, so
- * the two cannot drift the way the range logic itself used to.
+ * asked for. A middleware wraps the *response* instead, leaving each loader
+ * returning one shape always. One factory here rather than one hand-copied
+ * array per route, so the two cannot drift the way the range logic itself
+ * used to.
  *
  * What gets remembered is the request's own `?range=` (or `start`/`end`), not
  * some database-resolved effective value — spec 0008's own wording ("an

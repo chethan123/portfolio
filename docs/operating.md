@@ -1,8 +1,9 @@
 # Operating an instance
 
-Everything a self-hoster needs that is not in the [README](../README.md): what the three containers
-are, what to put in `.env`, putting a reverse proxy in front, the security decisions that are yours
-rather than the code's, what to watch, backing the data up, restoring it, and upgrading.
+Everything a self-hoster needs that is not in the [README](../README.md): what the containers are,
+the one-time Google setup this stack cannot start without, what to put in `.env`, how it sits behind
+your own proxy, the security decisions that are yours rather than the code's, what to watch, backing
+the data up, restoring it, and upgrading.
 
 When something is already broken and you want a procedure, that is [`runbook.md`](runbook.md). This
 file is how the instance is meant to be run.
@@ -23,20 +24,32 @@ file is how the instance is meant to be run.
 
 ## What runs here
 
-Three services, defined in [`compose.yaml`](../compose.yaml) under the project name `portfolio`.
+The services defined in [`compose.yaml`](../compose.yaml), under the project name `portfolio`.
 
 | Service | What it is | Published port |
 |---|---|---|
 | `db` | Postgres. All persistent state, in the named volume `db-data` | none |
 | `app` | The application: pages, uploads, and the price refresh loop, in one process | none |
-| `caddy` | The ingress front door | **`80:80`, on every interface** |
+| `gate` | oauth2-proxy. Answers "may this request in?" against Google and the allowlist | none |
+| `caddy` | The ingress front door, and where the gate is enforced | **`80:80`, on every interface** |
 
-A request goes browser → `caddy` → `app` → `db`. Only `caddy` is reachable from your LAN; `app` and
-`db` are reachable only on the compose network. That is not a hardening extra — it is the assumption
-the app's trust of `X-Forwarded-*` rests on, and [Security](#security) says what breaks if you
-publish the app's port yourself.
+A request goes browser → `caddy` → `gate` → `caddy` → `app` → `db`: Caddy asks the gate about every
+request except `/healthz` before it forwards anything. Only `caddy` is reachable from your LAN;
+`app`, `db` and `gate` are reachable only on the compose network. That is not a hardening extra — it
+is the assumption both the app's trust of `X-Forwarded-*` and the gate's own trust of them rest on,
+and [Security](#security) says what breaks if you publish either port yourself.
 
-They start in dependency order: `app` waits for `db` to report healthy, `caddy` waits for `app`.
+They start in dependency order: `app` waits for `db` to report healthy, and `caddy` waits for both
+`app` and `gate`.
+
+**`gate` is pinned to an exact release**, not a floating major like `app`. Nobody here watches that
+image for a breaking change, and it is the thing that keeps everyone out. It is the `-alpine`
+flavour specifically, because its healthcheck needs a shell the default distroless image does not
+have.
+
+**`gate` is stateless.** The session is an encrypted cookie in the browser, so there is no volume
+and no database behind it — only the read-only bind mount of `./allowed-emails.txt`, which is the
+whole of who may enter.
 
 **`app` is stateless and enforced as such.** It runs as a non-root user and is mounted `read_only`
 with a tmpfs `/tmp`. It writes nothing to its own filesystem, so it can be destroyed and recreated
@@ -57,9 +70,11 @@ CSV, every price. `docker compose down` leaves it alone; `docker compose down -v
 
 **Host requirements.** Docker Engine with the Compose v2 plugin — `docker compose`, two words, not
 the older `docker-compose` script. Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image
-is pulled. `linux/amd64` and `linux/arm64` are both published, so a Raspberry Pi or an ARM NAS needs
-nothing special. There is no build step and therefore no build-memory requirement — that is the
-whole point of publishing the image, and it is what makes a small NAS or VPS a reasonable host.
+is pulled, and to `quay.io`, because the gate image is. A Google account for each family member, and
+one Google Cloud project to hold the OAuth client. `linux/amd64` and `linux/arm64` are both
+published, so a Raspberry Pi or an ARM NAS needs nothing special. There is no build step and
+therefore no build-memory requirement — that is the whole point of publishing the image, and it is
+what makes a small NAS or VPS a reasonable host.
 Node itself is a requirement for *working on* this, not for running it.
 
 **Bringing it up is one command, and it belongs to the README:**
@@ -67,14 +82,60 @@ Node itself is a requirement for *working on* this, not for running it.
 reader has installed nothing and needs the whole shape; you are at a terminal and need what comes
 after.
 
+**It will refuse to start until the gate is configured, and that is the design.** There is no mode
+in which this stack boots open: the four gate variables are interpolated with Compose's `${VAR:?}`
+form, so a missing or empty one stops `docker compose up` before any container runs, with a message
+naming the variable. A missing `allowed-emails.txt` stops it the same way. Everything in this
+section up to [Verify it actually worked](#verify-it-actually-worked) is therefore prerequisite, not
+optional hardening.
+
+### One-time Google setup
+
+Done once per instance, before the first `up`. You need the public origin your house proxy will
+serve this instance at first, because step 3 registers it with Google character for character.
+
+1. **Console → APIs & Services → OAuth consent screen.** Choose "External", fill in an app name and
+   your own email as the contact, and **publish it**. The gate asks only for the `profile` and
+   `email` scopes, which are basic scopes — no verification review is required for them. Publishing
+   means any Google account can reach the account picker; the [allowlist](#who-may-enter) is what
+   refuses them afterwards, and that is the whole authorization story.
+2. **Credentials → Create credentials → OAuth client ID → Web application.**
+3. **Add one Authorized redirect URI:** your `PUBLIC_ORIGIN` with `/oauth2/callback` on the end —
+   `https://portfolio.example.com/oauth2/callback`. Google matches it exactly and refuses the
+   sign-in on any mismatch, trailing slash included. The path is the gate's, and it is not
+   configurable here without also changing `compose.yaml`.
+4. **Copy the client ID and client secret** into `GATE_CLIENT_ID` and `GATE_CLIENT_SECRET`.
+
+Google redirects the *browser*, never its own servers, so this URI only has to resolve for the
+family's devices — a LAN or VPN hostname behind your own proxy is fine. The one server-to-server
+call is outbound from `gate`.
+
+> This recipe is also in [`.env.example`](../.env.example), beside the variables it fills in. That
+> duplication is deliberate: this file is read before an instance exists, that one while `.env` is
+> open. If they ever disagree, `.env.example` sits next to the code and is the one to believe.
+
+### Who may enter
+
+`./allowed-emails.txt`, beside `compose.yaml`, one Google address per line; blank lines and lines
+starting with `#` are ignored. It is gitignored, and
+[`allowed-emails.example.txt`](../allowed-emails.example.txt) is the committed copy showing the
+format:
+
+```sh
+cp allowed-emails.example.txt allowed-emails.txt
+$EDITOR allowed-emails.txt
+```
+
+There is no domain rule and deliberately no option for one: the narrowest domain that would admit
+this household also admits every other Gmail account on earth. The file is the only authorization
+this instance has. Editing it is [a lever with real teeth](#revocation-and-the-levers-you-have).
+
 ### What to put in `.env`
 
-Nothing, for a first look: every setting has a working default except `DATABASE_URL`, which Compose
-supplies. `.env` exists to change something. For an instance that is going to be used, three are
-worth deciding before the first `up`:
+`cp .env.example .env`, then fill in the four gate variables above. Beyond those, every setting has
+a working default except `DATABASE_URL`, which Compose supplies. One more is worth deciding before
+the first `up`:
 
-- `AUTH_PASSWORD` and `SESSION_SECRET` — the login gate. Read [Security](#security) before deciding
-  to leave the password unset, including on a LAN you trust.
 - `POSTGRES_PASSWORD` — because it is read only when the data directory is first created. Setting it
   later is a different, more annoying operation ([Environment variables](#environment-variables)).
 
@@ -92,7 +153,8 @@ Set `DATABASE_URL` in `.env` to point at it. Four things that catch people:
 - Migrations run at every container start, against whatever `DATABASE_URL` names, so the role needs
   to be able to create tables. There is no separate migrate step to run.
 - Every `pg_dump` command below runs *inside* the bundled `db` container. On your own Postgres,
-  backups become your Postgres's problem, and [Backups](#backups) is then about `.env` only.
+  backups become your Postgres's problem, and [Backups](#backups) is then about `.env` and the
+  allowlist only.
 
 ### Verify it actually worked
 
@@ -101,8 +163,9 @@ docker compose ps
 curl -i http://localhost/healthz
 ```
 
-All three services `running`, with `db` and `app` also `healthy` — `caddy` declares no healthcheck
-in `compose.yaml`, so `running` is all you get about it. And `/healthz` answering `200` with exactly:
+All four services `running`, with `db`, `app` and `gate` also `healthy` — `caddy` declares no
+healthcheck in `compose.yaml`, so `running` is all you get about it. And `/healthz` answering `200`
+with exactly:
 
 ```json
 {"status":"ok","database":true,"migrations":"current","pendingMigrations":[]}
@@ -110,20 +173,34 @@ in `compose.yaml`, so `running` is all you get about it. And `/healthz` answerin
 
 Any other body on that endpoint means something, and [Monitoring](#monitoring) says what.
 
+`/healthz` is the one path the gate does not challenge, so a `200` there proves nothing about
+sign-in. Check the front door separately:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://localhost/
+```
+
+A `302` to `/oauth2/sign_in` is the gate refusing an unauthenticated request, which is what you
+want. A `200` means the gate is not in the path and every device on your LAN has the instance.
+
+The last leg — a real Google account completing a real sign-in — is yours to walk once, from a
+browser at your public origin. Nothing in CI can do it, and nothing on the box can either.
+
 > **`scripts/smoke-test.sh` is a CI tool and it destroys data.** It runs `docker compose down -v`
 > before it starts and again from an exit trap, which deletes the `db-data` volume — every
-> statement, every stored original, every price. It exists to prove a *fresh* machine comes up with
-> no manual steps. Never point it at an instance you care about.
+> statement, every stored original, every price. It exists to prove that a *fresh* machine refuses
+> to start until the gate is configured and then comes up whole, using throwaway Google credentials
+> that never contact Google. Never point it at an instance you care about.
 
 ---
 
 ## Environment variables
 
 The complete configuration surface an operator has. Every deployment setting is an environment
-variable — the household's own settings (the capital gains rate, the masking policy, the refresh
-cadence) are database rows edited under Settings instead, not here — and
-[`.env.example`](../.env.example) is this same table with the reasoning attached. Copy it to `.env`
-only to change something.
+variable, with one exception — who may enter is [a file](#who-may-enter), because it is a list that
+grows. The household's own settings (the capital gains rate, the masking policy, the refresh
+cadence) are database rows edited under Settings instead, not here. [`.env.example`](../.env.example)
+is this same table with the reasoning attached; copy it to `.env` and fill in the gate section.
 
 All of them are validated once at startup. A missing or malformed value stops the container
 immediately with a message naming the variable, rather than failing hours later on the request that
@@ -132,8 +209,7 @@ happens to need it.
 | Variable | Required | Default | What it does |
 |---|---|---|---|
 | `DATABASE_URL` | **Yes** | — | Postgres connection string. Compose supplies one pointing at its own `db` service, so you only set this to run against your own Postgres. |
-| `AUTH_PASSWORD` | No | unset | Setting it turns on the login gate: one password, one cookie, one login page. Unset means the instance is open to anyone who can reach it, and the UI shows a permanent warning banner saying so. |
-| `SESSION_SECRET` | **When `AUTH_PASSWORD` is set** | — | Signs the login cookie. Startup fails naming this variable if you set a password without it. Use a long random string: `openssl rand -hex 32`. |
+| `AUTH_GATE` | No | `none` | Whether the app has been *told* that something in front of it authenticates. `external` silences the unprotected-instance banner; `none` draws it. `compose.yaml` hardcodes `external` because the `gate` service is right there, so you do not set this — a developer running the app with nothing in front of it does. It is a description of the deployment, not a switch: setting it protects nothing. |
 | `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port: that is the fixed `80:80` in [`compose.yaml`](../compose.yaml), and moving it means editing that line. |
 | `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`** — see below. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
@@ -146,6 +222,21 @@ only while the market is open). An environment that still sets the old
 `PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
 once on that screen after upgrading.
 
+**The gate's four are Compose-level too, and they are the required ones.** `GATE_CLIENT_ID`,
+`GATE_CLIENT_SECRET`, `GATE_COOKIE_SECRET` and `PUBLIC_ORIGIN` configure the `gate` service; the
+application never sees any of them. They have no defaults on purpose, and `compose.yaml`
+interpolates them with `${VAR:?}`, so `docker compose up` stops on the first one that is unset *or
+empty* and names it — before a container exists, which is why the message is Compose's rather than
+the startup validator's. Two of them have specific shapes:
+
+- `GATE_COOKIE_SECRET` must decode to exactly 16, 24 or 32 bytes; the gate builds an AES cipher from
+  it and refuses to start otherwise, naming `cookie_secret` in its log. Generate one with
+  `openssl rand -base64 32 | tr -- '+/' '-_'`. Rotating it is
+  [the blunt revocation lever](#revocation-and-the-levers-you-have).
+- `PUBLIC_ORIGIN` is the `https://` origin your house proxy serves, no trailing slash. The gate
+  builds its Google redirect URL as `PUBLIC_ORIGIN` + `/oauth2/callback`, which must match what is
+  registered on the OAuth client exactly ([One-time Google setup](#one-time-google-setup)).
+
 **Two more that Compose reads and the application never sees.** `POSTGRES_PASSWORD` is the `db`
 service's password, covered under [Running against your own Postgres](#running-against-your-own-postgres).
 `APP_VERSION` is the published image tag the `app` service runs — it defaults to `1`, the floating
@@ -155,9 +246,11 @@ to hold this instance where it is, or to go back to a known-good image; see
 variable is validated at startup: they are resolved by Compose before a container exists, so a typo
 surfaces as a failed pull, not as the message naming the variable that the settings below get.
 
-**An empty value reads as unset, not as "configured to empty".** `AUTH_PASSWORD=` in `.env`, or a
-Compose variable that never got substituted, leaves the gate *off* — with no startup error, because
-nothing is malformed. [Security](#security) says why that particular one matters.
+**An empty value reads as unset, not as "configured to empty" — on both sides, in opposite
+directions.** For the application's own variables an empty assignment falls back to the default, so
+`AUTH_GATE=` in `.env` means `none` and the app draws its warning banner: it errs towards claiming
+less protection than it has, never more. For the gate's four, empty is a refusal to start. Neither
+can leave you quietly unprotected.
 
 **`MAX_UPLOAD_MB` does not reach the container under the bundled Compose file.** It is validated and
 read by the application, but it is missing from the `app` service's `environment:` block, so setting
@@ -186,30 +279,64 @@ docker compose exec db psql -U portfolio -d portfolio \
 
 ## Reverse proxy and TLS
 
-**Ingress runs through a bundled `caddy` container.** `compose.yaml` includes a `caddy` service, and
-it is the only container that publishes a port — `app` and `db` are reachable only on the compose
-network, which is what keeps the app port off the network in the first place rather than relying on
-you to bind it to loopback. Caddy's configuration lives in [`Caddyfile`](../Caddyfile) at the
-repository root.
+**Two proxies, and they do different jobs.** This stack assumes you already run a house-wide
+reverse proxy that terminates TLS and owns the public hostname; the bundled `caddy` container sits
+behind it, speaks plain HTTP on port 80, and is where the gate is enforced. Caddy's configuration
+lives in [`Caddyfile`](../Caddyfile) at the repository root.
 
-**TLS is not configured yet.** Caddy currently proxies plain HTTP on port 80 straight through to the
-app, so this alone does not make the instance safe to expose to the internet. Two ways to add TLS
-later, without ever having to publish the app's own port:
+| | Terminates TLS, owns the hostname | Enforces the gate |
+|---|---|---|
+| Your house proxy | **yes** | no |
+| This stack's `caddy` | no | **yes** |
 
-- Give the site block in `Caddyfile` a real hostname instead of `:80` and Caddy will request and
-  renew a certificate for it automatically. Publish `443:443` alongside the existing `80:80` — Caddy
-  serves HTTPS on 443 and keeps 80 for the redirect and the HTTP challenge.
-- Or put your own TLS-terminating proxy in front of this one, pointed at Caddy's port 80.
+**Enforcement is deliberately not the house proxy's.** A device on your LAN can dial this box's
+published port 80 directly and land on the bundled Caddy, skipping the house proxy entirely — and
+that device is the whole reason the gate exists. So the gate travels with the app, in the one
+container every path to it shares.
+
+`caddy` is also still the only container that publishes a port. `app`, `db` and `gate` are reachable
+only on the compose network, which is what keeps those ports off your LAN rather than relying on you
+to bind them to loopback.
+
+**Point your house proxy at this box's port 80**, and serve it at the origin you put in
+`PUBLIC_ORIGIN`. Nothing else has to be configured there: the bundled Caddy sets the forwarded
+headers the gate and the app need, and trusts the ones your proxy set
+([Forwarded headers](#forwarded-headers)).
+
+**The session belongs to that origin.** The gate issues its cookie `Secure` and scoped to the host
+the browser used, so a browser that reaches this stack any other way — the box's IP over plain HTTP,
+a second hostname — holds no cookie the gate will accept, and is bounced to Google and back to
+`PUBLIC_ORIGIN` rather than being let in where it stands. That is the gate working, not a
+misconfiguration.
+
+### If this stack's Caddy is your only Caddy
+
+Everything above assumes a proxy in front. Running without one is supported, but four things change,
+and all four are yours to do:
+
+- **Give the site block a real hostname** instead of `:80` in the `Caddyfile`, so Caddy requests and
+  renews a certificate for it. Publish `443:443` alongside the existing `80:80` — Caddy serves HTTPS
+  on 443 and keeps 80 for the redirect and the HTTP challenge.
+- **Give Caddy a volume** before the first certificate is issued. The section below is then about
+  you.
+- **`PUBLIC_ORIGIN` is that hostname**, and the redirect URI registered with Google is that hostname
+  plus `/oauth2/callback`. There is no second place to change.
+- **Keep the `handle` blocks as they are.** The `/healthz` exemption, the `/oauth2/*` passthrough to
+  the sidecar and the `forward_auth` on everything else are the gate. Adding TLS is editing the site
+  address, not the body.
+
+The `trusted_proxies` line stays correct either way: with no proxy in front there is simply nothing
+sending `X-Forwarded-*` for Caddy to believe.
 
 ### Before you enable TLS, give Caddy a volume
 
-`compose.yaml` mounts the Caddyfile and nothing else, so Caddy's `/data` is the container's own
-filesystem. `/data` is where it keeps the ACME account key and every certificate it has ever
-issued. Recreating the container throws all of it away — and recreating the container is exactly
-what the `docker compose up -d` in [Upgrading](#upgrading) does, every time. The next start
-asks the certificate authority for everything again from scratch. Enough of those in a week and
-Let's Encrypt's rate limit refuses, which leaves the site with no certificate at all and a wait
-before it can have one.
+Relevant only if you terminate TLS here rather than at a house proxy. `compose.yaml` mounts the
+Caddyfile and nothing else, so Caddy's `/data` is the container's own filesystem. `/data` is where it
+keeps the ACME account key and every certificate it has ever issued. Recreating the container throws
+all of it away — and recreating the container is exactly what the `docker compose up -d` in
+[Upgrading](#upgrading) does, every time. The next start asks the certificate authority for
+everything again from scratch. Enough of those in a week and Let's Encrypt's rate limit refuses,
+which leaves the site with no certificate at all and a wait before it can have one.
 
 Add the volumes *before* the first certificate is issued:
 
@@ -231,13 +358,22 @@ and costs nothing to add at the same time.
 
 ### Forwarded headers
 
-The app **trusts `X-Forwarded-*`**, and the bundled Caddy sets all three headers itself — nothing to
-configure there.
+The gate **trusts `X-Forwarded-*`**, and the bundled Caddy sets them itself — nothing to configure
+there. The application now reads no forwarded header at all; the two it used to read went with the
+password it served.
 
-| Header | Effect |
-|---|---|
-| `X-Forwarded-Proto` | Decides whether the login cookie is issued `Secure`. Behind TLS it is; over plain HTTP it is not, because a `Secure` cookie would be dropped by the browser and nobody could stay logged in. |
-| `X-Forwarded-For` | The address a failed login attempt is logged against. Nothing is authorised on it. |
+| Header | Who reads it | Effect |
+|---|---|---|
+| `X-Forwarded-Proto`, `X-Forwarded-Host` | `gate` | The scheme and host the sign-in redirects are built with. Without them the sidecar would build them from this stack's internal plain HTTP and nobody could follow them. |
+| `X-Forwarded-For`, `X-Real-IP` | `gate` | The client address in the sidecar's own log lines. Nothing is authorised on either. |
+| `X-Auth-Request-Email` | nothing, yet | The [authenticated email](../CONTEXT.md) the gate vouched for, forwarded to `app` on every admitted request. The app reads it nowhere today — it is attribution, never permission — and Caddy deletes any value a browser sent before copying the gate's, so nobody can assert their own identity. |
+
+**The Caddyfile trusts these from any private address**, not from one named proxy: it sets
+`trusted_proxies static private_ranges`, because the house proxy's address is yours and not this
+repository's. The honest reading is that a peer on your LAN can forge `X-Forwarded-*` at this stack.
+That is affordable only because nothing decides anything on them — the gate's verdict comes from a
+session cookie it decrypts itself, and its redirect URL is pinned in `compose.yaml` rather than read
+from a header. If you want it tighter, replace `private_ranges` with your proxy's address.
 
 The database is never exposed either: `compose.yaml` publishes no port for it, and the app reaches
 it over the compose network.
@@ -255,8 +391,9 @@ service workers require one, with `localhost` as the only exception — but it i
 its own, and a LAN address over plain HTTP is not what is standing in the way here.
 
 If installability is wanted later it is a change to the application, not to the deployment: a
-manifest, a service worker, and the offline caching `DESIGN.md` §11 sketches. Putting the instance
-behind a proxy with a real certificate is worth doing [for its own reasons](#reverse-proxy-and-tls).
+manifest, a service worker, and the offline caching `DESIGN.md` §11 sketches. The secure context
+that would be the other half of it is already there, because the household reaches this instance
+through [a proxy that terminates TLS](#reverse-proxy-and-tls).
 
 ---
 
@@ -267,64 +404,117 @@ mechanism is and why it was built that way. **That table is deliberately not rep
 section is the other half: the decisions that are yours, and the consequences you inherit whether or
 not you make them.
 
-### What an attacker on your LAN can reach
+### What the gate checks, and what an attacker on your LAN reaches
 
-**With `AUTH_PASSWORD` unset**, anyone who can open port 80 on the host has the whole instance:
+Every request that arrives at the bundled Caddy — including routes that do not exist yet, and
+including the JavaScript bundles, the CSS and the font, which the old in-app gate left open — is
+put to the `gate` sidecar before Caddy will forward it. The sidecar admits it only if all of this
+holds:
+
+- the request carries the gate's session cookie, and that cookie decrypts with `GATE_COOKIE_SECRET`;
+- the email inside it is on `allowed-emails.txt`, **re-checked on every single request**, not only
+  at sign-in;
+- and the person got that cookie by completing a real Google sign-in at `PUBLIC_ORIGIN`.
+
+Anything else is a redirect to Google. A guest on your wifi who finds the instance by IP gets the
+account picker and, if they sign in with an address that is not listed, an error from the gate — not
+a page.
+
+**`/healthz` is the one exemption**, so uptime monitoring keeps working without a Google account.
+It carries no household data, but it does name the *filenames* of any migration the image carries
+that the database has not applied — a version fingerprint available to anyone who can reach port 80.
+That is unchanged from before the gate, which exempted the same path.
+
+**The allowlist is the whole of authorization.** Everyone it admits sees and can do everything:
 every balance, every account, every uploaded statement, and every screen that writes. There is no
-read-only mode. The UI carries a permanent banner while that is true, and the banner is the reliable
-signal — not the contents of `.env`.
+read-only mode, no per-person permission, and no admin. The authenticated email the gate attaches to
+each request is attribution, never permission, and nothing in the app reads it.
 
-**With it set**, exactly two paths answer without a session: the login page and `/healthz`.
-Everything else is refused, including routes that do not exist yet, because the gate is a
-deny-by-default middleware on the root route rather than a list of protected paths. Static assets —
-the JavaScript bundles, the CSS, the font — are served ahead of the router and are *not* gated. No
-household data is in them.
+### Fail-closed, and what that buys you
 
-### Five things the code does not do, that you may assume it does
+There is no configuration of this stack that serves the application to an unauthenticated visitor.
+A missing or empty gate credential stops `docker compose up` before a container exists; a missing
+`allowed-emails.txt` stops it the same way; a `GATE_COOKIE_SECRET` of the wrong length stops the
+sidecar; and a stopped sidecar means Caddy answers nothing but `/healthz`. The failure mode is an
+instance that is **down**, never one that is open. That is the trade the old
+"boots with no manual steps" contract was exchanged for, and it is deliberate.
 
-**There is no login rate limiting or lockout of any kind.** A wrong password logs a warning and
-returns. No delay, no attempt counter, no lockout, no ban list, and nothing in the Caddyfile either
-— it is a bare `reverse_proxy`. Anyone who can reach the login page can guess as fast as the network
-allows. The length and randomness of the password is the entire defence.
+The application still carries its unprotected-instance banner, and behind this stack you will never
+see it — `compose.yaml` tells the app a gate fronts it. **If that banner ever appears on your
+instance, believe it**: something is serving the app without the gate in front.
 
-**There is no CSRF token anywhere.** `SameSite=Lax` on the session cookie is the whole of it. Against
-a logged-in household that covers the ordinary cross-site form post. What it does not cover is the
-*open* instance: with no password there is no session cookie at all, so `SameSite` has nothing to protect,
-and any page anybody in the house happens to open can POST to your instance and be obeyed. **That is
-a concrete reason to set `AUTH_PASSWORD` even on a LAN you completely trust** — the password is not
-only about who can look.
+### What the code still does not do, that you may assume it does
+
+**Rate limiting and lockout are Google's, not yours.** There is no password to guess here any more,
+so the brute-force surface moved to Google's own sign-in — which does have rate limiting, lockout
+and whatever second factor each family member has enabled. What is *not* rate limited is the gate
+itself: an unlisted address can be offered at it as fast as the network allows, and each attempt is
+refused with nothing counting them. Nothing in the Caddyfile limits rates either; the stock
+`caddy:2-alpine` image has no rate-limiting module.
+
+**Session handling is the sidecar's, and its shape is fixed in `compose.yaml`.** The cookie is
+encrypted rather than merely signed, `SameSite=Lax` and `Secure` are set explicitly, and the
+lifetime is the seven-day default — which is what makes signing in a once-per-device event rather
+than a weekly ritual, because the renewal bounces through Google without showing anyone a screen.
+There is no server-side session store, so there is nothing to revoke a single cookie against; see
+[the levers below](#revocation-and-the-levers-you-have).
+
+**There is no CSRF token anywhere.** `SameSite=Lax` on the gate's cookie is the whole of it, and now
+that the app carries no cookie of its own it is the entire posture — which is why `compose.yaml`
+pins the attribute rather than inheriting it. Against a signed-in household that covers the ordinary
+cross-site form post.
 
 **No security headers are set at all.** No CSP, no HSTS, no `X-Frame-Options`, no
 `X-Content-Type-Options`: the app sets none and the Caddyfile sets none. If you want them, a `header`
 block in the Caddyfile is where they go. Nothing in the app depends on their absence, but nothing has
 been run behind a strict CSP either, so test it rather than assuming.
 
-**The session cookie is signed, not encrypted.** Anyone holding the cookie can decode its contents.
-What is in it is a plain, unsalted SHA-256 of `AUTH_PASSWORD` and nothing else — so a memorable
-password is recoverable from a captured cookie by running a wordlist offline, with no rate limit and
-nothing watching. **Use a long random password**, generated the same way as the session secret:
-`openssl rand -hex 32`. It is typed once per device per month.
+**The gate container runs as root.** `app` does not; `gate` does, because the published `-alpine`
+image sets no `USER` and `compose.yaml` argues that pinning a uid here would be the worse choice —
+it would decide on your behalf that your allowlist file is readable by that uid, and hand you a
+sidecar that will not start over a file mode nobody mentioned. What bounds it instead: the container
+is `read_only` with a tmpfs `/tmp`, holds no volume, and publishes no port. It is a real
+soft spot, written down rather than left to be discovered.
 
-**The cookie has no server-side expiry.** Its month-long lifetime is an instruction to the browser
-and nothing more; there is no session table to revoke against. A cookie that leaks stays valid until
-the password or the secret changes.
+**A LAN peer can forge `X-Forwarded-*` at this stack**, because the Caddyfile trusts them from any
+private address rather than from one named proxy ([Forwarded headers](#forwarded-headers)). That is
+affordable only for as long as nothing authorises on them, which today nothing does.
 
-### Revocation, and the two silent settings
+### Revocation, and the levers you have
 
-**Changing `AUTH_PASSWORD` or `SESSION_SECRET` is the only revocation there is, and it logs everybody
-out at once.** Sessions are pinned to the password that issued them, and the cookie is signed with a
-single secret rather than a rotation list — so there is no grace period, no overlap window, and no
-way to sign out one lost phone without signing out the household. Plan it for an evening, not for a
-Monday morning.
+Three, in ascending order of blast radius. The first two are the real ones.
 
-**`AUTH_PASSWORD=` with nothing after it reads as unset.** An empty string is treated as not
-configured, so an empty assignment in `.env` — or a Compose variable that silently failed to
-substitute — serves the instance wide open, with no error at startup, because nothing about it is
-malformed. Check the banner in the UI, never the file.
+**Remove the address from `allowed-emails.txt` — this signs that person out everywhere.** The gate
+re-validates every request's email against the file and watches the file for changes, so their next
+request is refused and their cookie is cleared, on every device, without touching anyone else's
+session. **Restart the gate afterwards anyway:**
 
-**`/healthz` never requires credentials** — that is deliberate, so monitoring needs no secret — and
-it names the *filenames* of any migration the image carries that the database has not applied. That
-is a version fingerprint available to anyone who can reach the port.
+```sh
+docker compose restart gate
+```
+
+Not because the removal needs it, but because a single-file bind mount can stop following a file an
+editor replaces by rename — you would be left with the gate holding the old list and no sign that
+anything went wrong. The restart is cheap and removes the doubt.
+
+**Rotate `GATE_COOKIE_SECRET` — this signs out everyone, on every device, at once.** Every existing
+cookie stops decrypting the moment the new secret is in place. There is no rotation list, no grace
+period and no overlap window, so plan it for an evening. This is the lever for a leaked cookie or a
+lost device you cannot be sure about.
+
+```sh
+# In .env: GATE_COOKIE_SECRET=$(openssl rand -base64 32 | tr -- '+/' '-_')
+docker compose up -d gate
+```
+
+**The sidecar's sign-out URL is `PUBLIC_ORIGIN` + `/oauth2/sign_out`, and it is worth less than it
+sounds.** It clears the gate's own cookie in that one browser and nothing else: the Google session
+on the device is untouched, and sign-in goes straight to Google with no screen of our own in the
+way, so the next visit bounces out to Google and back and is re-admitted without anyone typing
+anything — silently, on a device signed into one Google account. It is useful for handing a phone to
+someone for a minute. It is not revocation, and there is no sign-out control in the UI — that is
+deliberately deferred and tracked as [issue #89](https://github.com/chethan123/portfolio/issues/89),
+and these limits are the argument for it.
 
 ### One thing that leaves the house
 
@@ -337,31 +527,39 @@ to the last known price, never to zeros.
 
 ### Can I put this on the internet?
 
-Honestly: it was not built for that. The threat model written into the design is a household LAN, and
-[`ARCHITECTURE.md` §7.6](../ARCHITECTURE.md#76-security-posture) says so rather than implying more.
-Nothing here forbids exposing it — but every gap above becomes yours to compensate for, in front of
-the app, because none of them is going to be fixed behind it.
+The honest answer changed with the gate, but not all the way to yes. The threat this was built
+against is a device on the household's own LAN — the guest phones and the IoT that share the wifi —
+which is why the gate is enforced here rather than at your house proxy
+([`ARCHITECTURE.md` §7.6](../ARCHITECTURE.md#76-security-posture),
+[ADR-0005](adr/0005-auth-is-a-forward-auth-gate.md)). Everything a stranger on the internet would
+meet is the same gate, and the sign-in behind it is Google's. What does not change is that every gap
+above stays yours to compensate for, in front of the app.
 
-If you are going to do it anyway:
+If you are going to do it:
 
-- [ ] TLS terminated in front, with a real certificate, and Caddy's `/data`
-      [on a volume](#before-you-enable-tls-give-caddy-a-volume) so it survives an upgrade.
-- [ ] `AUTH_PASSWORD` set to a long random string — and *verified* set, by the banner being gone.
-- [ ] `SESSION_SECRET` from `openssl rand -hex 32`, not reused from anything else.
-- [ ] Rate limiting on the login path, added in front. The stock `caddy:2-alpine` image has no
-      rate-limiting module, so this means a custom Caddy build or a different proxy.
-- [ ] Accept that a stolen cookie is valid until you change the password, and that changing the
-      password signs out the whole household with no warning.
-- [ ] Accept that you are now responsible for patching an internet-facing surface on whatever
-      schedule the internet decides.
+- [ ] TLS terminated in front, with a real certificate, and — if that is this stack's own Caddy —
+      its `/data` [on a volume](#before-you-enable-tls-give-caddy-a-volume) so it survives an
+      upgrade.
+- [ ] `PUBLIC_ORIGIN` and the registered redirect URI on the public hostname, not a LAN one.
+- [ ] `GATE_COOKIE_SECRET` generated fresh and not reused from anything else.
+- [ ] The allowlist re-read as what it now is: the only thing between the internet and the
+      household's finances.
+- [ ] Rate limiting in front of `/oauth2/*`, if you want the gate itself bounded rather than only
+      Google. The stock `caddy:2-alpine` image has no rate-limiting module, so this means a custom
+      Caddy build or a different proxy.
+- [ ] Accept that you are now responsible for patching an internet-facing surface — including the
+      pinned `gate` image, which nothing here updates for you — on whatever schedule the internet
+      decides.
 
 One addition to §7.6's error-disclosure row, because it is a deployment fact rather than a code fact:
 in a production build React Router replaces a thrown error's message with a generic one before it
 reaches the page, so a Postgres error does not leak from the shipped image. That is a mitigation for
 the deployed case only. It is not true under `react-router dev`, which should never face anything.
 
-**The recommendation is the option not on that list:** a VPN or a mesh network onto the LAN gives the
-household exactly the same access and leaves the threat model the one this was designed against.
+**A VPN is not the answer here, and that is a decision rather than an oversight.** It was the old
+recommendation, and [ADR-0005](adr/0005-auth-is-a-forward-auth-gate.md) rejects it for this threat
+model: a VPN onto the LAN does nothing about an adversary already on that LAN. Run one if you want
+remote access without publishing a port — but run it as well as the gate, never instead of it.
 
 ---
 
@@ -373,7 +571,9 @@ usefully — what they do not.
 
 ### `/healthz`
 
-No credentials, `Cache-Control: no-store`, `200` or `503`. The response body is an API contract
+No credentials, `Cache-Control: no-store`, `200` or `503`. **Point your monitor at this path and no
+other**: it is the one Caddy exempts from the gate, so anything else you probe answers with a
+redirect to Google and reads as an outage. The response body is an API contract
 pinned by a test (`tests/routes/healthz.test.ts` asserts it key for key, precisely so a rename cannot
 break your dashboard silently), which is why it is quoted here rather than described:
 
@@ -405,6 +605,13 @@ every upload returns a 500.
 **The price provider, deliberately.** A third-party outage must not make Compose restart a perfectly
 healthy app. Stale prices are a UI signal — the "as of" line — not a health signal.
 
+**Whether anybody can actually get in.** `/healthz` is the one path Caddy does not put to the gate,
+which is what lets a monitor probe it without a Google account — and means a gate that is down,
+crash-looping on a bad secret, or holding an allowlist that no longer has anyone on it leaves this
+endpoint answering `200` while the household is locked out. Nothing watches the gate's verdict for
+you, and `gate`'s own container healthcheck only asks whether the sidecar is alive, not whether it
+would admit anyone.
+
 **Disk, memory, and Caddy.** Nothing here watches any of them, and `caddy` has no healthcheck at all.
 
 One shape worth being able to recognise: if the ledger read itself throws, the body comes back
@@ -421,7 +628,9 @@ able to *act*, not only to alert — or you have to be the one who acts.
 ### Logs
 
 `docker compose logs -f app` is the entire pipeline; there is no metrics endpoint, no tracing and no
-log shipping. The stems below are for grepping and may drift — the code owns the wording:
+log shipping. `docker compose logs -f gate` is the second half of it, and the only place a refused
+sign-in is recorded at all — the application no longer sees one. The stems below are for grepping
+and may drift — the code owns the wording:
 
 - **One line per HTTP request** from the server's built-in request logger: method, path, status,
   duration. Note that the container healthcheck hits `/healthz` every ten seconds, and on an idle
@@ -435,12 +644,20 @@ log shipping. The stems below are for grepping and may drift — the code owns t
   a single symbol refused over its currency logs `Price refused`. None of them zeroes anything.
 - **Database trouble on the page path** at error level — stems `Database health check failed` and
   `Migration status check failed` — the lines behind a `/healthz` 503.
-- **Failed logins** at warning level, one per attempt, with the forwarded address — stem
-  `Failed login`. This is the only intrusion signal the instance produces, and nothing counts or
-  correlates them for you.
 - **Startup**, in order: the configuration check, one line per migration file (applied or skipped),
   then a `Migrations OK` line. A failure names the offending file and the Postgres error, and the
   server is never started — stem `Migrations`.
+
+And in `gate`'s log, which is a different program with a different vocabulary:
+
+- **The allowlist, at startup and again on every change it notices** — stem
+  `authenticated emails file`. A line after you have edited the file is the gate confirming it
+  re-read it; no line is the case [the restart exists for](#revocation-and-the-levers-you-have).
+- **A session refused** — stem `Invalid authorization via session` — someone whose address is no
+  longer on the list, arriving with a cookie that used to work. Their cookie is cleared as part of
+  the refusal.
+- **A refusal to start**, which crash-loops the container rather than serving anything: a
+  `cookie_secret` of the wrong length is the one to expect, and it names the variable.
 
 ### "There is no price line in the log" has three causes
 
@@ -506,18 +723,21 @@ you needed it.
 Automate it with whatever already runs on the host — cron, a systemd timer, your NAS. A daily dump
 kept for a few weeks is proportionate for a household.
 
-### The second thing to keep is `.env`
+### The second thing to keep is `.env`, and the third is the allowlist
 
-"Nothing outside Postgres" is true of *data* and false of *configuration*. `.env` is gitignored and
-dockerignored on purpose, so nothing else in the world has a copy of it, and it holds the three
-values that are not recoverable from anywhere:
+"Nothing outside Postgres" is true of *data* and false of *configuration*. `.env` and
+`allowed-emails.txt` are both gitignored and dockerignored on purpose, so nothing else in the world
+has a copy of them. What is in them that is not recoverable from anywhere:
 
-- `SESSION_SECRET` — regenerating it logs the household out. Recoverable, and annoying.
-- `AUTH_PASSWORD` — the household needs to be told a new one.
-- `POSTGRES_PASSWORD` — the worst of the three, because the `db-data` directory was initialised with
-  it and still expects it. A restored dump does not help; see [`runbook.md`](runbook.md).
+- `GATE_CLIENT_ID` and `GATE_CLIENT_SECRET` — recoverable, but only from the Google Cloud console,
+  and the secret may have to be regenerated there rather than read back.
+- `GATE_COOKIE_SECRET` — regenerating it signs the household out. Recoverable, and annoying.
+- `POSTGRES_PASSWORD` — the worst of them, because the `db-data` directory was initialised with it
+  and still expects it. A restored dump does not help; see [`runbook.md`](runbook.md).
+- `allowed-emails.txt` — losing it is a locked-out household until you retype it, because the stack
+  will not start without the file at all.
 
-Keep it wherever you keep passwords, which is not the directory you keep the dumps in.
+Keep them wherever you keep passwords, which is not the directory you keep the dumps in.
 
 > **A backup you have never restored is not a backup.** Rehearse it — the
 > [drill below](#rehearse-it-without-an-outage) does that without taking the instance down.
@@ -587,8 +807,9 @@ the drill and is dropped at the end.
 
 ### Rebuilding a machine from nothing
 
-Install Docker, clone this repository, restore your `.env`, then bring up the database **on its own**
-before anything else:
+Install Docker, clone this repository, restore your `.env` **and your `allowed-emails.txt`** — with
+either one missing nothing starts at all — then bring up the database **on its own** before anything
+else:
 
 ```sh
 docker compose up -d db
@@ -616,7 +837,12 @@ There is no `git pull` and no build. The `app` service is set `pull_policy: alwa
 `docker compose up -d` fetches whatever the pinned tag currently points at and recreates the
 container; with the default floating `APP_VERSION=1` that is the newest `v1.x.y` release. A
 checkout of this repository is not needed to run or upgrade an instance — only `compose.yaml`,
-`Caddyfile` and your `.env`.
+`Caddyfile`, your `.env` and your `allowed-emails.txt`.
+
+**This does not upgrade the gate.** `gate` is pinned to an exact release with no variable in front
+of it, so `docker compose up -d` recreates the container on the same image forever. Moving it is
+editing the tag in `compose.yaml`, and it is worth doing deliberately when oauth2-proxy publishes a
+security release — nothing here will tell you one exists.
 
 **Upgrading across a major means changing `APP_VERSION`.** The floating tag deliberately does not
 cross `1` → `2`, because a major is where a breaking change would be. Read the release notes, set

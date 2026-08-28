@@ -462,7 +462,7 @@ describe("the persistence cookie", () => {
   it("finds its own value among the others a browser sends, whole-name matched", () => {
     const requestWith = (cookie: string) => new Request("http://portfolio.local/", { headers: { Cookie: cookie } });
 
-    expect(readRangeCookie(requestWith(`__portfolio_session=abc; ${RANGE_COOKIE}=5y`))).toBe("5y");
+    expect(readRangeCookie(requestWith(`_oauth2_proxy=abc; ${RANGE_COOKIE}=5y`))).toBe("5y");
     expect(readRangeCookie(requestWith(`not_${RANGE_COOKIE}=5y`))).toBeUndefined();
     expect(readRangeCookie(new Request("http://portfolio.local/"))).toBeUndefined();
   });

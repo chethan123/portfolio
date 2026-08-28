@@ -12,6 +12,7 @@ Start here whatever the symptom is:
 docker compose ps
 curl -s localhost/healthz
 docker compose logs --tail=100 app
+docker compose logs --tail=100 gate
 ```
 
 Every command below runs from the repository root, where `compose.yaml` is.
@@ -24,6 +25,8 @@ Every command below runs from the repository root, where `compose.yaml` is.
 
 - No `caddy` — nothing is listening on port 80, and the browser reports a refused connection.
 - `caddy` up, `app` down or unhealthy — the browser gets `502`. Caddy is fine; its upstream is not.
+- `caddy` up, `gate` down or unhealthy — `/healthz` still answers `200`, everything else `502`. Go
+  to [Nobody can sign in](#nobody-can-sign-in).
 - `502` that clears on its own — `app` was still starting, or a restore was in progress.
 
 **Do.**
@@ -39,6 +42,38 @@ else on the host has taken port 80.
 
 Why: [Reverse proxy and TLS](operating.md#reverse-proxy-and-tls),
 [Installing](operating.md#installing).
+
+---
+
+## `docker compose up` refuses to start anything
+
+**Confirm.** No container is created and the message names one variable or one file.
+
+- A `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`, `GATE_COOKIE_SECRET` or `PUBLIC_ORIGIN` named in the
+  refusal — it is unset or empty in `.env`. `docker compose config --quiet` reproduces this without
+  starting anything, and reports the first one it hits.
+- A bind-mount complaint naming `./allowed-emails.txt` — the file is not there. This one surfaces at
+  `up`, not at `config`.
+
+```sh
+docker compose config --quiet
+ls -l .env allowed-emails.txt
+```
+
+**Do.**
+
+```sh
+cp .env.example .env                              # if there is no .env at all
+cp allowed-emails.example.txt allowed-emails.txt  # if the allowlist is missing
+$EDITOR .env
+docker compose up -d
+```
+
+This refusal is the design, not a fault: there is no configuration in which this stack boots without
+the gate.
+
+Why: [Installing](operating.md#installing),
+[Environment variables](operating.md#environment-variables).
 
 ---
 
@@ -70,11 +105,16 @@ docker compose up -d app
 Two things about the validator:
 
 - It reports **every** problem it can see in one pass, so fix the whole list before retrying.
-- The `AUTH_PASSWORD` / `SESSION_SECRET` rule is a cross-field check that runs only after the rest
-  parses. An instance with a bad `PORT` *and* a missing `SESSION_SECRET` reports the port first and
-  the secret only on the next attempt. A second refusal is not a new fault.
-- An empty value is treated as unset. `AUTH_PASSWORD=` is not an error and leaves the instance
-  open.
+- An empty value is treated as unset and falls back to the default. The gate's own variables are
+  not its business at all — those stop Compose before a container exists
+  ([`docker compose up` refuses to start anything](#docker-compose-up-refuses-to-start-anything)).
+
+If it is `gate` rather than `app` that is restarting, its log names the reason and `cookie_secret`
+is the usual one — the value must decode to 16, 24 or 32 bytes:
+
+```sh
+docker compose logs --tail=100 gate
+```
 
 Why: [Environment variables](operating.md#environment-variables), [Security](operating.md#security).
 
@@ -136,6 +176,38 @@ Note that `/healthz` requires no credentials and is served with `Cache-Control: 
 monitor needs no configuration and a stale answer is not a thing that happens.
 
 Why: [Monitoring](operating.md#monitoring).
+
+---
+
+## The monitor says the instance is down but the app works
+
+`/healthz` is the one path Caddy does not put to the gate. Everything else answers a redirect to
+Google, which a monitor reads as an outage.
+
+**Confirm.** Compare the two:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/healthz
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://localhost/
+```
+
+- `200` and `302` — the stack is fine and the monitor is pointed at a gated path.
+- `302` on `/healthz` too — the exemption has regressed. The `handle /healthz` block must come
+  before the catch-all `handle` in the `Caddyfile`.
+
+```sh
+docker compose exec caddy cat /etc/caddy/Caddyfile
+docker compose logs --tail=100 caddy
+```
+
+**Do.** Point the monitor at `/healthz` and nothing else. If the exemption regressed, restore that
+block and reload:
+
+```sh
+docker compose restart caddy
+```
+
+Why: [Monitoring](operating.md#monitoring), [Security](operating.md#security).
 
 ---
 
@@ -288,27 +360,116 @@ Why: [Monitoring](operating.md#monitoring), [Growth](operating.md#growth-and-lim
 
 ---
 
-## Nobody can log in, or I need to lock everyone out
+## A family member's phone is lost or stolen
 
-There is no password reset flow, no account recovery, and no sign-out control anywhere in the app.
-
-**Confirm.** `AUTH_PASSWORD` and `SESSION_SECRET` in `.env` are what the instance is using.
-
-**Do.** Changing either one is the only revocation there is, and it takes effect on the next start:
+**Confirm.** Which address that person signs in with, and that it is in the allowlist.
 
 ```sh
-# In .env — set a long random value, not a memorable one.
-#   AUTH_PASSWORD=...
-#   SESSION_SECRET=$(openssl rand -hex 32)
-docker compose up -d app
+cat allowed-emails.txt
 ```
 
-- Changing **either** logs everyone out immediately. There is no rotation grace period, so nobody
-  keeps a session across the change.
-- The session cookie has no server-side expiry. A captured cookie stays valid until the password or
-  the secret changes — this is the revocation for that too.
-- Removing `AUTH_PASSWORD`, or setting it to an empty value, turns the gate **off** and serves the
-  instance open. That is not a way to let someone in.
+**Do.** Remove their line, then restart the gate:
+
+```sh
+$EDITOR allowed-emails.txt
+docker compose restart gate
+```
+
+- The removal alone signs that person out **everywhere**, on their next request, on every device:
+  the gate re-checks each request's address against the file and watches the file for changes.
+- The restart is insurance, not the mechanism. A single-file bind mount can stop following a file an
+  editor replaces by rename, and there is no signal when it does.
+- Nobody else is affected. Their sessions continue.
+
+If you cannot be sure which account or which device, use the wider lever — it signs out everyone, on
+every device, at once:
+
+```sh
+# In .env: GATE_COOKIE_SECRET=$(openssl rand -base64 32 | tr -- '+/' '-_')
+docker compose up -d gate
+```
+
+Then tell the household to sign in again. There is no per-device revocation between these two.
+
+Why: [Security](operating.md#security).
+
+---
+
+## Nobody can sign in
+
+Three suspects: Google, the `gate` container, the allowlist file. Existing sessions keep working
+through a Google outage, so "everyone at once, including people who were already in" points away
+from Google.
+
+**Confirm — the container.**
+
+```sh
+docker compose ps gate
+docker compose logs --tail=100 gate
+```
+
+Not `healthy`, or crash-looping, is the whole answer. `cookie_secret` in the log means
+`GATE_COOKIE_SECRET` does not decode to 16, 24 or 32 bytes.
+
+**Confirm — the front door still challenges correctly.**
+
+```sh
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://localhost/
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost/oauth2/auth
+```
+
+A `302` to `/oauth2/sign_in` and a `401` are both correct. Anything else is Caddy or the gate, not
+Google.
+
+**Confirm — the allowlist.**
+
+```sh
+docker compose exec gate cat /etc/oauth2-proxy/allowed-emails.txt
+docker compose logs gate | grep -i "authenticated emails file"
+docker compose logs gate | grep -i "invalid authorization via session"
+```
+
+Read the file **inside the container**: an empty or truncated file there, or one that does not match
+what is on the host, is the fault. Addresses are matched whole and case-insensitively; a typo admits
+nobody.
+
+**Confirm — Google.** Only if the container is healthy and the file is right. People who were
+already signed in are unaffected; new sign-ins fail at Google's own pages, or come back to an error
+from the gate.
+
+- The consent screen was unpublished, or the OAuth client deleted or its secret rotated.
+- `PUBLIC_ORIGIN` changed and the registered redirect URI did not, or the reverse. It must be
+  `PUBLIC_ORIGIN` + `/oauth2/callback`, character for character.
+- Google itself is down. Wait; sessions in flight are not affected.
+
+**Do.**
+
+```sh
+docker compose restart gate     # after any allowlist edit, and worth trying first
+docker compose up -d gate       # after changing anything in .env
+```
+
+There is no break-glass account and no second sign-in path. Repairing the gate is the only way in.
+
+Why: [Security](operating.md#security),
+[Environment variables](operating.md#environment-variables).
+
+---
+
+## Somebody wants to sign out
+
+**Do.** Send them to `PUBLIC_ORIGIN` + `/oauth2/sign_out` in the browser they want cleared.
+
+- It clears the gate's cookie in **that browser only**. The Google session on the device is
+  untouched.
+- The next visit bounces out to Google and back and is re-admitted without anyone typing anything.
+  On a device signed into one Google account, no screen is shown at all.
+- So it is not revocation. For that, see
+  [A family member's phone is lost or stolen](#a-family-members-phone-is-lost-or-stolen).
+
+There is no sign-out control in the UI; it is deferred and tracked as
+[issue #89](https://github.com/chethan123/portfolio/issues/89), and these limits are the argument
+for it.
 
 Why: [Security](operating.md#security).
 
@@ -370,18 +531,22 @@ Why: [Restoring](operating.md#restoring), [Backups](operating.md#backups).
 
 ## I need to move to another machine
 
-**Do.** Carry both of these, not just the first:
+**Do.** Carry all three of these, not just the first:
 
 - The `pg_dump` file. It is the whole of the data, including the original uploaded CSVs, the
   migration ledger and the settings row.
 - **`.env`.** It is gitignored and dockerignored, so a fresh clone does not have it. It holds
-  `DATABASE_URL`, `AUTH_PASSWORD` and `SESSION_SECRET`. A regenerated `SESSION_SECRET` logs everyone
-  out and is recoverable; a lost `AUTH_PASSWORD` means choosing a new one and telling the household.
+  `DATABASE_URL` and the gate's four. A regenerated `GATE_COOKIE_SECRET` signs everyone out and is
+  recoverable; the client id and secret come back only from the Google Cloud console.
+- **`allowed-emails.txt`.** Also gitignored. Without it nothing starts at all.
 
 The image is rebuildable and is not worth carrying.
 
-Then: install Docker, clone, copy `.env` into place, `docker compose up -d db`, restore, start the
-rest.
+Then: install Docker, clone, copy `.env` and `allowed-emails.txt` into place,
+`docker compose up -d db`, restore, start the rest.
+
+If the public origin changes with the machine, `PUBLIC_ORIGIN` and the redirect URI registered on
+the Google OAuth client both have to change with it, or nobody can sign in.
 
 Why: [Installing](operating.md#installing), [Backups](operating.md#backups).
 
@@ -492,6 +657,10 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 
 - `docker compose restart app` — the fix for a wedged-but-alive app. An unhealthy container is not
   restarted for you: `restart: unless-stopped` fires on process exit, not on a failing healthcheck.
+- `docker compose restart gate` — a few seconds in which everything but `/healthz` answers `502`.
+  Nobody is signed out: sessions are cookies in browsers, and the gate keeps nothing.
+- Editing `allowed-emails.txt`. Adding a line admits that person; removing one signs them out
+  everywhere.
 - `docker compose down` — **without** `-v`. Stops and removes the containers and keeps `db-data`.
 - `docker compose up -d` — pulls the tag `APP_VERSION` points at and recreates. Note that Caddy's
   `/data` is not on a volume, so a recreate discards any certificates it has issued. It needs to
@@ -510,8 +679,12 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
   verified dump in hand.
 - Editing `schema_migrations` to make a symptom go away.
 - Editing an already-applied migration file. Only filenames are recorded, so the change never runs.
-- Publishing the `app` or `db` port. The app trusts `X-Forwarded-*` unconditionally, which is sound
-  only while nothing but the proxy can reach it.
+- Publishing the `app`, `db` or `gate` port. Publishing `app` walks straight around the gate;
+  publishing `gate` lets a LAN device assert its own forwarded headers to it. Both are sound only
+  while nothing but `caddy` can reach them.
+- Loosening the `forward_auth` block or the `trusted_proxies` line in the `Caddyfile` to make a
+  symptom go away. That block is the gate.
+- Rotating `GATE_COOKIE_SECRET` casually. It signs out the whole household with no warning.
 
 ---
 

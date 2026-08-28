@@ -34,8 +34,8 @@ import { Link, isRouteErrorResponse } from "react-router";
  * shows and `/no-such-page` does not. It is a claim about how this deployment
  * is configured, and root's loader is what establishes it; a URL that matched
  * no route never runs that loader, so the shell has no basis for the claim. The
- * banner says "this instance has no password" — printing it on faith would say
- * that of an instance that has one.
+ * banner says nothing stands in front of this instance — printing it on faith
+ * would say that of an instance sitting behind the gate.
  */
 export function ErrorPage({ error }: { error: unknown }) {
   const notFound = isRouteErrorResponse(error) && error.status === 404;

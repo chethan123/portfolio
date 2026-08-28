@@ -53,7 +53,7 @@ disagree, the header is nearer the code and probably right; fix this document.
 ## 2. System context
 
 One household, one instance, one database. There are no tenants, no external consumers, and exactly
-one third-party dependency in the request path.
+one third-party dependency the *application* talks to.
 
 ```mermaid
 graph LR
@@ -62,45 +62,71 @@ graph LR
         csv["Brokerage CSV exports<br/>Fidelity, Schwab, 401k providers"]
     end
 
+    house["House-wide Caddy<br/>TLS, the public hostname<br/>the operator's, not this stack's"]
+
     subgraph instance["The instance — one Docker Compose stack"]
-        caddy["Caddy<br/>ingress, the only published port"]
+        caddy["Caddy<br/>ingress, the only published port<br/>forward_auth on every request"]
+        gate["gate — oauth2-proxy<br/>sign-in, allowlist, session cookie"]
         app["Portfolio Tracker<br/>React Router 7 on Node 24"]
         db[("PostgreSQL 17<br/>all persistent state")]
     end
 
+    google["Google<br/>OIDC provider"]
     yahoo["Yahoo Finance<br/>unofficial quote endpoint"]
 
-    browser -->|HTTP| caddy
-    caddy -->|"reverse_proxy app:$APP_PORT"| app
+    browser -->|HTTPS| house
+    house -->|"HTTP, X-Forwarded-*"| caddy
+    browser -.->|"a LAN device can dial this box directly —<br/>which is why the gate is here and not up there"| caddy
+    caddy -->|"/oauth2/auth — admit or refuse"| gate
+    caddy -->|"reverse_proxy app:$APP_PORT<br/>+ the verified email"| app
+    gate -->|"token exchange"| google
+    browser -.->|"sign-in redirect"| google
     csv -.->|"uploaded through the browser"| browser
     app -->|SQL over the compose network| db
     app -->|"batched quote fetch, per the refresh cadence (seeded 15 min), market hours only<br/>+ a one-symbol probe at instrument creation, in the request path"| yahoo
 
     classDef ext fill:#f5f0e8,stroke:#8a7a5c,color:#3b3222
-    class yahoo,csv ext
+    class yahoo,csv,google,house ext
 ```
 
-**External dependencies, in full.** Yahoo Finance, and nothing else. There is no email, no object
-store, no queue, no cache tier, no identity provider, no analytics. It is reached two ways: the
-poller's batched refresh, which is off the request path entirely, and `probeSymbol` — a single-symbol
-currency check that runs *inside* a form submission when someone creates a feed-priced instrument
-(§6.1). The second one is the only place a third party can make a person wait. Both go through the
-one interface in §7.5, precisely because the endpoint is unofficial and expected to break.
+**External dependencies, in full.** Two, and they belong to different components. **Yahoo Finance**
+is the application's, and its only one: no email, no object store, no queue, no cache tier, no
+analytics. It is reached two ways — the poller's batched refresh, which is off the request path
+entirely, and `probeSymbol`, a single-symbol currency check that runs *inside* a form submission when
+someone creates a feed-priced instrument (§6.1). The second is the only place a third party can make
+a person wait. Both go through the one interface in §7.5, precisely because the endpoint is
+unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
+the browser is redirected there to sign in and the sidecar exchanges the code for a token, both
+outside the app process entirely. That seam is what keeps "an identity provider" out of the
+application's dependency list while the instance still has one.
 
-**Trust boundaries.** Three, marked here because §7.6 depends on them:
+**Trust boundaries.** Marked here because §7.6 depends on them:
 
 | Boundary | Crossing | Trusted? |
 |---|---|---|
-| Browser → Caddy | HTTP request, optional session cookie | No. Every form input is re-validated server-side. |
-| Caddy → app | `X-Forwarded-*` headers | **Yes, unconditionally** — which is why `app` publishes no port. |
+| Browser → Caddy | HTTP request, the gate's session cookie | No. The gate decrypts the cookie itself and re-checks its address against the allowlist on every request; every form input is re-validated server-side. |
+| House proxy → Caddy | `X-Forwarded-*` | Believed, bounded by `trusted_proxies static private_ranges` in the `Caddyfile`. The honest reading: **any LAN peer can forge these headers**, because this repository cannot know the operator's proxy address. See below for why that is affordable. |
+| Caddy → gate | `X-Forwarded-*`, `X-Real-IP`, `X-Forwarded-Uri` | **Yes, unconditionally.** The sidecar runs in reverse-proxy mode and builds its sign-in redirects from them, which is why `gate` publishes no port. |
+| Caddy → app | `X-Forwarded-*` and `X-Auth-Request-Email` | **Yes, unconditionally** — which is why `app` publishes no port. The trust costs nothing today: the app reads none of these (§7.6), and `copy_headers` replaces any client-sent email header with the gate's own, so a browser cannot assert an identity. |
 | app → Yahoo | JSON quote payload | No. Parsed through Zod, currency-guarded, floats converted at the boundary. |
+
+**Why a forgeable forwarded header is affordable.** Nothing downstream *authorises* on one. The
+gate's verdict comes from a session cookie it decrypts itself, and the origin it sends people back
+to is pinned in `compose.yaml` rather than read off a `Host` header. What a forged header can still
+reach is the *cosmetics* of a sign-in redirect and whatever Caddy logs as the client address — not
+admission. That is the trade this repository makes deliberately: naming the operator's proxy address
+would be a guess, and `private_ranges` states the real bound instead of pretending to a narrower one.
+An operator who knows their proxy's address can narrow it in one line.
 
 ---
 
 ## 3. Deployment architecture
 
 The deliverable is one application image plus a Compose file. `docker compose up -d` on a fresh
-machine with an empty volume produces a working instance with no manual steps (DESIGN.md §10.1).
+machine with an empty volume produces a working instance once the gate's Google credentials exist,
+and **refuses to start until they do** — the required gate variables use Compose's `${VAR:?}` form,
+which is evaluated before any container runs (DESIGN.md §10.1). Fail-closed replaced an older
+no-manual-steps promise that was kept by booting an unprotected instance.
 The image is pulled from GitHub Container Registry rather than built on the host: CI publishes a
 multi-architecture image on a `v*` tag, and `compose.yaml` deliberately carries no `build:` stanza
 so a deployment cannot silently become a build (§8.2).
@@ -112,36 +138,44 @@ graph TB
     host["Host machine"]
 
     subgraph compose["compose network — portfolio"]
-        caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:80 → app:$PORT<br/>Caddyfile mounted read-only"]
+        caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:80 → forward_auth gate, then app:$PORT<br/>Caddyfile mounted read-only"]
+        gate["<b>gate</b><br/>oauth2-proxy, pinned exactly<br/>read_only: true, tmpfs /tmp<br/>no published port, no volume<br/>allowlist file bind-mounted read-only"]
         app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>read_only: true, tmpfs /tmp<br/>USER node, no published port<br/><i>in-process price poller</i>"]
         db["<b>db</b><br/>postgres:17-alpine<br/>timezone=UTC<br/>no published port"]
         vol[("db-data<br/>named volume")]
     end
 
     host -->|"the only published port, 80:80"| caddy
+    caddy -->|"every request except /healthz"| gate
     caddy --> app
     app --> db
     db --- vol
 
     classDef svc fill:#eef3f8,stroke:#4a6d8c,color:#1c2f42
-    class caddy,app,db svc
+    class caddy,gate,app,db svc
 ```
 
-Three services, and the count is a decision rather than an accident:
+Each service is a decision rather than an accident:
 
 - **No worker container.** The quote refresh loop runs inside the `app` process
   (`app/lib/price-poller.server.ts`). DESIGN.md §10 chose this for "one process to deploy, one place
   to read logs", and accepts the trade-off: a restart mid-session misses a poll until the next tick.
-- **No published port on `app` or `db`.** Only `caddy` is reachable from the host. This is what makes
-  the app's unconditional trust of `X-Forwarded-*` safe (§7.6) and keeps the database credentials off
-  the LAN.
+- **A separate `gate` container, and enforcement in *this* stack's Caddy.** Authentication is one
+  sidecar answering `forward_auth`, not code in the app (ADR-0005). It sits here rather than in the
+  operator's house-wide proxy because a LAN device can dial this box's published port and land on
+  this Caddy directly — and that device is the threat the gate exists for.
+- **No published port on `app`, `db` or `gate`.** Only `caddy` is reachable from the host. This is
+  what makes the forwarded-header trust safe (§7.6), keeps the database credentials off the LAN, and
+  is the *whole* reason the gate cannot be walked around: there is no route to `app` that does not
+  pass the door where the check happens.
 - **One named volume.** `db-data` holds every byte of persistent state, so there is exactly one
   backup target — `pg_dump`, documented rather than built in.
 
-The `app` container is `read_only: true` with a `tmpfs` at `/tmp`. That is enforcement, not
-intention: it is a statement that the container writes nothing to its own filesystem and can be
-destroyed and recreated freely. A file-backed session store would discover this loudly on the first
-login, which is one reason the session is a signed cookie and nothing else.
+The `app` container is `read_only: true` with a `tmpfs` at `/tmp`, and `gate` is the same. That is
+enforcement, not intention: it is a statement that neither writes anything to its own filesystem and
+that either can be destroyed and recreated freely. It holds for the gate because its sessions live
+in an encrypted cookie in the browser — a sidecar with a session database would need a volume, and
+this one does not have one.
 
 ### 3.2 Startup sequence
 
@@ -186,23 +220,29 @@ Every setting is an environment variable, and `server/config.ts` is the only mod
 *interprets* one. Callers hand the environment in — `loadConfig(env)` is pure — so
 `validate-config.ts:12`, `migrate.ts:24` and `scripts/seed-demo.ts:1140` pass `process.env` without
 knowing what is in it, and `getConfig()` is the single place a value is actually read and cached. It
-is a Zod schema, parsed once, with cross-field rules.
+is a Zod schema, parsed once. It carries no cross-field rules: the one it used to have coupled the
+deleted password to the deleted cookie secret, and every remaining variable stands alone.
 
 | Variable | Default | Required | Effect |
 |---|---|---|---|
 | `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. |
-| `AUTH_PASSWORD` | unset | no | Setting it **enables** the login gate. Unset means no auth, with a persistent UI banner. |
-| `SESSION_SECRET` | unset | conditionally | Cookie signing key. Becomes required the moment `AUTH_PASSWORD` is set. |
+| `AUTH_GATE` | `none` | no | `external` or `none`: whether something in front of the app authenticates. It enables nothing — the app authenticates nobody either way — and decides only whether the unprotected-instance banner is drawn. A union rather than a boolean so a third posture is a value, not a redesign. |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
 | `MAX_UPLOAD_MB` | `10` | no | Upload body cap. **Not wired through `compose.yaml`** — under the documented deployment it is permanently 10 MB (§11.3). |
 | `MARKET_TIMEZONE` | `America/New_York` | no | Market-hours calculation and trading-day attribution. Validated as an IANA zone. |
 | `TZ` | `UTC` | no | Container clock. The database stores UTC regardless. |
 
-Two more variables exist that the application never reads, both Compose-level.
-**`POSTGRES_PASSWORD`** is consumed by the `db` service and must be kept in sync with the
-credentials inside `DATABASE_URL` (`compose.yaml:21-25`). **`APP_VERSION`** selects the published
-image tag the `app` service runs, defaulting to the floating major — it is resolved by Compose
-before a container exists, so `server/config.ts` never sees it and it is validated by nothing.
+More variables exist that the application never reads, all Compose-level and none of them validated
+by `server/config.ts`, which never sees them. **`POSTGRES_PASSWORD`** is consumed by the `db`
+service and must be kept in sync with the credentials inside `DATABASE_URL`. **`APP_VERSION`**
+selects the published image tag the `app` service runs, defaulting to the floating major. **The
+gate's four** — its Google client id and secret, its cookie encryption key, and `PUBLIC_ORIGIN`, the
+`https://` origin the house proxy serves and the gate builds its redirect from — configure the
+`gate` service. Those four are the only settings anywhere with no default, and they are interpolated
+with `${VAR:?}` so a missing one stops `docker compose up` naming it, before any container runs. Who
+may enter is not a variable at all: it is `allowed-emails.txt`, bind-mounted into `gate` with
+`create_host_path: false`, so a missing file stops `up` the same way rather than becoming an empty
+directory and a crash-looping sidecar.
 
 Two properties of this module are structural rather than cosmetic:
 
@@ -289,7 +329,7 @@ grep. They come in three tiers.
 | Invariant | The owner | The obligation |
 |---|---|---|
 | Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Three callers pass `process.env` in — `validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` — and none of them reads a variable itself. |
-| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:50`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design — `app/routes/login.tsx:33` is the one exception, and it reads no files. |
+| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:50`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off an account's kind | `app/lib/account-options.ts` | The kinds, their labels, and the two predicates derived from them — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints or from each other. The obligation is that it stays plain data: the client bundle imports it, so a rule needing a query cannot live here. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 
@@ -340,17 +380,17 @@ sequenceDiagram
     autonumber
     participant B as Browser
     participant C as Caddy
-    participant M as root middleware
+    participant G as gate
     participant L as holdings loader
     participant V as valuation.server
     participant PG as Postgres
     participant H as holdings-view (pure)
 
     B->>C: GET /holdings?owner=2&group=account
-    C->>M: proxied, X-Forwarded-* set
-    M->>M: authGate().requireSession(request)
-    Note right of M: Deny-by-default for every ROUTED path.<br/>Only a short open list is exempt.
-    M->>L: next()
+    C->>G: forward_auth /oauth2/auth
+    G-->>C: 2xx + X-Auth-Request-Email
+    Note right of G: Anything but a 2xx and the browser<br/>is sent to Google instead. The app is<br/>never reached by an unadmitted request.
+    C->>L: proxied, X-Forwarded-* and the verified email set
     L->>H: parseQuery(searchParams)
     Note right of L: First statement in the loader. The query<br/>decides whether the fetch happens at all.
     L->>L: canonical search? else 302
@@ -366,10 +406,11 @@ sequenceDiagram
 
 Three properties of this path are deliberate:
 
-1. **The gate is middleware on the root route**, so it sees every request that reaches the route tree
-   and refuses anything not on `auth.server.ts`'s short open list. A route added by a later slice is
-   protected the moment it is routable; nobody has to remember to protect it. Static assets are
-   served ahead of the router and are not gated — see §7.6.
+1. **The gate is in front of the process, not inside it.** There is no authentication middleware and
+   no open list in the app; a request that reaches a loader has already been admitted at the front
+   door. Everything the app serves is behind it, static assets included — which the in-app gate this
+   replaced could not manage, because assets are served ahead of the router. A route added by a later
+   slice is protected the moment it exists, and nobody has to remember to protect it. See §7.6.
 2. **Filtering and grouping are pure functions over one array**, not seven new SQL predicates. The
    screen's table and the subtotals under it are computed from the same rows, so agreement is
    structural rather than something to keep true. Nothing the table displays costs a second query;
@@ -1282,11 +1323,13 @@ one household's instance and the operator reads `docker compose logs`.
 | Startup | The migration runner logs `applied` / `skip` per file |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
 | Provider failure | `console.error`, then every selected instrument marked stale |
-| Failed login | `console.warn` with the **forwarded** address — the only address that means anything behind a proxy |
+| Refused sign-in | Not the app's. The gate logs it; `docker compose logs gate` is where a refusal is read, and the runbook is what indexes it by symptom |
 | Freshness, in the UI | The "as of" line, driven by the *oldest* `quote.as_of` among held feed instruments |
 
 The two non-goals of `/healthz` are as important as what it checks: it never tests the price provider,
-and it never requires credentials.
+and it never requires credentials. The second is now a property of the deployment rather than of the
+app — the app authenticates nothing at all, and it is the `Caddyfile` that exempts this one path, so
+the exemption survives only as long as that file says so.
 
 ### 7.5 The provider seam
 
@@ -1322,41 +1365,52 @@ Three conversions happen at this boundary and nowhere else:
 
 ### 7.6 Security posture
 
-The threat model is a household LAN, not the open internet, and the document says so rather than
-implying more.
+**The LAN is not the trust boundary — the gate is.** This used to say the threat model was a
+household LAN rather than the open internet, and that reading is now the wrong one: the LAN is where
+the adversary is. It carries guest phones, a TV and whatever else joined the wifi, any of which can
+find this box and dial its published port. Being on the network grants nothing; being on the
+allowlist does.
 
 | Control | State |
 |---|---|
-| Authentication | **Optional.** `AUTH_PASSWORD` enables one password, one signed cookie, one login page. Unset means open, with a persistent UI banner |
-| Authorisation | None. There is no user table and no per-person permissions — every session sees everything |
-| Enforcement point | One middleware on the root route. **Deny-by-default for every routed path**: everything not on `auth.server.ts:40`'s open list (`/healthz`, `/login`) is refused, including routes that do not exist yet. Static assets and `public/` are served ahead of the router and are **not** gated |
-| Session revocation | Sessions are pinned to a SHA-256 of the password, so changing `AUTH_PASSWORD` logs everyone out. That is the only revocation an instance with no user table can offer |
-| Password comparison | `timingSafeEqual` over hashes |
-| Cookie `Secure` | Chosen from the *browser's* scheme via `X-Forwarded-Proto`, not the app's own — behind a TLS-terminating proxy the request arrives over plain HTTP and the cookie must still be `Secure` |
-| Session storage | A signed cookie and nothing else. The container is `read_only`, which a file-backed store would discover on the first login |
-| TLS | **Not configured.** The app serves plain HTTP and never manages certificates; terminating TLS is Caddy's job once a real hostname is set |
+| Authentication | **Outside the app, and mandatory.** `caddy` asks the `gate` sidecar (oauth2-proxy, OIDC to Google) about every request and refuses anything it has not vouched for. The app authenticates nobody: it carries no password, no login route and no session of its own |
+| Authorisation | **None; every session sees everything.** There is no user table and no per-person permissions. The verified email arrives on every request and the app reads it nowhere — attribution, never permission (`CONTEXT.md`, "Authenticated email"). A screen that consulted it would be inventing a household rule nobody made |
+| Admission policy | One flat file of addresses, mounted read-only into `gate`. Deliberately not an email-domain rule: the narrowest domain that admits this family also admits every Gmail account alive |
+| Enforcement point | This stack's `caddy`, and only there. **Everything is challenged except `/healthz`** — static assets included, which the in-app gate could not cover. The `Caddyfile` is the single list of exemptions in the deployment; the operator's house proxy is deliberately *not* an enforcement point, because a LAN device can bypass it by dialling this box directly |
+| What makes it airtight | `app` publishes no port. Not tidiness: it is the reason there is no path to a loader that skips the check. A `ports:` line on `app` would not weaken the gate, it would end it |
+| Session revocation | Two grains, both the operator's. Removing an address from the allowlist ends that person's sessions everywhere — the gate re-checks each request's email against the file, which it watches for changes. Rotating the gate's cookie secret ends everyone's at once. There is no per-device revocation, and no sign-out control (DESIGN.md §14) |
+| Session storage | The gate's encrypted cookie and nothing else. Both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in |
+| Cookie attributes | `SameSite=Lax` and `Secure`, pinned in `compose.yaml` rather than inherited. With the app carrying no cookie of its own, the gate's `SameSite` **is** this instance's CSRF posture, so it is stated rather than defaulted |
+| Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
+| TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — which is also the redirect URI registered with Google, character for character |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
 | SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers (`valuation.server.ts:375-376` — the `accountId` there is bound behind a `/^\d+$/` guard) |
-| Error disclosure | Contained. The error page prints fixed wording chosen by the response status — nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx:258-259`) |
+| Error disclosure | Contained. The error page prints fixed wording chosen by the response status — nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
 
-**The forwarded-header decision, stated plainly.** The app trusts `X-Forwarded-*` unconditionally, and
-that trust has one deployment requirement behind it: **the app must not be reachable directly**,
-because anything that can connect to it can set these headers. `compose.yaml` publishes no port for
-`app` for exactly this reason. What is at stake if the requirement is broken is small and worth being
-exact about: a forged `X-Forwarded-Proto` changes only the `Secure` attribute on the sender's own
-session cookie, which can cost them their own session and nobody else's. It grants no access — the
-gate reads none of it.
+**The forwarded-header decision, stated plainly.** `caddy` trusts what reaches it from the house
+proxy within `private_ranges`, and `app` and `gate` trust `caddy` unconditionally. Both rest on one
+deployment requirement: **neither `app` nor `gate` may be reachable directly**, because anything that
+can connect to them can set these headers — which is why `compose.yaml` publishes no port for either.
+What is at stake if the LAN half is forged is worth being exact about, because it is small: the app
+reads no forwarded header at all, so a forged one reaches the gate's redirect construction and
+Caddy's idea of the client address, and nothing that decides admission. The verified email is the one
+header that could matter, and it cannot be spoofed from outside: `copy_headers` in the `Caddyfile`
+replaces any client-supplied value with the gate's own before the request is forwarded.
 
-**Two consequences of no TLS**, both deployment constraints rather than bugs:
+**One consequence of the app never terminating TLS**, a deployment constraint rather than a bug: the
+secure context a service worker needs comes from the house proxy, so a phone that reaches the
+instance at `PUBLIC_ORIGIN` can install it and one reaching the box by LAN IP over plain HTTP cannot
+— and the gate refuses that second request anyway.
 
-1. Service workers require a secure context, so an instance served over plain HTTP at a LAN IP
-   **cannot install as a PWA on a phone**.
-2. The login cookie will not carry `Secure`, because the browser's scheme is `http`.
-
-**What this posture is not.** It is sized for a household LAN. An instance exposed to the internet
-needs, at minimum, TLS terminated in front of it and `AUTH_PASSWORD` set. Neither is the app
-refusing to work — they are choices the operator has to make, and this table is here so they can be
-made knowingly.
+**What this posture is not.** It is not a claim that this stack is safe to publish to the internet as
+it stands. What the gate buys is that reachability is no longer access: an instance found by an
+unwelcome device is met by Google sign-in and refused by the allowlist. What it does not buy is
+everything else an internet-facing deployment wants — TLS terminated in front of it (assumed here,
+enforced by nothing in this repository), rate limiting and abuse handling at the edge, and a
+considered answer to the exposed `/healthz` path, which answers a pinned body to anyone who asks. The
+gate is also a single point of failure by design: if it cannot start, nobody gets in. That is the
+intended direction to fail, and the operator's break-glass path is a shell on the box rather than a
+second way through the front door.
 
 ---
 
@@ -1438,11 +1492,17 @@ job: audit                    ── runs in parallel
 
 job: smoke                    ── runs in parallel, on a clean runner
   ./scripts/smoke-test.sh
-    ── the ONLY test of everything §3.1 and §3.2 claim: compose up on an
+    ── the ONLY test of everything §3.1 and §3.2 claim: that compose
+       REFUSES to start with the gate unconfigured, then compose up on an
        empty volume, the app waiting for Postgres rather than racing it,
        migrations running at startup, a restart skipping applied ones,
-       the .sql files actually being present in the runtime image, and
-       the §8.1 prune having removed what it claims and nothing more
+       the .sql files actually being present in the runtime image, the
+       §8.1 prune having removed what it claims and nothing more, exactly
+       one published port and it belongs to caddy, and the front door
+       turning away a request the gate has not vouched for. It runs the
+       real sidecar on throwaway credentials — nothing contacts Google at
+       startup — so the only leg left uncovered is the round trip through
+       a real Google account, which is an operator's checklist
 
 job: publish                  ── ONLY on a refs/tags/v* ref
   needs: [check, audit, smoke]   ── all three, so "the published image passed
@@ -1518,9 +1578,9 @@ CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and 
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Genuinely pure                           27 files                       │
+│  Genuinely pure                           23 files                       │
 │  csv · statement · money · market-hours · holdings-view · allocation     │
-│  · format · config · forwarded · …                                       │
+│  · format · config · masking · …                                         │
 │  No database, because those modules have none. Six real brokerage        │
 │  exports live in tests/fixtures/statements/.                             │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -1556,11 +1616,13 @@ living unexported in a route module's body — `describe(filters)` in `holdings.
 untestable not by framework limitation but by where it was put. That is a stronger argument for thin
 routes than "routes cannot be tested", and it is the one this repo actually supports.
 
-Tests against `app/root.tsx` are a separate case: `root-gate.test.ts` drives the gate middleware
-directly, and both `.test.tsx` files render `root.tsx`'s `Layout` through `createRoutesStub` and
+Tests against `app/root.tsx` are a separate case: `tests/routes/root.test.ts` calls its loader
+directly, and the `.test.tsx` files render `root.tsx`'s `Layout` through `createRoutesStub` and
 `renderToStaticMarkup` — shell behaviour rather than isolated components, and deliberately so,
 because the rule being protected is "every page carries the banner", which a component test would
-not notice the shell dropping.
+not notice the shell dropping. The middleware that used to be tested alongside them is gone with the
+in-app gate; what is left to pin on this seam is whether the banner is drawn, which is a fact about
+the shell.
 
 ---
 
@@ -1617,7 +1679,7 @@ disagree**, and the first thing to check in a review of any new dashboard.
 | No cash-flow tracking | The history chart cannot separate market movement from contributions. A $10k deposit and a 40% rally look identical — which is why it is labelled **"Total value"**, never "return" | The same ledger |
 | Single owner per account | Joint accounts are not modelled | Revisiting `account.owner_id`, and multi-user auth alongside it |
 | USD only | A non-USD instrument is refused at creation | A currency dimension through every money column and every sum |
-| One password, no user table | No per-person permissions; changing the password is the only revocation | A separate design, per DESIGN.md §10 |
+| Authentication outside the app, no user table | The gate knows which family member is at the door; nothing behind it does. No per-person permissions, and no sign-out control — revocation is the allowlist or the cookie secret, both the operator's | A separate design, per DESIGN.md §10: `person` is an ownership label, and binding identity to it means revisiting single-owner accounts first |
 | In-process poller | A restart mid-session misses a poll until the next tick | A worker container — two images, two deployments, two log streams |
 
 ### 11.3 Live architectural debt
@@ -1655,7 +1717,9 @@ still live in the current code:
 |---|---|
 | A saved view builder (DESIGN.md §8.3) | `holdings-view.ts` already models seven of §8.3's eight dimensions — `instrument` is deliberately excluded — so the missing piece is persistence, plus absorbing the five array calls in `holdings.tsx` into a `holdingsTable` |
 | A second price provider | Implement `PriceProvider` and change one construction site. The interface was built for this |
-| TLS | A real hostname in the `Caddyfile` site block. Nothing in the app changes — it already reads the browser's scheme from `X-Forwarded-Proto` |
+| A sign-out control | Not a UI change alone. The gate's sign-out URL clears only its own cookie and the next visit re-admits silently, so anything worth shipping has to end the Google session too or say plainly that it does not (DESIGN.md §14) |
+| Recording *who* did something | The verified email already arrives on every request (§2), so it is a column and a write, not an auth redesign. The rule it must not break is that it stays attribution: nothing may read it to decide what someone may do |
+| TLS inside this stack | A real hostname and a certificate in the `Caddyfile` site block, for an operator with no house-wide proxy. Nothing in the app changes — it terminates nothing and reads no forwarded header |
 | Dividend history | A transaction ledger, and therefore a different ingest problem. Not an extension of this schema |
 
 ---
@@ -1691,8 +1755,6 @@ still live in the current code:
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
 | `account-options.ts` | The account-kind and tax-treatment vocabulary the forms are built from, and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
 | `settings.server.ts` | The capital gains rate |
-| `auth.server.ts` | The optional gate — deny-by-default, one cookie |
-| `forwarded.server.ts` | Reading the request as the client actually made it |
 | `first-run.server.ts` | One question, three answers |
 | `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
@@ -1705,6 +1767,12 @@ still live in the current code:
 | `chart-range.ts` | The chart's range vocabulary: the presets, the sampled date grid under its point budget, and the range cookie middleware (ADR-0003). Pure, and in the client bundle |
 | `masking.ts` | The masking vocabulary: policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
+
+**There is no authentication module, and its absence is the design.** A contributor looking for one
+should read §7.6 and stop: authentication is a Compose service and a `Caddyfile`, not code in
+`app/`. The only trace inside the process is `AUTH_GATE` deciding whether the warning banner is
+drawn, and a comment in `app/root.tsx` — where the middleware used to be — recording that the
+verified email rides in on every request and is read by nothing.
 
 ### `migrations/`
 

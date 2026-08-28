@@ -97,7 +97,7 @@ makes them the one thing here that can go stale in silence.
 
 Retake all of them with [`../scripts/capture-screenshots.ts`](../scripts/capture-screenshots.ts).
 **A change to a screen is not finished until they are retaken.** The editorial decisions — which
-account each shot is of, why the no-password banner is left in, why phone shots are not full-page —
+account each shot is of, why the warning strip is left in, why phone shots are not full-page —
 live in [`screenshots/README.md`](screenshots/README.md) and
 [`guide/images/README.md`](guide/images/README.md), because a script can hold the mechanics but not
 the reasons.

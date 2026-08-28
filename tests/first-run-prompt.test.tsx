@@ -15,7 +15,7 @@ import type { FirstRunStep } from "~/lib/first-run.server";
 
 /** Every case here is on a configured instance; the banner is another file's rule. */
 const renderPage = (path: string, firstRun: FirstRunStep) =>
-  renderThroughLayout(path, { authConfigured: true, firstRun });
+  renderThroughLayout(path, { gated: true, firstRun });
 
 describe("the first-run prompt", () => {
   it("points at People on an instance with nobody in it", () => {
