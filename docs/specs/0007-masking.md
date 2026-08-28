@@ -35,6 +35,11 @@ unmasked, or open as that browser last left it. A browser nobody has toggled yet
 Masking is a display state and not a security boundary. It defends against being read over the
 shoulder; the login gate remains the only thing that keeps anyone out.
 
+_The argument is unchanged, but the gate it names has moved: what keeps anyone out is now a
+forward-auth gate in front of the application, not a login page inside it
+([0011-auth-gate.md](0011-auth-gate.md),
+[ADR-0005](../adr/0005-auth-is-a-forward-auth-gate.md))._
+
 ## User Stories
 
 1. As someone checking my portfolio on a train, I want every amount hidden at one click, so that the

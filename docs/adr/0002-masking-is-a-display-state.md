@@ -13,6 +13,10 @@ be described as though it were: the amounts are still in the page, inside the se
 the client needs in order to unmask without a round trip. The login gate (§10) is the only boundary
 this application has, and anyone who can reach a masked screen can unmask it with one click.
 
+[Only the scenery has moved: that boundary is now a forward-auth gate in front of the application
+rather than a login page inside it — ADR-0005. The limit stated here is unchanged, and so is
+everything below it.]
+
 Everything below follows from accepting that limit rather than fighting it.
 
 ## Why the policy is a row and the state is a cookie
