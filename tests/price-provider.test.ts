@@ -247,6 +247,41 @@ describe("the instant a price was struck", () => {
 
     expect(quote?.asOf).toEqual(FETCHED_AT);
   });
+
+  it("carries when we learned the price alongside when it was struck", () => {
+    const struck = new Date("2026-06-05T20:00:00Z");
+    const quote = quoteFor({ symbol: "VTI", regularMarketPrice: 271.5, regularMarketTime: struck });
+
+    // Two different facts, and the observation log files under the first while
+    // recording the second (ADR-0006). A seam carrying only one of them would
+    // make an evening NAV indistinguishable from a morning fetch of it.
+    expect(quote?.asOf).toEqual(struck);
+    expect(quote?.fetchedAt).toEqual(FETCHED_AT);
+  });
+});
+
+describe("the raw entry kept for the archive", () => {
+  it("hands back the entry as it arrived, not the fields this module reads", () => {
+    const raw = {
+      symbol: "VTI",
+      regularMarketPrice: 271.5,
+      currency: "USD",
+      // Neither of these is in the schema above, and that is the point: the
+      // archive exists for what the typed parse throws away (ADR-0006).
+      marketState: "REGULAR",
+      fiftyTwoWeekHigh: 280.1,
+    };
+
+    expect(quoteFor(raw)?.payload).toEqual(raw);
+  });
+
+  it("archives nothing for an entry it refused, because there is no quote to archive it against", () => {
+    // The rule stated the other way round: a payload is stored only when the
+    // typed parse succeeded, so a shape change stays a refusal rather than
+    // becoming a stored surprise.
+    expect(quoteFor({ nothing: "useful" })).toBeNull();
+    expect(quoteFor({ symbol: "DELISTED", currency: "USD" })).toBeNull();
+  });
 });
 
 describe("probing a symbol at creation time", () => {
