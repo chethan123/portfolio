@@ -203,3 +203,19 @@ export function isPositive(decimal: string): boolean {
 export function toPlotValue(decimal: string): number {
   return Number(decimal);
 }
+
+/**
+ * `["a", "b", "c"]` → `"a, b and c"`.
+ *
+ * A list a sentence can hold. Here rather than in the two places that had it
+ * — the Holdings empty note and the owner filter's narration — because a
+ * screen saying "Alex, Jordan and Sam" and another saying "Alex, Jordan, Sam"
+ * would be one household described two ways on adjacent pages.
+ *
+ * No Oxford comma, matching what the empty note already said.
+ */
+export function joinWords(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+
+  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}

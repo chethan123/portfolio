@@ -29,11 +29,18 @@ import { currentPosition } from "~/lib/positions.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, post, redirectTo, responseOf } from "../support/routes.ts";
+import { args, get, outcomeOf, post, redirectTo, responseOf } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
 afterAll(closeTestDatabase);
+
+/** The canonical owner parameter for a selection, which is sorted numerically. */
+const ownerParam = (...people: { id: string }[]): string =>
+  people
+    .map((person) => person.id)
+    .sort((a, b) => Number(a) - Number(b))
+    .join(",");
 
 /** One priced position, which is the smallest thing this screen can draw. */
 async function seedOnePosition(
@@ -61,6 +68,10 @@ describe("the canonical bounce", () => {
     "sends a GET form's empty parameters to a readable address that does not itself redirect",
     withDatabase(async (ctx) => {
       const { owner } = await seedOnePosition(ctx);
+      // As above: a second owner, so `?owner=` survives the loader's collapse
+      // of a selection that names everybody.
+      const other = await ctx.seedPerson({ name: "Bob" });
+      await ctx.seedAccount({ name: "Bob Roth", owner: other, kind: "ira" });
 
       // Exactly what pressing Apply with one select touched puts in the address
       // bar: seven parameters, six of them meaning "all".
@@ -130,9 +141,14 @@ describe("the canonical bounce", () => {
 });
 
 /**
- * Two owners, one priced position each, and one instrument only Bob holds —
+ * Three owners, one priced position each, and an instrument only Bob holds —
  * so a dimension value can be present in the household and absent from the
  * narrowed set, which is what the facet rule is about.
+ *
+ * Three rather than two, so that a selection naming two people is a real
+ * narrowing. With two, "both owners" *is* the household: every assertion about
+ * a multi-owner filter would pass against a screen that ignored the filter
+ * entirely, and the all-roster collapse would redirect it away besides.
  */
 async function seedTwoOwners(
   ctx: Pick<
@@ -142,14 +158,18 @@ async function seedTwoOwners(
 ) {
   const alice = await ctx.seedPerson({ name: "Alice" });
   const bob = await ctx.seedPerson({ name: "Bob" });
+  const carol = await ctx.seedPerson({ name: "Carol" });
 
   const vti = await ctx.seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
   const bnd = await ctx.seedInstrument({ symbol: "BND", name: "Vanguard Total Bond" });
+  const vxus = await ctx.seedInstrument({ symbol: "VXUS", name: "Vanguard Total International" });
   await ctx.seedQuote({ instrument: vti, price: "250.0000" });
   await ctx.seedQuote({ instrument: bnd, price: "70.0000" });
+  await ctx.seedQuote({ instrument: vxus, price: "60.0000" });
 
   const hers = await ctx.seedAccount({ name: "Alice Brokerage", owner: alice, kind: "brokerage" });
   const his = await ctx.seedAccount({ name: "Bob Roth", owner: bob, kind: "ira" });
+  const theirs = await ctx.seedAccount({ name: "Carol Bank", owner: carol, kind: "bank" });
 
   await ctx.seedPositionSet({
     account: hers,
@@ -161,8 +181,13 @@ async function seedTwoOwners(
     asOf: "2026-01-31",
     holdings: [{ instrument: bnd, quantity: "40.00000000" }],
   });
+  await ctx.seedPositionSet({
+    account: theirs,
+    asOf: "2026-01-31",
+    holdings: [{ instrument: vxus, quantity: "10.00000000" }],
+  });
 
-  return { alice, bob, hers, his };
+  return { alice, bob, carol, hers, his, theirs };
 }
 
 describe("reading the table as an owner", () => {
@@ -178,11 +203,14 @@ describe("reading the table as an owner", () => {
       ]);
       expect(hers.total.value).toBe("25000.0000");
 
-      const both = await at(`?owner=${[alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",")}`);
-      expect(both.rows).toHaveLength(2);
-      expect(both.total.value).toBe("27800.0000");
+      // Two of three, so this is a narrowing and not the household spelled a
+      // second way — and the two figures below have to differ, or the
+      // assertion would pass against a screen ignoring the filter.
+      const two = await at(`?owner=${ownerParam(alice, bob)}`);
+      expect(two.rows).toHaveLength(2);
+      expect(two.total.value).toBe("27800.0000");
 
-      expect((await at("")).total.value).toBe("27800.0000");
+      expect((await at("")).total.value).toBe("28400.0000");
     }),
   );
 
@@ -200,10 +228,10 @@ describe("reading the table as an owner", () => {
       expect(data.active).toEqual([]);
       // N is the household's, not the narrowed set's: the same number has to
       // mean one thing whichever control you touched.
-      expect(data.totalHoldings).toBe(2);
+      expect(data.totalHoldings).toBe(3);
 
       const markup = renderRoute(Holdings, "/holdings", data);
-      expect(markup).toContain("filtered from 2");
+      expect(markup).toContain("filtered from 3");
       expect(markup).toContain("Showing <b>Alice</b> only.");
     }),
   );
@@ -211,9 +239,9 @@ describe("reading the table as an owner", () => {
   it(
     "builds the filter selects from every holding, not from the owner's",
     withDatabase(async (ctx) => {
-      const { alice, hers, his } = await seedTwoOwners(ctx);
+      const { alice, hers, his, theirs } = await seedTwoOwners(ctx);
 
-      // Bob's account has to stay on offer while the table is
+      // Bob's and Carol's accounts have to stay on offer while the table is
       // narrowed to Alice: options that vanished as you narrowed would leave
       // no way to widen again.
       const data = await loader(args(get(`/holdings?owner=${alice.id}`)));
@@ -222,6 +250,7 @@ describe("reading the table as an owner", () => {
       expect(accounts?.options.map((option) => option.value)).toEqual([
         String(hers.id),
         String(his.id),
+        String(theirs.id),
       ]);
     }),
   );
@@ -269,9 +298,10 @@ describe("reading the table as an owner", () => {
     "still groups by owner, still drops the column, and does it under a filter naming two",
     withDatabase(async (ctx) => {
       const { alice, bob } = await seedTwoOwners(ctx);
-      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
+      const both = ownerParam(alice, bob);
       const data = await loader(args(get(`/holdings?owner=${both}&group=owner`)));
 
+      // Two groups, not three: Carol is in the household and out of this view.
       expect(data.groups?.map((group) => group.label)).toEqual(["Alice", "Bob"]);
 
       const markup = renderRoute(Holdings, "/holdings", data);
@@ -298,6 +328,43 @@ describe("reading the table as an owner", () => {
       // No hidden field carries it: the form posts back to the address that
       // opened it, so the filter travels the way the row's identity does.
       expect(destination).toBe(`/holdings?owner=${alice.id}&saved=${key}`);
+    }),
+  );
+
+  it(
+    "collapses a selection naming everybody back to the household's own URL",
+    withDatabase(async (ctx) => {
+      const { alice, bob, carol } = await seedTwoOwners(ctx);
+
+      // ADR-0008: selecting every owner is spelled the same as selecting none.
+      // A `<Form method="get">` of checkboxes cannot decline to submit, so
+      // ticking all three arrives here and is bounced — one view, one URL.
+      expect(
+        await redirectTo(() =>
+          loader(args(get(`/holdings?owner=${ownerParam(alice, bob, carol)}&group=kind`))),
+        ),
+      ).toBe("/holdings?group=kind");
+
+      // Two of three is a real narrowing and stays.
+      const two = await loader(args(get(`/holdings?owner=${ownerParam(alice, bob)}`)));
+      expect(two.owners).toHaveLength(2);
+    }),
+  );
+
+  it(
+    "names whose portfolio is empty when a dimension filter is on as well",
+    withDatabase(async (ctx) => {
+      const { alice, his } = await seedTwoOwners(ctx);
+
+      // The selects are built from every holding, so Bob's account is on offer
+      // while the table is narrowed to Alice. Choosing it must not produce
+      // "nothing in the portfolio is in Bob Roth" — the portfolio holds
+      // something there; this reading does not.
+      const data = await loader(args(get(`/holdings?owner=${alice.id}&account=${his.id}`)));
+      const markup = renderRoute(Holdings, "/holdings", data);
+
+      expect(markup).toContain("Alice holds nothing in Bob Roth");
+      expect(markup).not.toContain("Nothing in the portfolio is in Bob Roth");
     }),
   );
 });
@@ -333,7 +400,7 @@ describe("the three empty states", () => {
       // always drawn for a question with no answer.
       expect(markup).not.toContain("There is no data yet");
       expect(markup).toContain("no longer be read as");
-      expect(markup).toContain(">2</span> holdings are recorded in all");
+      expect(markup).toContain(">3</span> holdings are recorded in all");
       // Two ways out, and the filter can be cleared from the screen it emptied.
       expect(markup).toContain('aria-label="Filter by owner"');
       expect(markup).toContain("Show everyone");
@@ -380,6 +447,66 @@ describe("the three empty states", () => {
   );
 });
 
+describe("the canonical bounce, through a real URL", () => {
+  /**
+   * The invariant the loader actually depends on, asserted the way the loader
+   * meets it: through `new Request`, so every re-encoding the URL parsing does
+   * on the way in is in the picture.
+   *
+   * `tests/holdings-view.test.ts` checks that `toSearch` is a fixed point of
+   * *itself*, which is a weaker claim and blind to exactly this. Two serialisers
+   * are in play — `encodeURIComponent` leaves `'` alone where `URL` spells it
+   * `%27`, and `URLSearchParams` spells `,` as `%2C` where the canonical owner
+   * parameter is `owner=1,3` — so an address could differ from its own
+   * canonical spelling forever, and the busiest table in the application would
+   * answer every request with another redirect until the browser gave up. No
+   * error page, no way back, and nothing failing anywhere.
+   */
+  const settles = async (search: string): Promise<void> => {
+    const first = await outcomeOf(() => loader(args(get(`/holdings${search}`))));
+    if (!(first instanceof Response)) return;
+
+    const target = first.headers.get("Location") ?? "";
+    const second = await outcomeOf(() => loader(args(get(target))));
+
+    expect({ search, redirectedAgain: second instanceof Response }).toEqual({
+      search,
+      redirectedAgain: false,
+    });
+  };
+
+  it(
+    "settles in at most one hop, whatever spelled the address",
+    withDatabase(async (ctx) => {
+      const { alice, bob } = await seedTwoOwners(ctx);
+      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
+
+      for (const search of [
+        "",
+        `?owner=${alice.id}`,
+        `?owner=${both}`,
+        // The comma, spelled both ways. Some transports hand the loader a
+        // query already round-tripped through `URLSearchParams`.
+        `?owner=${both.replace(",", "%2C")}`,
+        // The apostrophe: an id naming nobody, which this application keeps on
+        // purpose. `encodeURIComponent` leaves it bare and `URL` does not.
+        "?owner=o%27brien",
+        "?owner=o'brien",
+        "?owner=a%20b",
+        "?owner=a+b",
+        `?owner=${bob.id},${alice.id}`,
+        `?owner=${alice.id}&owner=${bob.id}`,
+        "?owner=",
+        `?owner=${alice.id}&account=&institution=&kind=&tax=&classification=&assetClass=`,
+        `?group=kind&owner=${alice.id}`,
+        `?owner=${alice.id}&sort=quantity&dir=asc&edit=1.2`,
+      ]) {
+        await settles(search);
+      }
+    }),
+  );
+});
+
 describe("correcting one row", () => {
   it(
     "refuses a correction whose address names no row, and writes nothing",
@@ -405,6 +532,12 @@ describe("correcting one row", () => {
     "rebuilds the redirect from the parsed query, so a write can only ever land on a Holdings view",
     withDatabase(async (ctx) => {
       const { owner, account, instrument, rowKey } = await seedOnePosition(ctx);
+      // A second person owning a second account, so that naming one owner is a
+      // narrowing rather than the household under another name — which the
+      // loader would collapse back to `/holdings` before this could assert on
+      // it. Nothing of theirs is held, which is enough.
+      const other = await ctx.seedPerson({ name: "Bob" });
+      await ctx.seedAccount({ name: "Bob Roth", owner: other, kind: "ira" });
 
       // The address the editor posts back to is whatever the reader was looking
       // at, and that can carry anything a bookmark or a hand-edit put there.

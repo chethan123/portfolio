@@ -4,7 +4,7 @@ import { Amount, Delta } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
 import { NarrowedTo, OwnerFilterControl } from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
-import { isNegative } from "~/lib/format";
+import { isNegative, joinWords } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
 import {
   DEFAULT_DIRECTION,
@@ -29,7 +29,13 @@ import {
   toSearch,
 } from "~/lib/holdings-view";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
-import { ALL_OWNERS, isFiltered, readOwnerFilter, type OwnerFilter } from "~/lib/owner-filter";
+import {
+  ALL_OWNERS,
+  isFiltered,
+  readOwnerFilter,
+  sameView,
+  type OwnerFilter,
+} from "~/lib/owner-filter";
 import { filterableOwners } from "~/lib/people.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
@@ -95,7 +101,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   // This also drops parameters that mean nothing here, which is the same
   // reading `parseQuery` gives them. The bounce cannot loop: `toSearch` is
   // deterministic and `parseQuery(toSearch(q))` is `q`, so the second pass is
-  // already canonical.
+  // already canonical — and the comparison below is `sameView` rather than
+  // `!==` because two serialisers spell `'` and `,` differently, and a
+  // comparison that could not see past that would bounce forever on an address
+  // it had just produced.
   // Grouping hides the column it grouped by, so a URL that sorts by that same
   // column leaves the table ordered by a heading nobody can see: no caret, no
   // `aria-sort`, and no control to reverse it. Fall back to the default sort,
@@ -128,7 +137,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // where the write redirects to, and the row it names has just been closed.
   const canonical =
     saved !== null ? withRow(view, "saved", saved) : withRow(view, "edit", editing);
-  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
+  if (!sameView(url.search, canonical)) throw redirect(`${url.pathname}${canonical}`);
 
   const [household, freshness, roster] = await Promise.all([
     currentHoldings(ALL_OWNERS),
@@ -154,6 +163,17 @@ export async function loader({ request }: Route.LoaderArgs) {
   // sentence to a reader — leaves this shorter than the selection.
   const narrowedTo = roster.filter((person) => owners.includes(person.id));
 
+  // Everybody ticked is the household, and the household's URL carries no owner
+  // parameter at all (ADR-0008: "selecting every owner is spelled the same as
+  // selecting none"). A `<Form method="get">` of checkboxes has no way to
+  // decline to submit, so the collapse happens on this side — the one that has
+  // a roster to compare against. After the roster read rather than before it,
+  // because it needs one; the canonical redirect above still runs first and
+  // still asks nothing of the database.
+  if (isFiltered(owners) && narrowedTo.length === roster.length && narrowedTo.length === owners.length) {
+    throw redirect(`${url.pathname}${withRow(toSearch(query, ALL_OWNERS), "edit", editing)}`);
+  }
+
   // The receipt quotes the database, never the URL.
   //
   // `?saved=` says *which* row was written and nothing about what was written
@@ -168,7 +188,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const written =
     saved === null
       ? null
-      : (holdings.find(
+      : (household.find(
           (holding) =>
             holding.accountId === saved.accountId && holding.instrumentId === saved.instrumentId,
         ) ?? null);
@@ -185,7 +205,11 @@ export async function loader({ request }: Route.LoaderArgs) {
      * reader, so one state.
      */
     unknownOwner: isFiltered(owners) && narrowedTo.length < owners.length,
-    /** The selected owners hold nothing. Not an error, and not an empty instance. */
+    /**
+     * The selected owners hold nothing. Not an error, and not an empty
+     * instance — the sentence below is written from this rather than derived a
+     * second time, so the three states are told apart in one place.
+     */
     ownersHoldNothing: isFiltered(owners) && household.length > 0 && holdings.length === 0,
     // Distinguishes "nothing uploaded" from "this filter matched nothing" —
     // two states that must not share a screen (§8.4). Both counted over every
@@ -473,7 +497,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
           // own way out.
           <div className="panel-body panel-body--empty">
             <p className="empty-note">
-              {describe(filters, narrowedTo, unknownOwner)}{" "}
+              {describe({ filters, narrowedTo, unknownOwner, ownersHoldNothing })}{" "}
               <span className="u-data">{totalHoldings}</span>{" "}
               {totalHoldings === 1 ? "holding is" : "holdings are"} recorded in all.
             </p>
@@ -574,60 +598,76 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
 }
 
 /**
- * Why the table is empty, in words — "Nothing in the portfolio is owned by Bob
- * and at Chase."
+ * Why the table is empty, in words — "Nothing in the portfolio is at Chase and
+ * in a bank account."
  *
  * An empty result that only says "no holding matches every filter at once"
- * leaves the reader looking back up at seven dropdowns to work out which pair
+ * leaves the reader looking back up at six dropdowns to work out which pair
  * cannot coexist. The controls know their own chosen option and each dimension
  * knows how to say itself in a sentence, so the screen can name them.
  *
- * The stale-key case gets its own words. "Nothing is owned by Bob and at Chase"
- * is a fact about the portfolio; a filter pointing at an account that has since
- * been closed is a fact about the URL, and telling the reader to look for an
- * overlap that was never the problem would waste their time.
+ * The stale-key case gets its own words. "Nothing is at Chase and in a bank
+ * account" is a fact about the portfolio; a filter pointing at an account that
+ * has since been closed is a fact about the URL, and telling the reader to look
+ * for an overlap that was never the problem would waste their time.
+ *
+ * The owner filter adds two more answers and takes precedence over both, in the
+ * order they stop being the reader's problem: an owner the household cannot be
+ * read as is a fact about the address, an owner holding nothing is a fact about
+ * the household, and only then is an overlap of this screen's own selects worth
+ * naming. And when both are on, the sentence has to say *whose* portfolio holds
+ * nothing — the selects are built from every holding now, so "nothing in the
+ * portfolio is in Bob Roth" would be a plain falsehood on a table narrowed to
+ * Alice.
  */
-function describe(
-  filters: Route.ComponentProps["loaderData"]["filters"],
-  narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"],
-  unknownOwner: boolean,
-): string {
+function describe({
+  filters,
+  narrowedTo,
+  unknownOwner,
+  ownersHoldNothing,
+}: {
+  filters: Route.ComponentProps["loaderData"]["filters"];
+  narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"];
+  unknownOwner: boolean;
+  ownersHoldNothing: boolean;
+}): string {
   // The owner filter first, because it is the more fundamental fact: if the
-  // household cannot be read as these people at all, or they hold nothing,
-  // then what this screen's own selects say about the rest is beside the point.
+  // household cannot be read as these people at all, or they hold nothing at
+  // all, then what this screen's own selects say about the rest is beside the
+  // point.
   if (unknownOwner) {
     return "This view is set to an owner the household can no longer be read as — removed, or left holding only closed accounts.";
   }
 
-  if (narrowedTo.length > 0 && filters.every((filter) => filter.selected === "")) {
-    const named = join(narrowedTo.map((person) => person.name));
+  const named = joinWords(narrowedTo.map((person) => person.name));
+  const hold = narrowedTo.length === 1 ? "holds" : "hold";
 
-    return `${named} ${narrowedTo.length === 1 ? "holds" : "hold"} nothing that has been recorded here.`;
-  }
-
-  const absent = filters.filter((filter) => filter.selectedIsAbsent);
-
-  if (absent.length > 0) {
-    const named = join(absent.map((filter) => filter.label.toLowerCase()));
-
-    return `The ${named} filter names something this portfolio does not hold — the link may predate a change to it.`;
-  }
+  if (ownersHoldNothing) return `${named} ${hold} nothing that has been recorded here.`;
 
   const chosen = filters
     .map((filter) => filter.selectedPhrase)
     .filter((phrase): phrase is string => phrase !== null);
 
+  // Narrowed *and* filtered. The selects are built from every holding now, so
+  // "nothing in the portfolio is in Bob Roth" would be a plain falsehood on a
+  // table narrowed to Alice — the portfolio does hold something there. The
+  // sentence has to name whose portfolio it is talking about.
+  if (narrowedTo.length > 0 && chosen.length > 0) {
+    return `${named} ${hold} nothing ${joinWords(chosen)}.`;
+  }
+
+  const absent = filters.filter((filter) => filter.selectedIsAbsent);
+
+  if (absent.length > 0) {
+    const named = joinWords(absent.map((filter) => filter.label.toLowerCase()));
+
+    return `The ${named} filter names something this portfolio does not hold — the link may predate a change to it.`;
+  }
+
   if (chosen.length === 0) return "Nothing is held at all.";
   if (chosen.length === 1) return `Nothing in the portfolio is ${chosen[0]}.`;
 
-  return `No holding matches every filter at once. Nothing in the portfolio is ${join(chosen)}.`;
-}
-
-/** `["a", "b", "c"]` → `"a, b and c"`. */
-function join(parts: string[]): string {
-  if (parts.length <= 1) return parts[0] ?? "";
-
-  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+  return `No holding matches every filter at once. Nothing in the portfolio is ${joinWords(chosen)}.`;
 }
 
 function Header({
@@ -718,8 +758,15 @@ function Filters({
     <Form method="get" className="filter-bar" aria-label="Filter holdings">
       {/* The owner filter travels with every other control on this screen, or
           picking an account type would silently widen the table back to the
-          whole household. */}
-      {owners.length > 0 ? <input type="hidden" name="owner" value={owners.join(",")} /> : null}
+          whole household.
+
+          One field per id, exactly as the owner control's own checkboxes
+          submit, rather than a comma-joined string — which would be a fourth
+          place spelling a grammar `toOwnerParam` exists to be the only speller
+          of. The canonical redirect turns either into the same address. */}
+      {owners.map((owner) => (
+        <input key={owner} type="hidden" name="owner" value={owner} />
+      ))}
       {query.group !== null ? <input type="hidden" name="group" value={query.group} /> : null}
       {query.sort !== DEFAULT_SORT ? <input type="hidden" name="sort" value={query.sort} /> : null}
       {query.direction !== DEFAULT_DIRECTION ? (

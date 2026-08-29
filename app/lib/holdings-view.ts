@@ -62,7 +62,8 @@ import { toOwnerParam, type OwnerFilter } from "./owner-filter.ts";
 import type { AccountKind, Coverage, TaxTreatment, ValuedHolding } from "./valuation.server.ts";
 
 /**
- * The seven things a holding can be filtered or grouped by. These double as URL
+ * The seven things a holding can be **grouped** by; six of them, `owner`
+ * excepted, are also what it can be **filtered** by. These double as URL
  * parameter names, so they are short and stable — renaming one silently breaks
  * every bookmark that carried it.
  */
@@ -255,7 +256,7 @@ const DIMENSION_BY_ID = new Map(GROUPINGS.map((dimension) => [dimension.id, dime
  * the first two.
  *
  * Throws on an id no dimension carries, which no caller can reach:
- * {@link DimensionId} is a closed union, {@link DIMENSIONS} covers it, and the
+ * {@link DimensionId} is a closed union, {@link GROUPINGS} covers it, and the
  * map is built from the second. `groupHoldings` answers the same impossible
  * lookup with an empty table, because an empty table is still a legible screen.
  * There is no such answer here — a grouping that filed every holding under one

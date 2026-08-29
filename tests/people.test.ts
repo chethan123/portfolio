@@ -10,7 +10,13 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
-import { createPerson, listPeople, removePerson, renamePerson } from "~/lib/people.server";
+import {
+  createPerson,
+  filterableOwners,
+  listPeople,
+  removePerson,
+  renamePerson,
+} from "~/lib/people.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
@@ -159,6 +165,54 @@ describe("removing a person", () => {
       const [alice, bea] = await listPeople(db);
       expect(alice).toMatchObject({ name: "Alice", accountCount: 2 });
       expect(bea).toMatchObject({ name: "Bea", accountCount: 0 });
+    }),
+  );
+});
+
+describe("who the household can be read as (spec 0013)", () => {
+  it(
+    "counts open accounts beside the count `removePerson` depends on, not instead of it",
+    withDatabase(async (ctx) => {
+      const alice = await ctx.seedPerson({ name: "Alice" });
+      await ctx.seedAccount({ name: "Open", owner: alice });
+      await ctx.seedAccount({ name: "Closed", owner: alice, closedAt: "2026-01-31" });
+
+      const [person] = await listPeople(ctx.db);
+
+      // `accountCount` means open and closed alike, because a person who owns a
+      // closed account still cannot be removed — narrowing it in place would
+      // have let that delete through.
+      expect(person).toMatchObject({ name: "Alice", accountCount: 2, openAccountCount: 1 });
+      await expect(removePerson(alice.id, ctx.db)).rejects.toThrow();
+    }),
+  );
+
+  it(
+    "leaves out an owner whose accounts have all been closed",
+    withDatabase(async (ctx) => {
+      const alice = await ctx.seedPerson({ name: "Alice" });
+      const bob = await ctx.seedPerson({ name: "Bob" });
+      const carol = await ctx.seedPerson({ name: "Carol" });
+
+      await ctx.seedAccount({ name: "Alice Brokerage", owner: alice });
+      await ctx.seedAccount({ name: "Bob Roth", owner: bob });
+      await ctx.seedAccount({ name: "Carol Old", owner: carol, closedAt: "2026-01-31" });
+
+      // Carol is recorded and cannot be filtered by: `holding_valued` excludes
+      // closed accounts, so selecting her would empty every screen with nothing
+      // saying why. Leaving her out makes her id one the roster does not name,
+      // which is a state the screens already have a sentence for.
+      expect((await filterableOwners(ctx.db)).map((person) => person.name)).toEqual([
+        "Alice",
+        "Bob",
+      ]);
+
+      // And a person who owns nothing at all is out for the same reason.
+      await ctx.seedPerson({ name: "Dana" });
+      expect((await filterableOwners(ctx.db)).map((person) => person.name)).toEqual([
+        "Alice",
+        "Bob",
+      ]);
     }),
   );
 });

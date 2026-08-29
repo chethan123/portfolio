@@ -698,6 +698,13 @@ a {
   gap: var(--space-md);
   padding-bottom: var(--space-lg);
   border-bottom: 1px solid var(--outline-variant);
+  /* The actions are `flex: none` — the freshness line and the owner control
+   * both size to their contents and neither shrinks legibly — so between about
+   * 768 and 1100 the strip was wider than the canvas and the page scrolled
+   * sideways, taking the narration off screen with it. Wrapping the whole
+   * actions block onto its own line is what a `flex: none` item needs; it
+   * changes nothing at the widths where it already fitted. */
+  flex-wrap: wrap;
 }
 
 .page-title {
@@ -3029,6 +3036,15 @@ code {
   align-items: center;
   gap: var(--space-base);
   padding: var(--space-base) var(--space-md);
+  flex-wrap: wrap;
+}
+
+/* Shrinkable inside the strip, which `.page-actions` is not: a household of
+ * six names is wider than the canvas has to spare, and the names wrap where the
+ * bar itself cannot. */
+.owner-filter {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* A row, not a column: the fieldset default stacks, and two or three names on
@@ -3062,8 +3078,10 @@ code {
  *
  * The condition attached to the filter surviving navigation: a reader who set
  * it two screens ago and forgot would otherwise read a household headline that
- * quietly means something else. It is prose under the figure rather than a chip
- * beside it, because a chip is a thing you stop seeing.
+ * quietly means something else. It is a sentence rather than a chip, because a
+ * chip is a thing you stop seeing — where it sits is each screen's business, at
+ * the end of the panel header's row here and under the figure on the two that
+ * have one.
  */
 .narrowed-to {
   margin: var(--space-xs) 0 0;
