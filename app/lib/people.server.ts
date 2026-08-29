@@ -17,6 +17,7 @@
 import { z } from "zod";
 
 import { getDb, type Database } from "./db.server.ts";
+import type { OwnerFilter } from "./owner-filter.ts";
 import {
   NotFoundError,
   ValidationError,
@@ -120,6 +121,56 @@ export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person
  */
 export async function filterableOwners(db: Kysely<Database> = getDb()): Promise<Person[]> {
   return (await listPeople(db)).filter((person) => person.openAccountCount > 0);
+}
+
+/** The roster a screen draws its control from, and what a selection makes of it. */
+export type OwnerRoster = {
+  /** Everyone the household can be read as, in the order to draw them. */
+  people: Person[];
+  /** Who the selection actually names — empty when the filter is off. */
+  narrowedTo: Person[];
+  /**
+   * The selection names an id the roster does not: hand-typed, naming somebody
+   * removed, or naming an owner whose accounts have all been closed. One
+   * sentence and one fix to a reader, so one flag.
+   */
+  unknownOwner: boolean;
+  /**
+   * The selection names exactly everybody, which is the household under another
+   * name — and the household's URL carries no owner parameter at all (ADR-0008).
+   * The screens bounce to it, because a `<Form method="get">` of checkboxes has
+   * no way to decline to submit the spelling in the first place.
+   */
+  coversEveryone: boolean;
+};
+
+/**
+ * The roster, read once, with the selection resolved against it.
+ *
+ * Every screen that draws the control asks the same two questions of the same
+ * roster — which ids name nobody it can filter by, and whether the selection is
+ * simply everybody — and a rule each loader spelled for itself would be one
+ * free to drift on a screen nobody was looking at. The query is
+ * {@link filterableOwners}'; what is added here is the comparison.
+ */
+export async function ownerRoster(
+  owners: OwnerFilter,
+  db: Kysely<Database> = getDb(),
+): Promise<OwnerRoster> {
+  const people = await filterableOwners(db);
+  const narrowedTo = people.filter((person) => owners.includes(person.id));
+
+  return {
+    people,
+    narrowedTo,
+    unknownOwner: owners.length > narrowedTo.length,
+    // Every roster member named and nobody else. Both halves, or a selection of
+    // "Alice and somebody who no longer exists" would be as long as a two-person
+    // roster and collapse to the household — hiding the one state that exists to
+    // say a stale address is stale.
+    coversEveryone:
+      people.length > 0 && narrowedTo.length === people.length && narrowedTo.length === owners.length,
+  };
 }
 
 /**

@@ -1,8 +1,13 @@
-import { Link } from "react-router";
+import { Link, redirect } from "react-router";
 
 import { Amount, Delta } from "~/components/amount";
 import { Breakdown, plural } from "~/components/breakdown";
 import { EmptyState } from "~/components/empty-state";
+import {
+  NarrowedTo,
+  NarrowedToNothing,
+  OwnerFilterControl,
+} from "~/components/owner-filter-control";
 import {
   allocationByAccountKind,
   allocationByAssetClass,
@@ -13,7 +18,14 @@ import {
   type GainGroups,
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
-import { ALL_OWNERS } from "~/lib/owner-filter";
+import {
+  ALL_OWNERS,
+  canonicalOwnerSearch,
+  isFiltered,
+  ownerSearch,
+  readOwnerFilter,
+} from "~/lib/owner-filter";
+import { ownerRoster } from "~/lib/people.server";
 import { readCapitalGainsRate } from "~/lib/settings.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
@@ -176,26 +188,68 @@ function GainsRow({ row, isTotal = false }: { row: GainRow; isTotal?: boolean })
   );
 }
 
-export async function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
+  const url = new URL(request.url);
+
+  // Before any database work, and roster-free: the canonical spelling of an
+  // owner parameter is a fact about the address, so this can be decided without
+  // asking who exists — which is what spec 0013 requires of it, and what makes
+  // it safe to do first.
+  const canonical = canonicalOwnerSearch(url.searchParams);
+  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
+
+  const owners = readOwnerFilter(url.searchParams);
+
   // One read, three groupings of the array it returned. The total comes from
   // the query module rather than from adding those groups up here: money is
   // summed in SQL, in `numeric` (§8.2), and this is the same figure the
-  // Overview headline shows because it is the same query.
-  const [holdings, total, capitalGainsRate, freshness] = await Promise.all([
-    currentHoldings(ALL_OWNERS),
-    netWorth(ALL_OWNERS),
+  // Overview headline shows because it is the same query. Narrowing it here
+  // rather than in a second grouping is what keeps the two agreeing: the
+  // headline and the slices are one arithmetic over one read, filtered or not.
+  const [holdings, total, capitalGainsRate, freshness, roster, everyone] = await Promise.all([
+    currentHoldings(owners),
+    netWorth(owners),
     readCapitalGainsRate(),
     asOfView(getConfig().MARKET_TIMEZONE),
+    ownerRoster(owners),
+    // Whether the *instance* holds anything, which is a different question from
+    // whether these owners do — and only the first may be answered with
+    // "nothing has been uploaded". Asked only while narrowed, because
+    // unnarrowed the two questions are the same one, and asked as a count
+    // rather than as a second read of every row.
+    isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
+
+  // Everybody ticked is the household, whose URL carries no owner parameter at
+  // all (ADR-0008). The control cannot decline to submit that spelling — a GET
+  // form of checkboxes has no way to — so the collapse happens here, after the
+  // roster read that it needs and after the roster-free redirect above.
+  if (roster.coversEveryone) {
+    throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
+  }
 
   return {
     freshness,
+    owners,
+    roster: roster.people.map((person) => ({ id: person.id, name: person.name })),
+    narrowedTo: roster.narrowedTo.map((person) => ({ id: person.id, name: person.name })),
+    unknownOwner: roster.unknownOwner,
+    /**
+     * Where "Show everyone" goes: this address, its own parameters kept, no
+     * owner. Built here rather than in the component, which knows no screen's
+     * vocabulary — and `"."` for a screen whose unfiltered URL is bare, the
+     * idiom the Holdings filter bar already uses.
+     */
+    showEveryone: canonicalOwnerSearch(url.searchParams, ALL_OWNERS) || ".",
     total: total.amount,
     capitalGainsRate,
     gains: unrealizedByAssetType(holdings, capitalGainsRate),
     // Counted off the rows already in hand rather than asked for separately —
-    // two counts of one thing are two things that can disagree.
+    // two counts of one thing are two things that can disagree. Narrowed, so
+    // the coverage note above the panels describes the figures beneath it.
     holdingCount: holdings.length,
+    /** Whether anything at all has been uploaded, narrowed or not. */
+    hasHoldings: everyone === null ? holdings.length > 0 : everyone.coverage.total > 0,
     pricedCount: holdings.filter((holding) => holding.isPriced).length,
     byPerson: allocationByPerson(holdings),
     byAccountKind: allocationByAccountKind(holdings),
@@ -205,6 +259,12 @@ export async function loader() {
 
 export default function Analysis({ loaderData }: Route.ComponentProps) {
   const {
+    owners,
+    roster,
+    narrowedTo,
+    unknownOwner,
+    showEveryone,
+    hasHoldings,
     total,
     capitalGainsRate,
     gains,
@@ -216,6 +276,11 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
     freshness,
   } = loaderData;
 
+  // Empty because the filter reached nothing, rather than because the instance
+  // has nothing: two different sentences, and only the second may say nothing
+  // has been uploaded.
+  const narrowedToNothing = holdingCount === 0 && hasHoldings && isFiltered(owners);
+
   return (
     <section className="page">
       <header className="page-header">
@@ -224,22 +289,33 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
           <p className="page-subtitle">Portfolio breakdown and allocation views.</p>
         </div>
         <div className="page-actions">
+          <OwnerFilterControl owners={roster} selected={owners} hidden={{}} />
           <PriceFreshness freshness={freshness} />
         </div>
 
       </header>
 
-      {holdingCount === 0 ? (
+      {narrowedToNothing ? (
+        // Below the header, deliberately: the control has to stay on screen or
+        // the filter cannot be cleared from the page it emptied.
+        <NarrowedToNothing
+          owners={narrowedTo}
+          unknownOwner={unknownOwner}
+          showEveryone={showEveryone}
+        />
+      ) : holdingCount === 0 ? (
         // One check for all three panels: every holding has an owner, an
         // account kind and an asset class, so either all three breakdowns have
         // rows or none of them do.
         <EmptyState>
-          The portfolio broken down by person, by account type and by asset class — and what it
+          The portfolio broken down by owner, by account type and by asset class — and what it
           has gained but not yet sold — appears here once a statement has been uploaded. Nothing
           has been uploaded to this instance yet.
         </EmptyState>
       ) : (
         <>
+          <NarrowedTo owners={narrowedTo} />
+
           {pricedCount < holdingCount ? (
             <p className="coverage-note">
               Based on {pricedCount} of {holdingCount} holdings. The rest have never been priced
@@ -247,10 +323,14 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
             </p>
           ) : null}
 
+          {/* "by owner", not "by person": an owner is the role — the single
+              person an account's money belongs to — and a person is the record
+              (`CONTEXT.md`). This was the one place the pre-glossary wording
+              survived in the UI. */}
           <Breakdown
-            title="Net worth by person"
-            count={plural(byPerson.length, "person", "people")}
-            heading="Person"
+            title="Net worth by owner"
+            count={plural(byPerson.length, "owner", "owners")}
+            heading="Owner"
             amountHeading="Value"
             slices={byPerson}
             total={total}

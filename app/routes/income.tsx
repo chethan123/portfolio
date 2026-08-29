@@ -1,6 +1,13 @@
+import { redirect } from "react-router";
+
 import { Amount } from "~/components/amount";
 import { Breakdown, plural } from "~/components/breakdown";
 import { EmptyState } from "~/components/empty-state";
+import {
+  NarrowedTo,
+  NarrowedToNothing,
+  OwnerFilterControl,
+} from "~/components/owner-filter-control";
 import {
   annualDividendBy,
   formatShare,
@@ -9,8 +16,15 @@ import {
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
 import { groupingBy, summarise } from "~/lib/holdings-view";
-import { ALL_OWNERS } from "~/lib/owner-filter";
-import { currentHoldings } from "~/lib/valuation.server";
+import {
+  ALL_OWNERS,
+  canonicalOwnerSearch,
+  isFiltered,
+  ownerSearch,
+  readOwnerFilter,
+} from "~/lib/owner-filter";
+import { ownerRoster } from "~/lib/people.server";
+import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import type { ShelteredSubtotal } from "~/lib/allocation";
 import { PriceFreshness } from "../components/price-freshness.tsx";
@@ -62,23 +76,62 @@ export function meta() {
   return [{ title: "Income · Portfolio" }];
 }
 
-export async function loader() {
-  const [holdings, freshness] = await Promise.all([
-    currentHoldings(ALL_OWNERS),
+export async function loader({ request }: Route.LoaderArgs) {
+  const url = new URL(request.url);
+
+  // Before any database work, and roster-free — the same rule Analysis and
+  // Holdings keep, and for the same reason (spec 0013).
+  const canonical = canonicalOwnerSearch(url.searchParams);
+  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
+
+  const owners = readOwnerFilter(url.searchParams);
+
+  const [holdings, freshness, roster, everyone] = await Promise.all([
+    currentHoldings(owners),
     asOfView(getConfig().MARKET_TIMEZONE),
+    ownerRoster(owners),
+    // See `analysis.tsx`: an empty instance and an empty reading are two
+    // different sentences, and only the first may say nothing has been
+    // uploaded. A count, and only while narrowed.
+    isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
+
+  // Everybody ticked is the household, whose URL carries no owner parameter at
+  // all (ADR-0008). The control cannot decline to submit that spelling — a GET
+  // form of checkboxes has no way to — so the collapse happens here, after the
+  // roster read that it needs and after the roster-free redirect above.
+  if (roster.coversEveryone) {
+    throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
+  }
 
   return {
     freshness,
+    owners,
+    roster: roster.people.map((person) => ({ id: person.id, name: person.name })),
+    narrowedTo: roster.narrowedTo.map((person) => ({ id: person.id, name: person.name })),
+    unknownOwner: roster.unknownOwner,
+    /**
+     * Where "Show everyone" goes: this address, its own parameters kept, no
+     * owner. Built here rather than in the component, which knows no screen's
+     * vocabulary — and `"."` for a screen whose unfiltered URL is bare, the
+     * idiom the Holdings filter bar already uses.
+     */
+    showEveryone: canonicalOwnerSearch(url.searchParams, ALL_OWNERS) || ".",
     // Counted off the rows already in hand rather than asked for separately —
     // two counts of one thing are two things that can disagree.
     holdingCount: holdings.length,
+    /** Whether anything at all has been uploaded, narrowed or not. */
+    hasHoldings: everyone === null ? holdings.length > 0 : everyone.coverage.total > 0,
     // `summarise` rather than a `sumMoney` of its own: it is the helper the
     // Holdings total row goes through, so this headline and the foot of that
     // table are the same arithmetic rather than two that agree today. It is
     // also where the zero rule is already honoured — a group where nothing pays
     // is `$0` and never a dash.
     total: summarise(holdings).annualDividend,
+    // Recomputed over whatever the filter left, never carried over from the
+    // household: a weighted yield is a ratio of the group in view
+    // (`CONTEXT.md`), so one owner's dividend over the household's value would
+    // be a figure of nothing.
     weightedYield: weightedYield(holdings),
     sheltered: shelteredSubtotal(holdings),
     // The dimension accessors come from `holdings-view.ts` so that the labels
@@ -126,6 +179,12 @@ export default function Income({ loaderData }: Route.ComponentProps) {
   // The payload keeps the name CONTEXT.md gives the figure; the local is
   // renamed only so it does not shadow the function that computed it.
   const {
+    owners,
+    roster,
+    narrowedTo,
+    unknownOwner,
+    showEveryone,
+    hasHoldings,
     holdingCount,
     total,
     weightedYield: weighted,
@@ -134,6 +193,10 @@ export default function Income({ loaderData }: Route.ComponentProps) {
     byAccount,
     freshness,
   } = loaderData;
+
+  // Empty because the filter reached nothing, rather than because the instance
+  // has nothing — two different sentences.
+  const narrowedToNothing = holdingCount === 0 && hasHoldings && isFiltered(owners);
 
   return (
     <section className="page">
@@ -145,12 +208,21 @@ export default function Income({ loaderData }: Route.ComponentProps) {
           </p>
         </div>
         <div className="page-actions">
+          <OwnerFilterControl owners={roster} selected={owners} hidden={{}} />
           <PriceFreshness freshness={freshness} />
         </div>
 
       </header>
 
-      {holdingCount === 0 ? (
+      {narrowedToNothing ? (
+        // Below the header, so the control stays on screen and the filter can
+        // be cleared from the page it emptied.
+        <NarrowedToNothing
+          owners={narrowedTo}
+          unknownOwner={unknownOwner}
+          showEveryone={showEveryone}
+        />
+      ) : holdingCount === 0 ? (
         // One check for both panels: every holding has an account and a tax
         // treatment, so either both breakdowns have rows or neither does.
         <EmptyState>
@@ -173,6 +245,8 @@ export default function Income({ loaderData }: Route.ComponentProps) {
                   <span className="kpi-aside">{formatShare(weighted)} weighted yield</span>
                 )}
               </p>
+
+              <NarrowedTo owners={narrowedTo} />
 
               {/* Said on the page, not only in the guide, and for the reason the
                   unrealized panel says its own figure is an upper bound: a
