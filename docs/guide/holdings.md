@@ -6,9 +6,12 @@ Every position the household holds, in one table you can narrow, group and sort.
 
 ## The seven ways to slice it
 
-There are seven dimensions, and each one works as both a filter and a grouping:
+There are seven dimensions. **Six work as both a filter and a grouping. Owner groups only** —
+narrowing to a person is a household-wide reading you set once and carry across all four money
+screens, from the control at the top of this one. See
+[reading a screen as one owner](owner-filter.md).
 
-- **Owner** — who the account belongs to.
+- **Owner** — who the account belongs to. Grouping only; the control at the top does the narrowing.
 - **Account** — one account by name. The dropdown adds the institution, because two accounts can
   be called "Roth IRA".
 - **Brokerage** — the institution the account is held at.
@@ -33,9 +36,9 @@ to the other person in the household.
 
 ## Why a filter is missing
 
-**A dropdown only appears once the data holds two different values for it.** A one-person
-household gets no Owner filter; a household that banks in one place gets no Brokerage filter.
-Nothing is being hidden — there is simply no choice to offer.
+**A dropdown only appears once the data holds two different values for it.** A household that
+banks in one place gets no Brokerage filter; one holding only brokerage accounts gets no Account
+type filter. Nothing is being hidden — there is simply no choice to offer.
 
 Every option in a dropdown is a value something in the portfolio really has. Because of that, **no
 single filter can leave you with an empty table.**
@@ -43,8 +46,7 @@ single filter can leave you with an empty table.**
 Two of them still can — nobody holds bonds at that particular brokerage — and when that happens
 the screen names the pair rather than leaving you to work it out:
 
-> No holding matches every filter at once. Nothing in the portfolio is owned by Jordan Rivera and
-> at Fidelity.
+> No holding matches every filter at once. Nothing in the portfolio is at Fidelity and bonds.
 
 The sentence also says how many holdings are recorded in all, and a **Clear filters** button sits
 beneath it.
@@ -56,9 +58,15 @@ dropdown shows "Not in this portfolio" so you can see which one it was.
 **An empty result is not an empty portfolio.** A table with nothing in it because of a filter says
 so in those words. It never says "nothing has been uploaded yet", which would be false.
 
+**With the owner control also set, the sentence names whose portfolio it means** — "Alex Rivera
+holds nothing at Fidelity." The dropdowns are built from every holding in the household rather than
+from the selected owner's, so an unqualified "nothing in the portfolio is at Fidelity" would be
+plainly untrue on a narrowed table. The owner control has two empty answers of its own, in
+[reading a screen as one owner](owner-filter.md#when-a-narrowed-screen-is-empty).
+
 ## Grouping and subtotals
 
-![Holdings filtered by owner and grouped by asset class](images/holdings-grouped.png)
+![The whole portfolio grouped by asset class](images/holdings-grouped.png)
 
 Each group gets a heading with its own count, its rows, then a subtotal.
 
@@ -72,6 +80,9 @@ you, a day later, following your own bookmark.
 
 Grouping by Owner or by Account drops that column from the table, since the heading above each
 group already says it.
+
+Grouping by Owner is still worth doing under the owner control — set to two people, it is how you
+read one table as two.
 
 ## The columns
 

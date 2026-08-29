@@ -19,6 +19,7 @@ This file carries what the script cannot: which shot is of what, and why.
 | File | Page | Which account, and why |
 |---|---|---|
 | `overview-*.png` | `/` | — |
+| `overview-owner-*.png` | `/?owner=:id` | Alex Rivera, the first of the demo household's two owners · the owner filter, which is only legible as a difference from `overview-*.png` directly above: same household, same range, a smaller headline, the owners named beneath it, longer ranges greyed out and the pre-app line withheld |
 | `overview-1d-*.png` | `/?range=1d` | — · the 1D range, whose time axis, time-of-day readout and one-point-per-refresh granularity are invisible on every other preset |
 | `holdings-*.png` | `/holdings` | — · unfiltered and ungrouped, which is the state the URL with no query string produces |
 | `holdings-edit-*.png` | `/holdings` with one row open | the brokerage one, on a row that has a cost basis, so both boxes carry a figure. Scoped to the table rather than the page: the point of the shot is the two boxes sitting in their own columns, which a whole-page capture at this width renders too small to read |
@@ -60,6 +61,18 @@ gated one, and that is the honest trade: what is photographed is what the code d
 trigger of its own: when the wording changes, every shot carrying it is stale in one commit. That
 has already happened once, when the gate replaced the password. Not every shot carries it — a
 capture framed on a single table, or below the top of a page, never had it in frame.
+
+**A narrowed screen is shot, and it is shot on Overview.** A control nobody can see in the README is
+a feature nobody knows exists, and the owner filter is the one thing on these screens that changes
+every figure at once. Overview carries it because it is where the narrowing is most visible: the
+headline drops, the sentence naming the owners appears under it, a range or two greys out, and the
+hand-typed prefix stops being drawn — four consequences in one frame, against an unnarrowed shot of
+the same screen immediately above it. Holdings would have shown the control and one shortened table.
+
+**The owner is picked by position, not by name.** The script takes the first of the two owners the
+seed records, as it takes accounts by kind: the seed renumbers people on every run, so an id written
+down here would be wrong by the next capture. Which of the two it is does not matter — what the
+shot has to show is that it is one of them rather than both.
 
 **Account ids are never written down.** The seed renumbers accounts on every run, so the script
 looks them up by kind. A shot described above as "the brokerage one" means exactly that.
