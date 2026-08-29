@@ -24,6 +24,7 @@ import {
   isFiltered,
   ownerSearch,
   readOwnerFilter,
+  sameView,
 } from "~/lib/owner-filter";
 import { ownerRoster } from "~/lib/people.server";
 import { readCapitalGainsRate } from "~/lib/settings.server";
@@ -196,7 +197,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   // asking who exists — which is what spec 0013 requires of it, and what makes
   // it safe to do first.
   const canonical = canonicalOwnerSearch(url.searchParams);
-  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
+  // `sameView` rather than `!==`: two serialisers spell `'` and `,` differently
+  // — `encodeURIComponent` leaves both alone where `URLSearchParams` writes
+  // `%27` and `%2C` — and a comparison that could not see past that would
+  // bounce forever on an address it had just produced. Every multi-owner URL
+  // reaches this on some transports.
+  if (!sameView(url.search, canonical)) throw redirect(`${url.pathname}${canonical}`);
 
   const owners = readOwnerFilter(url.searchParams);
 
