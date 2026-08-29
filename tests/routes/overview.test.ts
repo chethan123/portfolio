@@ -27,7 +27,7 @@ import { RANGE_COOKIE } from "~/lib/chart-range";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, redirectTo, servedThrough } from "../support/routes.ts";
+import { args, get, outcomeOf, redirectTo, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -138,7 +138,7 @@ async function seedTwoOwners(
     holdings: [{ instrument: vxus, quantity: "25" }],
   });
 
-  return { alice, bob, carol };
+  return { alice, bob, carol, vti };
 }
 
 /**
@@ -364,6 +364,134 @@ describe("the Overview read as an owner", () => {
       // And no header strip either, which would otherwise be an empty row with
       // its own gap above a headline that is already the page's title.
       expect(markup).not.toContain("page-header--bare");
+    }),
+  );
+});
+
+describe("what a filtered address must not lose", () => {
+  // Terminates, rather than bounces exactly once: an address legitimately takes
+  // two hops — spelling, then the all-owners collapse — and what must never
+  // happen is a third that is the second again. `holdings.test.ts` carries the
+  // reasoning: two serialisers spell `'` and `,` differently, so an address can
+  // differ from its own canonical form forever and the screen answers every
+  // request with another redirect until the browser gives up.
+  const settles = async (search: string): Promise<void> => {
+    let where = `/${search}`;
+    const seen: string[] = [];
+
+    for (let hop = 0; hop < 4; hop += 1) {
+      const outcome = await outcomeOf(() => loader(args(get(where))));
+      if (!(outcome instanceof Response)) return;
+
+      seen.push(where);
+      where = outcome.headers.get("Location") ?? "";
+      expect({ search, revisited: seen.includes(where) }).toEqual({ search, revisited: false });
+    }
+
+    expect({ search, settled: false }).toEqual({ search, settled: true });
+  };
+
+  it(
+    "settles the canonical redirect, whatever spelled the address",
+    withDatabase(async (ctx) => {
+      const { alice, bob } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
+
+      for (const search of [
+        "",
+        `?owner=${alice.id}`,
+        `?owner=${both}`,
+        `?owner=${both.replace(",", "%2C")}`,
+        "?owner=o%27brien",
+        "?owner=o'brien",
+        `?owner=${bob.id},${alice.id}`,
+        `?owner=${alice.id}&range=3m`,
+        "?owner=",
+      ]) {
+        await settles(search);
+      }
+    }),
+  );
+
+  it(
+    "keeps the chosen range when the owner is changed from an emptied screen",
+    withDatabase(async (ctx) => {
+      const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+
+      // An emptied screen is exactly where a reader changes owner, and the
+      // control there emitted no hidden fields at all — so widening also threw
+      // away the span they had chosen.
+      const data = await loader(args(get(`/?owner=999999999&range=3m`)));
+      const markup = renderRoute(Overview, "/", data);
+
+      expect(markup).toContain('name="range"');
+      expect(markup).toContain('value="3m"');
+      expect(data.showEveryone).toContain("range=3m");
+      expect(alice.id).toBeDefined();
+    }),
+  );
+
+  it(
+    "carries the filter into an account and the account carries it back",
+    withDatabase(async (ctx) => {
+      const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+
+      // Spec 0013 names this round trip as the price of the account exemption:
+      // the account page ignores the filter, so without a return address
+      // Overview → a row → back lands on the whole household silently.
+      const data = await loader(args(get(`/?owner=${alice.id}`)));
+      const markup = renderRoute(Overview, "/", data);
+
+      expect(markup).toContain(`/accounts/`);
+      expect(markup).toContain(`owner=${alice.id}`);
+    }),
+  );
+
+  it(
+    "does not blame the filter for the pre-app history 1D never draws",
+    withDatabase(async (ctx) => {
+      const { alice, vti } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+      await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "100000.00" });
+
+      // Under every other range the note is the whole point.
+      const dated = await loader(args(get(`/?owner=${alice.id}&range=all`)));
+      expect(dated.manualWithheld).toBe(true);
+
+      // A session to plot, or 1D falls back and there is nothing to assert.
+      const today = new Date().toISOString().slice(0, 10);
+      for (const minute of ["14:30", "15:30", "20:00"]) {
+        await ctx.seedObservation({
+          instrument: vti,
+          asOf: `${today}T${minute}:00Z`,
+          marketDate: today,
+          price: "100.0000",
+        });
+      }
+
+      // Under 1D the note would name the filter as the cause of an omission the
+      // range imposes, and say the line begins at first recorded holdings where
+      // a session begins at its first observed instant. Both wrong at once.
+      const session = await loader(args(get(`/?owner=${alice.id}&range=1d`)));
+      expect(session.session).not.toBeNull();
+      expect(session.manualWithheld).toBe(false);
+    }),
+  );
+
+  it(
+    "keeps a page heading on a household with one owner",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(30));
+      const data = await loader(args(get("/")));
+      const markup = renderRoute(Overview, "/", data);
+
+      expect(data.roster).toHaveLength(1);
+      // The strip is suppressed — an empty row with its own gap above a
+      // headline that is already the page's title — but the heading is the
+      // page's, not the strip's, and a screen with no `h1` cannot be navigated
+      // by heading.
+      expect(markup).not.toContain("page-header--bare");
+      expect(markup).toContain("<h1");
+      expect(markup).toContain("Overview</h1>");
     }),
   );
 });

@@ -37,6 +37,7 @@ import {
   isFiltered,
   ownerSearch,
   readOwnerFilter,
+  sameView,
   type OwnerFilter,
 } from "~/lib/owner-filter";
 import { ownerRoster } from "~/lib/people.server";
@@ -119,7 +120,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   // asking who exists (ADR-0008). {@link chartRangeMiddleware} declines to
   // stamp its cookie on the bounce.
   const canonical = canonicalOwnerSearch(url.searchParams);
-  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
+  // `sameView` rather than `!==`: two serialisers spell `'` and `,` differently
+  // — `encodeURIComponent` leaves both alone where `URLSearchParams` writes
+  // `%27` and `%2C` — and a comparison blind to that would bounce forever on an
+  // address it had just produced. Every multi-owner URL reaches it on some
+  // transports.
+  if (!sameView(url.search, canonical)) throw redirect(`${url.pathname}${canonical}`);
 
   const owners = readOwnerFilter(url.searchParams);
   const requested = readChartRange(request);
@@ -247,7 +253,12 @@ export async function loader({ request }: Route.LoaderArgs) {
      * is how a note stops being read, which is the rule the allocation panel's
      * own notes keep two panels down.
      */
-    manualWithheld: isFiltered(owners) && manual.length > 0,
+    // Never under 1D, which draws no pre-app history whether or not a filter is
+    // on: the note would name the filter as the cause of an omission the range
+    // imposes, and it says the line begins at the owners' first recorded
+    // holdings where a session begins at its first observed instant. Both
+    // sentences would be wrong at once.
+    manualWithheld: isFiltered(owners) && manual.length > 0 && resolved.session === undefined,
     /**
      * Where "Show everyone" goes: this address, its own parameters kept, no
      * owner — so clearing the filter from an emptied screen does not also throw
@@ -259,6 +270,22 @@ export async function loader({ request }: Route.LoaderArgs) {
     holdingCount: accounts.reduce((total, account) => total + account.coverage.total, 0),
     pricedCount: accounts.reduce((total, account) => total + account.coverage.known, 0),
   };
+}
+
+/**
+ * The chart parameters a GET form has to re-emit, so that applying an owner does
+ * not throw away the reader's chosen span.
+ *
+ * Shared by the header's control and the one on an emptied screen, because an
+ * emptied screen is exactly where a reader changes owner — and the version that
+ * quietly emitted nothing sent them back to the default range as well.
+ */
+function rangeFields(range: RangeKey, custom?: CustomSpan): Record<string, string> {
+  if (range === "custom" && custom !== undefined) {
+    return { range, start: custom.start, end: custom.end };
+  }
+
+  return range === DEFAULT_RANGE ? {} : { range };
 }
 
 /**
@@ -285,16 +312,15 @@ function Header({
   range: RangeKey;
   custom?: CustomSpan;
 }) {
-  // Nothing to put in it, so no strip: the row would otherwise add its own gap
-  // above a headline that is already the page's title.
-  if (roster.length < 2) return null;
+  // Nothing to put in the strip, so no strip — the row would otherwise add its
+  // own gap above a headline that is already the page's title. The heading is
+  // not the strip's, though: it is the page's, and a screen whose only `h1`
+  // disappears because the household has one owner is one a screen reader
+  // cannot navigate by heading. A `visually-hidden` heading has no box, so on
+  // its own it costs the gap nothing.
+  if (roster.length < 2) return <h1 className="visually-hidden">Overview</h1>;
 
-  const hidden: Record<string, string> =
-    range === "custom" && custom !== undefined
-      ? { range, start: custom.start, end: custom.end }
-      : range === DEFAULT_RANGE
-        ? {}
-        : { range };
+  const hidden = rangeFields(range, custom);
 
   return (
     <header className="page-header page-header--bare">
@@ -365,7 +391,20 @@ function allocationBars(accounts: AccountRow[]) {
   };
 }
 
-function AccountsPanel({ accounts }: { accounts: AccountRow[] }) {
+function AccountsPanel({
+  accounts,
+  owners,
+}: {
+  accounts: AccountRow[];
+  /**
+   * Carried into the account page — which ignores it — so that its breadcrumb
+   * can carry it back out. Spec 0013 names this round trip as the price of the
+   * account exemption: Overview → a row → back had otherwise landed on the
+   * whole household's headline, silently, from a screen a reader had narrowed
+   * two clicks earlier.
+   */
+  owners: OwnerFilter;
+}) {
   return (
     <section className="panel">
       <header className="panel-header">
@@ -384,7 +423,7 @@ function AccountsPanel({ accounts }: { accounts: AccountRow[] }) {
             <Link
               key={account.accountId}
               className="account-row"
-              to={`/accounts/${account.accountId}`}
+              to={`/accounts/${account.accountId}${ownerSearch(owners)}`}
             >
               <div className="account-identity">
                 <div className="account-tile">
@@ -505,7 +544,11 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
             <h1 className="page-title">Overview</h1>
           </div>
           <div className="page-actions">
-            <OwnerFilterControl owners={roster} selected={owners} hidden={{}} />
+            <OwnerFilterControl
+              owners={roster}
+              selected={owners}
+              hidden={rangeFields(range, custom)}
+            />
           </div>
         </header>
         {isFiltered(owners) ? (
@@ -645,7 +688,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
           off so the accounts panel takes the full width rather than two thirds
           of it and a hole. */}
       <div className={allocation.bars.length > 0 ? "columns columns--wide-narrow" : "columns"}>
-        <AccountsPanel accounts={accounts} />
+        <AccountsPanel accounts={accounts} owners={owners} />
         {allocation.bars.length > 0 ? (
           <AllocationPanel accounts={accounts} allocation={allocation} />
         ) : null}
