@@ -60,6 +60,10 @@ const STUB_STYLESHEET_WARNING = 'An empty string ("") was passed to the';
  * The caller is expected to pass output from the real loader rather than a
  * hand-built object: a fixture of the loader's shape is a second copy free to
  * drift from it, and the drift looks exactly like a passing test.
+ *
+ * `path` may carry a search string. It is rendered at the whole address and
+ * matched on the pathname, so a control that builds its links out of the
+ * params already there can be asserted on.
  */
 export function renderRoute<T>(
   Component: React.ComponentType<never>,
@@ -67,6 +71,12 @@ export function renderRoute<T>(
   loaderData: T,
   { masked = false }: { masked?: boolean } = {},
 ): string {
+  // The route pattern is the pathname alone; the entry below is the whole
+  // address. A search string in the pattern would match nothing, so a
+  // component reading `useSearchParams` could never be rendered at a URL that
+  // carries any — and a screen's controls are built from exactly that.
+  const pattern = path.split("?")[0];
+
   // A root route above the page, carrying the one field of root loader data
   // every amount on every screen reads (spec 0007). Without it `useMasked`
   // finds no root data and falls back to *masked* — which is the right
@@ -77,7 +87,7 @@ export function renderRoute<T>(
       id: "root",
       path: "/",
       Component: () => <Outlet />,
-      children: [{ id: "page", path, Component: Component as React.ComponentType }],
+      children: [{ id: "page", path: pattern, Component: Component as React.ComponentType }],
     },
   ]);
 

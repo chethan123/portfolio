@@ -22,8 +22,19 @@
  * **A disabled preset is a `<span>`, never a `<Link>`.** Nothing to href it
  * to: the surface has no data before that boundary, and a link the loader
  * would just fall back from is worse than no link at all.
+ *
+ * **Every link carries the rest of the query.** A bare `?range=1m` is a whole
+ * query string, and React Router resolves it as one — so the link replaced
+ * everything else the address held. On the account page that silently ate the
+ * `?uploaded=` and `?recorded=` receipts: record a statement, read the
+ * confirmation, click 1M, and the sentence you were reading was gone. Both
+ * the presets and Custom therefore start from the params already there.
+ * Which three parameters are the control's own to rewrite is
+ * `chart-range.ts`'s to say, beside the function that reads them back.
  */
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
+
+import { carriedParams, rangeSearch } from "~/lib/chart-range";
 
 import type { CustomSpan, RangeKey } from "~/lib/chart-range";
 import type { IsoDate } from "~/lib/valuation.server";
@@ -44,6 +55,8 @@ export function ChartRangeControl({
   /** Today — a custom span can never reach into the future. */
   customMax: IsoDate;
 }) {
+  const [params] = useSearchParams();
+
   return (
     <nav className="segmented" aria-label="Chart range">
       {options.map((option) => {
@@ -61,6 +74,12 @@ export function ChartRangeControl({
 
               <form method="get" className="segmented-custom-form">
                 <input type="hidden" name="range" value="custom" />
+                {/* A GET form submits its own fields and nothing else, so
+                    everything the address already held has to be re-emitted
+                    here or applying a span drops it. */}
+                {carriedParams(params).map(([name, value], index) => (
+                  <input key={`${name}-${index}`} type="hidden" name={name} value={value} />
+                ))}
                 <label>
                   Start
                   <input
@@ -100,7 +119,7 @@ export function ChartRangeControl({
         return (
           <Link
             key={option.key}
-            to={`?range=${option.key}`}
+            to={rangeSearch(params, option.key)}
             aria-current={option.key === range ? "true" : undefined}
             preventScrollReset
           >

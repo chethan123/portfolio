@@ -577,6 +577,48 @@ export function readChartRange(request: Request): RequestedRange {
 }
 
 /**
+ * The three parameters this control writes. Everything else in the address
+ * belongs to the screen and is carried through untouched.
+ *
+ * Named once, beside {@link readChartRange}, which reads exactly these three:
+ * a second list of them somewhere else is a list free to drift from this one.
+ */
+const RANGE_PARAMS = ["range", "start", "end"];
+
+/**
+ * What a preset link and the Custom form have to re-emit — the address
+ * stripped of this control's own vocabulary, in the order it already had.
+ */
+export function carriedParams(params: URLSearchParams): [string, string][] {
+  return [...params].filter(([name]) => !RANGE_PARAMS.includes(name));
+}
+
+/**
+ * The search string a preset points at: the rest of the query, plus its own
+ * `?range=`.
+ *
+ * The emit side of {@link readChartRange}, and here rather than in the control
+ * for `parseQuery`/`toSearch`'s reason — a parameter one function writes and
+ * another refuses to read is a seam with a hole in it.
+ *
+ * A whole search string rather than React Router's relative resolution,
+ * because a `to` beginning with `?` replaces the *entire* query: that is what
+ * silently dropped the account page's `?uploaded=` receipt when a range was
+ * picked. With nothing else in the address it still comes out as exactly
+ * `?range=<key>`.
+ *
+ * `start` and `end` are rewritten rather than carried. A preset never reads a
+ * custom span, so leaving one behind keeps a range in the address that nothing
+ * draws and that Custom would reopen on.
+ */
+export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
+  const next = new URLSearchParams(carriedParams(params));
+  next.set("range", range);
+
+  return `?${next.toString()}`;
+}
+
+/**
  * Remembers an explicit range choice in the persistence cookie (spec 0008).
  *
  * A middleware rather than a header on the loader's own return, because both
