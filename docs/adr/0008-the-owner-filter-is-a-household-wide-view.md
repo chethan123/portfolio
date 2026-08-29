@@ -35,12 +35,23 @@ they move between screens. Choosing the children on Analysis and finding Holding
 people makes the reader do the filing the app should be doing.
 
 The cost is a real one and is paid deliberately: a filter that survives navigation can be forgotten,
-and the number it silently redefines is the Overview headline. Two things keep that honest. The
-selection is carried in the URL and only *remembered* for the length of a browser session, so closing the browser
-returns the household to itself; and every screen reading a narrowed figure states the owners in
-words beside the figure, never as a highlighted chip alone. The precedent is the chart range, which
-resolves explicit URL over cookie over default, and the mask, whose cookie lifetime is chosen rather
-than assumed.
+and the number it silently redefines is the Overview headline. Two things keep that honest.
+
+**The URL is the whole of the state.** There is no cookie and nothing stored. The filter travels
+between screens because the navigation links carry the search string — `NAVIGATION` in
+`app/root.tsx:115-120` is bare paths today, and bare paths are why a `NavLink` drops the query. So
+the filter lasts exactly as long as the URL does: close the tab and the household is back, not
+because a cookie lifetime was chosen well but because there is nothing left to remember it. A link
+pasted to another family member carries the same view, which a cookie could never do.
+
+The rejected alternative was a session cookie written by a route middleware, mirroring the chart
+range. It would have survived a hand-typed path, and cost an encoder, a decoder, a third copy of the
+cookie-header reader, a middleware on four routes, and a rule for a selection that had gone stale
+while the app was not looking. For a filter whose whole job is to be visible, storing it invisibly
+was the wrong trade.
+
+**And every screen reading a narrowed figure states the owners in words** beside the figure, never
+as a highlighted chip alone.
 
 ## Why the hand-typed history disappears under it
 
@@ -69,6 +80,12 @@ a default, and buys a person-to-address mapping the schema deliberately does not
 forgotten. Rejected because the reader's question persists even when the app's state does not, and
 because a rule that every future money screen offers the filter is then a convention somebody has to
 remember rather than an argument the readers already require.
+
+**A session cookie written by a route middleware**, mirroring the chart range exactly. Rejected in
+favour of the navigation carrying the search: the cookie's one advantage is surviving a hand-typed
+path, and its costs are an encoder, a decoder, a third copy of the cookie-header reader, a middleware
+mounted on four routes, and a rule for a selection that went stale unobserved. A filter whose whole
+job is to be visible should not be stored invisibly.
 
 **A stored household preference, in `app_setting` beside the masking policy.** Rejected because it
 is the wrong blast radius, for the reason ADR-0002 gives about masking state: one person narrowing

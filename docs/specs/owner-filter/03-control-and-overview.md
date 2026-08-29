@@ -43,16 +43,28 @@ would eat the filter outright.
 - [ ] The sentence is masked-safe: it names people, and a name is never an amount
       (`CONTEXT.md`, **Masked**)
 
+**The navigation carries it**
+
+- [ ] `NAVIGATION`'s links become `to={{ pathname, search }}`, reading the search once in the shell —
+      this is the whole cross-screen carry mechanism, and without it the filter dies on the first nav
+      click
+- [ ] **`NavItems` (`app/root.tsx:129`) renders four times** — the main nav twice, for the desktop
+      rail (`:199`) and the mobile drawer (`:240`), and `FOOTER_NAVIGATION` twice (`:202`, `:241`).
+      Both main-nav renders carry the filter and **both footer renders must not**: Settings is exempt
+      from the filter, so linking to it with `?owner=` would carry a param that screen ignores. The
+      carry is therefore a prop on `NavItems`, not a change inside it
+- [ ] A screen with no filter still links to a bare path, so an unfiltered URL stays clean
+- [ ] Only `owner` travels: a screen's own params — `range`, `sort`, `edit`, `uploaded` — do not
+      follow a nav click onto a screen that does not own them
+
 **Overview's loader**
 
-- [ ] `ownerFilterMiddleware()` is mounted beside `chartRangeMiddleware()`
-      (`app/routes/overview.tsx:95`)
+- [ ] No middleware: the filter is read from the URL in the loader, and nothing is written back
 - [ ] The filter is resolved, normalised against the roster by source, and a non-canonical `owner`
       param redirects before any database work — the pattern at `app/routes/holdings.tsx:121-123`
 - [ ] Every reader call passes the resolved filter
-- [ ] An `owner` id from the **URL** that names nobody leaves the screen empty, with a state saying
-      the filter names an owner who is no longer recorded and a link that clears it
-- [ ] The same id from the **cookie** is dropped and the household is shown
+- [ ] An `owner` id that names nobody leaves the screen empty, with a state saying the filter names
+      an owner who is no longer recorded, and a link that clears it
 
 **The chart under a filter**
 
@@ -87,4 +99,5 @@ would eat the filter outright.
 - [ ] The reachable range shortens to the owners' history, and a preset beyond it is disabled
 - [ ] A range click preserves the filter, and a filter apply preserves the range
 - [ ] A single-person household renders no control
-- [ ] An unknown id from the URL empties the screen and explains; from the cookie it does not
+- [ ] An unknown id empties the screen and explains, rather than widening it
+- [ ] A nav click from a filtered Overview arrives at a filtered Holdings

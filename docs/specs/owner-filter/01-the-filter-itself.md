@@ -2,15 +2,15 @@
 
 _Part of [0013-owner-filter.md](../0013-owner-filter.md)._
 
-**What to build:** One pure module, `app/lib/owner-filter.ts`, and the route middleware that writes
-its cookie. No screen changes, no reader changes, no database access — the module is plain `.ts`
-rather than `.server` for the reason `app/lib/chart-range.ts:12-15` gives about itself: the control
-component will need the type and the serialiser, and neither touches the database.
+**What to build:** One pure module, `app/lib/owner-filter.ts`. No screen changes, no reader changes,
+no database access, no cookie and no middleware — the module is plain `.ts` rather than `.server` for
+the reason `app/lib/chart-range.ts:12-15` gives about itself: the control component will need the
+type and the serialiser, and neither touches the database.
 
 Doing this alone is worth a ticket because the awkward parts of this feature are all decisions about
-a string. What `?owner=1,3,3` means, what a selection naming everybody means, what a stale cookie
-naming a deleted person means — each is a fixture and a test here, or a bug found later on four
-screens at once. `chart-range.ts` is the shape to copy throughout, including the `Object.hasOwn`
+a string. What `?owner=1,3,3` means, what a selection naming everybody means, what an id naming a
+deleted person means — each is a fixture and a test here, or a bug found later on four screens at
+once. `chart-range.ts` is the shape to copy throughout, including the `Object.hasOwn`
 lesson at `:554-558`: a hand-typed param must fall through, never match something on a prototype.
 
 **Blocked by:** Nothing. It touches no schema, no route and no reader.
@@ -66,46 +66,30 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
 - [ ] An id matching no roster member is kept, narrows to nothing, and the screen says so — the same
       rule whatever carried it
 
-**The cookie**
-
-- [ ] `OWNER_COOKIE = "owner_filter"`, a name distinct from `chart_range` and `masked`
-- [ ] `Path=/`, `SameSite=Lax`, and **no `Max-Age`** — session-scoped, which is ADR-0008's condition
-      on a filter that survives navigation, and the one deliberate difference from `chart_range`
-- [ ] Encoding is the same comma list as the URL; decoding returns null on a value it cannot read at
-      all, the way `decodeRangeCookieValue` does (`app/lib/chart-range.ts:495-506`) — it rejects the
-      whole value and never prunes members
-- [ ] **The header reader is extracted, not copied.** `app/lib/masking.ts:182-196` and
-      `app/lib/chart-range.ts:514-528` are already the same fourteen lines; a third copy is the point
-      at which `docs/developing.md`'s "one site per hazard" bites. A shared
-      `readCookie(request, name)` returning the raw value, with both existing callers moved onto it
-      and each still decoding as it does today — masking deliberately does not decode
-
 **Resolution**
 
-- [ ] `readOwnerFilter(request)` returns the selection **and its source**: an explicit `owner` param
-      wins, then the cookie, then `ALL_OWNERS`
-- [ ] The source is part of the return value because the caller's handling of an unresolvable id
-      depends on it
-- [ ] A request with `?owner=` present but empty is explicit — it means the household, and it clears
-      the memory rather than falling back to it. This is a **deliberate divergence** from
-      `readChartRange`, where an empty `?range=` fails `Object.hasOwn` and falls through to the
-      cookie (`app/lib/chart-range.ts:563`); without the divergence there is no way to say "everyone"
-      from a link
+- [ ] `readOwnerFilter(request)` reads the `owner` param and nothing else. Present means filtered,
+      absent means `ALL_OWNERS`
+- [ ] There is **no cookie, no middleware and no fallback**, and therefore no source to tag. ADR-0008
+      records the trade: the URL is the whole of the state, so closing the tab forgets the filter
+      because the URL is gone
+- [ ] `?owner=` present but empty is the household — the same answer as absent, since there is
+      nothing to fall back to
 
-**The middleware**
+**Carrying it between screens**
 
-- [ ] `ownerFilterMiddleware()` writes the cookie from the request's **explicit** param only, never
-      from the resolved value — the reasoning `chart-range.ts:580-602` gives about not wrapping a
-      loader's return in `data(…, {headers})`
-- [ ] An explicit household selection clears the cookie rather than storing an empty one
-- [ ] It is exported and wired to nothing yet; ticket 03 mounts it
+- [ ] A helper the shell can use to append the current search to a navigation target, since
+      `NAVIGATION` (`app/root.tsx:115-120`) is bare paths and a bare path makes `NavLink` drop the
+      query. It belongs here rather than in the component so it is testable without a router
+- [ ] It is exported and used by nothing yet; ticket 03 wires the nav
 
 **Tests** (`tests/owner-filter.test.ts`)
 
 - [ ] Every parse rule above, including the malformed ids, as a table of inputs
 - [ ] Sort is numeric: `10,9` and `9,10` produce one canonical spelling
 - [ ] All-selected normalises to `ALL_OWNERS` for a two-person and a four-person roster
-- [ ] An unknown id is kept and narrows to nothing, from either source
+- [ ] An unknown id is kept and narrows to nothing
 - [ ] An id of 25 digits is refused at parse and never reaches Postgres
-- [ ] Cookie round trip, and a cookie string carrying an unrelated name alongside
-- [ ] Resolution precedence, including `?owner=` empty beating a set cookie
+- [ ] `?owner=` empty and `owner` absent both yield `ALL_OWNERS`
+- [ ] The nav helper appends a filtered search to a bare path, and leaves a bare path bare when the
+      filter is off

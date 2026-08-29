@@ -5,8 +5,8 @@
 > Covers ADR-0008, which decides the shape: one household-wide selection, carried across screens,
 > never derived from who signed in. Builds on the holdings slice (0003), whose Holdings table
 > already carries an in-memory `owner` dimension and the URL-as-state discipline this slice
-> generalises; on the chart-range work (0008, 0009), whose explicit-URL-over-cookie resolution and
-> route middleware are copied rather than reinvented; and on DESIGN.md §4.2's single owner per
+> generalises; on the chart-range work (0008, 0009), whose param-parsing discipline is copied
+> though its cookie and middleware deliberately are not; and on DESIGN.md §4.2's single owner per
 > account, which is what makes the filter a single column predicate.
 
 ## Problem Statement
@@ -86,23 +86,34 @@ breaks.
 - a request whose `owner` param is not already in canonical spelling is redirected to the one that
   is, before any database work.
 
-**Resolution follows the chart range** (`app/lib/chart-range.ts:531-577`), with one deliberate
-divergence noted in ticket 01: an explicit
-`owner` param wins; failing that a session cookie; failing that `ALL_OWNERS`. The cookie is
-`owner_filter`, `Path=/`, `SameSite=Lax`, and **session-scoped — no `Max-Age`**, which is the one
-deliberate difference from `chart_range`'s year and is ADR-0008's answer to a filter that can be
-forgotten. It is written by a route middleware carrying the *request's* explicit param, the way
-`chartRangeMiddleware` does (`app/lib/chart-range.ts:603-624`) and for the reason its docstring
-gives: wrapping a loader's return in `data(value, {headers})` would make every direct-calling test
-cope with a union.
+**The URL is the only carrier — there is no cookie and no middleware.** The filter is present if
+`?owner=` is present and absent otherwise, which is the whole of the resolution rule. Unlike the
+chart range, this slice adds no persistence: ADR-0008 records why, and the consequence is that
+closing the tab forgets the filter structurally rather than by a chosen cookie lifetime.
 
-**An unresolvable id is treated differently by source**, which is ADR-0008's honesty rule:
+**It travels between screens on the navigation links.** `NAVIGATION` in `app/root.tsx:115-120` is a
+list of bare paths rendered through the `NavItems` component (`:129`), and a bare path makes
+`NavLink` drop the query string — which is exactly why the filter does not survive a nav click
+today. The links become `to={{ pathname, search }}`, reading the search once in the shell. That is
+the entire carry mechanism.
 
-- from the **URL**, it is kept. The predicate matches nothing, the screen shows its empty state, and
-  the state says the filter names an owner who is no longer recorded, with a link that clears it.
-- from the **cookie**, it is dropped. If that empties the selection, the screen shows the household.
-  `decodeRangeCookieValue` (`app/lib/chart-range.ts:495-506`) rejects a whole cookie value rather
-  than pruning members, so this is that function's *posture* at a different layer, not its code.
+`NavItems` is rendered four times, though, and only two of them should carry: the desktop rail
+(`:199`) and the mobile drawer (`:240`) render `NAVIGATION`, while `:202` and `:241` render
+`FOOTER_NAVIGATION`, which is Settings — a screen this filter does not touch. So the carry is a prop
+on `NavItems` rather than a change inside it.
+
+Two consequences worth stating plainly, because they are the price of the simplicity:
+
+- Typing `/holdings` by hand, or opening an old bookmark, starts unfiltered. For a self-hosted
+  instance read by one family, that is not a defect worth a cookie.
+- Every link **out** of a filtered screen that should stay filtered has to carry the search. The nav
+  is the main path; the account rows are deliberately not (an account screen ignores the filter), and
+  the masking and refresh controls already round-trip `pathname + search` through their `redirectTo`
+  field (`app/components/masking-toggle.tsx:77`).
+
+**An id that names nobody is kept**, the predicate matches nothing, the screen shows its empty state,
+and that state says the filter names an owner who is no longer recorded, with a link that clears it.
+One rule, since there is now only one source.
 
 ### The readers
 
@@ -218,7 +229,7 @@ Postgres-backed, through the builders in `tests/support/fixtures.ts` and the rou
 `tests/support/routes.ts`, per the house rules.
 
 - `tests/owner-filter.test.ts` — the pure module: parse, normalise (sort, dedupe, all-selected,
-  empty, malformed), serialise, the cookie round trip, and URL-over-cookie-over-default resolution.
+  empty, malformed), serialise, and resolve — presence of the param and nothing else.
 - `tests/valuation-owner-filter.test.ts` — every household reader that takes the filter narrows; two owners sum to the
   household total at exact decimal strings; the series readers narrow **inside** the lateral, proven
   by a date on which only the excluded owner has a position set still appearing on the line;
@@ -230,8 +241,9 @@ Postgres-backed, through the builders in `tests/support/fixtures.ts` and the rou
   today only by `tests/invariants/aggregates-agree.test.ts:36-37`. `tests/holdings-view.test.ts`
   takes the `DIMENSIONS` and `toSearch` assertions. Each asserts its screen narrows, and Overview additionally asserts the manual series is absent and the reachable
   range shortens.
-- A test that an unresolvable id from the URL empties the screen while the same id from the cookie
-  does not.
+- A test that an unresolvable id empties the screen and explains, rather than widening it.
+- A test that a nav link from a filtered screen arrives filtered, and that clearing the filter
+  produces a bare path.
 
 ## Out of Scope
 
