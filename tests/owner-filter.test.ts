@@ -9,7 +9,7 @@
  * ever dropped: an id naming nobody has to survive parsing and empty the
  * screen, because dropping it would show the whole portfolio to someone who
  * asked for a slice of it. And the canonical spelling has to be a fixed point:
- * three loaders redirect a non-canonical `owner` to the canonical one, so a
+ * every loader redirects a non-canonical `owner` to the canonical one, so a
  * canonicalisation that is not idempotent is an infinite redirect loop nobody
  * sees until they open the screen.
  */
@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALL_OWNERS,
-  isCanonicalOwner,
+  canonicalOwnerSearch,
   isFiltered,
   ownerSearch,
   readOwnerFilter,
@@ -54,6 +54,12 @@ const PARSES: [address: string, selected: string[], why: string][] = [
   ["?owner=alice", ["alice"], "an id that is not digits at all is kept, and matches nothing"],
   ["?owner=2,alice,1", ["1", "2", "alice"], "digit ids first, in numeric order; the rest after"],
   ["?owner=1&owner=3", ["1", "3"], "a repeated parameter contributes both, rather than one"],
+  ["?owner=&owner=3", ["3"], "an empty first value does not swallow the id after it"],
+  ["?owner=a%26b", ["a&b"], "a decoded ampersand is one id, and must not become two parameters"],
+  ["?owner=a+b", ["a b"], "a plus decodes to a space, and the id keeps it"],
+  ["?owner=1%2C3", ["1", "3"], "a percent-encoded separator is still the separator"],
+  ["?owner=100%25", ["100%"], "a percent sign survives, and must survive being spelled again"],
+  ["?owner=%C3%A9", ["é"], "a non-ASCII id is kept, sorted after the digits"],
 ];
 
 describe("reading the filter off an address", () => {
@@ -64,8 +70,11 @@ describe("reading the filter off an address", () => {
   }
 
   it("treats an absent parameter and an empty one as the same household", () => {
-    expect(from("")).toEqual(ALL_OWNERS);
-    expect(from("?owner=")).toEqual(ALL_OWNERS);
+    // `toBe`, not `toEqual`: the unfiltered answer is the one frozen instance,
+    // so a caller that casts the readonly away and mutates it throws rather
+    // than quietly rewriting what every other screen reads.
+    expect(from("")).toBe(ALL_OWNERS);
+    expect(from("?owner=")).toBe(ALL_OWNERS);
     expect(isFiltered(from("?owner="))).toBe(false);
     expect(isFiltered(from("?owner=3"))).toBe(true);
   });
@@ -87,13 +96,29 @@ describe("reading the filter off an address", () => {
 
 describe("the canonical spelling", () => {
   it("is idempotent for every address the table above covers", () => {
-    // The string three loaders redirect *to*. A canonicalisation that is not a
+    // The string every loader redirects *to*. A canonicalisation that is not a
     // fixed point redirects forever, and nothing catches it before a reader does.
     for (const [address] of PARSES) {
       const once = from(address);
       expect(from(ownerSearch(once))).toEqual(once);
       expect(toOwnerParam(from(ownerSearch(once)))).toBe(toOwnerParam(once));
     }
+  });
+
+  it("encodes each id, so an id carrying a separator cannot become a second parameter", () => {
+    // Without the encode, `ownerSearch(["a&b"])` is `?owner=a&b` — an id
+    // injecting a parameter into the address a loader is about to redirect to.
+    expect(ownerSearch(["a&b"])).toBe("?owner=a%26b");
+    expect(from(ownerSearch(["a&b"]))).toEqual(["a&b"]);
+
+    // The separator itself stays literal, because a canonical generator that
+    // spelled it `%2C` would disagree with `toSearch` on every Holdings link.
+    expect(ownerSearch(["1", "3"])).toBe("?owner=1,3");
+  });
+
+  it("canonicalises what it is handed, so an unsorted filter has no second spelling", () => {
+    expect(toOwnerParam(["3", "1"])).toBe("owner=1,3");
+    expect(toOwnerParam(["3", "3"])).toBe("owner=3");
   });
 
   it("carries no owner parameter at all when the filter is off", () => {
@@ -109,21 +134,45 @@ describe("the canonical spelling", () => {
     expect(ownerSearch(["1", "3"])).toBe("?owner=1,3");
   });
 
-  it("reports an address as canonical only when it is already spelled that way", () => {
-    expect(isCanonicalOwner(new URLSearchParams("?owner=1,3"))).toBe(true);
-    expect(isCanonicalOwner(new URLSearchParams("?sort=value"))).toBe(true);
+  it("hands a loader the address to redirect to, with the rest of the query kept", () => {
+    const canonical = (search: string) => canonicalOwnerSearch(new URLSearchParams(search));
 
-    expect(isCanonicalOwner(new URLSearchParams("?owner=3,1"))).toBe(false);
-    expect(isCanonicalOwner(new URLSearchParams("?owner=3,3"))).toBe(false);
-    expect(isCanonicalOwner(new URLSearchParams("?owner=1&owner=3"))).toBe(false);
+    // Unchanged means no redirect.
+    expect(canonical("?owner=1,3")).toBe("?owner=1,3");
+    expect(canonical("?range=1m")).toBe("?range=1m");
+    expect(canonical("")).toBe("");
+
+    // Every second spelling of one view resolves to the first.
+    expect(canonical("?owner=3,1")).toBe("?owner=1,3");
+    expect(canonical("?owner=3,3")).toBe("?owner=3");
+    expect(canonical("?owner=1&owner=3")).toBe("?owner=1,3");
+    // Including the percent-encoded separator, which a verdict computed from
+    // the decoded values could not have told apart from the literal one.
+    expect(canonical("?owner=1%2C3")).toBe("?owner=1,3");
     // The unfiltered screen's spelling is no parameter at all, so an empty one
     // is a second URL for a view that already has one.
-    expect(isCanonicalOwner(new URLSearchParams("?owner="))).toBe(false);
+    expect(canonical("?owner=")).toBe("");
+
+    // The rest of the address is kept, and the owner parameter leads it. A
+    // target built from `ownerSearch` alone would drop a custom chart range.
+    expect(canonical("?range=custom&start=2026-01-01&owner=3,1")).toBe(
+      "?owner=1,3&range=custom&start=2026-01-01",
+    );
   });
 
-  it("reports its own output as canonical, for every address the table covers", () => {
+  it("is a fixed point, for every address the table covers", () => {
+    // A canonical address that is not one is an infinite redirect, and nothing
+    // notices until a reader opens the screen.
     for (const [address] of PARSES) {
-      expect(isCanonicalOwner(new URLSearchParams(ownerSearch(from(address))))).toBe(true);
+      const once = canonicalOwnerSearch(new URLSearchParams(address));
+
+      expect(canonicalOwnerSearch(new URLSearchParams(once))).toBe(once);
+    }
+
+    for (const search of ["?range=1m&owner=3,1", "?owner=1%2C3&sort=value", "?a=1&owner=&b=2"]) {
+      const once = canonicalOwnerSearch(new URLSearchParams(search));
+
+      expect(canonicalOwnerSearch(new URLSearchParams(once))).toBe(once);
     }
   });
 });
