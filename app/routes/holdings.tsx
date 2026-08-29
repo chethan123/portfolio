@@ -2,6 +2,7 @@ import { Form, Link, redirect } from "react-router";
 
 import { Amount, Delta } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
+import { NarrowedTo, OwnerFilterControl } from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
 import { isNegative } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
@@ -9,6 +10,7 @@ import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
   DIMENSIONS,
+  GROUPINGS,
   type DimensionId,
   type HoldingsQuery,
   type SortDirection,
@@ -27,6 +29,8 @@ import {
   toSearch,
 } from "~/lib/holdings-view";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
+import { ALL_OWNERS, isFiltered, readOwnerFilter, type OwnerFilter } from "~/lib/owner-filter";
+import { filterableOwners } from "~/lib/people.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
 
@@ -35,7 +39,6 @@ import { asOfView } from "../lib/prices.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/holdings";
-import { ALL_OWNERS } from "~/lib/owner-filter.ts";
 
 /**
  * Holdings — every position across every account, grouped and filterable.
@@ -73,6 +76,10 @@ export function meta() {
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const query = parseQuery(url.searchParams);
+  // Household-wide and not one of `query`'s own dimensions (ADR-0008): it
+  // followed the reader here from another screen and it follows them off this
+  // one. Read before the redirect below, because `toSearch` spells it.
+  const owners = readOwnerFilter(url.searchParams);
 
   // Canonicalise the URL before rendering anything.
   //
@@ -116,23 +123,36 @@ export async function loader({ request }: Route.LoaderArgs) {
   const editing = parseRowKey(url.searchParams.get("edit"));
   const saved = parseRowKey(url.searchParams.get("saved"));
 
-  const view = toSearch(query);
+  const view = toSearch(query, owners);
   // A receipt supersedes an editor rather than sitting beside one: `saved` is
   // where the write redirects to, and the row it names has just been closed.
   const canonical =
     saved !== null ? withRow(view, "saved", saved) : withRow(view, "edit", editing);
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
-  const [holdings, freshness] = await Promise.all([
+  const [household, freshness, roster] = await Promise.all([
     currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
+    filterableOwners(),
   ]);
+
+  // Narrowed in SQL, through the same predicate every other screen reads
+  // through, rather than by filtering `household` here — which would be a
+  // second implementation of one rule, free to disagree with the first about
+  // an id no person carries. A second round trip, and only while narrowed.
+  const holdings = isFiltered(owners) ? await currentHoldings(owners) : household;
 
   // The filter controls are built from *every* holding, not from the filtered
   // set: options that vanished as you narrowed would leave no way to widen
-  // again.
-  const filters = availableFilters(holdings, query);
+  // again. That now includes narrowing by owner, so they are built from
+  // `household` rather than from what the owner filter left.
+  const filters = availableFilters(household, query);
   const visible = applyFilters(holdings, query);
+
+  // Who the filter actually names, in the roster's order. An id naming nobody
+  // — or naming somebody whose accounts have all been closed, which is the same
+  // sentence to a reader — leaves this shorter than the selection.
+  const narrowedTo = roster.filter((person) => owners.includes(person.id));
 
   // The receipt quotes the database, never the URL.
   //
@@ -155,10 +175,24 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return {
     freshness,
+    /** The roster the control draws, and the selection it draws as ticked. */
+    roster: roster.map((person) => ({ id: person.id, name: person.name })),
+    owners,
+    narrowedTo: narrowedTo.map((person) => ({ id: person.id, name: person.name })),
+    /**
+     * The filter names an id the roster does not: a hand-typed one, or an owner
+     * whose accounts have all been closed. One sentence and one fix to a
+     * reader, so one state.
+     */
+    unknownOwner: isFiltered(owners) && narrowedTo.length < owners.length,
+    /** The selected owners hold nothing. Not an error, and not an empty instance. */
+    ownersHoldNothing: isFiltered(owners) && household.length > 0 && holdings.length === 0,
     // Distinguishes "nothing uploaded" from "this filter matched nothing" —
-    // two states that must not share a screen (§8.4).
-    hasHoldings: holdings.length > 0,
-    totalHoldings: holdings.length,
+    // two states that must not share a screen (§8.4). Both counted over every
+    // holding rather than over the narrowed set, or the owner filter would
+    // make an instance full of data look like an empty one.
+    hasHoldings: household.length > 0,
+    totalHoldings: household.length,
     accountCount: new Set(visible.map((holding) => holding.accountId)).size,
     filters,
     // A `Map` does not survive the trip to the browser; the component rebuilds
@@ -243,7 +277,10 @@ export async function action({ request }: Route.ActionArgs) {
     // fresh GET rather than the same elements re-rendered, and the confirmation
     // is forced to describe what the database says instead of what the
     // submission claimed.
-    const view = toSearch(parseQuery(url.searchParams));
+    // The owner filter comes off the same URL the row's identity does, so the
+    // correction returns to the narrowed view rather than to the household's.
+    // No hidden field: the form posts back to the address that opened it.
+    const view = toSearch(parseQuery(url.searchParams), readOwnerFilter(url.searchParams));
     throw redirect(`${url.pathname}${withRow(view, "saved", target)}`);
   } catch (error) {
     // The URL still names the row, so the editor is still open when this
@@ -326,6 +363,11 @@ function firstDirection(column: SortKey): SortDirection {
 
 export default function Holdings({ loaderData, actionData }: Route.ComponentProps) {
   const {
+    roster,
+    owners,
+    narrowedTo,
+    unknownOwner,
+    ownersHoldNothing,
     hasHoldings,
     totalHoldings,
     accountCount,
@@ -346,7 +388,12 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
 
   const query: HoldingsQuery = { filters: new Map(active), group, sort, direction };
   const shown = total.valueCoverage.total;
-  const filtered = active.length > 0;
+  // The owner filter counts here as much as this screen's own do. Without it a
+  // table narrowed to one person reads as the whole portfolio to anyone who did
+  // not set the filter — which is the honesty condition ADR-0008 attaches to
+  // the filter surviving navigation, and the notice below is where it is kept.
+  const filtered = active.length > 0 || isFiltered(owners);
+  const hidden = hiddenFields(query);
 
   // Everything one row needs to know about being the row that is open, gathered
   // once rather than threaded through `GroupBody` as six props it does not read.
@@ -364,7 +411,12 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
   // above already carries them through an Apply for exactly that reason — a
   // "Clear" beside it that quietly threw them away would undo more than it
   // says.
-  const cleared = toSearch({ ...query, filters: new Map() }) || ".";
+  //
+  // The owner filter is not this screen's to clear either, and for a stronger
+  // reason: it is household-wide, so clearing it from here would reach out and
+  // change what Overview shows next. "Show everyone" lives on the owner control
+  // itself, which is where the reader set it.
+  const cleared = toSearch({ ...query, filters: new Map() }, owners) || ".";
   const columns = columnsFor(group);
   // One column past the data columns: the row's own Edit control. It sorts by
   // nothing and sums to nothing, so it is not a `Column` — the array is what
@@ -373,10 +425,16 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
   const span = columns.length + 1;
   const labelSpan = columns.length - FIGURES;
 
+  // The one state that may say nothing has been uploaded, because it is the
+  // only one where nothing has been. An owner filter that reaches no holdings
+  // is an instance full of data this reading does not reach, and it falls
+  // through to the panel below — which is where this screen has always drawn
+  // "the question has an answer and it is nothing", and says so without the
+  // false claim.
   if (!hasHoldings) {
     return (
       <section className="page">
-        <Header freshness={freshness} />
+        <Header freshness={freshness} roster={roster} owners={owners} hidden={hidden} />
         <EmptyState>
           Every position across every account will be listed here, grouped and filterable.
           Nothing has been uploaded to this instance yet.
@@ -387,10 +445,10 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
 
   return (
     <section className="page">
-      <Header freshness={freshness} />
+      <Header freshness={freshness} roster={roster} owners={owners} hidden={hidden} />
 
-      <Filters filters={filters} query={query} />
-      <GroupBy query={query} />
+      <Filters filters={filters} query={query} owners={owners} />
+      <GroupBy query={query} owners={owners} />
 
       <div className="panel">
         <header className="panel-header">
@@ -403,15 +461,20 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
                 following your own bookmark. */}
             {filtered ? ` · filtered from ${totalHoldings}` : null}
           </p>
+          <NarrowedTo owners={narrowedTo} />
         </header>
 
         {shown === 0 ? (
           // Not the empty state above. The instance has data; this particular
           // question has no answer, and saying "there is no data yet" would be
-          // a different and false claim.
+          // a different and false claim. That is now three questions rather
+          // than one — this screen's own filters, an owner naming nobody, and
+          // owners who hold nothing — and each gets its own sentence and its
+          // own way out.
           <div className="panel-body panel-body--empty">
             <p className="empty-note">
-              {describe(filters)} <span className="u-data">{totalHoldings}</span>{" "}
+              {describe(filters, narrowedTo, unknownOwner)}{" "}
+              <span className="u-data">{totalHoldings}</span>{" "}
               {totalHoldings === 1 ? "holding is" : "holdings are"} recorded in all.
             </p>
             {/* The `.button--text` §7.2 names, and not a link inside the
@@ -420,9 +483,19 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
                 underlined 17px inline link — the only underlined-at-rest link
                 on the page — the same words pointing at the same URL were two
                 different components 280px apart. */}
-            <Link className="button button--text" to={cleared}>
-              Clear filters
-            </Link>
+            {active.length > 0 ? (
+              <Link className="button button--text" to={cleared}>
+                Clear filters
+              </Link>
+            ) : null}
+            {/* Its own way out, because the owner filter is not this screen's
+                to clear: it is household-wide, and this link says so by naming
+                everyone rather than by saying "clear". */}
+            {isFiltered(owners) ? (
+              <Link className="button button--text" to={toSearch(query, ALL_OWNERS) || "."}>
+                Show everyone
+              </Link>
+            ) : null}
           </div>
         ) : (
           <>
@@ -440,7 +513,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
                 <thead role="rowgroup">
                   <tr role="row">
                     {columns.map((column) => (
-                      <SortHeader key={column.key} column={column} query={query} />
+                      <SortHeader key={column.key} column={column} query={query} owners={owners} />
                     ))}
                     {/* Named for a screen reader and blank for everyone else:
                         a word over a column of icons would be a heading for a
@@ -514,7 +587,24 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
  * been closed is a fact about the URL, and telling the reader to look for an
  * overlap that was never the problem would waste their time.
  */
-function describe(filters: Route.ComponentProps["loaderData"]["filters"]): string {
+function describe(
+  filters: Route.ComponentProps["loaderData"]["filters"],
+  narrowedTo: Route.ComponentProps["loaderData"]["narrowedTo"],
+  unknownOwner: boolean,
+): string {
+  // The owner filter first, because it is the more fundamental fact: if the
+  // household cannot be read as these people at all, or they hold nothing,
+  // then what this screen's own selects say about the rest is beside the point.
+  if (unknownOwner) {
+    return "This view is set to an owner the household can no longer be read as — removed, or left holding only closed accounts.";
+  }
+
+  if (narrowedTo.length > 0 && filters.every((filter) => filter.selected === "")) {
+    const named = join(narrowedTo.map((person) => person.name));
+
+    return `${named} ${narrowedTo.length === 1 ? "holds" : "hold"} nothing that has been recorded here.`;
+  }
+
   const absent = filters.filter((filter) => filter.selectedIsAbsent);
 
   if (absent.length > 0) {
@@ -540,7 +630,17 @@ function join(parts: string[]): string {
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
 
-function Header({ freshness }: { freshness: FreshnessView }) {
+function Header({
+  freshness,
+  roster,
+  owners,
+  hidden,
+}: {
+  freshness: FreshnessView;
+  roster: Route.ComponentProps["loaderData"]["roster"];
+  owners: OwnerFilter;
+  hidden: Record<string, string>;
+}) {
   return (
     <header className="page-header">
       <div>
@@ -551,14 +651,43 @@ function Header({ freshness }: { freshness: FreshnessView }) {
       </div>
 
       <div className="page-actions">
+        <OwnerFilterControl owners={roster} selected={owners} hidden={hidden} />
         <PriceFreshness freshness={freshness} />
       </div>
     </header>
   );
 }
 
+/**
+ * This screen's own state, for the owner control's hidden fields.
+ *
+ * A GET form submits its own fields and nothing else, so changing the owner
+ * would otherwise reset the sort, the grouping and every dimension filter.
+ * Defaults are left out, for `toSearch`'s reason: the unfiltered table's URL is
+ * `/holdings`.
+ *
+ * `edit` and `saved` are not here and must never be. They are one thing you are
+ * doing to one row rather than how you are reading the table, and narrowing
+ * while a row is open must not carry a half-typed correction into a different
+ * view — the rule the loader states for every other control on this screen.
+ */
+function hiddenFields(query: HoldingsQuery): Record<string, string> {
+  const fields: Record<string, string> = {};
+
+  for (const dimension of DIMENSIONS) {
+    const value = query.filters.get(dimension.id);
+    if (value !== undefined) fields[dimension.id] = value;
+  }
+
+  if (query.group !== null) fields.group = query.group;
+  if (query.sort !== DEFAULT_SORT) fields.sort = query.sort;
+  if (query.direction !== DEFAULT_DIRECTION) fields.dir = query.direction;
+
+  return fields;
+}
+
 function groupTitle(group: DimensionId): string {
-  return `Grouped by ${(DIMENSIONS.find((dimension) => dimension.id === group)?.label ?? group).toLowerCase()}`;
+  return `Grouped by ${(GROUPINGS.find((dimension) => dimension.id === group)?.label ?? group).toLowerCase()}`;
 }
 
 /**
@@ -572,17 +701,25 @@ function groupTitle(group: DimensionId): string {
 function Filters({
   filters,
   query,
+  owners,
 }: {
   filters: Route.ComponentProps["loaderData"]["filters"];
   query: HoldingsQuery;
+  owners: OwnerFilter;
 }) {
   if (filters.length === 0) return null;
 
   const active = query.filters.size > 0;
-  const cleared = toSearch({ ...query, filters: new Map() }) || ".";
+  // Clears this screen's own filters and leaves the owner filter standing: it
+  // is household-wide, and "show everyone" belongs on the control that set it.
+  const cleared = toSearch({ ...query, filters: new Map() }, owners) || ".";
 
   return (
     <Form method="get" className="filter-bar" aria-label="Filter holdings">
+      {/* The owner filter travels with every other control on this screen, or
+          picking an account type would silently widen the table back to the
+          whole household. */}
+      {owners.length > 0 ? <input type="hidden" name="owner" value={owners.join(",")} /> : null}
       {query.group !== null ? <input type="hidden" name="group" value={query.group} /> : null}
       {query.sort !== DEFAULT_SORT ? <input type="hidden" name="sort" value={query.sort} /> : null}
       {query.direction !== DEFAULT_DIRECTION ? (
@@ -632,8 +769,8 @@ function Filters({
  * hint. Pointing `aria-labelledby` at the visible words is also what stops the
  * two names drifting apart the next time one of them is edited.
  */
-function GroupBy({ query }: { query: HoldingsQuery }) {
-  const chip = (id: DimensionId | null) => toSearch({ ...query, group: id });
+function GroupBy({ query, owners }: { query: HoldingsQuery; owners: OwnerFilter }) {
+  const chip = (id: DimensionId | null) => toSearch({ ...query, group: id }, owners);
 
   return (
     <div className="segmented-group">
@@ -644,7 +781,7 @@ function GroupBy({ query }: { query: HoldingsQuery }) {
         <Link to={chip(null) === "" ? "." : chip(null)} aria-current={query.group === null ? "true" : undefined} preventScrollReset>
           No grouping
         </Link>
-        {DIMENSIONS.map((dimension) => (
+        {GROUPINGS.map((dimension) => (
           <Link
             key={dimension.id}
             to={chip(dimension.id)}
@@ -669,9 +806,11 @@ function GroupBy({ query }: { query: HoldingsQuery }) {
 function SortHeader({
   column,
   query,
+  owners,
 }: {
   column: (typeof COLUMNS)[number];
   query: HoldingsQuery;
+  owners: OwnerFilter;
 }) {
   const active = query.sort === column.key;
   const next: SortDirection = active
@@ -689,7 +828,7 @@ function SortHeader({
     >
       <Link
         className="sortable"
-        to={toSearch({ ...query, sort: column.key, direction: next })}
+        to={toSearch({ ...query, sort: column.key, direction: next }, owners)}
         preventScrollReset
       >
         {column.label}

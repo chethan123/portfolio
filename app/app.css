@@ -3016,6 +3016,63 @@ code {
 }
 
 /*
+ * The owner filter's control (spec 0013).
+ *
+ * The filter bar's panel, in the page header's actions rather than on its own
+ * line: it is one dimension, not seven, and a full-width bar above the title
+ * would out-shout the screen it narrows. So the padding comes in, the
+ * checkboxes run along the bar instead of stacking, and `align-items: center`
+ * replaces `flex-end` — there is no label column here for a button to line up
+ * with the foot of.
+ */
+.owner-filter {
+  align-items: center;
+  gap: var(--space-base);
+  padding: var(--space-base) var(--space-md);
+}
+
+/* A row, not a column: the fieldset default stacks, and two or three names on
+ * one line is the whole control. `row-gap` is what keeps a household of six
+ * readable when it wraps. */
+.owner-filter-owners {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-md);
+  row-gap: var(--space-xs);
+}
+
+/* Each name is a `label.choice` — the inline variant the ingest forms already
+ * use for a checkbox and its sentence — so the box and the name are one hit
+ * target and read as a pair rather than as a stacked caption. */
+.owner-filter-owners > label.choice {
+  gap: var(--space-xs);
+  white-space: nowrap;
+}
+
+/* The actions sit next to the names rather than at the far edge of the header:
+ * `margin-left: auto` is right on a bar spanning the canvas and wrong on one
+ * sized to its contents. */
+.owner-filter .filter-actions {
+  margin-left: 0;
+}
+
+/*
+ * What a narrowed screen says beside the figure it narrowed (ADR-0008).
+ *
+ * The condition attached to the filter surviving navigation: a reader who set
+ * it two screens ago and forgot would otherwise read a household headline that
+ * quietly means something else. It is prose under the figure rather than a chip
+ * beside it, because a chip is a thing you stop seeing.
+ */
+.narrowed-to {
+  margin: var(--space-xs) 0 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--on-surface-variant);
+}
+
+/*
  * A column heading that sorts.
  *
  * The link inherits the header's type entirely — it is the same label doing one
@@ -3699,6 +3756,12 @@ code {
 
   .filter-actions {
     margin-left: 0;
+  }
+
+  /* Full width once the page header has stacked, so the control is not a
+   * narrow island under a 48px title. */
+  .owner-filter {
+    width: 100%;
   }
 }
 

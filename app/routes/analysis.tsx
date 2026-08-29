@@ -13,6 +13,7 @@ import {
   type GainGroups,
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { readCapitalGainsRate } from "~/lib/settings.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
@@ -21,7 +22,6 @@ import { asOfView } from "../lib/prices.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/analysis";
-import { ALL_OWNERS } from "~/lib/owner-filter.ts";
 
 /**
  * Analysis — the portfolio cut three ways, each as a ring beside its table.

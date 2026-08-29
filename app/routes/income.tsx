@@ -9,6 +9,7 @@ import {
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
 import { groupingBy, summarise } from "~/lib/holdings-view";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import type { ShelteredSubtotal } from "~/lib/allocation";
@@ -17,7 +18,6 @@ import { asOfView } from "../lib/prices.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/income";
-import { ALL_OWNERS } from "~/lib/owner-filter.ts";
 
 /**
  * Income — what the portfolio pays over the coming year, and how much of it is
