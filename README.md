@@ -144,13 +144,20 @@ the cost basis become boxes in their own columns, and Save records it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-owner-dark.png">
-  <img alt="The Overview narrowed to one owner: a checkbox per owner in the page header with Apply and Show everyone beside them, a smaller headline figure with the sentence &quot;Showing Alex Rivera only.&quot; beneath it, and a note on the chart saying the hand-typed history before the instance existed is the household's and is not drawn here" src="docs/screenshots/overview-owner-light.png">
+  <img alt="The Overview narrowed to one owner: the owner control open in the page header, showing a tick box per owner with Apply and Show everyone beneath them, a smaller headline figure with the sentence &quot;Showing Alex Rivera only.&quot; below it, and a note on the chart saying the hand-typed history before the instance existed is the household's and is not drawn here" src="docs/screenshots/overview-owner-light.png">
 </picture>
 
 "What does this look like for just Alex?" is a question about four screens, not one, so the answer
 is one selection that follows you across them: a control in the page header names the household's
 owners, and Overview, Holdings, Analysis and Income all read as whichever are chosen. The guide has
 the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way.
+
+- **The control is a disclosure, and that is a layout decision.** A row of tick boxes grows with the
+  household and wraps at a different width on each of the four screens, so the one control meant to
+  look identical everywhere was the one whose layout tracked how many people happened to be
+  recorded. Closed, it is a fixed shape that says who is being shown — a name or two, a count past
+  that. `<details>` is the browser's own disclosure, so this costs no JavaScript, as the custom
+  range picker beside it already showed.
 
 - **It is noise reduction, never privacy.** Anyone may set it, clear it, and set it to anybody; the
   gate at the front door is the only thing that keeps anyone out, and every family member sees

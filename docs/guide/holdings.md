@@ -8,7 +8,7 @@ Every position the household holds, in one table you can narrow, group and sort.
 
 There are seven dimensions. **Six work as both a filter and a grouping. Owner groups only** —
 narrowing to an owner is a household-wide reading you set once and carry across all four money
-screens, from the control at the top of this one. See
+screens, from the control at the top of this one — the button naming who you are looking at. See
 [reading a screen as one owner](owner-filter.md).
 
 - **Owner** — who the account belongs to. Grouping only; the control at the top does the narrowing.
