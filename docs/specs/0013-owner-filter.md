@@ -185,12 +185,15 @@ Ticket 02 carries both the shape and the consequence.
 
 ### The control
 
-A shared `OwnerFilterControl` in `app/components/`, drawn in the page header strip beside the chart
-range where a screen has one. It is a `<form method="get">` of checkboxes with an Apply button —
+A shared `OwnerFilterControl` in `app/components/`, drawn inside `<div className="page-actions">`
+within each screen's `<header className="page-header">` — the slot `PriceFreshness` already occupies.
+Not beside the chart range: Overview's range control lives in the hero section, not the header, so
+"beside the range" would name a different place on each screen. It is a `<form method="get">` of checkboxes with an Apply button —
 the `Filters` bar's shape (`app/routes/holdings.tsx:571-619`) — a React Router `<Form method="get">`, not a raw
 `<form>` — including its hidden fields, which is how a GET form changes one thing without resetting
-the others. It is built by extracting the shared parts of that bar rather than beside it, so there is
-one control shape and one options rule. No JavaScript is required, matching `ChartRangeControl`'s
+the others. It reuses that bar's CSS class and layout conventions and extracts no component from it: `Filters`
+is a `<select>`-per-dimension bar and this is a checkbox list, so what they share is a look rather
+than a shape. No JavaScript is required, matching `ChartRangeControl`'s
 custom-range disclosure.
 
 **It is not drawn at all** when fewer than two people own an open account — the spirit of

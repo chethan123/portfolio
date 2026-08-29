@@ -17,6 +17,31 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
 
 **Status:** ready-for-agent
 
+**The exports, by name and signature.** These are consumed by three later tickets, so they are
+fixed here rather than left to the implementer:
+
+```ts
+export type OwnerFilter = readonly string[];
+export const ALL_OWNERS: OwnerFilter;
+export function isFiltered(filter: OwnerFilter): boolean;
+
+/** Parse from a query string. Takes URLSearchParams, so a loader (which has a URL)
+ *  and a component (which has useSearchParams) can both call it. */
+export function readOwnerFilter(params: URLSearchParams): OwnerFilter;
+
+/** The canonical spelling, WITHOUT a leading "?" — e.g. `owner=1,3`, or "" when off. */
+export function toOwnerParam(filter: OwnerFilter): string;
+
+/** A complete search string for a navigation target, WITH the "?" — e.g. `?owner=1,3`,
+ *  or "" when off. This is what the shell puts in `to={{ pathname, search }}`. */
+export function ownerSearch(filter: OwnerFilter): string;
+```
+
+**The `?` is a real trap.** `toSearch` (`app/lib/holdings-view.ts:452`) returns its string *with* a
+leading `?`. Two functions exist here precisely so nobody concatenates two `?`-prefixed strings into
+`?sort=value&?owner=1`. `toOwnerParam` is the bare pair for composing; `ownerSearch` is the complete
+search for navigating. Nothing else returns a search string.
+
 **The type**
 
 - [ ] `OwnerFilter` is `readonly string[]` — owner ids as strings, because a `bigint` does not
@@ -41,6 +66,11 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
       roster at that point
 - [ ] Duplicates collapse: `owner=3,3` is `["3"]`
 - [ ] An empty value, a missing param, and a value of only separators all yield `ALL_OWNERS`
+- [ ] Whitespace around a separator is trimmed: `?owner=1, 3` is `["1","3"]`, not `["1"," 3"]`. An
+      untrimmed id would be "kept, matching nothing" and silently empty the screen
+- [ ] An empty segment is skipped, not kept: `?owner=1,,3` is `["1","3"]`
+- [ ] `?owner=0`, and any id that is only zeros, reduces to `"0"` after leading-zero stripping and is
+      kept — no person can have id 0, so it correctly matches nothing rather than becoming `""`
 - [ ] A syntactically plausible id is **kept**, whatever it names. Dropping it would widen the view,
       which `app/lib/holdings-view.ts:399-407` names as the hazard: *"dropping it would silently show
       the whole portfolio to someone who asked for a slice of it"*
@@ -93,7 +123,11 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
 
 - [ ] Every parse rule above, including the malformed ids, as a table of inputs
 - [ ] Sort is numeric: `10,9` and `9,10` produce one canonical spelling
-- [ ] All-selected normalises to `ALL_OWNERS` for a two-person and a four-person roster
+- [ ] Canonicalisation is idempotent: `canonical(canonical(x)) === canonical(x)` for every input in
+      the table. This module produces the string three loaders redirect to, so a non-idempotent
+      canonical spelling is an infinite redirect loop
+- [ ] **No roster test here.** All-selected-is-the-household needs the roster and therefore lives in
+      the control, in ticket 03 — this module never sees a roster
 - [ ] An unknown id is kept and narrows to nothing
 - [ ] A 25-digit id survives parsing unchanged — it is ticket 02's predicate that refuses it
 - [ ] `?owner=` empty and `owner` absent both yield `ALL_OWNERS`

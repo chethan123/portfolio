@@ -21,25 +21,45 @@ against Overview first would have created both.
       more, and its `accountCount` contract at `:41` is *"Accounts owned, open and closed alike"* —
       depended on by `removePerson` (`:135-146`) and rendered by the People screen. It cannot be
       narrowed in place
-- [ ] Add either an `openAccountCount` field or a separate `listOwnersWithOpenAccounts()` reader.
-      Whichever, `accountCount` keeps its meaning and the People screen is unchanged
+- [ ] Add an **`openAccountCount` field** to `Person`, computed in the same query with a filtered
+      count. Not a second reader: the People screen already pays for this query, `accountCount` keeps
+      its "open and closed alike" meaning for `removePerson`, and one query with two counts beats two
+      queries with one each
 - [ ] The roster is owners of at least one **open** account: `holding_valued` excludes closed
       accounts, so an owner with only closed ones narrows every screen to nothing
 
 **The control** (`app/components/owner-filter-control.tsx`)
 
-- [ ] Checkboxes, one per roster member, plus an Apply button, in the page header strip
-- [ ] It **shares the `.filter-bar` chrome** with `Filters` (`app/routes/holdings.tsx:571-619`) — the
-      wrapper, the Apply button, the Clear link. It is not an extraction of `Filters` itself, which
-      is a `<select>`-per-dimension bar and a different shape; claiming otherwise would mean
-      refactoring the very function this ticket rewrites
+- [ ] Checkboxes, one per roster member, plus an Apply button, rendered **inside
+      `<div className="page-actions">` within the screen's `<header className="page-header">`** —
+      the same slot `PriceFreshness` occupies on Holdings (`app/routes/holdings.tsx:542-557`). This
+      is the placement on all four screens. Note Overview's `ChartRangeControl` is *not* in the
+      header — it sits in the hero section (`app/routes/overview.tsx:424`) — so "beside the chart
+      range" would name a different place on every screen. The header is the one slot they share
+- [ ] It **reuses the `.filter-bar` CSS class and its layout conventions**, and extracts **nothing**
+      from `Filters` (`app/routes/holdings.tsx:571-619`). `Filters` is a `<select>`-per-dimension
+      bar; this is a checkbox list. They share a look, not a component. An adversarial reviewer will
+      ask whether this is a near-copy: the answer is that the shared part is CSS, extracting a
+      component from two controls with different inputs would be the more elaborate shape, and
+      spec 0013 agrees
+- [ ] `.filter-bar` (`app/app.css:2969`) styles `> div:not(.filter-actions)` (`:3008`) and `select`
+      (`:3013`); there is no checkbox-group rule. Add one, matching the file's existing conventions
+      — there is no formatter, so match what is around it
 - [ ] Hidden fields re-emit the host screen's other non-default params, so applying a filter does not
-      reset a sort or a range. (Note this is what preserves them — a React Router `<Form method="get">`
-      replaces the query exactly as a native one does; what it buys is client-side navigation)
+      reset a sort or a range. The control takes them as a **`hidden: Record<string, string>` prop**
+      supplied by each screen — Holdings passes `group`/`sort`/`dir`, Overview passes
+      `range`/`start`/`end`. The control knows nothing about any screen's vocabulary
+- [ ] `edit` and `saved` are **never** re-emitted: `app/routes/holdings.tsx:101-114` keeps them out
+      of `HoldingsQuery` precisely so every control drops them, and narrowing while a row is open
+      must not carry a half-typed correction
+- [ ] (A React Router `<Form method="get">` replaces the query exactly as a native one does; the
+      hidden fields are what preserve anything. What `<Form>` buys is client-side navigation)
 - [ ] A Clear affordance returning to the whole household, linking to `.` when the resulting search
       would be empty — the `|| "."` idiom at `app/routes/holdings.tsx:366`
 - [ ] **Not drawn** when fewer than two people own an open account
-- [ ] The checked owners are named in the control, not merely implied
+- [ ] The checkbox labels are the owners' names — that is the control naming them. The narration
+      sentence below is a **second, separate** element beside the figure; do not treat the checkbox
+      labels as satisfying it
 
 **Saying so in words**
 
@@ -89,18 +109,36 @@ source removes all three unless this ticket handles them:
       condition in the code already: *"Without this a filtered table looks like the whole portfolio
       to anyone who did not set the filter — including you, a day later, following your own
       bookmark."*
-- [ ] Decide and state what **Clear filters** (`:366`, `:581`) does with `owner`. Today it clears the
-      Owner select; after this ticket it will not, unless it is made to
+- [ ] **N is the household total** — every holding in the instance, as it means today. Not the
+      count before the dimension filters but after the owner filter, which would make the same
+      number mean two things depending on which control you had touched
+- [ ] **Clear filters** (`:366`, `:581`) clears this screen's own dimension filters and **leaves the
+      owner filter alone**. It is a screen-local control and the owner filter is household-wide;
+      clearing it from here would reach out and change what Overview shows next. The owner control
+      carries its own clear, which is where "show everyone again" lives. Say so in the button's
+      surroundings if the distinction is not obvious on screen
 
 **Holdings: carrying the param through every link**
 
 - [ ] `toSearch` (`app/lib/holdings-view.ts:438-453`) emits `owner`, taking it as **its own
       argument** rather than as a member of `HoldingsQuery` — a param `toSearch` writes but
       `parseQuery` refuses to read is a seam with a hole in it
+- [ ] **`owner` is emitted first**, before the dimensions, then `group`, `sort`, `dir`. The order is
+      fixed here because `toSearch` is the single definition of canonical spelling and the redirect
+      at `:121-123` compares against it. A control whose form serialises the fields in a different
+      order is fine — it costs one bounce through the redirect, which is already how every GET form
+      on this screen behaves (`ARCHITECTURE.md` §4.4)
+- [ ] **Test that canonicalisation is idempotent** — `toSearch` applied to its own output is
+      unchanged. If it is not, `url.search !== canonical` is permanently true and every request to
+      Holdings 302s forever. This is the highest-consequence failure in the ticket and it is silent
+      until someone opens the screen
 - [ ] Omitted entirely when the filter is off, so an unfiltered table's URL stays `/holdings`
 - [ ] The canonical redirect (`app/routes/holdings.tsx:121-123`) accounts for `owner`, roster-free
 - [ ] The filter bar's hidden fields carry `owner` alongside `group`, `sort`, `dir` (`:585-589`)
-- [ ] `edit` and `saved` keep working, and the action's redirect (`:246`) preserves the filter
+- [ ] `edit` and `saved` keep working, and the action's redirect (`:246`) preserves the filter by
+      reading `owner` from the **request URL** — the action already builds its target from
+      `toSearch(parseQuery(url.searchParams))`, so it reads the filter from the same URL and passes
+      it as `toSearch`'s new argument. No hidden field on the correction form
 
 **Holdings: narrowing, and the empty states**
 
@@ -110,10 +148,19 @@ source removes all three unless this ticket handles them:
 - [ ] Three empty states, told apart — and in the two filtered ones the **header strip and the
       control still render**, or the filter cannot be cleared from the screen it emptied. The early
       return at `:376-386` must therefore move below the header:
-      1. nothing uploaded to the instance — today's `EmptyState`, unchanged;
-      2. the filter names an owner no longer recorded — says so, with a clear link;
-      3. the filter names real owners who hold nothing — different words again, because an owner with
-         an open but empty account is in the roster and this is not an error
+      1. **nothing uploaded to the instance** — today's `EmptyState` and today's words, unchanged.
+         Only this state may say nothing has been uploaded;
+      2. **the filter names an owner you cannot filter by** — not recorded at all, or recorded but
+         owning no open account, which is the same sentence to a reader and the same fix. Covers the
+         hand-typed id and the owner whose accounts have all been closed;
+      3. **the filter names owners who hold nothing** — they are in the roster and this is not an
+         error, so the words must not sound like one
+- [ ] Write the copy yourself; no ticket dictates wording, because `docs/README.md` forbids documents
+      transcribing strings the code owns. `EmptyState` (`app/components/empty-state.tsx`) supplies
+      the fixed headline and takes the detail sentence as `children`, so all three states go through
+      it — this is a copy change, not a component change. Holdings' current detail at `:378-380` is
+      the register to match
+- [ ] States 2 and 3 each carry a link that clears the filter
 
 **Tests** (`tests/routes/holdings.test.ts`, `tests/holdings-view.test.ts`, and the nav assertion
 through `renderThroughLayout` in `tests/support/render.tsx` — `tests/support/routes.ts` drives
