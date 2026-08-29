@@ -413,6 +413,22 @@ async function prepare(pool: Pool): Promise<Fixture> {
   };
 }
 
+/**
+ * Open the owner filter's disclosure before shooting it.
+ *
+ * The control is a `<details>`, so a page loads with it closed and a capture
+ * would photograph a pill reading "Alex Rivera" — true, and not what these two
+ * shots are of. Opening it is the reader's own first action and a state the
+ * application draws itself; nothing here is hand-edited. The click is on the
+ * summary, so a change to the control's markup fails this rather than silently
+ * shooting the closed state.
+ */
+async function openOwnerFilter(page: Page): Promise<void> {
+  const summary = page.locator(".owner-filter > summary");
+  await summary.click();
+  await page.locator(".owner-filter[open]").waitFor({ state: "visible" });
+}
+
 /** The README's shots: both themes, plus the two phone ones. */
 async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Promise<void> {
   console.log("\nREADME — docs/screenshots/");
@@ -430,6 +446,7 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     // owners named beneath it, and the pre-app line withheld. A control nobody
     // can see in the README is a feature nobody knows exists.
     await visit(page, `/?owner=${ownerId}`);
+    await openOwnerFilter(page);
     await shoot(page, `docs/screenshots/overview-owner-${theme}.png`);
 
     // The one range that is not a span of days (ADR-0006). Shot separately
@@ -517,6 +534,7 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
   await visit(page, "/holdings?group=assetClass");
   await shoot(page, "docs/guide/images/holdings-grouped.png");
   await visit(page, `/holdings?owner=${ownerId}`);
+  await openOwnerFilter(page);
   await shoot(page, "docs/guide/images/holdings-owner.png");
   await visit(page, `/holdings?account=${brokerage}&edit=${editRow}`);
   await page.locator("table").first().screenshot({

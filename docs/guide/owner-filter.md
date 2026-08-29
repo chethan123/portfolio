@@ -7,24 +7,27 @@ read as one owner instead — or as two of five, or as everyone but one.
 
 ## How to narrow
 
-The control is in the header of each of those four screens, at the top right: a tick box per owner
-and an **Apply** button.
+The control is in the header of each of those four screens, at the top right. Closed, it is a single
+button saying who you are looking at — **Everyone**, until you say otherwise.
 
-1. Tick one or more names.
-2. Press **Apply**.
+1. Click it. A tick box per owner drops down.
+2. Tick one or more names.
+3. Press **Apply**.
 
-Every figure on the screen is now those owners': the total, the chart, every table, every ring,
-every subtotal.
+Nothing changes until you press Apply: the boxes are a form, and ticking one only fills it in.
+
+Every figure on the screen is then those owners': the total, the chart, every table, every ring,
+every subtotal. The button says who — a name or two while there are few enough to read, a count past
+that — so a filter you set on another screen is never invisible.
 
 Three things on Holdings deliberately stay the household's, because their whole job is to tell you
 what the narrowing left out — the "filtered from" count, the "recorded in all" figure beside an empty
 table, and the filter dropdowns, whose options are read from every holding so that narrowing can
 never leave you without a way to widen again.
 
-**To widen again**, press **Show everyone**. It sits beside Apply whenever a filter is applied — so
-it is there to be pressed on the narrowed screen you are reading, not the moment you tick a box.
-Nothing happens until Apply either way: the boxes are a form, and the screen only changes when you
-submit it.
+**To widen again**, open the control and press **Show everyone**, which sits beside Apply whenever a
+filter is applied. A screen the filter has emptied puts that link on the page as well, so the way out
+of a screen showing nothing is always on the screen showing nothing.
 
 Ticking every name is the same as no filter at all — everybody is the household — so the app says so
 by tidying the address back to the unnarrowed one.
