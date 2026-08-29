@@ -15,6 +15,12 @@ why their new screen will not compile.
 
 **Status:** ready-for-agent
 
+**CONTEXT.md**
+
+- [ ] The **Owner filter** entry is re-read against what shipped. It was written while the design
+      still had a cookie, and "standing choice" would be wrong for something that lives only in the
+      address of the page being read
+
 **ARCHITECTURE.md**
 
 - [ ] §4.2's single-site invariant list gains the owner filter: household-scoped readers require it,
@@ -54,7 +60,8 @@ why their new screen will not compile.
 
 **Screenshots**
 
-- [ ] `scripts/seed-demo.ts` seeds exactly two owners, Alex and Jordan Rivera (`:279-367`) — the
+- [ ] `scripts/seed-demo.ts` seeds exactly two owners, Alex and Jordan Rivera (`PEOPLE` at `:145`),
+      and no closed accounts, so the control draws — the
       minimum for the control to draw. Do not add a third: two is enough to photograph the control,
       and changing the demo household changes every committed figure
 - [ ] All shots retaken with `scripts/capture-screenshots.ts` against the demo household, never

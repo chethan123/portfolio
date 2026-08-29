@@ -118,10 +118,10 @@ screen says "owned by" rather than naming the record.
 _Avoid_: holder, beneficiary, account user.
 
 **Owner filter**:
-The household's standing choice to read every screen as one or more owners rather than as everyone.
-A way of narrowing what is shown and never of deciding what may be seen — every family member may
-set it, clear it, and set it to anybody. Off means the whole household, which is what a screen shows
-until somebody says otherwise.
+The choice to read every screen as one or more owners rather than as everyone. A way of narrowing
+what is shown and never of deciding what may be seen — every family member may set it, clear it, and
+set it to anybody. It belongs to the reading in progress rather than to the household, and it lasts
+only as long as that reading; off means the whole household, which is where every reading starts.
 _Avoid_: user filter, person filter, lens, view-as, my view.
 
 ### What a screen shows in public

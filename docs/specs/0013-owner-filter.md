@@ -32,9 +32,8 @@ projection.
 This is the deferred half of DESIGN.md §8.3, which records that the dashboards "are not five
 features — they are one query shape with different arguments", lists `holdings by user` and
 `…by person over time` among them, and names *persisting the Holdings table's filter and group
-state, and adding a measure picker* as most of the remaining work — this slice does the first half
-of that pair. This slice does the filter half of that, for one dimension,
-across every screen — and leaves the builder itself deferred.
+state, and adding a measure picker* as most of the remaining work. This slice does the first half of
+that pair, for one dimension, across every screen — and leaves the builder itself deferred.
 
 The plumbing is already waiting. `readHoldings(db, source, where?)`
 (`app/lib/valuation.server.ts:203-217`) takes an optional predicate, and its docstring says the
@@ -77,12 +76,18 @@ breaks.
 - ids are sorted numerically and de-duplicated;
 - a selection naming **every** account-owning person normalises to `ALL_OWNERS`;
 - an empty selection is `ALL_OWNERS` — "nobody" is not a view;
-- a non-digit id is **kept**, not dropped, and the predicate matches nothing — dropping it would
-  widen the view, which is the failure `app/lib/holdings-view.ts:399-407` exists to prevent;
-  `isAccount` (`app/lib/valuation.server.ts:370-384`) takes the same position, keeping the bad id and
-  emitting `false` so "no such row" comes out of the query rather than out of an early return. Its
-  guard is `/^\d+$/` and nothing more, so this slice adds the length guard it lacks — an id past
-  `bigint`'s range currently reaches Postgres and 500s;
+- **no id is ever dropped**, whatever it looks like. Dropping widens the view, which is the failure
+  `app/lib/holdings-view.ts:399-407` exists to prevent; `isAccount`
+  (`app/lib/valuation.server.ts:370-384`) takes the same position, keeping the bad id and emitting
+  `false` so "no such row" comes out of the query rather than out of an early return. The
+  syntactic guard therefore lives in the predicate, never at parse: `isOneOf` emits `false` for
+  anything failing `/^\d+$/` **or longer than 18 digits**. That length bound is this slice's addition
+  — `isAccount` has only the digit test, so `/accounts/99999999999999999999999` currently reaches
+  Postgres and 500s on an out-of-range `bigint`; generalising the guard fixes that too;
+- ids are ordered by a **total order that does not use `Number()`**: digit-only ids first, by length
+  then lexicographically — which is numeric ordering for equal-length strings and avoids `NaN` from a
+  `Number(a) - Number(b)` comparator on a non-digit id, which would make the canonical spelling
+  implementation-defined and a redirect-to-canonical loop possible;
 - a request whose `owner` param is not already in canonical spelling is redirected to the one that
   is, before any database work.
 
@@ -91,25 +96,41 @@ breaks.
 chart range, this slice adds no persistence: ADR-0008 records why, and the consequence is that
 closing the tab forgets the filter structurally rather than by a chosen cookie lifetime.
 
-**It travels between screens on the navigation links.** `NAVIGATION` in `app/root.tsx:115-120` is a
-list of bare paths rendered through the `NavItems` component (`:129`), and a bare path makes
-`NavLink` drop the query string — which is exactly why the filter does not survive a nav click
-today. The links become `to={{ pathname, search }}`, reading the search once in the shell. That is
-the entire carry mechanism.
+**It travels between screens on the navigation links, carrying the owner param and nothing else.**
+`NAVIGATION` in `app/root.tsx:115-120` is a list of bare paths rendered through `NavItems` (`:129`),
+and a bare path makes `NavLink` drop the query — which is exactly why the filter does not survive a
+nav click today. Each link becomes `to={{ pathname, search: <the canonical owner param> }}`.
 
-`NavItems` is rendered four times, though, and only two of them should carry: the desktop rail
-(`:199`) and the mobile drawer (`:240`) render `NAVIGATION`, while `:202` and `:241` render
-`FOOTER_NAVIGATION`, which is Settings — a screen this filter does not touch. So the carry is a prop
-on `NavItems` rather than a change inside it.
+**Not the whole search string.** Carrying `location.search` verbatim would drag `range`, `start`,
+`sort` and `edit` onto screens that do not own them: a nav click from a custom-ranged Overview would
+bounce through Holdings' canonical redirect every time, and a click from a mid-correction Holdings
+would carry a half-typed row key — the exact thing `app/routes/holdings.tsx:230-243` exists to
+prevent.
+
+`NavItems` is rendered four times, and only two should carry: the desktop rail (`:199`) and the
+bottom bar (`:240`) render `NAVIGATION`, while `:202` and `:241` render `FOOTER_NAVIGATION`, which is
+Settings — a screen this filter does not reach. So the carry is a prop on `NavItems` rather than a
+change inside it.
 
 Two consequences worth stating plainly, because they are the price of the simplicity:
 
 - Typing `/holdings` by hand, or opening an old bookmark, starts unfiltered. For a self-hosted
   instance read by one family, that is not a defect worth a cookie.
-- Every link **out** of a filtered screen that should stay filtered has to carry the search. The nav
-  is the main path; the account rows are deliberately not (an account screen ignores the filter), and
-  the masking and refresh controls already round-trip `pathname + search` through their `redirectTo`
-  field (`app/components/masking-toggle.tsx:77`).
+- **Every link out of a filtered screen either carries the param or ends the reading**, and each one
+  is a decision rather than an oversight:
+
+| Link | `file:line` | Carries? |
+|---|---|---|
+| The four main nav items, rail and bottom bar | `app/root.tsx:199`, `:240` | **yes** — the main path |
+| The brand tile, rendered twice | `app/root.tsx:153`, via `:197` and `:219` | **yes** — it is a nav item in all but name, and landing on an unfiltered Overview from a filtered Holdings would be the most-clicked way to lose the filter |
+| Account detail's "Overview" link | `app/routes/account.tsx:333` | **yes** — this closes the round trip the account exemption opens: Overview → an account row → back |
+| Settings, in the footer nav | `app/root.tsx:202`, `:241` | **no** — Settings ignores the filter, and a param it never reads should not appear in its URL |
+| The upload flow, and its `?uploaded=` return | `app/root.tsx:209`, `app/routes/upload/review.tsx:79` | **no** — same reason |
+| The error page's "go back to it" | `app/components/error-page.tsx:62` | **no** — a recovery path starts clean |
+| Masking and Refresh | `app/components/masking-toggle.tsx:77`, `app/components/price-freshness.tsx:55` | **already do** — both round-trip `pathname + search` through `redirectTo`, and `safeReturn` (`app/lib/return-path.ts:34`) returns it intact |
+
+  The consequence of the two "no"s is stated in ADR-0008: an excursion into Settings or an upload
+  ends the reading, and the filter must be set again. That is accepted.
 
 **An id that names nobody is kept**, the predicate matches nothing, the screen shows its empty state,
 and that state says the filter names an owner who is no longer recorded, with a link that clears it.
@@ -206,7 +227,7 @@ shipped screen and lands first, as ticket 00, rather than riding inside the larg
 | Screen | Behaviour |
 |---|---|
 | **Overview** | Headline, delta, chart, accounts rollup and allocation all narrow. The manual prefix is not drawn while narrowed, and the chart's earliest reachable date becomes the selected owners' first recorded position — so **All** shortens and long presets may disable, as they already do on an account. |
-| **Holdings** | `owner` leaves `DIMENSIONS` as a *filter* and stays as a *grouping*. The table narrows through the lens instead, and — being the one screen that filtered in memory — now narrows in SQL. |
+| **Holdings** | `owner` leaves `DIMENSIONS` as a *filter* and stays as a *grouping*. The table narrows through the owner filter instead, and — being the one screen that filtered in memory — now narrows in SQL, which means keeping three safeguards its own comments demand: the facets stay built from every holding, "nothing uploaded" stays distinct from "this filter matched nothing", and the `filtered from N` notice still appears. |
 | **Analysis** | All four panels narrow, including "Net worth by person", which is retitled **"Net worth by owner"** to match the glossary. The capital-gains rate is unchanged: it is the household's, not an owner's. |
 | **Income** | Annual dividend, weighted yield, the sheltered/taxable subtotal and both breakdowns narrow. |
 | **Account detail, upload flow, Settings** | Untouched. No control drawn, filter ignored. |
@@ -218,10 +239,15 @@ shipped screen and lands first, as ticket 00, rather than riding inside the larg
 | 00 | [Range links stop replacing the whole query](owner-filter/00-range-links-stop-replacing-the-query.md) | Nothing |
 | 01 | [The owner filter, parsed, normalised and carried](owner-filter/01-the-filter-itself.md) | Nothing |
 | 02 | [Narrowing the valuation readers](owner-filter/02-narrowing-the-readers.md) | 01 |
-| 03 | [The control, and Overview reading as an owner](owner-filter/03-control-and-overview.md) | 00, 01, 02 |
-| 04 | [Holdings folds its Owner dimension into the filter](owner-filter/04-holdings.md) | 03 |
+| 03 | [The control, the navigation carry, and Holdings reading it](owner-filter/03-control-nav-and-holdings.md) | 01, 02 |
+| 04 | [Overview reads as an owner](owner-filter/04-overview.md) | 00, 03 |
 | 05 | [Analysis and Income read as an owner](owner-filter/05-analysis-and-income.md) | 03 |
 | 06 | [The standing rule, the guide, and the screenshots](owner-filter/06-the-standing-rule.md) | 04, 05 |
+
+**Holdings comes before Overview on purpose.** It is the one screen that already has an Owner
+select, so the control replaces one rather than appearing beside one — no step in the sequence
+leaves a person unable to narrow by owner, and no step lets the control emit `?owner=1,3` at a
+parser that understands only a single value.
 
 ## Testing
 
@@ -229,7 +255,8 @@ Postgres-backed, through the builders in `tests/support/fixtures.ts` and the rou
 `tests/support/routes.ts`, per the house rules.
 
 - `tests/owner-filter.test.ts` — the pure module: parse, normalise (sort, dedupe, all-selected,
-  empty, malformed), serialise, and resolve — presence of the param and nothing else.
+  empty, malformed), the total ordering, serialise, and resolve — presence of the param and nothing
+  else. Plus the nav helper: it emits the owner param alone, never the caller's other params.
 - `tests/valuation-owner-filter.test.ts` — every household reader that takes the filter narrows; two owners sum to the
   household total at exact decimal strings; the series readers narrow **inside** the lateral, proven
   by a date on which only the excluded owner has a position set still appearing on the line;
@@ -242,16 +269,20 @@ Postgres-backed, through the builders in `tests/support/fixtures.ts` and the rou
   takes the `DIMENSIONS` and `toSearch` assertions. Each asserts its screen narrows, and Overview additionally asserts the manual series is absent and the reachable
   range shortens.
 - A test that an unresolvable id empties the screen and explains, rather than widening it.
-- A test that a nav link from a filtered screen arrives filtered, and that clearing the filter
-  produces a bare path.
+- **The three empty states, told apart on every filtered screen**: nothing uploaded to the instance;
+  the filter names an owner no longer recorded; the filter names real owners who hold nothing. The
+  second and third must still render the page header and the control, or the filter cannot be
+  cleared from the screen it emptied.
+- A nav-carry test asserting the rendered markup, through `renderThroughLayout`
+  (`tests/support/render.tsx`) — not through `tests/support/routes.ts`, which drives loaders only.
 
 ## Out of Scope
 
 - **The saved view builder** (DESIGN.md §8.3). This slice persists one dimension's filter across
   screens; it does not add a measure picker, a dimension picker, or a stored view.
-- **Making the other six Holdings dimensions household-wide.** Only `owner` becomes a lens. Whether
+- **Making the other six Holdings dimensions household-wide.** Only `owner` becomes household-wide. Whether
   tax treatment or asset class should follow is a question this slice deliberately leaves open, and
-  the answer may well be the builder rather than six more lenses.
+  the answer may well be the builder rather than six more of these.
 - **Joint ownership.** DESIGN.md §4.2 and §14 record single-owner as accepted debt; a filter over
   `owner_id` is one predicate precisely because of it. Nothing here makes the debt harder to pay.
 - **Per-owner pre-app history.** §7 rule 3 stands: the manual series has no structure to slice, and

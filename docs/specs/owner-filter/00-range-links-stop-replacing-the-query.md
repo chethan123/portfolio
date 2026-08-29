@@ -31,7 +31,7 @@ carries no part of the filter and could have been filed as a bug without this sl
 - [ ] The default preset keeps whatever behaviour the header comment at `:16-20` describes — it
       deliberately stopped linking to `.` because the cookie would win, and that reasoning still holds
 
-**Tests** (`tests/routes/account.test.ts`, or wherever the account screen's tests live)
+**Tests** (`tests/routes/account.test.ts`)
 
 - [ ] Clicking a range preset on `/accounts/:id?uploaded=<setId>` preserves `uploaded`, and the
       receipt is still rendered — the reproducing case for the bug

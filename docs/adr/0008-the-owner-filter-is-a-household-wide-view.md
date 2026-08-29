@@ -38,7 +38,8 @@ The cost is a real one and is paid deliberately: a filter that survives navigati
 and the number it silently redefines is the Overview headline. Two things keep that honest.
 
 **The URL is the whole of the state.** There is no cookie and nothing stored. The filter travels
-between screens because the navigation links carry the search string — `NAVIGATION` in
+between screens because the navigation links carry **the owner param** — not the whole query string,
+which would drag one screen's sort or half-typed correction onto another. `NAVIGATION` in
 `app/root.tsx:115-120` is bare paths today, and bare paths are why a `NavLink` drops the query. So
 the filter lasts exactly as long as the URL does: close the tab and the household is back, not
 because a cookie lifetime was chosen well but because there is nothing left to remember it. A link
@@ -52,6 +53,13 @@ was the wrong trade.
 
 **And every screen reading a narrowed figure states the owners in words** beside the figure, never
 as a highlighted chip alone.
+
+Two costs come with holding the state only in the address, and both are accepted rather than hidden.
+A hand-typed path or an old bookmark starts unfiltered. And any excursion to a screen the filter does
+not reach — Settings, the upload flow — ends the reading: those links deliberately do not carry the
+param, so there is no filtered way back and the filter must be set again. For a filter whose job is
+to answer one question and then get out of the way, ending when the question does is the right
+behaviour, not a defect.
 
 ## Why the hand-typed history disappears under it
 

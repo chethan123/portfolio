@@ -11,7 +11,7 @@ large enough to be worth a reviewer's separate sitting. Analysis carries the one
 the panel grouped by owner narrows like everything else, which leaves it with a single slice at 100%
 when one owner is selected. That is deliberate, and ADR-0008 records why.
 
-**Blocked by:** 03 — it needs the control.
+**Blocked by:** 03 — it needs the control and the navigation carry.
 
 **Status:** ready-for-agent
 
@@ -30,6 +30,9 @@ when one owner is selected. That is deliberate, and ADR-0008 records why.
 - [ ] The capital-gains rate is untouched: it is the household's number, not an owner's, and the
       potential-tax figures narrow only because the gains they apply to do
 - [ ] The owners are named beside the figures, per ADR-0008
+- [ ] The early return at `app/routes/analysis.tsx:230-238` fires on `holdingCount === 0` and renders
+      no header strip. It moves below the header, and the three empty states are told apart as in
+      ticket 03 — only the genuinely empty instance may say nothing has been uploaded
 
 **Income**
 
@@ -40,6 +43,7 @@ when one owner is selected. That is deliberate, and ADR-0008 records why.
 - [ ] Weighted yield is recomputed over the narrowed set — it is a ratio of the group in view, per
       `CONTEXT.md`'s **Weighted yield**, and must not be carried over from the household
 - [ ] The owners are named beside the figures
+- [ ] The same empty-state move for `app/routes/income.tsx:152-159`
 
 **Tests** — and note these files **do not exist yet**. Neither screen has a route test today; the
 two loaders are exercised only by `tests/invariants/aggregates-agree.test.ts:36-37`. This ticket
@@ -54,3 +58,5 @@ than its diff suggests
       ratio
 - [ ] The capital-gains rate is unchanged by the filter
 - [ ] Both screens preserve the filter across their own controls
+- [ ] Each of the three empty states on each screen, with the control still rendered in the two
+      filtered ones

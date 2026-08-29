@@ -27,6 +27,10 @@ three predicates, and it can be read for correctness without any argument about 
       reader passes no predicate, so no call site branches on an `undefined` return
 - [ ] An id that cannot be a `bigint` yields `false` rather than an early return, so "no such owner"
       comes out of the query — `isAccount`'s reason at `:370-379`
+- [ ] The guard is `/^\d+$/` **and a length bound of 18 digits**. `isAccount` has only the first, so
+      `/accounts/99999999999999999999999` reaches Postgres today and 500s on an out-of-range
+      `bigint`; generalising the guard fixes that as a side effect. 18 digits maxes at
+      999,999,999,999,999,999, comfortably inside `bigint`, so nothing valid is ever refused
 - [ ] It is called with the column each source exposes: `holding_valued.owner_id`, `v.owner_id`,
       `a.owner_id`, and unaliased `account.owner_id` in `accountTotals`. `isAccount` already lives
       with five such columns (`:491`, `:524`, `:617`, `:836`, `:966`), so the awkwardness is not new
@@ -73,7 +77,13 @@ three predicates, and it can be read for correctness without any argument about 
 
 **Call sites**
 
-- [ ] All ten production call sites — every one is in a route loader — pass `ALL_OWNERS` explicitly
+- [ ] All **nine** production call sites — every one in a route loader — pass `ALL_OWNERS`
+      explicitly: `overview.tsx:113,133,134,137,138`, `analysis.tsx:184,185`, `income.tsx:66`,
+      `holdings.tsx:126`
+- [ ] `holdingsAt` and `netWorthAt` gain a required argument that **no shipped code passes** — they
+      have no production callers. That is intended, not an oversight: they are the dated twins of the
+      two readers every screen uses, and a future screen reaching for them should face the same
+      question
 - [ ] No call site passes a literal `[]`
 - [ ] The roughly one hundred test call sites are updated mechanically; that noise is the bulk of the
       diff and is expected
@@ -90,6 +100,9 @@ three predicates, and it can be read for correctness without any argument about 
 - [ ] `accountTotals` narrowed still reports an owned account that holds nothing as `0.0000`
 - [ ] `netWorthChange` narrowed compares owner to owner on both ends
 - [ ] An owner id naming nobody yields empty results rather than an error
+- [ ] A 25-digit owner id yields empty results rather than a Postgres range error
+- [ ] `/accounts/99999999999999999999999` now 404s rather than 500ing — the reproducing case for the
+      guard `isAccount` was missing
 - [ ] An owner whose accounts are all closed yields no holdings but a real `firstRecordedDate`
 - [ ] `firstRecordedDate` narrowed returns the selected owners' first position set, not the
       household's

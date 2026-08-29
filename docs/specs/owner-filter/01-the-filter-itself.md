@@ -29,8 +29,13 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
 **Parsing `?owner=`**
 
 - [ ] `owner=3` yields `["3"]`; `owner=1,3` yields `["1","3"]`
-- [ ] Ids are sorted numerically, not lexically — `owner=10,9` is `["9","10"]`, so two spellings of
-      one selection cannot both be canonical
+- [ ] Ids are ordered by a **total order that never calls `Number()`**: digit-only ids first, by
+      length then lexicographically — numeric ordering for equal-length strings — and any other id
+      last, lexicographically. `owner=10,9` is `["9","10"]`. A `Number(a) - Number(b)` comparator
+      returns `NaN` on a non-digit id, which makes `sort` implementation-defined, the canonical
+      spelling undefined, and a redirect-to-canonical loop possible
+- [ ] Leading zeros are stripped from a digit-only id before de-duplication, so `?owner=03,3` is one
+      selection and not two
 - [ ] Canonicalisation is **roster-free**: sort, de-duplicate, drop nothing. It must stay pure, because
       three screens redirect a non-canonical param *before any database work* and cannot know the
       roster at that point
@@ -39,11 +44,11 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
 - [ ] A syntactically plausible id is **kept**, whatever it names. Dropping it would widen the view,
       which `app/lib/holdings-view.ts:399-407` names as the hazard: *"dropping it would silently show
       the whole portfolio to someone who asked for a slice of it"*
-- [ ] `isOneOf` (ticket 02) emits `false` for an id that cannot be a `bigint`, so "no such owner"
-      comes out of the query — `isAccount`'s posture at `app/lib/valuation.server.ts:370-384`, whose
-      guard is `/^\d+$/` and nothing more
-- [ ] A value over 18 digits is refused at parse — the one genuine addition, since `isAccount` lacks
-      it and an out-of-range bigint currently reaches Postgres and 500s
+- [ ] **Nothing is refused at parse, including a 25-digit id.** The syntactic guard lives in
+      `isOneOf` (ticket 02), which emits `false` for anything failing `/^\d+$/` or longer than 18
+      digits, so "no such owner" comes out of the query. Guarding at parse would drop the id, and a
+      selection of only dropped ids would normalise to the whole household — the widening this rule
+      exists to prevent, two bullets above
 - [ ] Parsing never throws and never rejects: a hand-edited param produces a filter, never an error
       page, matching `parseQuery`'s rule at `app/lib/holdings-view.ts:399-407`
 
@@ -78,9 +83,10 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
 
 **Carrying it between screens**
 
-- [ ] A helper the shell can use to append the current search to a navigation target, since
-      `NAVIGATION` (`app/root.tsx:115-120`) is bare paths and a bare path makes `NavLink` drop the
-      query. It belongs here rather than in the component so it is testable without a router
+- [ ] A helper the shell uses to build a navigation target's search. It emits **the canonical owner
+      param and nothing else** — never the caller's whole `location.search`, which would drag
+      `range`, `sort` or a half-typed `edit` row key onto a screen that does not own it
+- [ ] It belongs here rather than in the component, so it is testable without a router
 - [ ] It is exported and used by nothing yet; ticket 03 wires the nav
 
 **Tests** (`tests/owner-filter.test.ts`)
@@ -89,7 +95,8 @@ lesson at `:554-558`: a hand-typed param must fall through, never match somethin
 - [ ] Sort is numeric: `10,9` and `9,10` produce one canonical spelling
 - [ ] All-selected normalises to `ALL_OWNERS` for a two-person and a four-person roster
 - [ ] An unknown id is kept and narrows to nothing
-- [ ] An id of 25 digits is refused at parse and never reaches Postgres
+- [ ] A 25-digit id survives parsing unchanged — it is ticket 02's predicate that refuses it
 - [ ] `?owner=` empty and `owner` absent both yield `ALL_OWNERS`
-- [ ] The nav helper appends a filtered search to a bare path, and leaves a bare path bare when the
-      filter is off
+- [ ] The nav helper emits the owner param alone: given a filtered screen's full search it returns
+      only `owner`, and given no filter it returns `""`
+- [ ] The total order is deterministic for a selection mixing digit and non-digit ids
