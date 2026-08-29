@@ -41,11 +41,20 @@ disabled rather than a click that silently does the same thing All already does.
 different reason: an instance whose price refresh has never run during market hours has no session
 to draw yet.
 
+**Narrowing to an owner can grey more of them out**, because a narrowed chart reaches back only as
+far as the selected people's own first recorded holdings — see the dashed line below. The options
+come back the moment you press **Show everyone**.
+
 The choice lives in the address bar as `?range=3m` (or, for Custom, `?range=custom&start=…&end=…`). So it
 survives a reload, you can bookmark it, and you can send the address to the other person in the
 household and they will see the same window you did. Absent an address-bar range, this browser
 reopens on whichever range you picked here last time, remembered in a cookie — a convenience, not a
 household setting, so it is not in Settings and does not follow you to another browser.
+
+The owner control beside it works the other way round on purpose: it is the address and nothing
+else, with no cookie behind it, so a fresh tab always opens on the whole household. A remembered
+range shows you the same shape of the same money; a remembered owner would quietly show you a
+smaller total. See [reading a screen as one owner](owner-filter.md#it-lasts-as-long-as-the-address-does).
 
 ## Reading a point off the line
 
@@ -99,6 +108,16 @@ statement.
 Point at one of the hand-typed points and the readout says so, so a rough figure never reads as a
 priced valuation. One of them can answer for a wide stretch of chart — for months either side, it
 is the nearest thing recorded.
+
+**A narrowed chart does not draw it at all.** Those figures are a household net worth typed in as
+one number; there is no owner on them and no way to work out whose share was whose. A line read as
+one person therefore starts at their first recorded holdings, and a note above it says so:
+
+> The hand-typed history before this instance existed is the household's and has no owner, so it is
+> not drawn here. The line begins at these owners' first recorded holdings.
+
+Nothing has been lost — **Show everyone** brings the dashed prefix straight back. See
+[reading a screen as one owner](owner-filter.md).
 
 **There is no screen for those points yet.** Settings lists History alongside Classifications and
 Instruments as something a later version builds. Until then the dashed prefix is whatever was

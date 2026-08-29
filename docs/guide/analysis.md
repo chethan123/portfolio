@@ -13,7 +13,7 @@ counting as zero. See [prices.md](prices.md).
 
 ## The three breakdowns
 
-- **Net worth by person** — who owns what.
+- **Net worth by owner** — who owns what.
 - **Value by account type** — brokerage, workplace plan, IRA, bank, loan.
 - **Value by asset class** — Equity, Bonds, Cash, Other.
 
@@ -98,6 +98,13 @@ Coverage is counted separately here, because a gain needs **both** a price and a
 
 > Based on 11 of 18 holdings: the rest have no cost basis or no price recorded, and a gain needs
 > both.
+
+## Reading it as one owner
+
+The control at the top narrows all four panels at once, and it is the same selection Overview,
+Holdings and Income carry — see [reading a screen as one owner](owner-filter.md). The **Net worth by
+owner** panel then shows the selected people alone, which is the one place the narrowing is visible
+twice: the ring is of them, and so are its rows.
 
 ## Before anything is uploaded
 
