@@ -118,9 +118,10 @@ Leave the authorized JavaScript origins empty. This is a server-side redirect fl
 browser here talks to Google directly.
 
 **Copy the client ID and the client secret into `.env`**, as `GATE_CLIENT_ID` and
-`GATE_CLIENT_SECRET`. Copy the secret when the console offers it: it is shown at creation and may be
-masked afterwards, and a secret you cannot read again is replaced rather than recovered
-([Day two](#day-two)).
+`GATE_CLIENT_SECRET`. Copy the secret before you leave that panel: Google shows a client secret in
+full exactly once, at creation, and masks it in the console afterwards — a client made today gives
+you the last few characters as an identifying aid and nothing more. A secret you cannot read again is
+replaced rather than recovered ([Day two](#day-two)).
 
 ## Step 4 — the rest of the gate's settings
 
