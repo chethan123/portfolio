@@ -79,7 +79,10 @@ _Avoid_: tick, snapshot, price point, intraday price.
 
 **Poll**:
 One attempt to refresh quotes for every feed-priced instrument, recorded whether or not any new
-observation resulted. What tells a quiet market apart from a server that was not running.
+observation resulted — the cadence's own attempts and a person's press of Refresh now alike, since
+both are the same attempt at the same instruments. What tells a quiet market apart from a server
+that was not running: a gap during market hours is the deployment's silence, and a row outside them
+is somebody asking.
 _Avoid_: refresh run, fetch, sync.
 
 ### Who gets in

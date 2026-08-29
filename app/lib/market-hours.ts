@@ -149,6 +149,39 @@ export function marketTimeOf(instant: Date, timeZone: string): string {
 }
 
 /**
+ * The stamp an "as of" caption carries: `29 Aug 2026, 4:00 PM EDT`.
+ *
+ * Market time rather than the reader's, and the abbreviation rendered rather
+ * than left to be assumed. Two reasons, and the second is the one that decides
+ * it. These pages are server-rendered and every screen has to work with
+ * JavaScript off, so at render time there is no browser clock to ask. And the
+ * zone this resolves in is the zone `marketDateOf` files a close under, so the
+ * caption and the row behind it cannot appear to disagree — a Friday close
+ * reading "9:00 PM" beside a date that says Friday is a subtraction the reader
+ * has to do before they can trust either.
+ *
+ * Its own formatter rather than `partsIn`'s. That one is pinned to `h23`
+ * because the session window is arithmetic on minutes; this is read by a person,
+ * who wants four o'clock to say four.
+ */
+export function marketStampOf(instant: Date, timeZone: string): string {
+  const parts: Record<string, string> = {};
+  for (const { type, value } of new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  }).formatToParts(instant))
+    parts[type] = value;
+
+  return `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} ${parts.dayPeriod} ${parts.timeZoneName}`;
+}
+
+/**
  * Is the regular session running at this instant?
  *
  * Weekend, then holiday, then the 09:30–16:00 window — cheapest test first,

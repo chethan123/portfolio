@@ -67,11 +67,74 @@
  */
 import { sql } from "kysely";
 
-import { getDb, type Database } from "./db.server.ts";
-import { marketDateOf } from "./market-hours.ts";
+import { getDb, getPool, type Database } from "./db.server.ts";
+import { marketDateOf, marketStampOf } from "./market-hours.ts";
 import type { PriceProvider, ProviderQuote } from "./price-provider.server.ts";
 
 import type { Kysely } from "kysely";
+import type pg from "pg";
+
+/**
+ * The lock a refresh contends for.
+ *
+ * Arbitrary, and must not change — and must not equal the migration runner's
+ * `7295380114023641`, or a cold start would have a poll and a migration
+ * blocking each other for no reason.
+ */
+const ADVISORY_LOCK_KEY = "7295380114023642";
+
+/**
+ * Run a refresh, or decline because one is already running.
+ *
+ * Lives beside the refresh rather than in the poller, because the poller stopped
+ * being the only caller the moment a person could press a button. What it
+ * guards has not changed — the *decision* to spend a request, never the rows,
+ * which are convergent upserts either way — but the contention it guards
+ * against has: two containers and a slow tick meeting the next one were the
+ * cases 0002-pricing.md anticipated, and two browser tabs is the one that
+ * actually happens.
+ *
+ * `null` for a refusal rather than a throw. Nothing has gone wrong: another
+ * caller is doing the work, and the prices will be fresh either way, which is
+ * the only thing either caller wanted.
+ *
+ * A dedicated connection, because an advisory lock belongs to the session that
+ * took it, so taking and releasing it have to happen on the same client. The
+ * work itself goes through Kysely on a different connection.
+ */
+export async function withRefreshLock<T>(body: () => Promise<T>): Promise<T | null> {
+  // Declared before the `try` and acquired inside it: a database that is
+  // briefly unreachable is the ordinary case, and a throw from `connect` above
+  // the `finally` would leak the client.
+  let client: pg.PoolClient | undefined;
+  let broken = false;
+
+  try {
+    client = await getPool().connect();
+
+    const held = await client.query<{ locked: boolean }>(
+      `select pg_try_advisory_lock(${ADVISORY_LOCK_KEY}) as locked`,
+    );
+
+    if (!held.rows[0]?.locked) return null;
+
+    try {
+      return await body();
+    } finally {
+      await client.query(`select pg_advisory_unlock(${ADVISORY_LOCK_KEY})`);
+    }
+  } catch (error) {
+    // A session-level lock outlives the query that failed but not the session
+    // holding it, and a connection handed back to the pool keeps its session.
+    // If anything above threw, this connection may still hold the lock, and
+    // returning it to the pool would block every future refresh forever — so it
+    // is destroyed rather than reused.
+    broken = true;
+    throw error;
+  } finally {
+    client?.release(broken);
+  }
+}
 
 /** What a refresh did, for the log line and for the tests. */
 export type RefreshReport = {
@@ -83,6 +146,27 @@ export type RefreshReport = {
   stale: number;
   /** `price_daily` rows written or rewritten. */
   closes: number;
+  /**
+   * Observations the log did not already hold.
+   *
+   * The only field that separates a refresh that learned something from one
+   * that re-fetched a price it already had. Every other count says the same
+   * thing on a Saturday evening as it does mid-session: forty instruments
+   * requested, forty priced, forty closes rewritten — with the same Friday
+   * close going back into every row. This one says nought, which is the truth
+   * the person pressing the button asked for.
+   */
+  observed: number;
+  /**
+   * Did the provider call itself fail?
+   *
+   * A failed call is swallowed here on purpose (see the catch below), so every
+   * aggregate on this report looks exactly like a provider that answered and
+   * knew nothing: `priced: 0`, everything stale. The two want different
+   * sentences on screen — one says the feed is down, the other says these
+   * symbols are wrong — and this is the only thing that can tell them apart.
+   */
+  providerFailed: boolean;
 };
 
 /** An instrument the provider can be asked about. */
@@ -216,12 +300,14 @@ export async function refreshQuotes(
   // every selected instrument stale and writes no price — and, because the
   // absence of a price is the truth about that instant, no observation either.
   let quotes: ProviderQuote[] = [];
+  let providerFailed = false;
   if (feed.length > 0) {
     try {
       quotes = await provider.getQuotes([...lookup.keys()]);
     } catch (error) {
       console.error("Price provider failed; marking every selected instrument stale:", error);
       quotes = [];
+      providerFailed = true;
     }
   }
 
@@ -241,7 +327,7 @@ export async function refreshQuotes(
     // changes nothing about what survives, but it is the order the facts are in:
     // the observation records what the provider said, and the quote and the
     // close are what we now believe because of it.
-    await writeObservations(trx, observationsOf(matched, marketTimeZone));
+    const observed = await writeObservations(trx, observationsOf(matched, marketTimeZone));
 
     const pricedIds = new Set<string>();
     let closes = 0;
@@ -277,6 +363,8 @@ export async function refreshQuotes(
       priced: pricedIds.size,
       stale: missing.length,
       closes,
+      observed,
+      providerFailed,
     };
 
     await writePoll(trx, startedAt, report);
@@ -474,14 +562,23 @@ function observationsOf(
  * provider re-stating an instant it has already given us with a different price
  * loses the second price here, while `quote` upserts to it.
  */
-async function writeObservations(db: Kysely<Database>, rows: ObservationRow[]): Promise<void> {
-  if (rows.length === 0) return;
+async function writeObservations(db: Kysely<Database>, rows: ObservationRow[]): Promise<number> {
+  if (rows.length === 0) return 0;
 
-  await db
+  // `returning` rather than a count query: under `do nothing` Postgres returns a
+  // row only for an insert that actually happened, so the length is the number
+  // of instants new to the log — counted where it is known, at no extra
+  // round trip. Deriving it afterwards would mean scanning an append-only table
+  // that grows about half a gigabyte a year and carries no index on the column
+  // a time-bounded scan would need.
+  const inserted = await db
     .insertInto("price_observation")
     .values(rows)
     .onConflict((conflict) => conflict.columns(["instrument_id", "as_of"]).doNothing())
+    .returning("instrument_id")
     .execute();
+
+  return inserted.length;
 }
 
 /**
@@ -566,4 +663,28 @@ export async function priceFreshness(
     stale: Number(row?.stale ?? 0),
     priced: Number(row?.priced ?? 0),
   };
+}
+
+/**
+ * The as-of caption, rendered.
+ *
+ * One place rather than five: every screen that shows a figure asks the same
+ * question and must not answer it differently. The stamp is formatted here
+ * rather than in the component because the market zone is configuration and a
+ * component has no business reading it — and because these pages are rendered
+ * on the server, where the reader's clock does not exist.
+ *
+ * Note what `priceFreshness` counts and this inherits: the *oldest* quote, over
+ * feed-priced instruments actually held. A household of nothing but cash and a
+ * hand-priced trust is fully valued and still says "no prices yet", because
+ * there is no fetched price behind any of it — which is the truth, if a blunt
+ * one.
+ */
+export async function asOfView(
+  marketTimeZone: string,
+  db: Kysely<Database> = getDb(),
+): Promise<{ stamp: string | null; stale: number }> {
+  const { oldest, stale } = await priceFreshness(db);
+
+  return { stamp: oldest === null ? null : marketStampOf(oldest, marketTimeZone), stale };
 }

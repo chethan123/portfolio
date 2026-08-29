@@ -53,6 +53,9 @@ import {
 
 import { getConfig } from "../../server/config.ts";
 
+import { PriceFreshness } from "../components/price-freshness.tsx";
+import { asOfView } from "../lib/prices.server.ts";
+
 import type { Route } from "./+types/account";
 
 /**
@@ -148,7 +151,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       ? accountSeries(params.accountId, resolved.dates).then(asSessionPoints)
       : accountSessionSeries(params.accountId, resolved.session);
 
-  const [account, holdings, series, recorded] = await Promise.all([
+  const [account, holdings, series, recorded, freshness] = await Promise.all([
     // Read for one field: the tax treatment. `AccountTotal` carries what a
     // figure is computed from and no more, and a tax treatment is a fact about
     // the account rather than about its value (§4.5). Safe after the gate above
@@ -160,6 +163,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     // What the current figure was read from, so the set-balance panel can say
     // which day it is superseding rather than asking for a correction blind.
     lastRecorded(params.accountId),
+    asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 
   // A date before this account's first statement sums to 0.0000 over zero rows.
@@ -171,6 +175,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     .map((point) => ({ date: point.at, amount: point.amount }));
 
   return {
+    freshness,
     range: resolved.range,
     custom: resolved.custom,
     // Null on every range but 1D, which is how the chart is told which axis it
@@ -299,6 +304,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
     earliestAsOf,
     latestAsOf,
     justRecorded,
+    freshness,
   } = loaderData;
 
   const Tile = TILES[total.accountKind];
@@ -395,6 +401,8 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
 
           <div className="detail-total">
             <span className="u-label">Total value</span>
+
+            <PriceFreshness freshness={freshness} />
 
             {/* No delta chip beside the figure, though the mock has one. The
                 honest version of it is this account now against this account at

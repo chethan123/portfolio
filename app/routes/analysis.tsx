@@ -16,6 +16,10 @@ import { isNegative } from "~/lib/format";
 import { readCapitalGainsRate } from "~/lib/settings.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
+import { PriceFreshness } from "../components/price-freshness.tsx";
+import { asOfView } from "../lib/prices.server.ts";
+import { getConfig } from "../../server/config.ts";
+
 import type { Route } from "./+types/analysis";
 
 /**
@@ -176,13 +180,15 @@ export async function loader() {
   // the query module rather than from adding those groups up here: money is
   // summed in SQL, in `numeric` (§8.2), and this is the same figure the
   // Overview headline shows because it is the same query.
-  const [holdings, total, capitalGainsRate] = await Promise.all([
+  const [holdings, total, capitalGainsRate, freshness] = await Promise.all([
     currentHoldings(),
     netWorth(),
     readCapitalGainsRate(),
+    asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 
   return {
+    freshness,
     total: total.amount,
     capitalGainsRate,
     gains: unrealizedByAssetType(holdings, capitalGainsRate),
@@ -206,6 +212,7 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
     byPerson,
     byAccountKind,
     byAssetClass,
+    freshness,
   } = loaderData;
 
   return (
@@ -215,6 +222,10 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
           <h1 className="page-title">Analysis</h1>
           <p className="page-subtitle">Portfolio breakdown and allocation views.</p>
         </div>
+        <div className="page-actions">
+          <PriceFreshness freshness={freshness} />
+        </div>
+
       </header>
 
       {holdingCount === 0 ? (

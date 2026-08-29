@@ -43,23 +43,12 @@
  * failing during a third-party outage would make Compose restart a perfectly
  * healthy app. Poller state is the same argument.
  */
-import type pg from "pg";
-
 import { getConfig } from "../../server/config.ts";
-import { getDb, getPool } from "./db.server.ts";
+import { getDb } from "./db.server.ts";
 import { isMarketOpen } from "./market-hours.ts";
-import { refreshQuotes } from "./prices.server.ts";
+import { refreshQuotes, withRefreshLock } from "./prices.server.ts";
 import { yahooPriceProvider, type PriceProvider } from "./price-provider.server.ts";
 import { readRefreshCadence } from "./settings.server.ts";
-
-/**
- * The lock every poller tick contends for.
- *
- * Arbitrary, and must not change — and must not equal the migration runner's
- * `7295380114023641`, or a cold start would have a poll and a migration
- * blocking each other for no reason.
- */
-const ADVISORY_LOCK_KEY = "7295380114023642";
 
 /**
  * Where the timer is kept.
@@ -143,30 +132,11 @@ async function tick(state: PollerState, provider: PriceProvider): Promise<void> 
   });
   if (minutes !== state.minutes) retime(state, provider, minutes);
 
-  // A dedicated connection: an advisory lock belongs to the session that took
-  // it, so taking and releasing it have to happen on the same client. The work
-  // itself goes through Kysely on a different connection, which is fine — the
-  // lock guards the decision to run, not the rows.
-  //
-  // Declared before the `try` and acquired inside it. Acquiring it outside
-  // would put a throw — a database that is briefly unreachable is the ordinary
-  // case — above the `finally` that clears `running`, and the loop would then
-  // be wedged for the lifetime of the process by one failed connect.
-  let client: pg.PoolClient | undefined;
-  let broken = false;
-
   try {
-    client = await getPool().connect();
-
-    const held = await client.query<{ locked: boolean }>(
-      `select pg_try_advisory_lock(${ADVISORY_LOCK_KEY}) as locked`,
-    );
-
-    // Another process is mid-refresh. Not an error: the prices will be fresh
-    // either way, which is the only thing this loop is for.
-    if (!held.rows[0]?.locked) return;
-
-    try {
+    // `null` when another caller — the other container, or a person who just
+    // pressed Refresh — is already doing it. Not an error: the prices will be
+    // fresh either way, which is the only thing this loop is for.
+    await withRefreshLock(async () => {
       const report = await refreshQuotes(provider, config.MARKET_TIMEZONE, getDb());
 
       // One line per attempt, always — "prices stopped updating" has to be
@@ -174,22 +144,13 @@ async function tick(state: PollerState, provider: PriceProvider): Promise<void> 
       // up on failure cannot distinguish a healthy quiet loop from a dead one.
       // A tick that left something stale is a warning rather than information,
       // because it is the line an operator is looking for.
-      const summary = `Price refresh: ${report.priced} of ${report.requested} priced, ${report.stale} stale, ${report.closes} closes written.`;
+      const summary = `Price refresh: ${report.priced} of ${report.requested} priced, ${report.stale} stale, ${report.closes} closes written, ${report.observed} new.`;
       if (report.stale > 0) console.warn(summary);
       else console.info(summary);
-    } finally {
-      await client.query(`select pg_advisory_unlock(${ADVISORY_LOCK_KEY})`);
-    }
+    });
   } catch (error) {
-    // A session-level lock outlives the query that failed but not the session
-    // holding it, and a connection handed back to the pool keeps its session.
-    // If anything above threw, this connection may still hold the lock, and
-    // returning it to the pool would block every future tick forever — so it
-    // is destroyed rather than reused.
-    broken = true;
     console.error("Price refresh failed; last known prices are kept:", error);
   } finally {
-    client?.release(broken);
     state.running = false;
   }
 }

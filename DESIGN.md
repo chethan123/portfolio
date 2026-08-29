@@ -751,7 +751,7 @@ routing here, so it is not needed.
 | **Auth** | **Outside the app.** Caddy asks a Google sign-in gate about every request before it reaches the app, and the app authenticates nobody (see below). It keeps one honest fact about its own deployment — whether a gate fronts it — and draws a persistent warning banner when nothing does. |
 | **Job scheduler** | In-process, inside the app container. One process to deploy, one place to read logs. Trade-off: a restart mid-session misses a poll until the next tick — acceptable at 15-minute granularity. |
 | **Market calendar** | Weekday + `America/New_York` session check plus a small hardcoded NYSE holiday table. A wrongly skipped poll costs nothing; a wrongly attempted one costs one request. |
-| **Timezone** | UTC everywhere in the database. `America/New_York` only for market-hours logic. Browser-local for display. |
+| **Timezone** | UTC everywhere in the database. `America/New_York` for market-hours logic, and for any timestamp naming a market instant — the "as of" caption renders in market time with its abbreviation, because these pages are server-rendered and have no browser clock to ask (spec `pricing/06`, which supersedes §6's story 8). Browser-local for everything else. |
 | **Backups** | Documented `pg_dump` procedure. Not built in — self-hosters have their own, and a half-built backup feature is worse than none. |
 | **Tests** | Integration tests against a real Postgres, concentrated on CSV mapping, alias resolution, and the position-set diff. Those are where wrong answers are silent. |
 

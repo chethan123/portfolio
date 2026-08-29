@@ -3799,3 +3799,79 @@ code {
   color: var(--on-surface-variant);
   font-weight: 400;
 }
+
+/* The as-of caption and the control that changes it.
+   ------------------------------------------------------------------------- */
+
+/* The pair reads as one unit: the fact, and the button that acts on it. They
+   are never separated, because a refresh control with no timestamp beside it
+   cannot tell you whether it did anything (§11). */
+.price-freshness {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xs);
+}
+
+.as-of {
+  margin: 0;
+  color: var(--on-surface-variant);
+}
+
+/* Takes colour only when stale — a caption, not a chip. */
+.as-of .u-data {
+  color: inherit;
+}
+
+.refresh-button {
+  gap: var(--space-xs);
+}
+
+.refresh-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+/* Busy, not forbidden.
+   The browser's grey disabled treatment reads as "you may not", and the answer
+   here is "you already have" — so the control keeps its full text contrast and
+   says "Refreshing…" while it is inert. `disabled` still does the work of
+   refusing a second press. */
+.refresh-button:disabled {
+  opacity: 1;
+  color: var(--primary);
+  cursor: progress;
+}
+
+/* The app's first spinner. There was no precedent, so this is it: one arc, one
+   turn a second, no library. */
+.refresh-icon--busy {
+  animation: refresh-spin 1s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@keyframes refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The label alone is sufficient: "Refreshing…" says everything the rotation
+   does, and someone who asked for less motion has asked for exactly this. */
+@media (prefers-reduced-motion: reduce) {
+  .refresh-icon--busy {
+    animation: none;
+  }
+}
+
+/* On the Overview headline and Account detail the pair sits under a large
+   figure rather than in a header's right slot, so it needs its own breathing
+   room rather than the slot's. */
+.kpi .price-freshness,
+.detail-total .price-freshness {
+  margin-top: var(--space-sm);
+}

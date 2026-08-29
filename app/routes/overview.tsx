@@ -38,6 +38,9 @@ import {
 
 import { getConfig } from "../../server/config.ts";
 
+import { PriceFreshness } from "../components/price-freshness.tsx";
+import { asOfView } from "../lib/prices.server.ts";
+
 import type { Route } from "./+types/overview";
 
 /**
@@ -130,10 +133,11 @@ export async function loader({ request }: Route.LoaderArgs) {
       ? netWorthSeries(resolved.dates).then(asSessionPoints)
       : netWorthSessionSeries(resolved.session);
 
-  const [change, accounts, series] = await Promise.all([
+  const [change, accounts, series, freshness] = await Promise.all([
     netWorthChange(resolved.since),
     accountTotals(),
     points,
+    asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 
   // A date before the first upload sums to 0.0000 over zero rows. That is
@@ -161,6 +165,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         );
 
   return {
+    freshness,
     range: resolved.range,
     custom: resolved.custom,
     // Null on every range but 1D, which is how the chart is told which axis it
@@ -356,6 +361,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
     session,
     holdingCount,
     pricedCount,
+    freshness,
   } = loaderData;
 
   if (holdingCount === 0) {
@@ -411,6 +417,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               <Amount value={change.difference} shape="signed" />
             </span>
           </p>
+
+          <PriceFreshness freshness={freshness} />
         </div>
 
         <ChartRangeControl

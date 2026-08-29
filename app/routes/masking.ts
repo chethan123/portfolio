@@ -24,20 +24,9 @@ import { formFields } from "~/lib/input.server";
 import { MASKED, UNMASKED, maskingCookie } from "~/lib/masking";
 import { readMaskingPolicy } from "~/lib/settings.server";
 
-import type { Route } from "./+types/masking";
+import { safeReturn } from "../lib/return-path.ts";
 
-/**
- * Where to send a browser back to after a toggle it made as a navigation.
- *
- * Same-origin paths only. The field comes off a form and a form can be edited,
- * so an absolute URL here would turn the toggle into an open redirect. The
- * check is that it starts with a single slash: `//elsewhere.test` is a
- * protocol-relative URL and is exactly what a bare `startsWith("/")` lets
- * through.
- */
-function safeReturn(to: string | undefined): string {
-  return to !== undefined && /^\/(?!\/)/.test(to) ? to : "/";
-}
+import type { Route } from "./+types/masking";
 
 export async function action({ request }: Route.ActionArgs) {
   const { masked, redirectTo } = formFields(await request.formData());

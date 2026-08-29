@@ -112,6 +112,50 @@ describe("choosing what to fetch", () => {
   );
 });
 
+describe("what a refresh learned", () => {
+  it(
+    "counts only the instants the log did not already hold",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      // Twice, with the provider re-stating the same instant both times — which
+      // is exactly what a weekend press gets: Friday's close, again.
+      const first = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
+      const second = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
+
+      expect(first.observed).toBe(1);
+
+      // Every other count is identical between the two, which is the reason
+      // this field exists: without it the second press claims to have updated a
+      // price it merely re-read.
+      expect(second.priced).toBe(1);
+      expect(second.closes).toBe(1);
+      expect(second.observed).toBe(0);
+    }),
+  );
+
+  it(
+    "reports a provider that threw apart from one that knew nothing",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const outage = await refreshQuotes(brokenProvider(), NEW_YORK, db);
+      const ignorance = await refreshQuotes(fakeProvider([]), NEW_YORK, db);
+
+      // Identical aggregates. The feed being down and the symbol being wrong
+      // need different sentences on screen, and this is the only thing that
+      // tells them apart.
+      expect(outage.priced).toBe(0);
+      expect(ignorance.priced).toBe(0);
+      expect(outage.stale).toBe(1);
+      expect(ignorance.stale).toBe(1);
+
+      expect(outage.providerFailed).toBe(true);
+      expect(ignorance.providerFailed).toBe(false);
+    }),
+  );
+});
+
 describe("storing a price", () => {
   it(
     "writes the intraday quote and the daily close together",
@@ -786,7 +830,14 @@ describe("the poll record", () => {
       // Nothing to price, so nothing is asked — but the attempt happened, and a
       // log with no observations for an hour has to be able to say why.
       expect(provider.asked).toEqual([]);
-      expect(report).toEqual({ requested: 0, priced: 0, stale: 0, closes: 0 });
+      expect(report).toEqual({
+        requested: 0,
+        priced: 0,
+        stale: 0,
+        closes: 0,
+        observed: 0,
+        providerFailed: false,
+      });
 
       const polls = await db.selectFrom("price_poll").selectAll().execute();
       expect(polls).toHaveLength(1);
