@@ -384,6 +384,57 @@ describe("the three empty states", () => {
   );
 
   it(
+    "says who it is showing on the closed control, without growing with the household",
+    withDatabase(async (ctx) => {
+      const { alice, bob, carol } = await seedTwoOwners(ctx);
+
+      // The control is a disclosure: what the header spends is one summary
+      // whatever the household's size, and the summary has to say enough that a
+      // filter set two screens ago is legible without opening it.
+      const everyone = renderRoute(
+        Holdings,
+        "/holdings",
+        await loader(args(get("/holdings"))),
+      );
+      expect(everyone).toContain("<details");
+      expect(everyone).toContain("Everyone");
+      // Nothing applied, so the summary itself is not marked as set — the page
+      // has other `aria-current` of its own, so this asserts on the tag.
+      expect(everyone).toContain("<summary>");
+
+      const one = renderRoute(
+        Holdings,
+        "/holdings",
+        await loader(args(get(`/holdings?owner=${alice.id}`))),
+      );
+      expect(one).toContain("Alice");
+      expect(one).toContain('<summary aria-current="true">');
+
+      const two = renderRoute(
+        Holdings,
+        "/holdings",
+        await loader(args(get(`/holdings?owner=${[alice.id, bob.id].sort().join(",")}`))),
+      );
+      expect(two).toContain("Alice and Bob");
+
+      // Past two it is a count, because four names spelled out would put the
+      // header back where the row of checkboxes left it. A fourth owner, so the
+      // selection of three is not the whole household and does not collapse.
+      const dana = await ctx.seedPerson({ name: "Dana" });
+      await ctx.seedAccount({ name: "Dana Bank", owner: dana, kind: "bank" });
+
+      const chosen = [alice.id, bob.id, carol.id].sort((a, b) => Number(a) - Number(b)).join(",");
+      const three = renderRoute(
+        Holdings,
+        "/holdings",
+        await loader(args(get(`/holdings?owner=${chosen}`))),
+      );
+      expect(three).toContain("3 of 4");
+      expect(three).not.toContain("Alice and Bob and Carol");
+    }),
+  );
+
+  it(
     "says the filter names an owner it cannot read as, and keeps the control on screen",
     withDatabase(async (ctx) => {
       await seedTwoOwners(ctx);
