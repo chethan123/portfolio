@@ -1,15 +1,16 @@
-# 05 — Freshness on screen and the Instruments tab
+# 05 — Stale prices on screen and the Instruments tab
 
 _Part of [0002-pricing.md](../0002-pricing.md)._
 
-**What to build:** The half of pricing a family actually sees. Every page that shows a figure says
-what it is as of — DESIGN.md §11 calls that timestamp non-negotiable, because silently showing
-yesterday's net worth as though it were live is the one genuinely dangerous failure mode in a
-finance app. A stale price is shown, still carrying its last known value, and labelled as stale
-rather than blanked or zeroed. A "Refresh now" control (§6.2) pulls prices on demand. And Settings →
-Instruments (§8.4) becomes the place that answers "which manual prices have gone stale", where a
-collective investment trust gets its price by hand, and where a ticker change is applied as the
-one-column update §4.3 designed it to be.
+**What to build:** What a family sees when a price goes wrong, and the screen that lets them fix it.
+A stale price is shown, still carrying its last known value, and labelled as stale rather than
+blanked or zeroed. And Settings → Instruments (§8.4) becomes the place that answers "which manual
+prices have gone stale", where a collective investment trust gets its price by hand, and where a
+ticker change is applied as the one-column update §4.3 designed it to be.
+
+The as-of timestamp and the "Refresh now" control were split out into
+[06](06-refresh-now-control.md), which also records where the design brief is superseded. The
+banner below is drawn together with that timestamp rather than above it, so the two do not stack.
 
 Note for whoever picks this up: the Stitch mock set covers none of this. Per
 `docs/research/2026-08-19-stitch-screen-audit.md`, all twelve screens lack a stale-data indicator,
@@ -17,17 +18,9 @@ an empty state and an error state, there is no Settings screen anywhere in the s
 timestamp appears on exactly one mobile screen. The design brief for this ticket is
 `docs/design/pricing-ui-brief.md`.
 
-**Blocked by:** 03.
+**Blocked by:** 06, for the header slot and the timestamp the banner sits beside.
 
 **Status:** ready-for-agent
-
-**As of**
-
-- [ ] Every read page showing a figure carries an as-of timestamp taken from the newest quote behind
-      what it displays
-- [ ] The timestamp renders in the browser's local timezone (§10), and reads as a time a person
-      would say out loud rather than an ISO string
-- [ ] With nothing priced yet, the page says so instead of showing an empty or epoch timestamp
 
 **Stale prices**
 
@@ -40,15 +33,6 @@ timestamp appears on exactly one mobile screen. The design brief for this ticket
       so it is clear which one needs a manual price
 - [ ] An instrument refused for being priced in a currency other than USD explains that as the
       reason, rather than reading as an ordinary failure
-
-**Refresh now**
-
-- [ ] A "Refresh now" control triggers one refresh and reports its outcome — how many were updated,
-      marked stale and refused
-- [ ] It is disabled while a refresh is in flight, so it cannot be pressed twice
-- [ ] The figures and the as-of timestamp update without a manual page reload
-- [ ] It works outside market hours, so a closing price can be pulled the evening it settles
-- [ ] A failed refresh shows a readable message and leaves the figures already on screen intact
 
 **Settings → Instruments**
 
