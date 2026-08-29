@@ -23,8 +23,8 @@
  */
 import type { IsoDate } from "./valuation.server.ts";
 
-/** The eight options the segmented control offers, in display order. */
-export type RangeKey = "1w" | "1m" | "3m" | "ytd" | "1y" | "5y" | "all" | "custom";
+/** Every option the segmented control offers, in display order. */
+export type RangeKey = "1d" | "1w" | "1m" | "3m" | "ytd" | "1y" | "5y" | "all" | "custom";
 
 /**
  * The presets and their order — identical on Overview and the account page,
@@ -34,8 +34,15 @@ export type RangeKey = "1w" | "1m" | "3m" | "ytd" | "1y" | "5y" | "all" | "custo
  * live decision to retain it, against a recommendation raised while designing
  * this spec, rather than an oversight of the old four-option control — so a
  * future pass should not read it as leftover debt to clean up.
+ *
+ * 1D leads the set and is the one preset that is not a span of dates at all
+ * (ADR-0006): it names the most recent trading session the observation log
+ * carries, so it resolves to a session and a list of instants rather than to a
+ * start date and a list of days. Everything else about a preset key — the URL
+ * parameter, the cookie, the segmented control — it inherits unchanged.
  */
 export const RANGES: Record<RangeKey, { label: string }> = {
+  "1d": { label: "1D" },
   "1w": { label: "1W" },
   "1m": { label: "1M" },
   "3m": { label: "3M" },
@@ -105,7 +112,29 @@ interface Window {
 export interface RangeWindow extends Window {
   range: RangeKey;
   custom?: CustomSpan;
+  /**
+   * The trading session 1D plots, present only when 1D actually resolved.
+   *
+   * Its presence is what tells a loader to read the intra-session series
+   * instead of the day-granularity one — the two cannot both be right, and a
+   * flag beside the key would be a second thing to keep in step with it. When
+   * 1D is asked for on an instance whose observation log is empty there is no
+   * session to name, and the range falls back to the default preset the way an
+   * undrawable custom span does.
+   */
+  session?: IsoDate;
 }
+
+/**
+ * Has anything been observed at all?
+ *
+ * Two spellings of "no session" reach here — `null` from a reader that looked
+ * and found nothing, and `undefined` from a caller that did not pass one — and
+ * both mean the same thing to 1D. Named once so the two functions that branch
+ * on it cannot come to disagree about which spellings count.
+ */
+const hasSession = (session?: IsoDate | null): session is IsoDate =>
+  session !== undefined && session !== null;
 
 /** UTC throughout, deliberately — the one conversion that cannot pick up a server's zone. */
 const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
@@ -133,8 +162,14 @@ function subtractMonths(date: IsoDate, months: number): IsoDate {
 
 const startOfYear = (date: IsoDate): IsoDate => `${date.slice(0, 4)}-01-01`;
 
-/** Every preset's boundary except "All" and "Custom", which need the surface's earliest date. */
-const FIXED_BOUNDARY: Record<Exclude<RangeKey, "all" | "custom">, (today: IsoDate) => IsoDate> = {
+/**
+ * Every preset's boundary except the three that cannot be a calendar offset
+ * from today: "All" and "Custom" need the surface's earliest date, and "1D"
+ * needs the observation log's most recent session. Excluding them from the key
+ * type is what makes the compiler demand a branch for each in the two functions
+ * below rather than letting one fall through to a wrong window.
+ */
+const FIXED_BOUNDARY: Record<Exclude<RangeKey, "1d" | "all" | "custom">, (today: IsoDate) => IsoDate> = {
   "1w": (today) => addDays(today, -7),
   "1m": (today) => subtractMonths(today, 1),
   "3m": (today) => subtractMonths(today, 3),
@@ -276,9 +311,55 @@ function isDrawableCustomSpan(span: CustomSpan, today: IsoDate, earliest: IsoDat
  */
 export function resolveRange(
   range: RangeKey,
-  opts: { today: IsoDate; earliest: SurfaceEarliest; surface: Surface; custom?: CustomSpan },
+  opts: {
+    today: IsoDate;
+    earliest: SurfaceEarliest;
+    surface: Surface;
+    custom?: CustomSpan;
+    /**
+     * The most recent trading session the observation log carries, from
+     * `latestObservedSession`. Omitted means none — which is the safe
+     * direction, since it disables 1D rather than offering a chart that cannot
+     * be drawn.
+     */
+    session?: IsoDate | null;
+  },
 ): RangeWindow {
   const earliestDate = surfaceEarliestDate(opts.surface, opts.earliest);
+
+  if (range === "1d") {
+    // Nothing observed yet, so there is no session to plot. The same fallback
+    // an undrawable custom span takes, and for the same reason: a caller cannot
+    // draw a chart captioned "1D" from a session it never had.
+    if (!hasSession(opts.session)) return resolveRange(DEFAULT_RANGE, opts);
+
+    // `dates` is empty on purpose — 1D bypasses the day-granularity sampler
+    // entirely, and its points come from the observation log's own instants
+    // rather than from a calendar. A loader that fails to notice `session` and
+    // reads the day series anyway therefore draws nothing, rather than drawing
+    // the wrong thing.
+    //
+    // `since` is the day before the plotted session, which is what the change
+    // figure beside the headline is measured from: today's own `price_daily`
+    // row is provisional and converges on the last observation, so measuring
+    // from it would report every session as flat. Strictly before the session,
+    // carried forward by `holding_valued_at`, is the previous close — "today's
+    // change" in the sense a brokerage means it.
+    //
+    // One consequence, stated because 1D is where it first shows: the change
+    // reader compares *today's* positions against the positions held on
+    // `since`, while the 1D line holds today's positions constant across the
+    // whole session. On every other preset those agree, because the line's
+    // first point is the same `holding_valued_at(since)` call the change reads.
+    // Under 1D a statement uploaded during the session moves the delta by the
+    // whole change in holdings while the line moves only by the change in
+    // price. That is DESIGN.md §14's second accepted limitation — this app
+    // cannot separate market movement from contributions — arriving on a span
+    // short enough to notice it. Reconciling it would mean a change reader that
+    // values `since` at today's positions, which is a different figure from the
+    // one every other range shows, and is not what issue #94 asked for.
+    return { range, session: opts.session, since: addDays(opts.session, -1), dates: [] };
+  }
 
   if (range === "custom") {
     if (opts.custom && isDrawableCustomSpan(opts.custom, opts.today, earliestDate)) {
@@ -306,8 +387,22 @@ export function resolveRange(
  */
 export function isRangeDisabled(
   range: RangeKey,
-  opts: { today: IsoDate; earliest: SurfaceEarliest; surface: Surface },
+  opts: {
+    today: IsoDate;
+    earliest: SurfaceEarliest;
+    surface: Surface;
+    /** See {@link resolveRange}. Omitted means nothing observed yet. */
+    session?: IsoDate | null;
+  },
 ): boolean {
+  // The one preset disabled by something other than the surface's earliest
+  // date. An instance whose observation log is entirely empty — a brand-new
+  // one, or one whose poller has never run during a session — has no session to
+  // draw, and story 13 asks for the chip to say so the way an out-of-reach
+  // preset already does. A log with a single observation is not empty: the chip
+  // is offered and the panel explains what it is short of.
+  if (range === "1d") return !hasSession(opts.session);
+
   if (range === "all" || range === "custom") return false;
 
   const earliestDate = surfaceEarliestDate(opts.surface, opts.earliest);
@@ -324,6 +419,10 @@ export function isRangeDisabled(
  */
 export function rangeDescription(range: RangeKey, custom?: CustomSpan): string {
   if (range === "custom" && custom) return `from ${custom.start} to ${custom.end}`;
+  // "over the last 1D" would be a sentence about a span, and 1D is not one: it
+  // is one named session, which is what a listener needs to hear before the
+  // times of day that follow in the label's second half.
+  if (range === "1d") return "over the latest trading session";
   return `over the last ${RANGES[range].label}`;
 }
 
@@ -332,6 +431,8 @@ export function rangeOptions(opts: {
   today: IsoDate;
   earliest: SurfaceEarliest;
   surface: Surface;
+  /** See {@link resolveRange}. Omitted means nothing observed yet. */
+  session?: IsoDate | null;
 }): Array<{ key: RangeKey; label: string; disabled: boolean }> {
   return (Object.keys(RANGES) as RangeKey[]).map((key) => ({
     key,
