@@ -245,7 +245,9 @@ async function readTotal(
   // Filtered before the aggregate, so an owner holding nothing comes back as
   // `0.0000` over zero rows rather than as no row at all — the aggregate
   // always answers, which is what `executeTakeFirstOrThrow` relies on.
-  const row = await (where === undefined ? totalled : totalled.where(where)).executeTakeFirstOrThrow();
+  const row = await (
+    where === undefined ? totalled : totalled.where(where)
+  ).executeTakeFirstOrThrow();
 
   return {
     amount: row.amount,
@@ -387,13 +389,20 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
 /**
  * An id that can be compared to a `bigint` column at all.
  *
- * Digits, and at most eighteen of them. The length bound is not decoration:
- * 999,999,999,999,999,999 is comfortably inside `bigint`, so nothing an
+ * Digits, and at most eighteen of them once the leading zeros are discounted —
+ * the same bound `parseRowKey` states in `holdings-view.ts`, for the same
+ * reason: 999,999,999,999,999,999 is comfortably inside `bigint`, so nothing an
  * identity column will ever issue is refused, while
  * `/accounts/99999999999999999999999` — all digits, far past the range —
  * stops here instead of erroring inside Postgres.
+ *
+ * `0*` is what keeps that promise exactly. A padded id is a legal spelling of a
+ * legal id and binds to the same row, so refusing it on length would be this
+ * guard turning a working URL into a 404 to save itself a character count.
+ * (`parseRowKey` refuses padding, and is right to for a different reason: a row
+ * key is a spelling the screen *generates*, and one row wants one URL.)
  */
-const USABLE_ID = /^\d{1,18}$/;
+const USABLE_ID = /^0*\d{1,18}$/;
 
 /**
  * `<column> in (<ids>)`, or a predicate matching nothing when none of them can
@@ -427,12 +436,19 @@ function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
 
 /**
  * The owner narrowing for a source whose rows carry `column`, or `undefined`
- * for the whole household — the shape every `where` parameter below already
- * takes, so no reader branches on it.
+ * for the whole household.
  *
- * Whether to narrow at all is decided here rather than inside {@link isOneOf}:
- * an empty selection is the household, and a predicate saying so would be
- * `true`, which is a clause the planner has to carry for nothing.
+ * `undefined` rather than `true` because that is the shape {@link readHoldings}
+ * and {@link readTotal} already take, so the readers that go through them pass
+ * this straight in. The four that build their own query — `accountTotals`,
+ * both of `netWorthChange`'s CTEs, and `firstRecordedDate` — spell the same
+ * ternary those two spell internally. `readSessionSeries` is the one place a
+ * `true` is written instead, because its predicate is interpolated into a raw
+ * statement where there is no clause to leave out.
+ *
+ * Whether to narrow at all is decided here rather than inside {@link isOneOf},
+ * which is what lets that one answer an unusable id in SQL rather than by
+ * returning nothing at all.
  */
 function ownedBy(column: string, owners: OwnerFilter): RawBuilder<SqlBool> | undefined {
   return isFiltered(owners) ? isOneOf(column, owners) : undefined;
@@ -446,11 +462,18 @@ function ownedBy(column: string, owners: OwnerFilter): RawBuilder<SqlBool> | und
  * A subquery is the only shape that reaches it, and that subquery spans
  * **closed** accounts where `holding_valued` does not. See
  * {@link firstRecordedDate} for what follows from that.
+ *
+ * The outer table is named rather than passed, because there is exactly one
+ * caller and the name has to match how that caller spells its `from`: aliasing
+ * it there would compile here and fail in Postgres. `account.owner_id` is
+ * qualified for the opposite reason — bare, it binds to the subquery's own
+ * `account` by scope alone, which is right today and is not a thing to leave
+ * to scope.
  */
 function ownsAPositionSet(owners: OwnerFilter): RawBuilder<SqlBool> | undefined {
   return isFiltered(owners)
     ? sql<SqlBool>`position_set.account_id in (
-        select id from account where ${isOneOf("owner_id", owners)}
+        select account.id from account where ${isOneOf("account.owner_id", owners)}
       )`
     : undefined;
 }
@@ -934,8 +957,8 @@ export async function accountSessionSeries(
  * computed wins on overlapping dates, manual only fills gaps — is a display
  * rule about two lines, not a fact about either one.
  *
- * **The one household reader that does not take the owner filter, and the line
- * falls here on purpose.** `manual_networth` is a date and an amount: the
+ * **A household reader that does not take the owner filter, and the line falls
+ * here on purpose.** `manual_networth` is a date and an amount: the
  * household's pre-app net worth, entered before there were accounts to
  * attribute it to. There is no owner on it and no honest way to invent one
  * (ADR-0008), so a filtered screen decides not to *draw* this series rather
@@ -998,7 +1021,9 @@ export async function netWorthChange(
 
   const row = await db
     .with("present", (qb) => {
-      const all = qb.selectFrom(valuedNow()).select(sql<string>`coalesce(sum(value), 0)`.as("amount"));
+      const all = qb
+        .selectFrom(valuedNow())
+        .select(sql<string>`coalesce(sum(value), 0)`.as("amount"));
 
       return owned === undefined ? all : all.where(owned);
     })

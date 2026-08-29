@@ -42,7 +42,10 @@ import type { TestContext } from "./support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/** An id no person in a transaction-scoped test can ever have been issued. */
+/**
+ * An id far above anything this suite's sequences will reach, so it names
+ * nobody however many tests have run before this one.
+ */
 const NOBODY = "999999999";
 
 /** All digits, and far past `bigint` — the id that used to reach Postgres. */
@@ -180,7 +183,11 @@ describe("the readers that take the filter", () => {
       // Bob's own delta is flat, and narrowing the past CTE is what makes it so:
       // against the household's past it would read as a large fall.
       const his = await netWorthChange([bob.id], "2026-02-01", ctx.db);
-      expect(his).toMatchObject({ previous: "2400.0000", current: "2400.0000", difference: "0.0000" });
+      expect(his).toMatchObject({
+        previous: "2400.0000",
+        current: "2400.0000",
+        difference: "0.0000",
+      });
     }),
   );
 
@@ -220,6 +227,52 @@ describe("the readers that take the filter", () => {
       expect(await currentHoldings([alice.id], ctx.db)).toEqual([]);
       expect((await netWorth([alice.id], ctx.db)).amount).toBe("0.0000");
       expect(await firstRecordedDate([alice.id], ctx.db)).toBe("2025-05-31");
+    }),
+  );
+
+  it(
+    "counts coverage over the narrowed set, so a filtered screen says how much of itself it knows",
+    withDatabase(async (ctx) => {
+      const { alice, hers } = await seedTwoOwners(ctx, "2026-02-28");
+
+      // A later statement of Alice's holding one priced instrument and one
+      // that has never been priced. `known`/`total` is what captions a figure,
+      // and Bob — fully priced — must not be what makes her screen look
+      // complete.
+      const vti3 = await ctx.seedInstrument({ symbol: "VTI3", name: "Another Total Market" });
+      const trust = await ctx.seedInstrument({ symbol: null, name: "Workplace Trust" });
+      await ctx.seedQuote({ instrument: vti3, price: "300.0000" });
+      await ctx.seedPositionSet({
+        account: hers,
+        asOf: "2026-03-31",
+        holdings: [
+          { instrument: vti3, quantity: "10.00000000" },
+          { instrument: trust, quantity: "1450.00000000" },
+        ],
+      });
+
+      expect(await netWorth([alice.id], ctx.db)).toEqual({
+        amount: "3000.0000",
+        coverage: { known: 1, total: 2 },
+      });
+      expect(await netWorth(ALL_OWNERS, ctx.db)).toEqual({
+        amount: "5400.0000",
+        coverage: { known: 2, total: 3 },
+      });
+    }),
+  );
+
+  it(
+    "agrees with itself once narrowed: the delta's present end is the narrowed net worth",
+    withDatabase(async (ctx) => {
+      // The invariant `aggregates-agree.test.ts` enforces for the household,
+      // asked of one owner — the one most likely to rot once the screens pass
+      // a filter through two readers instead of one.
+      const { alice } = await seedTwoOwners(ctx, "2026-02-28");
+
+      const change = await netWorthChange([alice.id], "2026-02-01", ctx.db);
+
+      expect(change.current).toBe((await netWorth([alice.id], ctx.db)).amount);
     }),
   );
 });
@@ -272,8 +325,16 @@ describe("the series readers narrow inside the lateral", () => {
       // point at both — flat, which is the honest answer, rather than one point.
       // The closes the helper seeded on 2026-02-27 are what price Alice's
       // holding at both instants: strictly before the session, per ADR-0006.
-      await ctx.seedObservation({ instrument: vxus, asOf: "2026-02-28T14:30:00.000Z", price: "61.0000" });
-      await ctx.seedObservation({ instrument: vxus, asOf: "2026-02-28T20:00:00.000Z", price: "62.0000" });
+      await ctx.seedObservation({
+        instrument: vxus,
+        asOf: "2026-02-28T14:30:00.000Z",
+        price: "61.0000",
+      });
+      await ctx.seedObservation({
+        instrument: vxus,
+        asOf: "2026-02-28T20:00:00.000Z",
+        price: "62.0000",
+      });
 
       const hers = await netWorthSessionSeries([alice.id], "2026-02-28", ctx.db);
       expect(hers.map((point) => point.amount)).toEqual(["25000.0000", "25000.0000"]);
@@ -283,6 +344,40 @@ describe("the series readers narrow inside the lateral", () => {
 
       const household = await netWorthSessionSeries(ALL_OWNERS, "2026-02-28", ctx.db);
       expect(household.map((point) => point.amount)).toEqual(["27440.0000", "27480.0000"]);
+    }),
+  );
+
+  it(
+    "draws a flat line for an owner who holds nothing, rather than no line at all",
+    withDatabase(async (ctx) => {
+      // The session reader's version of the same rule. Its instants come from
+      // the log as a whole, so an owner holding nothing has to answer at every
+      // one of them: a predicate applied outside the `valued` lateral would
+      // reject the all-null row the join manufactures and take the instant
+      // down with it, leaving an empty chart where "it did not move" is the
+      // honest answer.
+      const { alice, vxus } = await seedTwoOwners(ctx, "2026-02-27");
+      const casey = await ctx.seedPerson({ name: "Casey" });
+      const account = await ctx.seedAccount({ name: "Casey Cash", owner: casey, kind: "bank" });
+      await ctx.seedPositionSet({ account, asOf: "2026-02-27", holdings: [] });
+
+      await ctx.seedObservation({
+        instrument: vxus,
+        asOf: "2026-02-28T14:30:00.000Z",
+        price: "61.0000",
+      });
+      await ctx.seedObservation({
+        instrument: vxus,
+        asOf: "2026-02-28T20:00:00.000Z",
+        price: "62.0000",
+      });
+
+      const theirs = await netWorthSessionSeries([casey.id], "2026-02-28", ctx.db);
+      const hers = await netWorthSessionSeries([alice.id], "2026-02-28", ctx.db);
+
+      expect(theirs.map((point) => point.at)).toEqual(hers.map((point) => point.at));
+      expect(theirs.map((point) => point.amount)).toEqual(["0.0000", "0.0000"]);
+      expect(theirs.map((point) => point.coverage.total)).toEqual([0, 0]);
     }),
   );
 });
@@ -316,6 +411,17 @@ describe("an id that cannot name an owner", () => {
       expect(await netWorthSeries([TOO_LONG], ["2026-02-28"], ctx.db)).toEqual([
         { date: "2026-02-28", amount: "0.0000", coverage: { known: 0, total: 0 } },
       ]);
+    }),
+  );
+
+  it(
+    "still resolves a zero-padded id, which is a legal spelling of a legal id",
+    withDatabase(async (ctx) => {
+      const { alice } = await seedTwoOwners(ctx, "2026-02-28");
+
+      // The length bound exists to keep an out-of-range value away from
+      // Postgres, not to turn a working URL into a 404 on a character count.
+      expect((await netWorth([alice.id.padStart(22, "0")], ctx.db)).amount).toBe("25000.0000");
     }),
   );
 

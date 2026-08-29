@@ -475,11 +475,14 @@ is what keeps a schema change from rewriting every test.
 screen reads through:
 
 ```ts
-currentHoldings()          // every holding held right now, valued
-netWorth()                 // one SUM, plus how many holdings it was computed from
-holdingsAt('2026-02-14')   // the same, for any past date
-netWorthAt('2026-02-14')   // dates are 'YYYY-MM-DD' strings, both directions
+currentHoldings(owners)            // every holding held right now, valued
+netWorth(owners)                   // one SUM, plus how many holdings it was computed from
+holdingsAt(owners, '2026-02-14')   // the same, for any past date
+netWorthAt(owners, '2026-02-14')   // dates are 'YYYY-MM-DD' strings, both directions
 ```
+
+`owners` is the owner filter: which of the household's people the read is for, required on every
+one of these so that reading everyone's money is something the caller says rather than omits.
 
 DESIGN.md §8.2 names dashboards drifting on the definition of "current holdings" as the
 weakest point in the design; the view and this one module over it are the mitigation. A screen that

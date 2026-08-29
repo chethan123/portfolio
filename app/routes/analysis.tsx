@@ -13,8 +13,8 @@ import {
   type GainGroups,
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
-import { readCapitalGainsRate } from "~/lib/settings.server";
 import { ALL_OWNERS } from "~/lib/owner-filter";
+import { readCapitalGainsRate } from "~/lib/settings.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import { PriceFreshness } from "../components/price-freshness.tsx";

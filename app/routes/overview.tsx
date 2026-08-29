@@ -23,6 +23,7 @@ import {
 } from "~/lib/chart-range";
 import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import {
   accountTotals,
   asSessionPoints,
@@ -35,7 +36,6 @@ import {
   type AccountKind,
   type IsoDate,
 } from "~/lib/valuation.server";
-import { ALL_OWNERS } from "~/lib/owner-filter";
 
 import { getConfig } from "../../server/config.ts";
 

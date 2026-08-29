@@ -350,7 +350,7 @@ grep. They come in three tiers.
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
   the view, and it is worth watching.
-- `valuation.server.ts:697` (`readSessionSeries`) values holdings from `price_observation` rather
+- `valuation.server.ts`'s `readSessionSeries` values holdings from `price_observation` rather
   than through `holding_valued` — the 1D chart's line, and the only valuation anywhere that reads the
   observation log. Not an escape from the invariant but an extension of it: the same module owns
   both, so the rule stays "one module values holdings" rather than becoming "one view does". It
@@ -1176,16 +1176,23 @@ either source; the rest are their own queries inside the same module, which is t
 in the module, not scattered across routes.
 
 ```ts
-currentHoldings()              // every holding held right now, valued
-netWorth()                     // one SUM, plus how many holdings it was computed from
-holdingsAt('2026-02-14')       // the same, for any past date
-netWorthAt('2026-02-14')
-accountTotals() / accountTotal(id) / accountHoldings(id)
-netWorthSeries(dates) / accountSeries(id, dates)
-latestObservedSession()        // which session 1D plots, off the observation log
-netWorthSessionSeries(session) / accountSessionSeries(id, session)
-manualNetWorth() / netWorthChange() / firstRecordedDate() / accountFirstRecordedDate(id)
+currentHoldings(owners)              // every holding held right now, valued
+netWorth(owners)                     // one SUM, plus how many holdings it was computed from
+holdingsAt(owners, '2026-02-14')     // the same, for any past date
+netWorthAt(owners, '2026-02-14')
+accountTotals(owners) / accountTotal(id) / accountHoldings(id)
+netWorthSeries(owners, dates) / accountSeries(id, dates)
+latestObservedSession()              // which session 1D plots, off the observation log
+netWorthSessionSeries(owners, session) / accountSessionSeries(id, session)
+manualNetWorth() / netWorthChange(owners, since) / firstRecordedDate(owners)
+accountFirstRecordedDate(id)
 ```
+
+`owners` is the **owner filter** (spec 0013, ADR-0008) — required, and with no default, on every
+household-scoped read: `ALL_OWNERS` is the whole household and is a word somebody typed rather than
+an argument somebody forgot. An account-scoped read does not take it, because an account already has
+exactly one owner; `manualNetWorth` and `latestObservedSession` do not either, and
+`valuation.server.ts` says why at each seam.
 
 The seam is `ValuedSource` — `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
 type, so a read built on it works for both. The reads that sit beside it rather than on it fall
@@ -1444,7 +1451,7 @@ allowlist does.
 | Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
 | TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — which is also the redirect URI registered with Google, character for character |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
-| SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers (`valuation.server.ts:375-376` — the `accountId` there is bound behind a `/^\d+$/` guard) |
+| SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers (`valuation.server.ts`'s `isOneOf` — the ids there are bound as one `bigint[]` parameter behind a digits-and-length guard, so an id past the type's range answers "no such row" in SQL rather than erroring inside Postgres) |
 | Error disclosure | Contained. The error page prints fixed wording chosen by the response status — nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
 
 **The forwarded-header decision, stated plainly.** `caddy` trusts what reaches it from the house
