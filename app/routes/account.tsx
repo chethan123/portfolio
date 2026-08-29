@@ -250,7 +250,22 @@ export async function action({ params, request }: Route.ActionArgs) {
     // empty because this is a fresh GET rather than the same elements
     // re-rendered, and the confirmation is then forced to describe what the
     // database says instead of what the submission claimed.
-    throw redirect(`/accounts/${params.accountId}?recorded=${written.asOf}`);
+    //
+    // The receipt keeps whatever the submitting page was reading — its range,
+    // and its owner filter. `chartRangeMiddleware` writes no cookie onto a
+    // redirect, so a target that dropped `range` would leave the followed GET
+    // with nothing explicit to read and send it to whatever the cookie last
+    // held, which another tab may have moved. Naming it here is what makes the
+    // middleware's rule safe: every redirect under it lands somewhere carrying
+    // the same answer.
+    const receipt = new URLSearchParams(new URL(request.url).searchParams);
+    // The previous receipt, if the form was submitted from one. Two would stack
+    // and the second would be read.
+    receipt.delete("recorded");
+    receipt.delete("uploaded");
+    receipt.set("recorded", written.asOf);
+
+    throw redirect(`/accounts/${params.accountId}?${receipt.toString()}`);
   } catch (error) {
     if (error instanceof ValidationError) {
       return { errors: error.fieldErrors, values };
