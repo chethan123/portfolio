@@ -30,6 +30,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
+  DIMENSIONS,
+  GROUPINGS,
   applyFilters,
   availableFilters,
   formatQuantity,
@@ -44,6 +46,7 @@ import {
   toSearch,
 } from "~/lib/holdings-view";
 import { MONEY_SCALE, SHARE_SCALE, render, sumMoney, toUnits } from "~/lib/money";
+import { ALL_OWNERS, readOwnerFilter } from "~/lib/owner-filter";
 
 import type { ValuedHolding } from "~/lib/valuation.server";
 
@@ -109,9 +112,9 @@ describe("parseQuery", () => {
   });
 
   it("reads every dimension, the grouping and the sort", () => {
-    const parsed = query("owner=2&institution=Vanguard&group=kind&sort=quantity&dir=asc");
+    const parsed = query("account=7&institution=Vanguard&group=kind&sort=quantity&dir=asc");
 
-    expect(parsed.filters.get("owner")).toBe("2");
+    expect(parsed.filters.get("account")).toBe("7");
     expect(parsed.filters.get("institution")).toBe("Vanguard");
     expect(parsed.group).toBe("kind");
     expect(parsed.sort).toBe("quantity");
@@ -131,7 +134,7 @@ describe("parseQuery", () => {
 
   it("treats an empty select as `all`, not as a filter for the empty key", () => {
     // This is what a GET form submits for a `<select>` nobody touched.
-    expect(query("owner=&kind=").filters.size).toBe(0);
+    expect(query("account=&kind=").filters.size).toBe(0);
   });
 
   it("accepts the dividend column as a sort", () => {
@@ -150,32 +153,78 @@ describe("parseQuery", () => {
   });
 });
 
+describe("the dimensions", () => {
+  it("offers exactly the six a select can narrow by, owner no longer among them", () => {
+    // The literal list, not a count: a count passes while the wrong dimension
+    // is missing. `owner` left because narrowing by owner is household-wide
+    // now, and a second, screen-local way to ask the same question is two
+    // answers available at once.
+    expect(DIMENSIONS.map((dimension) => dimension.id)).toEqual([
+      "account",
+      "institution",
+      "kind",
+      "tax",
+      "classification",
+      "assetClass",
+    ]);
+  });
+
+  it("keeps owner as a grouping, first, because grouping is not narrowing", () => {
+    expect(GROUPINGS.map((dimension) => dimension.id)).toEqual([
+      "owner",
+      ...DIMENSIONS.map((dimension) => dimension.id),
+    ]);
+  });
+
+  it("still parses `group=owner`, so a bookmarked grouping keeps working", () => {
+    expect(query("group=owner").group).toBe("owner");
+    // And it is no longer read as a filter, whatever the URL says.
+    expect(query("owner=2").filters.size).toBe(0);
+  });
+});
+
 describe("toSearch", () => {
   it("omits the defaults, so the unfiltered table's URL is bare", () => {
-    expect(toSearch(query())).toBe("");
+    expect(toSearch(query(), ALL_OWNERS)).toBe("");
   });
 
   it("round-trips a view", () => {
-    const search = "owner=2&institution=Vanguard&group=kind&sort=quantity&dir=asc";
+    const search = "account=7&institution=Vanguard&group=kind&sort=quantity&dir=asc";
 
-    expect(toSearch(query(search))).toBe(`?${search}`);
+    expect(toSearch(query(search), ALL_OWNERS)).toBe(`?${search}`);
+  });
+
+  it("emits the owner filter first, with literal commas, so one view has one spelling", () => {
+    // First and comma-spelled because this function is the single definition of
+    // a canonical Holdings URL and the loader redirects anything else. Round
+    // -tripping the pair through `URLSearchParams` would spell the separator
+    // `%2C`, which is a second URL for one view.
+    expect(toSearch(query("group=kind"), ["1", "3"])).toBe("?owner=1,3&group=kind");
+    expect(toSearch(query(), ["3"])).toBe("?owner=3");
   });
 
   it("is a fixed point, so the route's canonical redirect cannot loop", () => {
-    // The route bounces to `toSearch(parseQuery(search))` whenever the incoming
-    // URL differs from it — which is every time the filter form submits, since
-    // a GET form sends `&kind=&tax=` for the selects nobody touched. If a
-    // second pass could change the string again, that bounce would be a
-    // redirect loop rather than a tidy-up.
+    // The route bounces to `toSearch(parseQuery(search), readOwnerFilter(…))`
+    // whenever the incoming URL differs from it — which is every time a form
+    // submits, since a GET form sends `&kind=&tax=` for the selects nobody
+    // touched and `owner=1&owner=3` for the boxes somebody did. If a second
+    // pass could change the string again, that bounce would be a redirect loop
+    // rather than a tidy-up, and nothing would notice until a reader opened
+    // the screen.
     for (const messy of [
       "owner=1&account=&institution=&kind=&tax=&classification=&assetClass=",
       "sort=value&dir=desc&group=",
       "colour=blue&owner=2",
+      "owner=3&owner=1",
+      "group=kind&owner=10,9",
+      "owner=1%2C3&sort=quantity",
       "",
     ]) {
-      const once = toSearch(query(messy));
+      const params = new URLSearchParams(messy);
+      const once = toSearch(parseQuery(params), readOwnerFilter(params));
+      const again = new URLSearchParams(once);
 
-      expect(toSearch(query(once))).toBe(once);
+      expect(toSearch(parseQuery(again), readOwnerFilter(again))).toBe(once);
     }
   });
 });
@@ -196,13 +245,27 @@ describe("availableFilters", () => {
   it("offers every dimension the data really varies on", () => {
     const controls = availableFilters(
       [
+        holding({ institution: "Fidelity", assetClass: "equity" }),
+        holding({ institution: "Vanguard", assetClass: "bond" }),
+      ],
+      query(),
+    );
+
+    expect(controls.map((control) => control.id)).toEqual(["institution", "assetClass"]);
+  });
+
+  it("never offers an owner select, however many owners the holdings carry", () => {
+    // Narrowing by owner is household-wide (ADR-0008), so this bar does not
+    // ask: two ways to ask one question is two answers available at once.
+    const controls = availableFilters(
+      [
         holding({ ownerId: "1", ownerName: "Alice", institution: "Fidelity" }),
         holding({ ownerId: "2", ownerName: "Bob", institution: "Vanguard" }),
       ],
       query(),
     );
 
-    expect(controls.map((control) => control.id)).toEqual(["owner", "institution"]);
+    expect(controls.map((control) => control.id)).not.toContain("owner");
   });
 
   it("builds its options from the holdings, never from the enumeration", () => {
@@ -263,16 +326,21 @@ describe("availableFilters", () => {
     ]);
   });
 
-  it("distinguishes two people who share a name", () => {
-    const [owner] = availableFilters(
+  it("distinguishes two people who share a name, wherever owner is still read", () => {
+    // The owner dimension is a grouping now rather than a filter, and it is
+    // still keyed on the id: two people in one household can share a first
+    // name, and a grouping that merged them would be wrong invisibly.
+    const groups = groupHoldings(
       [
-        holding({ ownerId: "1", ownerName: "Sam" }),
-        holding({ ownerId: "2", ownerName: "Sam" }),
+        holding({ ownerId: "1", ownerName: "Sam", value: "10.0000" }),
+        holding({ ownerId: "2", ownerName: "Sam", value: "20.0000" }),
       ],
-      query(),
+      "owner",
+      DEFAULT_SORT,
+      DEFAULT_DIRECTION,
     );
 
-    expect(owner?.options.map((option) => option.value)).toEqual(["1", "2"]);
+    expect(groups.map((group) => group.key)).toEqual(["2", "1"]);
   });
 });
 
@@ -288,15 +356,21 @@ describe("applyFilters", () => {
   });
 
   it("ands the dimensions together", () => {
-    const filtered = applyFilters(rows, query("owner=1&institution=Fidelity"));
+    const filtered = applyFilters(rows, query("assetClass=equity&institution=Fidelity"));
 
-    expect(filtered).toHaveLength(1);
-    expect(filtered[0]?.assetClass).toBe("equity");
+    expect(filtered).toHaveLength(2);
+    expect(filtered.every((row) => row.institution === "Fidelity")).toBe(true);
   });
 
   it("returns nothing for a combination the household does not hold", () => {
     // Distinct from an empty portfolio, and the screen says so differently.
-    expect(applyFilters(rows, query("owner=2&institution=Vanguard"))).toEqual([]);
+    expect(applyFilters(rows, query("assetClass=bond&institution=Fidelity"))).toEqual([]);
+  });
+
+  it("no longer narrows on owner, whatever the URL says", () => {
+    // The owner filter is household-wide and applied in SQL. A leftover
+    // `?owner=` reaching this function must not narrow a second time.
+    expect(applyFilters(rows, query("owner=1"))).toHaveLength(rows.length);
   });
 });
 

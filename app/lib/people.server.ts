@@ -39,6 +39,18 @@ export type Person = {
   name: string;
   /** Accounts owned, open and closed alike. */
   accountCount: number;
+  /**
+   * Accounts owned that are still open — which is what decides whether this
+   * person can be an *owner* the screens are readable as (spec 0013).
+   *
+   * A second count rather than a narrowing of the first, because
+   * {@link removePerson} depends on `accountCount` meaning open and closed
+   * alike: a person whose accounts have all been closed still cannot be
+   * removed, and a count that had quietly stopped seeing them would let the
+   * delete through. Both come out of the one query the People screen already
+   * pays for.
+   */
+  openAccountCount: number;
 };
 
 /**
@@ -66,6 +78,10 @@ export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person
       "person.id",
       "person.name",
       fn.count<string>("account.id").as("account_count"),
+      fn
+        .count<string>("account.id")
+        .filterWhere("account.closed_at", "is", null)
+        .as("open_account_count"),
     ])
     .groupBy(["person.id", "person.name"])
     // By name for a stable, readable list; by id to break the tie between two
@@ -80,7 +96,26 @@ export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person
     // A cardinality of a household's accounts, not money — `Number` is safe
     // here in a way it never is on a `numeric` column.
     accountCount: Number(row.account_count),
+    openAccountCount: Number(row.open_account_count),
   }));
+}
+
+/**
+ * The people a screen can be read as — the owner filter's roster (spec 0013).
+ *
+ * Owners of at least one **open** account, because `holding_valued` excludes
+ * closed ones: selecting somebody whose accounts have all been closed would
+ * empty every screen with no explanation, and their id resolves, so the
+ * unknown-owner state would not fire either. Their history stays out of the
+ * filter's reach, which DESIGN.md §14 records as an accepted limitation rather
+ * than something solved here.
+ *
+ * A filter over {@link listPeople} rather than a second query: the roster is
+ * small, the query is the one the People screen already runs, and two readers
+ * of one table are two answers waiting to disagree.
+ */
+export async function filterableOwners(db: Kysely<Database> = getDb()): Promise<Person[]> {
+  return (await listPeople(db)).filter((person) => person.openAccountCount > 0);
 }
 
 /**
@@ -101,7 +136,8 @@ export async function createPerson(
     .returning(["id", "name"])
     .executeTakeFirstOrThrow();
 
-  return { id: row.id, name: row.name, accountCount: 0 };
+  // A person just created owns nothing, open or closed.
+  return { id: row.id, name: row.name, accountCount: 0, openAccountCount: 0 };
 }
 
 /**
@@ -178,16 +214,24 @@ export async function removePerson(
   await db.deleteFrom("person").where("id", "=", id).execute();
 }
 
-/** Re-read the account count for a person a write has just returned. */
+/** Re-read the account counts for a person a write has just returned. */
 async function countedPerson(
   person: { id: string; name: string },
   db: Kysely<Database>,
 ): Promise<Person> {
   const row = await db
     .selectFrom("account")
-    .select(({ fn }) => fn.count<string>("id").as("account_count"))
+    .select(({ fn }) => [
+      fn.count<string>("id").as("account_count"),
+      fn.count<string>("id").filterWhere("closed_at", "is", null).as("open_account_count"),
+    ])
     .where("owner_id", "=", person.id)
     .executeTakeFirstOrThrow();
 
-  return { id: person.id, name: person.name, accountCount: Number(row.account_count) };
+  return {
+    id: person.id,
+    name: person.name,
+    accountCount: Number(row.account_count),
+    openAccountCount: Number(row.open_account_count),
+  };
 }

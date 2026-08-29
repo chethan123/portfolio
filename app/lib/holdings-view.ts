@@ -57,6 +57,8 @@ import {
   toUnits,
 } from "./money.ts";
 
+import { toOwnerParam, type OwnerFilter } from "./owner-filter.ts";
+
 import type { AccountKind, Coverage, TaxTreatment, ValuedHolding } from "./valuation.server.ts";
 
 /**
@@ -127,24 +129,36 @@ function plain(key: string): Facet {
 }
 
 /**
- * Ordered as the filter bar and the group-by strip render them: who owns it,
- * where it sits, then what it is. That is the order a person narrows in.
+ * Owner: a **grouping**, and no longer a filter (spec 0013).
+ *
+ * Narrowing to an owner is household-wide now — it follows the reader onto
+ * Overview, Analysis and Income — so this screen's own Owner select would have
+ * been a second, screen-local way to ask the same question, with two answers
+ * available at once. Grouping by owner is a different act and stays: it is how
+ * you read one table as four, and it is still useful under a filter naming two
+ * people.
+ *
+ * Keyed on the owner's id rather than their name, for the reason
+ * `allocationByPerson` gives: two people in one household can share a first
+ * name, and a grouping that merged them would be wrong invisibly.
+ */
+const OWNER: Dimension = {
+  id: "owner",
+  label: "Owner",
+  filterLabel: "Owner",
+  phrase: (label) => `owned by ${label}`,
+  of: (holding) => ({
+    key: holding.ownerId,
+    label: holding.ownerName,
+    optionLabel: holding.ownerName,
+  }),
+};
+
+/**
+ * The dimensions the filter bar offers, ordered as it renders them: where it
+ * sits, then what it is. That is the order a person narrows in.
  */
 export const DIMENSIONS: ReadonlyArray<Dimension> = [
-  {
-    id: "owner",
-    label: "Owner",
-    filterLabel: "Owner",
-    phrase: (label) => `owned by ${label}`,
-    // Keyed on the owner's id rather than their name, for the reason
-    // `allocationByPerson` gives: two people in one household can share a first
-    // name, and a filter that merged them would be wrong invisibly.
-    of: (holding) => ({
-      key: holding.ownerId,
-      label: holding.ownerName,
-      optionLabel: holding.ownerName,
-    }),
-  },
   {
     id: "account",
     label: "Account",
@@ -208,7 +222,18 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
   },
 ];
 
-const DIMENSION_BY_ID = new Map(DIMENSIONS.map((dimension) => [dimension.id, dimension]));
+/**
+ * The dimensions the table can be grouped by: the filterable ones plus
+ * {@link OWNER}, which is a grouping and not a filter.
+ *
+ * Two lists rather than one flag on `Dimension`, because everything that reads
+ * these reads one of the two whole: the filter bar and `toSearch`'s parameters
+ * are {@link DIMENSIONS}, the group-by strip and the `group=` vocabulary are
+ * these.
+ */
+export const GROUPINGS: ReadonlyArray<Dimension> = [OWNER, ...DIMENSIONS];
+
+const DIMENSION_BY_ID = new Map(GROUPINGS.map((dimension) => [dimension.id, dimension]));
 
 /**
  * One dimension's accessor, for a breakdown built outside this module.
@@ -434,8 +459,22 @@ export function parseQuery(params: URLSearchParams): HoldingsQuery {
  *
  * Defaults are omitted rather than written out, so the unfiltered table's URL
  * is `/holdings` and not `/holdings?sort=value&dir=desc&group=`.
+ *
+ * **The owner filter arrives as its own argument, not as a member of
+ * {@link HoldingsQuery}.** It is household-wide (ADR-0008) where everything in
+ * that object is this screen's own; but it has to be here, and first, because
+ * every link on the screen is built from this function and a control that
+ * rebuilt the query without it would clear the filter on a column click. A
+ * parameter this writes and {@link parseQuery} refuses to read would be a seam
+ * with a hole in it, so `readOwnerFilter` is the other half and the loader
+ * passes both.
+ *
+ * Emitted **first**, and with literal commas, because this is the single
+ * definition of a canonical Holdings URL and the loader redirects anything
+ * spelled differently. `URLSearchParams` would percent-encode the separator,
+ * which is a second spelling of one view.
  */
-export function toSearch(query: HoldingsQuery): string {
+export function toSearch(query: HoldingsQuery, owners: OwnerFilter): string {
   const params = new URLSearchParams();
 
   for (const dimension of DIMENSIONS) {
@@ -447,7 +486,7 @@ export function toSearch(query: HoldingsQuery): string {
   if (query.sort !== DEFAULT_SORT) params.set("sort", query.sort);
   if (query.direction !== DEFAULT_DIRECTION) params.set("dir", query.direction);
 
-  const search = params.toString();
+  const search = [toOwnerParam(owners), params.toString()].filter((part) => part !== "").join("&");
 
   return search === "" ? "" : `?${search}`;
 }
