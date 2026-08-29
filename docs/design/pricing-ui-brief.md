@@ -397,8 +397,15 @@ stale; partial coverage and fresh; nothing valued.
    a direction arrow; every stale thing carries the word "stale". The screens must survive greyscale.
 2. **Never render a figure in an empty state.** A zero and an absence must not look alike. No `$0.00`
    placeholder, no ghost chart, no axis with no line.
-3. **No sub-daily range chips.** No `1D`, no `1W`, no intraday. Mutual funds strike one NAV a day, so
-   a 1D chart is two points. The one range set is **1M / 3M / 1Y / All**.
+3. ~~**No sub-daily range chips.** No `1D`, no `1W`, no intraday. Mutual funds strike one NAV a day, so
+   a 1D chart is two points. The one range set is **1M / 3M / 1Y / All**.~~
+   **Reversed** by [ADR-0006](../adr/0006-intraday-quotes-are-an-observation-log.md) and issue #94:
+   1D ships, first in a range set that is now **1D / 1W / 1M / 3M / YTD / 1Y / 5Y / All / Custom**.
+   Struck through rather than deleted, because the argument was not wrong and is now a caveat rather
+   than a rule: a fund does strike one NAV a day, so for a workplace-plan-heavy household much of the
+   1D line is flat. That is accepted, not fixed. What changed is the premise underneath it — the
+   price poller stopped discarding every quote it fetched, so a session is a line of a household's
+   own observations rather than the two points a fund would give it.
 4. **No invented metrics.** No risk gauge, no "Target Risk 8.0 / 10", no time-weighted return, no
    after-tax net worth, no projected anything. If a number cannot be traced to stored data, it is
    not drawn.
