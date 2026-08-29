@@ -49,18 +49,12 @@ calendar is built from the wall clock, so quantities drift with the day the data
 CSV frozen today would slowly turn its unchanged rows into changed ones, and `upload-4-review.png`
 would stop showing the diff it is captioned as showing.
 
-## `holdings-owner.png` is the owner filter's only picture
+## The owner filter is shot on Holdings
 
-The owner filter narrows four screens, and [its guide page](../owner-filter.md) is illustrated once,
-on Holdings. Holdings is where the control is easiest to read against something familiar — it is the
-same table `holdings.png` already shows unnarrowed — and it is the screen whose panel header spells
-the narrowing out in words as well as in figures. The README's pair is on Overview instead, for the
-opposite reason: [there](../../screenshots/README.md) the point is everything a narrowed chart does
-differently, which needs a before and an after to be visible at all.
-
-`holdings-grouped.png` was narrowed as well as grouped until this shot existed, which left the
-reader working out which of two controls had done which. It is grouped and nothing else now, and
-the narrowing is here.
+`holdings-owner.png` is the same table `holdings.png` shows unnarrowed, which is what makes the
+control legible; the README's pair is on Overview, for [its own reasons](../../screenshots/README.md).
+`holdings-grouped.png` was narrowed as well as grouped until this shot existed, leaving the reader to
+work out which of two controls had done which; it is grouped and nothing else now.
 
 ## Sizes
 

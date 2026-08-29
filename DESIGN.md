@@ -527,13 +527,15 @@ features.
 **All four read as one or more owners.** The **owner filter** ([ADR-0008](docs/adr/0008-the-owner-filter-is-a-household-wide-view.md))
 is one household-wide selection, carried between these four screens by the navigation and held
 entirely in the address — no cookie, nothing stored, and never derived from who signed in. Every
-figure on a narrowed screen is that selection's, and every narrowed screen names the owners in words
-beside the figure, because a filter that survives navigation is a filter that can be forgotten.
+*valued* figure on a narrowed screen is that selection's; what stays household-wide is deliberate and
+narrow — the "filtered from N" count, the "recorded in all" figure beside it, and Holdings' own
+filter options, each of which exists to say what the narrowing left out and would say nothing if it
+narrowed too. And every narrowed screen names the owners in words, because a filter that survives
+navigation is a filter that can be forgotten.
 
-Some surfaces are exempt, each for its own reason. **An account's own page** is already narrower
-than an owner — one account has exactly one owner — so it ignores the filter and draws no control.
-**The upload flow and Settings** are about records rather than about money, so they neither read the
-parameter nor carry it: an excursion into either ends the reading, which ADR-0008 accepts out loud.
+The exempt surfaces and the argument for each are
+[ADR-0008](docs/adr/0008-the-owner-filter-is-a-household-wide-view.md)'s, not restated here: an
+account's own page, the upload flow and Settings, which neither read the parameter nor carry it.
 
 Structurally, the rule is a signature: the owner filter is a required first argument with no default
 on every household-scoped reader in `valuation.server.ts`, so a new screen cannot read holdings

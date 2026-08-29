@@ -339,7 +339,7 @@ grep. They come in three tiers.
 |---|---|---|
 | Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:276` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | Two, both real (below). The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
-| Whose money a screen is reading | The readers' own signatures — the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and Appendix A on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons stated at the seam. The argument cannot make the filter impossible to skip — a new screen can pass `ALL_OWNERS` and draw no control — only **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
+| Whose money a screen is reading | The readers' own signatures — the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and Appendix A on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons — both given in `manualNetWorth`'s own docstring, where the line falls. The argument cannot make the filter impossible to skip — a new screen can pass `ALL_OWNERS` and draw no control — only **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
 **The two valuation exceptions, stated rather than buried:**
 
@@ -1193,7 +1193,7 @@ accountFirstRecordedDate(id)
 household-scoped read: `ALL_OWNERS` is the whole household and is a word somebody typed rather than
 an argument somebody forgot. An account-scoped read does not take it, because an account already has
 exactly one owner; `manualNetWorth` and `latestObservedSession` do not either, and
-`valuation.server.ts` says why at each seam.
+`manualNetWorth`'s docstring says why for both.
 
 **Where the narrowing goes is the part a future change breaks silently**, so it is worth knowing
 before editing any of these. Four shapes, and they are not interchangeable:
