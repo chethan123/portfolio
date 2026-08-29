@@ -729,6 +729,24 @@ a {
   flex: none;
 }
 
+/*
+ * A header strip that is only there for what sits in it (spec 0013).
+ *
+ * The Overview's title is its headline figure, not a heading, so its strip has
+ * nothing on the left and the rule and the padding beneath would draw a line
+ * under an empty row. It keeps the row and drops the ornament, which is what
+ * puts the owner control in the same place on all four screens without giving
+ * this one a heading it deliberately does not have.
+ */
+.page-header--bare {
+  padding-bottom: 0;
+  border-bottom: 0;
+  /* `space-between` has nothing to space when the left is a hidden heading,
+   * and would leave the control at the far left — three screens away from
+   * where the same control sits on the other three. */
+  justify-content: flex-end;
+}
+
 @media (max-width: 767px) {
   .page-header {
     flex-direction: column;
