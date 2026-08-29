@@ -35,6 +35,21 @@ function Icon({ className, children }: IconProps & { children: React.ReactNode }
   );
 }
 
+/**
+ * Refresh. Two arcs chasing each other, each with its own head — the shape
+ * every browser and every phone already uses for "fetch this again".
+ */
+export function RefreshIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M20.5 12a8.5 8.5 0 0 1-14.6 5.9L3.5 15.5" />
+      <path d="M3.5 12a8.5 8.5 0 0 1 14.6-5.9L20.5 8.5" />
+      <path d="M20.5 4v4.5H16" />
+      <path d="M3.5 20v-4.5H8" />
+    </Icon>
+  );
+}
+
 /** Overview. Four panes — the dashboard itself. */
 export function DashboardIcon(props: IconProps) {
   return (

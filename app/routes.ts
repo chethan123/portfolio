@@ -58,6 +58,11 @@ export default [
   // that it keeps working with JavaScript off.
   route("masking", "routes/masking.ts"),
 
+  // "Refresh now" (spec 0002 story 5). No UI of its own: the control sits in
+  // the header of every screen that shows a figure, and this is what its form
+  // posts to, so a press works with JavaScript off.
+  route("refresh", "routes/refresh.ts"),
+
   // Resource route, no UI. Kept in the router rather than in a server wrapper
   // so it behaves identically in dev and in the container.
   route("healthz", "routes/healthz.ts"),

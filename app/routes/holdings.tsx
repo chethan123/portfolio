@@ -30,6 +30,10 @@ import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
 
+import { PriceFreshness, type FreshnessView } from "../components/price-freshness.tsx";
+import { asOfView } from "../lib/prices.server.ts";
+import { getConfig } from "../../server/config.ts";
+
 import type { Route } from "./+types/holdings";
 
 /**
@@ -118,7 +122,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     saved !== null ? withRow(view, "saved", saved) : withRow(view, "edit", editing);
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
-  const holdings = await currentHoldings();
+  const [holdings, freshness] = await Promise.all([
+    currentHoldings(),
+    asOfView(getConfig().MARKET_TIMEZONE),
+  ]);
 
   // The filter controls are built from *every* holding, not from the filtered
   // set: options that vanished as you narrowed would leave no way to widen
@@ -146,6 +153,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         ) ?? null);
 
   return {
+    freshness,
     // Distinguishes "nothing uploaded" from "this filter matched nothing" —
     // two states that must not share a screen (§8.4).
     hasHoldings: holdings.length > 0,
@@ -332,6 +340,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
     editing,
     written,
     asOf,
+    freshness,
   } = loaderData;
 
   const query: HoldingsQuery = { filters: new Map(active), group, sort, direction };
@@ -366,7 +375,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
   if (!hasHoldings) {
     return (
       <section className="page">
-        <Header />
+        <Header freshness={freshness} />
         <EmptyState>
           Every position across every account will be listed here, grouped and filterable.
           Nothing has been uploaded to this instance yet.
@@ -377,7 +386,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
 
   return (
     <section className="page">
-      <Header />
+      <Header freshness={freshness} />
 
       <Filters filters={filters} query={query} />
       <GroupBy query={query} />
@@ -530,7 +539,7 @@ function join(parts: string[]): string {
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
 
-function Header() {
+function Header({ freshness }: { freshness: FreshnessView }) {
   return (
     <header className="page-header">
       <div>
@@ -538,6 +547,10 @@ function Header() {
         <p className="page-subtitle">
           Every position the household holds, whichever account it sits in.
         </p>
+      </div>
+
+      <div className="page-actions">
+        <PriceFreshness freshness={freshness} />
       </div>
     </header>
   );

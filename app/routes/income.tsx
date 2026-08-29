@@ -12,6 +12,10 @@ import { groupingBy, summarise } from "~/lib/holdings-view";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import type { ShelteredSubtotal } from "~/lib/allocation";
+import { PriceFreshness } from "../components/price-freshness.tsx";
+import { asOfView } from "../lib/prices.server.ts";
+import { getConfig } from "../../server/config.ts";
+
 import type { Route } from "./+types/income";
 
 /**
@@ -58,9 +62,13 @@ export function meta() {
 }
 
 export async function loader() {
-  const holdings = await currentHoldings();
+  const [holdings, freshness] = await Promise.all([
+    currentHoldings(),
+    asOfView(getConfig().MARKET_TIMEZONE),
+  ]);
 
   return {
+    freshness,
     // Counted off the rows already in hand rather than asked for separately —
     // two counts of one thing are two things that can disagree.
     holdingCount: holdings.length,
@@ -123,6 +131,7 @@ export default function Income({ loaderData }: Route.ComponentProps) {
     sheltered,
     byTaxTreatment,
     byAccount,
+    freshness,
   } = loaderData;
 
   return (
@@ -134,6 +143,10 @@ export default function Income({ loaderData }: Route.ComponentProps) {
             What the portfolio pays over the coming year, and how much of it is taxed.
           </p>
         </div>
+        <div className="page-actions">
+          <PriceFreshness freshness={freshness} />
+        </div>
+
       </header>
 
       {holdingCount === 0 ? (

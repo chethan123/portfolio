@@ -14,6 +14,17 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // A loader that reads configuration — the market timezone the as-of caption
+    // renders in — calls `getConfig()`, which validates the whole environment
+    // and refuses without a `DATABASE_URL`. Tests never connect through it:
+    // `withDatabase` puts a transaction in async storage and `getDb()` finds it
+    // there. Pointing it at the same throwaway Postgres the suite already uses
+    // keeps the one variable config demands truthful rather than invented.
+    env: {
+      DATABASE_URL:
+        process.env.TEST_DATABASE_URL ??
+        "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test",
+    },
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     // Integration tests share one Postgres; keep them off each other's toes.
     fileParallelism: false,
