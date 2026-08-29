@@ -6,10 +6,11 @@
  * presets and Custom render identically on Overview and the account page with
  * one JSX tree to change.
  *
- * **No JavaScript required.** Every fixed preset is a plain link to
- * `?range=<key>`; Custom is a native `<details>` disclosure holding a GET form
- * that produces `?range=custom&start=&end=`. Both work with scripting off,
- * which is the same contract the four-preset control already kept.
+ * **No JavaScript required.** Every fixed preset is a plain link naming its
+ * own `range`; Custom is a native `<details>` disclosure holding a GET form
+ * that names `range=custom` and a `start`/`end` pair. Both work with scripting
+ * off, which is the same contract the four-preset control already kept, and
+ * both carry the rest of the query — see below.
  *
  * **Every link names its range explicitly, including the default.** The old
  * four-option control linked the default preset to `.`, stripping the query

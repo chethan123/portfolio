@@ -577,11 +577,15 @@ export function readChartRange(request: Request): RequestedRange {
 }
 
 /**
- * The three parameters this control writes. Everything else in the address
+ * The three parameters this control owns. Everything else in the address
  * belongs to the screen and is carried through untouched.
  *
- * Named once, beside {@link readChartRange}, which reads exactly these three:
- * a second list of them somewhere else is a list free to drift from this one.
+ * Here rather than in the component because these are exactly the three
+ * {@link readChartRange} reads back, and the read side and the write side of
+ * one vocabulary drift when they live in different files. They are still two
+ * lists in one file — `readChartRange` names each one where it reads it,
+ * because the three have different roles rather than being interchangeable —
+ * so adding a fourth is an edit in both places, twenty lines apart.
  */
 const RANGE_PARAMS = ["range", "start", "end"];
 
@@ -608,14 +612,21 @@ export function carriedParams(params: URLSearchParams): [string, string][] {
  * `?range=<key>`.
  *
  * `start` and `end` are rewritten rather than carried. A preset never reads a
- * custom span, so leaving one behind keeps a range in the address that nothing
- * draws and that Custom would reopen on.
+ * custom span — {@link readChartRange} looks at them only under
+ * `range=custom` — so one left behind is inert, and an address advertising a
+ * span nothing draws is worse than no span at all.
+ *
+ * The one liberty taken with `URLSearchParams.toString`: it percent-encodes a
+ * comma, and this application spells a multi-valued parameter with literal
+ * commas (`?owner=1,3`, spec 0013). Both spellings parse to the same value, so
+ * decoding it back keeps one view spelled one way in the address bar instead
+ * of two.
  */
 export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
   const next = new URLSearchParams(carriedParams(params));
   next.set("range", range);
 
-  return `?${next.toString()}`;
+  return `?${next.toString().replaceAll("%2C", ",")}`;
 }
 
 /**
