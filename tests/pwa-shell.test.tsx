@@ -7,7 +7,7 @@
  * to audit by eye, and its rule — nothing is ever stored on the device — is
  * ADR-0007's to state and this file's last describe block to tripwire.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -54,7 +54,7 @@ describe("the manifest", () => {
     expect(manifest.display).toBe("standalone");
   });
 
-  it("offers 192, 512 and a separate maskable icon, and every file it names exists", () => {
+  it("offers 192, 512 and a separate maskable icon", () => {
     const sizes = manifest.icons.map((icon) => icon.sizes);
     expect(sizes).toContain("192x192");
     expect(sizes).toContain("512x512");
@@ -64,9 +64,25 @@ describe("the manifest", () => {
     const purposes = manifest.icons.map((icon) => icon.purpose);
     expect(purposes).toContain("maskable");
     expect(purposes).not.toContain("any maskable");
+  });
 
+  it("inlines each icon as a data: URI matching its committed PNG, so no icon fetch can hit the gate", () => {
+    // Android's WebAPK icon hasher fetches icon URLs without cookies
+    // (Chromium webapk_single_icon_hasher.cc), so an icon *URL* behind the
+    // gate greys out install. A data: URI leaves nothing to fetch; this pins
+    // the URIs to the committed artifacts the render script rasterized.
+    const committed: Record<string, string> = {
+      "192x192:any": "icon-192.png",
+      "512x512:any": "icon-512.png",
+      "512x512:maskable": "icon-maskable-512.png",
+    };
+
+    expect(manifest.icons).toHaveLength(Object.keys(committed).length);
     for (const icon of manifest.icons) {
-      expect(existsSync(new URL(icon.src.replace(/^\//, ""), PUBLIC))).toBe(true);
+      const file = committed[`${icon.sizes}:${icon.purpose}`];
+      expect(file).toBeDefined();
+      const bytes = readFileSync(new URL(`icons/${file}`, PUBLIC));
+      expect(icon.src).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
     }
   });
 });

@@ -92,6 +92,14 @@ posture:
   artifacts, rasterized once by a small script using the Playwright chromium already in the dev
   dependencies — the same committed-artifact-plus-regeneration-script pattern the screenshot
   tooling already uses; wired into no build step.
+- **The manifest inlines the icons as `data:` URIs** rather than linking their URLs; the render
+  script writes that array from the committed PNGs. This is what makes Android install work
+  behind the gate: `use-credentials` covers only the manifest itself, and Android's install
+  machinery fetches manifest icon URLs on its own terms — the WebAPK icon hasher sends no cookies
+  at all (Chromium's `webapk_single_icon_hasher.cc`), so a gated icon URL yields the sign-in
+  redirect, no decodable image, and a greyed "This app cannot be installed". A `data:` URI leaves
+  nothing to fetch, keeps every path gated, and Chrome's hasher handles `data:` icons explicitly.
+  Cost: a ~25 KB manifest, accepted.
 - **Service worker**: one hand-rolled plain-JavaScript file (small enough to read in one sitting;
   no dependencies, no Workbox), served from the public asset directory at the site root so its
   scope covers the whole app. Plain `.js`, deliberately: the TypeScript config would otherwise
@@ -151,8 +159,9 @@ posture:
   carries `use-credentials`, the favicon link is present, and the registration script is emitted.
 - **Manifest contract**: a test reads and parses the manifest file from the public directory and
   asserts the fields installation depends on: name and short name, root start URL, standalone
-  display, and an icon set including 192, 512 and a separate maskable entry whose files exist on
-  disk. Prior art: the migrations test asserting a contract over files on disk.
+  display, and an icon set including 192, 512 and a separate maskable entry — each inlined as a
+  `data:` URI whose bytes equal the committed PNG, which pins the manifest to the artifacts the
+  render script produced. Prior art: the migrations test asserting a contract over files on disk.
 - **Worker contract**: a test reads the worker file and asserts it exists and carries the
   connect-your-VPN message — a guard against accidental deletion, not a behavior test.
 - The worker's fetch logic itself is deliberately untested (see the seam decision above).

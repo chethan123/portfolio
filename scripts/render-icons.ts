@@ -9,6 +9,14 @@
  *
  *   node ./scripts/render-icons.ts
  *
+ * The manifest's `icons` array is this script's to write, as `data:` URIs of
+ * those same PNGs — everything else in `public/manifest.webmanifest` stays
+ * hand-written. Inlined, not linked, because Android's install machinery
+ * fetches manifest icons on its own terms: the WebAPK icon hasher sends no
+ * cookies at all (Chromium `webapk_single_icon_hasher.cc`), so behind the
+ * gate an icon URL gets the sign-in redirect and install greys out. A `data:`
+ * URI leaves nothing to fetch and keeps every path gated.
+ *
  * The maskable variant is the same drawing with the corner radius removed.
  * Android crops its own shape out of a full-bleed square and guarantees only a
  * centred circle of 40% radius; the glyph sits well inside it, so no rescaling
@@ -23,12 +31,11 @@ const EXECUTABLE = process.env.CHROMIUM_EXECUTABLE;
 
 const svg = readFileSync(new URL("../public/icon.svg", import.meta.url), "utf8");
 
-/** name → [markup, edge in pixels] */
-const RENDERS: Record<string, [string, number]> = {
-  "icon-192.png": [svg, 192],
-  "icon-512.png": [svg, 512],
-  "icon-maskable-512.png": [svg.replace('rx="14"', 'rx="0"'), 512],
-};
+const ICONS = [
+  { file: "icon-192.png", edge: 192, markup: svg, purpose: "any" },
+  { file: "icon-512.png", edge: 512, markup: svg, purpose: "any" },
+  { file: "icon-maskable-512.png", edge: 512, markup: svg.replace('rx="14"', 'rx="0"'), purpose: "maskable" },
+] as const;
 
 async function main(): Promise<void> {
   const outDir = new URL("../public/icons/", import.meta.url);
@@ -39,18 +46,31 @@ async function main(): Promise<void> {
     args: ["--no-sandbox"],
   });
 
+  const rendered: { icon: (typeof ICONS)[number]; png: Buffer }[] = [];
   try {
     const page = await browser.newPage();
-    for (const [name, [markup, edge]] of Object.entries(RENDERS)) {
-      const sized = markup.replace("<svg ", `<svg width="${edge}" height="${edge}" `);
+    for (const icon of ICONS) {
+      const sized = icon.markup.replace("<svg ", `<svg width="${icon.edge}" height="${icon.edge}" `);
       await page.setContent(`<body style="margin:0">${sized}</body>`);
       const png = await page.locator("svg").screenshot({ omitBackground: true });
-      writeFileSync(new URL(name, outDir), png);
-      console.log(`wrote public/icons/${name} (${png.length} bytes)`);
+      writeFileSync(new URL(icon.file, outDir), png);
+      console.log(`wrote public/icons/${icon.file} (${png.length} bytes)`);
+      rendered.push({ icon, png });
     }
   } finally {
     await browser.close();
   }
+
+  const manifestUrl = new URL("../public/manifest.webmanifest", import.meta.url);
+  const manifest = JSON.parse(readFileSync(manifestUrl, "utf8")) as { icons: unknown };
+  manifest.icons = rendered.map(({ icon, png }) => ({
+    src: `data:image/png;base64,${png.toString("base64")}`,
+    sizes: `${icon.edge}x${icon.edge}`,
+    type: "image/png",
+    purpose: icon.purpose,
+  }));
+  writeFileSync(manifestUrl, `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log("wrote public/manifest.webmanifest icons as data: URIs");
 }
 
 await main();
