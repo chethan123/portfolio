@@ -183,6 +183,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#f7f9fb" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#0b1326" media="(prefers-color-scheme: dark)" />
+        <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+        {/* `use-credentials`, because Chrome fetches a manifest without cookies
+            by default — behind the gate that turns install into a silent
+            sign-in redirect (docs/specs/0012). */}
+        <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
         <Meta />
         <Links />
       </head>
@@ -239,6 +244,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
         <ScrollRestoration />
         <Scripts />
+        {/* The worker exists for its offline page alone and stores nothing on
+            the device (ADR-0007). Registration failing — no support, a lapsed
+            gate session — is silent by design: the app works without it. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");`,
+          }}
+        />
       </body>
     </html>
   );
