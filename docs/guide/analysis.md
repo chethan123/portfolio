@@ -101,10 +101,11 @@ Coverage is counted separately here, because a gain needs **both** a price and a
 
 ## Reading it as one owner
 
-The control at the top narrows all four panels at once, and it is the same selection Overview,
-Holdings and Income carry — see [reading a screen as one owner](owner-filter.md). The **Net worth by
-owner** panel then shows the selected people alone, which is the one place the narrowing is visible
-twice: the ring is of them, and so are its rows.
+The owner filter narrows all four panels at once, and its control at the top of this screen sets
+the same selection Overview, Holdings and Income carry — see
+[reading a screen as one owner](owner-filter.md). The **Net worth by owner** panel then shows the
+chosen owners alone, which is the one place the narrowing is visible twice: the ring is of them, and
+so are its rows.
 
 ## Before anything is uploaded
 

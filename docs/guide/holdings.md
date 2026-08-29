@@ -7,7 +7,7 @@ Every position the household holds, in one table you can narrow, group and sort.
 ## The seven ways to slice it
 
 There are seven dimensions. **Six work as both a filter and a grouping. Owner groups only** —
-narrowing to a person is a household-wide reading you set once and carry across all four money
+narrowing to an owner is a household-wide reading you set once and carry across all four money
 screens, from the control at the top of this one. See
 [reading a screen as one owner](owner-filter.md).
 
@@ -58,10 +58,10 @@ dropdown shows "Not in this portfolio" so you can see which one it was.
 **An empty result is not an empty portfolio.** A table with nothing in it because of a filter says
 so in those words. It never says "nothing has been uploaded yet", which would be false.
 
-**With the owner control also set, the sentence names whose portfolio it means** — "Alex Rivera
+**With the owner filter also set, the sentence names whose portfolio it means** — "Alex Rivera
 holds nothing at Fidelity." The dropdowns are built from every holding in the household rather than
 from the selected owner's, so an unqualified "nothing in the portfolio is at Fidelity" would be
-plainly untrue on a narrowed table. The owner control has two empty answers of its own, in
+plainly untrue on a narrowed table. The owner filter has its own empty answers, in
 [reading a screen as one owner](owner-filter.md#when-a-narrowed-screen-is-empty).
 
 ## Grouping and subtotals
@@ -81,7 +81,7 @@ you, a day later, following your own bookmark.
 Grouping by Owner or by Account drops that column from the table, since the heading above each
 group already says it.
 
-Grouping by Owner is still worth doing under the owner control — set to two people, it is how you
+Grouping by Owner is still worth doing under the owner filter — set to two owners, it is how you
 read one table as two.
 
 ## The columns

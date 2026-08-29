@@ -42,7 +42,7 @@ different reason: an instance whose price refresh has never run during market ho
 to draw yet.
 
 **Narrowing to an owner can grey more of them out**, because a narrowed chart reaches back only as
-far as the selected people's own first recorded holdings — see the dashed line below. The options
+far as the selected owners' own first recorded holdings — see the dashed line below. The options
 come back the moment you press **Show everyone**.
 
 The choice lives in the address bar as `?range=3m` (or, for Custom, `?range=custom&start=…&end=…`). So it
@@ -51,10 +51,11 @@ household and they will see the same window you did. Absent an address-bar range
 reopens on whichever range you picked here last time, remembered in a cookie — a convenience, not a
 household setting, so it is not in Settings and does not follow you to another browser.
 
-The owner control beside it works the other way round on purpose: it is the address and nothing
-else, with no cookie behind it, so a fresh tab always opens on the whole household. A remembered
-range shows you the same shape of the same money; a remembered owner would quietly show you a
-smaller total. See [reading a screen as one owner](owner-filter.md#it-lasts-as-long-as-the-address-does).
+The owner filter, whose control sits beside this one, works the other way round on purpose: it is
+the address and nothing else, with no cookie behind it, so a fresh tab always opens on the whole
+household. A remembered range shows you the same shape of the same money; a remembered owner would
+quietly show you a smaller total. See
+[reading a screen as one owner](owner-filter.md#it-lasts-as-long-as-the-address-does).
 
 ## Reading a point off the line
 
@@ -111,7 +112,7 @@ is the nearest thing recorded.
 
 **A narrowed chart does not draw it at all.** Those figures are a household net worth typed in as
 one number; there is no owner on them and no way to work out whose share was whose. A line read as
-one person therefore starts at their first recorded holdings, and a note above it says so:
+one owner therefore starts at their first recorded holdings, and a note above it says so:
 
 > The hand-typed history before this instance existed is the household's and has no owner, so it is
 > not drawn here. The line begins at these owners' first recorded holdings.

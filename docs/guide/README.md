@@ -35,7 +35,7 @@ Come back to these when you want to know what something on a screen means.
 - **[Settings](settings.md)** — people, accounts, closing an account, the tax rate, and how
   amounts start hidden.
 - **[Reading a screen as one owner](owner-filter.md)** — narrowing all four money screens to one
-  person, and what changes when you do.
+  owner, and what changes when you do.
 
 ## Worth knowing
 
