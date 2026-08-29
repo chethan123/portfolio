@@ -384,6 +384,23 @@ describe("the Overview's three empty states", () => {
   );
 
   it(
+    "says nothing has been uploaded even when the address carries an owner filter",
+    withDatabase(async (ctx) => {
+      // A bookmarked `/?owner=1` opened against a fresh instance is a filtered
+      // address *and* an empty instance. Branching on the filter alone answered
+      // it with "set to an owner the household can no longer be read as", which
+      // sends the reader hunting for a roster on a database that has none.
+      await ctx.seedPerson({ name: "Alice" });
+      const data = await loader(args(get("/?owner=999999999")));
+
+      expect(data.hasHoldings).toBe(false);
+      const markup = renderRoute(Overview, "/", data);
+      expect(markup).toContain("Nothing has been uploaded to this instance yet");
+      expect(markup).not.toContain("no longer be read as");
+    }),
+  );
+
+  it(
     "tells an unreadable owner apart from an owner holding nothing, and keeps the control",
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
