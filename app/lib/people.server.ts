@@ -105,10 +105,14 @@ export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person
  *
  * Owners of at least one **open** account, because `holding_valued` excludes
  * closed ones: selecting somebody whose accounts have all been closed would
- * empty every screen with no explanation, and their id resolves, so the
- * unknown-owner state would not fire either. Their history stays out of the
- * filter's reach, which DESIGN.md §14 records as an accepted limitation rather
- * than something solved here.
+ * empty every screen with no explanation. Leaving them out instead makes their
+ * id one the roster does not name, which is the state the screens already have
+ * a sentence for.
+ *
+ * The cost is stated rather than hidden: their history is not reachable through
+ * the filter at all, even though `firstRecordedDate` can still see it. That is
+ * an accepted limitation of this slice and belongs in DESIGN.md §14, which
+ * ticket 06 adds it to.
  *
  * A filter over {@link listPeople} rather than a second query: the roster is
  * small, the query is the one the People screen already runs, and two readers

@@ -12,10 +12,13 @@
  * — pulling a component out of two controls with different inputs would be the
  * more elaborate shape, not the simpler one.
  *
- * **No JavaScript**, like every other control here: a GET form and a link. Its
- * hidden fields are how a GET form changes one thing without resetting the
- * others, and they arrive as a prop because the control knows no screen's
- * vocabulary — Holdings passes its `group`/`sort`/`dir`, Overview its
+ * **No client-side state**, like every other control here: the whole of what it
+ * is, is a GET form and a link, and it works with scripting off. (A React
+ * Router `<Form>` rather than a bare one, which buys a client-side navigation
+ * where JavaScript is running and changes nothing where it is not.) Its hidden
+ * fields are how a GET form changes one thing without resetting the others, and
+ * they arrive as a prop because the control knows no screen's vocabulary —
+ * Holdings passes its own filters, grouping and sort, Overview its
  * `range`/`start`/`end`, and neither has to be named here.
  *
  * **Not drawn at all when fewer than two people own an open account.** The
@@ -28,6 +31,7 @@
  */
 import { Form, Link } from "react-router";
 
+import { joinWords } from "~/lib/format";
 import { isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
 
 /** A roster member: enough to draw a checkbox, and nothing about their money. */
@@ -119,14 +123,7 @@ export function NarrowedTo({ owners }: { owners: ReadonlyArray<FilterableOwner> 
 
   return (
     <p className="narrowed-to">
-      Showing <b>{joinNames(owners.map((owner) => owner.name))}</b> only.
+      Showing <b>{joinWords(owners.map((owner) => owner.name))}</b> only.
     </p>
   );
-}
-
-/** "Alex", "Alex and Jordan", "Alex, Jordan and Sam". */
-function joinNames(names: string[]): string {
-  if (names.length < 2) return names[0] ?? "";
-
-  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
