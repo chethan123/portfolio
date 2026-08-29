@@ -103,6 +103,27 @@ acting. Attribution, never permission: it may say who did a thing, and it never 
 may do — every family member sees and can do everything.
 _Avoid_: user, account, login, principal, role.
 
+### Whose money a screen is showing
+
+**Person**:
+A family member the household has recorded, as a name and nothing else. The thing you add, rename
+and remove on the People screen; it is not a login, and admission to the instance is the gate's
+business rather than a person's.
+_Avoid_: user, member, profile, household member.
+
+**Owner**:
+The single person an account's money belongs to. Every account has exactly one, and every holding
+inside it is that owner's — the same person seen through the account they hold, which is why a
+screen says "owned by" rather than naming the record.
+_Avoid_: holder, beneficiary, account user.
+
+**Owner filter**:
+The choice to read every screen as one or more owners rather than as everyone. A way of narrowing
+what is shown and never of deciding what may be seen — every family member may set it, clear it, and
+set it to anybody. It belongs to the reading in progress rather than to the household, and it lasts
+only as long as that reading; off means the whole household, which is where every reading starts.
+_Avoid_: user filter, person filter, lens, view-as, my view.
+
 ### What a screen shows in public
 
 **Masked**:
