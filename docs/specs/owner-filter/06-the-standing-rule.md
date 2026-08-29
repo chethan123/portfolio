@@ -33,7 +33,8 @@ why their new screen will not compile.
       the deferral is smaller than it was rather than untouched
 - [ ] §7's rule 3 gains a sentence saying a filter, not only a grouping, now puts a screen into that
       case
-- [ ] §14 is checked for a limitation this slice removes or narrows
+- [ ] §14 gains one: an owner whose accounts are all closed cannot be selected, so their history is
+      not reachable through the filter
 
 **The guide** (`docs/guide/`)
 
@@ -53,9 +54,9 @@ why their new screen will not compile.
 
 **Screenshots**
 
-- [ ] `scripts/seed-demo.ts` is checked for at least two account-owning people, since the control is
-      not drawn otherwise — if it has fewer, the demo household gains one and the seed's own figures
-      are re-checked
+- [ ] `scripts/seed-demo.ts` seeds exactly two owners, Alex and Jordan Rivera (`:279-367`) — the
+      minimum for the control to draw. Do not add a third: two is enough to photograph the control,
+      and changing the demo household changes every committed figure
 - [ ] All shots retaken with `scripts/capture-screenshots.ts` against the demo household, never
       hand-edited, per `docs/README.md`
 - [ ] At least one shot shows a narrowed screen, since a control nobody can see in the README is a

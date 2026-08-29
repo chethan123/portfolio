@@ -21,8 +21,9 @@ screen's filtering happens to live.
 - **Overview, Analysis and Income cannot.** Analysis renders `allocationByPerson` as a
   *breakdown* (`app/routes/analysis.tsx:199`, `:249-257`) — it shows every person side by side, and
   offers no way to read the other three panels as one of them. Income has no person cut at all.
-  Overview's own module comment (`app/routes/overview.tsx:212-215`) records that the per-person cut
-  was left out because it needs the holdings themselves.
+  `allocationBars`' docstring (`app/routes/overview.tsx:211-214`) records that the per-person cut was
+  left out because it needs the holdings themselves, and fetching them there would add another
+  hand-rolled dashboard query.
 
 So the question "what does this look like for just the children?" is answerable on one screen out of
 four, and only for a table — never for a chart, a net worth figure, an allocation, or a dividend
@@ -31,7 +32,8 @@ projection.
 This is the deferred half of DESIGN.md §8.3, which records that the dashboards "are not five
 features — they are one query shape with different arguments", lists `holdings by user` and
 `…by person over time` among them, and names *persisting the Holdings table's filter and group
-state* as most of the remaining work. This slice does the filter half of that, for one dimension,
+state, and adding a measure picker* as most of the remaining work — this slice does the first half
+of that pair. This slice does the filter half of that, for one dimension,
 across every screen — and leaves the builder itself deferred.
 
 The plumbing is already waiting. `readHoldings(db, source, where?)`
@@ -60,8 +62,10 @@ export type OwnerFilter = readonly string[];
 export const ALL_OWNERS: OwnerFilter = Object.freeze([]);
 ```
 
-Owner ids are `bigint` and therefore cross as **strings**, per ARCHITECTURE.md §5.6 and the standing
-rule that ids never go through `Number()`.
+Owner ids are `bigint` and therefore cross as **strings** — `server/db.ts:28-30` registers the type
+parsers that keep them so, and ARCHITECTURE.md:738-739 states the guarantee. (§5.6's `Number()`
+prohibition is about money; a cardinality is `Number()`d freely. An id is neither: it is a string
+because a bigint does not survive one.)
 
 **The grammar is one param, comma-separated:** `?owner=3` and `?owner=1,3`. Today's single-value
 `?owner=3` on Holdings keeps working and now means the same thing household-wide, so no bookmark
@@ -73,12 +77,17 @@ breaks.
 - ids are sorted numerically and de-duplicated;
 - a selection naming **every** account-owning person normalises to `ALL_OWNERS`;
 - an empty selection is `ALL_OWNERS` — "nobody" is not a view;
-- a malformed id (non-digit, over 18 digits) is dropped at parse, matching `isAccount`'s guard
-  against handing a bad bigint to Postgres (`app/lib/valuation.server.ts:370-384`);
+- a non-digit id is **kept**, not dropped, and the predicate matches nothing — dropping it would
+  widen the view, which is the failure `app/lib/holdings-view.ts:399-407` exists to prevent;
+  `isAccount` (`app/lib/valuation.server.ts:370-384`) takes the same position, keeping the bad id and
+  emitting `false` so "no such row" comes out of the query rather than out of an early return. Its
+  guard is `/^\d+$/` and nothing more, so this slice adds the length guard it lacks — an id past
+  `bigint`'s range currently reaches Postgres and 500s;
 - a request whose `owner` param is not already in canonical spelling is redirected to the one that
   is, before any database work.
 
-**Resolution mirrors the chart range exactly** (`app/lib/chart-range.ts:531-577`): an explicit
+**Resolution follows the chart range** (`app/lib/chart-range.ts:531-577`), with one deliberate
+divergence noted in ticket 01: an explicit
 `owner` param wins; failing that a session cookie; failing that `ALL_OWNERS`. The cookie is
 `owner_filter`, `Path=/`, `SameSite=Lax`, and **session-scoped — no `Max-Age`**, which is the one
 deliberate difference from `chart_range`'s year and is ADR-0008's answer to a filter that can be
@@ -92,8 +101,8 @@ cope with a union.
 - from the **URL**, it is kept. The predicate matches nothing, the screen shows its empty state, and
   the state says the filter names an owner who is no longer recorded, with a link that clears it.
 - from the **cookie**, it is dropped. If that empties the selection, the screen shows the household.
-  This is `decodeRangeCookieValue` returning `null` on anything unrecognised
-  (`app/lib/chart-range.ts:495-506`), applied to a stale member of a set.
+  `decodeRangeCookieValue` (`app/lib/chart-range.ts:495-506`) rejects a whole cookie value rather
+  than pruning members, so this is that function's *posture* at a different layer, not its code.
 
 ### The readers
 
@@ -108,13 +117,14 @@ required with no default so a new caller cannot forget them.
 | `currentHoldings`, `holdingsAt`, `netWorth`, `netWorthAt` | yes | the household reads |
 | `accountTotals`, `netWorthChange`, `firstRecordedDate` | yes | household aggregates and the chart's reach |
 | `netWorthSeries`, `netWorthSessionSeries` | yes | narrowing goes **inside** the lateral |
-| `manualNetWorth` | yes — and returns nothing when the filter is on | DESIGN.md §7 rule 3, made structural |
+| `manualNetWorth` | **no** | the rule is a display decision about two lines; it belongs in the loader |
 | `accountTotal`, `accountHoldings`, `accountSeries`, `accountSessionSeries`, `accountFirstRecordedDate` | **no** | already narrower than an owner; ADR-0008's account-screen rule |
 | `latestObservedSession` | **no** | a fact about the price feed, not about holdings |
 
-`manualNetWorth` taking a filter it answers by returning `[]` is the load-bearing oddity: it is what
-stops a future Overview-shaped screen from drawing household history under a narrowed line, without
-that screen's author having read §7.
+`manualNetWorth` was going to take the filter and answer `[]`, as a forcing function. It does not,
+because `[]` cannot be told apart from an instance with no manual rows — and the screen needs that
+distinction anyway to decide whether to explain the absence. The rule lives in the Overview loader
+instead, on one line carrying the §7 citation, where the decision is visible.
 
 Two implementation notes the tickets carry:
 
@@ -122,29 +132,47 @@ Two implementation notes the tickets carry:
   built without one, and `netWorth()` goes through it. It gains the same optional predicate its two
   siblings already have.
 - **`accountTotals` and `accountTotal` do not use the `ValuedSource` path at all.** They select from
-  `account`, inner-join `person` and **left**-join `holding_valued` (`:404-467`), specifically so an
-  account holding nothing reports `0.0000` rather than vanishing. Their narrowing is therefore its
+  `account`, inner-join `person` and **left**-join `holding_valued` (`:404-443` and `:470-506`), specifically so an account
+  holding nothing reports `0.0000` rather than vanishing — the reasoning is in `accountTotal`'s
+  docstring at `:460-461`. Their narrowing is therefore its
   own predicate on `account.owner_id`, not a reuse of the lateral one.
 
-A new predicate builder sits beside `isAccount`: `isOwner(column, filter)`, returning a predicate
-that is omitted entirely for `ALL_OWNERS` rather than emitting a tautology, and that is called with
-the right column per source — `holding_valued.owner_id`, `v.owner_id`, `a.owner_id`.
+`isAccount` generalises to `isOneOf(column, ids)`, with `isAccount(column, id)` becoming
+`isOneOf(column, [id])` — one digit-and-length guard, one answer for an unusable id. It is called
+with the column each source exposes: `holding_valued.owner_id`, `v.owner_id`, `a.owner_id`,
+`account.owner_id` (unaliased, in `accountTotals`), and — see below — a subquery for
+`firstRecordedDate`. Whether to emit a predicate at all is the reader's decision, not the builder's,
+so no call site has to branch on `undefined`.
+
+**`firstRecordedDate` has no owner to narrow on.** It reads `position_set` (`:934-943`), which
+carries `account_id` and no `owner_id` — deliberately, per DESIGN.md §4.2. Narrowing it needs a
+fourth shape: `position_set.account_id in (select id from account where owner_id in (…))`. That
+subquery spans **closed** accounts, where `holding_valued` excludes them, so a narrowed
+`firstRecordedDate` and a narrowed `currentHoldings` can disagree about which owners have history.
+Ticket 02 carries both the shape and the consequence.
 
 ### The control
 
 A shared `OwnerFilterControl` in `app/components/`, drawn in the page header strip beside the chart
 range where a screen has one. It is a `<form method="get">` of checkboxes with an Apply button —
-the `Filters` bar's shape (`app/routes/holdings.tsx:571-619`), including its hidden fields, which is
-how a GET form changes one thing without resetting the others. No JavaScript is required, matching
-`ChartRangeControl`'s custom-range disclosure.
+the `Filters` bar's shape (`app/routes/holdings.tsx:571-619`) — a React Router `<Form method="get">`, not a raw
+`<form>` — including its hidden fields, which is how a GET form changes one thing without resetting
+the others. It is built by extracting the shared parts of that bar rather than beside it, so there is
+one control shape and one options rule. No JavaScript is required, matching `ChartRangeControl`'s
+custom-range disclosure.
 
-**It is not drawn at all** when the household has fewer than two account-owning people, which is
-`availableFilters`' existing rule (`app/lib/holdings-view.ts:508`) and means a single-person
-household never sees it.
+**It is not drawn at all** when fewer than two people own an open account — the spirit of
+`availableFilters`' rule (`app/lib/holdings-view.ts:508`), not its code. That rule counts distinct
+values among the *holdings on screen*; this roster counts people, and the two disagree for an owner
+who holds nothing. Following the holdings would hide the control on a screen the owner is absent
+from, which is the wrong answer for a filter that spans four screens.
 
-**The roster** is `listPeople()` (`app/lib/people.server.ts:61-84`) kept to `accountCount > 0`. That
-count already spans open and closed accounts, which is exactly ADR-0008's rule: an owner whose
-accounts are all closed still has history worth reading.
+**The roster** is `listPeople()` (`app/lib/people.server.ts:61-84`) kept to owners of at least one
+**open** account. `accountCount` spans closed accounts too, so it cannot be used unfiltered: an owner
+whose accounts are all closed contributes nothing to `holding_valued`, and selecting them would
+empty every screen with no explanation — a resolvable id, so the unknown-owner state would not fire.
+Their history stays out of the filter's reach, which is recorded as an accepted limitation rather
+than solved here.
 
 **A narrowed screen says so in words** beside the figure it narrowed — never a highlighted chip
 alone. This is the condition ADR-0008 attaches to the filter surviving navigation, and it is what
@@ -152,12 +180,13 @@ keeps the Overview headline from silently meaning something else.
 
 ### Two traps this slice has to fix
 
-Both are existing behaviours that would silently eat the filter:
+Both are existing behaviours that would silently eat the filter. The second is a live bug on a
+shipped screen and lands first, as ticket 00, rather than riding inside the largest ticket.
 
 1. **`toSearch` rebuilds the query from scratch** (`app/lib/holdings-view.ts:438-453`). Every
    filter, sort and group link on Holdings is built from it, so unless it carries `owner` through,
    clicking a column header clears the filter.
-2. **`ChartRangeControl` links to a bare `?range=…`** (`app/components/chart-range-control.tsx:102`),
+2. **`ChartRangeControl` links to a bare `?range=…`** (`app/components/chart-range-control.tsx:103`),
    which React Router resolves as *replace the whole query*. Picking a range on a filtered Overview
    would drop the filter — the same bug that already drops `?uploaded=` on the account screen.
 
@@ -175,9 +204,10 @@ Both are existing behaviours that would silently eat the filter:
 
 | # | Ticket | Blocked by |
 |---|---|---|
+| 00 | [Range links stop replacing the whole query](owner-filter/00-range-links-stop-replacing-the-query.md) | Nothing |
 | 01 | [The owner filter, parsed, normalised and carried](owner-filter/01-the-filter-itself.md) | Nothing |
 | 02 | [Narrowing the valuation readers](owner-filter/02-narrowing-the-readers.md) | 01 |
-| 03 | [The control, and Overview reading as an owner](owner-filter/03-control-and-overview.md) | 01, 02 |
+| 03 | [The control, and Overview reading as an owner](owner-filter/03-control-and-overview.md) | 00, 01, 02 |
 | 04 | [Holdings folds its Owner dimension into the filter](owner-filter/04-holdings.md) | 03 |
 | 05 | [Analysis and Income read as an owner](owner-filter/05-analysis-and-income.md) | 03 |
 | 06 | [The standing rule, the guide, and the screenshots](owner-filter/06-the-standing-rule.md) | 04, 05 |
@@ -189,13 +219,16 @@ Postgres-backed, through the builders in `tests/support/fixtures.ts` and the rou
 
 - `tests/owner-filter.test.ts` — the pure module: parse, normalise (sort, dedupe, all-selected,
   empty, malformed), serialise, the cookie round trip, and URL-over-cookie-over-default resolution.
-- `tests/valuation-owner-filter.test.ts` — every household reader narrows; two owners sum to the
+- `tests/valuation-owner-filter.test.ts` — every household reader that takes the filter narrows; two owners sum to the
   household total at exact decimal strings; the series readers narrow **inside** the lateral, proven
   by a date on which only the excluded owner has a position set still appearing on the line;
   `manualNetWorth` returns nothing when narrowed; account-scoped readers ignore it because they do
   not take it.
-- Per-screen tests extend the existing route files rather than adding a meta-test: each asserts its
-  screen narrows, and Overview additionally asserts the manual series is absent and the reachable
+- Per-screen tests rather than a meta-test. `tests/routes/overview.test.ts` and
+  `tests/routes/holdings.test.ts` are extended; **`tests/routes/analysis.test.ts` and
+  `tests/routes/income.test.ts` do not exist and are created** — those two loaders are exercised
+  today only by `tests/invariants/aggregates-agree.test.ts:36-37`. `tests/holdings-view.test.ts`
+  takes the `DIMENSIONS` and `toSearch` assertions. Each asserts its screen narrows, and Overview additionally asserts the manual series is absent and the reachable
   range shortens.
 - A test that an unresolvable id from the URL empties the screen while the same id from the cookie
   does not.

@@ -41,7 +41,10 @@ when one owner is selected. That is deliberate, and ADR-0008 records why.
       `CONTEXT.md`'s **Weighted yield**, and must not be carried over from the household
 - [ ] The owners are named beside the figures
 
-**Tests** (extending `tests/analysis.test.ts` and `tests/income.test.ts`)
+**Tests** — and note these files **do not exist yet**. Neither screen has a route test today; the
+two loaders are exercised only by `tests/invariants/aggregates-agree.test.ts:36-37`. This ticket
+creates `tests/routes/analysis.test.ts` and `tests/routes/income.test.ts`, which is why it is larger
+than its diff suggests
 
 - [ ] Each screen narrowed shows one owner's figures as exact decimal strings
 - [ ] Two owners' narrowed figures sum to the household's, for net worth and for annual dividend

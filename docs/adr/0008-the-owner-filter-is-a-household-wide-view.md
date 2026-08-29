@@ -23,7 +23,7 @@ The mapping does not exist either, and inventing it is the actual cost. `person`
 nothing else — no email column, no link to the allowlist — because a person is a label for whose
 money it is, not a user account. Defaulting by identity means a person-to-address join, an answer
 for a family member with no accounts, an answer for two people sharing a login, and an answer for an
-address on the allowlist that names nobody. All of that, so that one of four people saves one click.
+address on the allowlist that names nobody. All of that, so that one family member saves one click.
 
 So the filter is a chooser: anybody may set it, clear it, and set it to anybody. It opens on the
 whole household, which is the only default that needs no identity to compute.
@@ -36,7 +36,7 @@ people makes the reader do the filing the app should be doing.
 
 The cost is a real one and is paid deliberately: a filter that survives navigation can be forgotten,
 and the number it silently redefines is the Overview headline. Two things keep that honest. The
-selection is carried in the URL and only *remembered* in a session cookie, so closing the browser
+selection is carried in the URL and only *remembered* for the length of a browser session, so closing the browser
 returns the household to itself; and every screen reading a narrowed figure states the owners in
 words beside the figure, never as a highlighted chip alone. The precedent is the chart range, which
 resolves explicit URL over cookie over default, and the mask, whose cookie lifetime is chosen rather
@@ -82,19 +82,20 @@ numbers somebody did.
 ## Consequences
 
 - **Household-scoped readers take the filter and require it; account-scoped readers do not take it
-  at all.** A required argument with no default is what makes the standing rule structural: a new
-  screen cannot read holdings without deciding, and "no filter" is a visible word in the diff rather
-  than an omission. The same trick, for the same reason, as the chart's required `masked` prop.
+  at all.** A required argument with no default does not make honouring the filter impossible to
+  skip — a new screen can pass `ALL_OWNERS` and draw no control. What it buys is that the skip is
+  **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop.
 - **An account's own screen ignores the filter and does not draw the control.** It is already
   narrowed to one account, and one account has exactly one owner; a filter with a single value to
   offer is not drawn, which is the rule the Holdings filter bar already follows.
 - **Selecting every owner is spelled the same as selecting none — the filter off.** One view has one
   URL, so `?owner=` naming the whole household normalises away rather than becoming a second
   spelling of the unfiltered screen.
-- **A selection is honest about an owner it cannot resolve, and a memory of one is not.** An id in
-  the URL that names nobody narrows to nothing and says so; the same id arriving from the cookie is
-  dropped and the household is shown. A shared link should tell the truth, and a week-old cookie
-  should never empty somebody's home screen.
+- **An id that names nobody narrows to nothing, and says so.** One rule, whatever carried it. The
+  alternative considered — drop it and show the household — was rejected because widening a view
+  somebody asked to narrow is the failure `holdings-view.ts:399-407` already names, and because a
+  selection can only go stale within one browser session, which is not long enough to be worth a
+  second rule.
 - **Every breakdown narrows, including the one grouped by owner.** Filtering to one owner leaves that
   panel with a single slice at 100%, which is honest and useless; it was left in rather than special-
   cased, because two owners selected is exactly the split a reader wants beside a combined total.
