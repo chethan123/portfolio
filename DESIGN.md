@@ -629,8 +629,9 @@ Recorded because it was explicitly deferred rather than rejected. The five dashb
 described are not five features — they are one query shape with different arguments:
 
 **One dimension of this now exists**, which makes the deferral smaller rather than untouched. The
-owner filter (§8.1) is the `filters` half of the shape below for `person` alone, persisted across
-screens by the URL rather than by a stored view. Whether tax treatment or asset class should follow
+owner filter (§8.1) is the `filters` half of the shape below for one dimension — the one this
+section's table and config still call `person`, which everywhere else is now the **owner** — persisted
+across screens by the URL rather than by a stored view. Whether tax treatment or asset class should follow
 is left open here on purpose: six more of these may well be the wrong answer, and the builder the
 right one.
 
