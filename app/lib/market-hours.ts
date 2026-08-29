@@ -127,6 +127,28 @@ export function marketDateOf(instant: Date, timeZone: string): IsoDate {
 }
 
 /**
+ * The wall-clock time an instant reads as on the market's own clock, `HH:MM`.
+ *
+ * What a 1D chart's axis and readouts say. The market's zone rather than the
+ * reader's, for two reasons: a session is 09:30 to 16:00 in exactly one zone,
+ * and the chart is rendered on the server and again in the browser after
+ * hydration — a label derived from whichever clock happened to render it would
+ * disagree with itself between the two.
+ *
+ * Formatting rather than computing, so it belongs beside the other two: this is
+ * the only module in `app/` that uses `Intl`, and one place that knows how to
+ * read a wall clock is the point.
+ *
+ * @param instant the moment being labelled.
+ * @param timeZone `MARKET_TIMEZONE`; the caller passes configuration, this
+ *                 module holds none.
+ */
+export function marketTimeOf(instant: Date, timeZone: string): string {
+  const parts = partsIn(instant, timeZone);
+  return `${parts.hour}:${parts.minute}`;
+}
+
+/**
  * Is the regular session running at this instant?
  *
  * Weekend, then holiday, then the 09:30–16:00 window — cheapest test first,

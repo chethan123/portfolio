@@ -405,6 +405,9 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               manual={manual}
               label={`Total value ${rangeDescription(range, custom)},`}
               masked={masked}
+              // Null until the loaders learn to resolve a session: every range
+              // this page can currently draw is a span of days.
+              session={null}
             />
           ) : (
             <p className="empty-note">
