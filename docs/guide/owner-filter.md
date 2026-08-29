@@ -13,8 +13,13 @@ and an **Apply** button.
 1. Tick one or more names.
 2. Press **Apply**.
 
-Everything on the screen is now those owners': the total, the chart, every table, every ring, every
-subtotal.
+Every figure on the screen is now those owners': the total, the chart, every table, every ring,
+every subtotal.
+
+Three things on Holdings deliberately stay the household's, because their whole job is to tell you
+what the narrowing left out — the "filtered from" count, the "recorded in all" figure beside an empty
+table, and the filter dropdowns, whose options are read from every holding so that narrowing can
+never leave you without a way to widen again.
 
 **To widen again**, press **Show everyone**. It sits beside Apply whenever a filter is applied — so
 it is there to be pressed on the narrowed screen you are reading, not the moment you tick a box.
@@ -87,10 +92,15 @@ yet. That one appears only when it is true.
 ## Who appears in the list
 
 Everyone who owns at least one **open** account. Somebody whose accounts have all been closed is not
-offered, because the screens would come back empty with nothing explaining why — their figures are
-still in the household's totals and their history is still recorded, they simply cannot be picked
-out with this control. A household with only one owner gets no control at all: there is nothing to
-choose between.
+offered, because the screens would come back empty with nothing explaining why.
+
+That is not the app forgetting them. A closed account stops counting toward today's figure — which is
+what closing one means, and is true whether or not anybody filters — while it keeps counting on every
+date before you closed it, so the line behind you does not move. All of that history is still
+recorded and still drawn on the household's chart; it simply cannot be picked out by owner with this
+control.
+
+A household with only one owner gets no control at all: there is nothing to choose between.
 
 ---
 
