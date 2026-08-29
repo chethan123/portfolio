@@ -47,6 +47,7 @@ import {
   firstRecordedDate,
   latestObservedSession,
   manualNetWorth,
+  netWorth,
   netWorthChange,
   netWorthSeries,
   netWorthSessionSeries,
@@ -197,11 +198,17 @@ export async function loader({ request }: Route.LoaderArgs) {
       ? netWorthSeries(owners, resolved.dates).then(asSessionPoints)
       : netWorthSessionSeries(owners, resolved.session);
 
-  const [change, accounts, series, freshness] = await Promise.all([
+  const [change, accounts, series, freshness, everyone] = await Promise.all([
     netWorthChange(owners, resolved.since),
     accountTotals(owners),
     points,
     asOfView(getConfig().MARKET_TIMEZONE),
+    // Whether the *instance* holds anything, which is a different question from
+    // whether these owners do — and only the first may be answered with
+    // "nothing has been uploaded". Asked only while narrowed, because
+    // unnarrowed the two questions are the same one and `accounts` already
+    // answers it. The same read Analysis and Income make, for the same reason.
+    isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
 
   // A date before the first upload sums to 0.0000 over zero rows. That is
@@ -268,6 +275,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Summed from the same rollup the table renders, rather than counted
     // separately — two counts of one thing are two things that can disagree.
     holdingCount: accounts.reduce((total, account) => total + account.coverage.total, 0),
+    /** Whether anything at all has been uploaded, narrowed or not. */
+    hasHoldings:
+      everyone === null
+        ? accounts.some((account) => account.coverage.total > 0)
+        : everyone.coverage.total > 0,
     pricedCount: accounts.reduce((total, account) => total + account.coverage.known, 0),
   };
 }
@@ -520,6 +532,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
     manual,
     session,
     holdingCount,
+    hasHoldings,
     pricedCount,
     freshness,
     manualWithheld,
@@ -534,6 +547,13 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
   // has nothing. Only the second may say nothing has been uploaded, and the
   // first has to keep the control on screen or the filter cannot be cleared
   // from the page it emptied.
+  //
+  // Which of the two it is turns on `hasHoldings`, not on the filter being on:
+  // a bookmarked `/?owner=1` opened against a fresh instance is a filtered
+  // address *and* an empty instance, and answering it with "set to an owner the
+  // household can no longer be read as" would send the reader hunting for a
+  // roster on a database that has none. Analysis and Income already split it
+  // this way.
   if (holdingCount === 0) {
     return (
       <section className="page">
@@ -551,7 +571,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
             />
           </div>
         </header>
-        {isFiltered(owners) ? (
+        {isFiltered(owners) && hasHoldings ? (
           <NarrowedToNothing
             owners={narrowedTo}
             unknownOwner={unknownOwner}
