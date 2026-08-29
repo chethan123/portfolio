@@ -54,10 +54,9 @@ would stop showing the diff it is captioned as showing.
 The owner filter narrows four screens, and [its guide page](../owner-filter.md) is illustrated once,
 on Holdings. Holdings is where the control is easiest to read against something familiar — it is the
 same table `holdings.png` already shows unnarrowed — and it is the screen whose panel header spells
-the narrowing out in words (`· filtered from 18`) as well as in figures. The README's pair is on
-Overview instead, for the opposite reason: [there](../../screenshots/README.md) the point is the
-four things a narrowed chart does differently, which need a before and an after to be visible at
-all.
+the narrowing out in words as well as in figures. The README's pair is on Overview instead, for the
+opposite reason: [there](../../screenshots/README.md) the point is everything a narrowed chart does
+differently, which needs a before and an after to be visible at all.
 
 `holdings-grouped.png` was narrowed as well as grouped until this shot existed, which left the
 reader working out which of two controls had done which. It is grouped and nothing else now, and

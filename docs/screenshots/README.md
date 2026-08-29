@@ -64,10 +64,11 @@ capture framed on a single table, or below the top of a page, never had it in fr
 
 **A narrowed screen is shot, and it is shot on Overview.** A control nobody can see in the README is
 a feature nobody knows exists, and the owner filter is the one thing on these screens that changes
-every figure at once. Overview carries it because it is where the narrowing is most visible: the
-headline drops, the sentence naming the owners appears under it, a range or two greys out, and the
-hand-typed prefix stops being drawn — four consequences in one frame, against an unnarrowed shot of
-the same screen immediately above it. Holdings would have shown the control and one shortened table.
+every figure at once. Overview carries it because it is where the narrowing shows in the most ways at
+once: the headline drops, the sentence naming the owners appears under it, presets grey out as the
+reachable history shortens, and the hand-typed prefix stops being drawn — all in one frame, against
+an unnarrowed shot of the same screen immediately above it. Holdings would have shown the control
+and one shortened table.
 
 **The owner is picked by position, not by name.** The script takes the first of the two owners the
 seed records, as it takes accounts by kind: the seed renumbers people on every run, so an id written

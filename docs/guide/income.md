@@ -116,7 +116,7 @@ Every number here is summed from the Holdings table, and you can watch it happen
 They agree because both screens read one set of positions rather than each asking the database its
 own question.
 
-That survives the owner control, which narrows this screen as it narrows Holdings: click through
+That survives the owner filter, which narrows this screen as it narrows Holdings: click through
 from one to the other and the selection comes with you, so the subtotals still line up. See
 [reading a screen as one owner](owner-filter.md).
 

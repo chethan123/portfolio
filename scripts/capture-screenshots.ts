@@ -416,9 +416,8 @@ async function prepare(pool: Pool): Promise<Fixture> {
 /** The README's shots: both themes, plus the two phone ones. */
 async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Promise<void> {
   console.log("\nREADME — docs/screenshots/");
-  const { accounts, editRow, csv } = fixture;
+  const { accounts, editRow, ownerId, csv } = fixture;
   const brokerage = accounts.brokerage;
-  const { ownerId } = fixture;
 
   for (const theme of ["light", "dark"] as const) {
     const page = await open(browser, theme);

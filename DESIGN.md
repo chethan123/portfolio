@@ -496,7 +496,7 @@ Three rules govern how the two series coexist, so the chart never overstates wha
 1. Manual points render as a **visually distinct dashed/lighter series** — never blended into the
    computed line, which would imply a real daily curve where there is a hand-typed annual dot.
 2. **Computed always wins** on overlapping dates. Manual points only fill gaps.
-3. **Only the total chart reaches back.** Views grouped by person, account, or tax status start at
+3. **Only the total chart reaches back.** Views grouped by owner, account, or tax status start at
    day zero, since the manual series has no structure to slice. The UI says so rather than showing a
    suspiciously short line. Since the owner filter (§8.1) a *filter* puts a screen into this case as
    well as a grouping: an Overview read as one or more owners does not draw the prefix and cannot
@@ -520,7 +520,7 @@ management screens that create the data they read are in §8.4.
 | **Analysis** | Net worth cut three ways — by owner, by account kind, by asset class — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment. The one view where the loan's negative yield does something interesting |
 
-A groupable, filterable Holdings table absorbs what would otherwise be four more pages — by person,
+A groupable, filterable Holdings table absorbs what would otherwise be four more pages — by owner,
 by account, tax view, unrealized. Those are the same table with the grouping changed, not separate
 features.
 
@@ -530,7 +530,7 @@ entirely in the address — no cookie, nothing stored, and never derived from wh
 figure on a narrowed screen is that selection's, and every narrowed screen names the owners in words
 beside the figure, because a filter that survives navigation is a filter that can be forgotten.
 
-Three surfaces are exempt, each for its own reason. **An account's own page** is already narrower
+Some surfaces are exempt, each for its own reason. **An account's own page** is already narrower
 than an owner — one account has exactly one owner — so it ignores the filter and draws no control.
 **The upload flow and Settings** are about records rather than about money, so they neither read the
 parameter nor carry it: an excursion into either ends the reading, which ADR-0008 accepts out loud.
@@ -538,7 +538,8 @@ parameter nor carry it: an excursion into either ends the reading, which ADR-000
 Structurally, the rule is a signature: the owner filter is a required first argument with no default
 on every household-scoped reader in `valuation.server.ts`, so a new screen cannot read holdings
 without deciding whose. Reading everyone's is `ALL_OWNERS` — a word in the diff rather than an
-omission.
+omission. Which readers those are, which are exempt, and where inside each query the narrowing then
+has to go are `ARCHITECTURE.md` §4.2 and Appendix A's; this is only the argument for the shape.
 
 **Deliberately not in v1:** per-account drill-down (the filtered Holdings table already is one) and a
 dedicated tax page (a group-by plus a chart on Overview). The drill-down exclusion was later
@@ -1343,12 +1344,12 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     is the operator's shell on the box, not another way in through the front door.
 12. **An owner whose accounts have all been closed cannot be filtered by.** Consequence of the owner
     filter's roster (§8.1) being owners of at least one *open* account, which is itself a
-    consequence of `holding_valued` excluding closed accounts: selecting such a person would empty
+    consequence of `holding_valued` excluding closed accounts: selecting such an owner would empty
     every screen with nothing on it saying why. Their history is still recorded and still counts
     toward the household's own figures — `firstRecordedDate` reaches through `position_set` and sees
     it — it simply is not reachable through the filter. Fixing it means the filter answering "held
     nothing, ever" and "holds nothing now" differently on every screen, which is a second empty
-    state for a case that arises when a household closes out one person entirely.
+    state for a case that arises when a household closes out one owner entirely.
 13. **1D always shows the latest session; an older one cannot be chosen.** The observations are
     kept forever, so the data for last Tuesday's session exists — but drawing it is a separate
     decision with its own cost, and one deliberately deferred

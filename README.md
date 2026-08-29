@@ -92,8 +92,8 @@ so a chosen range survives a reload and can be bookmarked.
 Every position the household holds, whichever account it sits in. Filter by account, brokerage,
 account type, tax treatment, classification or asset class; group by any of those or by owner, with
 subtotals. "Everything at Fidelity", "the whole taxable side", "all the bonds, wherever they are" —
-each is this table with the arguments changed rather than a screen of its own. Narrowing to a
-*person* is not one of these six: that is the owner filter below, and it narrows all four screens at
+each is this table with the arguments changed rather than a screen of its own. Narrowing to an
+*owner* is not one of those six: that is the owner filter below, and it narrows all four screens at
 once.
 
 - **The controls are the URL.** Filters, grouping and sort all live in the query string, so a view
@@ -140,28 +140,29 @@ the cost basis become boxes in their own columns, and Save records it.
   with JavaScript turned off — with it off, Save is a plain form post and the confirmation comes back
   on the next page.
 
-### The owner filter — every money screen read as one person
+### The owner filter — every money screen read as one owner
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-owner-dark.png">
-  <img alt="The Overview narrowed to one owner: a checkbox per person in the page header with Apply and Show everyone beside them, a smaller headline figure with the sentence &quot;Showing Alex Rivera only.&quot; beneath it, and a note on the chart saying the hand-typed history before the instance existed is the household's and is not drawn here" src="docs/screenshots/overview-owner-light.png">
+  <img alt="The Overview narrowed to one owner: a checkbox per owner in the page header with Apply and Show everyone beside them, a smaller headline figure with the sentence &quot;Showing Alex Rivera only.&quot; beneath it, and a note on the chart saying the hand-typed history before the instance existed is the household's and is not drawn here" src="docs/screenshots/overview-owner-light.png">
 </picture>
 
 "What does this look like for just Alex?" is a question about four screens, not one, so the answer
-is one selection that follows you across them. Tick a name in the page header, press **Apply**, and
-Overview, Holdings, Analysis and Income all read as that person until you press **Show everyone**.
+is one selection that follows you across them: a control in the page header names the household's
+owners, and Overview, Holdings, Analysis and Income all read as whichever are chosen. The guide has
+the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way.
 
 - **It is noise reduction, never privacy.** Anyone may set it, clear it, and set it to anybody; the
   gate at the front door is the only thing that keeps anyone out, and every family member sees
   everything. It is never derived from who signed in — the app deliberately holds no mapping from a
-  sign-in to a person, and inventing one so that a screen could open on "you" is the short step to
+  sign-in to an owner, and inventing one so that a screen could open on "you" is the short step to
   "and this is *your* data" that a household of shared money does not want taken.
 - **The URL is the whole of it.** `?owner=1,3` and nothing else: no cookie, no stored setting.
   Closing the tab forgets it because there is nothing left to remember it, and pasting the address
   to the other person in the household shows them the same reading — which a cookie could never do.
 - **A narrowed screen says so in words**, beside the figure it narrowed, because a filter that
-  survives navigation is a filter that can be forgotten. Holdings adds `· filtered from 18` to its
-  count for the same reason.
+  survives navigation is a filter that can be forgotten. Holdings adds the household's own count to
+  its panel header — "filtered from N" — for the same reason.
 - **The hand-typed history is not drawn while narrowed.** The pre-app series is the household's and
   has no owner, so a filtered chart cannot reach behind those owners' first recorded holdings — the
   Overview says that rather than showing a suspiciously short line.
