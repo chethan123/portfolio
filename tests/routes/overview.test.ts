@@ -293,7 +293,7 @@ describe("a preset before this household's earliest data", () => {
       // the address it resolves to, so the old assertion against `href="?…"`
       // could never have failed whether the preset linked or not.
       expect(markup).not.toContain("range=5y");
-      expect(markup).toContain('<span aria-disabled="true">5Y</span>');
+      expect(markup).toMatch(/<span[^>]*aria-disabled="true"[^>]*>5Y</);
     }),
   );
 

@@ -396,12 +396,19 @@ describe("a custom range", () => {
  * Where the segmented control's `key` preset actually points — the resolved
  * href a reader would follow, with the ampersands a multi-param query needs
  * decoded back out of the markup.
+ *
+ * Found by parsing each candidate's query rather than by matching the string,
+ * so the assertion below is about which range the link names and not about
+ * where in the query it happens to sit.
  */
 function presetHref(markup: string, key: string): string {
-  const href = markup.match(new RegExp(`href="([^"]*range=${key})"`))?.[1];
+  const href = [...markup.matchAll(/href="([^"]*)"/g)]
+    .map(([, candidate]) => (candidate ?? "").replaceAll("&amp;", "&"))
+    .find((candidate) => new URL(candidate, "http://portfolio.local").searchParams.get("range") === key);
+
   if (href === undefined) throw new Error(`No ${key} preset link in:\n${markup}`);
 
-  return href.replaceAll("&amp;", "&");
+  return href;
 }
 
 describe("the range links and the rest of the query", () => {
@@ -433,21 +440,24 @@ describe("the range links and the rest of the query", () => {
   it(
     "keeps the balance receipt too, and carries it through the custom form's hidden fields",
     withDatabase(async (ctx) => {
-      const account = await seedAccountDayZero(ctx, daysAgo(400));
+      // Read once: five `daysAgo(400)` calls could straddle UTC midnight, and
+      // the failure would be a flake nobody could reproduce.
+      const recorded = daysAgo(400);
+      const account = await seedAccountDayZero(ctx, recorded);
       const at = (path: string) => loader(args(get(path), { accountId: account.id }));
 
-      const path = `/accounts/${account.id}?recorded=${daysAgo(400)}`;
+      const path = `/accounts/${account.id}?recorded=${recorded}`;
       const data = await at(path);
       expect(data.justRecorded).toBe(true);
 
       const markup = renderRoute(Account, path, data);
       const href = presetHref(markup, "1m");
-      expect(href).toBe(`/accounts/${account.id}?recorded=${daysAgo(400)}&range=1m`);
+      expect(href).toBe(`/accounts/${account.id}?recorded=${recorded}&range=1m`);
       expect((await at(href)).justRecorded).toBe(true);
 
       // A GET form submits its own fields and nothing else, so Custom drops
       // whatever the address held unless it re-emits it as a hidden field.
-      expect(markup).toContain(`type="hidden" name="recorded" value="${daysAgo(400)}"`);
+      expect(markup).toContain(`type="hidden" name="recorded" value="${recorded}"`);
     }),
   );
 
@@ -461,8 +471,8 @@ describe("the range links and the rest of the query", () => {
       const markup = renderRoute(Account, path, data);
 
       // `range`, `start` and `end` are the control's own vocabulary: a preset
-      // rewrites them rather than carrying them, or the address keeps a span
-      // nothing draws and Custom reopens on a range the reader has left.
+      // rewrites them rather than carrying them, or the address advertises a
+      // span nothing draws.
       expect(presetHref(markup, "1m")).toBe(`/accounts/${account.id}?range=1m`);
     }),
   );
@@ -504,7 +514,7 @@ describe("a preset before this account's own earliest data", () => {
       // the address it resolves to, so the old assertion against `href="?…"`
       // could never have failed whether the preset linked or not.
       expect(markup).not.toContain("range=5y");
-      expect(markup).toContain('<span aria-disabled="true">5Y</span>');
+      expect(markup).toMatch(/<span[^>]*aria-disabled="true"[^>]*>5Y</);
     }),
   );
 
