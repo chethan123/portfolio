@@ -22,6 +22,8 @@ import {
   rangeDescription,
   rangeOptions,
   readChartRange,
+  carriedParams,
+  rangeSearch,
   readRangeCookie,
   resolveRange,
   surfaceEarliestDate,
@@ -550,5 +552,38 @@ describe("the persistence cookie", () => {
     expect(readRangeCookie(requestWith(`_oauth2_proxy=abc; ${RANGE_COOKIE}=5y`))).toBe("5y");
     expect(readRangeCookie(requestWith(`not_${RANGE_COOKIE}=5y`))).toBeUndefined();
     expect(readRangeCookie(new Request("http://portfolio.local/"))).toBeUndefined();
+  });
+});
+
+describe("the address a range control points at", () => {
+  const at = (search: string) => new URLSearchParams(search);
+
+  it("keeps every parameter the control does not own", () => {
+    // The bug this exists to fix: a bare `?range=1m` is a whole query string,
+    // and React Router resolves it as one — so picking a range on the account
+    // page dropped the `?uploaded=` receipt the reader was looking at.
+    expect(rangeSearch(at("?uploaded=42"), "1m")).toBe("?uploaded=42&range=1m");
+    expect(rangeSearch(at("?owner=1,3&sort=value"), "1m")).toBe("?owner=1%2C3&sort=value&range=1m");
+  });
+
+  it("rewrites its own three rather than carrying them, so no preset leaves a custom span behind", () => {
+    expect(rangeSearch(at("?range=custom&start=2026-01-01&end=2026-06-30"), "1m")).toBe("?range=1m");
+    expect(rangeSearch(at(""), "1y")).toBe("?range=1y");
+  });
+
+  it("carries a repeated parameter as many times as the address holds it", () => {
+    // `URLSearchParams.get` would keep one and discard the rest, which is a
+    // link that quietly edits the address it was only meant to add to.
+    expect(rangeSearch(at("?tag=a&tag=b"), "1m")).toBe("?tag=a&tag=b&range=1m");
+    expect(carriedParams(at("?tag=a&tag=b"))).toEqual([
+      ["tag", "a"],
+      ["tag", "b"],
+    ]);
+  });
+
+  it("hands the Custom form the same parameters, since a GET form submits its own fields and nothing else", () => {
+    expect(carriedParams(at("?recorded=2026-01-31&range=1m&start=x&end=y"))).toEqual([
+      ["recorded", "2026-01-31"],
+    ]);
   });
 });

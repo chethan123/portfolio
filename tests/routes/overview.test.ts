@@ -289,7 +289,11 @@ describe("a preset before this household's earliest data", () => {
       expect(data.rangeOptions.find((option) => option.key === "5y")?.disabled).toBe(true);
 
       const markup = renderRoute(Overview, "/", data);
-      expect(markup).not.toContain('href="?range=5y"');
+      // On the resolved href, not on the relative `to`: a `<Link>` renders
+      // the address it resolves to, so the old assertion against `href="?…"`
+      // could never have failed whether the preset linked or not.
+      expect(markup).not.toContain("range=5y");
+      expect(markup).toContain('<span aria-disabled="true">5Y</span>');
     }),
   );
 
