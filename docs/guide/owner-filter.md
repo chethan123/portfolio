@@ -7,8 +7,8 @@ read as one owner instead — or as two of five, or as everyone but one.
 
 ## How to narrow
 
-The control sits at the top right of each of those four screens, beside the "As of" line. It is a
-tick box per owner and an **Apply** button.
+The control is in the header of each of those four screens, at the top right: a tick box per owner
+and an **Apply** button.
 
 1. Tick one or more names.
 2. Press **Apply**.
@@ -16,9 +16,13 @@ tick box per owner and an **Apply** button.
 Everything on the screen is now those owners': the total, the chart, every table, every ring, every
 subtotal.
 
-**To widen again**, press **Show everyone**, which appears beside Apply once something is ticked.
-Ticking every name does the same thing — everybody is the household, so the app treats it as no
-filter at all and tidies the address to match.
+**To widen again**, press **Show everyone**. It sits beside Apply whenever a filter is applied — so
+it is there to be pressed on the narrowed screen you are reading, not the moment you tick a box.
+Nothing happens until Apply either way: the boxes are a form, and the screen only changes when you
+submit it.
+
+Ticking every name is the same as no filter at all — everybody is the household — so the app says so
+by tidying the address back to the unnarrowed one.
 
 ## It follows you between screens
 
