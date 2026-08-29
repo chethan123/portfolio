@@ -14,6 +14,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import {
   accountTotal,
   accountTotals,
@@ -55,7 +56,7 @@ describe("accountTotals", () => {
         holdings: [{ instrument: usd, quantity: "12500.00000000" }],
       });
 
-      const totals = await accountTotals(db);
+      const totals = await accountTotals(ALL_OWNERS, db);
 
       // 25,000 + 3,000 = 28,000, and it sorts above the 12,500.
       expect(totals.map((total) => [total.accountName, total.amount])).toEqual([
@@ -65,7 +66,7 @@ describe("accountTotals", () => {
 
       // The screen's own consistency check: the rollup and the headline are one
       // arithmetic, so summing the parts must reproduce the whole exactly.
-      const headline = await netWorth(db);
+      const headline = await netWorth(ALL_OWNERS, db);
       expect(headline.amount).toBe("40500.0000");
       expect(totals.reduce((sum, total) => sum + Number(total.amount), 0)).toBe(
         Number(headline.amount),
@@ -94,7 +95,7 @@ describe("accountTotals", () => {
         holdings: [{ instrument: usd, quantity: "-8000.00000000" }],
       });
 
-      const totals = await accountTotals(db);
+      const totals = await accountTotals(ALL_OWNERS, db);
 
       expect(totals.map((total) => [total.accountName, total.amount])).toEqual([
         ["Checking", "12500.0000"],
@@ -123,7 +124,7 @@ describe("accountTotals", () => {
         ],
       });
 
-      const [total] = await accountTotals(db);
+      const [total] = await accountTotals(ALL_OWNERS, db);
 
       expect(total?.amount).toBe("2500.0000");
       expect(total?.coverage).toEqual({ known: 1, total: 2 });
@@ -161,7 +162,7 @@ describe("accountTotals", () => {
         holdings: [{ instrument: usd, quantity: "9000.00000000" }],
       });
 
-      const totals = await accountTotals(db);
+      const totals = await accountTotals(ALL_OWNERS, db);
 
       // The zeros sort under the funded account and tie-break on name.
       expect(totals.map((total) => [total.accountName, total.amount])).toEqual([
@@ -206,7 +207,7 @@ describe("netWorthSeries", () => {
       await seedDailyClose({ instrument: vti, date: "2026-01-31", close: "200.0000" });
       await seedDailyClose({ instrument: vti, date: "2026-02-28", close: "250.0000" });
 
-      const series = await netWorthSeries(["2026-02-28", "2026-01-31"], db);
+      const series = await netWorthSeries(ALL_OWNERS, ["2026-02-28", "2026-01-31"], db);
 
       // Sorted by date regardless of the order asked for.
       expect(series.map((point) => [point.date, point.amount])).toEqual([
@@ -231,7 +232,7 @@ describe("netWorthSeries", () => {
       // Friday only. Saturday and Sunday are represented by absent rows.
       await seedDailyClose({ instrument: vti, date: "2026-01-30", close: "100.0000" });
 
-      const series = await netWorthSeries(["2026-01-31", "2026-02-01"], db);
+      const series = await netWorthSeries(ALL_OWNERS, ["2026-01-31", "2026-02-01"], db);
 
       expect(series.map((point) => point.amount)).toEqual(["1000.0000", "1000.0000"]);
     }),
@@ -251,7 +252,7 @@ describe("netWorthSeries", () => {
       });
       await seedDailyClose({ instrument: vti, date: "2026-01-31", close: "100.0000" });
 
-      const series = await netWorthSeries(["2025-06-01", "2026-01-31"], db);
+      const series = await netWorthSeries(ALL_OWNERS, ["2025-06-01", "2026-01-31"], db);
 
       // This distinction is what stops the chart drawing a fictional climb from
       // zero at its head: the amount is 0 but the coverage says nothing was
@@ -268,7 +269,7 @@ describe("netWorthSeries", () => {
   it(
     "returns nothing for no dates rather than querying for none",
     withDatabase(async ({ db }) => {
-      expect(await netWorthSeries([], db)).toEqual([]);
+      expect(await netWorthSeries(ALL_OWNERS, [], db)).toEqual([]);
     }),
   );
 });
@@ -289,7 +290,7 @@ describe("netWorthChange", () => {
       await seedDailyClose({ instrument: vti, date: "2026-01-31", close: "200.0000" });
       await seedQuote({ instrument: vti, price: "250.0000" });
 
-      const change = await netWorthChange("2026-01-31", db);
+      const change = await netWorthChange(ALL_OWNERS, "2026-01-31", db);
 
       expect(change.current).toBe("25000.0000");
       expect(change.previous).toBe("20000.0000");
@@ -318,7 +319,7 @@ describe("netWorthChange", () => {
       });
       await seedDailyClose({ instrument: usd, date: "2026-01-31", close: "1.0000" });
 
-      const change = await netWorthChange("2026-01-31", db);
+      const change = await netWorthChange(ALL_OWNERS, "2026-01-31", db);
 
       expect(change.difference).toBe("5000.0000");
       // Dividing by the signed −10,000 would report this recovery as −50%,
@@ -342,7 +343,7 @@ describe("netWorthChange", () => {
       });
 
       // Nothing existed in 2025, so there is no base to be a percentage of.
-      const change = await netWorthChange("2025-01-01", db);
+      const change = await netWorthChange(ALL_OWNERS, "2025-01-01", db);
 
       expect(change.previous).toBe("0.0000");
       expect(change.difference).toBe("25000.0000");
@@ -431,7 +432,7 @@ describe("the 1D series", () => {
         await seedObservation({ instrument: vti, asOf: at as string, price: price as string });
       }
 
-      const series = await netWorthSessionSeries("2026-06-05", db);
+      const series = await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db);
 
       // Unsampled: one point per observation, so the line is exactly as
       // granular as the refresh cadence the household chose (story 3).
@@ -464,7 +465,7 @@ describe("the 1D series", () => {
       // Cash contributes its fixed dollar at every instant — it is quoted by
       // nobody and carried forward from the 1970 row — so the point is
       // $5,000 plus ten shares at the price the feed had given us.
-      expect(await netWorthSessionSeries("2026-06-05", db)).toEqual([
+      expect(await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).toEqual([
         {
           at: "2026-06-05T14:00:00.000Z",
           amount: "8000.0000",
@@ -500,7 +501,7 @@ describe("the 1D series", () => {
       await seedObservation({ instrument: early, asOf: "2026-06-05T13:30:00Z", price: "110.0000" });
       await seedObservation({ instrument: late, asOf: "2026-06-05T14:00:00Z", price: "80.0000" });
 
-      expect((await netWorthSessionSeries("2026-06-05", db)).map((point) => [point.at, point.amount])).toEqual([
+      expect((await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).map((point) => [point.at, point.amount])).toEqual([
         // 10 × 110 + 10 × 50, the second still at yesterday's close.
         ["2026-06-05T13:30:00.000Z", "1600.0000"],
         // 10 × 110 + 10 × 80, once its own quote arrived.
@@ -526,9 +527,9 @@ describe("the 1D series", () => {
       await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "220.0000" });
       await seedQuote({ instrument: vti, price: "220.0000" });
 
-      const series = await netWorthSessionSeries("2026-06-05", db);
+      const series = await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db);
 
-      expect(series.at(-1)?.amount).toBe((await netWorth(db)).amount);
+      expect(series.at(-1)?.amount).toBe((await netWorth(ALL_OWNERS, db)).amount);
     }),
   );
 
@@ -546,7 +547,7 @@ describe("the 1D series", () => {
 
       // Not a flat line: nothing was observed, which is not the same claim as
       // "nothing moved".
-      expect(await netWorthSessionSeries("2026-06-05", db)).toEqual([]);
+      expect(await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).toEqual([]);
     }),
   );
 });

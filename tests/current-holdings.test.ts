@@ -12,6 +12,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -50,7 +51,7 @@ describe("the valuation rule", () => {
       });
 
       // 25,000 + 12,500 − 8,000
-      expect(await netWorth(db)).toEqual({
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "29500.0000",
         coverage: { known: 3, total: 3 },
       });
@@ -83,7 +84,7 @@ describe("the valuation rule", () => {
         holdings: [{ instrument: vti, quantity: "100.00000000", costBasisPerShare: "200.0000" }],
       });
 
-      expect(await currentHoldings(db)).toEqual([
+      expect(await currentHoldings(ALL_OWNERS, db)).toEqual([
         {
           accountId: account.id,
           accountName: "Empower 401k — Roth",
@@ -117,8 +118,8 @@ describe("the valuation rule", () => {
   it(
     "reports zero from nothing when no account holds anything",
     withDatabase(async ({ db }) => {
-      expect(await netWorth(db)).toEqual({ amount: "0.0000", coverage: { known: 0, total: 0 } });
-      expect(await currentHoldings(db)).toEqual([]);
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({ amount: "0.0000", coverage: { known: 0, total: 0 } });
+      expect(await currentHoldings(ALL_OWNERS, db)).toEqual([]);
     }),
   );
 });
@@ -141,7 +142,7 @@ describe("which position set counts as current", () => {
         holdings: [{ instrument: usd, quantity: "250.00000000" }],
       });
 
-      expect((await currentHoldings(db)).map((holding) => holding.quantity)).toEqual([
+      expect((await currentHoldings(ALL_OWNERS, db)).map((holding) => holding.quantity)).toEqual([
         "250.00000000",
       ]);
     }),
@@ -166,7 +167,7 @@ describe("which position set counts as current", () => {
         holdings: [{ instrument: usd, quantity: "100.00000000" }],
       });
 
-      expect((await currentHoldings(db)).map((holding) => holding.quantity)).toEqual([
+      expect((await currentHoldings(ALL_OWNERS, db)).map((holding) => holding.quantity)).toEqual([
         "250.00000000",
       ]);
     }),
@@ -191,7 +192,7 @@ describe("which position set counts as current", () => {
         holdings: [{ instrument: usd, quantity: "175.00000000" }],
       });
 
-      expect((await currentHoldings(db)).map((holding) => holding.quantity)).toEqual([
+      expect((await currentHoldings(ALL_OWNERS, db)).map((holding) => holding.quantity)).toEqual([
         "175.00000000",
       ]);
     }),
@@ -217,7 +218,7 @@ describe("which position set counts as current", () => {
         holdings: [{ instrument: usd, quantity: "100.00000000" }],
       });
 
-      expect((await currentHoldings(db)).map((holding) => holding.quantity)).toEqual([
+      expect((await currentHoldings(ALL_OWNERS, db)).map((holding) => holding.quantity)).toEqual([
         "175.00000000",
       ]);
     }),
@@ -241,10 +242,10 @@ describe("which position set counts as current", () => {
         holdings: [{ instrument: usd, quantity: "999999.00000000" }],
       });
 
-      expect((await currentHoldings(db)).map((holding) => holding.accountName)).toEqual([
+      expect((await currentHoldings(ALL_OWNERS, db)).map((holding) => holding.accountName)).toEqual([
         "Checking",
       ]);
-      expect(await netWorth(db)).toEqual({
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "100.0000",
         coverage: { known: 1, total: 1 },
       });
@@ -271,7 +272,7 @@ describe("partial data, told honestly", () => {
         holdings: [{ instrument: trust, quantity: "42.00000000", costBasisPerShare: "10.0000" }],
       });
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
 
       // The row is here rather than dropped: an inner join to `quote` would
       // make it vanish and understate every total with no error anywhere.
@@ -310,7 +311,7 @@ describe("partial data, told honestly", () => {
       // 2,500 + 500, and the unpriced holding contributes nothing — but the
       // count says so, so a screen can label "based on 2 of 3 holdings" rather
       // than implying the total is complete.
-      expect(await netWorth(db)).toEqual({
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "3000.0000",
         coverage: { known: 2, total: 3 },
       });
@@ -331,7 +332,7 @@ describe("partial data, told honestly", () => {
         holdings: [{ instrument: fund, quantity: "100.00000000" }],
       });
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
 
       // Zero here would report a $25,000 gain on a position whose basis is
       // simply not known.
@@ -342,7 +343,7 @@ describe("partial data, told honestly", () => {
         unrealized: null,
       });
       // The price is known, so the holding is still fully counted in net worth.
-      expect(await netWorth(db)).toEqual({
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "25000.0000",
         coverage: { known: 1, total: 1 },
       });
@@ -363,7 +364,7 @@ describe("partial data, told honestly", () => {
         holdings: [{ instrument: fund, quantity: "100.00000000" }],
       });
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
 
       expect(holding).toMatchObject({
         price: "250.0000",
@@ -372,7 +373,7 @@ describe("partial data, told honestly", () => {
         isStale: true,
       });
       // Last known value, not a zero and not a null.
-      expect(await netWorth(db)).toEqual({
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "25000.0000",
         coverage: { known: 1, total: 1 },
       });
@@ -397,7 +398,7 @@ describe("what a holding is projected to pay", () => {
         holdings: [{ instrument: fund, quantity: "10.50000000" }],
       });
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
 
       // 10.5 × 3.6000, exact and at the stored scale. `toBeCloseTo` would pass
       // just as happily on a figure that had been through a double, which is
@@ -432,7 +433,7 @@ describe("what a holding is projected to pay", () => {
       });
 
       const dividends = Object.fromEntries(
-        (await currentHoldings(db)).map((holding) => [
+        (await currentHoldings(ALL_OWNERS, db)).map((holding) => [
           holding.instrumentName,
           holding.annualDividend,
         ]),
@@ -466,7 +467,7 @@ describe("what a holding is projected to pay", () => {
         holdings: [{ instrument: note, quantity: "-2.00000000" }],
       });
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
 
       expect(holding).toMatchObject({ quantity: "-2.00000000", annualDividend: "-10.0000" });
     }),
@@ -500,7 +501,7 @@ describe("what a holding is projected to pay", () => {
       // key, so the left join the dividend is computed over stays one row per
       // holding — a second quote row for one instrument would double the
       // dividend-paying rows and silently double every total taken over them.
-      expect(await currentHoldings(db)).toHaveLength(3);
+      expect(await currentHoldings(ALL_OWNERS, db)).toHaveLength(3);
     }),
   );
 });
@@ -520,7 +521,7 @@ describe("money crossing the database boundary", () => {
         holdings: [{ instrument: fund, quantity: "0.12345678", costBasisPerShare: "199.9900" }],
       });
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
 
       expect(holding).toMatchObject({
         quantity: "0.12345678",
@@ -546,7 +547,7 @@ describe("money crossing the database boundary", () => {
         holdings: [{ instrument: fund, quantity: "1234567890.12345670" }],
       });
 
-      const { amount } = await netWorth(db);
+      const { amount } = await netWorth(ALL_OWNERS, db);
 
       expect(amount).toBe("1234567890123.4567");
       // Proof the guarantee is load-bearing rather than decorative: the same

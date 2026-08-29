@@ -107,6 +107,23 @@ describe("the 404 gate", () => {
       }
     }),
   );
+
+  it(
+    "answers 404 for an id that is all digits and far past bigint, rather than erroring",
+    withDatabase(async () => {
+      // The gap the digits-only guard left: `'99999999999999999999999'::bigint`
+      // passes `/^\d+$/`, reaches Postgres, and comes back as an out-of-range
+      // error — a 500 on a URL a truncated link or a fuzzer produces, where
+      // "no such account" is the honest answer. The guard now bounds the length
+      // as well as the alphabet.
+      const accountId = "99999999999999999999999";
+      const response = await responseOf(() =>
+        loader(args(get(`/accounts/${accountId}`), { accountId })),
+      );
+
+      expect(response.status).toBe(404);
+    }),
+  );
 });
 
 describe("the date control's boundaries", () => {
