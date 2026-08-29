@@ -112,6 +112,20 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
               change is picked up when the next refresh runs, so it can take up to one old
               cadence to apply.
             </p>
+
+            {/* The price tag, at the dial (ADR-0006, story 17). Every distinct
+                price the feed reports is kept forever, so the cadence is a
+                storage decision as much as a request-rate one — and the figure
+                belongs where the choice is made rather than in a document
+                nobody reads at the moment they turn it. Stated as the shape of
+                the relationship plus one worked figure, because the real number
+                depends on how many instruments the household holds. */}
+            <p className="field-note">
+              It is also a storage decision. Every distinct price the feed reports is kept, and
+              never pruned, so the price archive grows in proportion: about a hundred instruments
+              at 15 minutes is on the order of half a gigabyte a year, and one minute is roughly
+              fifteen times that.
+            </p>
           </div>
 
           <button type="submit" className="button">
