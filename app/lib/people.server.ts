@@ -140,6 +140,23 @@ export type OwnerRoster = {
    * name — and the household's URL carries no owner parameter at all (ADR-0008).
    * The screens bounce to it, because a `<Form method="get">` of checkboxes has
    * no way to decline to submit the spelling in the first place.
+   *
+   * **Everybody in the household, not everybody the control can draw.** The
+   * distinction is load-bearing where somebody owns only closed accounts: they
+   * are not in {@link OwnerRoster.people}, so ticking every box a reader can
+   * see names the whole roster and *not* the whole household — and the two read
+   * differently on every past date, because `holding_valued_at` admits an
+   * account closed after that date and `firstRecordedDate` spans closed
+   * accounts outright. Collapsing that selection would hand back a chart
+   * carrying the history the reader had just excluded, under an identical
+   * headline, with nothing on screen to tell the two apart.
+   *
+   * Read against the selection rather than against {@link narrowedTo}, which is
+   * drawn from the roster and so can never name such an owner — a selection
+   * that *does* name them is the household and must still collapse. That is
+   * also why this and {@link unknownOwner} can both be true at once, of a
+   * selection naming a closed-out owner and everybody else: every screen
+   * redirects on this one first, so the pair is resolved before either is read.
    */
   coversEveryone: boolean;
 };
@@ -157,7 +174,12 @@ export async function ownerRoster(
   owners: OwnerFilter,
   db: Kysely<Database> = getDb(),
 ): Promise<OwnerRoster> {
-  const people = await filterableOwners(db);
+  // One read, two questions. `household` is who exists at all; `people` is who
+  // the control can offer, which is the subset owning an open account. Both
+  // come off the query the People screen already pays for, rather than a second
+  // one free to disagree with the first.
+  const household = await listPeople(db);
+  const people = household.filter((person) => person.openAccountCount > 0);
   const narrowedTo = people.filter((person) => owners.includes(person.id));
 
   return {
@@ -165,11 +187,14 @@ export async function ownerRoster(
     narrowedTo,
     unknownOwner: owners.length > narrowedTo.length,
     // Every roster member named and nobody else. Both halves, or a selection of
-    // "Alice and somebody who no longer exists" would be as long as a two-person
-    // roster and collapse to the household — hiding the one state that exists to
-    // say a stale address is stale.
+    // Every person recorded is named, and nothing else is. Both halves: without
+    // the second, "Alice and somebody who no longer exists" is as long as a
+    // two-person household and would collapse to it, hiding the one state that
+    // exists to say a stale address is stale.
     coversEveryone:
-      people.length > 0 && narrowedTo.length === people.length && narrowedTo.length === owners.length,
+      household.length > 0 &&
+      owners.length === household.length &&
+      household.every((person) => owners.includes(person.id)),
   };
 }
 

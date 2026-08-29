@@ -29,6 +29,7 @@ import {
   readChartRange,
   resolveRange,
 } from "~/lib/chart-range";
+import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { uploadReceipt } from "~/lib/uploads.server";
 import { holdingNote } from "~/lib/holdings-view";
 import { useMasked } from "~/lib/masking";
@@ -176,6 +177,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   return {
     freshness,
+    /**
+     * The owner filter, spelled as a search string, purely to be handed back
+     * out by the breadcrumb (spec 0013). **Nothing on this page applies it**:
+     * an account has exactly one owner, so every reader here is account-scoped
+     * and takes no filter at all (ADR-0008). It is a return address, not a
+     * narrowing — which is why it is a string rather than an `OwnerFilter`, and
+     * why it is not read by anything below.
+     */
+    owners: ownerSearch(readOwnerFilter(new URL(request.url).searchParams)),
     range: resolved.range,
     custom: resolved.custom,
     // Null on every range but 1D, which is how the chart is told which axis it
@@ -305,6 +315,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
     latestAsOf,
     justRecorded,
     freshness,
+    owners,
   } = loaderData;
 
   const Tile = TILES[total.accountKind];
@@ -328,9 +339,17 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
       {/* Overview, not Settings → Accounts: this page is the drill-down from the
           overview's accounts list, which is what links here. The settings page
           for the same account is the form that edits it, and the header's Edit
-          action is the way across. */}
+          action is the way across.
+
+          It carries the owner filter back, which is the one thing on this page
+          that reads the parameter at all: spec 0013 names this round trip as
+          the price of the account exemption. Everything else here ignores it —
+          an account has exactly one owner, so there is nothing to narrow and no
+          control drawn — but landing on the whole household's Overview from a
+          row a reader clicked on a narrowed one is how the reading gets lost
+          without anybody choosing to end it. */}
       <nav className="breadcrumb" aria-label="Breadcrumb">
-        <Link to="/">Overview</Link>
+        <Link to={{ pathname: "/", search: owners }}>Overview</Link>
         <span aria-hidden="true">/</span>
         <span aria-current="page">{total.accountName}</span>
       </nav>
