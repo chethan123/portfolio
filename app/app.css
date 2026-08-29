@@ -3050,30 +3050,85 @@ code {
  * replaces `flex-end` — there is no label column here for a button to line up
  * with the foot of.
  */
+/*
+ * A disclosure, not a row of boxes.
+ *
+ * The row grew with the household: five names were wider than the header had to
+ * spare, and the strip reflowed differently on every screen and every viewport —
+ * so the one control meant to look identical everywhere was the one that did
+ * not. Closed, this is a fixed shape whatever the household's size, which is
+ * what makes the header's layout a property of the design rather than of how
+ * many people happen to be recorded.
+ *
+ * The mechanics are `.segmented-custom`'s, which solved the same problem for the
+ * custom range picker: `position: relative` on the disclosure, the panel
+ * absolutely positioned under it so opening one never reflows the row it is in.
+ */
 .owner-filter {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.owner-filter > summary {
+  display: inline-flex;
   align-items: center;
+  gap: var(--space-xs);
+  max-width: 15rem;
+  height: 32px;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Safari draws its own triangle through `list-style: none`. */
+.owner-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Applied, so it reads as set at a glance — the same affordance the range
+ * control's chips use for the range in force. */
+.owner-filter > summary[aria-current="true"] {
+  background: var(--primary-container);
+  border-color: transparent;
+  color: var(--on-primary-container);
+}
+
+/* The hard stop that keeps the promise above: one very long name cannot widen
+ * the header, it truncates. The count form is short by construction. */
+.owner-filter-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Out of flow, so opening the menu never moves the header around it. */
+.owner-filter-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + var(--space-xs));
+  right: 0;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 2 * var(--space-md)));
+  align-items: flex-start;
   gap: var(--space-base);
-  padding: var(--space-base) var(--space-md);
-  flex-wrap: wrap;
+  padding: var(--space-md);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
-/* Shrinkable inside the strip, which `.page-actions` is not: a household of
- * six names is wider than the canvas has to spare, and the names wrap where the
- * bar itself cannot. */
-.owner-filter {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-/* A row, not a column: the fieldset default stacks, and two or three names on
- * one line is the whole control. `row-gap` is what keeps a household of six
- * readable when it wraps. */
+/* A column here, unlike the old inline row: inside a menu there is no reason to
+ * pack names onto one line, and one per line is the shape a reader scans and
+ * ticks. */
 .owner-filter-owners {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: var(--space-md);
-  row-gap: var(--space-xs);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xs);
 }
 
 /* Each name is a `label.choice` — the inline variant the ingest forms already
