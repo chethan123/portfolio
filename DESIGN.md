@@ -893,14 +893,16 @@ LAN dialling this box's published port directly, which is the threat the gate ex
 |---|---|
 | `deps` | `npm ci` against `package-lock.json` only, so dependency layers cache independently of source. Runs on `$BUILDPLATFORM` |
 | `build` | `react-router build` → client and server bundles. Runs on `$BUILDPLATFORM` |
-| `runtime` | `node:24-slim`, production dependencies only, build output, migration `.sql` files. Runs as a **non-root user**. No compiler, no dev dependencies, no source tree |
+| `runtime` | `node:24-alpine`, production dependencies only, build output, migration `.sql` files. Runs as a **non-root user**. No compiler, no dev dependencies, no source tree |
 
-**Only `runtime` is architecture-specific.** `deps` and `build` are pinned to `$BUILDPLATFORM` and
-run natively on the builder; the per-platform stage does nothing but copy and `chmod`. That makes
-the `arm64` image nearly free instead of a slow, occasionally faulting emulated Node build. It is
-sound only while no production dependency carries a native binary or a platform-specific install
-script — which is true today and would break *silently* if it stopped being, so the Dockerfile
-names the invariant in place.
+**Only `runtime` is architecture-specific — and only `runtime` is Alpine.** `deps` and `build` are
+pinned to `$BUILDPLATFORM` and run natively on the builder against glibc; the per-platform stage
+does nothing but copy and `chmod`. That makes the `arm64` image nearly free instead of a slow,
+occasionally faulting emulated Node build, and it makes the published image Alpine's small userland
+rather than Debian slim's — perl, bash, apt and dpkg stay behind. Both legs are sound only while no
+production dependency carries a native binary or a platform-specific install script — true today,
+and silent to break — so the Dockerfile names the invariant in place and the audit job in CI fails
+any change that violates it.
 
 **Startup sequence.** The entrypoint runs migrations to completion, then starts the server. Not
 concurrently, and not in a separate one-shot service — a single instance means no coordination

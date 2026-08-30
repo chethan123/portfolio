@@ -1560,9 +1560,12 @@ Three stages, each with one job:
 │      Hono, jose, cors and ajv. The script marks the tree with those   │
 │      three edges intact and again with them cut, and deletes only     │
 │      the difference — so it cannot remove anything still reachable    │
+│ rm -rf node_modules/yahoo-finance2/script                             │
+│   ── the CommonJS half of its dual build; the tree is ESM-only, so    │
+│      only esm/ can be reached                                         │
 └───────────────────────────────┬───────────────────────────────────────┘
 ┌─ runtime ─────────────────────▼───────────────────────────────────────┐
-│ node:24-slim · USER node · NODE_ENV=production TZ=UTC PORT=3000       │
+│ node:24-alpine · USER node · NODE_ENV=production TZ=UTC PORT=3000     │
 │ node_modules/ build/ package.json                                     │
 │ server/{config,validate-config,db,migrations,migrate}.ts              │
 │   ── run under Node's TYPE STRIPPING; no build step for them          │
@@ -1604,6 +1607,10 @@ job: audit                    ── runs in parallel
     │                                      being republished with new contents
     └─▶ npm audit --omit=dev --audit-level=high   ── the only BLOCKING advisory
     │                                                gate: production, serious
+    └─▶ enforce the pure-JavaScript tree   ── BLOCKING: a production entry
+    │                                         declaring hasInstallScript, os or
+    │                                         cpu fails the run — the invariant
+    │                                         the Dockerfile header names
     └─▶ npm audit                       ── dev advisories, reported not enforced
     └─▶ deprecations, re-resolved first so a package deprecated SINCE the
         lockfile was committed still shows up

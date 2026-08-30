@@ -195,6 +195,21 @@ for pkg in yahoo-finance2 tough-cookie tldts express react-router kysely pg zod;
 done
 printf 'runtime dependencies intact\n'
 
+# The CommonJS copy of `yahoo-finance2` — the `require` half of its dual build,
+# which nothing in this ESM-only image can reach; the Dockerfile carries the
+# argument.
+run_in_image 'test ! -e /app/node_modules/yahoo-finance2/script' ||
+  fail "the CommonJS copy of yahoo-finance2 is still in the runtime image"
+
+# And the half the app does reach, proved rather than inferred: the provider
+# loads the package through a lazy `import()` on the first quote refresh, not
+# at boot, so a healthy container says nothing about it. This is the exact path
+# app/lib/price-provider.server.ts takes.
+docker compose exec -T app node -e \
+  'import("yahoo-finance2").then(({default:YahooFinance})=>{process.exit(typeof new YahooFinance().quote==="function"?0:1)}).catch(()=>process.exit(1))' ||
+  fail "the ESM half of yahoo-finance2 did not import and construct inside the image"
+printf 'yahoo-finance2 CommonJS copy removed, ESM half loads\n'
+
 for compiler in gcc cc g++ make tsc; do
   run_in_image "! command -v $compiler >/dev/null" || fail "compiler in the runtime image: $compiler"
 done
@@ -236,6 +251,21 @@ page="$(docker compose exec -T app node -e \
 [[ "$page" == *'aria-label="Primary"'* ]] || fail "GET / did not render the navigation rail"
 [[ "$page" == *"Portfolio"* ]] || fail "GET / did not render the brand"
 printf 'GET / rendered a page\n'
+
+# The static assets Vite copies out of `public/` — the PWA manifest, the
+# service worker, the icon and the font. The one part of the image a rendered
+# page cannot vouch for: the markup above carries its `<link>` tags whether
+# the files behind them exist or not — exactly how an image that 404'd all
+# four shipped unnoticed. Asked of `app` directly, like the page fetch, for
+# the same reasons.
+log "Fetching the static assets from the app container"
+
+for asset in /manifest.webmanifest /sw.js /icon.svg /fonts/inter-latin-var.woff2; do
+  status="$(docker compose exec -T app node -e \
+    'fetch("http://127.0.0.1:"+(process.env.PORT||3000)+process.argv[1]).then(r=>{console.log(r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))' \
+    "$asset")" || fail "GET ${asset} from the app returned ${status:-nothing}, expected 200"
+  printf 'GET %s -> %s\n' "$asset" "$status"
+done
 
 # The body, not just the status: "200 with the wrong body" is the failure
 # Compose, the proxy and monitoring cannot see.

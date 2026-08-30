@@ -89,8 +89,33 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
-      # Reported, not enforced: the fix for a transitive advisory or a
-      # deprecation is usually somebody else's release.
+      # The Dockerfile's cross-platform, cross-libc invariant, enforced where
+      # a violation is cheapest to see: the build stages install on the
+      # builder's architecture against glibc and the runtime is Alpine pulled
+      # per platform — sound only while every production package is pure
+      # JavaScript. A dependency that compiles or fetches a native binary
+      # breaks the published image at runtime, silently, so it fails here
+      # instead, by name.
+      - name: Enforce the pure-JavaScript production tree
+        run: |
+          node -e '
+            const lock = require("./package-lock.json");
+            const offenders = Object.entries(lock.packages)
+              .filter(([path, pkg]) => path && !pkg.dev)
+              .filter(([, pkg]) => pkg.hasInstallScript || pkg.os || pkg.cpu)
+              .map(([path, pkg]) =>
+                `${path}: ${["hasInstallScript", "os", "cpu"].filter((f) => pkg[f]).join(", ")}`);
+            if (offenders.length > 0) {
+              console.error("Production packages with native or platform-specific markers:");
+              console.error(offenders.join("\n"));
+              console.error("The Dockerfile header names the invariant this breaks.");
+              process.exit(1);
+            }
+            console.log("no production package declares hasInstallScript, os or cpu");
+          '
+
+      # Everything below is reported, not enforced: the fix for a transitive
+      # advisory or a deprecation is usually somebody else's release.
       - name: Report dev advisories
         if: always()
         run: npm audit || true
