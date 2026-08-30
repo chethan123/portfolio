@@ -26,9 +26,9 @@ kinds of fact it never edits:
   transaction ledger — no buys, sells, or transfers — and no row is ever updated. The current
   portfolio is simply the latest photograph per account; the portfolio on a past date is the latest
   photograph at or before that date (DESIGN.md §3, §7).
-- **Prices**: each instrument's price history is a spine of daily closes (`price_daily`) — one row
-  per trading day, immutable once the day is finished — plus a single overwritten current quote
-  (`quote`) and an append-only log of intraday observations (`price_observation`).
+- **Prices**: each instrument's price history is a spine of daily closes (`price_daily`) — at most
+  one row per trading day — plus a single overwritten current quote (`quote`) and an append-only
+  log of intraday observations (`price_observation`).
 
 Value is always `quantity × price`, computed in SQL at `numeric` precision. **The sign lives in the
 quantity, never in the price**: a bank balance is a positive quantity of the seeded `USD` instrument
@@ -306,12 +306,15 @@ Three tiers with one-line contracts, stated as `COMMENT ON TABLE` in
 | `as_of` | `timestamptz` | no | the provider's instant, not the fetch time |
 | `is_stale` | `boolean` | no | default false; a stale price is *used*, not discarded |
 
-**`price_daily`** — the spine, immutable for finished days. While a session is running, the
-current day's row is rewritten on each refresh and settles on the day's last price, which is the
-close ([`app/lib/prices.server.ts`](../app/lib/prices.server.ts)); no earlier day's row is ever
-touched. Non-trading days get **no row**; every historical query carries forward the last close at
-or before the asked date, so Saturday equals Friday and a market holiday equals the trading day
-before it, with no calendar table anywhere.
+**`price_daily`** — the spine. A refresh files each price under the day the provider says it
+belongs to: usually the running session, whose row is rewritten through the day and settles on the
+close, and sometimes the previous trading day — a fund's evening NAV fetched next morning, a
+holiday poll returning Friday's close. A row is thus only ever rewritten with the provider's own
+price for that same day, which makes the rewrite idempotent unless the provider itself revises a
+close — a correction, not corruption ([`app/lib/prices.server.ts`](../app/lib/prices.server.ts)
+argues this in its header). Non-trading days get **no row**; every historical query carries
+forward the last close at or before the asked date, so Saturday equals Friday and a market holiday
+equals the trading day before it, with no calendar table anywhere.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -527,7 +530,7 @@ flowchart LR
     subgraph pricing [Pricing — app/lib/prices.server.ts]
         P[price provider] --> Q[quote: overwrite]
         P --> PO[price_observation: append]
-        P --> PD[price_daily: rewrite today, keep finished days]
+        P --> PD[price_daily: latest price per market day]
         P --> PL[price_poll: one row per attempt]
     end
 ```
@@ -544,18 +547,20 @@ flowchart LR
 - **The price refresh** ([`app/lib/prices.server.ts`](../app/lib/prices.server.ts) — the only
   price writer; [`app/lib/price-provider.server.ts`](../app/lib/price-provider.server.ts) — the
   only importer of the provider library) overwrites `quote`, appends new `price_observation`
-  instants, keeps the current day's `price_daily` row at the latest price (rewriting it through
-  the session; it settles on the close), and records the attempt in `price_poll`. It also refreshes
-  `instrument.quote_type` from the provider.
+  instants, keeps each market day's `price_daily` row at the provider's latest price for that day,
+  and records the attempt in `price_poll`. It also refreshes `instrument.quote_type` from the
+  provider.
 - **Deletes are rare and enumerable**: a bad upload's `position_set` (the design's undo; holdings
   cascade), a `person` owning no accounts, an `instrument` that lost an alias race, and swept or
   consumed `upload_draft` rows. Nothing else is ever deleted; accounts close via `closed_at`.
 - **Never updated**: `position_set`, `holding`, `price_observation`, and `manual_networth` rows
-  are append-only facts, and so is every `price_daily` row for a finished day. Overwritten in
-  place: `quote`, `app_setting`, the current day's `price_daily` row, an `upload_draft` as its
-  steps write parts back, and the mutable columns of `instrument` (name, symbol, `quote_type`,
-  classification), `account` (naming columns, `external_account_number`, and `closed_at` when it
-  closes) and `classification`.
+  are append-only facts, and a `price_daily` row is only ever rewritten with the provider's own
+  price for its day — a finished day changes only if the provider revises its close. Overwritten
+  in place: `quote`, `app_setting`, an `upload_draft` as its steps write parts back, `account`'s
+  editable columns (its naming columns, `external_account_number` where a commit captures one, and
+  `closed_at` when it closes), and `instrument.quote_type` on each refresh. `instrument`'s symbol,
+  name and classification are mutable by design — a ticker change is a one-column update
+  (DESIGN.md §4.3) — though nothing writes them today.
 
 ## 8. Extracting from a dump
 
