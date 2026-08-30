@@ -557,8 +557,10 @@ flowchart LR
   are append-only facts, and a `price_daily` row is only ever rewritten with the provider's own
   price for its day — a finished day changes only if the provider revises its close. Overwritten
   in place: `quote`, `app_setting`, an `upload_draft` as its steps write parts back, `account`'s
-  editable columns (its naming columns, `external_account_number` where a commit captures one, and
-  `closed_at` when it closes), and `instrument.quote_type` on each refresh. `instrument`'s symbol,
+  editable columns (name, institution, kind, owner, tax treatment and `external_account_number`
+  from the Settings edit — a commit also captures an account number where the column is empty —
+  and `closed_at` when it closes; note for a dump auditor that a historical position set reports
+  under the account's *current* owner), and `instrument.quote_type` on each refresh. `instrument`'s symbol,
   name and classification are mutable by design — a ticker change is a one-column update
   (DESIGN.md §4.3) — though nothing writes them today.
 
