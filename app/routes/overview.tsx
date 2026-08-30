@@ -131,6 +131,31 @@ export async function loader({ request }: Route.LoaderArgs) {
   const requested = readChartRange(request);
   const today = isoDate(Date.now());
 
+  // The roster comes first, alone, because what the money reads narrow by is
+  // the selection *resolved against it* below — one query ahead of the rest,
+  // which is the price of the reads and the sentence beside them agreeing.
+  const roster = await ownerRoster(owners);
+
+  // Everybody ticked is the household, whose URL carries no owner parameter at
+  // all (ADR-0008) — and here that is not merely a second URL for one view: a
+  // narrowed chart drops the pre-app history, so the two would differ by every
+  // year before the first upload while the headline stayed identical.
+  if (roster.coversEveryone) {
+    throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
+  }
+
+  // What the readers narrow by: the selection resolved against the roster,
+  // never the raw ids. An owner the roster cannot offer is not reachable
+  // through the filter, their history included (DESIGN.md §14) — but
+  // `holding_valued_at` reads an account closed after the date it is asked
+  // about, so a stale id riding along in a hand-typed address would put that
+  // owner's past into the chart and the delta while the sentence beside the
+  // headline named only the others. A selection resolving to *nobody* keeps
+  // the raw ids instead, which narrow to nothing — resolving it to `[]` would
+  // read the whole household, the exact widening `owner-filter.ts` forbids.
+  const reading =
+    roster.narrowedTo.length > 0 ? roster.narrowedTo.map((person) => person.id) : owners;
+
   // Read before the window is sized: the household surface's earliest date
   // (§7's "chart range" rule) is measured partly from it, and it is a handful
   // of hand-typed rows either way.
@@ -140,17 +165,16 @@ export async function loader({ request }: Route.LoaderArgs) {
   // would plot — or, by its absence, whether the chip may be offered at all
   // (ADR-0006, story 13). Every page load pays for that one whether or not 1D
   // is selected, which is why it joins the others rather than queueing behind
-  // them. The roster is here for the same reason and needs nothing either.
-  const [manual, positionSet, session, roster] = await Promise.all([
+  // them.
+  const [manual, positionSet, session] = await Promise.all([
     // Read either way, because "not drawn while narrowed" and "this instance
     // has none" are two different screens and only the first has anything to
     // explain. Spec 0013 gives that as the reason `manualNetWorth` does not
     // take the filter at all: an empty answer could not be told from an empty
     // table. It is a handful of hand-typed rows.
     manualNetWorth(),
-    firstRecordedDate(owners),
+    firstRecordedDate(reading),
     latestObservedSession(),
-    ownerRoster(owners),
   ]);
 
   // DESIGN.md §7 rule 3: the hand-typed series is the household's net worth
@@ -172,14 +196,6 @@ export async function loader({ request }: Route.LoaderArgs) {
   // account page.
   const earliest = { positionSet, manual: reachable[0]?.date };
 
-  // Everybody ticked is the household, whose URL carries no owner parameter at
-  // all (ADR-0008) — and here that is not merely a second URL for one view: a
-  // narrowed chart drops the pre-app history, so the two would differ by every
-  // year before the first upload while the headline stayed identical.
-  if (roster.coversEveryone) {
-    throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
-  }
-
   const resolved = resolveRange(requested.range, {
     today,
     earliest,
@@ -194,12 +210,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   // is what says which, and the chart is told the same thing.
   const points =
     resolved.session === undefined
-      ? netWorthSeries(owners, resolved.dates).then(asSessionPoints)
-      : netWorthSessionSeries(owners, resolved.session);
+      ? netWorthSeries(reading, resolved.dates).then(asSessionPoints)
+      : netWorthSessionSeries(reading, resolved.session);
 
   const [change, accounts, series, freshness, everyone] = await Promise.all([
-    netWorthChange(owners, resolved.since),
-    accountTotals(owners),
+    netWorthChange(reading, resolved.since),
+    accountTotals(reading),
     points,
     asOfView(getConfig().MARKET_TIMEZONE),
     // Whether the *instance* holds anything, which is a different question from
@@ -263,8 +279,18 @@ export async function loader({ request }: Route.LoaderArgs) {
     // on: the note would name the filter as the cause of an omission the range
     // imposes, and it says the line begins at the owners' first recorded
     // holdings where a session begins at its first observed instant. Both
-    // sentences would be wrong at once.
-    manualWithheld: isFiltered(owners) && manual.length > 0 && resolved.session === undefined,
+    // sentences would be wrong at once. And only for a point the *unfiltered*
+    // window would show — the same rule, one step further: a 1M chart omits a
+    // hand-typed point from years ago filtered or not, so blaming the filter
+    // for it is again naming a cause the omission does not have. A preset's or
+    // a custom span's start is date arithmetic the filter cannot move, so
+    // `resolved.since` is that counterfactual; **All**'s start is the narrowed
+    // reach itself, and unfiltered it spans back through every hand-typed
+    // point, so there any point at all is being withheld.
+    manualWithheld:
+      isFiltered(owners) &&
+      resolved.session === undefined &&
+      manual.some((point) => resolved.range === "all" || point.date >= resolved.since),
     /**
      * Where "Show everyone" goes: this address, its own parameters kept, no
      * owner — so clearing the filter from an emptied screen does not also throw
@@ -328,8 +354,12 @@ function Header({
   // not the strip's, though: it is the page's, and a screen whose only `h1`
   // disappears because the household has one owner is one a screen reader
   // cannot navigate by heading. A `visually-hidden` heading has no box, so on
-  // its own it costs the gap nothing.
-  if (roster.length < 2) return <h1 className="visually-hidden">Overview</h1>;
+  // its own it costs the gap nothing. A filtered address keeps the strip
+  // whatever the roster holds, because the control inside it is then the one
+  // way to clear the filter (its own header comment says why it draws).
+  if (roster.length < 2 && !isFiltered(owners)) {
+    return <h1 className="visually-hidden">Overview</h1>;
+  }
 
   const hidden = rangeFields(range, custom);
 
@@ -542,6 +572,15 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
     unknownOwner,
   } = loaderData;
 
+  // Before the empty return, unconditionally: this is a hook, and the empty
+  // state is a state this same mounted route moves in and out of — the owner
+  // form navigates client-side, so a reader switching from an owner with
+  // holdings to one without would otherwise change the render's hook count,
+  // which React refuses. The chart takes it as a prop rather than asking for
+  // itself: its axis ticks and its accessible label are strings, not
+  // components (spec 0007).
+  const masked = useMasked();
+
   // Empty because the filter reached nothing, rather than because the instance
   // has nothing. Only the second may say nothing has been uploaded, and the
   // first has to keep the control on screen or the filter cannot be cleared
@@ -588,10 +627,6 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
 
   const down = isNegative(change.difference);
   const Arrow = down ? TrendingDownIcon : TrendingUpIcon;
-
-  // The chart takes the state as a prop rather than asking for itself: its axis
-  // ticks and its accessible label are strings, not components (spec 0007).
-  const masked = useMasked();
 
   // Two points make a line; one is a dot. The panel still renders, because the
   // coverage note and the reason the line is missing are both worth saying —

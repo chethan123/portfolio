@@ -36,10 +36,12 @@
  * knows no screen's vocabulary — Holdings passes its own filters, grouping and
  * sort, Overview its `range`/`start`/`end`, and neither has to be named here.
  *
- * **Not drawn at all when fewer than two people own an open account.** The
- * spirit of `availableFilters`' one-option rule, not its code: that rule counts
- * distinct values among the holdings on screen, and this counts people, because
- * an owner who holds nothing is still someone the reader may want to read the
+ * **Not drawn at all when fewer than two people own an open account** — unless
+ * a filter is on, in which case it draws whatever the roster holds, because it
+ * is then the one control that can clear it. The threshold is the spirit of
+ * `availableFilters`' one-option rule, not its code: that rule counts distinct
+ * values among the holdings on screen, and this counts people, because an
+ * owner who holds nothing is still someone the reader may want to read the
  * household as. Following the holdings would hide the control on the screen an
  * owner happens to be absent from, which is the wrong answer for a filter that
  * spans four of them.
@@ -69,8 +71,13 @@ export function OwnerFilterControl({
    */
   hidden: Record<string, string>;
 }) {
-  // One name is not a choice, and nobody at all is not a filter.
-  if (owners.length < 2) return null;
+  // One name is not a choice, and nobody at all is not a filter — unless a
+  // filter is already on. A household of one selectable owner can still carry
+  // `?owner=` from a bookmark or from a person losing their last open account
+  // after the link was made, and a control that vanished then would leave the
+  // filter with no way off the screen: the nav carries it, and "Show everyone"
+  // below is the only control that clears it.
+  if (owners.length < 2 && !isFiltered(selected)) return null;
 
   const chosen = new Set(selected);
   const narrowedTo = owners.filter((owner) => chosen.has(owner.id));

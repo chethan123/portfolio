@@ -269,6 +269,58 @@ describe("the Overview read as an owner", () => {
   );
 
   it(
+    "keeps a stale id's owner out of the chart and the delta, not only out of the sentence",
+    withDatabase(async (ctx) => {
+      const { alice, bob } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+
+      // Bob's accounts all close, taking him off the roster — while
+      // `holding_valued_at` deliberately still reads an account closed after
+      // the date it is asked about, so his past is reachable to any read that
+      // is handed his id. A stale bookmark naming him alongside Alice must not
+      // put that past into a chart whose sentence says "Showing Alice only":
+      // the loader resolves what it reads by against the roster (§14).
+      await ctx.db
+        .updateTable("account")
+        .set({ closed_at: new Date() })
+        .where("name", "=", "Bob Roth")
+        .execute();
+
+      const hers = await loader(args(get(`/?owner=${alice.id}&range=all`)));
+      const stale = await loader(args(get(`/?owner=${alice.id},${bob.id}&range=all`)));
+
+      expect(stale.unknownOwner).toBe(true);
+      expect(renderRoute(Overview, "/", stale)).toContain("Showing <b>Alice</b> only.");
+      // The figures are the sentence's, exactly: the same line, the same
+      // delta, the same reach as the address that never named Bob.
+      expect(stale.computed).toEqual(hers.computed);
+      expect(stale.change).toEqual(hers.change);
+      expect(stale.customMin).toBe(hers.customMin);
+    }),
+  );
+
+  it(
+    "does not blame the filter for a hand-typed point the range would omit anyway",
+    withDatabase(async (ctx) => {
+      const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
+      await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "5000.00" });
+
+      // A 1M window omits a 900-day-old point unfiltered too, so the note
+      // would name the filter as the cause of an omission the range imposes —
+      // the same wrong sentence the 1D case already refuses.
+      const month = await loader(args(get(`/?owner=${alice.id}&range=1m`)));
+      expect(month.manualWithheld).toBe(false);
+      expect(renderRoute(Overview, "/", month)).not.toContain(
+        "hand-typed history before this instance existed",
+      );
+
+      // **All** unfiltered reaches back through every hand-typed point, so
+      // there the omission is the filter's and the note stands.
+      const all = await loader(args(get(`/?owner=${alice.id}&range=all`)));
+      expect(all.manualWithheld).toBe(true);
+    }),
+  );
+
+  it(
     "keeps the filter across a range click and the range across an owner apply",
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
@@ -351,15 +403,18 @@ describe("the Overview read as an owner", () => {
 
       // No hand-typed rows: nothing is being withheld, and a note naming a
       // cause the instance does not have is how a note stops being read — the
-      // rule the allocation panel's own notes keep two panels down.
-      const quiet = await loader(args(get(`/?owner=${alice.id}`)));
+      // rule the allocation panel's own notes keep two panels down. Under
+      // **All**, deliberately: the one range where an existing point is always
+      // the filter's omission and never the window's, so the absence here can
+      // only mean the instance has nothing to withhold.
+      const quiet = await loader(args(get(`/?owner=${alice.id}&range=all`)));
       expect(quiet.manualWithheld).toBe(false);
       expect(renderRoute(Overview, "/", quiet)).not.toContain(
         "hand-typed history before this instance existed",
       );
 
       await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "5000.00" });
-      const withheld = await loader(args(get(`/?owner=${alice.id}`)));
+      const withheld = await loader(args(get(`/?owner=${alice.id}&range=all`)));
       expect(withheld.manualWithheld).toBe(true);
       expect(renderRoute(Overview, "/", withheld)).toContain(
         "hand-typed history before this instance existed",
@@ -571,6 +626,40 @@ describe("the Overview's three empty states", () => {
       expect(nothingMarkup).not.toContain("There is no data yet");
       expect(nothingMarkup).toContain("Alice holds nothing that has been recorded here");
       expect(nothingMarkup).toContain('aria-label="Filter by owner"');
+    }),
+  );
+
+  it(
+    "keeps a way to clear the filter when only one owner can be offered",
+    withDatabase(async (ctx) => {
+      const alice = await ctx.seedPerson({ name: "Alice" });
+      await ctx.seedPerson({ name: "Dana" });
+      const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await ctx.seedQuote({ instrument: vti, price: "100.0000" });
+      const account = await ctx.seedAccount({
+        kind: "brokerage",
+        name: "Alice Brokerage",
+        owner: alice,
+      });
+      await ctx.seedPositionSet({
+        account,
+        asOf: daysAgo(30),
+        holdings: [{ instrument: vti, quantity: "10" }],
+      });
+
+      // Dana is recorded and owns no open account, so `?owner=` naming Alice
+      // does not cover everybody recorded and cannot collapse — while the
+      // roster offers one name, which used to mean no control at all: the nav
+      // carried the filter onward and no screen could clear it.
+      const data = await loader(args(get(`/?owner=${alice.id}`)));
+      const markup = renderRoute(Overview, "/", data);
+      expect(markup).toContain('aria-label="Filter by owner"');
+      expect(markup).toContain("Show everyone");
+
+      // Unfiltered, the one-name household still draws no control.
+      expect(renderRoute(Overview, "/", await loader(args(get("/"))))).not.toContain(
+        'aria-label="Filter by owner"',
+      );
     }),
   );
 });
