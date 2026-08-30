@@ -85,9 +85,11 @@ concluding a grep found a violation):
 - `app/lib/price-provider.server.ts` is the only importer of `yahoo-finance2`;
   `app/lib/prices.server.ts` is the only price writer.
 - `app/lib/valuation.server.ts` is the only valuation reader of `holding_valued` — every screen
-  reads holdings through its readers (`currentHoldings()`, `netWorth()`, `holdingsAt()`,
-  `netWorthAt()`, `accountHoldings()`, `accountTotals()`). A screen writing its own join over
-  `holding` has left the design.
+  reads holdings through its readers (`currentHoldings(owners)`, `netWorth(owners)`,
+  `holdingsAt(owners, d)`, `netWorthAt(owners, d)`, `accountHoldings(id)`, `accountTotals(owners)`).
+  A screen writing its own join over `holding` has left the design. The household-scoped readers
+  take an `OwnerFilter` first, required and never defaulted, so a new screen cannot read holdings
+  without saying whose (ADR-0008); the account-scoped ones are already narrower and take none.
 
 **History is append-only.** Uploads, balance sets, and position corrections each write a new
 `position_set`; nothing edits or deletes one, because `holding_valued_at` reads them for every date

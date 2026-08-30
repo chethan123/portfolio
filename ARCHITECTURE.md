@@ -402,7 +402,7 @@ sequenceDiagram
     L->>H: parseQuery(searchParams)
     Note right of L: First statement in the loader. The query<br/>decides whether the fetch happens at all.
     L->>L: canonical search? else 302
-    L->>V: currentHoldings()
+    L->>V: currentHoldings(owners)
     V->>PG: select * from holding_valued order by …
     PG-->>V: rows — numeric as decimal STRINGS
     V-->>L: ValuedHolding[]
