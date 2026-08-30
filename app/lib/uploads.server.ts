@@ -45,6 +45,7 @@ import { z } from "zod";
 import { sql } from "kysely";
 
 import { getConfig } from "../../server/config.ts";
+import { numberTail } from "./account-label.ts";
 import { getAccount } from "./accounts.server.ts";
 import { lastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
@@ -83,6 +84,18 @@ export type UploadDraft = {
   id: string;
   accountId: string;
   accountName: string;
+  /**
+   * The account's owner, for the identity strip's "owned by" — a draft
+   * survives a closed laptop, and a bare name is least sufficient exactly
+   * when the reader resumes cold with two same-named accounts in the house.
+   */
+  ownerName: string;
+  /**
+   * `····` plus the last four characters of the account's recorded number,
+   * or null without one — pre-masked so the raw number never leaves the
+   * commit path (`DraftRecord`), while the strip still gets its tiebreaker.
+   */
+  accountNumberTail: string | null;
   filename: string;
   /** The uploaded bytes, exactly as they arrived — BOM, CRLF and all. */
   bytes: Uint8Array;
@@ -257,10 +270,12 @@ async function findDraft(
   const row = await db
     .selectFrom("upload_draft")
     .innerJoin("account", "account.id", "upload_draft.account_id")
+    .innerJoin("person", "person.id", "account.owner_id")
     .select([
       "upload_draft.id",
       "upload_draft.account_id",
       "account.name as account_name",
+      "person.name as owner_name",
       "account.closed_at",
       "account.external_account_number",
       "upload_draft.filename",
@@ -278,6 +293,8 @@ async function findDraft(
     id: row.id,
     accountId: row.account_id,
     accountName: row.account_name,
+    ownerName: row.owner_name,
+    accountNumberTail: numberTail(row.external_account_number),
     filename: row.filename,
     bytes: row.raw_file,
     mapping: row.mapping,
@@ -541,6 +558,9 @@ export type UploadDiff = {
   draftId: string;
   accountId: string;
   accountName: string;
+  /** For the identity strip — same reason as {@link UploadDraft.ownerName}. */
+  ownerName: string;
+  accountNumberTail: string | null;
   filename: string;
   added: DiffAdded[];
   updated: DiffUpdated[];
@@ -857,6 +877,8 @@ async function assembleDiff(
       draftId: draft.id,
       accountId: draft.accountId,
       accountName: draft.accountName,
+      ownerName: draft.ownerName,
+      accountNumberTail: draft.accountNumberTail,
       filename: draft.filename,
       added,
       updated,
@@ -1004,8 +1026,9 @@ export async function commitUpload(
     if (disagreeing !== undefined) {
       throw ValidationError.form(
         `This file says it describes account "${disagreeing.accountNumber}", and ` +
-          `${draft.accountName} is recorded as account "${draft.accountNumber}". A statement ` +
-          "lands in the account it describes — check which account this export belongs to.",
+          `${draft.accountName} — owned by ${draft.ownerName} — is recorded as account ` +
+          `"${draft.accountNumber}". A statement lands in the account it describes — check ` +
+          "which account this export belongs to.",
       );
     }
   }

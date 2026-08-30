@@ -743,6 +743,36 @@ describe("commitUpload", () => {
   );
 
   it(
+    "refuses a file naming a different account, and says whose account the draft is against",
+    withDatabase(async (ctx) => {
+      const { db, seedPerson, seedAccount, seedInstrument, seedInstrumentAlias } = ctx;
+      const owner = await seedPerson({ name: "Alex Rivera" });
+      const account = await seedAccount({
+        name: "Schwab",
+        owner,
+        externalAccountNumber: "8391-2245",
+      });
+      const apple = await seedInstrument({ symbol: "AAPL", name: "Apple Inc." });
+      await seedInstrumentAlias({ instrument: apple, rawString: "AAPL" });
+
+      const draftId = await stage(
+        ctx,
+        account,
+        "Symbol,Quantity,Basis,Account\nAAPL,5,100.00,4407-9913\n",
+        { columns: { accountNumber: "Account" } },
+      );
+
+      const refusal = await refusalOf(() =>
+        commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/"4407-9913"/);
+      expect(refusal.fieldErrors.form).toMatch(
+        /Schwab — owned by Alex Rivera — is recorded as account "8391-2245"/,
+      );
+    }),
+  );
+
+  it(
     "runs the same product guard against the instrument's dividend rate",
     withDatabase(async (ctx) => {
       const { db, seedAccount, seedInstrument, seedInstrumentAlias, seedQuote } = ctx;

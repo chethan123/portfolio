@@ -301,11 +301,19 @@ because this is the screen a person is standing on when they decide whether to t
 Then a `.panel-form` (`multipart/form-data` — the app's first), closing up under the intro via the
 `.panel-body + .panel-form` rule:
 
-- **"Account"** — a `<select>` over **open accounts only**, ordered as the Settings account list
-  orders them, so the two screens never disagree about what the household's accounts are called or
-  which comes first. A closed account is **absent, not disabled**: a closed account's history does
-  not change — the same refusal `setBalance` already makes — and a disabled option is a question
-  ("why can I see it and not choose it?") the select cannot answer. **Every open account kind is
+- **"Account"** — a `<select>` over **open accounts only**, grouped with an `<optgroup>` per
+  owner — "Owned by Alex Rivera" — because the collision this picker actually suffered was two
+  people at one broker, and a group header says the owner once instead of stamping it on every
+  row. Groups follow the People screen's order; within a group the options keep the order the
+  Settings account list gives them, so the two screens never disagree about what the household's
+  accounts are called. An option's label is quiet until two rows would read the same: the
+  account's name, plus `····last-4` of its recorded number when there is one; then
+  "— institution · account type" for rows that still match within their group; then the tax
+  treatment, shortened, for rows that match beyond that — and rows identical in every stored
+  attribute render identically, honestly (`app/lib/account-label.ts` owns the rule). A closed
+  account is **absent, not disabled**: a closed account's history does not change — the same
+  refusal `setBalance` already makes — and a disabled option is a question ("why can I see it and
+  not choose it?") the select cannot answer. **Every open account kind is
   offered, not just brokerage**: a liability statement listing what is owed and an overdrawn bank
   export carrying its own minus sign are both legitimate uploads — and the overdraft in particular
   is recordable only through an upload or by recasting the account as a `liability`, because the
@@ -358,8 +366,11 @@ and splitting them into a separate card puts the evidence in a different box fro
 
 ### 4.1 The intro, and where the mapping came from
 
-A `.panel-body form-intro` opening with the file and the account, because a draft survives a closed
-laptop and the reader may be resuming cold: **"Positions_2026-06-30.csv · Fidelity Brokerage."**
+A `.panel-body form-intro` opening with the file and the account — the account with its owner and
+number tail, because a draft survives a closed laptop, and the reader resuming cold is exactly who
+cannot tell two same-named accounts apart:
+**"Positions_2026-06-30.csv · Fidelity Brokerage ····3910 — owned by Alex Rivera."** The review
+screen's intro opens the same way.
 
 **When a saved mapping matched the header fingerprint**, a second sentence says so: *"These columns
 were mapped when a previous Fidelity statement was uploaded; the choices below are that mapping.
