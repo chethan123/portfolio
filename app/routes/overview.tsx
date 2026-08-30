@@ -23,6 +23,7 @@ import {
 } from "~/lib/chart-range";
 import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import {
   accountTotals,
   asSessionPoints,
@@ -42,7 +43,6 @@ import { PriceFreshness } from "../components/price-freshness.tsx";
 import { asOfView } from "../lib/prices.server.ts";
 
 import type { Route } from "./+types/overview";
-import { ALL_OWNERS } from "~/lib/owner-filter.ts";
 
 /**
  * Overview — the net worth headline, the trend line, and the accounts rollup.

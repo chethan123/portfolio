@@ -125,6 +125,31 @@ export function ownerSearch(filter: OwnerFilter): string {
 }
 
 /**
+ * Whether two search strings name the same view, whatever spelled them.
+ *
+ * The loaders redirect an address to its canonical spelling, and the
+ * comparison that decides has to be blind to *encoding*, or it is an infinite
+ * redirect rather than a tidy-up. There are two serialisers in play and they
+ * disagree on two characters that reach this application:
+ *
+ * - `encodeURIComponent` leaves `'` alone; `URL` and `URLSearchParams` spell it
+ *   `%27`. So `?owner=o'brien` — a hand-typed id this module deliberately keeps
+ *   — could never equal its own canonical spelling.
+ * - `URLSearchParams.toString` spells `,` as `%2C` while the canonical owner
+ *   parameter is `owner=1,3` by design (spec 0013). Some transports hand the
+ *   loader a query that has already been round-tripped through
+ *   `URLSearchParams`, so the two spellings both arrive in practice.
+ *
+ * Normalising both sides through one serialiser makes the comparison about the
+ * parameters, their order and their values — which is what "canonical" was ever
+ * meant to mean. The redirect still *targets* the readable spelling; what
+ * changes is that arriving at the other one is not a fault worth bouncing over.
+ */
+export function sameView(a: string, b: string): boolean {
+  return new URLSearchParams(a).toString() === new URLSearchParams(b).toString();
+}
+
+/**
  * The address a request should be reading: its owner parameter spelled
  * canonically and first, everything else kept.
  *

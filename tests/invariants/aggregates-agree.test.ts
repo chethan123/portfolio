@@ -48,11 +48,11 @@ import {
   netWorthSeries,
 } from "~/lib/valuation.server";
 import { MONEY_SCALE, toUnits } from "~/lib/money";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 
 import type { TestContext } from "../support/database.ts";
-import { ALL_OWNERS } from "../../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
