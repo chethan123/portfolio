@@ -41,6 +41,12 @@ COPY package.json package-lock.json ./
 COPY react-router.config.ts vite.config.ts tsconfig.json ./
 COPY app ./app
 COPY server ./server
+# Vite copies `public/` verbatim into build/client, and `react-router-serve`
+# serves it from there — the PWA manifest, service worker, icon and font have
+# no other way into the image. Every COPY here is deliberate and selective, so
+# leaving this one out broke nothing at build time and 404'd all four paths in
+# production, which is why the smoke test now fetches them.
+COPY public ./public
 
 RUN npm run build
 

@@ -270,6 +270,21 @@ page="$(docker compose exec -T app node -e \
 [[ "$page" == *"Portfolio"* ]] || fail "GET / did not render the brand"
 printf 'GET / rendered a page\n'
 
+# The static assets Vite copies out of `public/` — the PWA manifest, the
+# service worker, the icon and the font. They are the one part of the image a
+# rendered page cannot vouch for: the markup above carries its `<link>` tags
+# whether the files behind them exist or not, which is exactly how an image
+# that 404'd all four shipped unnoticed. Asked of `app` directly, like the
+# page fetch, and for the same reasons.
+log "Fetching the static assets from the app container"
+
+for asset in /manifest.webmanifest /sw.js /icon.svg /fonts/inter-latin-var.woff2; do
+  status="$(docker compose exec -T app node -e \
+    'fetch("http://127.0.0.1:"+(process.env.PORT||3000)+process.argv[1]).then(r=>{console.log(r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))' \
+    "$asset")" || fail "GET ${asset} from the app returned ${status:-nothing}, expected 200"
+  printf 'GET %s -> %s\n' "$asset" "$status"
+done
+
 # The body, not just the status. `/healthz` is what Compose, the proxy and any
 # monitoring read, and "200 with the wrong body" is the failure they cannot see.
 health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
