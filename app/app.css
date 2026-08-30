@@ -3898,6 +3898,22 @@ code {
     width: auto;
     max-width: none;
   }
+
+  /* The names take the whole row, so the actions wrap under them — beside the
+   * list they floated in whatever the panel had spare, which on a spanning
+   * panel was a button adrift in empty space. */
+  .owner-filter-owners {
+    flex: 1 0 100%;
+  }
+
+  /* Trailing corner, primary outermost: `margin-left: 0` above is right on a
+   * panel sized to its contents and wrong on one spanning the row — the base
+   * `.filter-actions` already knew that. Reversed so Apply takes the corner
+   * itself and Show everyone, the quieter exit, sits inside it. */
+  .owner-filter .filter-actions {
+    margin-left: auto;
+    flex-direction: row-reverse;
+  }
 }
 
 /* --- Upload steps ----------------------------------------------------------
