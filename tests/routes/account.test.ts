@@ -99,16 +99,39 @@ describe("the 404 gate", () => {
       // that casts to `bigint`, where `'lookup'::bigint` is a driver error and
       // reaches the reader as a 500 rather than as "no such account".
       //
-      // The third is all digits and so passed the old guard, then overflowed
-      // `bigint` inside Postgres — the same 500 by a longer route. The length
-      // bound in `isOneOf` is what turns it back into "no such account".
-      for (const accountId of ["999999999", "lookup", "99999999999999999999999"]) {
+      // The third is all digits and so passed the guard on shape, then
+      // overflowed `bigint` inside Postgres — the same 500 by a longer route.
+      // The magnitude bound in `couldBeId` is what turns it back into "no such
+      // account", and the fourth pins the boundary itself: one past the largest
+      // `bigint` is refused here rather than by the driver.
+      for (const accountId of [
+        "999999999",
+        "lookup",
+        "99999999999999999999999",
+        "9223372036854775808",
+      ]) {
         const response = await responseOf(() =>
           loader(args(get(`/accounts/${accountId}`), { accountId })),
         );
 
         expect(response.status).toBe(404);
       }
+    }),
+  );
+
+  it(
+    "still resolves an account whose id is written with leading zeros",
+    withDatabase(async (ctx) => {
+      // The other half of the same bound. `0000000000000000001` is nineteen
+      // characters and is account 1: a guard counting characters rather than
+      // reading the value would 404 a row that exists, which is the opposite
+      // failure and the harder one to notice.
+      const { account } = await seedTwoStatements(ctx);
+      const padded = account.id.padStart(19, "0");
+
+      const data = await loader(args(get(`/accounts/${padded}`), { accountId: padded }));
+
+      expect(data.total.accountId).toBe(account.id);
     }),
   );
 });

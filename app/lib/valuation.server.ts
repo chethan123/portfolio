@@ -391,14 +391,23 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
 
 /**
 /**
- * The most digits that always fit a `bigint`.
+ * The largest value a `bigint` column can hold.
  *
- * 999,999,999,999,999,999 is comfortably inside the type's range, so nothing an
- * instance could ever have issued is refused, and nothing that would overflow
- * is sent. Without the bound a long enough id reaches Postgres and errors out
- * of range — a 500 where the honest answer is "no such row".
+ * The bound is on the *magnitude*, not on the number of characters: an id is
+ * refused when it could not be a `bigint`, never when it is merely written at
+ * length. `0000000000000000001` is nineteen characters and is account 1, which
+ * a digit-count guard would turn into a 404 for a row that exists.
+ *
+ * Compared as a `BigInt` rather than a `Number`, for the reason §5.6 gives
+ * about ids generally: past 2^53 a float rounds, and rounding here would admit
+ * exactly the values this exists to refuse.
  */
-const MAX_ID_DIGITS = 18;
+const MAX_BIGINT = 9223372036854775807n;
+
+/** Whether an id could name a row, rather than error inside Postgres. */
+function couldBeId(id: string): boolean {
+  return /^\d+$/.test(id) && BigInt(id) <= MAX_BIGINT;
+}
 
 /**
  * `<column> in (<ids>)`, or a predicate matching nothing when none can be one.
@@ -416,7 +425,7 @@ const MAX_ID_DIGITS = 18;
  * names; this is that rule at the other end of the same request.
  */
 function isOneOf(column: string, ids: readonly string[]): RawBuilder<SqlBool> {
-  const usable = ids.filter((id) => /^\d+$/.test(id) && id.length <= MAX_ID_DIGITS);
+  const usable = ids.filter(couldBeId);
 
   return usable.length === 0
     ? sql<SqlBool>`false`
