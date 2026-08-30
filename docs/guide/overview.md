@@ -117,6 +117,9 @@ one owner therefore starts at their first recorded holdings, and a note above it
 > The hand-typed history before this instance existed is the household's and has no owner, so it is
 > not drawn here. The line begins at these owners' first recorded holdings.
 
+The note only appears on a range that would have shown those points unfiltered — a short range
+omits years-old history whether or not a filter is on, and gets no note for it.
+
 Nothing has been lost — **Show everyone** brings the dashed prefix straight back. See
 [reading a screen as one owner](owner-filter.md).
 

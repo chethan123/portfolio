@@ -19,7 +19,7 @@ This file carries what the script cannot: which shot is of what, and why.
 | File | Page | Which account, and why |
 |---|---|---|
 | `overview-*.png` | `/` | — |
-| `overview-owner-*.png` | `/?owner=:id` | the first of the demo household's two owners, by id · the owner filter, which is only legible as a difference from `overview-*.png` directly above: same household, same range, a smaller headline, the owners named beneath it, 5Y greyed out where the household reaches it, and the pre-app line withheld |
+| `overview-owner-*.png` | `/?owner=:id&range=all` | the first of the demo household's two owners, by id · the owner filter, which is only legible as a difference from `overview-*.png` above: same household, a smaller headline, the owners named beneath it, the long presets greyed out where the household reaches them, and the pre-app line withheld — at **All**, deliberately, because the withheld-history note only appears on a range that would have shown those points unfiltered, and the demo's are years old |
 | `overview-1d-*.png` | `/?range=1d` | — · the 1D range, whose time axis, time-of-day readout and one-point-per-refresh granularity are invisible on every other preset |
 | `holdings-*.png` | `/holdings` | — · unfiltered and ungrouped, which is the state the URL with no query string produces |
 | `holdings-edit-*.png` | `/holdings` with one row open | the brokerage one, on a row that has a cost basis, so both boxes carry a figure. Scoped to the table rather than the page: the point of the shot is the two boxes sitting in their own columns, which a whole-page capture at this width renders too small to read |

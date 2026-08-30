@@ -442,10 +442,13 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
 
     // The same screen read as one owner (spec 0013). A pair rather than a
     // single shot, because what the owner filter does is only legible as a
-    // difference: the same household, the same range, a smaller headline, the
-    // owners named beneath it, and the pre-app line withheld. A control nobody
-    // can see in the README is a feature nobody knows exists.
-    await visit(page, `/?owner=${ownerId}`);
+    // difference: the same household, a smaller headline, the owners named
+    // beneath it, and the pre-app line withheld. At **All**, deliberately —
+    // the withheld-history note only appears on a range that would have shown
+    // the hand-typed points unfiltered, and the demo's are years old, so the
+    // default range would photograph a narrowed chart with nothing to say. A
+    // control nobody can see in the README is a feature nobody knows exists.
+    await visit(page, `/?owner=${ownerId}&range=all`);
     await openOwnerFilter(page);
     await shoot(page, `docs/screenshots/overview-owner-${theme}.png`);
 

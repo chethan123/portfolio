@@ -76,7 +76,9 @@ that quietly means something else is worse than no total.
 is the household's — there is no owner on it — so a narrowed chart does not draw it and starts at
 the selected owners' first recorded holdings instead. **All** gets shorter, and the long ranges may
 grey out. A note above the line says so, rather than leaving you with a line that starts
-suspiciously late. See [Overview](overview.md#the-second-dashed-line).
+suspiciously late — though only on a range that would have shown that history in the first place: a
+one-month view never draws years-old points, filtered or not, so it gets no note. See
+[Overview](overview.md#the-second-dashed-line).
 
 ## When a narrowed screen is empty
 
