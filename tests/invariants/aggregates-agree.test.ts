@@ -22,8 +22,8 @@
  * structural arrangement rather than a coincidence, and this is the test that
  * keeps it structural.
  *
- * **What is deliberately not asserted here:** `netWorth()` and
- * `netWorthAt(today)` do not agree, and must not be made to. The current view
+ * **What is deliberately not asserted here:** `netWorth(ALL_OWNERS)` and
+ * `netWorthAt(ALL_OWNERS, today)` do not agree, and must not be made to. The current view
  * prices from `quote.price`; the as-of function prices from `price_daily.close`
  * (`0002_holding_valued.sql:134` against `0003_holding_valued_at.sql`). With a
  * quote of 482.10 against a close of 480.00 they answer 48210.0000 and
@@ -52,6 +52,7 @@ import { MONEY_SCALE, toUnits } from "~/lib/money";
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 
 import type { TestContext } from "../support/database.ts";
+import { ALL_OWNERS } from "../../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
@@ -113,8 +114,8 @@ describe("the total for a date, asked two different ways", () => {
       // the function directly, while `readSeries` left-join-laterals it per date
       // and counts the joined column rather than the row. Nothing couples them.
       const [point, [series]] = await Promise.all([
-        netWorthAt("2026-06-30", ctx.db),
-        netWorthSeries(["2026-06-30"], ctx.db),
+        netWorthAt(ALL_OWNERS, "2026-06-30", ctx.db),
+        netWorthSeries(ALL_OWNERS, ["2026-06-30"], ctx.db),
       ]);
 
       expect(series?.amount).toBe(point.amount);
@@ -134,8 +135,8 @@ describe("the total for a date, asked two different ways", () => {
       // exactly where a `count(*)` would score it as one holding. The point
       // query has no such row to miscount, so this is the pair's sharpest case.
       const [point, [series]] = await Promise.all([
-        netWorthAt("2026-06-29", ctx.db),
-        netWorthSeries(["2026-06-29"], ctx.db),
+        netWorthAt(ALL_OWNERS, "2026-06-29", ctx.db),
+        netWorthSeries(ALL_OWNERS, ["2026-06-29"], ctx.db),
       ]);
 
       expect(series?.amount).toBe(point.amount);
@@ -148,8 +149,8 @@ describe("the Analysis screen's own arithmetic", () => {
   it(
     "slices a total it did not compute, and the slices add back up to it",
     withDatabase(async (ctx) => {
-      // `analysis.tsx` issues two queries — `currentHoldings()` for the slices
-      // and `netWorth()` for the headline — and nothing couples them. A filter
+      // `analysis.tsx` issues two queries — `currentHoldings(ALL_OWNERS)` for the slices
+      // and `netWorth(ALL_OWNERS)` for the headline — and nothing couples them. A filter
       // added to either side, or a grouping that dropped a row, would put a
       // total on the screen that its own breakdown contradicts. That is §8.2's
       // failure exactly, on one page.
@@ -191,7 +192,7 @@ describe("the Analysis screen's own arithmetic", () => {
       // counts of one thing are two things that can disagree.
       await anAwkwardPortfolio(ctx);
 
-      const [page, headline] = await Promise.all([analysisPage(), netWorth(ctx.db)]);
+      const [page, headline] = await Promise.all([analysisPage(), netWorth(ALL_OWNERS, ctx.db)]);
 
       expect({ total: page.holdingCount, known: page.pricedCount }).toEqual(headline.coverage);
     }),
@@ -290,7 +291,7 @@ describe("the Income screen and the Holdings table", () => {
       // would.
       await aPortfolioThatPays(ctx);
 
-      const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ctx.db)]);
+      const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ALL_OWNERS, ctx.db)]);
       const groups = groupHoldings(holdings, "tax", DEFAULT_SORT, DEFAULT_DIRECTION);
 
       expect(
@@ -326,7 +327,7 @@ describe("the Income screen and the Holdings table", () => {
     withDatabase(async (ctx) => {
       await aPortfolioThatPays(ctx);
 
-      const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ctx.db)]);
+      const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ALL_OWNERS, ctx.db)]);
 
       // $360.00 + $0.00 + $312.00 − $522.00. The headline, the Holdings total
       // row, and the slices under the ring are three renderings of one sum, so

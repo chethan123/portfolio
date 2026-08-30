@@ -22,6 +22,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { holdingsAt, netWorthAt } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
@@ -40,7 +41,7 @@ describe("the price on a date", () => {
       // shut prints no price.
       await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "100.0000" });
 
-      expect(await netWorthAt("2026-02-14", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "2026-02-14", db)).toEqual({
         amount: "1000.0000",
         coverage: { known: 1, total: 1 },
       });
@@ -59,7 +60,7 @@ describe("the price on a date", () => {
       });
       await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "100.0000" });
 
-      const [holding] = await holdingsAt("2026-02-15", db);
+      const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-15", db);
 
       expect(holding).toMatchObject({ price: "100.0000", value: "1000.0000" });
     }),
@@ -81,11 +82,11 @@ describe("the price on a date", () => {
 
       // Monday 2026-02-16 is Presidents' Day: no close of its own, so Friday's
       // stands. No holiday calendar exists anywhere for this to consult.
-      expect(await netWorthAt("2026-02-16", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "2026-02-16", db)).toEqual({
         amount: "1000.0000",
         coverage: { known: 1, total: 1 },
       });
-      expect(await netWorthAt("2026-02-17", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "2026-02-17", db)).toEqual({
         amount: "1110.0000",
         coverage: { known: 1, total: 1 },
       });
@@ -108,7 +109,7 @@ describe("the price on a date", () => {
         // into a historical point would move a line that has already been drawn.
         await seedQuote({ instrument: fund, price: "900.0000" });
 
-        const [holding] = await holdingsAt("2026-02-13", db);
+        const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
         expect(holding).toMatchObject({ price: "100.0000", value: "1000.0000" });
       },
@@ -130,7 +131,7 @@ describe("the price on a date", () => {
         // A refresh that failed this morning. It says nothing about February.
         await seedQuote({ instrument: fund, price: "900.0000", isStale: true });
 
-        const [holding] = await holdingsAt("2026-02-13", db);
+        const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
         // Staleness is a property of a live price that failed to refresh. The
         // close on a date that has already happened is simply the close.
@@ -155,13 +156,13 @@ describe("history starting at the first upload", () => {
       // The day before the first statement. The money existed; the record of it
       // does not, and inventing a figure here would draw a chart line through a
       // period nothing is known about.
-      expect(await holdingsAt("2026-01-30", db)).toEqual([]);
-      expect(await netWorthAt("2026-01-30", db)).toEqual({
+      expect(await holdingsAt(ALL_OWNERS, "2026-01-30", db)).toEqual([]);
+      expect(await netWorthAt(ALL_OWNERS, "2026-01-30", db)).toEqual({
         amount: "0.0000",
         coverage: { known: 0, total: 0 },
       });
       // One day later there is a record, and it is the whole answer.
-      expect(await netWorthAt("2026-01-31", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "2026-01-31", db)).toEqual({
         amount: "5000.0000",
         coverage: { known: 1, total: 1 },
       });
@@ -189,10 +190,10 @@ describe("history starting at the first upload", () => {
       // Mid-February: February's statement has not happened yet, so January's
       // positions still stand. That is what makes a daily series possible from
       // monthly statements.
-      expect((await holdingsAt("2026-02-13", db)).map((holding) => holding.quantity)).toEqual([
+      expect((await holdingsAt(ALL_OWNERS, "2026-02-13", db)).map((holding) => holding.quantity)).toEqual([
         "10.00000000",
       ]);
-      expect((await holdingsAt("2026-02-28", db)).map((holding) => holding.quantity)).toEqual([
+      expect((await holdingsAt(ALL_OWNERS, "2026-02-28", db)).map((holding) => holding.quantity)).toEqual([
         "25.00000000",
       ]);
     }),
@@ -213,12 +214,12 @@ describe("history starting at the first upload", () => {
       // emptied. It must not fall back to January's holdings.
       await seedPositionSet({ account, asOf: "2026-02-28", holdings: [] });
 
-      expect(await netWorthAt("2026-02-27", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "2026-02-27", db)).toEqual({
         amount: "5000.0000",
         coverage: { known: 1, total: 1 },
       });
-      expect(await holdingsAt("2026-03-01", db)).toEqual([]);
-      expect(await netWorthAt("2026-03-01", db)).toEqual({
+      expect(await holdingsAt(ALL_OWNERS, "2026-03-01", db)).toEqual([]);
+      expect(await netWorthAt(ALL_OWNERS, "2026-03-01", db)).toEqual({
         amount: "0.0000",
         coverage: { known: 0, total: 0 },
       });
@@ -251,17 +252,17 @@ describe("an account that has since been closed", () => {
       // January's net worth genuinely included the savings account. Dropping it
       // from history because of something that happened in February would make
       // the chart lie about a month that has already been lived.
-      expect((await holdingsAt("2026-01-31", db)).map((holding) => holding.accountName)).toEqual([
+      expect((await holdingsAt(ALL_OWNERS, "2026-01-31", db)).map((holding) => holding.accountName)).toEqual([
         "Checking",
         "Old savings",
       ]);
-      expect(await netWorthAt("2026-01-31", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "2026-01-31", db)).toEqual({
         amount: "4100.0000",
         coverage: { known: 2, total: 2 },
       });
 
       // From the closure onward it is gone, so today's figures are not polluted.
-      expect((await holdingsAt("2026-02-01", db)).map((holding) => holding.accountName)).toEqual([
+      expect((await holdingsAt(ALL_OWNERS, "2026-02-01", db)).map((holding) => holding.accountName)).toEqual([
         "Checking",
       ]);
     }),
@@ -290,7 +291,7 @@ describe("which position set speaks for a date", () => {
         holdings: [{ instrument: usd, quantity: "250.00000000" }],
       });
 
-      expect((await holdingsAt("2026-01-31", db)).map((holding) => holding.quantity)).toEqual([
+      expect((await holdingsAt(ALL_OWNERS, "2026-01-31", db)).map((holding) => holding.quantity)).toEqual([
         "100.00000000",
       ]);
     }),
@@ -320,11 +321,11 @@ describe("cash and debt on a past date, with no branch", () => {
       // Nothing seeded a 1999 price for USD and nothing ever will. The 1970 row
       // the initial migration writes carries forward through the same lateral
       // that turns Friday into Saturday — there is no cash branch to take.
-      const holdings = await holdingsAt("1999-01-01", db);
+      const holdings = await holdingsAt(ALL_OWNERS, "1999-01-01", db);
 
       expect(holdings.map((holding) => holding.price)).toEqual(["1.0000", "1.0000"]);
       expect(holdings.map((holding) => holding.value)).toEqual(["1200.0000", "-500.0000"]);
-      expect(await netWorthAt("1999-01-01", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "1999-01-01", db)).toEqual({
         amount: "700.0000",
         coverage: { known: 2, total: 2 },
       });
@@ -369,7 +370,7 @@ describe("cash and debt on a past date, with no branch", () => {
         });
 
         // 25,000 + 12,500 − 8,000, on a Saturday, from one SUM.
-        expect(await netWorthAt("2026-02-14", db)).toEqual({
+        expect(await netWorthAt(ALL_OWNERS, "2026-02-14", db)).toEqual({
           amount: "29500.0000",
           coverage: { known: 3, total: 3 },
         });
@@ -402,7 +403,7 @@ describe("partial data on a past date, told honestly", () => {
           ],
         });
 
-        const holdings = await holdingsAt("2026-02-13", db);
+        const holdings = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
         const trustHolding = holdings.find((holding) => holding.symbol === null);
 
         // The row is here rather than dropped: an inner join to `price_daily`
@@ -416,7 +417,7 @@ describe("partial data on a past date, told honestly", () => {
           isPriced: false,
         });
         // The cash is counted, the trust is not, and the count says so.
-        expect(await netWorthAt("2026-02-13", db)).toEqual({
+        expect(await netWorthAt(ALL_OWNERS, "2026-02-13", db)).toEqual({
           amount: "500.0000",
           coverage: { known: 1, total: 2 },
         });
@@ -438,7 +439,7 @@ describe("partial data on a past date, told honestly", () => {
         holdings: [{ instrument: fund, quantity: "100.00000000" }],
       });
 
-      const [holding] = await holdingsAt("2026-02-13", db);
+      const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
       // Zero here would report a $25,000 gain on a position whose basis is
       // simply not known.
@@ -470,7 +471,7 @@ describe("the projection a past date will not make", () => {
         // nothing whatever about February.
         await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
 
-        const [holding] = await holdingsAt("2026-02-13", db);
+        const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
         // Not "37.8000", and not "0.0000" either. A projection forward from
         // today is not a fact about a date that has already happened, so the
@@ -522,7 +523,7 @@ describe("the shape a past date returns", () => {
 
         // The same field-for-field shape the current view returns: the as-of
         // answer is the view's row type, not a parallel one.
-        expect(await holdingsAt("2026-02-14", db)).toEqual([
+        expect(await holdingsAt(ALL_OWNERS, "2026-02-14", db)).toEqual([
           {
             accountId: account.id,
             accountName: "Empower 401k — Roth",
@@ -570,7 +571,7 @@ describe("the shape a past date returns", () => {
         holdings: [{ instrument: fund, quantity: "0.12345678", costBasisPerShare: "199.9900" }],
       });
 
-      const [holding] = await holdingsAt("2026-02-13", db);
+      const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
       expect(holding).toMatchObject({
         quantity: "0.12345678",
@@ -609,7 +610,7 @@ describe("what the observation log may not touch", () => {
 
         // ADR-0006's historical-line invariant, from its second front: a line
         // already drawn cannot move because a new tier arrived under it.
-        expect(await netWorthAt("2026-02-13", db)).toEqual({
+        expect(await netWorthAt(ALL_OWNERS, "2026-02-13", db)).toEqual({
           amount: "2500.0000",
           coverage: { known: 1, total: 1 },
         });
@@ -646,7 +647,7 @@ describe("what the observation log may not touch", () => {
           });
         }
 
-        expect(await netWorthAt("2026-02-13", db)).toEqual({
+        expect(await netWorthAt(ALL_OWNERS, "2026-02-13", db)).toEqual({
           amount: "2500.0000",
           coverage: { known: 1, total: 1 },
         });

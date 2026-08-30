@@ -41,6 +41,7 @@ import { makeFixtures, type SeededAccount } from "./support/fixtures.ts";
 
 import type { StatementMapping } from "~/lib/statement";
 import type { TestContext } from "./support/database.ts";
+import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
@@ -549,8 +550,8 @@ describe("commitUpload", () => {
         "110.00000000",
         "120.00000000",
       ]);
-      expect((await netWorth(db)).amount).toBe("44000.0000"); // 110 × 400.00; VXUS unpriced
-      expect((await netWorth(db)).coverage).toEqual({ known: 1, total: 2 });
+      expect((await netWorth(ALL_OWNERS, db)).amount).toBe("44000.0000"); // 110 × 400.00; VXUS unpriced
+      expect((await netWorth(ALL_OWNERS, db)).coverage).toEqual({ known: 1, total: 2 });
 
       // Posting the committed draft again is the expired case, not a second
       // set and not a 500.

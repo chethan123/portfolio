@@ -35,6 +35,7 @@ import { asOfView } from "../lib/prices.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/holdings";
+import { ALL_OWNERS } from "~/lib/owner-filter.ts";
 
 /**
  * Holdings — every position across every account, grouped and filterable.
@@ -44,7 +45,7 @@ import type { Route } from "./+types/holdings";
  * unrealized. Those are the same table with the grouping changed, not separate
  * features."
  *
- * The whole screen is one query and one array. `currentHoldings()` returns the
+ * The whole screen is one query and one array. `currentHoldings(ALL_OWNERS)` returns the
  * rows; `holdings-view.ts` filters, sorts, groups and totals them without
  * touching the database again, because every dimension is already a column on
  * the row (§8.2). Nothing here can disagree with Overview or Account detail
@@ -123,7 +124,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const [holdings, freshness] = await Promise.all([
-    currentHoldings(),
+    currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 
@@ -137,7 +138,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   //
   // `?saved=` says *which* row was written and nothing about what was written
   // to it, and the figures beside the confirmation are read back out of
-  // `currentHoldings()` here — so a hand-typed parameter can only ever produce
+  // `currentHoldings(ALL_OWNERS)` here — so a hand-typed parameter can only ever produce
   // a sentence describing what the account actually holds, which is the
   // guarantee Account detail's `?recorded=` has for the same reason (§13.7).
   // Looked up in every holding rather than in the filtered set, so that the

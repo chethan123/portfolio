@@ -21,6 +21,7 @@ import { asOfView } from "../lib/prices.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/analysis";
+import { ALL_OWNERS } from "~/lib/owner-filter.ts";
 
 /**
  * Analysis — the portfolio cut three ways, each as a ring beside its table.
@@ -181,8 +182,8 @@ export async function loader() {
   // summed in SQL, in `numeric` (§8.2), and this is the same figure the
   // Overview headline shows because it is the same query.
   const [holdings, total, capitalGainsRate, freshness] = await Promise.all([
-    currentHoldings(),
-    netWorth(),
+    currentHoldings(ALL_OWNERS),
+    netWorth(ALL_OWNERS),
     readCapitalGainsRate(),
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);

@@ -17,6 +17,7 @@ import { asOfView } from "../lib/prices.server.ts";
 import { getConfig } from "../../server/config.ts";
 
 import type { Route } from "./+types/income";
+import { ALL_OWNERS } from "~/lib/owner-filter.ts";
 
 /**
  * Income — what the portfolio pays over the coming year, and how much of it is
@@ -26,7 +27,7 @@ import type { Route } from "./+types/income";
  * account. The first answers "how much of this is taxed"; the second answers
  * "which statement does it land in".
  *
- * **One read.** Every figure on the page comes off the array `currentHoldings()`
+ * **One read.** Every figure on the page comes off the array `currentHoldings(ALL_OWNERS)`
  * returned, which is the array Holdings reads. That is what makes the headline,
  * the two breakdowns and the Holdings table structurally unable to disagree
  * about the same portfolio — §8.2 names hand-rolled dashboard queries drifting
@@ -35,7 +36,7 @@ import type { Route } from "./+types/income";
  *
  * The headline is therefore summed **in JavaScript**, by `summarise` — the same
  * helper that computes the Holdings table's own total row — where the Analysis
- * headline calls `netWorth()` and sums in SQL. A deliberate departure: `money.ts`
+ * headline calls `netWorth(ALL_OWNERS)` and sums in SQL. A deliberate departure: `money.ts`
  * sums exactly, in `BigInt` counts of ten-thousandths, and there is no separate
  * dividend total query to be had without adding the fourth query.
  *
@@ -63,7 +64,7 @@ export function meta() {
 
 export async function loader() {
   const [holdings, freshness] = await Promise.all([
-    currentHoldings(),
+    currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 

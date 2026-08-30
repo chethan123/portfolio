@@ -98,7 +98,11 @@ describe("the 404 gate", () => {
       // what a crawler or a truncated link produces. Neither may reach a query
       // that casts to `bigint`, where `'lookup'::bigint` is a driver error and
       // reaches the reader as a 500 rather than as "no such account".
-      for (const accountId of ["999999999", "lookup"]) {
+      //
+      // The third is all digits and so passed the old guard, then overflowed
+      // `bigint` inside Postgres — the same 500 by a longer route. The length
+      // bound in `isOneOf` is what turns it back into "no such account".
+      for (const accountId of ["999999999", "lookup", "99999999999999999999999"]) {
         const response = await responseOf(() =>
           loader(args(get(`/accounts/${accountId}`), { accountId })),
         );

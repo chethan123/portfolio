@@ -30,6 +30,7 @@ import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, post, redirectTo, responseOf } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
+import { ALL_OWNERS } from "../../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
@@ -172,7 +173,7 @@ describe("correcting one row", () => {
       expect(destination).toBe(`/holdings?owner=${owner.id}&saved=${rowKey}`);
 
       // Following it proves both halves at once: the write landed, and the
-      // confirmation quotes `currentHoldings()` rather than the parameter — so
+      // confirmation quotes `currentHoldings(ALL_OWNERS)` rather than the parameter — so
       // the sentence beside it can only describe what the account now holds.
       const confirmed = await loader(args(get(destination)));
       expect(confirmed.written).toMatchObject({

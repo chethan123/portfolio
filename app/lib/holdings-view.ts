@@ -9,7 +9,7 @@
  * shape, one set of dimensions, and a grouping argument.
  *
  * **No new query, on purpose.** Every dimension below is already a column on
- * the {@link ValuedHolding} rows `currentHoldings()` returns, because
+ * the {@link ValuedHolding} rows `currentHoldings(ALL_OWNERS)` returns, because
  * `holding_valued` was built to expose exactly them (§8.2). So filtering and
  * grouping are pure functions over an array that already exists rather than
  * seven new predicates pushed into SQL. That is not laziness about `WHERE`
