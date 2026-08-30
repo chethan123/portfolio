@@ -89,19 +89,21 @@ so a chosen range survives a reload and can be bookmarked.
   <img alt="Holdings: a filter bar, a group-by strip and the full table of every position with its quantity, price, value, cost basis, unrealized gain and projected annual dividend" src="docs/screenshots/holdings-light.png">
 </picture>
 
-Every position the household holds, whichever account it sits in. Filter by owner, account,
-brokerage, account type, tax treatment, classification or asset class; group by any of the same
-seven, with subtotals. "Everything Alex holds at Fidelity", "the whole taxable side", "all the
-bonds, wherever they are" — each is this table with the arguments changed rather than a screen of
-its own.
+Every position the household holds, whichever account it sits in. Filter by account, brokerage,
+account type, tax treatment, classification or asset class; group by any of those or by owner, with
+subtotals. "Everything at Fidelity", "the whole taxable side", "all the bonds, wherever they are" —
+each is this table with the arguments changed rather than a screen of its own. Narrowing to an
+*owner* is not one of those six: that is the owner filter below, and it narrows all four screens at
+once.
 
 - **The controls are the URL.** Filters, grouping and sort all live in the query string, so a view
   survives a reload, can be bookmarked, and can be sent to the other person in the household. The
   whole screen works with JavaScript turned off.
 - **A filter you cannot use is not drawn.** A dimension only becomes a dropdown once the data holds
   two different values for it, and every option in it is a value something really has — so a
-  one-person household gets no Owner filter, and no single filter can land you on an empty table.
-  Two of them still can, and the screen says which two rather than leaving you to work it out.
+  household that banks in one place gets no Brokerage dropdown, and no single filter can land you on
+  an empty table. Two of them still can, and the screen says which two rather than leaving you to
+  work it out.
 - **Three coverages, not one.** A workplace plan reports a price and no cost basis at all, so the
   value total can be complete while the unrealized total is short. Each figure carries its own
   count rather than borrowing a neighbour's, because a cost basis over 11 holdings printed against
@@ -138,14 +140,50 @@ the cost basis become boxes in their own columns, and Save records it.
   with JavaScript turned off — with it off, Save is a plain form post and the confirmation comes back
   on the next page.
 
+### The owner filter — every money screen read as one owner
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-owner-dark.png">
+  <img alt="The Overview narrowed to one owner: the owner control open in the page header, showing a tick box per owner with Apply and Show everyone beneath them, a smaller headline figure with the sentence &quot;Showing Alex Rivera only.&quot; below it, and a note on the chart saying the hand-typed history before the instance existed is the household's and is not drawn here" src="docs/screenshots/overview-owner-light.png">
+</picture>
+
+"What does this look like for just Alex?" is a question about four screens, not one, so the answer
+is one selection that follows you across them: a control in the page header names the household's
+owners, and Overview, Holdings, Analysis and Income all read as whichever are chosen. The guide has
+the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way.
+
+- **The control is a disclosure, and that is a layout decision.** A row of tick boxes grows with the
+  household and wraps at a different width on each of the four screens, so the one control meant to
+  look identical everywhere was the one whose layout tracked how many people happened to be
+  recorded. Closed, it is a fixed shape that says who is being shown — a name or two, a count past
+  that. `<details>` is the browser's own disclosure, so this costs no JavaScript, as the custom
+  range picker beside it already showed.
+
+- **It is noise reduction, never privacy.** Anyone may set it, clear it, and set it to anybody; the
+  gate at the front door is the only thing that keeps anyone out, and every family member sees
+  everything. It is never derived from who signed in — the app deliberately holds no mapping from a
+  sign-in to an owner, and inventing one so that a screen could open on "you" is the short step to
+  "and this is *your* data" that a household of shared money does not want taken.
+- **The URL is the whole of it.** `?owner=1,3` and nothing else: no cookie, no stored setting.
+  Closing the tab forgets it because there is nothing left to remember it, and pasting the address
+  to the other person in the household shows them the same reading — which a cookie could never do.
+- **A narrowed screen says so in words**, beside the figure it narrowed, because a filter that
+  survives navigation is a filter that can be forgotten. Holdings adds the household's own count to
+  its panel header — "filtered from N" — for the same reason.
+- **The hand-typed history is not drawn while narrowed.** The pre-app series is the household's and
+  has no owner, so a filtered chart cannot reach behind those owners' first recorded holdings — the
+  Overview says that rather than showing a suspiciously short line.
+- **An account's own page ignores it**, being narrower already, and Settings and the upload flow
+  neither read it nor carry it: an excursion into either ends the reading.
+
 ### Analysis — where the money actually sits
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/analysis-dark.png">
-  <img alt="Analysis: three donut-and-table panels breaking net worth down by person, by account type and by asset class, and a fourth table of unrealized gains by asset type with the tax a taxable one would attract" src="docs/screenshots/analysis-light.png">
+  <img alt="Analysis: three donut-and-table panels breaking net worth down by owner, by account type and by asset class, and a fourth table of unrealized gains by asset type with the tax a taxable one would attract" src="docs/screenshots/analysis-light.png">
 </picture>
 
-Three breakdowns of the same total — by person, by account type, and by asset class — each a donut
+Three breakdowns of the same total — by owner, by account type, and by asset class — each a donut
 beside the table it is drawn from, and beneath them what has been gained and not yet sold.
 
 - **Debt is drawn as debt.** The ring paints what is owned, so the loan's row is left unfilled and

@@ -514,9 +514,14 @@ export type FilterControl = {
  *
  * **A dimension with fewer than two distinct values is not a filter**, it is a
  * fact about the household, and drawing it as a control implies a choice that
- * does not exist. One person, one brokerage, everything taxable — each of those
- * simply loses a select. This is §13.7's objection to searching a dozen
+ * does not exist. One brokerage, one account kind, everything taxable — each of
+ * those simply loses a select. This is §13.7's objection to searching a dozen
  * accounts, applied as a rule rather than as a one-off refusal.
+ *
+ * Owner is no longer among them: it left {@link DIMENSIONS} with spec 0013 and
+ * this function never sees it. The household-wide control answers that question
+ * now, and it has its own version of this same rule — it does not draw under a
+ * roster of fewer than two.
  *
  * The options come from the unfiltered holdings, not from the enumerations in
  * `account-options.ts`. A household with no Roth account is not offered
