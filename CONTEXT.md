@@ -57,7 +57,9 @@ _Avoid_: deleted, removed, archived, deactivated, inactive.
 The named span of time a chart plots: one of the fixed presets (1D, 1W, 1M, 3M, YTD, 1Y, 5Y, All)
 or a custom start/end pair. Which dates a range can reach differs by screen — the Overview's range
 may include hand-typed pre-app data; an account's never does.
-_Avoid_: time range, period, date range, window, lookback.
+_Avoid_: time range, period, date range, lookback. (`window` is not avoided but means something
+narrower: the resolved start/end span a range produces, which is what `chart-range.ts` calls it —
+never a synonym for the named range a reader picks.)
 
 **1D**:
 The chart range that plots the most recent trading session's observations, open to close — or to

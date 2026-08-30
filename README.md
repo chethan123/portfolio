@@ -363,16 +363,31 @@ The chart's readout is rendered before the page is sent rather than composed on 
 with no pointer still arrives with the readout filled in — and, like the screens above, it works
 with JavaScript turned off.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/holdings-mobile-dark.png">
+  <img alt="Holdings on a phone: the table reflowed into cards, grouped by asset class with the group heading and subtotal strip in frame" width="390" src="docs/screenshots/holdings-mobile-light.png">
+</picture>
+
+Holdings is the one screen that changes shape rather than merely narrowing: the table reflows into
+cards, one per position, with the group headings, the subtotal strips and the grand total carried
+across. Every other screen keeps its layout and stacks.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/analysis-mobile-dark.png">
+  <img alt="Analysis on a phone: the stacked header with the owner chip, the as-of line and Refresh now, above the net-worth-by-owner ring" width="390" src="docs/screenshots/analysis-mobile-light.png">
+</picture>
+
 ### Not built yet
 
 Nothing in the navigation is a placeholder any more. What is still missing sits behind a screen
 rather than in place of one.
 
-The pricing slice leaves its own UI unbuilt — the "as of" timestamp, the page-level stale summary, a
-"Refresh now" control, and the Settings → Instruments tab where a collective investment trust gets
-its price typed in by hand; a stale or never-priced holding is already labelled on its own row.
-Settings names Classifications, Instruments and History on its index page as what later slices
-build — they are not drawn as tabs — and there is no export or download of any kind.
+The pricing slice still owes two of its screens: the page-level stale summary, and the
+Settings → Instruments tab where a collective investment trust gets its price typed in by hand. The
+"as of" line and its "Refresh now" control already sit on every figure screen, and a stale or
+never-priced holding is already labelled on its own row. Settings names Classifications,
+Instruments and History on its index page as what later slices build — they are not drawn as
+tabs — and there is no export or download of any kind.
 
 The pricing UI is specified in [`docs/specs/0002-pricing.md`](docs/specs/0002-pricing.md) and drawn
 in [`docs/design/pricing-ui-brief.md`](docs/design/pricing-ui-brief.md). Every screen above was
@@ -414,6 +429,32 @@ You do not need a checkout to run this: `compose.yaml`, `Caddyfile`, `.env` and 
 are the whole deployment. The same command is also the upgrade — the pinned tag is the floating
 major, so `docker compose up -d` fetches the newest `v1.x.y` release. Take a backup first
 ([Upgrading](docs/operating.md#upgrading)).
+
+What that command stands up, in one picture — the contributor's version, with the trust boundaries,
+is [`ARCHITECTURE.md` §2](ARCHITECTURE.md#2-system-context), which this is drawn from:
+
+```mermaid
+graph LR
+    browser["The family's browsers<br/>and installed phone app"]
+    house["House-wide proxy<br/>TLS, the public hostname<br/>(the operator's own)"]
+
+    subgraph stack["This stack — docker compose up"]
+        caddy["caddy<br/>the only published port"]
+        gate["gate<br/>Google sign-in + allowlist"]
+        app["app<br/>the tracker"]
+        db[("db<br/>PostgreSQL — the one volume")]
+    end
+
+    google["Google sign-in"]
+    yahoo["Yahoo Finance quotes"]
+
+    browser --> house --> caddy
+    caddy -->|"every request:<br/>vouched for?"| gate
+    caddy --> app
+    gate -.-> google
+    app --> db
+    app -.->|market hours,<br/>or Refresh now| yahoo
+```
 
 ### Who gets in, and where that is decided
 
@@ -460,8 +501,8 @@ port, which is what makes it the single place the gate can be enforced. It speak
 and the public hostname belong to the reverse proxy the operator runs in front of the stack, and the
 `X-Forwarded-*` headers arriving through it are trusted. [`docs/operating.md`](docs/operating.md)
 has the proxy topology, the `pg_dump` backup and restore procedure, the full environment table, the
-security posture an operator has to decide about, and why no instance installs as an app on a phone
-yet; [`docs/google-sign-in.md`](docs/google-sign-in.md) is the one-time Google setup those depend
+security posture an operator has to decide about, and installing the instance as an app on a
+phone; [`docs/google-sign-in.md`](docs/google-sign-in.md) is the one-time Google setup those depend
 on. When something is actually broken, [`docs/runbook.md`](docs/runbook.md) is indexed by symptom
 instead of by topic.
 

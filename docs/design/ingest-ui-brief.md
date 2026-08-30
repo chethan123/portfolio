@@ -922,7 +922,7 @@ built routes. Stitch output that renames them creates a duplicate design system:
 - **The closed-account refusal wording exists** — `setBalance`'s "a closed account's history does
   not change" — and §3 and §7.2 borrow it rather than paraphrasing.
 - **The currency refusal's sentence is `CurrencyRefused`'s**
-  (`app/lib/price-provider.server.ts:84`): "*{symbol} is quoted in {currency}. This instance holds
+  (`app/lib/price-provider.server.ts:106`): "*{symbol} is quoted in {currency}. This instance holds
   USD only, so the price was not stored.*" §5.3 adapts only its tail. Note that
   `docs/design/pricing-ui-brief.md:239-240` coined a second spelling — "…and this app sums USD
   only" — before the guard shipped; that brief should be reconciled to the shipped words on its

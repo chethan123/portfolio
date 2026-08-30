@@ -109,5 +109,5 @@ A household with only one owner gets no control at all: there is nothing to choo
 
 ---
 
-**Next:** [Overview](overview.md#the-second-dashed-line) — the chart, and why a narrowed one starts
-later.
+**Next:** [Uploading a statement](upload.md) — the filter never touches recording; this is every
+rule the upload follows.

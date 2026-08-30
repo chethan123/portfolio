@@ -252,8 +252,10 @@ Index: `instrument_alias_instrument_id_idx`.
 
 **`position_set`** — an immutable, as-of-dated photograph of what one account held. Every upload
 and every manual balance entry appends a new set; **nothing ever updates or deletes one**, which is
-what makes undo free and quantity history come for nothing (DESIGN.md §5.2). The one delete that
-exists is removing a bad upload, and it takes the set's holdings with it by cascade.
+what makes undo free and quantity history come for nothing (DESIGN.md §5.2). The one delete the
+schema anticipates is removing a bad upload by hand — `delete from position_set where id = …` from
+a `psql` session, as [`importing-history.md`](importing-history.md) shows; no screen offers it —
+and the set's holdings go with it by cascade.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -550,9 +552,11 @@ flowchart LR
   instants, keeps each market day's `price_daily` row at the provider's latest price for that day,
   and records the attempt in `price_poll`. It also refreshes `instrument.quote_type` from the
   provider.
-- **Deletes are rare and enumerable**: a bad upload's `position_set` (the design's undo; holdings
-  cascade), a `person` owning no accounts, an `instrument` that lost an alias race, and swept or
-  consumed `upload_draft` rows. Nothing else is ever deleted; accounts close via `closed_at`.
+- **Deletes are rare and enumerable.** From the application: a `person` owning no accounts, an
+  `instrument` that lost an alias race, and swept or consumed `upload_draft` rows. From a `psql`
+  session only: a bad upload's `position_set` — the design's undo, holdings cascading — which no
+  screen offers yet ([`importing-history.md`](importing-history.md) carries the statement). Nothing
+  else is ever deleted; accounts close via `closed_at`.
 - **Never updated**: `position_set`, `holding`, `price_observation`, and `manual_networth` rows
   are append-only facts, and a `price_daily` row is only ever rewritten with the provider's own
   price for its day — a finished day changes only if the provider revises its close. Overwritten
@@ -634,7 +638,10 @@ limit 1;
 **Recovering an original statement file**:
 
 ```sql
-\copy (select encode(raw_file, 'base64') from position_set where id = $1) to 'statement.b64'
+-- \copy is a psql meta-command: it binds no $1 and interpolates no :variable, so write the id in.
+-- The translate() strips the newlines encode() inserts, which COPY would otherwise escape to
+-- literal \n and break the decode.
+\copy (select translate(encode(raw_file, 'base64'), e'\n', '') from position_set where id = 42) to 'statement.b64'
 -- then: base64 -d statement.b64 > statement.csv
 ```
 

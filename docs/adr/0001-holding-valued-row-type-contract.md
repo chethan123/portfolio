@@ -11,7 +11,8 @@ next column, because the tooling will not stop them.
 `holding_valued_at` declares `returns setof holding_valued`, which is deliberate — it is what stops
 the historical answer from becoming a second definition of "holdings, valued". The cost is that the
 view's row type is a contract binding both, and PostgreSQL does not check it at replace time.
-Reproduced against Postgres 16 with the real migrations applied:
+Reproduced against Postgres 17 — the version `compose.test.yaml` runs — with the real migrations
+applied:
 
 ```
 create or replace view holding_valued as ...   -- one column appended

@@ -138,7 +138,7 @@ graph TB
     host["Host machine"]
 
     subgraph compose["compose network — portfolio"]
-        caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:80 → forward_auth gate, then app:$PORT<br/>Caddyfile mounted read-only"]
+        caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:80 → forward_auth gate, then app:$APP_PORT<br/>Caddyfile mounted read-only"]
         gate["<b>gate</b><br/>oauth2-proxy, pinned exactly<br/>read_only: true, tmpfs /tmp<br/>no published port, no volume<br/>allowlist file bind-mounted read-only"]
         app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>read_only: true, tmpfs /tmp<br/>USER node, no published port<br/><i>in-process price poller</i>"]
         db["<b>db</b><br/>postgres:17-alpine<br/>timezone=UTC<br/>no published port"]
@@ -218,8 +218,8 @@ healthcheck gates `caddy` on it.
 
 Every setting is an environment variable, and `server/config.ts` is the only module that
 *interprets* one. Callers hand the environment in — `loadConfig(env)` is pure — so
-`validate-config.ts:12`, `migrate.ts:24` and `scripts/seed-demo.ts:1140` pass `process.env` without
-knowing what is in it, and `getConfig()` is the single place a value is actually read and cached. It
+`validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` and `scripts/capture-screenshots.ts`
+pass `process.env` without knowing what is in it, and `getConfig()` is the single place a value is actually read and cached. It
 is a Zod schema, parsed once. It carries no cross-field rules: the one it used to have coupled the
 deleted password to the deleted cookie secret, and every remaining variable stands alone.
 
@@ -283,7 +283,7 @@ the framework handles serialisation.
 ┌────────────────────────────────▼─────────────────────────────────────────────┐
 │  DOMAIN            app/lib/*.server.ts                                       │
 │                    accounts · people · positions · balances · uploads        │
-│                    instrument-resolution · prices · settings · auth          │
+│                    instrument-resolution · prices · current-statement · …    │
 │  Every rule about what may be written and what a refusal says. Returns        │
 │  ValidationError with a message per field, never a 500.                       │
 └──────┬─────────────────────────────────────────────┬─────────────────────────┘
@@ -322,13 +322,13 @@ grep. They come in three tiers.
 |---|---|---|
 | Postgres pool construction | `server/db.ts:62` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
 | Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:388` | The provider swap stops being a day's work. The interface is also the test seam. |
-| Writing a price | `app/lib/prices.server.ts` | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
+| Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
 
 **Owned by a module, upheld by its callers.**
 
 | Invariant | The owner | The obligation |
 |---|---|---|
-| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Three callers pass `process.env` in — `validate-config.ts`, `migrate.ts`, `scripts/seed-demo.ts` — and none of them reads a variable itself. |
+| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off an account's kind | `app/lib/account-options.ts` | The kinds, their labels, and the two predicates derived from them — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints or from each other. The obligation is that it stays plain data: the client bundle imports it, so a rule needing a query cannot live here. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
@@ -337,13 +337,13 @@ grep. They come in three tiers.
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:276` rounds the overflow-guard product inline instead of calling `divide`. |
-| Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | Two, both real (below). The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
+| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:276` rounds the overflow-guard product inline instead of calling `divide`. |
+| Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | The ones below, each real. The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
 | Whose money a screen is reading | The readers' own signatures — the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and §6.3 on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons — both given in `manualNetWorth`'s own docstring, where the line falls. The argument cannot make the filter impossible to skip — a new screen can pass `ALL_OWNERS` and draw no control — only **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
-**The two valuation exceptions, stated rather than buried:**
+**The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:520` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
+- `prices.server.ts:633` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
   to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `uploads.server.ts:620` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
@@ -351,7 +351,7 @@ grep. They come in three tiers.
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
   the view, and it is worth watching.
-- `valuation.server.ts:697` (`readSessionSeries`) values holdings from `price_observation` rather
+- `valuation.server.ts:793` (`readSessionSeries`) values holdings from `price_observation` rather
   than through `holding_valued` — the 1D chart's line, and the only valuation anywhere that reads the
   observation log. Not an escape from the invariant but an extension of it: the same module owns
   both, so the rule stays "one module values holdings" rather than becoming "one view does". It
@@ -382,7 +382,7 @@ the boundary. Worth fixing before that happens rather than after.
 
 A representative read — `GET /holdings?owner=2&group=account` — end to end. The parameter order
 matters: `toSearch` builds a canonical search string, and a URL that does not match it is bounced
-before any database work happens (`holdings.tsx:119`), so `?group=account&owner=2` would 302 first.
+before any database work happens (`holdings.tsx:144`), so `?group=account&owner=2` would 302 first.
 
 ```mermaid
 sequenceDiagram
@@ -423,7 +423,7 @@ Three properties of this path are deliberate:
 2. **Filtering and grouping are pure functions over one array**, not seven new SQL predicates. The
    screen's table and the subtotals under it are computed from the same rows, so agreement is
    structural rather than something to keep true. Nothing the table displays costs a second query;
-   an open `?edit=` row costs exactly one more read (`holdings.tsx:196`), for the date the correction
+   an open `?edit=` row costs exactly one more read (`holdings.tsx:257`), for the date the correction
    will be filed under.
 3. **Numbers never become numbers.** The rows leave Postgres as decimal strings and stay that way
    through grouping, subtotalling and rendering.
@@ -442,8 +442,8 @@ vocabulary that makes them readable. All five append; none rewrites a past fact.
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
 
 **This is not every write in the application.** The management surface updates rows in place, as
-CRUD should: `accounts.server.ts:246` edits an account and `:362` closes one, `people.server.ts:113`
-renames a person and `:148` deletes one outright when they own no accounts, `settings.server.ts:88`
+CRUD should: `accounts.server.ts:246` edits an account and `:376` closes one, `people.server.ts:213`
+renames a person and `:248` deletes one outright when they own no accounts, `settings.server.ts:88`
 writes the tax rate, `column-mapping.server.ts:96` upserts a saved mapping, and `uploads.server.ts`
 inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
 database: a position set, once written, is never edited, because `holding_valued_at` reads it for
@@ -618,7 +618,7 @@ split is exact and each side is a decision:
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
 
 **Only two of those deletes are reachable from the application at all:** a person who owns no
-accounts (`people.server.ts:178`), and a just-created, never-held instrument that lost an alias race
+accounts (`people.server.ts:278`), and a just-created, never-held instrument that lost an alias race
 (`instrument-resolution.server.ts:663`). There is no account delete and no position-set delete
 anywhere in `app/`. The rest of the table is a standing guarantee about someone with a `psql`
 session, not about a screen.
@@ -781,9 +781,9 @@ The generated types carry the **read** half of this: `npm run db:types` runs `ky
   is a string, but an insert or update still *accepts* a JavaScript number. On the write path the
   rule is a convention, not a compile-time guarantee.
 - Postgres reports every column of a view as nullable regardless of the underlying column, so
-  `holding_valued` comes out entirely `| null`. That is why `valuation.server.ts:117-128` exists: a
-  `required()` narrower that throws, wrapped around fourteen columns in `toValuedHolding`. The view is
-  typed *from* a table, not typed *like* one.
+  `holding_valued` comes out entirely `| null`. That is why `required()` in `valuation.server.ts`
+  exists: a narrower that throws, wrapped in `toValuedHolding` around every column the underlying
+  tables guarantee. The view is typed *from* a table, not typed *like* one.
 
 CI verifies the committed types match the schema (`npm run db:types -- --verify`), which is what makes
 regeneration after a migration mandatory rather than remembered.
@@ -1152,7 +1152,8 @@ were live" failure this application refuses. Two more properties of `priceFreshn
   is one stale price, not three. An instrument nobody owns going stale is not a fact about anyone's
   net worth, and reporting it would make the banner unclearable.
 
-**Poller hazards, all three handled explicitly** (`price-poller.server.ts`):
+**Poller hazards, all three handled explicitly** (`price-poller.server.ts`; the cross-process lock
+itself is `withRefreshLock` in `prices.server.ts`):
 
 | Hazard | Guard |
 |---|---|
@@ -1286,7 +1287,7 @@ has none by definition.
 the data holds two or more distinct values for it, so a one-person household is never shown an Owner
 select that can only mean "everyone". One exception, and it is the right one: a dimension that already
 carries a selection is returned anyway, with a "Not in this portfolio" option synthesised if the
-selected key matches nothing (`holdings-view.ts:520`). A stale bookmark from before an account
+selected key matches nothing (`holdings-view.ts:565`). A stale bookmark from before an account
 closed therefore shows an empty table the reader can *see and clear*, rather than being silently
 widened behind their back.
 
@@ -1325,7 +1326,7 @@ those CTEs, so an account that changed underneath an open form produces no rows 
 set, no holding — and "nothing landed" is what becomes the refusal.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
-`account.kind` alone (`account.tsx:173`), and a `bank` account can be holding securities with no kind
+`account.kind` alone (`account.tsx:215`), and a `bank` account can be holding securities with no kind
 change behind it — `createDraft` (`uploads.server.ts:205`) reads only whether the account is closed,
 so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
@@ -1370,7 +1371,7 @@ still-shutting-down container, and a determined operator can run two.
 | Race | Guard | Where |
 |---|---|---|
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
-| Two poller ticks in different processes | Advisory lock per tick, distinct key | `price-poller.server.ts` |
+| Two poller ticks in different processes | Advisory lock per tick, distinct key | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
 | Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
@@ -1437,13 +1438,13 @@ the exemption survives only as long as that file says so.
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
         the only importer in app/     implements this and nothing else;
-        (price-provider.server:464)   the refresh tests reach no network
+        (price-provider.server:494)   the refresh tests reach no network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
 makes that tolerable is that swapping it is a day's work — which is only true while this interface is
 the sole thing the write path imports. One test imports the library directly
-(`tests/price-provider.test.ts:338-364`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:393`), deliberately, to pin the static-versus-instance shape the
 adapter depends on.
 
 Three conversions happen at this boundary and nowhere else:
@@ -1479,7 +1480,8 @@ allowlist does.
 | Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
 | TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — which is also the redirect URI registered with Google, character for character |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
-| SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers (`valuation.server.ts:375-376` — the `accountId` there is bound behind a `/^\d+$/` guard) |
+| SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers. Every externally supplied id is bound behind `couldBeId`'s digits-and-length test (`isOneOf` / `isAccount` in `valuation.server.ts`) |
+| Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so `/refresh?redirectTo=https://evil.test` — and its backslash spelling — lands on `/`. Both resource routes (`masking`, `refresh`) use it |
 | Error disclosure | Contained. The error page prints fixed wording chosen by the response status — nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
 
 **The forwarded-header decision, stated plainly.** `caddy` trusts what reaches it from the house
@@ -1507,6 +1509,27 @@ gate is also a single point of failure by design: if it cannot start, nobody get
 intended direction to fail, and the operator's break-glass path is a shell on the box rather than a
 second way through the front door.
 
+### 7.7 The installed shell
+
+The instance is an installable PWA, shaped by one decision: **the service worker stores nothing**
+(ADR-0007). `public/sw.js` is network-only — no Cache Storage, no IndexedDB, no precache — and
+exists for exactly one page: the inlined offline notice a phone shows when the instance is
+unreachable. Anything that is not a GET navigation passes it untouched, so loaders, actions and the
+upload flow's multipart posts never meet it. Two seams are structural:
+
+- **The worker must never branch on `response.ok`.** The gate answers a navigation with a 302 that
+  a worker's `fetch` resolves as an `opaqueredirect` — `ok === false` — which the browser then
+  follows itself. Treating anything but a 200 as "down" would swallow sign-in; only a *rejected*
+  fetch means unreachable, and `sw.js` says so in place.
+- **Install has to work from behind the gate.** The manifest is fetched with credentials
+  (`crossOrigin="use-credentials"` on the `<link>` in `app/root.tsx`) and its `icons` array carries
+  `data:` URIs, because Android's install probe sends no cookies — a fetched icon URL would get the
+  sign-in redirect and installation would grey out. No asset path is exempted in the `Caddyfile`
+  for it.
+
+`tests/pwa-shell.test.tsx` pins the storage-free rule. The secure-context consequence — installation
+is offered at `PUBLIC_ORIGIN`, never over LAN-IP HTTP — is §7.6's.
+
 ---
 
 ## 8. Build, release, run
@@ -1530,7 +1553,7 @@ Three stages, each with one job:
 │   ── tsc is an OPTIONAL PEER of @react-router/node, kept by prune;    │
 │      the runtime stage is specified to contain no compiler, and the   │
 │      two bin symlinks would otherwise still resolve                   │
-│ node scripts/prune-unreachable-deps.mjs   → 59 packages, 9.6 MB       │
+│ node scripts/prune-unreachable-deps.mjs   → logs its own removals     │
 │   ── yahoo-finance2 declares the MCP SERVER SDK, a Deno shim and a    │
 │      fetch-mocking library as RUNTIME deps, for a subpath and two     │
 │      bins this app never imports; they bring a second Express, plus   │
@@ -1654,7 +1677,7 @@ CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and 
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  withDatabase(body)                       32 files                       │
+│  withDatabase(body) — everything that touches data                       │
 │  ── real Postgres, migrations applied, fixtures seeded ──                │
 │                                                                          │
 │  database.transaction() ─▶ body({ db: trx, ...makeFixtures(trx) })       │
@@ -1666,14 +1689,14 @@ CI job, which is the only coverage of the deployment claims in §3.1, §3.2 and 
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Direct Postgres, no rollback wrapper      2 files                       │
+│  Direct Postgres, no rollback wrapper                                    │
 │  migrations.test.ts · numeric.test.ts                                    │
 │  They open their own pool because what they test IS the pool and the     │
 │  migration runner — the things withDatabase depends on.                  │
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Genuinely pure                           23 files                       │
+│  Genuinely pure — the rest                                               │
 │  csv · statement · money · market-hours · holdings-view · allocation     │
 │  · format · config · masking · …                                         │
 │  No database, because those modules have none. Six real brokerage        │
@@ -1687,10 +1710,11 @@ gets in the way of server-module tests.
 
 ### 9.2 Rules the suite is held to
 
-- **Seed through the builder, never raw SQL.** `tests/support/fixtures.ts` exposes eleven builders —
+- **Seed through the builder, never raw SQL.** `tests/support/fixtures.ts` exposes the builders —
   `seedPerson`, `seedAccount`, `seedClassification`, `seedInstrument`, `seedInstrumentAlias`,
-  `seedPositionSet`, `seedQuote`, `seedDailyClose`, `seedUploadDraft`, `seedManualNetWorth`, and
-  `usdInstrument`. Raw `INSERT` statements belong in the builder and nowhere else — that is what keeps
+  `seedPositionSet`, `seedQuote`, `seedDailyClose`, `seedObservation`, `seedPoll`,
+  `seedUploadDraft`, `seedManualNetWorth`, and `usdInstrument`. Raw `INSERT` statements belong in
+  the builder and nowhere else — that is what keeps
   a schema change from rewriting every test. One live exception, now stale: `plantAlias` in
   `column-mapping.test.ts:53` inserts aliases directly, justified by a domain writer that did not
   exist at the time and does now (§11.3).
@@ -1874,6 +1898,7 @@ still live in the current code:
 | `chart-range.ts` | The chart's range vocabulary: the presets, the sampled date grid under its point budget, and the range cookie middleware (ADR-0003). 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
 | `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
 | `masking.ts` | The masking vocabulary: policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
+| `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request — attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 
 **There is no authentication module, and its absence is the design.** A contributor looking for one
@@ -1881,6 +1906,67 @@ should read §7.6 and stop: authentication is a Compose service and a `Caddyfile
 `app/`. The only trace inside the process is `AUTH_GATE` deciding whether the warning banner is
 drawn, and a comment in `app/root.tsx` — where the middleware used to be — recording that the
 verified email rides in on every request and is read by nothing.
+
+### `app/` and `app/routes/` — the shell and the screens
+
+Ordered as `app/routes.ts` orders them: by how often a page is opened (DESIGN.md §8.4), flow-only
+and resource routes last. `root.tsx` and `routes.ts` sit one level up and lead the table because
+everything below is drawn inside the first and listed by the second. The one stylesheet,
+`app/app.css`, belongs to this tree too: several component headers argue decisions — the chart's
+custom properties, `.panel-form`'s wrapping, the mobile card reflow — that are only enforceable
+there.
+
+| File | Role |
+|---|---|
+| `../root.tsx` | The shell every page is drawn inside — the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its loader starts the price poller, because `react-router-serve` leaves no server entry to hook and root's loader is the one server path every render passes through. Also where the gate's middleware used to be: the only place recording that the verified email rides in on every request and is read by nothing |
+| `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes stay in the router so dev and the container behave identically |
+| `overview.tsx` | The net worth headline, the trend line and the accounts rollup. The empty case is load-bearing and comes first: an instance nothing has been uploaded to renders no figure at all |
+| `holdings.tsx` | Every position across every account — §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
+| `analysis.tsx` | The portfolio cut three ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All three breakdowns group one read — three `GROUP BY` queries would be three more of the hand-rolled dashboard queries §8.2 names as the weakest point |
+| `income.tsx` | What the portfolio pays over the coming year and how much of it is taxed: the same figure by tax treatment and by account, off the same array Holdings reads — which is what makes the two structurally unable to disagree |
+| `upload.tsx` | The drop screen, step one: which account, and the file. The application's first multipart form; its guards — the size cap read twice, the empty file, the not-text file — live in `uploads.server.ts` so the action stays a thin translation |
+| `upload/draft.tsx` | The shared frame around every step of one draft: page header, step strip, and the expired-draft boundary, written once rather than once per step. Deliberately no loader — the strip's data comes up from the child via `useMatches`, so it can never disagree with the form beneath it |
+| `upload/index.tsx` | The draft's bare address, which resumes wherever the draft got to (`parseDraft` decides). No page: a screen here would be a fifth step nobody asked to stand on |
+| `upload/columns.tsx` | Step two — map the file's columns, once per institution, answered against the file's own preview rows. A saved mapping prefills but never skips the screen: a changed export has to be visible rather than silently reapplied |
+| `upload/instruments.tsx` | Step three — resolve first sightings, each answered once and remembered forever. The flow's one early write: it records vocabulary, not the statement. Reached only on a miss; otherwise the loader redirects to review |
+| `upload/review.tsx` | Step four — the diff, then the commit, the flow's only write. The safety valve for §5.2's missing-row-means-sold rule: every removal listed in full, and a majority removal demands an explicit tick. Otherwise read-only — a wrong figure is fixed back on the columns step, because it is wrong in the mapping |
+| `account.tsx` | One account's identity, series and holdings, plus the balance form for the kinds that hold one number, and the upload receipt. Reads nothing directly and computes nothing on money, which is what keeps its total identical to the row Overview shows |
+| `settings.tsx` | The Settings tab strip: a layout, not a page. Only the tabs that exist are listed — a tab rendering an apology is worse than one that is not there yet |
+| `settings/index.tsx` | What Settings holds and what it will hold — naming the unbuilt tabs is the honest version of a fresh install |
+| `settings/people.tsx` | The household roster; every rule lives in `people.server.ts` |
+| `settings/accounts.tsx` | The account list and the add form. Editing and closing are their own screen, not row affordances |
+| `settings/account.tsx` | One account: correct it, or close it — a separate submission with its own acknowledgement, refused by the domain when the tick is missing. Nothing here deletes anything |
+| `settings/tax.tsx` | The capital gains rate — a stored setting, not an environment variable, because it is the household's number (`0005_app_setting.sql`) |
+| `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls |
+| `settings/display.tsx` | The masking policy a browser opens in. **Not the masking control** — ADR-0002 records why that lives in the chrome |
+| `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
+| `refresh.ts` | The one way a person spends a provider request on demand — a resource route, like `masking.ts`, so a press works with JavaScript off. Owns `RefreshOutcome`, which keeps a held lock, a database failure and a provider failure that still counts as done from collapsing into one answer |
+| `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Never checks the provider, never requires authentication (§7.4) |
+
+### `app/components/`
+
+Server-rendered throughout — there is no React state anywhere in the application. A component
+exists here when the rule it keeps is one no single screen can be trusted to keep alone; three of
+them (`breakdown.tsx`, `net-worth-chart.tsx`, `owner-filter-control.tsx`) also export the pure
+functions their tests exercise, so this tree is not purely presentational.
+
+| File | Role |
+|---|---|
+| `amount.tsx` | **The one component that renders an amount** (spec 0007, ADR-0002): every absolute figure comes through here and every ratio does not. One component rather than a flag on the formatters, because the guarantee is only as good as its narrowest point; `masking-boundary.test.ts` asserts the import boundary in place of a linter. `Delta` lives here and asks it for the figure rather than being a second renderer |
+| `masking-toggle.tsx` | The control that hides every amount, in the chrome, labelled with what it will do rather than what is true. Two writers, one click: a real form to `/masking` for scripting-off, and a direct cookie write so the flip happens at the speed of a hand |
+| `open-instance-banner.tsx` | The standing warning that nothing guards this instance. Not dismissible, never drawn behind the gate, and it names no variable — a banner offering the setting as the fix would teach the one mistake that silences it while leaving the instance open |
+| `first-run-prompt.tsx` | The one setup prompt, naming the next step only. Doing the thing it asks for is what removes it |
+| `error-page.tsx` | Where a thrown error lands. The wording is ours and the status alone picks it; nothing the throwing code wrote is printed (§7.6) |
+| `empty-state.tsx` | What a dashboard says when it has nothing to show: no figure and no axis at all, because a zero net worth and a never-uploaded instance are indistinguishable on screen and only one of them is alarming |
+| `stub-page.tsx` | A page header over a sentence saying what a screen will be, written for routes whose content belonged to a later slice. The slices landed: nothing imports it now |
+| `icons.tsx` | The icon set, inline, replacing the mock's CDN font for the same reasons the fonts are self-hosted (§13.7 of DESIGN.md). Decorative by design: every icon is `aria-hidden` beside a real text label |
+| `net-worth-chart.tsx` | The trend line, hand-drawn: one stroke over a gradient is a polyline, a path and some CSS, and a charting dependency would mean fighting its defaults to arrive back here. Colours resolve from custom properties through classes, because `stroke="#0055ff"` cannot follow a theme. The one file besides `amount.tsx` allowed to call a money formatter — its figures are axis ticks and per-point readouts, which no component can host — and the readout overlays are HTML positioned in percentages, not SVG children (ADR-0004) |
+| `chart-range-control.tsx` | The segmented range control. Every option links to its own explicit `range`, the default included — a bare relative link would read back whatever the cookie held. A disabled preset is a span, never a link, and every link carries the rest of the query |
+| `owner-filter-control.tsx` | The owner filter (spec 0013, ADR-0008), in the page header's actions on every screen it reaches. A disclosure rather than a row of boxes, because a row grows with the household and reflowed differently everywhere. Its hidden fields arrive as a prop: the control knows no screen's vocabulary |
+| `breakdown.tsx` | One breakdown panel: a ring and the rows it is drawn from. One component because §13.3's same-rank-same-colour rule is enforced by nothing except there being one implementation; the circumference is computed, not written down, so rounding error cannot land in the last visible segment |
+| `price-freshness.tsx` | How old this page's figures are, and the control that changes it — one component because they are one sentence: without a timestamp that moves, nothing separates a refresh that worked from one that failed silently. The stamp arrives already formatted, in market time |
+| `account-fields.tsx` | The account form, shared by add and edit: the cheapest way to guarantee the two screens offer the same fields is to have only one of them. Options come from `account-options.ts`, the same list the domain validates against |
+| `upload-steps.tsx` | The upload flow's step strip. Four entries always, and only a step already passed is a link: a step with nothing to do dims in place rather than disappearing, so the flow never reads as a different flow between uploads |
 
 ### `migrations/`
 
@@ -1895,6 +1981,42 @@ verified email rides in on every request and is read by nothing.
 | `0007_masking_policy.sql` | The `masking_policy` column on `app_setting` |
 | `0008_refresh_cadence.sql` | The `refresh_cadence_minutes` column on `app_setting` |
 | `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
+
+### `public/`
+
+Static files, served as-is — and all behind the gate like everything else.
+
+| File | Role |
+|---|---|
+| `sw.js` | The whole service worker (§7.7, ADR-0007): network-only, stores nothing, exists for the inlined offline page. Deliberately hand-written and short enough to verify by eye |
+| `manifest.webmanifest` | The install manifest. Hand-written except the `icons` array, which `scripts/render-icons.ts` owns and rewrites — its entries are `data:` URIs so installation works from behind the gate (§7.7) |
+| `icon.svg`, `icons/` | The drawing, and the committed rasterisations `render-icons.ts` produces from it |
+| `fonts/` | Inter, self-hosted, subset to latin — no third-party round trip to draw a household's finances (DESIGN.md §13.4) |
+
+### `scripts/`
+
+Run by hand or by CI, never by the serving process. Each exists because the alternative was a
+recipe a human followed by hand — a defence that works until the day nobody has twenty minutes.
+
+| File | Role |
+|---|---|
+| `seed-demo.ts` | One plausible household portfolio, generated: several institutions, two people, years of statements, a drawdown, an instrument nobody can quote, a loan that sums negative — because a screenshot where everything is priced is a screenshot of the easy case. Idempotent, one transaction, and it refuses to touch a database missing its own marker. There is no `--force` |
+| `capture-screenshots.ts` | Every committed screenshot, retaken in one command against the demo household — the images are the one thing here that can go stale silently. Nothing the seed regenerates is hardcoded: accounts are found by kind, the edited row by having a cost basis. The first-run shots come from a second, migrated-but-unseeded database |
+| `render-icons.ts` | The committed PWA icons, rasterised from `public/icon.svg`, and the manifest's `data:`-URI `icons` array (§7.7). Committed rather than generated at build time so the artifacts change only when someone means them to |
+| `prune-unreachable-deps.mjs` | Removes the production dependencies reachable only through the three `yahoo-finance2` edges this app never imports (its MCP server, a Deno shim, a fetch-mocker). Marks the tree with the edges intact and cut, deletes only the difference — so it cannot remove anything still reachable. Not a general garbage collector |
+| `smoke-test.sh` | The CI-only container test, and the only coverage of §3.1, §3.2 and §8.1's deployment claims. Layers the dev override so it builds the working tree — otherwise every run would silently certify the last release |
+
+### `tests/support/`
+
+The four modules every test is written through. Why the suite is shaped this way is §9; this is
+where each piece lives.
+
+| File | Role |
+|---|---|
+| `database.ts` | The primary seam: real Postgres, migrations applied once, every body in a transaction that is always rolled back — and `getDb()` scoped to it, so a loader querying with no argument reads the seeded rows |
+| `fixtures.ts` | **The one piece of test code allowed to know the schema** — the builders of §9.2. Money and quantity are decimal strings and the types refuse a number |
+| `routes.ts` | Calling a route the way the framework calls it: the request built, the cookie carried, the thrown `Response` caught. Route modules import cleanly with no plugin because their one framework-shaped import is types only |
+| `render.tsx` | A page rendered through the real shell, where a React warning is a failure — the one known stub artefact is allowed by name and anything else throws |
 
 ---
 

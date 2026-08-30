@@ -128,4 +128,4 @@ they do not get the same screen. Start at [upload.md](upload.md).
 
 ---
 
-**Next:** [An account](account-detail.md) — one account end to end.
+**Next:** [Overview](overview.md) — the whole household at a glance, and the chart's two lines.

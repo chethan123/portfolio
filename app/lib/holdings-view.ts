@@ -18,8 +18,9 @@
  * is not to add a fourth one. The screen's table and its subtotals are computed
  * from a single array, so a row and the total beneath it cannot disagree.
  *
- * **Seven dimensions, not four and not eight.** §8.1 grants Holdings four —
- * person, account, tax treatment, classification. §8.3's deferred view builder
+ * **Seven dimensions, not four and not eight.** §8.1's first draft granted
+ * Holdings four — person, account, tax treatment, classification (its text now
+ * records the growth). §8.3's deferred view builder
  * types the same idea as eight: `person | account | institution | kind |
  * tax_treatment | classification | asset_class | instrument`. §8.1 predates
  * §8.3, `holding_valued` exposes all eight, and nothing anywhere forbids the

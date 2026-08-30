@@ -128,11 +128,14 @@ replaced rather than recovered ([Day two](#day-two)).
 `cp .env.example .env` if you have not already, and fill in the gate section. Every variable in it is
 required and none has a default: [`compose.yaml`](../compose.yaml) interpolates each with Compose's
 `${VAR:?}` form, so `docker compose up` stops before any container exists and names the first one
-that is unset or empty. Half-configured is not a state this stack has.
+that is unset or empty. Half-configured is not a state Compose lets by — with one blind spot, next.
 
 Beyond the client ID and secret from step 3:
 
 - **`PUBLIC_ORIGIN`** — the origin from [Before you start](#before-you-start), no trailing slash.
+  This is the one gate setting Compose cannot catch: `.env.example` ships it pre-filled with an
+  example origin, so a copied file passes the `${VAR:?}` check unedited and the mistake surfaces
+  later, as Google's `redirect_uri_mismatch` page at sign-in. Edit it.
 - **`GATE_COOKIE_SECRET`** — the key the gate encrypts its session cookie with. It must decode to
   exactly 16, 24 or 32 bytes: the sidecar builds an AES cipher from it and refuses to start
   otherwise, naming `cookie_secret` in its log. Generate one with the command

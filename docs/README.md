@@ -34,6 +34,7 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`../DESIGN.md`](../DESIGN.md) | anyone changing the system | the authoritative design record: domain model, ingest, pricing, screens, stack, accepted limitations | anything already settled and shipped that a reader would rather see in code |
 | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | a contributor finding their way around | how the code is arranged and why the seams sit where they do | user-facing behaviour |
 | [`../AGENTS.md`](../AGENTS.md) | agents working in this repo | how work here is done and judged | project documentation of any kind |
+| [`../CLAUDE.md`](../CLAUDE.md) | Claude Code, at session start | the working brief: the read-first list, the commands and their traps, the rules a change is rejected against — it imports `AGENTS.md` and points at the document that owns each subject | project documentation of any kind |
 | [`../CONTEXT.md`](../CONTEXT.md) | anyone naming a domain concept | the glossary: the word this project uses for each concept, and the ones it avoids | implementation detail, decisions, anything that is not a definition |
 | [`adr/`](adr/) | someone about to undo a decision | one record per decision that is hard to reverse, surprising without its context, and the result of a real trade-off | decisions that are none of those three — they belong in the code or the design record |
 | [`guide/`](guide/) | a family member using a running instance | how to do a thing, screen by screen and task by task, and files the guide hands out to do it (the example statement CSV) | rationale, operations, anything needing a terminal |
@@ -57,8 +58,9 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 [`agents/domain.md`](agents/domain.md) describes them and [`../AGENTS.md`](../AGENTS.md) points at
 them. Neither is filled in preemptively: a term earns a glossary entry the first time it is
 genuinely resolved, and a decision earns an ADR only when it is hard to reverse, surprising without
-context, and the result of a real trade-off. Both were opened by the dividends work
-([`specs/0006-dividends.md`](specs/0006-dividends.md)), which is why they start small.
+context, and the result of a real trade-off. The dividends work
+([`specs/0006-dividends.md`](specs/0006-dividends.md)) opened both; the slices since have grown them
+one resolved term and one hard decision at a time, which is the intended pace.
 
 ## Deliberate duplications, and why
 
@@ -99,13 +101,14 @@ context, and the result of a real trade-off. Both were opened by the dividends w
 - **[`../README.md`](../README.md)'s "Working on it" is the short version of
   [`developing.md`](developing.md).** The README's reader may not have decided to contribute yet, so
   it keeps a handful of commands and defers the rest.
-- **The price archive's storage figure is stated in four places**, because it is a number four
-  different people need at four different moments: [`adr/0006-intraday-quotes-are-an-observation-log.md`](adr/0006-intraday-quotes-are-an-observation-log.md)
+- **The price archive's storage figure is stated in five places**, because it is a number five
+  different readers need at five different moments: [`adr/0006-intraday-quotes-are-an-observation-log.md`](adr/0006-intraday-quotes-are-an-observation-log.md)
   argues why the cost is worth paying, [`../DESIGN.md`](../DESIGN.md) §6 records it as part of the
-  pricing design, [`operating.md`](operating.md)'s "Growth and limits" carries the arithmetic and the
+  pricing design, the header of `migrations/0009_price_observation.sql` states it where the table
+  is created, [`operating.md`](operating.md)'s "Growth and limits" carries the arithmetic and the
   query that measures the real instance, and Settings → Prices states it at the dial, where the
-  household actually turns it. **The ADR is the one to believe**; the other three are derived from it
-  and none of them may quietly disagree. A revised figure changes all four in one commit.
+  household actually turns it. **The ADR is the one to believe**; the other four are derived from it
+  and none of them may quietly disagree. A revised figure changes all five in one commit.
 
 ## Screenshots
 

@@ -5,9 +5,10 @@ Take a brokerage statement from a download to a recorded set of holdings, in fou
 Before you start:
 
 - **Export the CSV version** of the statement from your brokerage. A `.csv` file is the only thing
-  the upload accepts — not OFX, QIF, XLSX or PDF — and there is no way to link a bank or brokerage
-  directly. If you hand it something else, it refuses with *"This does not read as a text file.
-  Export the CSV version of the statement and upload that instead."*
+  the upload can read, and there is no way to link a bank or brokerage directly. A spreadsheet or a
+  PDF is refused on this first screen with *"This does not read as a text file. Export the CSV
+  version of the statement and upload that instead."* A text export in another format — OFX, QIF —
+  gets one screen further and fails on the columns step instead, where nothing in it maps.
 - **Bank accounts and loans are not recorded this way.** They are one number rather than a list of
   positions, so you type the balance on the account's own page instead — see
   [Account detail](account-detail.md).
