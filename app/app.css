@@ -2012,11 +2012,32 @@ a.account-row:hover {
 }
 
 @media (min-width: 768px) {
+  /* Wraps rather than crushes. `.detail-total` must not shrink — the figure
+   * is money and the actions are a row of their own — so when both sides
+   * outgrow the card (three actions on a balance-kind account against the
+   * ~630px a header gets just past the rail's breakpoint) something has to
+   * give, and without a wrap it was the identity: squeezed to a sliver, the
+   * account name breaking one word per line. The total drops to a line of its
+   * own instead, held against the right edge by its auto margin — a wrapped
+   * line under `space-between` alone would sit on the left. */
   .detail-header {
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-lg);
+  }
+
+  /* The basis is the identity's graceful floor — the tile and a few words of
+   * name on one line — and is what the wrap decision weighs, since a flex
+   * line breaks on base sizes, never on how far an item could shrink. Below
+   * the floor plus the total's own width the header stacks; above it the
+   * identity takes the slack and its meta pairs wrap inside as they always
+   * have. Without a basis the identity's full one-line width decides, and the
+   * header stacks at widths the old layout handled gracefully. */
+  .detail-identity {
+    flex: 1 1 360px;
+    min-width: 0;
   }
 
   .detail-total {
@@ -2025,6 +2046,7 @@ a.account-row:hover {
     padding-top: 0;
     border-top: 0;
     flex: none;
+    margin-left: auto;
   }
 }
 

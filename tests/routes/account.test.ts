@@ -213,6 +213,31 @@ describe("the receipts", () => {
   );
 });
 
+describe("the way into the upload flow", () => {
+  it(
+    "links the action row and the empty state's sentence to the upload screen naming this account",
+    withDatabase(async (ctx) => {
+      // A statement-kind account with nothing recorded yet: the one state that
+      // renders both ways in at once. The action row is unconditional, and an
+      // empty non-balance account is exactly who the empty state tells to
+      // upload.
+      const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
+
+      const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
+      const markup = renderRoute(Account, `/accounts/${account.id}`, data);
+
+      // Destination and label are the contract; the icon inside the button
+      // and the sentence around the phrase are free to change. The address is
+      // named without the owner filter: the upload flow has no owner concept,
+      // so unlike the breadcrumb there is nothing to hand it.
+      const upload = `href="/upload?account=${account.id}"`;
+      expect(markup.split(upload).length - 1).toBe(2);
+      expect(markup).toContain("Upload statement</a>");
+      expect(markup).toContain(">upload a statement</a>");
+    }),
+  );
+});
+
 describe("the chart's range", () => {
   it(
     "falls back to the default window for a value it does not offer, rather than to an empty one",
