@@ -17,6 +17,7 @@
 import { z } from "zod";
 
 import { getDb, type Database } from "./db.server.ts";
+import type { OwnerFilter } from "./owner-filter.ts";
 import {
   NotFoundError,
   ValidationError,
@@ -100,26 +101,85 @@ export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person
   }));
 }
 
+/** The roster a screen draws its control from, and what a selection makes of it. */
+export type OwnerRoster = {
+  /** Everyone the household can be read as, in the order to draw them. */
+  people: Person[];
+  /** Who the selection actually names — empty when the filter is off. */
+  narrowedTo: Person[];
+  /**
+   * The selection names an id the roster does not: hand-typed, naming somebody
+   * removed, or naming an owner whose accounts have all been closed. One
+   * sentence and one fix to a reader, so one flag.
+   */
+  unknownOwner: boolean;
+  /**
+   * The selection names exactly everybody, which is the household under another
+   * name — and the household's URL carries no owner parameter at all (ADR-0008).
+   * The screens bounce to it, because a `<Form method="get">` of checkboxes has
+   * no way to decline to submit the spelling in the first place.
+   *
+   * **Everybody in the household, not everybody the control can draw.** The
+   * distinction is load-bearing where somebody owns only closed accounts: they
+   * are not in {@link OwnerRoster.people}, so ticking every box a reader can
+   * see names the whole roster and *not* the whole household — and the two read
+   * differently on every past date, because `holding_valued_at` admits an
+   * account closed after that date and `firstRecordedDate` spans closed
+   * accounts outright. Collapsing that selection would hand back a chart
+   * carrying the history the reader had just excluded, under an identical
+   * headline, with nothing on screen to tell the two apart.
+   *
+   * Read against the selection rather than against {@link narrowedTo}, which is
+   * drawn from the roster and so can never name such an owner — a selection
+   * that *does* name them is the household and must still collapse. That is
+   * also why this and {@link unknownOwner} can both be true at once, of a
+   * selection naming a closed-out owner and everybody else: every screen
+   * redirects on this one first, so the pair is resolved before either is read.
+   */
+  coversEveryone: boolean;
+};
+
 /**
- * The people a screen can be read as — the owner filter's roster (spec 0013).
+ * The roster, read once, with the selection resolved against it.
  *
- * Owners of at least one **open** account, because `holding_valued` excludes
- * closed ones: selecting somebody whose accounts have all been closed would
- * empty every screen with no explanation. Leaving them out instead makes their
- * id one the roster does not name, which is the state the screens already have
- * a sentence for.
+ * Every screen that draws the control asks the same two questions of the same
+ * roster — which ids name nobody it can filter by, and whether the selection is
+ * simply everybody — and a rule each loader spelled for itself would be one
+ * free to drift on a screen nobody was looking at.
  *
- * The cost is stated rather than hidden: their history is not reachable through
- * the filter at all, even though `firstRecordedDate` can still see it. That is
- * an accepted limitation of this slice and belongs in DESIGN.md §14, which
- * ticket 06 adds it to.
- *
- * A filter over {@link listPeople} rather than a second query: the roster is
- * small, the query is the one the People screen already runs, and two readers
- * of one table are two answers waiting to disagree.
+ * The roster is owners of at least one **open** account, because
+ * `holding_valued` excludes closed ones: selecting somebody whose accounts have
+ * all been closed would empty every screen with no explanation. Leaving them
+ * out instead makes their id one the roster does not name, which is the state
+ * the screens already have a sentence for. The cost is stated rather than
+ * hidden — their history is not reachable through the filter at all, even
+ * though `firstRecordedDate` can still see it — and DESIGN.md §14 records it.
  */
-export async function filterableOwners(db: Kysely<Database> = getDb()): Promise<Person[]> {
-  return (await listPeople(db)).filter((person) => person.openAccountCount > 0);
+export async function ownerRoster(
+  owners: OwnerFilter,
+  db: Kysely<Database> = getDb(),
+): Promise<OwnerRoster> {
+  // One read, two questions. `household` is who exists at all; `people` is who
+  // the control can offer, which is the subset owning an open account. Both
+  // come off the query the People screen already pays for, rather than a second
+  // one free to disagree with the first.
+  const household = await listPeople(db);
+  const people = household.filter((person) => person.openAccountCount > 0);
+  const narrowedTo = people.filter((person) => owners.includes(person.id));
+
+  return {
+    people,
+    narrowedTo,
+    unknownOwner: owners.length > narrowedTo.length,
+    // Every person recorded is named, and nothing else is. Both halves: without
+    // the second, "Alice and somebody who no longer exists" is as long as a
+    // two-person household and would collapse to it, hiding the one state that
+    // exists to say a stale address is stale.
+    coversEveryone:
+      household.length > 0 &&
+      owners.length === household.length &&
+      household.every((person) => owners.includes(person.id)),
+  };
 }
 
 /**

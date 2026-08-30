@@ -66,7 +66,7 @@ Down the left side:
 
 - **Overview** — net worth, the trend line, and every account.
 - **Holdings** — every position you hold, filtered and grouped any way you ask.
-- **Analysis** — the same total broken down by person, account type and asset class.
+- **Analysis** — the same total broken down by owner, account type and asset class.
 - **Income** — what the portfolio is projected to pay over the coming year, and how much of that
   is taxed.
 

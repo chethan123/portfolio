@@ -49,9 +49,16 @@ calendar is built from the wall clock, so quantities drift with the day the data
 CSV frozen today would slowly turn its unchanged rows into changed ones, and `upload-4-review.png`
 would stop showing the diff it is captioned as showing.
 
+## The owner filter is shot on Holdings
+
+`holdings-owner.png` is the same table `holdings.png` shows unnarrowed, which is what makes the
+control legible; the README's pair is on Overview, for [its own reasons](../../screenshots/README.md).
+`holdings-grouped.png` was narrowed as well as grouped until this shot existed, leaving the reader to
+work out which of two controls had done which; it is grouped and nothing else now.
+
 ## Sizes
 
-Desktop shots are 1440×1000 at `deviceScaleFactor: 2`, full page. `overview-mobile.png` is 390×900,
+Desktop shots are 1600×1000 at `deviceScaleFactor: 2`, full page. `overview-mobile.png` is 390×900,
 `isMobile`, and **not** full page: the bottom navigation is `position: fixed`, so a full-page capture
 paints it across the middle of the image instead of at the foot of the screen where a phone shows it.
 

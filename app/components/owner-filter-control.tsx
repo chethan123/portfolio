@@ -36,10 +36,12 @@
  * knows no screen's vocabulary — Holdings passes its own filters, grouping and
  * sort, Overview its `range`/`start`/`end`, and neither has to be named here.
  *
- * **Not drawn at all when fewer than two people own an open account.** The
- * spirit of `availableFilters`' one-option rule, not its code: that rule counts
- * distinct values among the holdings on screen, and this counts people, because
- * an owner who holds nothing is still someone the reader may want to read the
+ * **Not drawn at all when fewer than two people own an open account** — unless
+ * a filter is on, in which case it draws whatever the roster holds, because it
+ * is then the one control that can clear it. The threshold is the spirit of
+ * `availableFilters`' one-option rule, not its code: that rule counts distinct
+ * values among the holdings on screen, and this counts people, because an
+ * owner who holds nothing is still someone the reader may want to read the
  * household as. Following the holdings would hide the control on the screen an
  * owner happens to be absent from, which is the wrong answer for a filter that
  * spans four of them.
@@ -69,8 +71,13 @@ export function OwnerFilterControl({
    */
   hidden: Record<string, string>;
 }) {
-  // One name is not a choice, and nobody at all is not a filter.
-  if (owners.length < 2) return null;
+  // One name is not a choice, and nobody at all is not a filter — unless a
+  // filter is already on. A household of one selectable owner can still carry
+  // `?owner=` from a bookmark or from a person losing their last open account
+  // after the link was made, and a control that vanished then would leave the
+  // filter with no way off the screen: the nav carries it, and "Show everyone"
+  // below is the only control that clears it.
+  if (owners.length < 2 && !isFiltered(selected)) return null;
 
   const chosen = new Set(selected);
   const narrowedTo = owners.filter((owner) => chosen.has(owner.id));
@@ -181,5 +188,59 @@ export function NarrowedTo({ owners }: { owners: ReadonlyArray<FilterableOwner> 
     <p className="narrowed-to">
       Showing <b>{joinWords(owners.map((owner) => owner.name))}</b> only.
     </p>
+  );
+}
+
+/**
+ * The address is stale rather than the household empty: this selection names
+ * somebody the household cannot be read as.
+ *
+ * Exported because Holdings says the same thing in its own panel note, and one
+ * household described two ways on adjacent pages is exactly what a second copy
+ * of a sentence buys.
+ */
+export const UNREADABLE_OWNER =
+  "This view is set to an owner the household can no longer be read as — removed, or left holding only closed accounts.";
+
+/** "Alice holds", "Alice and Bob hold" — the same fragment both screens use. */
+export function holdsNothing(names: ReadonlyArray<FilterableOwner>): string {
+  return `${joinWords(names.map((owner) => owner.name))} ${names.length === 1 ? "holds" : "hold"}`;
+}
+
+/**
+ * What a screen says when the owner filter is the reason it has nothing to show.
+ *
+ * Deliberately **not** `EmptyState`, whose headline is the fixed *"There is no
+ * data yet."* — a false claim on an instance full of it, and the same
+ * distinction `holdings.tsx` has always drawn between an empty instance and a
+ * question whose answer happens to be nothing. Only a genuinely empty instance
+ * may say nothing has been uploaded.
+ *
+ * Two sentences rather than one, because the two are a different fix to a
+ * reader: an id naming nobody is a stale address, and an owner holding nothing
+ * is a fact about the household. Neither may sound like an error.
+ */
+export function NarrowedToNothing({
+  owners,
+  unknownOwner,
+  showEveryone,
+}: {
+  owners: ReadonlyArray<FilterableOwner>;
+  unknownOwner: boolean;
+  /** Where "Show everyone" goes: this screen, its own state kept, no owner. */
+  showEveryone: string;
+}) {
+  return (
+    <div className="panel">
+      <div className="panel-body panel-body--empty">
+        <p className="empty-note">
+          {unknownOwner ? UNREADABLE_OWNER : `${holdsNothing(owners)} nothing that has been recorded here.`}{" "}
+          Everything else is still there.
+        </p>
+        <Link className="button button--text" to={showEveryone}>
+          Show everyone
+        </Link>
+      </div>
+    </div>
   );
 }

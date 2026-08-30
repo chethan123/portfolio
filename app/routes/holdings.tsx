@@ -2,7 +2,12 @@ import { Form, Link, redirect } from "react-router";
 
 import { Amount, Delta } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
-import { NarrowedTo, OwnerFilterControl } from "~/components/owner-filter-control";
+import {
+  NarrowedTo,
+  OwnerFilterControl,
+  UNREADABLE_OWNER,
+  holdsNothing,
+} from "~/components/owner-filter-control";
 import { ChevronRightIcon, EditIcon } from "~/components/icons";
 import { isNegative, joinWords } from "~/lib/format";
 import { formatShare } from "~/lib/allocation";
@@ -33,10 +38,9 @@ import {
   ALL_OWNERS,
   isFiltered,
   readOwnerFilter,
-  sameView,
   type OwnerFilter,
 } from "~/lib/owner-filter";
-import { filterableOwners } from "~/lib/people.server";
+import { ownerRoster } from "~/lib/people.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
 
@@ -101,10 +105,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   // This also drops parameters that mean nothing here, which is the same
   // reading `parseQuery` gives them. The bounce cannot loop: `toSearch` is
   // deterministic and `parseQuery(toSearch(q))` is `q`, so the second pass is
-  // already canonical — and the comparison below is `sameView` rather than
-  // `!==` because two serialisers spell `'` and `,` differently, and a
-  // comparison that could not see past that would bounce forever on an address
-  // it had just produced.
+  // already canonical — and its spelling is a fixed point of URL parsing
+  // (`spellId` in `owner-filter.ts` says why that holds and what broke when it
+  // did not), so `url.search`, which the parser has already respelled, can
+  // equal it.
   // Grouping hides the column it grouped by, so a URL that sorts by that same
   // column leaves the table ordered by a heading nobody can see: no caret, no
   // `aria-sort`, and no control to reverse it. Fall back to the default sort,
@@ -137,12 +141,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   // where the write redirects to, and the row it names has just been closed.
   const canonical =
     saved !== null ? withRow(view, "saved", saved) : withRow(view, "edit", editing);
-  if (!sameView(url.search, canonical)) throw redirect(`${url.pathname}${canonical}`);
+  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const [household, freshness, roster] = await Promise.all([
     currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
-    filterableOwners(),
+    ownerRoster(owners),
   ]);
 
   // Narrowed in SQL, through the same predicate every other screen reads
@@ -158,11 +162,6 @@ export async function loader({ request }: Route.LoaderArgs) {
   const filters = availableFilters(household, query);
   const visible = applyFilters(holdings, query);
 
-  // Who the filter actually names, in the roster's order. An id naming nobody
-  // — or naming somebody whose accounts have all been closed, which is the same
-  // sentence to a reader — leaves this shorter than the selection.
-  const narrowedTo = roster.filter((person) => owners.includes(person.id));
-
   // Everybody ticked is the household, and the household's URL carries no owner
   // parameter at all (ADR-0008: "selecting every owner is spelled the same as
   // selecting none"). A `<Form method="get">` of checkboxes has no way to
@@ -170,7 +169,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // a roster to compare against. After the roster read rather than before it,
   // because it needs one; the canonical redirect above still runs first and
   // still asks nothing of the database.
-  if (isFiltered(owners) && narrowedTo.length === roster.length && narrowedTo.length === owners.length) {
+  if (roster.coversEveryone) {
     throw redirect(`${url.pathname}${withRow(toSearch(query, ALL_OWNERS), "edit", editing)}`);
   }
 
@@ -196,15 +195,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   return {
     freshness,
     /** The roster the control draws, and the selection it draws as ticked. */
-    roster: roster.map((person) => ({ id: person.id, name: person.name })),
+    roster: roster.people.map((person) => ({ id: person.id, name: person.name })),
     owners,
-    narrowedTo: narrowedTo.map((person) => ({ id: person.id, name: person.name })),
-    /**
-     * The filter names an id the roster does not: a hand-typed one, or an owner
-     * whose accounts have all been closed. One sentence and one fix to a
-     * reader, so one state.
-     */
-    unknownOwner: isFiltered(owners) && narrowedTo.length < owners.length,
+    narrowedTo: roster.narrowedTo.map((person) => ({ id: person.id, name: person.name })),
+    unknownOwner: roster.unknownOwner,
     /**
      * The selected owners hold nothing. Not an error, and not an empty
      * instance — the sentence below is written from this rather than derived a
@@ -635,14 +629,11 @@ function describe({
   // household cannot be read as these people at all, or they hold nothing at
   // all, then what this screen's own selects say about the rest is beside the
   // point.
-  if (unknownOwner) {
-    return "This view is set to an owner the household can no longer be read as — removed, or left holding only closed accounts.";
-  }
+  if (unknownOwner) return UNREADABLE_OWNER;
 
-  const named = joinWords(narrowedTo.map((person) => person.name));
-  const hold = narrowedTo.length === 1 ? "holds" : "hold";
+  const holds = holdsNothing(narrowedTo);
 
-  if (ownersHoldNothing) return `${named} ${hold} nothing that has been recorded here.`;
+  if (ownersHoldNothing) return `${holds} nothing that has been recorded here.`;
 
   const chosen = filters
     .map((filter) => filter.selectedPhrase)
@@ -653,7 +644,7 @@ function describe({
   // table narrowed to Alice — the portfolio does hold something there. The
   // sentence has to name whose portfolio it is talking about.
   if (narrowedTo.length > 0 && chosen.length > 0) {
-    return `${named} ${hold} nothing ${joinWords(chosen)}.`;
+    return `${holds} nothing ${joinWords(chosen)}.`;
   }
 
   const absent = filters.filter((filter) => filter.selectedIsAbsent);

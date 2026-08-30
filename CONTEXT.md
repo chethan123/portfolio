@@ -129,9 +129,11 @@ _Avoid_: holder, beneficiary, account user.
 **Owner filter**:
 The choice to read every screen as one or more owners rather than as everyone. A way of narrowing
 what is shown and never of deciding what may be seen — every family member may set it, clear it, and
-set it to anybody. It belongs to the reading in progress rather than to the household, and it lasts
-only as long as that reading; off means the whole household, which is where every reading starts.
-_Avoid_: user filter, person filter, lens, view-as, my view.
+set it to anybody. It belongs to the reading in progress rather than to the household: it is in the
+address of the page being read and nowhere else, so it lasts exactly as long as that address does.
+Off means the whole household, which is where every reading starts — and which selecting everybody
+is only another way of saying.
+_Avoid_: user filter, person filter, lens, view-as, my view, standing choice.
 
 ### What a screen shows in public
 

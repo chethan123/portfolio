@@ -50,7 +50,7 @@ why their new screen will not compile.
       filter is a way of reading
 - [ ] The pre-app history's absence under a filter is explained where the Overview chart is described,
       so a shorter line is never mistaken for lost data
-- [ ] `docs/guide/holdings.md` is corrected where it describes the Owner select that ticket 04
+- [ ] `docs/guide/holdings.md` is corrected where it describes the Owner select that ticket 03
       removed
 
 **README.md**

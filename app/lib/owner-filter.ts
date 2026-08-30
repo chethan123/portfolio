@@ -104,8 +104,33 @@ export function readOwnerFilter(params: URLSearchParams): OwnerFilter {
 export function toOwnerParam(filter: OwnerFilter): string {
   const canonical = canonicalise(filter);
 
-  // Each id encoded, the separators not: the grammar is `owner=1,3`.
-  return isFiltered(canonical) ? `owner=${canonical.map(encodeURIComponent).join(",")}` : "";
+  // Each id spelled as a URL spells it, the separators left bare: the grammar
+  // is `owner=1,3`.
+  return isFiltered(canonical) ? `owner=${canonical.map(spellId).join(",")}` : "";
+}
+
+/**
+ * One id, spelled the way the URL parser spells it.
+ *
+ * The loaders compare `url.search` — a string the WHATWG URL parser has
+ * already respelled — against the canonical search with `!==`, and bounce on a
+ * difference. That comparison is loop-free only while the canonical spelling
+ * is a **fixed point of URL parsing**: a target the parser respells is an
+ * address that can never equal its own canonical form, and the redirect fires
+ * forever. `?owner=o'brien` — a hand-typed id this module deliberately keeps —
+ * did exactly that when the ids were spelled with `encodeURIComponent` alone,
+ * because it leaves `'` bare where the parser writes `%27`.
+ *
+ * The apostrophe is the one disagreement: everything else
+ * `encodeURIComponent` leaves bare — digits, letters, `-_.!~*()` — the
+ * parser's query serialiser also leaves bare, as it does this grammar's own
+ * commas and the `URLSearchParams` spelling `toSearch` and
+ * `canonicalOwnerSearch` use for every other parameter. So one respelling
+ * makes the whole canonical search a fixed point, and
+ * `tests/owner-filter.test.ts` holds it there with real `URL` round trips.
+ */
+function spellId(id: string): string {
+  return encodeURIComponent(id).replaceAll("'", "%27");
 }
 
 /**
@@ -122,31 +147,6 @@ export function ownerSearch(filter: OwnerFilter): string {
   const param = toOwnerParam(filter);
 
   return param === "" ? "" : `?${param}`;
-}
-
-/**
- * Whether two search strings name the same view, whatever spelled them.
- *
- * The loaders redirect an address to its canonical spelling, and the
- * comparison that decides has to be blind to *encoding*, or it is an infinite
- * redirect rather than a tidy-up. There are two serialisers in play and they
- * disagree on two characters that reach this application:
- *
- * - `encodeURIComponent` leaves `'` alone; `URL` and `URLSearchParams` spell it
- *   `%27`. So `?owner=o'brien` — a hand-typed id this module deliberately keeps
- *   — could never equal its own canonical spelling.
- * - `URLSearchParams.toString` spells `,` as `%2C` while the canonical owner
- *   parameter is `owner=1,3` by design (spec 0013). Some transports hand the
- *   loader a query that has already been round-tripped through
- *   `URLSearchParams`, so the two spellings both arrive in practice.
- *
- * Normalising both sides through one serialiser makes the comparison about the
- * parameters, their order and their values — which is what "canonical" was ever
- * meant to mean. The redirect still *targets* the readable spelling; what
- * changes is that arriving at the other one is not a fault worth bouncing over.
- */
-export function sameView(a: string, b: string): boolean {
-  return new URLSearchParams(a).toString() === new URLSearchParams(b).toString();
 }
 
 /**
@@ -167,12 +167,17 @@ export function sameView(a: string, b: string): boolean {
  *
  * `?owner=` present but empty is not canonical: it is the unfiltered screen,
  * whose spelling is no parameter at all.
+ *
+ * `owners` overrides what the address says, for the one caller that needs a
+ * *different* selection spelled into the same address: a screen bouncing an
+ * all-roster selection back to the household, and the "Show everyone" link
+ * beside it, which keeps the range or the sort the reader had.
  */
-export function canonicalOwnerSearch(params: URLSearchParams): string {
+export function canonicalOwnerSearch(params: URLSearchParams, owners?: OwnerFilter): string {
   const rest = new URLSearchParams(params);
   rest.delete("owner");
 
-  const search = [toOwnerParam(readOwnerFilter(params)), rest.toString()]
+  const search = [toOwnerParam(owners ?? readOwnerFilter(params)), rest.toString()]
     .filter((part) => part !== "")
     .join("&");
 

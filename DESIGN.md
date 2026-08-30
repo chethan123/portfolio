@@ -496,9 +496,13 @@ Three rules govern how the two series coexist, so the chart never overstates wha
 1. Manual points render as a **visually distinct dashed/lighter series** — never blended into the
    computed line, which would imply a real daily curve where there is a hand-typed annual dot.
 2. **Computed always wins** on overlapping dates. Manual points only fill gaps.
-3. **Only the total chart reaches back.** Views grouped by person, account, or tax status start at
+3. **Only the total chart reaches back.** Views grouped by owner, account, or tax status start at
    day zero, since the manual series has no structure to slice. The UI says so rather than showing a
-   suspiciously short line.
+   suspiciously short line. Since the owner filter (§8.1) a *filter* puts a screen into this case as
+   well as a grouping: an Overview read as one or more owners does not draw the prefix and cannot
+   reach behind those owners' first recorded holdings, so **All** shortens and the long presets fall
+   out of reach exactly as they do on an account page. The screen says so where there is a hand-typed
+   history to withhold, and says nothing where there is not.
 
 ---
 
@@ -512,13 +516,32 @@ management screens that create the data they read are in §8.4.
 | Page | Contents |
 |---|---|
 | **Overview** | Net worth headline · trend line (dashed manual prefix, solid computed) · the accounts rollup · allocation by account, drawn as bars (the asset-class cut lives on Analysis) |
-| **Holdings** | The workhorse. Full column set on desktop, cards on mobile. Filter by person / account / tax treatment / classification; group by any of them, with subtotals |
-| **Analysis** | Net worth cut three ways — by person, by account kind, by asset class — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
+| **Holdings** | The workhorse. Full column set on desktop, cards on mobile. Filter by account / brokerage / account type / tax treatment / classification / asset class; group by any of those or by owner, with subtotals |
+| **Analysis** | Net worth cut three ways — by owner, by account kind, by asset class — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment. The one view where the loan's negative yield does something interesting |
 
-A groupable, filterable Holdings table absorbs what would otherwise be four more pages — by person,
+A groupable, filterable Holdings table absorbs what would otherwise be four more pages — by owner,
 by account, tax view, unrealized. Those are the same table with the grouping changed, not separate
 features.
+
+**All four read as one or more owners.** The **owner filter** ([ADR-0008](docs/adr/0008-the-owner-filter-is-a-household-wide-view.md))
+is one household-wide selection, carried between these four screens by the navigation and held
+entirely in the address — no cookie, nothing stored, and never derived from who signed in. Every
+*valued* figure on a narrowed screen is that selection's; what stays household-wide is deliberate and
+narrow — the "filtered from N" count, the "recorded in all" figure beside it, and Holdings' own
+filter options, each of which exists to say what the narrowing left out and would say nothing if it
+narrowed too. And every narrowed screen names the owners in words, because a filter that survives
+navigation is a filter that can be forgotten.
+
+The exempt surfaces and the argument for each are
+[ADR-0008](docs/adr/0008-the-owner-filter-is-a-household-wide-view.md)'s, not restated here: an
+account's own page, the upload flow and Settings, which neither read the parameter nor carry it.
+
+Structurally, the rule is a signature: the owner filter is a required first argument with no default
+on every household-scoped reader in `valuation.server.ts`, so a new screen cannot read holdings
+without deciding whose. Reading everyone's is `ALL_OWNERS` — a word in the diff rather than an
+omission. Which readers those are, which are exempt, and where inside each query the narrowing then
+has to go are `ARCHITECTURE.md` §4.2 and Appendix A's; this is only the argument for the shape.
 
 **Deliberately not in v1:** per-account drill-down (the filtered Holdings table already is one) and a
 dedicated tax page (a group-by plus a chart on Overview). The drill-down exclusion was later
@@ -604,6 +627,13 @@ to zero, which would report a fake gain equal to the entire untracked position.
 
 Recorded because it was explicitly deferred rather than rejected. The five dashboards originally
 described are not five features — they are one query shape with different arguments:
+
+**One dimension of this now exists**, which makes the deferral smaller rather than untouched. The
+owner filter (§8.1) is the `filters` half of the shape below for one dimension — the one this
+section's table and config still call `person`, which everywhere else is now the **owner** — persisted
+across screens by the URL rather than by a stored view. Whether tax treatment or asset class should follow
+is left open here on purpose: six more of these may well be the wrong answer, and the builder the
+right one.
 
 | Requirement | Group by | Measure | Time |
 |---|---|---|---|
@@ -1315,7 +1345,15 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     without asking Google again. There is deliberately no second login system to fall back to — one
     would be a password, which is the thing this replaced — so the break-glass path during an outage
     is the operator's shell on the box, not another way in through the front door.
-12. **1D always shows the latest session; an older one cannot be chosen.** The observations are
+12. **An owner whose accounts have all been closed cannot be filtered by.** Consequence of the owner
+    filter's roster (§8.1) being owners of at least one *open* account, which is itself a
+    consequence of `holding_valued` excluding closed accounts: selecting such an owner would empty
+    every screen with nothing on it saying why. Their history is still recorded and still counts
+    toward the household's own figures — `firstRecordedDate` reaches through `position_set` and sees
+    it — it simply is not reachable through the filter. Fixing it means the filter answering "held
+    nothing, ever" and "holds nothing now" differently on every screen, which is a second empty
+    state for a case that arises when a household closes out one owner entirely.
+13. **1D always shows the latest session; an older one cannot be chosen.** The observations are
     kept forever, so the data for last Tuesday's session exists — but drawing it is a separate
     decision with its own cost, and one deliberately deferred
     ([ADR-0006](docs/adr/0006-intraday-quotes-are-an-observation-log.md)): an instant-parameterised
