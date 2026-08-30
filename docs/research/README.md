@@ -33,6 +33,12 @@ number that `listAccounts` already returns.
    detected bank and shows it in an editable dropdown). The ingest brief's invariant 4 matches the
    industry, not just caution.
 
+### Evidence
+
+[`picker-2026-08-30/`](./picker-2026-08-30/) holds screenshots of the real application, taken
+while driving the fix this research fed: the two identical "Schwab" rows the old picker drew, the
+owner-grouped adaptive labels that replaced them, and the columns step's enriched identity strip.
+
 ### Status
 
 Nothing here is approved work. Evidence is graded in place — ● read directly (source code, specs,
