@@ -413,16 +413,41 @@ async function prepare(pool: Pool): Promise<Fixture> {
   };
 }
 
+/**
+ * Open the owner filter's disclosure before shooting it.
+ *
+ * The control is a `<details>`, so a page loads with it closed and a capture
+ * would photograph a pill reading "Alex Rivera" — true, and not what these two
+ * shots are of. Opening it is the reader's own first action and a state the
+ * application draws itself; nothing here is hand-edited. The click is on the
+ * summary, so a change to the control's markup fails this rather than silently
+ * shooting the closed state.
+ */
+async function openOwnerFilter(page: Page): Promise<void> {
+  const summary = page.locator(".owner-filter > summary");
+  await summary.click();
+  await page.locator(".owner-filter[open]").waitFor({ state: "visible" });
+}
+
 /** The README's shots: both themes, plus the two phone ones. */
 async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Promise<void> {
   console.log("\nREADME — docs/screenshots/");
-  const { accounts, editRow, csv } = fixture;
+  const { accounts, editRow, ownerId, csv } = fixture;
   const brokerage = accounts.brokerage;
 
   for (const theme of ["light", "dark"] as const) {
     const page = await open(browser, theme);
     await visit(page, "/");
     await shoot(page, `docs/screenshots/overview-${theme}.png`);
+
+    // The same screen read as one owner (spec 0013). A pair rather than a
+    // single shot, because what the owner filter does is only legible as a
+    // difference: the same household, the same range, a smaller headline, the
+    // owners named beneath it, and the pre-app line withheld. A control nobody
+    // can see in the README is a feature nobody knows exists.
+    await visit(page, `/?owner=${ownerId}`);
+    await openOwnerFilter(page);
+    await shoot(page, `docs/screenshots/overview-owner-${theme}.png`);
 
     // The one range that is not a span of days (ADR-0006). Shot separately
     // because everything about it that is worth seeing — the time axis, the
@@ -503,8 +528,14 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
 
   await visit(page, "/holdings");
   await shoot(page, "docs/guide/images/holdings.png");
-  await visit(page, `/holdings?owner=${ownerId}&group=assetClass`);
+  // Grouped, and unnarrowed: the guide describes grouping here, and a table
+  // that was also filtered would have the reader working out which control did
+  // which. The owner filter has its own shot below.
+  await visit(page, "/holdings?group=assetClass");
   await shoot(page, "docs/guide/images/holdings-grouped.png");
+  await visit(page, `/holdings?owner=${ownerId}`);
+  await openOwnerFilter(page);
+  await shoot(page, "docs/guide/images/holdings-owner.png");
   await visit(page, `/holdings?account=${brokerage}&edit=${editRow}`);
   await page.locator("table").first().screenshot({
     path: "docs/guide/images/holdings-edit.png",

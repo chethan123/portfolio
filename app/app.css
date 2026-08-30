@@ -3107,6 +3107,13 @@ code {
   color: var(--on-primary-container);
 }
 
+/* The caption takes the summary's colour rather than `.u-label`'s own, which is
+ * a surface-variant grey chosen against the canvas and unreadable on the filled
+ * applied state — the one state the caption most has to be legible in. */
+.owner-filter > summary .u-label {
+  color: inherit;
+}
+
 /* The hard stop that keeps the promise above: one very long name cannot widen
  * the header, it truncates. The count form is short by construction. */
 .owner-filter-summary {
