@@ -754,6 +754,16 @@ a {
     gap: var(--space-sm);
   }
 
+  /* The stacked column would shrink-wrap the actions row (`align-items:
+   * flex-start` above), and anything inside it sized in percentages then
+   * resolves against the row's own content — a circle that always answers
+   * "as wide as the chips already were". The owner filter's phone rules
+   * depend on this row being honestly full width; see `.owner-filter` in
+   * its own 767px block. */
+  .page-actions {
+    align-self: stretch;
+  }
+
   /* headline-sm entire, weight included.
    *
    * These declarations moved the size, the line height and the tracking and
@@ -3866,10 +3876,43 @@ code {
     margin-left: 0;
   }
 
-  /* Full width once the page header has stacked, so the control is not a
-   * narrow island under a 48px title. */
+  /* Full width once the page header has stacked — minus whatever shares the
+   * row, which on three screens is the freshness note. `flex: 1` rather than
+   * the `width: 100%` this used to say: the actions row shrink-wrapped until
+   * its own 767px rule stretched it, so 100% resolved to the chip's own width
+   * and the promise in this comment never actually happened. The chip itself
+   * keeps its size either way — `summary` is inline-flex — only the anchor
+   * box grows. */
   .owner-filter {
-    width: 100%;
+    flex: 1;
+  }
+
+  /* `right: 0; width: max-content` is `.segmented-custom-form`'s geometry,
+   * and it is right beside the range strip because that summary sits at the
+   * trailing edge — a panel growing leftwards grows into the viewport. Under
+   * a chip at the leading edge of a stacked header the same rule grew the
+   * panel off the left of the phone. Spanning the now-full anchor box keeps
+   * every checkbox on screen and hands the thumb the whole row. */
+  .owner-filter-menu {
+    left: 0;
+    width: auto;
+    max-width: none;
+  }
+
+  /* The names take the whole row, so the actions wrap under them — beside the
+   * list they floated in whatever the panel had spare, which on a spanning
+   * panel was a button adrift in empty space. */
+  .owner-filter-owners {
+    flex: 1 0 100%;
+  }
+
+  /* Trailing corner, primary outermost: `margin-left: 0` above is right on a
+   * panel sized to its contents and wrong on one spanning the row — the base
+   * `.filter-actions` already knew that. Reversed so Apply takes the corner
+   * itself and Show everyone, the quieter exit, sits inside it. */
+  .owner-filter .filter-actions {
+    margin-left: auto;
+    flex-direction: row-reverse;
   }
 }
 
