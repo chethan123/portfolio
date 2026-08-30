@@ -1,7 +1,7 @@
 # 0005 — Remediating the 2026-08-24 exploratory test report
 
-Six of the report's sixty-seven findings, in the order they should be built. Four High and two
-Medium. `SET-1`, the report's only Critical, was already fixed in `f9198d4`.
+Eight of the report's sixty-seven findings, in the order they should be built. Five High, two
+Medium, one Low. `SET-1`, the report's only Critical, was already fixed in `f9198d4`.
 
 Every load-bearing claim below was checked against a running instance rather than read off the
 report, and the plan went through two adversarial review rounds before it was written down. Two of

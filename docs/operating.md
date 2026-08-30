@@ -370,9 +370,8 @@ it over the compose network.
 **The instance installs as an app, at `PUBLIC_ORIGIN` and nowhere else.** The application ships a
 web app manifest and a service worker, so a browser signed in through the house proxy's HTTPS
 origin can add it to the home screen as a real install — its own icon, a standalone window.
-Everything involved stays behind the gate: the manifest is fetched with credentials and its icons
-ride inside it as `data:` URIs, so the install works without exempting a single path in the
-`Caddyfile`.
+Everything involved stays behind the gate, with no path exempted in the `Caddyfile` —
+[`ARCHITECTURE.md` §7.7](../ARCHITECTURE.md#77-the-installed-shell) holds the mechanism.
 
 Two properties are decisions rather than gaps
 ([ADR-0007](adr/0007-the-service-worker-stores-nothing.md)):
@@ -666,8 +665,9 @@ Only the last is a fault:
    going, or while another process holds the advisory lock, is dropped silently — never queued.
 4. **The poller failed to start.** That one *does* log, once, at error level.
 
-A *successful* **Refresh now** press writes no line either: its outcome is reported on the screen
-that pressed it, and the attempt still lands a `price_poll` row.
+A *successful* **Refresh now** press writes no `Price refresh` line: its outcome is reported on the
+screen that pressed it. The attempt still lands a `price_poll` row, and a currency refusal along
+the way still logs `Price refused`.
 
 There is also a quiet period by design: the first tick is one full interval after the first page
 view, with no immediate poll, so a freshly recreated container is silent for up to the refresh

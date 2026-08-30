@@ -3,7 +3,7 @@
  * the subtotals under them are (DESIGN.md §8.1).
  *
  * §8.1 calls Holdings the workhorse and says a groupable, filterable table
- * "absorbs what would otherwise be four more pages — by person, by account, tax
+ * "absorbs what would otherwise be four more pages — by owner, by account, tax
  * view, unrealized. Those are the same table with the grouping changed, not
  * separate features." This module is that sentence made executable: one row
  * shape, one set of dimensions, and a grouping argument.
@@ -33,8 +33,9 @@
  * over accounts — "a household has a dozen accounts; a filter over twelve rows
  * is a control that costs more than it saves." That refusal is honoured here
  * rather than argued with: {@link availableFilters} returns a dimension only if
- * the data actually holds two or more distinct values for it, so a one-person
- * household is never shown an Owner select that can only mean "everyone", and
+ * the data actually holds two or more distinct values for it, so a household
+ * with one brokerage is never shown an Institution select that could only mean
+ * "all of them", and
  * every option it does show is a value some holding really has — so no *single*
  * filter can select an empty table. Two of them still can, and deliberately:
  * the options are read from the whole portfolio rather than from what the other

@@ -586,9 +586,10 @@ upper bound. The panel says that on the page.
 horizontal scroll nobody uses. Mobile gets a card list with a few fields visible and tap-to-expand.
 
 **The filter list grew after this section was first written, and owner then left it.** The first
-draft granted Holdings four filter dimensions; §8.3, written later, types the same idea as eight —
-person, account, institution, kind, tax treatment, classification, asset class, instrument — and
-`holding_valued` (§8.2) already exposes all eight, so the extra ones cost no join and no new query. As built, Holdings filters on every
+draft granted Holdings four filter dimensions — person, account, tax treatment, classification;
+§8.3, written later, types the same idea as eight, adding institution, kind, asset class and
+instrument — and `holding_valued` (§8.2) already exposes all eight, so the extra ones cost no join
+and no new query. As built, Holdings filters on every
 dimension the view exposes except two. `instrument`, because a filter over the very thing each row
 is is a search box wearing a dropdown — a different control with a different case to make. And
 `person`, which since spec 0013 is the household-wide owner filter (ADR-0008) rather than one
@@ -978,10 +979,10 @@ viewport would compromise the desktop version that will actually be used.
 **Caching: considered, and refused.** This section used to owe stale-while-revalidate on the read
 pages — cached render first, last-known numbers when the server is unreachable. The shipped worker
 is the opposite: network-only, storing nothing, because a cache of the family's balances sits on
-every phone *outside* the gate's boundary — readable by whoever holds the unlocked phone, surviving
-the VPN, revocable by nobody. The household chose the clean device over the glanceable snapshot,
-and [ADR-0007](docs/adr/0007-the-service-worker-stores-nothing.md) is that answer written down.
-Offline, the installed app shows a branded connect-the-VPN page and nothing else.
+every phone *outside* the gate's boundary. The household chose the clean device over the glanceable
+snapshot, and [ADR-0007](docs/adr/0007-the-service-worker-stores-nothing.md) is that answer written
+down, argument and all. Offline, the installed app shows a branded connect-the-VPN page and nothing
+else.
 
 **The "as of" timestamp is non-negotiable.** Silently showing yesterday's net worth as though it were
 live is the one genuinely dangerous failure mode in a finance app.

@@ -10,8 +10,9 @@ page is the reference behind it.
 **CSV files only.** A `.csv` export, saved as text.
 
 - **No OFX, QIF, XLSX or PDF.** A spreadsheet or a PDF is refused on the first screen as not being
-  text. OFX and QIF *are* text, so they get one screen further and fail at the columns step, where
-  nothing in them maps. Most institutions offer a CSV download beside the one you took; use that.
+  text. OFX and QIF *are* text, so they get past that check — but nothing in them lines up as
+  columns, so the mapping screen is where they stop. Most institutions offer a CSV download beside
+  the one you took; use that.
 - **No bank linking.** Nothing here connects to an institution, so there is no account to link and
   no credentials to give. A statement gets in because you exported it and uploaded it.
 - **Not empty.** A zero-byte download is refused as what it is — export it again.

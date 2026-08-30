@@ -377,6 +377,9 @@ across. Every other screen keeps its layout and stacks.
   <img alt="Analysis on a phone: the stacked header with the owner chip, the as-of line and Refresh now, above the net-worth-by-owner ring" width="390" src="docs/screenshots/analysis-mobile-light.png">
 </picture>
 
+Analysis at the same width: the header stacks — the owner chip, the price age and its refresh
+control all stay — and each ring sits above the table it is drawn from.
+
 ### Not built yet
 
 Nothing in the navigation is a placeholder any more. What is still missing sits behind a screen

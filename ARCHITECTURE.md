@@ -1277,15 +1277,15 @@ over the array the query layer already returned, because the grouping key is alr
 exists to prevent.
 
 **Coverage travels with every figure computed from holdings.** Such a total is
-`{ amount, coverage: { known, total } }`, never a bare number, so a partial answer is labelled "based
-on 8 of 12 holdings" rather than quietly understated. An unpriced holding contributes nothing to
+`{ amount, coverage: { known, total } }`, never a bare number, so a partial answer carries how many
+holdings it is based on rather than being quietly understated. An unpriced holding contributes nothing to
 `amount` and is counted in `coverage.total`. Two shapes are deliberately bare: `netWorthChange`, since
 a difference between two totals has no single coverage, and `ManualPoint`, since a hand-typed figure
 has none by definition.
 
 **A filter is only offered when it can discriminate.** `availableFilters` returns a dimension only if
-the data holds two or more distinct values for it, so a one-person household is never shown an Owner
-select that can only mean "everyone". One exception, and it is the right one: a dimension that already
+the data holds two or more distinct values for it, so a household with one brokerage is never shown
+an Institution select that could only mean "all of them". One exception, and it is the right one: a dimension that already
 carries a selection is returned anyway, with a "Not in this portfolio" option synthesised if the
 selected key matches nothing (`holdings-view.ts:565`). A stale bookmark from before an account
 closed therefore shows an empty table the reader can *see and clear*, rather than being silently
@@ -1481,7 +1481,7 @@ allowlist does.
 | TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — which is also the redirect URI registered with Google, character for character |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
 | SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers. Every externally supplied id is bound behind `couldBeId`'s digits-and-length test (`isOneOf` / `isAccount` in `valuation.server.ts`) |
-| Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so `/refresh?redirectTo=https://evil.test` — and its backslash spelling — lands on `/`. Both resource routes (`masking`, `refresh`) use it |
+| Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so a `redirectTo=https://evil.test` posted from a form's hidden field — or its backslash spelling — lands on `/`. Both resource routes (`masking`, `refresh`) use it |
 | Error disclosure | Contained. The error page prints fixed wording chosen by the response status — nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
 
 **The forwarded-header decision, stated plainly.** `caddy` trusts what reaches it from the house
@@ -1919,7 +1919,7 @@ there.
 | File | Role |
 |---|---|
 | `../root.tsx` | The shell every page is drawn inside — the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its loader starts the price poller, because `react-router-serve` leaves no server entry to hook and root's loader is the one server path every render passes through. Also where the gate's middleware used to be: the only place recording that the verified email rides in on every request and is read by nothing |
-| `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes stay in the router so dev and the container behave identically |
+| `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes are routes for two different reasons — two are form targets that keep working with JavaScript off, and `healthz` is in the router so dev and the container behave identically |
 | `overview.tsx` | The net worth headline, the trend line and the accounts rollup. The empty case is load-bearing and comes first: an instance nothing has been uploaded to renders no figure at all |
 | `holdings.tsx` | Every position across every account — §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
 | `analysis.tsx` | The portfolio cut three ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All three breakdowns group one read — three `GROUP BY` queries would be three more of the hand-rolled dashboard queries §8.2 names as the weakest point |
@@ -1947,8 +1947,8 @@ there.
 
 Server-rendered throughout — there is no React state anywhere in the application. A component
 exists here when the rule it keeps is one no single screen can be trusted to keep alone; three of
-them (`breakdown.tsx`, `net-worth-chart.tsx`, `owner-filter-control.tsx`) also export the pure
-functions their tests exercise, so this tree is not purely presentational.
+them (`breakdown.tsx`, `net-worth-chart.tsx`, `owner-filter-control.tsx`) also export pure
+functions rather than only a component, so this tree is not purely presentational.
 
 | File | Role |
 |---|---|

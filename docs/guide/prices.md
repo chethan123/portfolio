@@ -6,9 +6,10 @@ Prices mostly look after themselves, so this page is three short answers.
 
 Prices refresh on their own, in the background, while the market is open. Every screen with a
 figure says how old its prices are — the **As of** line in the header — and carries a
-**Refresh now** button beside it. One press spends one request for fresh quotes and answers on the
-same line: how many prices moved, or that there was nothing new. The stamp changing is how you know
-it worked.
+**Refresh now** button beside it. One press spends one request for fresh quotes and says underneath
+what it did: how many prices it fetched, or that nothing was new since the stamp. That answer is
+how you know it ran — the stamp itself is the *oldest* price on the page, so it can stay put after
+a press that worked.
 
 So a total that has not moved usually means the market has not moved it:
 
@@ -22,7 +23,7 @@ So a total that has not moved usually means the market has not moved it:
 - **How often prices refresh during the day is the refresh cadence**, set at Settings → Prices in
   whole minutes. A change is picked up when the next refresh runs, so it can take up to one old
   cadence to apply. If a total looks genuinely stuck beyond that, press **Refresh now** first; if
-  the stamp still will not move, see [operating](../operating.md).
+  it reports a failure rather than "nothing new", see [operating](../operating.md).
 
 Two things you may see on a row instead of a fresh figure:
 

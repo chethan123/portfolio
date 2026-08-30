@@ -98,9 +98,9 @@ whole of Settings all work from a phone.
 
 On the household's own `https://` address — the one the sign-in runs on — the browser offers a real
 install: the app gets its own icon and opens in its own window, like any store app. Installing
-stores nothing on the phone; off the VPN, the installed app shows a connect-the-VPN page rather
-than any figure. [Installing on a phone](../operating.md#installing-on-a-phone) is the operator's
-side of it.
+stores nothing on the phone, and when the app cannot reach home — off the VPN, or the server down —
+it shows a page saying so rather than any figure.
+[Installing on a phone](../operating.md#installing-on-a-phone) is the operator's side of it.
 
 ---
 

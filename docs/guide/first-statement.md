@@ -8,7 +8,8 @@ Before you start:
   the upload can read, and there is no way to link a bank or brokerage directly. A spreadsheet or a
   PDF is refused on this first screen with *"This does not read as a text file. Export the CSV
   version of the statement and upload that instead."* A text export in another format — OFX, QIF —
-  gets one screen further and fails on the columns step instead, where nothing in it maps.
+  gets past that check, but nothing in it lines up as columns, so the mapping screen is where it
+  stops.
 - **Bank accounts and loans are not recorded this way.** They are one number rather than a list of
   positions, so you type the balance on the account's own page instead — see
   [Account detail](account-detail.md).

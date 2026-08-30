@@ -13,14 +13,15 @@ checked every claim in it against the tree the next day.
 | Document | What it answers |
 |---|---|
 | [Codex review](./2026-08-28-codex-review.md) | An outside reading of the domain model, schema, dataflows and risks, with a ranked improvement list — against `410a61f`, a tree from before the auth gate replaced the in-app password |
-| [Validation](./2026-08-29-codex-review-validation.md) | Which of those findings hold on the current tree: sixteen confirmed, the rest rejected or downgraded with the evidence, plus one finding of the validation's own that the review missed |
+| [Validation](./2026-08-29-codex-review-validation.md) | Which of those findings hold on the current tree: sixteen confirmed — fifteen of the review's, plus one of the validation's own that the review missed — and the rest rejected or downgraded with the evidence |
 
 ### The three things worth knowing without reading further
 
 1. **Sixteen findings confirmed**, the sharpest being a statement row with a quantity but a blank
    instrument cell dropped without a word, a derived-product overflow that can take every money
-   screen down at once, and the missing `pool.on('error')` that lets a database restart kill the
-   process. Where they overlap the exploratory report below, they are the same defects seen twice.
+   screen down at once, and a lost Postgres connection killing the process — which a pool-level
+   error listener alone does not fix, as the remediation spec's own measurements show. Where they
+   overlap the exploratory report below, they are the same defects seen twice.
 2. **The review's auth findings were moot on arrival**: it read a tree from before the forward-auth
    gate ([ADR-0005](../adr/0005-auth-is-a-forward-auth-gate.md)) deleted the password machinery it
    analysed.
@@ -31,7 +32,8 @@ checked every claim in it against the tree the next day.
 ### Status
 
 The validation is the document to act from; the review is kept as its input. Nothing in either is
-approved work by itself — where a finding became approved work it did so through
+approved work by itself — where a finding became approved work it did so as the exploratory
+report's version of the same defect, through
 [`../specs/0005-report-remediation.md`](../specs/0005-report-remediation.md), below.
 
 ## 2026-08-25 — Upload workflow UX review
@@ -128,7 +130,8 @@ annotated in place.
 
 ### Status
 
-Six of these findings became approved work after the report landed:
+Eight of these findings, over five sequenced pull requests, became approved work after the report
+landed:
 [`../specs/0005-report-remediation.md`](../specs/0005-report-remediation.md) sequences the date
 floor (`SET-2`/`SET-3`), pool resilience (`LEAD-8`/`LEAD-6`), the sign-in return path
 (`SEC-1`/`SEC-3`), the nameless-quantity refusal (`ING-4`) and the filed-behind statement

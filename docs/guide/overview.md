@@ -178,7 +178,7 @@ to [Analysis](analysis.md).
 
 ## When there is nothing to draw
 
-Three different empty screens, and they are not the same:
+The empty screens this page can show, and they are not the same:
 
 - **Nothing uploaded yet.** No figure at all, and a sentence saying so. A net worth of zero and an
   empty instance look identical, and only one of them is worth worrying about. Start at
@@ -188,6 +188,8 @@ Three different empty screens, and they are not the same:
 - **1D, early in the day.** The panel says a line needs two observed moments and this session has
   one — the day's first refresh has landed and the second has not yet. Wait one cadence, or press
   **Refresh now**.
+- **Narrowed to owners who hold nothing.** The [owner filter](owner-filter.md) is on and the
+  selection has no holdings; the control stays on screen so you can clear it.
 
 ## On a phone
 

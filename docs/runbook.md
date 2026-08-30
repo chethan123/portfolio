@@ -299,9 +299,12 @@ ordinary. So:
   restart a healthy app. Nothing to do but check egress.
 
 **Do.** Press **Refresh now** on any figure screen first — it spends a provider request
-immediately, works outside market hours, and needs no restart; the as-of stamp moving is the
-confirmation. Beyond that, nothing destructive is ever warranted here: `docker compose restart app`
-is the remaining action, and it needs a page render afterwards to start the loop again.
+immediately, works outside market hours, and needs no restart. The line it prints under the button
+is the confirmation: how many prices it fetched, or that there was nothing new. Do not read the
+as-of stamp as the verdict — it is the *oldest* held quote, so a press that worked can leave it
+still, and outside market hours it usually will. Beyond that, nothing destructive is ever
+warranted here: `docker compose restart app` is the remaining action, and it needs a page render
+afterwards to start the loop again.
 
 Why: [Monitoring](operating.md#monitoring).
 

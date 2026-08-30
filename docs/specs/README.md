@@ -27,7 +27,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0002](0002-pricing.md) | Pricing: the provider seam, market calendar, refresh, in-process poller |
 | [0003](0003-holdings.md) | The Holdings table: filtering, grouping, subtotals, money maths |
 | [0004](0004-ingest.md) | The four-screen statement upload over a durable draft |
-| [0005](0005-report-remediation.md) | Fixes sequenced from the exploratory report — the date floor and the return path have landed; the pool listener, the nameless-quantity refusal and the filed-behind statement are still owed |
+| [0005](0005-report-remediation.md) | Fixes sequenced from the exploratory report — the date floor and the return path have landed; pool resilience, the nameless-quantity refusal and the filed-behind statement are still owed |
 | [0006](0006-dividends.md) | The Income screen and `annual_dividend` through the valuation contract |
 | [0007](0007-masking.md) | Masking: policy row, per-browser state, the one amount renderer |
 | [0008](0008-chart-ranges.md) | The chart range presets, cookie and custom span |

@@ -91,9 +91,10 @@ one resolved term and one hard decision at a time, which is the intended pace.
   different moments: one indexed by symptom and read while something is broken, the other by topic
   and read while it is not. The seam that keeps them from drifting is that the runbook explains
   nothing — it confirms, acts, and links.
-- **[`operating.md`](operating.md) overlaps `ARCHITECTURE.md` §7.4 and §7.6** on observability and
-  security. Those sections hold the mechanism, for a contributor; `operating.md` holds the decisions
-  an operator has to make, and links rather than restating.
+- **[`operating.md`](operating.md) overlaps `ARCHITECTURE.md` §7.4, §7.6 and §7.7** on
+  observability, security and the installed shell. Those sections hold the mechanism, for a
+  contributor; `operating.md` holds the decisions an operator has to make, and links rather than
+  restating.
 - **[`developing.md`](developing.md) sits between `AGENTS.md` and `ARCHITECTURE.md`** and must not
   become either. `AGENTS.md` says what good work looks like here; `ARCHITECTURE.md` says how the code
   is arranged and why. `developing.md` says how to get a checkout working and what to run — it links
