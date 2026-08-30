@@ -74,7 +74,13 @@ breaks.
 (`app/routes/holdings.tsx:121-123`) already establish:
 
 - ids are sorted numerically and de-duplicated;
-- a selection naming **every** account-owning person normalises to `ALL_OWNERS`;
+- a selection naming **everybody recorded** normalises to `ALL_OWNERS`. Not merely every
+  account-owning person, which is how this rule was first written: an owner holding only closed
+  accounts cannot be *selected*, but `holding_valued_at` and `firstRecordedDate` still reach their
+  history, so ticking every box a reader can see is narrower than the household and must not
+  collapse to it (`ownerRoster` in `app/lib/people.server.ts` is the one place that answers this).
+  The collapse also necessarily runs *after* the roster read — it is the one normalisation that
+  needs one — while the spelling redirect below stays roster-free and first;
 - an empty selection is `ALL_OWNERS` — "nobody" is not a view;
 - **no id is ever dropped**, whatever it looks like. Dropping widens the view, which is the failure
   `app/lib/holdings-view.ts:399-407` exists to prevent; `isAccount`
