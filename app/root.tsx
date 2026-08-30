@@ -25,6 +25,7 @@ import { MaskingToggle } from "~/components/masking-toggle";
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
 import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
+import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { startPricePoller } from "~/lib/price-poller.server";
 import { readMaskingPolicy } from "~/lib/settings.server";
 import { getConfig } from "../server/config.ts";
@@ -126,13 +127,32 @@ const FOOTER_NAVIGATION = [
 
 type NavItem = (typeof NAVIGATION)[number] | (typeof FOOTER_NAVIGATION)[number];
 
-function NavItems({ items }: { items: readonly NavItem[] }) {
+/**
+ * `search` is the owner filter, and it is a prop rather than something read
+ * here (spec 0013, ADR-0008).
+ *
+ * This renders four times: `NAVIGATION` in the rail and again in the phone's
+ * bottom bar, and `FOOTER_NAVIGATION` — Settings — in both. Settings does not
+ * read the filter, and a parameter a screen never reads should not appear in
+ * its URL, so the two that carry it say so at the call site and the other two
+ * pass nothing.
+ *
+ * The owner parameter alone, never `location.search`. Carrying the whole thing
+ * would drag one screen's `range`, `sort` or half-typed `edit` row key onto
+ * another that does not own it, and would bounce every nav click through
+ * Holdings' canonical redirect.
+ */
+function NavItems({ items, search = "" }: { items: readonly NavItem[]; search?: string }) {
   return (
     <>
       {items.map(({ to, label, end, Icon }) => (
         <li key={to}>
           <NavLink
-            to={to}
+            // `NavLink` resolves its active state on the pathname alone, so
+            // `end` on "/" and the `aria-current` behaviour are unchanged by a
+            // search; an empty one collapses back to a bare path, which keeps
+            // an unfiltered instance's URLs clean.
+            to={{ pathname: to, search }}
             end={end}
             className={({ isActive }) =>
               isActive ? "app-nav-link app-nav-link--active" : "app-nav-link"
@@ -147,10 +167,16 @@ function NavItems({ items }: { items: readonly NavItem[] }) {
   );
 }
 
-/** The mark, at both sizes it is drawn: in the rail, and in the phone's top bar. */
-function Brand() {
+/**
+ * The mark, at both sizes it is drawn: in the rail, and in the phone's top bar.
+ *
+ * It carries the owner filter for the same reason the nav items do: it is a nav
+ * item in all but name, and landing on an unfiltered Overview from a filtered
+ * Holdings would be the most-clicked way to lose the filter.
+ */
+function Brand({ search }: { search: string }) {
   return (
-    <Link className="app-brand" to="/">
+    <Link className="app-brand" to={{ pathname: "/", search }}>
       <span className="app-brand-tile" aria-hidden="true">
         P
       </span>
@@ -168,7 +194,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // banner is placed here rather than on a page so that every route — including
   // ones that do not exist yet — carries it.
   const rootData = useRouteLoaderData<typeof loader>("root");
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
+
+  // Read here rather than passed down from a loader, because `Layout` wraps
+  // error boundaries too and there is no loader data at all in one. The URL is
+  // the whole of the filter's state (ADR-0008), so the address is the only
+  // thing this needs.
+  const owners = ownerSearch(readOwnerFilter(new URLSearchParams(search)));
 
   // The prompt is suppressed inside Settings, which is the one place it would
   // be telling someone to go where they already are. Everywhere else it is the
@@ -194,9 +226,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <body>
         <div className="app">
           <nav className="app-rail" aria-label="Primary">
-            <Brand />
+            <Brand search={owners} />
             <ul className="app-nav">
-              <NavItems items={NAVIGATION} />
+              <NavItems items={NAVIGATION} search={owners} />
             </ul>
             <ul className="app-nav app-nav--footer">
               <NavItems items={FOOTER_NAVIGATION} />
@@ -216,7 +248,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             {/* Below 1024px the rail is gone, so the bar carries the mark and
              * the one action the rail's foot would have held. */}
             <header className="app-topbar">
-              <Brand />
+              <Brand search={owners} />
               <div className="app-topbar-actions">
                 <MaskingToggle />
                 <Link className="button" to="/upload">
@@ -237,7 +269,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
            * does — no drawer and no hamburger anywhere in the set (§13.1). */}
           <nav className="app-bottomnav" aria-label="Primary">
             <ul className="app-nav">
-              <NavItems items={NAVIGATION} />
+              <NavItems items={NAVIGATION} search={owners} />
               <NavItems items={FOOTER_NAVIGATION} />
             </ul>
           </nav>

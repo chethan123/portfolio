@@ -698,6 +698,13 @@ a {
   gap: var(--space-md);
   padding-bottom: var(--space-lg);
   border-bottom: 1px solid var(--outline-variant);
+  /* The actions are `flex: none` — the freshness line and the owner control
+   * both size to their contents and neither shrinks legibly — so between about
+   * 768 and 1100 the strip was wider than the canvas and the page scrolled
+   * sideways, taking the narration off screen with it. Wrapping the whole
+   * actions block onto its own line is what a `flex: none` item needs; it
+   * changes nothing at the widths where it already fitted. */
+  flex-wrap: wrap;
 }
 
 .page-title {
@@ -3016,6 +3023,129 @@ code {
 }
 
 /*
+ * The owner filter's control (spec 0013).
+ *
+ * The filter bar's panel, in the page header's actions rather than on its own
+ * line: it is one dimension, not seven, and a full-width bar above the title
+ * would out-shout the screen it narrows. So the padding comes in, the
+ * checkboxes run along the bar instead of stacking, and `align-items: center`
+ * replaces `flex-end` — there is no label column here for a button to line up
+ * with the foot of.
+ */
+/*
+ * A disclosure, not a row of boxes.
+ *
+ * The row grew with the household: five names were wider than the header had to
+ * spare, and the strip reflowed differently on every screen and every viewport —
+ * so the one control meant to look identical everywhere was the one that did
+ * not. Closed, this is a fixed shape whatever the household's size, which is
+ * what makes the header's layout a property of the design rather than of how
+ * many people happen to be recorded.
+ *
+ * The mechanics are `.segmented-custom`'s, which solved the same problem for the
+ * custom range picker: `position: relative` on the disclosure, the panel
+ * absolutely positioned under it so opening one never reflows the row it is in.
+ */
+.owner-filter {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.owner-filter > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  max-width: 15rem;
+  height: 32px;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Safari draws its own triangle through `list-style: none`. */
+.owner-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Applied, so it reads as set at a glance — the same affordance the range
+ * control's chips use for the range in force. */
+.owner-filter > summary[aria-current="true"] {
+  background: var(--primary-container);
+  border-color: transparent;
+  color: var(--on-primary-container);
+}
+
+/* The hard stop that keeps the promise above: one very long name cannot widen
+ * the header, it truncates. The count form is short by construction. */
+.owner-filter-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Out of flow, so opening the menu never moves the header around it. */
+.owner-filter-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + var(--space-xs));
+  right: 0;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 2 * var(--space-md)));
+  align-items: flex-start;
+  gap: var(--space-base);
+  padding: var(--space-md);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+/* A column here, unlike the old inline row: inside a menu there is no reason to
+ * pack names onto one line, and one per line is the shape a reader scans and
+ * ticks. */
+.owner-filter-owners {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xs);
+}
+
+/* Each name is a `label.choice` — the inline variant the ingest forms already
+ * use for a checkbox and its sentence — so the box and the name are one hit
+ * target and read as a pair rather than as a stacked caption. */
+.owner-filter-owners > label.choice {
+  gap: var(--space-xs);
+  white-space: nowrap;
+}
+
+/* The actions sit next to the names rather than at the far edge of the header:
+ * `margin-left: auto` is right on a bar spanning the canvas and wrong on one
+ * sized to its contents. */
+.owner-filter .filter-actions {
+  margin-left: 0;
+}
+
+/*
+ * What a narrowed screen says beside the figure it narrowed (ADR-0008).
+ *
+ * The condition attached to the filter surviving navigation: a reader who set
+ * it two screens ago and forgot would otherwise read a household headline that
+ * quietly means something else. It is a sentence rather than a chip, because a
+ * chip is a thing you stop seeing — where it sits is each screen's business, at
+ * the end of the panel header's row here and under the figure on the two that
+ * have one.
+ */
+.narrowed-to {
+  margin: var(--space-xs) 0 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--on-surface-variant);
+}
+
+/*
  * A column heading that sorts.
  *
  * The link inherits the header's type entirely — it is the same label doing one
@@ -3699,6 +3829,12 @@ code {
 
   .filter-actions {
     margin-left: 0;
+  }
+
+  /* Full width once the page header has stacked, so the control is not a
+   * narrow island under a 48px title. */
+  .owner-filter {
+    width: 100%;
   }
 }
 
