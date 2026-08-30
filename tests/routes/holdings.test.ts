@@ -1,25 +1,16 @@
 /**
- * The Holdings URL, which is the whole of that screen's state (DESIGN.md §8.1).
- *
- * What the table *contains* belongs to `holdings-view.ts` and is tested against
- * its own rules in `holdings-view.test.ts` — `parseQuery`, `toSearch`,
- * `sortHoldings`, `parseRowKey`. What lives only here is the route's use of
- * them: the bounce to a canonical address, the two row parameters deliberately
- * kept outside `HoldingsQuery`, and the one write.
- *
- * The bounce is why this file exists. Every control on this screen is a link or
- * a GET form, and a GET form submits the six selects nobody touched — so the
- * address a person actually arrives at is `?owner=1&account=&institution=&…`
- * and the loader redirects it to the readable spelling before drawing anything.
- * A redirect target that is not itself canonical is not a cosmetic fault: it is
- * the application's busiest table answering every request with another redirect
- * until the browser gives up, with no error page and no way back. So the target
- * is fed straight back into the loader below rather than merely read.
- *
- * The write's guard is the other half of the same idea. Which row a correction
- * applies to comes from `?edit=` and from nowhere else — there is no hidden
- * field that could disagree with the page — so a POST that names no row has no
- * row to write, and must refuse rather than choose one.
+ * The Holdings URL, which is the whole of that screen's state (§8.1). What
+ * the table *contains* is `holdings-view.test.ts`'s; what lives only here
+ * is the route's use of it: the canonical bounce, the two row parameters
+ * kept outside `HoldingsQuery`, and the one write. The bounce is why this
+ * file exists — a GET form submits the six selects nobody touched, so the
+ * arriving address is `?owner=1&account=&institution=&…` and the loader
+ * redirects it before drawing anything; a target not itself canonical is
+ * the app's busiest table answering every request with another redirect
+ * until the browser gives up, so the target is fed straight back into the
+ * loader rather than merely read. The write's guard is the same idea: which
+ * row a correction applies to comes from `?edit=` and nowhere else, so a
+ * POST naming no row must refuse rather than choose one.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -500,18 +491,14 @@ describe("the three empty states", () => {
 
 describe("the canonical bounce, through a real URL", () => {
   /**
-   * The invariant the loader actually depends on, asserted the way the loader
-   * meets it: through `new Request`, so every re-encoding the URL parsing does
-   * on the way in is in the picture.
-   *
-   * `tests/holdings-view.test.ts` checks that `toSearch` is a fixed point of
-   * *itself*, which is a weaker claim and blind to exactly this. Two serialisers
-   * are in play — `encodeURIComponent` leaves `'` alone where `URL` spells it
-   * `%27`, and `URLSearchParams` spells `,` as `%2C` where the canonical owner
-   * parameter is `owner=1,3` — so an address could differ from its own
-   * canonical spelling forever, and the busiest table in the application would
-   * answer every request with another redirect until the browser gave up. No
-   * error page, no way back, and nothing failing anywhere.
+   * The invariant the loader depends on, asserted the way the loader meets
+   * it: through `new Request`, so every re-encoding of URL parsing is in
+   * the picture. `holdings-view.test.ts` checks `toSearch` is a fixed point
+   * of *itself* — weaker, and blind to exactly this: two serialisers are in
+   * play (`encodeURIComponent` leaves `'` where `URL` spells `%27`;
+   * `URLSearchParams` spells `,` as `%2C` where the canonical parameter is
+   * `owner=1,3`), so an address could differ from its canonical spelling
+   * forever and the busiest table would redirect until the browser gave up.
    */
   const settles = async (search: string): Promise<void> => {
     const first = await outcomeOf(() => loader(args(get(`/holdings${search}`))));

@@ -1,14 +1,10 @@
 /**
- * The display formatters (DESIGN.md §13.3).
- *
- * These exist because `Intl.NumberFormat` needs a float and §4.1 keeps money
- * out of floats end to end, so the rounding and grouping are done on the digits
- * by hand. Hand-rolled rounding is exactly the kind of code that is correct on
- * the cases you thought of, so the carry cases are pinned here: nines rolling
- * over, a carry that lengthens the number, and a carry that crosses a
- * thousands boundary.
- *
- * No database. These are pure string functions.
+ * The display formatters (DESIGN.md §13.3). They exist because
+ * `Intl.NumberFormat` needs a float and §4.1 keeps money out of floats, so
+ * rounding and grouping are hand-rolled on the digits — exactly the code
+ * that is correct on the cases you thought of. The carry cases are pinned:
+ * nines rolling over, a carry that lengthens the number, a carry crossing a
+ * thousands boundary. No database; pure string functions.
  */
 import { describe, expect, it } from "vitest";
 

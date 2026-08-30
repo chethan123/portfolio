@@ -687,15 +687,11 @@ describe("unresolvedStrings", () => {
   it(
     "reads an alias written for one institution's statement when another's names the same string",
     withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
-      // `instrument_alias` is deliberately global: one `raw_string`, one
-      // instrument, no institution column between them. So Fidelity writing
-      // `CASH` resolves it for Schwab too, and the second brokerage's first
-      // upload asks nothing.
-      //
-      // This replaces a test that read `information_schema.columns` back and
-      // asserted the table had exactly two columns — true, brittle, and about
-      // the schema file rather than about what the schema does. Adding a
-      // `created_at` would have failed it and changed nothing.
+      // `instrument_alias` is deliberately global — one `raw_string`, one
+      // instrument, no institution column — so Fidelity writing `CASH`
+      // resolves it for Schwab too. This replaces a test that asserted the
+      // table had exactly two columns via `information_schema` — true,
+      // brittle, and about the schema file rather than what the schema does.
       const usd = await seedInstrument({ symbol: "USD", name: "US Dollar" });
       await seedInstrumentAlias({ instrument: usd, rawString: "CASH" });
 

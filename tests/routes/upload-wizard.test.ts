@@ -1,26 +1,17 @@
 /**
  * Where a half-finished upload resumes, and where a finished one refuses to
- * land a second time (ingest brief §2.1, §6.5, §7.4).
- *
- * The flow is four URLs and no client state, so "how far did this draft get"
- * has to be answerable from the row alone. `parseDraft` is that answer, and
- * these routes are its only readers: `/upload/:draftId` redirects to the step
- * it names, and review turns a step still owed into a bounce back to it —
- * from the loader for a bookmark, and from the action for a form that sat open
- * while the draft changed underneath it. `parseDraft` has no test of its own
- * anywhere; the matrix below is what pins it.
- *
- * Breaking any of this strands a reader rather than writing a wrong number: a
- * bookmarked review over a draft whose mapping no longer reads back would draw
- * a diff over nothing, and a resume that guessed "review" for a draft that
- * never passed columns would ask the household to confirm a statement no
- * mapping had parsed.
- *
- * The one write-shaped risk lives here too — the re-POST after a commit, which
- * must answer 404 rather than record the same statement twice, and must not
- * carry a forged account id back to the page that links to it. That page's own
- * `accountIdOf` is not exported, so it is pinned at the end that is: what the
- * action throws is what the boundary reads.
+ * land twice (ingest brief §2.1, §6.5, §7.4). The flow is four URLs and no
+ * client state, so "how far did this draft get" must be answerable from the
+ * row alone; `parseDraft` is that answer, these routes its only readers,
+ * and it has no test of its own anywhere — the matrix below is what pins
+ * it. Breaking any of this strands a reader rather than writing a wrong
+ * number: a bookmarked review over a broken mapping would diff over
+ * nothing; a resume guessing "review" would ask the household to confirm a
+ * statement no mapping parsed. The one write-shaped risk is the re-POST
+ * after a commit — 404, never a second recording, and no forged account id
+ * carried to the page that links to it: `accountIdOf` is not exported, so
+ * it is pinned at the end that is — what the action throws is what the
+ * boundary reads.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

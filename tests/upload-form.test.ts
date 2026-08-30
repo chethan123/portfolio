@@ -20,7 +20,7 @@ import { getConfig } from "../server/config.ts";
 
 // `getConfig` reads the process environment once; the guards only consult
 // MAX_UPLOAD_MB, but the parse requires a plausible connection string
-// (root-gate.test.ts sets the same precedent).
+// (`tests/routes/root.test.ts` sets the same precedent).
 process.env.DATABASE_URL ??= "postgres://portfolio:portfolio@db:5432/portfolio";
 
 const CAP_BYTES = getConfig().MAX_UPLOAD_MB * 1024 * 1024;

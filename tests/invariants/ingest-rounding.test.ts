@@ -1,25 +1,19 @@
 /**
- * Where a figure is rounded on its way in, and what that costs.
+ * Where a figure is rounded on its way in, and what that costs. The suite
+ * is dense with exact-literal tests of one operation each; what it never
+ * had is a test that an operation applied *twice* agrees with itself
+ * applied once — the only way this fault shows: no throw, nothing looks
+ * wrong, a tenth of a cent per share until the position is large.
  *
- * The suite is dense with exact-literal tests of one operation each. What it
- * has never had is a test that an operation applied *twice* agrees with the
- * same operation applied once — which is the only way a rounding fault of this
- * shape ever shows itself. It does not throw, it does not look wrong, and it
- * is a tenth of a cent per share until the position is large.
- *
- * Two folds run on the way in. `parseStatement` folds the rows that share a
- * raw spelling; `assembleDiff` then folds the spellings that resolved to one
- * instrument. That second fold is over figures the first one already rounded,
- * so unless the exact numerator is carried across it, the flow computes an
- * average of averages — and a brute force over 200,000 random two-spelling
- * files put the divergence at **16.6%**, worst case $0.51 on one position's
- * cost basis, flowing on into `unrealized`, the Analysis gains table and the
- * tax estimate.
- *
- * The other half is the `costBasisIs: "total"` path, which divides the file's
- * stated total by the quantity and is the one lossy operation performed on a
- * figure a person can read off their own statement. It had never reached the
- * database in any test.
+ * Two folds run on the way in — `parseStatement` folds rows sharing a raw
+ * spelling, `assembleDiff` folds spellings resolving to one instrument —
+ * and the second is over figures the first already rounded, so unless the
+ * exact numerator is carried across, the flow computes an average of
+ * averages: brute force over 200,000 random two-spelling files put the
+ * divergence at **16.6%**, worst case $0.51 on one cost basis, flowing into
+ * `unrealized`, the gains table and the tax estimate. The other half is the
+ * `costBasisIs: "total"` path — the one lossy operation on a figure a
+ * person can read off their own statement, never before database-tested.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -231,11 +225,11 @@ describe("the value shown on the review screen", () => {
   it(
     "is the figure the account reports once the statement lands",
     withDatabase(async (ctx) => {
-      // The review screen computes Value in JavaScript, because the account has
-      // no `holding_valued` row to compute it in SQL yet — the one place the
-      // view's multiplication is written twice (`uploads.server.ts:618`). The
-      // only test that touched it used a product that terminates, so it had
-      // never been made to round at all.
+      // The review screen computes Value in JavaScript, because the account
+      // has no `holding_valued` row to compute it in SQL yet — the one place
+      // the view's multiplication is written twice (`valueAt` in
+      // `uploads.server.ts`). The only test that touched it used a product
+      // that terminates, so it had never been made to round at all.
       //
       // 1.23456789 × 81.1111 lands past the money column's four places, so the
       // two implementations have to agree about which way it goes or the number

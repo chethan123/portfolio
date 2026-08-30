@@ -1,20 +1,14 @@
 /**
- * Calling a route the way the framework calls it.
- *
- * Route modules import cleanly under vitest with no plugin and no manifest:
- * their one framework-shaped import, `./+types/*`, is types only and is erased
- * before the module ever runs. So a loader or an action is an ordinary async
- * function taking `{ request, params }`, and these helpers are the small amount
- * of ceremony around that — building the request, and catching the `Response`
- * a route throws instead of returning.
- *
- * What is being tested here is only ever the route's own contribution: the
- * redirects, the guards, the error mapping and the shape handed to the
- * component. The rules underneath belong to `app/lib/*` and are tested there.
- *
- * These pair with `withDatabase` from `./database.ts`, which now scopes
- * `getDb()` to the test's transaction — so a loader that queries with no
- * argument reads the seeded rows and rolls back with everything else.
+ * Calling a route the way the framework calls it. Route modules import
+ * cleanly under vitest — their one framework-shaped import, `./+types/*`,
+ * is types-only and erased — so a loader or action is an ordinary async
+ * function taking `{ request, params }`, and these helpers are the ceremony
+ * around that: building the request, catching the `Response` a route throws
+ * instead of returning. Only the route's own contribution is tested here —
+ * redirects, guards, error mapping, the shape handed to the component; the
+ * rules underneath are `app/lib/*`'s. Pairs with `withDatabase`, which
+ * scopes `getDb()` to the test's transaction, so an argument-less loader
+ * query reads the seeded rows and rolls back with everything else.
  */
 import { RouterContextProvider } from "react-router";
 

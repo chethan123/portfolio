@@ -1,18 +1,12 @@
 /**
- * The one module in the application that adds, divides or compares money
- * outside SQL (DESIGN.md §4.1).
- *
- * `toUnits`, `render` and `divide` came out of `allocation.ts` unchanged and
- * have been covered indirectly by `allocation.test.ts` since they were written;
- * they are pinned here directly because they are now shared, and a shared
- * function that only two callers' tests describe is a function whose contract
- * nobody has written down. `sumMoney` and `compareDecimal` are new, and were
- * covered by nothing.
- *
- * Every assertion is an exact decimal string. Not `toBeCloseTo` — the entire
- * reason this module exists rather than `a + b` is that a float is wrong in the
- * last place, and a test that tolerates the last place would not notice if this
- * module became a float tomorrow.
+ * The one module that adds, divides or compares money outside SQL (§4.1).
+ * `toUnits`, `render` and `divide` came out of `allocation.ts` and were
+ * covered only indirectly; pinned here because they are now shared, and a
+ * shared function only two callers' tests describe has no written contract.
+ * `sumMoney` and `compareDecimal` were covered by nothing. Every assertion
+ * is an exact decimal string — a float is wrong in the last place, and a
+ * test tolerating the last place would not notice this module becoming a
+ * float tomorrow.
  */
 import { describe, expect, it } from "vitest";
 

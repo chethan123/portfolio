@@ -1,29 +1,16 @@
 /**
- * The Holdings screen's table — what it shows, in what order, and what the
- * figures under it come to (DESIGN.md §8.1).
- *
- * No database. `app/lib/holdings-view.ts` is pure by design, for the reason
- * `allocation.ts` gives about itself: the screen renders its rows and its
- * subtotals from one array, so agreement between them is structural rather than
- * something to keep true. That makes these unit tests over a fixture function
- * rather than a fixture builder, and they run without Postgres.
- *
- * Four things are being pinned, and only one of them is the obvious one.
- *
- * The grouping and the filtering are the obvious one. The second is the
- * arithmetic: every money assertion is an exact decimal string, including the
- * cases a float gets wrong, because `money.ts` is now the one module in the
- * application that adds money outside SQL and being exact is its whole
- * justification. The third is the sort, which is where a plausible
- * implementation quietly fails — comparing `"9.0000"` against `"10.0000"` as
- * strings puts the ninth-largest holding at the top of a column sorted by
- * value, and it looks right until you read it.
- *
- * The fourth is the honesty rule the whole screen stands on: an unknown is
- * never a zero. A null cost basis reports no gain rather than a gain equal to
- * the entire untracked position; a group nobody can price is worth `null`
- * rather than nothing; and a filter that matched no rows is a different state
- * from a portfolio with no rows in it.
+ * The Holdings table — what it shows, in what order, and what the figures
+ * come to (DESIGN.md §8.1). No database: `holdings-view.ts` is pure, so
+ * these are unit tests over a fixture function. Four things pinned: the
+ * grouping and filtering (the obvious one); the arithmetic — exact decimal
+ * strings including the cases a float gets wrong; the sort, where a
+ * plausible implementation quietly fails (`"9.0000"` against `"10.0000"` as
+ * strings puts the ninth-largest holding atop a value-sorted column, and it
+ * looks right until you read it); and the honesty rule the screen stands on
+ * — an unknown is never a zero: a null cost basis reports no gain rather
+ * than a gain equal to the untracked position, a group nobody can price is
+ * worth `null`, and a filter matching no rows differs from a portfolio with
+ * none.
  */
 import { describe, expect, it } from "vitest";
 

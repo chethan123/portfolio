@@ -1,16 +1,12 @@
 /**
  * The upload draft's lifecycle (DESIGN.md §5.1, docs/specs/0004-ingest.md).
- *
- * Against a real Postgres, because what is at risk is in the database: the
- * bytes surviving the round trip, the sweep deleting exactly the rows it
- * should, and the join that turns a closed account's draft into a 404.
- *
- * The tests group around the three ways a draft could quietly go wrong:
- *
- *   * a stale draft outliving its day, or a fresh one swept with it;
- *   * a draft staged against an account no statement may land in;
- *   * a dead draft URL surfacing as anything other than the expired page —
- *     a driver error on "abc" is a 500 wearing a bookmark.
+ * Against real Postgres — the risk is in the database: bytes surviving the
+ * round trip, the sweep deleting exactly the right rows, the join turning a
+ * closed account's draft into a 404. Grouped around the quiet failures: a
+ * stale draft outliving its day or a fresh one swept with it; a draft
+ * staged against an account no statement may land in; a dead draft URL
+ * surfacing as anything but the expired page — a driver error on "abc" is a
+ * 500 wearing a bookmark.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

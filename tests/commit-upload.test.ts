@@ -1,23 +1,15 @@
 /**
- * The diff, the commit, and the receipt (docs/specs/ingest/05, DESIGN.md §5.1,
- * §5.2).
- *
- * Against a real Postgres, because everything at risk is in the database: the
- * transaction that must land whole or not at all, the tie-break that decides
- * which set an account reads after a same-date re-upload, and the guards that
- * stand between a filtered export and 28 holdings silently sold.
- *
- * The tests group around the ways this write could be silently wrong:
- *
- *   * the diff misclassifies a row, and a sale is read as an update — or a
- *     removal is a count nobody can recognise as the AAPL position;
- *   * the commit half-applies, and a position set lands without its holdings,
- *     which reads as "this account now holds nothing";
- *   * a guard lets through what it exists to refuse — a product the money
- *     column cannot hold, a statement for someone else's account, a file that
- *     removes a majority nobody confirmed.
- *
- * Every money assertion is an exact decimal string.
+ * The diff, the commit, and the receipt (docs/specs/ingest/05, DESIGN.md
+ * §5.1, §5.2). Against real Postgres — the risk is in the database: the
+ * transaction that lands whole or not at all, the tie-break after a
+ * same-date re-upload, the guards between a filtered export and 28 holdings
+ * silently sold. Grouped around the silent failures: the diff
+ * misclassifying a row (a sale read as an update, a removal nobody can
+ * recognise as the AAPL position); the commit half-applying (a position set
+ * without its holdings reads as "holds nothing"); a guard letting through
+ * what it refuses (an unholdable product, someone else's statement, an
+ * unconfirmed majority removal). Every money assertion is an exact decimal
+ * string.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

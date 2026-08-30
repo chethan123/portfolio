@@ -1,18 +1,12 @@
 /**
- * A fixture builder that speaks the domain.
- *
- * Tests seed a person, an account, a position set with holdings, a quote — the
- * vocabulary of DESIGN.md §4 — and never write an `INSERT` in a test body. When
- * a column moves, this file changes and no test does.
- *
- * This is the one piece of test code allowed to know the schema. Everything
- * else in a test knows only the domain and the query module, which is what
- * keeps the tests honest about behaviour rather than about column names.
- *
- * Money and quantity are handed in as **decimal strings**, exactly as they
- * cross the driver boundary in the other direction. A test that writes
- * `quantity: 0.1` would be introducing the float this design spent a migration
- * and a type-parser override keeping out, so the types here refuse it.
+ * A fixture builder that speaks the domain: tests seed a person, an
+ * account, a position set, a quote — DESIGN.md §4's vocabulary — and never
+ * write an `INSERT` in a test body; when a column moves, this file changes
+ * and no test does. The one piece of test code allowed to know the schema —
+ * everything else knows only the domain and the query module. Money and
+ * quantity are handed in as **decimal strings**, exactly as they cross the
+ * driver boundary the other way: `quantity: 0.1` would introduce the float
+ * this design spent a migration keeping out, so the types refuse it.
  */
 import type { Kysely } from "kysely";
 

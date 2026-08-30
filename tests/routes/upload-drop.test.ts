@@ -1,20 +1,15 @@
 /**
- * The drop screen — step one of the upload flow — through its real loader.
- *
- * Two rules are pinned here. The projection: `listAccounts` already returns
- * owner, institution, kind and number, and the loader must not narrow them
- * away — that defect once rendered two same-named accounts as two identical
- * rows (the label rules themselves are `account-label.test.ts`'s to state).
- * And the `?account=` prefill (CONTEXT.md): a link from an account's own page
- * hands the select its starting choice, still changeable, committing nothing.
- * What is at risk there is the quiet half of the rule — a prefill naming
- * anything the select does not offer, a closed account or an id that never
- * existed, must be dropped without a trace: no note, no 404, no selection.
- * The loader matches it against the options rather than trusting it into
- * `defaultValue`, so the select is never defaulted to a value no option
- * carries — which is also what makes this markup deterministic enough to
- * assert on. Every refusal that matters stays where it always was, in
- * `uploads.server.ts`: a prefill only ever saved the picking, never the pick.
+ * The drop screen — step one — through its real loader. Two rules pinned.
+ * The projection: `listAccounts` returns owner, institution, kind and
+ * number, and the loader must not narrow them away — that defect once
+ * rendered two same-named accounts as identical rows. And the `?account=`
+ * prefill (CONTEXT.md): its quiet half is that a prefill naming anything
+ * the select does not offer — closed, or never existed — must drop without
+ * a trace: no note, no 404, no selection. The loader matches it against the
+ * options rather than trusting it into `defaultValue`, which is also what
+ * makes this markup deterministic enough to assert on. Every refusal that
+ * matters stays in `uploads.server.ts`: a prefill only ever saved the
+ * picking, never the pick.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

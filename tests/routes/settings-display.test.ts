@@ -1,17 +1,11 @@
 /**
- * Settings → Display (spec 0007, ADR-0002).
- *
- * The route's own contribution and nothing else's. What a policy is allowed to
- * be belongs to `settings.server.ts` and is tested there against a real
- * database; what is only true of *this route* is the header it sends back.
- *
- * That header is the whole reason this file exists. Saving the policy has to
- * clear the browser's state cookie, and nothing about the write itself would
- * ever reveal that it does not: the row updates, the form re-renders with the
- * new value selected, and the screen the reader is looking at goes on obeying
- * the cookie it already had. The setting would appear to do nothing on the one
- * browser whose owner just changed it (story 25), and the stale cookie would
- * keep the lifetime the old policy gave it.
+ * Settings → Display (spec 0007, ADR-0002): the route's own contribution —
+ * the header it sends back. Saving the policy must clear the browser's
+ * state cookie, and nothing about the write itself would reveal that it
+ * does not: the row updates, the form re-renders, and the screen goes on
+ * obeying the cookie it already had — the setting appearing to do nothing
+ * on the one browser whose owner just changed it (story 25), the stale
+ * cookie keeping the old policy's lifetime.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

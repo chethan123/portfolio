@@ -1,25 +1,14 @@
 /**
- * Correcting one position on the Holdings table (DESIGN.md §5.4).
- *
- * Against a real Postgres, because every rule at risk here lives in one
- * statement the database executes: which rows get carried forward, which set
- * ends up speaking for the account, and whether anything is written at all when
- * the guard inside the CTE finds nothing.
- *
- * The tests are grouped around the ways this write could be silently wrong
- * rather than around the function's arguments, because none of these failures
- * announces itself on any screen:
- *
- *   * it edits in place, and every past figure quietly moves with it;
- *   * it writes a set holding only the corrected row, and the rest of the
- *     account reads as sold;
- *   * it lands behind the statement it corrects, and changes nothing;
- *   * it turns an asset into a debt, moving net worth by twice the figure;
- *   * it finds nothing to correct and writes a position set anyway.
- *
- * Every money and quantity assertion is an exact decimal string. `toBeCloseTo`
- * would hide precisely the driver-coercion regression the whole design is
- * arranged around.
+ * Correcting one position on the Holdings table (DESIGN.md §5.4). Against
+ * real Postgres — every rule at risk lives in one statement the database
+ * executes: which rows carry forward, which set speaks for the account,
+ * whether anything is written when the guard CTE finds nothing. Grouped
+ * around the silent failures, none of which announces itself: editing in
+ * place (every past figure moves); a set holding only the corrected row
+ * (the rest reads as sold); landing behind the statement it corrects
+ * (changes nothing); turning an asset into a debt (net worth moves by twice
+ * the figure); writing a set with nothing to correct. Every money and
+ * quantity assertion is an exact decimal string.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

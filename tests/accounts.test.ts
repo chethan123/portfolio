@@ -308,7 +308,7 @@ describe("changing an account's kind", () => {
       expect(errors.form).toBeUndefined();
 
       // And it names a way out, the way its sibling in `setBalance` does
-      // (`balances.server.ts:184-191`). The guard condition read back — "change
+      // (`setBalance`'s guard CTE in `balances.server.ts`). The guard condition read back — "change
       // the kind on an account whose statement is a single cash balance" — is
       // the refusal restated, not something the reader can go and do.
       expect(errors.kind).toMatch(/on Holdings/);
@@ -321,7 +321,7 @@ describe("changing an account's kind", () => {
     "refuses it for a closed account too, whose securities no current-holdings view lists",
     withDatabase(async ({ db, seedPerson, seedAccount, seedInstrument, seedPositionSet }) => {
       // The case that decides which reader answers "what does this hold".
-      // `holding_valued` drops closed accounts (`0002_holding_valued.sql:140`),
+      // `holding_valued` drops closed accounts (`0002_holding_valued.sql`),
       // so a guard built on the view would answer "holds nothing" here and let
       // the relabel through — on the one account where nothing in the app can
       // put the securities back, since every write path refuses a closed one.
@@ -356,19 +356,15 @@ describe("changing an account's kind", () => {
   it(
     "refuses savings relabelled as a debt, in one hop and with no securities anywhere",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // The other half of report `SET-1`: no write at all, and $42,000 of
-      // savings counted as debt on every screen and every historical date,
-      // because both views apply `kind` retroactively.
-      //
-      // This case and the one below are the pair that tells the shipped
-      // condition — `input.kind !== existing.kind && acceptsSetBalance(input.kind)`,
-      // asked of the new kind and the rows and never of the old kind — from one
-      // carrying an `existing.kind` term. Swap in
-      // `acceptsSetBalance(input.kind) && !acceptsSetBalance(existing.kind)` and
-      // only these two fail: every other refusal in this file arrives from a
-      // securities kind, which that condition catches too. They are not a
-      // longer way of writing the two-hop case below, and folding them into it
-      // puts the hole back.
+      // The other half of report SET-1: no write at all, and $42,000 of
+      // savings counted as debt on every screen and date, because both views
+      // apply `kind` retroactively. This case and the one below tell the
+      // shipped condition — asked of the new kind and the rows, never the
+      // old kind — from one carrying an `existing.kind` term: swap in
+      // `acceptsSetBalance(input.kind) && !acceptsSetBalance(existing.kind)`
+      // and only these two fail (every other refusal here arrives from a
+      // securities kind, which that condition catches too). Folding them
+      // into the two-hop case below puts the hole back.
       const savings = await seedAccount({
         name: "Ally Online Savings",
         kind: "bank",
@@ -422,7 +418,7 @@ describe("changing an account's kind", () => {
       // nothing in the app reopens one — so the refusal an open account gets,
       // which sends it to its own page or to Holdings, would be sending this
       // reader to two doors that are not there: `/accounts/:id` 404s for a
-      // closed account (`account.tsx:137-144`) and `holding_valued` drops it,
+      // closed account (`account.tsx`'s loader gate) and `holding_valued` drops it,
       // so Holdings lists nothing of its to correct.
       const savings = await seedAccount({
         name: "Ally Online Savings",
