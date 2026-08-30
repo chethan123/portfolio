@@ -285,16 +285,56 @@ describe("the mapping itself", () => {
 describe("row handling", () => {
   const columns = { instrument: "Symbol", quantity: "Qty" };
 
-  it("skips a row whose instrument cell is empty, as a footer or spacer", () => {
+  it("refuses a populated quantity with no mapped instrument", () => {
     const parsed = parseStatement(
-      [["Symbol", "Qty"], ["AAPL", "50"], ["", "1"], ["   ", "2"], [""]],
+      [["Qty", "Symbol"], ["1"]],
+      mapping({ columns: { instrument: "Symbol", quantity: "Qty" } }),
+    );
+
+    expect(parsed.positions).toEqual([]);
+    expect(parsed.skipped).toEqual([]);
+    expect(parsed.problems).toEqual([
+      {
+        row: 1,
+        column: "Symbol",
+        message: 'Line 2 carries data but has no instrument in the "Symbol" column.',
+      },
+    ]);
+  });
+
+  it("refuses other meaningful row data with no mapped instrument", () => {
+    const parsed = parseStatement(
+      [["Symbol", "Qty", "Description"], ["   ", "", "Brokerage total"]],
+      mapping({ columns }),
+    );
+
+    expect(parsed.positions).toEqual([]);
+    expect(parsed.problems[0]).toMatchObject({ row: 1, column: "Symbol" });
+    expect(parsed.problems[0]?.message).toMatch(/Line 2 carries data but has no instrument/);
+  });
+
+  it("silently skips a genuinely empty row", () => {
+    const parsed = parseStatement(
+      [["Symbol", "Qty"], ["", ""], ["   ", "\t"], []],
       mapping({ columns }),
     );
 
     expect(parsed.problems).toEqual([]);
-    expect(parsed.positions).toHaveLength(1);
-    // Not reported either: a spacer names nothing worth telling the reader.
+    expect(parsed.positions).toEqual([]);
     expect(parsed.skipped).toEqual([]);
+  });
+
+  it("refuses a blank-instrument holding even when another row is valid", () => {
+    const parsed = parseStatement(
+      [["Symbol", "Qty"], ["AAPL", "50"], ["", "1"]],
+      mapping({ columns }),
+    );
+
+    expect(parsed.positions).toHaveLength(1);
+    expect(parsed.positions[0]?.instrument).toBe("AAPL");
+    expect(parsed.positions).not.toContainEqual(expect.objectContaining({ row: 2 }));
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({ row: 2, column: "Symbol" });
   });
 
   it("skips and reports a row that names an instrument but states no quantity", () => {

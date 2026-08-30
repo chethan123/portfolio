@@ -292,7 +292,8 @@ type RowRecord = {
  * The row rules, each a checklist item in spec 0004 step 02:
  *
  * - rows above the header are preamble and never read
- * - a row whose instrument cell is blank is a footer or spacer, skipped
+ * - an empty row, or a short footer that does not reach the instrument column,
+ *   is skipped; a data-shaped row with a blank instrument is refused
  * - a row naming an instrument whose quantity is an absence marker is skipped
  *   and reported (see {@link SkippedRow})
  * - a row naming an instrument whose quantity is nonsense refuses the file,
@@ -395,9 +396,22 @@ export function parseStatement(
   for (let row = mapping.headerRow + 1; row < rows.length; row++) {
     const cells = rows[row] ?? [];
     const instrument = cells[instrumentIndex] ?? "";
-    if (instrument.trim() === "") continue;
-
     const line = row + 1;
+    if (instrument.trim() === "") {
+      const hasMappedInstrumentCell = cells.length > instrumentIndex;
+      const hasQuantity = (cells[quantityIndex] ?? "").trim() !== "";
+      if (hasQuantity || (hasMappedInstrumentCell && cells.some((cell) => cell.trim() !== ""))) {
+        problems.push({
+          row,
+          column: columns.instrument,
+          message:
+            `Line ${line} carries data but has no instrument in the ` +
+            `"${columns.instrument}" column.`,
+        });
+      }
+      continue;
+    }
+
     const quantityCell = (cells[quantityIndex] ?? "").trim();
     const quantity = normaliseFigure(quantityCell);
 
