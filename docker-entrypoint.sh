@@ -1,15 +1,11 @@
 #!/bin/sh
-# Startup sequence, per DESIGN.md §10.1. Each step runs to completion before the
-# next begins — never concurrently, and never as a separate one-shot service.
-#
-#   1. Validate the environment, so a misconfigured instance fails immediately
-#      and names the offending variable rather than failing hours later.
-#   2. Run migrations to completion, so no request is ever served against a
-#      half-migrated schema. Migrations are idempotent, so a restart is safe.
+# Startup sequence (DESIGN.md §10.1), each step to completion before the next:
+#   1. Validate the environment — fail now, naming the variable.
+#   2. Migrate — no request ever meets a half-migrated schema; idempotent, so
+#      restarts are safe.
 #   3. Serve.
-#
-# `set -e` is what makes the ordering load-bearing: either step exiting non-zero
-# stops the script here, and the server is never reached.
+# `set -e` makes the ordering load-bearing: a non-zero step stops here and the
+# server is never reached.
 set -eu
 
 node ./server/validate-config.ts

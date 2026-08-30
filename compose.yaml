@@ -1,24 +1,17 @@
-# The whole deployment — DESIGN.md §10.1. The price poller runs in-process inside
-# `app`, which is why there is no separate worker: a worker container would
-# mean two images, two deployments and two places to read logs. `caddy` is a
-# different kind of service — the ingress front door — and is the only one
-# that publishes a port; `app`, `db` and `gate` are reachable only on the
-# compose network.
+# The whole deployment — DESIGN.md §10.1. The price poller runs in-process in
+# `app` (no separate worker: two images, two deployments, two logs). `caddy`
+# is the ingress front door and the only service that publishes a port; `app`,
+# `db` and `gate` exist only on the compose network.
 #
-#   docker compose up -d
+# `docker compose up -d` deliberately does NOT produce a working instance with
+# zero manual steps: that promise meant an instance open to anything on a home
+# LAN. Google sign-in at `gate` replaces it, and a gate skippable by
+# forgetting to configure it is no gate — the `${VAR:?}` interpolations stop
+# `up` naming the first missing variable rather than start half-protected.
 #
-# no longer produces a working instance with no manual steps, and that is the
-# point. The old promise came with an instance open to anyone who could reach
-# it, on a home LAN that also carries guest phones and IoT. What replaces it is
-# Google sign-in at `gate`, and a gate that can be skipped by forgetting to
-# configure it is not a gate — so the `${VAR:?}` interpolations below stop
-# `docker compose up` with the name of the first missing variable rather than
-# starting something half-protected.
-#
-# The manual step is therefore exactly one, done once: create a Google OAuth
-# client and put its credentials in `.env`. Copy .env.example and follow
-# docs/google-sign-in.md, which walks it from the console to a first sign-in.
-# Every other setting still has a working default.
+# The one manual step, done once: create a Google OAuth client and put its
+# credentials in `.env` (copy .env.example; docs/google-sign-in.md walks it).
+# Every other setting has a working default.
 
 name: portfolio
 
@@ -27,14 +20,12 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      # Reachable only on the Compose network — the port below is deliberately
-      # not published, so these credentials are not exposed to your LAN. If you
-      # change them, change DATABASE_URL to match.
+      # Reachable only on the Compose network — no published port, so these
+      # credentials never face the LAN. Change them = change DATABASE_URL too.
       POSTGRES_USER: portfolio
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}
       POSTGRES_DB: portfolio
-      # Timestamps are stored UTC regardless; this makes the server's own logs
-      # and any `now()` default agree with that.
+      # Storage is UTC regardless; this makes logs and `now()` defaults agree.
       TZ: UTC
       PGTZ: UTC
     command:
@@ -44,8 +35,7 @@ services:
       - -c
       - log_timezone=UTC
     volumes:
-      # The one named volume. All persistent state lives here, so there is
-      # exactly one backup target (DESIGN.md §10, `pg_dump`).
+      # The one named volume — the single backup target (DESIGN.md §10, `pg_dump`).
       - db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
@@ -53,25 +43,19 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
-    # No `ports:` by design. The app reaches Postgres over the Compose network;
-    # publishing it would put the database on the host's network for nothing.
+    # No `ports:` by design: the app reaches Postgres over the Compose
+    # network; publishing would put the database on the host for nothing.
 
   app:
-    # Pulled, never built here. The image is published to GHCR by the `publish`
-    # job in .github/workflows/ci.yml when a `v*` tag is pushed. The tag is the
-    # floating major, so every v1.x.y release lands on `1`; set APP_VERSION to a
-    # full version to hold an instance still or to go back to a known-good image.
-    #
-    # There is deliberately no `build:` stanza. This is the deployment file, and
-    # a deploy that cannot reach the registry — an unreachable network, a typo'd
-    # tag — must fail loudly rather than quietly building a multi-minute image on
-    # whatever NAS or VPS happens to be running it. Building from source is
-    # `compose.dev.yaml`, which says so in one place.
+    # Pulled, never built here. Published to GHCR by ci.yml's `publish` job on
+    # a `v*` tag; the floating major puts every v1.x.y on `1` — set APP_VERSION
+    # to a full version to pin or roll back. Deliberately no `build:` stanza: a
+    # deploy that cannot reach the registry must fail loudly, not quietly build
+    # a multi-minute image on some NAS. Building is `compose.dev.yaml`'s job.
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
-    # This is what makes `docker compose up -d` an upgrade rather than a no-op.
-    # Under Compose's default `missing` policy a floating tag is fetched once and
-    # then never again, so a new release would install itself only on a machine
-    # that had never run the old one — silently, with no error to notice.
+    # What makes `up -d` an upgrade: under the default `missing` policy a
+    # floating tag is fetched once and never again — a new release would land
+    # only on machines that never ran the old one, silently.
     pull_policy: always
     restart: unless-stopped
     depends_on:
@@ -80,19 +64,16 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
-      # Not a switch and not a variable: in this file it is a fact. The `gate`
-      # service below fronts the app, so the app must not draw its
-      # unprotected-instance banner. It still authenticates nobody.
-      # `server/config.ts` carries the argument for why the app is told this
-      # rather than left to guess.
+      # A fact in this file, not a switch: `gate` fronts the app, so the app
+      # must not draw its unprotected-instance banner. It still authenticates
+      # nobody — `server/config.ts` has the argument.
       AUTH_GATE: external
       PORT: ${PORT:-3000}
       MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
       TZ: ${TZ:-UTC}
-    # No `ports:` by design, same as `db` above. Only `caddy` is reachable from
-    # outside the compose network; the app is reached at `app:${PORT}`.
-    # The container writes nothing to its own filesystem, so it can be destroyed
-    # and recreated freely. Enforced rather than merely intended.
+    # No `ports:`, same as `db` — only `caddy` faces outside; the app is
+    # reached at `app:${PORT}`. Writes nothing to its own filesystem;
+    # `read_only` enforces that rather than merely intending it.
     read_only: true
     tmpfs:
       - /tmp
@@ -108,94 +89,74 @@ services:
       start_period: 20s
 
   gate:
-    # oauth2-proxy: the forward-auth sidecar `caddy` asks about every request
-    # before it reaches `app` (Caddyfile). Pinned to an exact release rather
-    # than a floating major — unlike `app`, nobody here is watching this image
-    # for a breaking change, and the thing it guards is the whole picture.
-    #
-    # The `-alpine` flavour specifically. The default image is distroless: no
-    # shell and no wget, which the healthcheck below needs, because a
-    # healthcheck runs inside the container it checks.
-    #
-    # Stateless — the session is an encrypted cookie in the browser — so there
-    # is no volume and no database here, only the allowlist it reads.
+    # oauth2-proxy: the forward-auth sidecar `caddy` asks before any request
+    # reaches `app` (Caddyfile). Pinned to an exact release — unlike `app`,
+    # nobody watches this image for breaking changes, and it guards everything.
+    # `-alpine` because the default distroless image has no wget for the
+    # healthcheck (a healthcheck runs inside the container it checks).
+    # Stateless — the session is an encrypted browser cookie — hence no volume.
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
     restart: unless-stopped
     environment:
       OAUTH2_PROXY_PROVIDER: google
-      # The fail-closed contract, in three lines. `:?` is evaluated before any
-      # container starts, so a missing credential is a message naming the
-      # variable rather than a sidecar crash-looping behind a Caddy that has
-      # already bound :80 and is refusing everything.
+      # Fail-closed: `:?` is evaluated before any container starts, so a
+      # missing credential is a message naming the variable, not a sidecar
+      # crash-looping behind a Caddy already refusing everything on :80.
       OAUTH2_PROXY_CLIENT_ID: "${GATE_CLIENT_ID:?missing GATE_CLIENT_ID — see the gate section of .env.example}"
       OAUTH2_PROXY_CLIENT_SECRET: "${GATE_CLIENT_SECRET:?missing GATE_CLIENT_SECRET — see the gate section of .env.example}"
       OAUTH2_PROXY_COOKIE_SECRET: "${GATE_COOKIE_SECRET:?missing GATE_COOKIE_SECRET — see the gate section of .env.example}"
-      # Google redirects the *browser* here, so this is the origin the house
-      # proxy serves — never anything on the compose network. It must also be
-      # the redirect URI registered on the Google OAuth client, character for
-      # character, or Google refuses the sign-in.
+      # Google redirects the *browser* here: the origin the house proxy serves,
+      # never a compose-network address — and character-for-character the
+      # redirect URI registered on the OAuth client, or Google refuses.
       OAUTH2_PROXY_REDIRECT_URL: "${PUBLIC_ORIGIN:?missing PUBLIC_ORIGIN — see the gate section of .env.example}/oauth2/callback"
-      # The default is 127.0.0.1:4180, which inside a container means `caddy`
-      # cannot reach it at all.
+      # The default 127.0.0.1:4180 is unreachable from `caddy` inside a container.
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
-      # Believe Caddy's X-Forwarded-* headers. Without it the sidecar reads the
-      # container-internal host and builds sign-in redirects nobody can follow.
-      # It is also what makes the missing `ports:` below load-bearing: with this
-      # on, the sidecar trusts those headers from whatever reaches it, so "only
-      # Caddy can reach it" has to hold for the gate exactly as it does for
-      # `app`.
+      # Believe Caddy's X-Forwarded-* headers — without it the sidecar builds
+      # sign-in redirects from the container-internal host. Also what makes the
+      # missing `ports:` below load-bearing: the sidecar trusts these headers
+      # from whatever reaches it, so "only Caddy can" has to hold.
       OAUTH2_PROXY_REVERSE_PROXY: "true"
-      # Puts X-Auth-Request-Email on the /oauth2/auth response. The Caddyfile
-      # copies it onto the request it forwards to `app`, which ignores it
-      # today: attribution for later, never permission.
+      # X-Auth-Request-Email on the /oauth2/auth response; the Caddyfile copies
+      # it onto the forwarded request. The app ignores it today: attribution
+      # for later, never permission.
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
-      # Skip the sidecar's own sign-in page. The only sign-in screen anyone in
-      # this household ever sees is Google's.
+      # Skip the sidecar's own sign-in page — the only sign-in screen is Google's.
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
-      # The entire authorization policy: one address per line. `email_domains`
-      # is deliberately not set — the narrowest domain rule that would admit
-      # the family also admits every other Gmail account on earth.
+      # The entire authorization policy, one address per line. `email_domains`
+      # deliberately unset: the narrowest domain admitting the family admits
+      # every other Gmail account on earth.
       OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/allowed-emails.txt
-      # Both are spelled out rather than inherited. SameSite=Lax is this
-      # instance's entire CSRF posture now that the app carries no cookie of
-      # its own, and it is not a default (the image leaves SameSite unset).
-      # Secure is a default, and is stated because it is a claim about the
-      # deployment — the browser only ever meets this instance over the house
-      # proxy's TLS — rather than a preference. Expiry is left at the seven-day
-      # default, which is what makes sign-in a once-per-device event.
+      # Spelled out, not inherited. SameSite=Lax is the instance's entire CSRF
+      # posture now the app carries no cookie of its own — and the image leaves
+      # SameSite unset. Secure restates a deployment claim: the browser only
+      # meets this instance over the house proxy's TLS. Expiry keeps the
+      # seven-day default, which makes sign-in once per device.
       OAUTH2_PROXY_COOKIE_SAMESITE: lax
       OAUTH2_PROXY_COOKIE_SECURE: "true"
       TZ: ${TZ:-UTC}
     volumes:
-      # Long syntax purely for `create_host_path: false`. Docker's short
-      # `./allowed-emails.txt:/…:ro` form creates a *directory* at the source
-      # path when the file is missing, which hands the operator a crash-looping
-      # sidecar and a junk directory in their deploy dir. This way a missing
-      # allowlist stops `up` with a message, like every other missing input.
+      # Long syntax purely for `create_host_path: false`: the short form
+      # creates a *directory* at a missing source path — a crash-looping
+      # sidecar plus a junk dir. This way a missing allowlist stops `up` with
+      # a message, like every other missing input.
       - type: bind
         source: ./allowed-emails.txt
         target: /etc/oauth2-proxy/allowed-emails.txt
         read_only: true
         bind:
           create_host_path: false
-    # No `ports:` by design, and here it is enforcement rather than tidiness —
-    # see OAUTH2_PROXY_REVERSE_PROXY above.
-    #
-    # Read-only for the same reason `app` is: the sidecar keeps no state on
-    # disk, and this says so in a way that would fail loudly if that changed.
-    #
-    # It does run as root, which `app` does not: the published alpine image
-    # sets no USER, and pinning one here would decide on the operator's behalf
-    # that their allowlist file is readable by that uid — a file mode nobody
-    # mentioned to them, discovered as a sidecar that will not start. Root in a
-    # read-only container with no port and no volume is the smaller of those
-    # two risks, and it is written down rather than left to be noticed.
+    # No `ports:` — here enforcement, not tidiness (see REVERSE_PROXY above).
+    # Read-only like `app`: no state on disk, failing loudly if that changes.
+    # It DOES run as root, unlike `app`: the published image sets no USER, and
+    # pinning one would silently decide the allowlist's file mode on the
+    # operator's behalf — discovered as a sidecar that won't start. Root in a
+    # read-only container with no port and no volume is the smaller risk.
     read_only: true
     tmpfs:
       - /tmp
     healthcheck:
-      # `/ping` is the sidecar's own liveness endpoint and is not routed
-      # through Caddy, so it is reachable only from inside this container.
+      # `/ping`: the sidecar's own liveness endpoint, not routed through Caddy
+      # — reachable only from inside this container.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4180/ping"]
       interval: 10s
       timeout: 5s
@@ -208,19 +169,16 @@ services:
     depends_on:
       app:
         condition: service_healthy
-      # Caddy refuses every request the gate has not vouched for, so a Caddy
-      # that binds :80 before the gate answers is an instance that is down
-      # rather than one that is open — but "down for a few seconds on boot" is
-      # still worth avoiding, and it is the same reason `app` is here.
+      # Caddy refuses whatever the gate hasn't vouched for, so binding :80
+      # early means down-not-open — still worth avoiding a few seconds of it.
       gate:
         condition: service_healthy
     environment:
-      # Caddy substitutes this into the Caddyfile below. Kept in sync with the
-      # app's own listen port rather than hardcoded.
+      # Substituted into the Caddyfile; kept in sync with the app's listen port.
       APP_PORT: ${PORT:-3000}
-    # The only port published to the host, which is what makes this container
-    # the single place the gate can be enforced. Plain HTTP: TLS and the public
-    # hostname belong to the operator's house-wide Caddy in front of it.
+    # The only published port — the single place the gate can be enforced.
+    # Plain HTTP: TLS and the public hostname belong to the operator's
+    # house-wide Caddy in front.
     ports:
       - "80:80"
     volumes:

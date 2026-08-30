@@ -3,9 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
-    # Version tags publish the container image — see the `publish` job. The
-    # `[0-9]` rather than a bare `*` keeps a non-version tag from starting a run
-    # that can only end in "not a valid semver" and an image nobody asked for.
+    # Version tags publish the container image (`publish` job). `[0-9]`, not a
+    # bare `*`: a non-version tag could only end in "not a valid semver".
     tags: ['v[0-9]*']
   pull_request:
 
@@ -27,21 +26,21 @@ jobs:
 
       - run: npm ci
 
-      # The runtime strips types without checking them (DESIGN.md §9), so this
-      # is the only place stripped types are actually verified.
+      # The runtime strips types without checking them (DESIGN.md §9); this is
+      # the only place stripped types are verified.
       - name: Typecheck
         run: npm run typecheck
 
       - name: Build
         run: npm run build
 
-      # A real Postgres, not a mock: the risk this slice guards lives in
-      # Postgres-specific `numeric` handling, which disappears under a substitute.
+      # Real Postgres, not a mock: the guarded risk lives in Postgres-specific
+      # `numeric` handling, which disappears under a substitute.
       - name: Start the test database
         run: docker compose -f compose.test.yaml up -d --wait
 
-      # Explicit rather than implicit: the suite applies migrations itself, but
-      # the type verification below needs a migrated database to compare against.
+      # Explicit because the type verification below needs a migrated database
+      # to compare against (the suite applies migrations itself).
       - name: Apply migrations
         run: npm run migrate
         env:
@@ -52,9 +51,9 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test
 
-      # The committed types are derived from the live database, so a migration
-      # landing without a regeneration would silently leave every query typed
-      # against the old schema. This is what makes the README step mandatory.
+      # Committed types derive from the live database: a migration landing
+      # without a regeneration would silently leave every query typed against
+      # the old schema.
       - name: Verify the committed database types match the schema
         run: npm run db:types -- --verify
         env:
@@ -75,33 +74,30 @@ jobs:
           node-version: 24
           cache: npm
 
-      # `--ignore-scripts` because nothing here needs a package's install hook to
-      # have run, and an audit job is the last place that should execute
-      # third-party code it is in the middle of checking.
+      # `--ignore-scripts`: nothing here needs install hooks, and an audit job
+      # is the last place to execute the third-party code it is checking.
       - run: npm ci --ignore-scripts
 
-      # The only check that would notice a pinned name and version being
-      # republished with different contents. Everything in the lockfile is
-      # signed by the registry today, so a gap here is a finding, not noise.
+      # The only check that notices a pinned name+version republished with
+      # different contents. Everything in the lockfile is registry-signed
+      # today, so a gap here is a finding, not noise.
       - name: Verify registry signatures
         run: npm audit signatures
 
-      # Production only, and only high and critical: this gate exists to stop a
-      # serious advisory in code the container actually runs, not to turn the
-      # branch red over a moderate in a build tool.
+      # Production, high and critical only: stop a serious advisory in code
+      # the container runs, not redden the branch over a moderate in a build tool.
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
-      # Everything below is reported and not enforced, because the fix for a
-      # transitive advisory or a deprecation is usually somebody else's release.
+      # Reported, not enforced: the fix for a transitive advisory or a
+      # deprecation is usually somebody else's release.
       - name: Report dev advisories
         if: always()
         run: npm audit || true
 
-      # npm records a package's deprecation notice in the lockfile, but only as
-      # of the resolution that wrote it — so this re-resolves into the throwaway
-      # workspace first, which is what makes a package deprecated *since* the
-      # lockfile was committed show up.
+      # The lockfile records deprecations only as of the resolution that wrote
+      # it, so re-resolve into the throwaway workspace first — that surfaces a
+      # package deprecated *since* the lockfile was committed.
       - name: Report deprecated packages
         if: always()
         run: |
@@ -123,31 +119,27 @@ jobs:
       - name: Smoke test
         run: ./scripts/smoke-test.sh
 
-  # Publishing lives here rather than in a release workflow of its own so that a
-  # tag is gated on *everything* this file already checks. A separate workflow
-  # could only re-run the jobs or trust that they passed on main; this way the
-  # dependency is the real one, and there is one place to read what CI does.
+  # Lives here rather than in a release workflow so a tag is gated on
+  # *everything* this file checks — a separate workflow could only re-run the
+  # jobs or trust they passed on main. One place to read what CI does.
   publish:
     name: Publish the container image
-    # All three, not just `smoke`: `check` is the typecheck and the test suite,
-    # `audit` is the production advisory gate, `smoke` is the container itself.
-    # Gating on all of them is what makes "a published image passed CI" a fact
-    # rather than a convention.
+    # All three: `check` (types + tests), `audit` (production advisories),
+    # `smoke` (the container itself) — what makes "a published image passed
+    # CI" a fact rather than a convention.
     needs: [check, audit, smoke]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # The only elevated permission in this file, and all GHCR needs: the
-      # built-in GITHUB_TOKEN can push to a package owned by this repository, so
-      # there is no PAT to create, store or rotate.
+      # The only elevated permission, and all GHCR needs: GITHUB_TOKEN pushes
+      # to a package this repository owns — no PAT to create, store or rotate.
       packages: write
     steps:
       - uses: actions/checkout@v5
 
-      # No setup-qemu-action: the Dockerfile builds its `deps` and `build`
-      # stages on the runner's own architecture (see its header comment), so
-      # nothing here is emulated and the arm64 leg is a file copy.
+      # No setup-qemu-action: the Dockerfile builds `deps`/`build` on the
+      # runner's own architecture (see its header), so the arm64 leg is a copy.
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
@@ -156,14 +148,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Derives the image tags from the git tag: v1.2.3 publishes 1.2.3, 1.2, 1
-      # and `latest`. The leading `v` is stripped, which is why compose.yaml
-      # pins `1` and not `v1` — the two have to agree.
-      #
-      # `latest` is deliberately not listed. It comes from the default
-      # `latest=auto` flavour, which withholds it from a pre-release; spelling it
-      # out as `type=raw` would publish it unconditionally and let a v1.0.0-rc1
-      # become what every unpinned instance upgrades to.
+      # Image tags derive from the git tag: v1.2.3 → 1.2.3, 1.2, 1, `latest`.
+      # The `v` is stripped — why compose.yaml pins `1`, not `v1`. `latest` is
+      # deliberately unlisted: the default `latest=auto` withholds it from a
+      # pre-release, where `type=raw` would let a v1.0.0-rc1 become what every
+      # unpinned instance upgrades to.
       - id: meta
         uses: docker/metadata-action@v6
         with:
@@ -175,19 +164,18 @@ jobs:
 
       - uses: docker/build-push-action@v7
         with:
-          # The checkout, not the git context this action defaults to — which
-          # ignores .dockerignore and anything a previous step wrote.
+          # The checkout, not the default git context — which ignores
+          # .dockerignore and anything a previous step wrote.
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # A multi-platform image is a manifest list, and the package page reads
-          # its description from the index annotations rather than image labels.
+          # A multi-platform image is a manifest list; the package page reads
+          # its description from index annotations, not image labels.
           annotations: ${{ steps.meta.outputs.annotations }}
-          # Public repositories get provenance attestations at mode=max by
-          # default. They arrive as extra manifest entries that GHCR renders as
-          # `unknown/unknown` architectures on the package page.
+          # Default provenance (mode=max on public repos) adds manifest
+          # entries GHCR renders as `unknown/unknown` architectures.
           provenance: false
           sbom: false
           cache-from: type=gha

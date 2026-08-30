@@ -1,12 +1,10 @@
 /*
- * The whole service worker, and deliberately the whole of it.
- *
- * It exists for one reason: when the server is unreachable — the phone is off
- * the VPN — a navigation lands on the branded page below instead of the
- * browser's error screen. It stores nothing: no Cache Storage, no IndexedDB;
- * the offline page is the template string right here (ADR-0007). Anything
- * that is not a GET navigation passes by untouched, so loaders, actions and
- * the upload flow's multipart posts never meet this file.
+ * The whole service worker, deliberately: when the server is unreachable —
+ * the phone off the VPN — a navigation lands on the branded page below
+ * instead of the browser's error screen. Stores nothing: no Cache Storage,
+ * no IndexedDB; the offline page is the template string here (ADR-0007).
+ * Anything that is not a GET navigation passes untouched, so loaders,
+ * actions and multipart uploads never meet this file.
  */
 
 const OFFLINE_PAGE = `<!doctype html>
@@ -58,9 +56,9 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET" || request.mode !== "navigate") return;
 
   // Only a *rejected* fetch means unreachable. The gate answers a navigation
-  // with a 302 this fetch resolves as an `opaqueredirect` — `ok === false` —
-  // that the browser then follows itself. Branching on `response.ok` here
-  // would swallow sign-in; never add it.
+  // with a 302 that resolves here as `opaqueredirect` (`ok === false`) and is
+  // followed by the browser itself — branching on `response.ok` would swallow
+  // sign-in. Never add it.
   event.respondWith(
     fetch(request).catch(
       () =>

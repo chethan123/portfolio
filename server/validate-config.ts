@@ -1,10 +1,7 @@
 /**
- * Startup gate. The container entrypoint runs this before the server, so a
- * misconfigured instance fails immediately and loudly rather than hours later
- * on the first request that happens to need the bad setting.
- *
- * Run directly under Node 24's type stripping — no build step for operational
- * scripts (DESIGN.md §9).
+ * Startup gate: the entrypoint runs this before the server, so a misconfigured
+ * instance fails at start rather than hours later on the first request that
+ * needs the bad setting. Runs under Node's type stripping (DESIGN.md §9).
  */
 import { ConfigError, loadConfig } from "./config.ts";
 

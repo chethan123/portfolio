@@ -1,16 +1,12 @@
 /**
- * Every committed screenshot, retaken in one command.
+ * Every committed screenshot, retaken in one command. The images under
+ * `docs/screenshots/` and `docs/guide/images/` are the real application
+ * against the generated demo household — never a mock, never hand-edited —
+ * which makes them the one thing here that can go stale silently: a screen
+ * changes, its picture does not, nothing fails.
  *
- * The images under `docs/screenshots/` and `docs/guide/images/` are the real
- * application against the generated demo household — never a mock, never
- * hand-edited. That makes them the one thing in this repository that can go
- * stale silently: a screen changes, the picture of it does not, and nothing
- * fails. Until this script existed the only defence was a recipe a human
- * followed by hand, which is a defence that works until the day nobody has
- * twenty minutes.
- *
- * Run it from the repository root, against a throwaway database, with the
- * application already serving that database:
+ * Run from the repository root, against a throwaway database the application
+ * is already serving:
  *
  *   printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\n' > .env.demo
  *   node --env-file=.env.demo ./server/migrate.ts
@@ -19,33 +15,28 @@
  *
  *   node --env-file=.env.demo ./scripts/capture-screenshots.ts
  *
- * The empty-instance shots the guide opens with cannot come from that database,
- * because it has data in it. They are taken against a second, *migrated but
- * unseeded* database, served the same way:
+ * The guide's empty-instance shots need a second, *migrated but unseeded*
+ * database, served the same way:
  *
  *   node --env-file=.env.fresh ./scripts/capture-screenshots.ts --first-run
  *
- * Three things here are deliberate and worth not undoing.
+ * Three deliberate choices worth not undoing:
  *
- * **Nothing is hardcoded that the seed regenerates.** `account.id` is an
- * identity column and `seed-demo.ts` wipes with a plain `delete`, so ids climb
- * every time it runs. Accounts are therefore looked up by *kind*, and the row
- * the Holdings editor opens on is looked up by "has a cost basis" — never by a
- * number read off a previous run.
+ * **Nothing hardcoded that the seed regenerates.** Ids climb on every re-seed
+ * (identity columns, plain-`delete` wipe), so accounts are looked up by
+ * *kind* and the Holdings editor row by "has a cost basis" — never a number
+ * read off a previous run.
  *
- * **The statement the upload walkthrough is driven with is generated here, not
- * committed.** It has to restate what the account currently holds so the review
- * step renders an unchanged majority alongside one added, one updated and one
- * removed position. But the demo calendar is built from the wall clock
- * (`seed-demo.ts`, `buildCalendar(new Date())`), so quantities drift with the
- * day it was seeded. A CSV committed today would quietly turn "unchanged" rows
- * into "updated" ones a week later, and the diff screenshot would stop showing
- * what it is captioned as showing.
+ * **The walkthrough statement is generated, not committed.** It must restate
+ * current holdings so the review shows an unchanged majority beside one
+ * added, one updated, one removed — but the demo calendar tracks the wall
+ * clock, so a committed CSV would quietly turn "unchanged" rows into
+ * "updated" a week later.
  *
- * **The upload flow is walked, never committed.** The mapping and review shots
- * need a live draft, and the draft dies with the commit — so the walk stops at
- * the review screen and the drafts are left to the 24-hour sweep. Recording the
- * statement would also change the demo household, which every other shot is of.
+ * **The upload flow is walked, never committed.** The mapping and review
+ * shots need a live draft, which dies at commit — so the walk stops at review
+ * and the drafts go to the 24-hour sweep. Committing would also change the
+ * household every other shot is of.
  */
 import { chromium, type Browser, type Page } from "playwright";
 
@@ -57,21 +48,17 @@ import type { Pool } from "pg";
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:5173";
 
 /**
- * Playwright resolves its own bundled Chromium by default, which is what a
- * contributor running `npx playwright install chromium` gets. Sandboxes and CI
- * images that already carry a browser set this instead of downloading a second.
+ * Default is Playwright's own bundled Chromium (`npx playwright install
+ * chromium`); sandboxes and CI images already carrying a browser set this
+ * instead of downloading a second.
  */
 const EXECUTABLE = process.env.CHROMIUM_EXECUTABLE;
 
 /**
- * The README's shots.
- *
- * 1440 until Holdings gained a ninth column. The rail takes 280 and the canvas
- * margins 64, so at 1440 the panel offers a table wanting 1214 about 1096 — it
- * scrolls inside `.data-table-scroll`, and a full-page capture cuts the last
- * column off. A shot that shows a reader less than the screen holds is worse
- * than a wider shot: this is the narrowest round width at which the widest
- * table the application draws is whole.
+ * The README's shots. 1440 until Holdings gained a ninth column: rail (280) +
+ * canvas margins (64) left the table scrolling inside `.data-table-scroll`,
+ * and a full-page capture cut the last column off. This is the narrowest
+ * round width at which the widest table the application draws is whole.
  */
 const DESKTOP = { width: 1600, height: 1000 } as const;
 /** A phone, and not full-page: the bottom navigation is `position: fixed`. */
@@ -91,41 +78,31 @@ async function open(browser: Browser, theme: Theme, mobile = false): Promise<Pag
     colorScheme: theme,
   });
 
-  // Every shot is taken unmasked, and this line is what makes that true
-  // (spec 0007). The masking policy is seeded to *masked*, so a browser that
-  // has never been toggled — which is precisely what a fresh Playwright
-  // context is — opens with every amount replaced by dots. Without this the
-  // whole shot list would silently retake as a set of pictures of dots: the
-  // README, the guide, every figure this repository shows anyone. Nothing
-  // would fail, which is exactly the silent staleness this script exists to
-  // prevent.
-  //
-  // The masking shots themselves are the deliberate exception and set their
-  // own cookie back, below.
+  // Every shot is unmasked, and this line is what makes that true (spec
+  // 0007): the policy seeds *masked*, and a fresh Playwright context has
+  // never been toggled, so without it the whole shot list silently retakes
+  // as pictures of dots — exactly the silent staleness this script exists to
+  // prevent. The masking shots are the deliberate exception and set their
+  // own cookie back.
   await context.addCookies([{ ...UNMASKED_COOKIE, url: BASE_URL }]);
 
   return context.newPage();
 }
 
 /**
- * What a browser that has been toggled to show its amounts carries.
- *
- * Spelled out here rather than imported from `app/lib/masking.ts`: this script
- * runs against a *served* application over HTTP and shares no module with it,
- * and the one thing worse than a second copy of two characters would be this
- * file importing the app's client bundle to get them. If the vocabulary ever
- * changes, `masking.test.ts` pins it and this line is the other end.
- *
- * No `path` here: Playwright refuses a cookie carrying both a `url` and a
- * `path`, and the `url` is what scopes it.
+ * What a browser toggled to show amounts carries. Spelled out, not imported
+ * from `app/lib/masking.ts`: this script runs against a *served* app over
+ * HTTP and shares no module with it — importing the client bundle for two
+ * characters would be worse than a second copy. `masking.test.ts` pins the
+ * vocabulary. No `path`: Playwright refuses a cookie carrying both `url` and
+ * `path`, and `url` scopes it.
  */
 const UNMASKED_COOKIE = { name: "masked", value: "0" } as const;
 
 /**
- * Navigate and wait for the page to settle. The application renders on the
- * server and the charts are inline SVG, so there is nothing to wait for beyond
- * the document itself — but fonts land late enough to change a table's height,
- * and a screenshot taken mid-swap has the wrong metrics.
+ * Navigate and settle. Server-rendered with inline-SVG charts, so only the
+ * document matters — but fonts land late enough to change a table's height,
+ * and a mid-swap screenshot has the wrong metrics.
  */
 async function visit(page: Page, path: string): Promise<void> {
   await page.goto(`${BASE_URL}${path}`, { waitUntil: "networkidle" });
@@ -143,8 +120,8 @@ type Kind = (typeof NEEDED)[number];
 type Accounts = Record<Kind, number>;
 
 /**
- * Every refusal here says the same thing — that the database being captured is
- * not the demo household — so it says it once, naming what it went looking for.
+ * Every refusal says the same thing — this is not the demo household — so it
+ * says it once, naming what it went looking for.
  */
 function refuse(what: string): never {
   throw new Error(
@@ -191,16 +168,13 @@ async function currentPositions(pool: Pool, accountId: number): Promise<Position
 }
 
 /**
- * A statement for the brokerage account, shaped like a Fidelity export: a
- * preamble row before the header, dollar signs, thousands separators, and a
- * cost basis the file calls "Average Cost Basis".
- *
- * The diff it produces is the point. Every position is restated unchanged
- * except one, whose quantity moves; one instrument the household has never held
- * is added, which is also what puts a row on the new-instruments step; and one
- * position is left out, which a statement means as "sold" and the review screen
- * lists in full. One removal out of seven stays well under the majority-removal
- * confirmation, which is a different screenshot and a different lesson.
+ * A brokerage statement shaped like a Fidelity export: preamble row, dollar
+ * signs, thousands separators, "Average Cost Basis". The diff it produces is
+ * the point — every position restated unchanged except one bumped quantity;
+ * one never-held instrument added (what puts a row on the new-instruments
+ * step); one left out, which a statement means as "sold". One removal of
+ * seven stays under the majority-removal confirmation — a different
+ * screenshot, a different lesson.
  */
 function authorStatement(positions: Position[], accountNumber: string): string {
   const priced = positions.filter((p) => p.symbol !== null);
@@ -240,8 +214,7 @@ function authorStatement(positions: Position[], accountNumber: string): string {
     );
   }
 
-  // The one instrument the household has never held. Its row is what the
-  // new-instruments step exists to resolve.
+  // The never-held instrument — what the new-instruments step exists to resolve.
   lines.push(
     [accountNumber, "Individual", FIRST_SIGHTING, '"SCHWAB US DIVIDEND EQUITY ETF"', "60", '"$1,629.00"', "$25.4000"].join(","),
   );
@@ -250,29 +223,23 @@ function authorStatement(positions: Position[], accountNumber: string): string {
 }
 
 /**
- * Undo the two writes the walk makes.
+ * Undo the walk's two writes — both right for the app to make, wrong for a
+ * capture run to keep: each teaches the household something, and a taught
+ * household is not the one these shots are of.
  *
- * Both are writes the application is right to make and a capture run is wrong
- * to keep, for the same reason: each teaches the household something, and a
- * household that has already been taught is not the one these shots are of.
+ * **The resolved instrument.** Resolving is the flow's only early write (so
+ * the alias survives an abandoned draft); the first walk teaches the
+ * household `SCHD`, and every later walk then skips the step the screenshot
+ * is of.
  *
- * **The resolved instrument.** Resolving is the upload flow's only early write
- * — it lands before the statement is recorded, precisely so that the alias
- * survives an abandoned draft. The first walk teaches the household what `SCHD`
- * is, and every later walk then skips the step the screenshot is of.
+ * **The saved column mapping.** Remembered against institution + header — the
+ * feature — but a second run then arrives with all six selects prefilled, and
+ * the guide's "before anything is mapped" caption sits under a fully mapped
+ * form. Deleted by id above a pre-walk watermark, not truncated, so a mapping
+ * the household legitimately has is never collateral.
  *
- * **The saved column mapping.** "Save mapping and continue" remembers the
- * mapping against the institution and the file's header, which is the feature
- * the flow exists to have. It is also what makes the *blank* columns shot
- * impossible to take twice: the second run arrives with all six selects
- * prefilled and a banner explaining that a previous statement was uploaded, and
- * the guide's "before anything is mapped" caption then sits under a picture of
- * a fully mapped form. Deleted by id above a watermark taken before the walk,
- * rather than by truncating the table, so a mapping the household legitimately
- * has is never collateral.
- *
- * Neither row is referenced by anything — the walk never commits a statement —
- * so removing both puts the database back where the shots need it.
+ * Neither row is referenced — the walk never commits — so removing both puts
+ * the database back where the shots need it.
  */
 async function mappingWatermark(pool: Pool): Promise<string> {
   const { rows } = await pool.query<{ max: string }>(
@@ -287,12 +254,10 @@ async function forgetWalkWrites(pool: Pool, watermark: string): Promise<void> {
 }
 
 /**
- * Walk the four-step upload as far as a given step and shoot it. Stops short of
- * recording: see the header.
- *
- * The walk cleans up after itself rather than leaving that to the caller: its
- * two writes are invisible from the call site, and a caller that forgets one
- * does not fail — it quietly photographs the wrong screen on the next run.
+ * Walk the four-step upload as far as a given step and shoot it; stops short
+ * of recording (see header). Cleans up after itself: its two writes are
+ * invisible from the call site, and a caller that forgot one would not fail —
+ * it would quietly photograph the wrong screen on the next run.
  */
 async function walkUpload(
   page: Page,
@@ -366,10 +331,8 @@ async function captureFirstRun(browser: Browser): Promise<void> {
 }
 
 /**
- * Everything both passes need looked up once: which account is which, the
- * statement to drive the upload with, the row the Holdings editor opens on, and
- * whose name the owner filter uses. All of it is read from the database rather
- * than written down, because the seed renumbers on every run.
+ * Everything both passes need, looked up once and read from the database
+ * rather than written down — the seed renumbers on every run.
  */
 type Fixture = {
   accounts: Accounts;
@@ -414,14 +377,11 @@ async function prepare(pool: Pool): Promise<Fixture> {
 }
 
 /**
- * Open the owner filter's disclosure before shooting it.
- *
- * The control is a `<details>`, so a page loads with it closed and a capture
- * would photograph a pill reading "Alex Rivera" — true, and not what these two
- * shots are of. Opening it is the reader's own first action and a state the
- * application draws itself; nothing here is hand-edited. The click is on the
- * summary, so a change to the control's markup fails this rather than silently
- * shooting the closed state.
+ * Open the owner filter's disclosure before shooting: it is a `<details>`,
+ * loads closed, and a capture would photograph a pill reading "Alex Rivera" —
+ * true, and not what these shots are of. Opening is the reader's own first
+ * action; nothing hand-edited. The click targets the summary so a markup
+ * change fails this rather than silently shooting the closed state.
  */
 async function openOwnerFilter(page: Page): Promise<void> {
   const summary = page.locator(".owner-filter > summary");
@@ -440,29 +400,26 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await visit(page, "/");
     await shoot(page, `docs/screenshots/overview-${theme}.png`);
 
-    // The same screen read as one owner (spec 0013). A pair rather than a
-    // single shot, because what the owner filter does is only legible as a
-    // difference: the same household, a smaller headline, the owners named
-    // beneath it, and the pre-app line withheld. At **All**, deliberately —
-    // the withheld-history note only appears on a range that would have shown
-    // the hand-typed points unfiltered, and the demo's are years old, so the
-    // default range would photograph a narrowed chart with nothing to say. A
-    // control nobody can see in the README is a feature nobody knows exists.
+    // One owner, as a pair with the shot above (spec 0013): the filter is
+    // only legible as a difference — smaller headline, owners named, pre-app
+    // line withheld. At **All** deliberately: the withheld-history note only
+    // appears on a range that would have shown the hand-typed points, and the
+    // demo's are years old. A control invisible in the README is a feature
+    // nobody knows exists.
     await visit(page, `/?owner=${ownerId}&range=all`);
     await openOwnerFilter(page);
     await shoot(page, `docs/screenshots/overview-owner-${theme}.png`);
 
-    // The one range that is not a span of days (ADR-0006). Shot separately
-    // because everything about it that is worth seeing — the time axis, the
-    // time-of-day readout, the granularity of the household's own cadence — is
-    // invisible on any other preset.
+    // The one range that is not a span of days (ADR-0006): the time axis,
+    // time-of-day readout and cadence granularity are invisible on any other
+    // preset.
     await visit(page, "/?range=1d");
     await shoot(page, `docs/screenshots/overview-1d-${theme}.png`);
     await visit(page, "/holdings");
     await shoot(page, `docs/screenshots/holdings-${theme}.png`);
 
-    // The editor open on one row. Cropped to the table rather than the page:
-    // at this width a full-page shot renders the two boxes too small to read.
+    // The editor open on one row, cropped to the table: full-page at this
+    // width renders the two boxes too small to read.
     await visit(page, `/holdings?account=${brokerage}&edit=${editRow}`);
     await page.locator("table").first().screenshot({
       path: `docs/screenshots/holdings-edit-${theme}.png`,
@@ -493,18 +450,14 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(phone, `docs/screenshots/overview-mobile-${theme}.png`, false);
     await visit(phone, "/analysis");
     await shoot(phone, `docs/screenshots/analysis-mobile-${theme}.png`, false);
-    // Holdings is the one screen that stops being a table below 768px and
-    // becomes a stack of cards, and until now nothing photographed it. A
-    // reflow that large with no committed image is the one case the README's
-    // "a change to a screen is not finished until these are retaken" rule
-    // cannot catch — there is nothing to retake. Grouped, because the group
-    // heading, the subtotal strip and the grand total are three of the things
-    // the reflow has to get right and all three are only visible grouped.
+    // Holdings is the one screen that reflows from table to card stack below
+    // 768px — with no committed image, the one case "retake on change" cannot
+    // catch. Grouped, because the group heading, subtotal strip and grand
+    // total are what the reflow must get right, and only visible grouped.
     await visit(phone, "/holdings?group=assetClass");
-    // Scrolled to a subtotal, not left at the top. A phone shot is one 900px
-    // viewport and the top of this page is the filter bar and the panel header
-    // — the cards do not start until below the fold, so an unscrolled shot
-    // photographs everything except the thing it is captioned as showing.
+    // Scrolled to a subtotal: a phone shot is one viewport and the cards
+    // start below the fold — unscrolled photographs everything except the
+    // thing it is captioned as showing.
     await phone.evaluate(() => {
       document.querySelector(".row-subtotal")?.scrollIntoView({ block: "center" });
     });
@@ -531,9 +484,8 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
 
   await visit(page, "/holdings");
   await shoot(page, "docs/guide/images/holdings.png");
-  // Grouped, and unnarrowed: the guide describes grouping here, and a table
-  // that was also filtered would have the reader working out which control did
-  // which. The owner filter has its own shot below.
+  // Grouped and unnarrowed: the guide describes grouping here, and adding a
+  // filter would leave the reader working out which control did which.
   await visit(page, "/holdings?group=assetClass");
   await shoot(page, "docs/guide/images/holdings-grouped.png");
   await visit(page, `/holdings?owner=${ownerId}`);

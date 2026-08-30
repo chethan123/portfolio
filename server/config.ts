@@ -1,14 +1,10 @@
 /**
- * The whole configuration API of the application.
- *
- * Every setting is an environment variable and every environment variable is
- * described here. DESIGN.md §10.1 holds the authoritative table; `.env.example`
- * is its documentation for operators. This module is the only place that reads
- * `process.env`.
- *
- * Deliberately dependency-light and side-effect free so that it can be executed
- * two ways: bundled into the server build by Vite, and run directly by Node's
- * type stripping from `server/validate-config.ts` at container start.
+ * The whole configuration API: every setting is an environment variable,
+ * every variable is described here, and this is the only reader of
+ * `process.env`. DESIGN.md §10.1 holds the authoritative table;
+ * `.env.example` documents it for operators. Dependency-light and
+ * side-effect free because it runs two ways: bundled by Vite, and directly
+ * under type stripping from `server/validate-config.ts` at container start.
  */
 import { z } from "zod";
 
@@ -53,22 +49,15 @@ const configSchema = z.object({
     }),
 
   /**
-   * Whether something in front of this instance authenticates the people who
-   * reach it. `external` says a gate does — the Compose stack's forward-auth
-   * sidecar (ADR-0005) — and `none` says nothing does.
-   *
-   * The app authenticates nobody either way, and this changes exactly one
-   * thing: whether the unprotected-instance banner is drawn. That is the whole
-   * reason the value exists. Behind the gate the banner is a lie, and a warning
-   * a family learns to scroll past is worse than no warning at all — so the app
-   * is told what fronts it rather than left to guess and cry wolf.
-   *
-   * It is therefore a *description of the deployment, not a switch*: setting it
-   * to `external` protects nothing, it only stops the app claiming otherwise.
-   *
-   * A union rather than a boolean, so that a third posture later is a value
-   * here rather than a redesign. `none` is the default because a checkout with
-   * nothing in front of it is what a developer has.
+   * Whether something in front of this instance authenticates people:
+   * `external` = the Compose stack's forward-auth sidecar does (ADR-0005),
+   * `none` = nothing does. The app authenticates nobody either way — the value
+   * only decides whether the unprotected-instance banner is drawn. Behind a
+   * gate the banner is a lie, and a warning a family learns to scroll past is
+   * worse than none. A *description of the deployment, not a switch*:
+   * `external` protects nothing, it only stops the app crying wolf. A union,
+   * not a boolean, so a third posture is a value rather than a redesign;
+   * `none` default because a bare checkout is what a developer has.
    */
   AUTH_GATE: z
     .enum(["external", "none"], { error: "must be either 'external' or 'none'" })
@@ -80,17 +69,13 @@ const configSchema = z.object({
     })
     .default(3000),
 
-  // The quote refresh cadence is deliberately absent here: it is the
-  // household's dial rather than the deployment's, so it lives in
-  // `app_setting.refresh_cadence_minutes` and is edited at Settings → Prices —
-  // `0008_refresh_cadence.sql` carries the argument, including why the old
-  // `PRICE_POLL_INTERVAL_MINUTES` was removed outright rather than kept as a
-  // fallback.
+  // Quote refresh cadence is deliberately absent: the household's dial, not
+  // the deployment's — it lives in `app_setting.refresh_cadence_minutes`,
+  // edited at Settings → Prices. `0008_refresh_cadence.sql` has the argument.
 
   /**
-   * The most a statement upload may carry, in whole megabytes. A brokerage CSV
-   * is tens of kilobytes, so the cap bounds what an accident can put in
-   * memory, not real use.
+   * Upload cap in whole megabytes. A brokerage CSV is tens of kilobytes — this
+   * bounds what an accident can put in memory, not real use.
    */
   MAX_UPLOAD_MB: integerFromString("megabytes")
     .refine((value) => value >= 1, {
@@ -99,8 +84,8 @@ const configSchema = z.object({
     .default(10),
 
   /**
-   * Market-hours calculation, and the zone a quote's timestamp is read in to
-   * decide which trading day it belongs to. Storage is UTC regardless.
+   * Market-hours math, and the zone a quote's timestamp is read in to pick its
+   * trading day. Storage is UTC regardless.
    */
   MARKET_TIMEZONE: timeZone.default("America/New_York"),
 
