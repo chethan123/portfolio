@@ -339,6 +339,7 @@ grep. They come in three tiers.
 |---|---|---|
 | Money representation and its rounding | `app/lib/money.ts` | Five modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:276` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | Two, both real (below). The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
+| Whose money a screen is reading | The readers' own signatures — the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and Appendix A on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons — both given in `manualNetWorth`'s own docstring, where the line falls. The argument cannot make the filter impossible to skip — a new screen can pass `ALL_OWNERS` and draw no control — only **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
 **The two valuation exceptions, stated rather than buried:**
 
@@ -1192,7 +1193,27 @@ accountFirstRecordedDate(id)
 household-scoped read: `ALL_OWNERS` is the whole household and is a word somebody typed rather than
 an argument somebody forgot. An account-scoped read does not take it, because an account already has
 exactly one owner; `manualNetWorth` and `latestObservedSession` do not either, and
-`valuation.server.ts` says why at each seam.
+`manualNetWorth`'s docstring says why for both.
+
+**Where the narrowing goes is the part a future change breaks silently**, so it is worth knowing
+before editing any of these. Four shapes, and they are not interchangeable:
+
+- The `ValuedSource` reads narrow on `holding_valued.owner_id`, in an ordinary `WHERE`. Safe there
+  because the source *is* the view.
+- **The series readers narrow inside the lateral**, on `v.owner_id` and `a.owner_id` — never in the
+  outer `WHERE`. An outer predicate is evaluated after the LEFT join and rejects the all-null row the
+  join manufactures for a date the selected owners hold nothing on, which takes that date off the
+  line instead of reporting it as uncovered. The chart silently starts later than it should.
+- `accountTotals` narrows on `account.owner_id`, because it selects from `account` and LEFT-joins the
+  view so an account holding nothing still reports `0.0000`. An outer `WHERE` *is* right there:
+  `account` is the preserved side, so narrowing it drops whole accounts rather than nulling coverage.
+- `firstRecordedDate` narrows by subquery, because `position_set` carries `account_id` and no owner
+  (DESIGN.md §4.2). That subquery spans **closed** accounts where the view excludes them, so a
+  narrowed first-recorded date and a narrowed `currentHoldings` can disagree about which owners have
+  any history — deliberately, and the Overview's chart reach depends on it.
+
+The id guard is shared: `isOneOf` binds ids as one `bigint[]` behind a digits-and-length test, so an
+id past the type's range answers "no such row" in SQL rather than erroring inside Postgres.
 
 The seam is `ValuedSource` — `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
 type, so a read built on it works for both. The reads that sit beside it rather than on it fall
@@ -1839,11 +1860,12 @@ still live in the current code:
 | `money.ts` | **The only place JS money arithmetic happens.** `BigInt` counts of the last decimal place |
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
-| `holdings-view.ts` | The Holdings table: seven dimensions, filtering, grouping, subtotals |
+| `holdings-view.ts` | The Holdings table: seven dimensions to group by, six of them to filter by, plus subtotals. `owner` is a grouping and not a filter — narrowing to an owner is household-wide (`owner-filter.ts`) |
 | `allocation.ts` | `allocationBy` — one grouper over any figure — the three cuts adapted from it, plus unrealized gains by asset type |
 | `market-hours.ts` | `isMarketOpen` (an optimisation) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
 | `chart-range.ts` | The chart's range vocabulary: the presets, the sampled date grid under its point budget, and the range cookie middleware (ADR-0003). 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
+| `owner-filter.ts` | The owner filter's vocabulary (spec 0013, ADR-0008): the type, `ALL_OWNERS`, the parse, the canonical spelling every screen redirects to, and the search string the shell carries between them. Roster-free, so a loader can canonicalise before touching the database. Pure, and in the client bundle because the control needs it |
 | `masking.ts` | The masking vocabulary: policy and per-browser state, the cookies that carry them, and what masks versus stays (ADR-0002). Pure, and in the client bundle by design |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 
