@@ -183,3 +183,57 @@ export function NarrowedTo({ owners }: { owners: ReadonlyArray<FilterableOwner> 
     </p>
   );
 }
+
+/**
+ * What a screen says when the owner filter is the reason it has nothing to show.
+ *
+ * Deliberately **not** `EmptyState`, whose headline is the fixed *"There is no
+ * data yet."* — a false claim on an instance full of it, and the same
+ * distinction `holdings.tsx` has always drawn between an empty instance and a
+ * question whose answer happens to be nothing. Only a genuinely empty instance
+ * may say nothing has been uploaded.
+ *
+ * Two sentences rather than one, because the two are a different fix to a
+ * reader: an id naming nobody is a stale address, and an owner holding nothing
+ * is a fact about the household. Neither may sound like an error.
+ */
+/**
+ * The address is stale rather than the household empty: this selection names
+ * somebody the household cannot be read as.
+ *
+ * Exported because Holdings says the same thing in its own panel note, and one
+ * household described two ways on adjacent pages is exactly what a second copy
+ * of a sentence buys.
+ */
+export const UNREADABLE_OWNER =
+  "This view is set to an owner the household can no longer be read as — removed, or left holding only closed accounts.";
+
+/** "Alice holds", "Alice and Bob hold" — the same fragment both screens use. */
+export function holdsNothing(names: ReadonlyArray<FilterableOwner>): string {
+  return `${joinWords(names.map((owner) => owner.name))} ${names.length === 1 ? "holds" : "hold"}`;
+}
+
+export function NarrowedToNothing({
+  owners,
+  unknownOwner,
+  showEveryone,
+}: {
+  owners: ReadonlyArray<FilterableOwner>;
+  unknownOwner: boolean;
+  /** Where "Show everyone" goes: this screen, its own state kept, no owner. */
+  showEveryone: string;
+}) {
+  return (
+    <div className="panel">
+      <div className="panel-body panel-body--empty">
+        <p className="empty-note">
+          {unknownOwner ? UNREADABLE_OWNER : `${holdsNothing(owners)} nothing that has been recorded here.`}{" "}
+          Everything else is still there.
+        </p>
+        <Link className="button button--text" to={showEveryone}>
+          Show everyone
+        </Link>
+      </div>
+    </div>
+  );
+}
