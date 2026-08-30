@@ -320,7 +320,7 @@ grep. They come in three tiers.
 
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
-| Postgres pool construction | `server/db.ts:62` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
+| Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
 | Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:388` | The provider swap stops being a day's work. The interface is also the test seam. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
 

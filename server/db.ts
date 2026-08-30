@@ -43,7 +43,7 @@ for (const oid of STRING_TYPE_OIDS) {
 
 /** Exported so tests and the migration runner reuse this construction site. */
 export function createPool(connectionString: string): pg.Pool {
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString,
     // Bounded so `/healthz` reports unreachable rather than hanging past the
     // Compose healthcheck.
@@ -51,4 +51,24 @@ export function createPool(connectionString: string): pg.Pool {
     // The database stores UTC regardless of the container clock (DESIGN.md §10).
     options: "-c timezone=UTC",
   });
+
+  const reportConnectionError = (error: Error): void => {
+    console.error("Postgres connection error:", error);
+  };
+
+  // Both paths are necessary: pg-pool removes its idle error listener while a
+  // client is checked out, and the price poller holds one across provider
+  // network work. The pool catches idle failures; the client catches that gap.
+  // Detaching on release keeps the paths disjoint — an idle death would
+  // otherwise fire both this listener and pg-pool's own, reporting one error
+  // twice.
+  pool.on("error", reportConnectionError);
+  pool.on("acquire", (client) => {
+    client.on("error", reportConnectionError);
+  });
+  pool.on("release", (_error, client) => {
+    client.removeListener("error", reportConnectionError);
+  });
+
+  return pool;
 }
