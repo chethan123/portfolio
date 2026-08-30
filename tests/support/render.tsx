@@ -64,12 +64,15 @@ const STUB_STYLESHEET_WARNING = 'An empty string ("") was passed to the';
  * `path` may carry a search string. It is rendered at the whole address and
  * matched on the pathname, so a control that builds its links out of the
  * params already there can be asserted on.
+ *
+ * `actionData` is for the screen a refusal re-renders: pass what the real
+ * action returned, for the same no-drift reason as the loader data above.
  */
 export function renderRoute<T>(
   Component: React.ComponentType<never>,
   path: string,
   loaderData: T,
-  { masked = false }: { masked?: boolean } = {},
+  { masked = false, actionData }: { masked?: boolean; actionData?: unknown } = {},
 ): string {
   // The route pattern is the pathname alone; the entry below is the whole
   // address. A search string in the pattern would match nothing, so a
@@ -94,7 +97,10 @@ export function renderRoute<T>(
   return renderToStaticMarkup(
     <Stub
       initialEntries={[path]}
-      hydrationData={{ loaderData: { root: { masked }, page: loaderData } }}
+      hydrationData={{
+        loaderData: { root: { masked }, page: loaderData },
+        ...(actionData !== undefined ? { actionData: { page: actionData } } : {}),
+      }}
     />,
   );
 }

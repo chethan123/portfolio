@@ -151,3 +151,14 @@ The household's standing choice of what a browser that has not been toggled yet 
 unmasked, or as that browser last left it. Distinct from being masked, which is a fact about one
 browser at one moment rather than about the household.
 _Avoid_: privacy setting, hide on start, default state.
+
+### How a form starts already answered
+
+**Prefill**:
+A starting choice a link hands a form — already selected on arrival, still changeable, and
+committing nothing: the form's own rules decide what may actually be submitted. A prefill that
+names something gone — closed, removed, mistyped — is quietly dropped and the form starts blank,
+because a prefill only ever saved the picking; it never promised the pick. Distinct from a filter,
+which narrows what a page shows: a filter that matches nothing is kept and said out loud, since
+dropping it would silently change what the reader believes they are looking at.
+_Avoid_: pre-selection, auto-select, locked, deep-link default.
