@@ -75,10 +75,15 @@ export function createPool(connectionString: string): pg.Pool {
   // Both paths are necessary: pg-pool removes its idle error listener while a
   // client is checked out, and the price poller holds one across provider
   // network work. The pool catches idle failures; the client catches that gap.
+  // Detaching on release keeps the paths disjoint — an idle death would
+  // otherwise fire both this listener and pg-pool's own, reporting one error
+  // twice.
   pool.on("error", reportConnectionError);
   pool.on("acquire", (client) => {
-    client.removeListener("error", reportConnectionError);
     client.on("error", reportConnectionError);
+  });
+  pool.on("release", (_error, client) => {
+    client.removeListener("error", reportConnectionError);
   });
 
   return pool;

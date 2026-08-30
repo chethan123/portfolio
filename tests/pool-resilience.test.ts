@@ -21,7 +21,7 @@ describe("Postgres pool resilience", () => {
       await Promise.allSettled([subjectPool.end(), controllerPool.end()]);
       throw new Error(
         `Cannot reach the test database at ${TEST_DATABASE_URL}.\n` +
-          "Start it with: docker compose -f compose.test.yaml up -d\n" +
+          "Start it with: docker compose -f compose.test.yaml up -d --wait\n" +
           "or point TEST_DATABASE_URL at your own throwaway Postgres.",
         { cause },
       );
@@ -39,13 +39,14 @@ describe("Postgres pool resilience", () => {
   });
 
   function waitForConnectionError() {
-    let resolveError: (() => void) | undefined;
-    const errorReported = new Promise<void>((resolve) => {
-      resolveError = resolve;
-    });
+    const { promise: errorReported, resolve } = Promise.withResolvers<void>();
+    const original = console.error;
     const errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
       if (args[0] === CONNECTION_ERROR_MESSAGE) {
-        resolveError?.();
+        resolve();
+      } else {
+        // Anything else going wrong in the observation window still surfaces.
+        original(...args);
       }
     });
 
@@ -66,6 +67,10 @@ describe("Postgres pool resilience", () => {
     await errorReported;
 
     expect(errorSpy).toHaveBeenCalledWith(CONNECTION_ERROR_MESSAGE, expect.any(Error));
+    // Exactly once: both listeners firing for one death would double-count
+    // every idle failure in the logs. Both calls land synchronously with the
+    // emit, so an extra one is visible by the time the wait resolves.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
   it("logs an error when Postgres terminates a checked-out client", async () => {
@@ -84,6 +89,7 @@ describe("Postgres pool resilience", () => {
       await errorReported;
 
       expect(errorSpy).toHaveBeenCalledWith(CONNECTION_ERROR_MESSAGE, expect.any(Error));
+      expect(errorSpy).toHaveBeenCalledTimes(1);
     } finally {
       heldClient.release(true);
       heldClient = undefined;
