@@ -665,7 +665,20 @@ export function chartRangeMiddleware() {
     const response = (await next()) as Response;
     const requested = readChartRange(request);
 
-    if (requested.explicit) {
+    // Not onto a redirect. Since spec 0013 a loader may bounce to a canonical
+    // address before it draws anything, and stamping a remembered choice on a
+    // response that is not the page is a header nobody reads. Skipping it costs
+    // nothing: every redirect under this middleware lands somewhere this same
+    // middleware runs, so the cookie is written for the page that is actually
+    // drawn.
+    //
+    // Document requests only. A client-side navigation carries a redirect back
+    // as react-router's single-fetch 202 rather than a 3xx, and this does not
+    // fire for it — which is harmless, because it would write the same value
+    // the followed request writes a moment later.
+    const redirecting = response.status >= 300 && response.status < 400;
+
+    if (requested.explicit && !redirecting) {
       response.headers.append(
         "Set-Cookie",
         rangeCookie(encodeRangeCookieValue(requested.range, requested.custom)),

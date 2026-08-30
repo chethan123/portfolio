@@ -22,13 +22,13 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import Account, { loader, middleware } from "../../app/routes/account.tsx";
+import Account, { action, loader, middleware } from "../../app/routes/account.tsx";
 import { RANGE_COOKIE } from "~/lib/chart-range";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, responseOf, servedThrough } from "../support/routes.ts";
+import { args, get, post, redirectTo, responseOf, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -610,6 +610,53 @@ describe("the 1D range on an account", () => {
       );
       expect(asked.range).toBe("1y");
       expect(asked.session).toBeNull();
+    }),
+  );
+});
+
+describe("the receipt a balance write redirects to", () => {
+  it(
+    "keeps what the submitting page was reading",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "bank", name: "Chase Checking" });
+
+      // `chartRangeMiddleware` writes no cookie onto a redirect, so a target
+      // that dropped `range` would leave the followed GET with nothing explicit
+      // to read — and send it to whatever the cookie last held, which another
+      // tab may have moved. The receipt names the range, which is what makes
+      // the middleware's rule safe.
+      const to = await redirectTo(() =>
+        action(
+          args(
+            post(`/accounts/${account.id}?range=1m&owner=7`, { amount: "1250.00", asOf: "2026-02-28" }),
+            { accountId: account.id },
+          ),
+        ),
+      );
+
+      expect(to).toContain("range=1m");
+      // And the owner filter, so a write does not end a reading either.
+      expect(to).toContain("owner=7");
+      expect(to).toContain("recorded=");
+    }),
+  );
+
+  it(
+    "does not stack a second receipt on the first",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "bank", name: "Chase Checking" });
+
+      const to = await redirectTo(() =>
+        action(
+          args(
+            post(`/accounts/${account.id}?recorded=2026-01-31`, { amount: "10.00", asOf: "2026-02-28" }),
+            { accountId: account.id },
+          ),
+        ),
+      );
+
+      expect(to.match(/recorded=/g)).toHaveLength(1);
+      expect(to).not.toContain("recorded=2026-01-31");
     }),
   );
 });

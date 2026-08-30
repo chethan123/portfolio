@@ -33,8 +33,8 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import { loader as analysisPage } from "../../app/routes/analysis.tsx";
-import { loader as incomePage } from "../../app/routes/income.tsx";
+import { loader as analysis } from "../../app/routes/analysis.tsx";
+import { loader as income } from "../../app/routes/income.tsx";
 import {
   DEFAULT_DIRECTION,
   DEFAULT_SORT,
@@ -51,8 +51,19 @@ import { MONEY_SCALE, toUnits } from "~/lib/money";
 import { ALL_OWNERS } from "~/lib/owner-filter";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
+import { args, get } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
+
+/**
+ * The two screens' loaders, unfiltered.
+ *
+ * Both read the owner filter off the request now (spec 0013), so they take
+ * route arguments like every other loader this suite drives. The invariants
+ * below are about the household, so the address carries no filter.
+ */
+const analysisPage = () => analysis(args(get("/analysis")));
+const incomePage = () => income(args(get("/income")));
 
 afterAll(closeTestDatabase);
 
