@@ -16,6 +16,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import {
   accountFirstRecordedDate,
   accountHoldings,
@@ -75,7 +76,7 @@ describe("accountTotal", () => {
 
       // The drill-down's consistency check, and the reason this returns the
       // same type the list does: the page's headline is the overview's row.
-      const [row] = (await accountTotals(db)).filter(
+      const [row] = (await accountTotals(ALL_OWNERS, db)).filter(
         (candidate) => candidate.accountId === brokerage.id,
       );
       expect(total).toEqual(row);
@@ -153,7 +154,7 @@ describe("accountTotal", () => {
 
       // And the account's own figure is the household's, since it is the only
       // account: the drill-down and the headline are one arithmetic (§8.2).
-      expect(await netWorth(db)).toEqual({ amount: "2500.0000", coverage: { known: 1, total: 2 } });
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({ amount: "2500.0000", coverage: { known: 1, total: 2 } });
     }),
   );
 

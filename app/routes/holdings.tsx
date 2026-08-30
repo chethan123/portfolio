@@ -27,6 +27,7 @@ import {
   toSearch,
 } from "~/lib/holdings-view";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
 import { currentHoldings } from "~/lib/valuation.server";
 
@@ -123,7 +124,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const [holdings, freshness] = await Promise.all([
-    currentHoldings(),
+    currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 

@@ -19,6 +19,7 @@ import {
 } from "~/lib/accounts.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { createPerson, listPeople, removePerson } from "~/lib/people.server";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { netWorth, netWorthAt } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -548,7 +549,7 @@ describe("closing an account", () => {
         holdings: [{ instrument: usd, quantity: "12500.00000000" }],
       });
 
-      expect(await netWorth(db)).toEqual({
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "12500.0000",
         coverage: { known: 1, total: 1 },
       });
@@ -557,9 +558,9 @@ describe("closing an account", () => {
 
       // Gone from today's figure — and reported as zero holdings rather than as
       // a total computed from one, so nothing reads as an empty account.
-      expect(await netWorth(db)).toEqual({ amount: "0.0000", coverage: { known: 0, total: 0 } });
+      expect(await netWorth(ALL_OWNERS, db)).toEqual({ amount: "0.0000", coverage: { known: 0, total: 0 } });
 
-      expect(await netWorthAt("2026-02-14", db)).toEqual({
+      expect(await netWorthAt(ALL_OWNERS, "2026-02-14", db)).toEqual({
         amount: "12500.0000",
         coverage: { known: 1, total: 1 },
       });

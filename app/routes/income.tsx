@@ -9,6 +9,7 @@ import {
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
 import { groupingBy, summarise } from "~/lib/holdings-view";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { currentHoldings } from "~/lib/valuation.server";
 
 import type { ShelteredSubtotal } from "~/lib/allocation";
@@ -63,7 +64,7 @@ export function meta() {
 
 export async function loader() {
   const [holdings, freshness] = await Promise.all([
-    currentHoldings(),
+    currentHoldings(ALL_OWNERS),
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 

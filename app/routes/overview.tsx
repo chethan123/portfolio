@@ -23,6 +23,7 @@ import {
 } from "~/lib/chart-range";
 import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import {
   accountTotals,
   asSessionPoints,
@@ -110,7 +111,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // behind them.
   const [manual, positionSet, session] = await Promise.all([
     manualNetWorth(),
-    firstRecordedDate(),
+    firstRecordedDate(ALL_OWNERS),
     latestObservedSession(),
   ]);
 
@@ -130,12 +131,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   // is what says which, and the chart is told the same thing.
   const points =
     resolved.session === undefined
-      ? netWorthSeries(resolved.dates).then(asSessionPoints)
-      : netWorthSessionSeries(resolved.session);
+      ? netWorthSeries(ALL_OWNERS, resolved.dates).then(asSessionPoints)
+      : netWorthSessionSeries(ALL_OWNERS, resolved.session);
 
   const [change, accounts, series, freshness] = await Promise.all([
-    netWorthChange(resolved.since),
-    accountTotals(),
+    netWorthChange(ALL_OWNERS, resolved.since),
+    accountTotals(ALL_OWNERS),
     points,
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);

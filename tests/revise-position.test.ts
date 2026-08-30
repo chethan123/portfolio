@@ -25,6 +25,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { currentPosition, effectiveDate, revisePosition } from "~/lib/positions.server";
+import { ALL_OWNERS } from "~/lib/owner-filter";
 import { accountTotal, currentHoldings, netWorth, netWorthAt } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -68,7 +69,7 @@ describe("revisePosition", () => {
       expect(written.quantity).toBe("120");
       expect(written.asOf).toBe(today());
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
       // 120 × 250 = 30,000, against 120 × 210 = 25,200 of basis.
       expect(holding?.quantity).toBe("120.00000000");
       expect(holding?.value).toBe("30000.0000");
@@ -92,13 +93,13 @@ describe("revisePosition", () => {
         holdings: [{ instrument: vti, quantity: "100.00000000" }],
       });
 
-      const before = await netWorthAt("2026-06-30", db);
+      const before = await netWorthAt(ALL_OWNERS, "2026-06-30", db);
       expect(before.amount).toBe("25000.0000");
 
       await revisePosition(account.id, vti.id, { quantity: "120", costBasisPerShare: "" }, db);
 
       // June is still June. The correction speaks from today onward.
-      expect((await netWorthAt("2026-06-30", db)).amount).toBe("25000.0000");
+      expect((await netWorthAt(ALL_OWNERS, "2026-06-30", db)).amount).toBe("25000.0000");
 
       const sets = await db
         .selectFrom("position_set")
@@ -136,7 +137,7 @@ describe("revisePosition", () => {
 
       await revisePosition(account.id, vti.id, { quantity: "120", costBasisPerShare: "200" }, db);
 
-      const holdings = await currentHoldings(db);
+      const holdings = await currentHoldings(ALL_OWNERS, db);
       expect(holdings).toHaveLength(3);
 
       const byName = new Map(holdings.map((holding) => [holding.instrumentName, holding]));
@@ -179,7 +180,7 @@ describe("revisePosition", () => {
       );
 
       expect(written.asOf).toBe(tomorrow);
-      expect((await currentHoldings(db))[0]?.quantity).toBe("120.00000000");
+      expect((await currentHoldings(ALL_OWNERS, db))[0]?.quantity).toBe("120.00000000");
     }),
   );
 
@@ -201,7 +202,7 @@ describe("revisePosition", () => {
       // Undo is a second correction, not a delete: the tie-break on a shared
       // as-of date is `created_at` then `id`, the same one a re-uploaded
       // statement resolves through.
-      expect((await currentHoldings(db))[0]?.quantity).toBe("130.00000000");
+      expect((await currentHoldings(ALL_OWNERS, db))[0]?.quantity).toBe("130.00000000");
       const sets = await db
         .selectFrom("position_set")
         .select("id")
@@ -227,7 +228,7 @@ describe("revisePosition", () => {
 
       // Still a row, so the table still prints it and the editor can still
       // reach it. Omitting it would mean "sold" — true, and unreachable.
-      const holdings = await currentHoldings(db);
+      const holdings = await currentHoldings(ALL_OWNERS, db);
       expect(holdings).toHaveLength(1);
       expect(holdings[0]?.quantity).toBe("0.00000000");
       expect(holdings[0]?.value).toBe("0.0000");
@@ -251,7 +252,7 @@ describe("revisePosition", () => {
       await revisePosition(loan.id, usd.id, { quantity: "−13,900.50", costBasisPerShare: "" }, db);
 
       expect((await accountTotal(loan.id, db))?.amount).toBe("-13900.5000");
-      expect((await netWorth(db)).amount).toBe("-13900.5000");
+      expect((await netWorth(ALL_OWNERS, db)).amount).toBe("-13900.5000");
     }),
   );
 
@@ -415,7 +416,7 @@ describe("revisePosition", () => {
       expect(refusal.fieldErrors.costBasisPerShare).toMatch(/larger figure than this application/);
 
       // The proof that the refusal was the point: the view still renders.
-      const holdings = await currentHoldings(db);
+      const holdings = await currentHoldings(ALL_OWNERS, db);
       expect(holdings).toHaveLength(1);
       expect(holdings[0]?.costBasisPerShare).toBeNull();
     }),
@@ -440,7 +441,7 @@ describe("revisePosition", () => {
       );
       expect(refusal.fieldErrors.quantity).toMatch(/larger figure than this application/);
 
-      expect((await currentHoldings(db))[0]?.quantity).toBe("1.00000000");
+      expect((await currentHoldings(ALL_OWNERS, db))[0]?.quantity).toBe("1.00000000");
     }),
   );
 
@@ -476,7 +477,7 @@ describe("revisePosition", () => {
       // The whole point of the refusal: the view still answers. Before the
       // guard this read raised `numeric field overflow`, and with Holdings down
       // there was no screen left from which to correct the row.
-      const holdings = await currentHoldings(db);
+      const holdings = await currentHoldings(ALL_OWNERS, db);
       expect(holdings).toHaveLength(1);
       expect(holdings[0]?.quantity).toBe("1.00000000");
     }),
@@ -498,7 +499,7 @@ describe("revisePosition", () => {
 
       await revisePosition(account.id, schd.id, { quantity: "5000" }, db);
 
-      const [holding] = await currentHoldings(db);
+      const [holding] = await currentHoldings(ALL_OWNERS, db);
       expect(holding?.quantity).toBe("5000.00000000");
       // 5,000 × $1.03, computed by the view rather than restated here.
       expect(holding?.annualDividend).toBe("5150.0000");
@@ -527,7 +528,7 @@ describe("revisePosition", () => {
         db,
       );
       expect(written.costBasisPerShare).toBe("99999999999999");
-      expect((await currentHoldings(db))[0]?.costBasis).toBe("9999999999999900.0000");
+      expect((await currentHoldings(ALL_OWNERS, db))[0]?.costBasis).toBe("9999999999999900.0000");
     }),
   );
 
@@ -582,7 +583,7 @@ describe("revisePosition", () => {
       );
 
       expect(written.quantity).toBe("100.12");
-      expect((await currentHoldings(db))[0]?.quantity).toBe("100.12000000");
+      expect((await currentHoldings(ALL_OWNERS, db))[0]?.quantity).toBe("100.12000000");
       expect((await accountTotal(account.id, db))?.amount).toBe("100.1200");
     }),
   );
@@ -610,9 +611,9 @@ describe("revisePosition", () => {
       );
 
       expect(written.quantity).toBe("1.23456789");
-      expect((await currentHoldings(db))[0]?.quantity).toBe("1.23456789");
+      expect((await currentHoldings(ALL_OWNERS, db))[0]?.quantity).toBe("1.23456789");
       // 1.23456789 × 250 = 308.6419725, as the view rounds it to the column.
-      expect((await currentHoldings(db))[0]?.value).toBe("308.6420");
+      expect((await currentHoldings(ALL_OWNERS, db))[0]?.value).toBe("308.6420");
     }),
   );
 
