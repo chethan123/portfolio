@@ -71,10 +71,11 @@ context, and the result of a real trade-off. Both were opened by the dividends w
   is not a zero. The README states them at the altitude of a module seam for a contributor; the
   guide states them as consequences for a household.
 - **[`operating.md`](operating.md) restates parts of `.env.example`.** Named there, in place.
-- **[`data-model.md`](data-model.md) retells the migrations' DDL and `DESIGN.md` §2–§8's rules** for
-  a reader who may have neither open — someone with only a dump. Named there, in place, with the
-  migrations given as the ones to believe: their header comments carry the reasoning, and the
-  document describes rather than replaces them.
+- **[`data-model.md`](data-model.md) retells the migrations' DDL, `DESIGN.md` §2–§8's rules, and
+  `ARCHITECTURE.md` §5's schema walk** — entity diagram included — for a reader who may have none of
+  them open: someone with only a dump. Named there, in place, with the migrations given as the ones
+  to believe: their header comments carry the reasoning, and the document describes rather than
+  replaces them.
 - **[`google-sign-in.md`](google-sign-in.md) restates the shapes of the gate's settings**, which
   `.env.example` owns beside the blanks they fill — the cookie secret's length and the command that
   generates one, and the origin's form. Named there, in place, with `.env.example` given as the one
