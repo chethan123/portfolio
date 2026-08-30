@@ -185,19 +185,6 @@ export function NarrowedTo({ owners }: { owners: ReadonlyArray<FilterableOwner> 
 }
 
 /**
- * What a screen says when the owner filter is the reason it has nothing to show.
- *
- * Deliberately **not** `EmptyState`, whose headline is the fixed *"There is no
- * data yet."* — a false claim on an instance full of it, and the same
- * distinction `holdings.tsx` has always drawn between an empty instance and a
- * question whose answer happens to be nothing. Only a genuinely empty instance
- * may say nothing has been uploaded.
- *
- * Two sentences rather than one, because the two are a different fix to a
- * reader: an id naming nobody is a stale address, and an owner holding nothing
- * is a fact about the household. Neither may sound like an error.
- */
-/**
  * The address is stale rather than the household empty: this selection names
  * somebody the household cannot be read as.
  *
@@ -213,6 +200,19 @@ export function holdsNothing(names: ReadonlyArray<FilterableOwner>): string {
   return `${joinWords(names.map((owner) => owner.name))} ${names.length === 1 ? "holds" : "hold"}`;
 }
 
+/**
+ * What a screen says when the owner filter is the reason it has nothing to show.
+ *
+ * Deliberately **not** `EmptyState`, whose headline is the fixed *"There is no
+ * data yet."* — a false claim on an instance full of it, and the same
+ * distinction `holdings.tsx` has always drawn between an empty instance and a
+ * question whose answer happens to be nothing. Only a genuinely empty instance
+ * may say nothing has been uploaded.
+ *
+ * Two sentences rather than one, because the two are a different fix to a
+ * reader: an id naming nobody is a stale address, and an owner holding nothing
+ * is a fact about the household. Neither may sound like an error.
+ */
 export function NarrowedToNothing({
   owners,
   unknownOwner,

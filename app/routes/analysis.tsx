@@ -22,7 +22,6 @@ import {
   ALL_OWNERS,
   canonicalOwnerSearch,
   isFiltered,
-  ownerSearch,
   readOwnerFilter,
 } from "~/lib/owner-filter";
 import { ownerRoster } from "~/lib/people.server";

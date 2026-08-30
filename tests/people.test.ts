@@ -11,8 +11,10 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import {
+  ALL_OWNERS,
+} from "~/lib/owner-filter";
+import {
   createPerson,
-  filterableOwners,
   listPeople,
   ownerRoster,
   removePerson,
@@ -203,17 +205,13 @@ describe("who the household can be read as (spec 0013)", () => {
       // closed accounts, so selecting her would empty every screen with nothing
       // saying why. Leaving her out makes her id one the roster does not name,
       // which is a state the screens already have a sentence for.
-      expect((await filterableOwners(ctx.db)).map((person) => person.name)).toEqual([
-        "Alice",
-        "Bob",
-      ]);
+      const roster = async () =>
+        (await ownerRoster(ALL_OWNERS, ctx.db)).people.map((person) => person.name);
+      expect(await roster()).toEqual(["Alice", "Bob"]);
 
       // And a person who owns nothing at all is out for the same reason.
       await ctx.seedPerson({ name: "Dana" });
-      expect((await filterableOwners(ctx.db)).map((person) => person.name)).toEqual([
-        "Alice",
-        "Bob",
-      ]);
+      expect(await roster()).toEqual(["Alice", "Bob"]);
     }),
   );
 });

@@ -101,28 +101,6 @@ export async function listPeople(db: Kysely<Database> = getDb()): Promise<Person
   }));
 }
 
-/**
- * The people a screen can be read as — the owner filter's roster (spec 0013).
- *
- * Owners of at least one **open** account, because `holding_valued` excludes
- * closed ones: selecting somebody whose accounts have all been closed would
- * empty every screen with no explanation. Leaving them out instead makes their
- * id one the roster does not name, which is the state the screens already have
- * a sentence for.
- *
- * The cost is stated rather than hidden: their history is not reachable through
- * the filter at all, even though `firstRecordedDate` can still see it. That is
- * an accepted limitation of this slice and belongs in DESIGN.md §14, which
- * ticket 06 adds it to.
- *
- * A filter over {@link listPeople} rather than a second query: the roster is
- * small, the query is the one the People screen already runs, and two readers
- * of one table are two answers waiting to disagree.
- */
-export async function filterableOwners(db: Kysely<Database> = getDb()): Promise<Person[]> {
-  return (await listPeople(db)).filter((person) => person.openAccountCount > 0);
-}
-
 /** The roster a screen draws its control from, and what a selection makes of it. */
 export type OwnerRoster = {
   /** Everyone the household can be read as, in the order to draw them. */
@@ -167,8 +145,15 @@ export type OwnerRoster = {
  * Every screen that draws the control asks the same two questions of the same
  * roster — which ids name nobody it can filter by, and whether the selection is
  * simply everybody — and a rule each loader spelled for itself would be one
- * free to drift on a screen nobody was looking at. The query is
- * {@link filterableOwners}'; what is added here is the comparison.
+ * free to drift on a screen nobody was looking at.
+ *
+ * The roster is owners of at least one **open** account, because
+ * `holding_valued` excludes closed ones: selecting somebody whose accounts have
+ * all been closed would empty every screen with no explanation. Leaving them
+ * out instead makes their id one the roster does not name, which is the state
+ * the screens already have a sentence for. The cost is stated rather than
+ * hidden — their history is not reachable through the filter at all, even
+ * though `firstRecordedDate` can still see it — and DESIGN.md §14 records it.
  */
 export async function ownerRoster(
   owners: OwnerFilter,
@@ -186,7 +171,6 @@ export async function ownerRoster(
     people,
     narrowedTo,
     unknownOwner: owners.length > narrowedTo.length,
-    // Every roster member named and nobody else. Both halves, or a selection of
     // Every person recorded is named, and nothing else is. Both halves: without
     // the second, "Alice and somebody who no longer exists" is as long as a
     // two-person household and would collapse to it, hiding the one state that
