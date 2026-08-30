@@ -142,6 +142,11 @@ export function ownerSearch(filter: OwnerFilter): string {
  *
  * `?owner=` present but empty is not canonical: it is the unfiltered screen,
  * whose spelling is no parameter at all.
+ *
+ * `owners` overrides what the address says, for the one caller that needs a
+ * *different* selection spelled into the same address: a screen bouncing an
+ * all-roster selection back to the household, and the "Show everyone" link
+ * beside it, which keeps the range or the sort the reader had.
  */
 /**
  * Whether two search strings name the same view, whatever spelled them.
@@ -168,11 +173,11 @@ export function sameView(a: string, b: string): boolean {
   return new URLSearchParams(a).toString() === new URLSearchParams(b).toString();
 }
 
-export function canonicalOwnerSearch(params: URLSearchParams): string {
+export function canonicalOwnerSearch(params: URLSearchParams, owners?: OwnerFilter): string {
   const rest = new URLSearchParams(params);
   rest.delete("owner");
 
-  const search = [toOwnerParam(readOwnerFilter(params)), rest.toString()]
+  const search = [toOwnerParam(owners ?? readOwnerFilter(params)), rest.toString()]
     .filter((part) => part !== "")
     .join("&");
 
