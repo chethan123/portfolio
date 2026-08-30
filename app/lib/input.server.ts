@@ -1,27 +1,18 @@
 /**
  * Turning a submitted form into domain input, and a refusal into something a
- * person can read.
- *
- * The domain modules own their own rules — `people.server.ts` decides what a
- * name is — and this module is only the shared vocabulary they express those
- * rules in: one error type carrying per-field messages, one parse helper, the
- * field shapes the forms are built from — two of text, one of money and one of
- * dates — and the one phrase-builder their refusals share, so that three
- * modules naming a list of things name it the same way.
- *
- * It exists so that a route never has to know about Zod. A route reads the
- * form, hands the raw fields to a domain function and renders whatever comes
- * back on the way out; that is what keeps the routes thin wrappers rather than
- * a second place the rules live.
+ * person can read. The domain modules own their rules; this is the shared
+ * vocabulary they express them in — one error type with per-field messages,
+ * one parse helper, the field shapes the forms are built from, and the one
+ * phrase-builder their refusals share. It exists so a route never has to know
+ * about Zod: routes stay thin wrappers, not a second place the rules live.
  */
 import { z } from "zod";
 
 import { SHARE_SCALE, compareDecimal } from "./money.ts";
 
 /**
- * The field name a message belongs to when it belongs to no single field —
- * "this person still owns two accounts" is about the submission, not about a
- * box on the form.
+ * The key for a message that belongs to no single field — "this person still
+ * owns two accounts" is about the submission, not a box.
  */
 export const FORM_ERROR = "form";
 
@@ -29,11 +20,9 @@ export const FORM_ERROR = "form";
 export type FieldErrors = Readonly<Record<string, string>>;
 
 /**
- * Input a domain module refused, with a message per field.
- *
- * Carrying the field name is what lets the form re-render with the message
- * beside the box that caused it while every other box keeps what was typed.
- * A refusal is an ordinary outcome of a form submission — never a 500.
+ * Input a domain module refused, a message per field — the field name lets
+ * the form re-render the message beside the box that caused it. A refusal is
+ * an ordinary outcome of a submission, never a 500.
  */
 export class ValidationError extends Error {
   override readonly name = "ValidationError";
@@ -51,22 +40,17 @@ export class ValidationError extends Error {
 }
 
 /**
- * An id in a URL or a form that matches no row.
- *
- * Separate from {@link ValidationError} because the two become different
- * responses: a validation failure re-renders the form, a missing row is a 404.
+ * An id that matches no row. Separate from {@link ValidationError} because
+ * they become different responses: a re-rendered form versus a 404.
  */
 export class NotFoundError extends Error {
   override readonly name = "NotFoundError";
 }
 
 /**
- * "A", "A and B", "A, B and C" — a refusal reads as a sentence, not a dump.
- *
- * Here rather than beside any one of the three refusals that name a list,
- * because they are three ways of saying the same thing to the same reader and a
- * second copy would be free to punctuate it differently. Not `Intl.ListFormat`,
- * which writes the serial comma none of the prose in this application does.
+ * "A", "A and B", "A, B and C" — a refusal reads as a sentence. Here so the
+ * three refusals that name a list cannot punctuate it differently. Not
+ * `Intl.ListFormat`, which writes the serial comma this prose does not.
  */
 export function listSentence(items: readonly string[]): string {
   if (items.length <= 1) return items[0] ?? "";
@@ -74,11 +58,9 @@ export function listSentence(items: readonly string[]): string {
 }
 
 /**
- * Required free text: trimmed, non-empty, and bounded.
- *
- * The bound is a storage sanity limit rather than a domain rule — `text` in
- * Postgres has no length limit, so without one a paste of an entire statement
- * lands in a name column and every list on the screen breaks.
+ * Required free text: trimmed, non-empty, bounded. The bound is storage
+ * sanity, not a domain rule — `text` has no limit, and a pasted statement in
+ * a name column breaks every list on screen.
  */
 export const requiredText = (label: string, max = 200) =>
   z
@@ -88,11 +70,9 @@ export const requiredText = (label: string, max = 200) =>
     .max(max, { message: `${label} must be ${max} characters or fewer.` });
 
 /**
- * Optional free text, where blank means "not recorded".
- *
- * Blank becomes `null` rather than `""`: a column that distinguishes "no
- * account number" from "an account number that is the empty string" would be
- * distinguishing nothing, and null is what the schema already means by absent.
+ * Optional free text, where blank means "not recorded". Blank becomes `null`,
+ * not `""`: distinguishing "no number" from "empty-string number" would
+ * distinguish nothing, and null is what the schema means by absent.
  */
 export const optionalText = (label: string, max = 200) =>
   z
@@ -104,11 +84,9 @@ export const optionalText = (label: string, max = 200) =>
     .transform((value) => value ?? null);
 
 /**
- * Parse raw form fields against a schema, or refuse with per-field messages.
- *
- * Zod reports an issue path; the first segment is the field name, which is
- * exactly the key the form needs to put the message under. Only the first
- * message per field survives, because a box can only carry one.
+ * Parse raw form fields against a schema, or refuse per field. Zod's first
+ * path segment is the field name — exactly the key the form needs. Only the
+ * first message per field survives: a box can only carry one.
  *
  * @throws {ValidationError} naming every field that was wrong.
  */
@@ -129,12 +107,9 @@ export function parseInput<Schema extends z.ZodType>(
 }
 
 /**
- * The string fields of a submitted form.
- *
- * File parts are dropped rather than stringified — the settings forms have
- * none, and `"[object File]"` reaching a name column is not a failure anyone
- * should have to diagnose. The upload slice reads its file from the `FormData`
- * directly.
+ * The string fields of a submitted form. File parts are dropped, never
+ * stringified: `"[object File]"` in a name column is not a failure anyone
+ * should diagnose. The upload slice reads its file from `FormData` directly.
  */
 export function formFields(form: FormData): Record<string, string> {
   const fields: Record<string, string> = {};
@@ -145,14 +120,10 @@ export function formFields(form: FormData): Record<string, string> {
 }
 
 /**
- * The digits and the point, extracted from the way a person writes a figure.
- *
- * Shared by all three number fields — {@link moneyMagnitude},
- * {@link signedQuantity} and {@link perShareAmount} — because all three are
- * copied off the same statements, and a second, subtly different set of strip
- * rules would be a second answer to "is `1 234.5` a number". It was two copies
- * for a while, and the lone-point bug below was in both of them — which is the
- * argument for one: a fault found in one box is fixed for every box.
+ * The digits and the point, extracted from how a person writes a figure.
+ * Shared by all three number fields: a second, subtly different strip rule
+ * would be a second answer to "is `1 234.5` a number". It was two copies for
+ * a while, and the lone-point bug below was in both.
  */
 const bareDecimal = (value: string): string =>
   value
@@ -160,37 +131,26 @@ const bareDecimal = (value: string): string =>
     // U+00A0 is what a copy out of a rendered statement brings with it, and
     // U+2009 is the thin space some brokerages group thousands with.
     .replace(/[$\s ,]/g, "")
-    // ".50" and "50." are unambiguous, so they are completed rather than
-    // refused. Every other shape has to be exactly right — and the lookarounds
-    // are what keep a bare "." out of that generosity. Without them the two
-    // rules compose: "." becomes "0." becomes "0", and a stray keystroke is
-    // accepted as a figure of zero. On a quantity that reads as the whole
-    // position sold; on a balance it empties an account.
+    // ".50" and "50." are unambiguous, so completed rather than refused; the
+    // lookarounds keep a bare "." out of that generosity — without them "."
+    // becomes "0", and a stray keystroke reads as the whole position sold, or
+    // an emptied account.
     .replace(/^\.(?=\d)/, "0.")
     .replace(/(?<=\d)\.$/, "");
 
 /**
- * An amount of money, typed the way a person types one, as an unsigned decimal
- * string.
+ * An amount of money as a person types one, as an unsigned decimal string:
+ * `$14,500.00`, `14,500` and `14500` are one amount, and refusing any would
+ * refuse the way statements print the number being copied.
  *
- * `$14,500.00`, `14,500`, `14500.00` and `14500` are one amount written four
- * ways, and refusing three of them would be refusing the way statements print
- * the number being copied. The currency mark, the thousands separators and the
- * spaces come out; the digits and the point are all that is kept.
- *
- * **No sign.** The caller decides the direction from what the account *is*
- * (DESIGN.md §2 puts the sign in quantity), so a minus typed here is refused
- * rather than honoured — a form that accepts both a signed amount and a
- * kind-derived sign has two sources of truth for whether money is owed, and
- * they can disagree.
- *
- * **No `Number`.** The output is the digits that were typed, normalised as
- * text, because §4.1 keeps money out of floats end to end. `z.coerce.number`
- * would undo the whole discipline in one call.
+ * **No sign** — the caller derives direction from what the account *is* (§2
+ * puts the sign in quantity), and a form accepting both a signed amount and
+ * a kind-derived sign has two sources of truth that can disagree. **No
+ * `Number`** — the output is the typed digits normalised as text (§4.1);
+ * `z.coerce.number` would undo the whole discipline in one call.
  *
  * @param label how the amount is named in a refusal, e.g. "A balance".
- * @param maxIntegerDigits digits before the point. Defaults to 12, which is
- *        what `numeric(20, 8)` has room for once the scale is taken out.
+ * @param maxIntegerDigits before the point; 12 is `numeric(20, 8)`'s room.
  */
 export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
   z
@@ -217,59 +177,44 @@ export const moneyMagnitude = (label: string, maxIntegerDigits = 12) =>
     });
 
 /**
- * The earliest date {@link recordedDate} will accept.
- *
- * `1970-01-01` rather than an arbitrary round year, because that is the first
- * day this application can put a price on anything: `0001_initial_schema.sql`
- * seeds USD a close of `1.00` dated `1970-01-01`, and `holding_valued_at`
- * carries the last close *forward* only. A set dated before that row produces a
- * chart point on which even cash is unpriced.
- *
- * Exported alongside {@link latestRecordableDate} so a date control can carry
- * both boundaries, for the same reason: the rule is stated once and read twice.
+ * The earliest date {@link recordedDate} accepts: `1970-01-01`, the first day
+ * this application can price anything — `0001_initial_schema.sql` seeds USD a
+ * close dated then, and `holding_valued_at` carries closes *forward* only, so
+ * a set dated earlier produces a chart point where even cash is unpriced.
+ * Exported so a date control can carry the boundary: stated once, read twice.
  */
 export function earliestRecordableDate(): string {
   return "1970-01-01";
 }
 
 /**
- * The furthest-ahead date {@link recordedDate} will accept.
- *
- * Exported so a date control can carry the same boundary as its `max`. The rule
- * is stated once and read twice, rather than a hint in the markup quietly
- * disagreeing with the refusal behind it.
+ * The furthest-ahead date {@link recordedDate} accepts. Exported as the date
+ * control's `max`: stated once, read twice, so the markup hint cannot quietly
+ * disagree with the refusal behind it.
  */
 export function latestRecordableDate(): string {
   return new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 }
 
 /**
- * A date something was true on, as `YYYY-MM-DD`.
+ * A date something was true on, `YYYY-MM-DD`. Three refusals, each earned:
  *
- * Three refusals, each earning its place:
- *
- * **A date that does not exist.** `2026-02-30` is a real thing to type and
- * Postgres would reject it as a `date`, which reaches the family as a driver
+ * **Not on the calendar** — `2026-02-30` would reach the family as a driver
  * error rather than a sentence.
  *
- * **A date in the future.** This is the one that matters. "Latest" is
- * `max(as_of_date)` per account (`latest_position_set`), so a year typed as
- * 2126 does not merely record a wrong date — it pins the account to that row
- * and no later statement can outrank it until 2126. A mistyped digit becomes a
- * balance that cannot be corrected by recording the right one.
+ * **In the future** — the one that matters: "latest" is `max(as_of_date)` per
+ * account, so a year typed 2126 pins the account until 2126, and a mistyped
+ * digit becomes a balance that cannot be corrected by recording the right one.
  *
- * **A date before this application can price anything.** The ceiling had no
- * floor, so `1026-08-24` — one digit away from `2026-08-24` — recorded a
- * position set a thousand years back and permanently flattened the "All"
- * net-worth chart, with no way to reach the row and correct it. The floor is
- * {@link earliestRecordableDate}, and it also disposes of `0000-01-01`, which
- * has a year zero in JavaScript, passes the round trip above, and then reaches
- * the family as a driver error because Postgres has no year zero.
+ * **Before the app can price anything** — `1026-08-24`, one digit from
+ * `2026-08-24`, once flattened the "All" chart permanently with no way to
+ * reach the row. The floor also disposes of `0000-01-01`, which JavaScript
+ * accepts and Postgres has no year for.
  *
- * Tomorrow is allowed, and only tomorrow. The browser's date control speaks the
- * reader's local date while everything here speaks UTC (§4.1), so a household
- * far enough east is on tomorrow's date honestly. One day of slack covers every
- * real timezone; two would start covering typos.
+ * Tomorrow is allowed, and only tomorrow: the browser's date control speaks
+ * local while this speaks UTC, so a household far enough east is on
+ * tomorrow's date honestly. One day covers every real timezone; two would
+ * start covering typos.
  *
  * @param label how the date is named in a refusal, e.g. "The date".
  */
@@ -317,37 +262,27 @@ const QUANTITY_DECIMALS = 8;
 const PER_SHARE_DECIMALS = 4;
 
 /**
- * A quantity held, as a **signed** decimal string at `numeric(20, 8)`'s scale.
+ * A quantity held, as a **signed** decimal string at `numeric(20, 8)`'s scale
+ * — the opposite decision to {@link moneyMagnitude}, and the difference is
+ * why both exist: that serves a form whose direction follows from the
+ * account's kind (§2); this serves a box that opens *containing the quantity
+ * already on the row* — a loan reads `−8,000` in the table and in the box,
+ * and stripping the sign to re-derive it would print a number the screen has
+ * never shown. Round-tripping `formatQuantity`'s output is therefore a hard
+ * requirement: U+2212 and the thousands separators must both come back in.
  *
- * The opposite decision to {@link moneyMagnitude}'s, and the difference is the
- * whole reason both exist. `moneyMagnitude` serves a form that asks "what is
- * the balance?" of an account whose direction is known from its kind (§2), so
- * accepting a sign there would give the app two sources of truth for whether
- * money is owed. This one serves a box that opens *containing the quantity
- * already on the row* — a loan reads `−8,000` in the table and reads `−8,000`
- * in the box, and the reader edits the digits around a minus sign that was
- * already there. Stripping the sign out to re-derive it would mean printing a
- * number the screen has never shown.
- *
- * That makes round-tripping `formatQuantity`'s output a hard requirement rather
- * than a nicety: the box is prefilled with it, so U+2212 (the true minus the
- * table prints) and the thousands separators must both come back in.
- *
- * **`−0` is not a thing.** A negative zero is a debt of nothing written as
- * though it were something, exactly as `setBalance` says of the same figure,
- * and it would print as `−0` in the table.
+ * **`−0` is not a thing**: a debt of nothing written as though it were
+ * something, and it would print as `−0` in the table.
  *
  * @param label how the quantity is named in a refusal, e.g. "A quantity".
- * @param maxIntegerDigits digits before the point. Defaults to 12, which is
- *        what `numeric(20, 8)` has room for once the scale is taken out.
+ * @param maxIntegerDigits before the point; 12 is `numeric(20, 8)`'s room.
  */
 export const signedQuantity = (label: string, maxIntegerDigits = 12) =>
   z
     .string({ message: `${label} is required.` })
     .trim()
-    // U+2212 in, ASCII out: the table prints a true minus and the driver takes
-    // a hyphen, so the conversion happens once, here, rather than at the edge
-    // of every caller.
+    // U+2212 in, ASCII out: the table prints a true minus and the driver
+    // takes a hyphen — converted once, here.
     .transform((value) => bareDecimal(value).replace(/^−/, "-"))
     .superRefine((value, ctx) => {
       const refuse = (message: string) => ctx.addIssue({ code: "custom", message });
@@ -373,18 +308,11 @@ export const signedQuantity = (label: string, maxIntegerDigits = 12) =>
 
 /**
  * What one share cost, where blank means "the statement did not say".
- *
- * Unsigned, because a price is a positive market fact even for a position held
- * negative (§2) — the sign lives in the quantity it multiplies.
- *
- * Four decimal places rather than {@link moneyMagnitude}'s two, because
- * `holding.cost_basis_per_share` is `numeric(20, 4)` and a box prefilled from
- * that column must accept what it was prefilled with. A two-place rule here
- * would refuse `31.4159` on a resubmit having just printed it.
- *
- * Blank becomes `null`, never `0`: a cost basis of zero claims the shares were
- * free and prints an unrealized gain equal to the whole position, which is the
- * exact reading `valuation.server.ts` refuses everywhere else.
+ * Unsigned: a price is a positive market fact even for a position held
+ * negative (§2). Four decimal places, not {@link moneyMagnitude}'s two:
+ * `cost_basis_per_share` is `numeric(20, 4)` and a box prefilled from it must
+ * accept what it just printed. Blank becomes `null`, never `0`: a zero basis
+ * claims the shares were free and prints a gain equal to the whole position.
  *
  * @param label how the figure is named in a refusal, e.g. "A cost basis".
  */
@@ -416,24 +344,15 @@ export const perShareAmount = (label: string, maxIntegerDigits = 16) =>
     .transform((value) => value ?? null);
 
 /**
- * A tax rate, typed as a percentage — `23.8`, not `0.238`.
- *
- * A percentage is what a person says out loud, what the form asks for and what
- * the panel it feeds prints beside its column heading, so it is what the field
- * takes and what the column stores. The one conversion to a multiplier lives
- * where the multiplying happens, rather than at every boundary this figure
- * crosses.
- *
- * `bareDecimal` again, so `23.8%` pasted out of a tax table is the same figure
- * as `23.8` typed by hand — the sign is the only generosity withheld, because a
- * negative rate is not a rate.
- *
- * **No `Number`.** The output is the digits, like every other figure that ends
- * up multiplying money (§4.1).
+ * A tax rate typed as a percentage — `23.8`, not `0.238`: what a person says,
+ * what the form asks, what the panel prints, what the column stores; the one
+ * conversion to a multiplier lives where the multiplying happens.
+ * `bareDecimal` again, so `23.8%` pasted from a tax table equals `23.8` typed
+ * — the sign is the one generosity withheld, a negative rate not being a
+ * rate. **No `Number`** (§4.1).
  *
  * @param label how the rate is named in a refusal, e.g. "A tax rate".
- * @param decimals places allowed after the point. Defaults to the share scale,
- *        which is what the column stores and finer than anyone will type.
+ * @param decimals after the point; defaults to the share scale the column stores.
  */
 export const percentRate = (label: string, decimals = SHARE_SCALE) =>
   z

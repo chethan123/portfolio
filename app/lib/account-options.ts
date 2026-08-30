@@ -1,15 +1,10 @@
 /**
- * The account kinds and tax treatments, once.
- *
- * Not a `.server` module, deliberately: the domain module needs these values to
- * validate against and the form needs them to render options, and a list
- * written twice is a list free to drift from the schema's check constraints.
- * Everything here is plain data and pure functions over it, with no database
- * access, so both sides can import it.
- *
- * The `AccountKind` and `TaxTreatment` types are imported for their names only
- * — a type import is erased, so this file pulls no server code into the client
- * bundle.
+ * The account kinds and tax treatments, once. Not a `.server` module,
+ * deliberately: the domain module validates against these values and the
+ * form renders options from them — a list written twice is free to drift
+ * from the schema's check constraints. Plain data and pure functions, no
+ * database. The `AccountKind`/`TaxTreatment` imports are type-only and
+ * erased, so this pulls no server code into the client bundle.
  */
 import type { AccountKind, TaxTreatment } from "./valuation.server.ts";
 
@@ -51,11 +46,9 @@ export const taxTreatmentValues = TAX_TREATMENTS.map((treatment) => treatment.va
 ];
 
 /**
- * The label a stored value wears on screen.
- *
- * Falls back to the value itself rather than throwing: a row written before a
- * kind was renamed should render as the raw slug, which is ugly and legible,
- * rather than taking the page down.
+ * The label a stored value wears on screen. Falls back to the value itself
+ * rather than throwing: a row written before a kind was renamed renders as
+ * the raw slug — ugly and legible — rather than taking the page down.
  */
 export function labelOf<Value extends string>(
   options: ReadonlyArray<Option<Value>>,
@@ -65,13 +58,11 @@ export function labelOf<Value extends string>(
 }
 
 /**
- * Which kinds hold their whole position in one number.
- *
- * An exhaustive record rather than a list or a predicate: adding a kind to the
- * schema becomes a compile error here, at the exact place someone has to decide
- * whether a single `USD` row is the truth about it. A list would just quietly
- * not contain the new kind, and quietly not containing it is the answer that
- * loses a portfolio.
+ * Which kinds hold their whole position in one number. An exhaustive record,
+ * not a list or predicate: adding a kind to the schema becomes a compile
+ * error here, exactly where someone must decide whether a single `USD` row
+ * is the truth about it — a list would quietly not contain the new kind,
+ * and quietly not containing it is the answer that loses a portfolio.
  */
 const SINGLE_POSITION: Record<AccountKind, boolean> = {
   brokerage: false,
@@ -82,10 +73,8 @@ const SINGLE_POSITION: Record<AccountKind, boolean> = {
 };
 
 /**
- * Which direction a kind's balance runs.
- *
- * Only consulted for the kinds {@link SINGLE_POSITION} admits; the securities
- * accounts are absent from this question because they never reach it.
+ * Which direction a kind's balance runs. Only consulted for the kinds
+ * {@link SINGLE_POSITION} admits; securities accounts never reach it.
  */
 const OWES: Record<AccountKind, boolean> = {
   brokerage: false,
@@ -96,26 +85,22 @@ const OWES: Record<AccountKind, boolean> = {
 };
 
 /**
- * Can this kind of account have its balance set by hand?
- *
- * Here rather than in `balances.server.ts`, where it was written, because both
- * writers now need it: `setBalance` asks it of the account it is writing to,
- * and `updateAccount` asks it of the kind it is being asked to write. The
- * second cannot import the first: `balances.server.ts` already imports
- * `accounts.server.ts`. The two tables are the kind vocabulary as much as the
- * labels are, so they live with it.
+ * Can this kind's balance be set by hand? Here rather than in
+ * `balances.server.ts`, where it was written, because both writers need it:
+ * `setBalance` asks it of the account, `updateAccount` of the kind — and the
+ * second cannot import the first (`balances.server.ts` already imports
+ * `accounts.server.ts`). The two tables are the kind vocabulary as much as
+ * the labels are.
  */
 export function acceptsSetBalance(kind: AccountKind): boolean {
   return SINGLE_POSITION[kind];
 }
 
 /**
- * Does a balance on this kind count against the household?
- *
- * Exported so the form can caption its box with the direction it is going to
- * apply — "Amount owed" over a box whose contents become a negative quantity.
- * The alternative is a screen that says "Balance" and stores the opposite of
- * what a reader would expect, which is a lie told by omission.
+ * Does a balance on this kind count against the household? Exported so the
+ * form can caption its box with the direction it will apply — "Amount owed"
+ * over a box whose contents become a negative quantity; a screen saying
+ * "Balance" while storing the opposite is a lie told by omission.
  */
 export function isOwed(kind: AccountKind): boolean {
   return OWES[kind];

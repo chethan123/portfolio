@@ -1,27 +1,18 @@
 /**
  * Bytes to rows of strings — the half of the parser that reads what a
- * brokerage actually exported, before `statement.ts` decides what any of it
- * means (DESIGN.md §5.3, spec 0004).
+ * brokerage actually exported, before `statement.ts` decides what it means
+ * (DESIGN.md §5.3, spec 0004). Hand-rolled: RFC 4180 quoting is the easy
+ * sixty lines, and the tolerance a real export needs — preambles, footers,
+ * sniffed delimiters, ragged rows — has to live in our code either way; the
+ * seam is this one module, so falling back to `csv-parse` is a cheap reversal.
  *
- * Hand-rolled rather than a library, for the reason the spec records: RFC 4180
- * quoting is the easy sixty lines, and the tolerance a real export needs —
- * preambles, footers, sniffed delimiters, ragged rows — has to live in our own
- * code either way. The seam is this one module, so falling back to `csv-parse`
- * if this proves fragile against real exports is a cheap reversal.
- *
- * Two properties are load-bearing everywhere downstream:
- *
- * **Never throws on content.** A file this module cannot make sense of still
- * yields rows for the caller to judge, so the refusal a reader eventually sees
- * is a sentence about their statement — never a stack trace from in here.
- * Malformed UTF-8 becomes replacement characters, an unterminated quote runs to
- * the end of the file, a stray quote mid-field is kept as a character.
- *
- * **Row indices are stable.** Blank rows are kept in the row list, because a
- * saved mapping's `headerRow` is an index into these rows — dropping a blank
- * line would silently shift every mapping made against the file after it. Only
- * the phantom row a trailing newline implies is suppressed, since no mapping
- * can point past the data.
+ * Two load-bearing properties. **Never throws on content**: malformed UTF-8
+ * becomes replacement characters, an unterminated quote runs to the end of
+ * the file, a stray quote is kept as a character — the refusal a reader sees
+ * is a sentence about their statement, never a stack trace. **Row indices are
+ * stable**: blank rows are kept, because a saved mapping's `headerRow`
+ * indexes these rows and dropping one would shift every mapping made after
+ * it; only the phantom row a trailing newline implies is suppressed.
  */
 
 /** The three delimiters real exports use, and the only ones sniffed between. */
@@ -117,20 +108,14 @@ function consistency(rows: string[][]): { agreeing: number; width: number } {
 }
 
 /**
- * The file's rows, with a leading UTF-8 BOM stripped, CRLF, LF and bare CR all
- * treated as row breaks, and the delimiter sniffed between comma, semicolon
- * and tab when the caller does not force one.
- *
- * The sniff is by whichever delimiter yields the most consistent column count
- * across the file's rows — not by counting occurrences on line one, which a
- * preamble sentence full of commas would win. A delimiter that never splits
- * anything (every row one column) ranks below any that does; among the rest,
- * more agreeing rows win, then more columns, then comma over semicolon over
- * tab, so the answer is deterministic on a file that supports two readings.
- *
- * The forced-delimiter form exists for a saved mapping: the mapping records
- * the delimiter it was built against, and re-reading the same bytes must not
- * depend on the sniff reaching the same verdict twice.
+ * The file's rows: leading BOM stripped, CRLF/LF/bare-CR all row breaks, the
+ * delimiter sniffed when not forced. The sniff picks whichever delimiter
+ * yields the most consistent column count across rows — not occurrences on
+ * line one, which a preamble sentence full of commas would win. Never-splits
+ * ranks below any that splits; then more agreeing rows, then more columns,
+ * then comma over semicolon over tab — deterministic on a file that supports
+ * two readings. The forced form exists for a saved mapping: re-reading the
+ * same bytes must not depend on the sniff reaching the same verdict twice.
  */
 export function readCsv(bytes: Uint8Array, delimiter?: Delimiter): CsvRead {
   // TextDecoder removes a leading BOM and replaces malformed sequences rather
@@ -186,14 +171,11 @@ function isCandidate(cells: ReadonlyArray<string>): boolean {
 }
 
 /**
- * The plausible header rows, as indices in file order, for the mapping screen
- * to offer.
- *
- * Never empty for a non-empty file: when no row passes the screen — every cell
- * blank somewhere, or duplicates everywhere — the fallback is every non-blank
- * row, and failing even that, the first row. A degenerate file still returns
- * something, and the screen lets the reader pick; returning nothing would leave
- * step 03 with no control to draw.
+ * The plausible header rows, as indices in file order. Never empty for a
+ * non-empty file: when no row passes the screen, the fallback is every
+ * non-blank row, then the first row — a degenerate file still returns
+ * something for the reader to pick from; nothing would leave step 03 with no
+ * control to draw.
  */
 export function candidateHeaderRows(rows: ReadonlyArray<ReadonlyArray<string>>): number[] {
   const candidates: number[] = [];
@@ -210,18 +192,13 @@ export function candidateHeaderRows(rows: ReadonlyArray<ReadonlyArray<string>>):
 }
 
 /**
- * Every row the header-row select offers, as indices: the candidates first —
- * the default choice among them is `defaultHeaderRow`'s — then every other
- * non-blank row, in file order, and the row currently on screen whatever
- * detection thinks of it.
- *
- * The widening beyond the candidates exists for a real header that fails the
- * candidate screen — most plainly one carrying two same-named columns, which
- * `isCandidate`'s no-two-alike rule refuses. Such a header is still the
- * header, and a select that cannot offer it strands the file. Name-based
- * mapping resolves a duplicated header name to its first occurrence — the
- * spec chose names deliberately, and the fingerprint pins the exact header
- * the mapping was built against, so the resolution cannot silently move.
+ * Every row the header-row select offers: candidates first, then every other
+ * non-blank row, then the row currently on screen whatever detection thinks.
+ * The widening exists for a real header that fails the candidate screen —
+ * plainly one with two same-named columns, which no-two-alike refuses. Such a
+ * header is still the header, and a select that cannot offer it strands the
+ * file; name-based mapping resolves a duplicate to its first occurrence, and
+ * the fingerprint pins the exact header, so the resolution cannot move.
  */
 export function headerRowChoices(
   rows: ReadonlyArray<ReadonlyArray<string>>,
@@ -241,13 +218,9 @@ export function headerRowChoices(
 
 /**
  * The header row to preselect: the first candidate whose column count matches
- * the majority column count of the rows below it — which is what skips a
- * preamble of "Account Summary", a blank line and a date stamp, none of which
- * are shaped like the data under them.
- *
- * When no candidate matches — a file of prose, a header with nothing under
- * it — the first candidate stands in, so the screen always opens on something.
- * `null` only for a file with no rows at all.
+ * the majority of the rows below it — what skips a preamble not shaped like
+ * the data under it. When none matches, the first candidate stands in so the
+ * screen always opens on something; `null` only for a file with no rows.
  */
 export function defaultHeaderRow(rows: ReadonlyArray<ReadonlyArray<string>>): number | null {
   const candidates = candidateHeaderRows(rows);

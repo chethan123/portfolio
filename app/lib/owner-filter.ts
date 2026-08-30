@@ -1,47 +1,34 @@
 /**
- * Whose money a screen is showing (spec 0013, ADR-0008).
+ * Whose money a screen is showing (spec 0013, ADR-0008): the **owner filter**,
+ * a household-wide selection of account owners carried between screens, never
+ * derived from who signed in (vocabulary: CONTEXT.md). Not a `.server` module
+ * — the control component, rendered again after hydration, needs the type and
+ * serialiser as much as a loader does.
  *
- * The **owner filter** is a household-wide selection of one or more account
- * owners, carried between screens and never derived from who signed in.
- * `CONTEXT.md` defines it, and the words here are that glossary's: an *owner*
- * is the single person an account's money belongs to, a *person* is the record.
+ * **The URL is the whole of the state** — no cookie, middleware or stored
+ * setting: the filter is present when `?owner=` is. ADR-0008 records the
+ * trade: closing the tab forgets the filter; a pasted link carries the same
+ * view, which a cookie never could.
  *
- * Not a `.server` module, for `chart-range.ts`'s reason: nothing here touches
- * the database, and the control component — rendered again in the browser after
- * hydration — needs the type and the serialiser as much as a loader does.
- *
- * **The URL is the whole of the state.** There is no cookie, no middleware and
- * no stored setting, so this module has no fallback to resolve and nothing to
- * tag a source with: the filter is present when `?owner=` is, and absent
- * otherwise. ADR-0008 records the trade — closing the tab forgets the filter
- * because there is nothing left that remembers it, and a link pasted to another
- * family member carries the same view, which a cookie could never do.
- *
- * **Nothing is ever dropped at parse.** A syntactically plausible id naming
- * nobody, a 25-digit id, an id that is not digits at all — each is kept, and
- * narrows to nothing when the query runs. Dropping one would widen the view,
- * which is the failure `holdings-view.ts`'s `parseQuery` already names: it
- * would *"silently show the whole portfolio to someone who asked for a slice of
- * it"*. A selection of nothing but dropped ids would normalise all the way back
- * to the household. The syntactic guard therefore lives in the predicate that
- * runs the query, never here.
+ * **Nothing is dropped at parse.** An id naming nobody, a 25-digit id, an id
+ * that is not digits at all — each is kept and narrows to nothing when the
+ * query runs; dropping one would silently widen the view toward the whole
+ * portfolio. The syntactic guard lives in the predicate that runs the query,
+ * never here.
  */
 
 /**
- * The selected owners, as ids. Empty means the whole household.
- *
- * Ids are strings because they are `bigint`: `server/db.ts` registers the type
- * parsers that keep them so, and a `bigint` does not survive `Number()`.
+ * The selected owners, as ids — empty means the whole household. Strings
+ * because they are `bigint`: `server/db.ts` keeps them so, and a `bigint`
+ * does not survive `Number()`.
  */
 export type OwnerFilter = readonly string[];
 
 /**
- * The unfiltered household, spelled as a value so a diff can see the choice.
- *
- * It has a name because the household-scoped readers take the filter as a
- * required first argument with no default (spec 0013, ticket 02): a screen
- * reading everyone's money then says the word rather than omitting it, and the
- * omission is visible in review rather than invisible.
+ * The unfiltered household, named so a diff can see the choice: the
+ * household-scoped readers take the filter required and undefaulted (spec
+ * 0013), so a screen reading everyone's money says the word visibly in
+ * review rather than omitting it invisibly.
  */
 export const ALL_OWNERS: OwnerFilter = Object.freeze([]);
 
@@ -54,94 +41,68 @@ export function isFiltered(filter: OwnerFilter): boolean {
 }
 
 /**
- * The owner filter a request asked for, canonically spelled.
+ * The owner filter a request asked for, canonically spelled. Takes
+ * `URLSearchParams` so a loader (has a URL) and a component
+ * (`useSearchParams`) can both call it.
  *
- * Takes `URLSearchParams` rather than a `Request` so a loader (which has a URL)
- * and a component (which has `useSearchParams`) can both call it.
- *
- * Reads every `owner` the address carries, not just the first, because that is
- * how the control submits: checkboxes sharing a name produce `owner=1&owner=3`,
- * and a `<Form method="get">` of them is the whole control (ticket 03). `get`
- * would keep the first box and drop the rest. It also closes the one shape that
- * would genuinely *widen* — `?owner=&owner=3` reads as the empty first value
- * under `get`, which is the whole household.
- *
- * Never throws and never refuses. A hand-edited parameter produces a filter,
- * the same rule `parseQuery` keeps for the Holdings table's own state.
+ * `getAll`, never `get`: checkboxes sharing a name submit `owner=1&owner=3`
+ * (ticket 03), and `get` would keep the first box, drop the rest, and read
+ * `?owner=&owner=3` as the empty first value — the whole household. Never
+ * throws, never refuses: a hand-edited parameter produces a filter, the rule
+ * `parseQuery` keeps for the Holdings table's own state.
  */
 export function readOwnerFilter(params: URLSearchParams): OwnerFilter {
   return canonicalise(
     params
       .getAll("owner")
       .flatMap((value) => value.split(","))
-      // An empty segment is skipped rather than kept: `?owner=1,,3` is two ids,
-      // and an id of "" could only ever match nothing while looking deliberate.
-      // The trim is what makes `?owner=1, 3` two ids and not one id and one
-      // that silently empties the screen.
+      // Empty segments skipped: `?owner=1,,3` is two ids, and "" could only
+      // match nothing while looking deliberate. The trim makes `?owner=1, 3`
+      // two ids, not one plus one that silently empties the screen.
       .map((segment) => segment.trim())
       .filter((segment) => segment !== ""),
   );
 }
 
 /**
- * The canonical spelling, **without** a leading `?` — `owner=1,3`, or `""`
- * when the filter is off.
+ * The canonical spelling **without** a leading `?` — `owner=1,3`, or `""`
+ * when the filter is off: the bare pair, for composing into a longer query
+ * (`toSearch` in `holdings-view.ts` returns *with* `?`; concatenating two
+ * such gives `?sort=value&?owner=1`, hence two functions). Canonicalises its
+ * input rather than trusting it, so the name is true for any caller.
  *
- * The bare pair, for composing into a query alongside other parameters.
- * `toSearch` in `holdings-view.ts` returns its string *with* a `?`, and
- * concatenating two such strings gives `?sort=value&?owner=1`; the two
- * functions here exist so that cannot happen.
- *
- * Canonicalises what it is given rather than trusting it, so the name is true
- * for any caller: an unsorted filter would otherwise produce a second spelling
- * of a view, which is what the loaders redirect on.
- *
- * **A screen composing this into a longer query must append the pair as it
- * stands**, never round-trip it through `URLSearchParams.set`: that spells the
- * separator `%2C`, and a canonical generator disagreeing with this one about
- * how a comma is written is a redirect that fires on every click.
+ * **Append the pair as it stands** — never round-trip it through
+ * `URLSearchParams.set`, which spells the separator `%2C`: a generator
+ * disagreeing with this one about commas is a redirect firing on every click.
  */
 export function toOwnerParam(filter: OwnerFilter): string {
   const canonical = canonicalise(filter);
 
-  // Each id spelled as a URL spells it, the separators left bare: the grammar
-  // is `owner=1,3`.
   return isFiltered(canonical) ? `owner=${canonical.map(spellId).join(",")}` : "";
 }
 
 /**
- * One id, spelled the way the URL parser spells it.
- *
- * The loaders compare `url.search` — a string the WHATWG URL parser has
- * already respelled — against the canonical search with `!==`, and bounce on a
- * difference. That comparison is loop-free only while the canonical spelling
- * is a **fixed point of URL parsing**: a target the parser respells is an
- * address that can never equal its own canonical form, and the redirect fires
- * forever. `?owner=o'brien` — a hand-typed id this module deliberately keeps —
- * did exactly that when the ids were spelled with `encodeURIComponent` alone,
- * because it leaves `'` bare where the parser writes `%27`.
- *
- * The apostrophe is the one disagreement: everything else
- * `encodeURIComponent` leaves bare — digits, letters, `-_.!~*()` — the
- * parser's query serialiser also leaves bare, as it does this grammar's own
- * commas and the `URLSearchParams` spelling `toSearch` and
- * `canonicalOwnerSearch` use for every other parameter. So one respelling
- * makes the whole canonical search a fixed point, and
- * `tests/owner-filter.test.ts` holds it there with real `URL` round trips.
+ * One id, spelled as the URL parser spells it. Loaders compare `url.search`
+ * — already respelled by the WHATWG parser — to the canonical search with
+ * `!==` and bounce on difference; that is loop-free only while the canonical
+ * spelling is a **fixed point of URL parsing**, else the redirect fires
+ * forever. `?owner=o'brien` — a hand-typed id deliberately kept — did
+ * exactly that under bare `encodeURIComponent`, which leaves `'` where the
+ * parser writes `%27`. The apostrophe is the one disagreement: everything
+ * else `encodeURIComponent` leaves bare the parser's query serialiser also
+ * leaves bare, this grammar's commas included. `tests/owner-filter.test.ts`
+ * holds the fixed point with real `URL` round trips.
  */
 function spellId(id: string): string {
   return encodeURIComponent(id).replaceAll("'", "%27");
 }
 
 /**
- * A complete search string for a navigation target, **with** the `?` — or `""`
- * when the filter is off, which collapses `to={{ pathname, search }}` back to a
- * bare path so an unfiltered instance's URLs stay clean.
- *
- * This is the whole of what the shell carries between screens: the owner
- * parameter and nothing else. Carrying `location.search` verbatim would drag
- * one screen's `range`, `sort` or half-typed `edit` row key onto another that
- * does not own it.
+ * A complete search string **with** the `?`, or `""` when the filter is off
+ * — which collapses `to={{ pathname, search }}` to a bare path, keeping an
+ * unfiltered instance's URLs clean. This is all the shell carries between
+ * screens: carrying `location.search` verbatim would drag one screen's
+ * `range`, `sort` or half-typed `edit` row key onto another.
  */
 export function ownerSearch(filter: OwnerFilter): string {
   const param = toOwnerParam(filter);
@@ -151,27 +112,19 @@ export function ownerSearch(filter: OwnerFilter): string {
 
 /**
  * The address a request should be reading: its owner parameter spelled
- * canonically and first, everything else kept.
+ * canonically and first, everything else kept. What screens redirect on
+ * before any database work — answered from the address alone, no roster.
  *
- * What the screens redirect on, before any database work — so it answers from
- * the address alone, with no roster to consult. A loader compares it to
- * `url.search` and bounces once if they differ, which is what
- * `holdings.tsx`'s own canonical redirect already does with `toSearch`.
+ * The whole search rather than a yes/no: a boolean computed from *decoded*
+ * values cannot tell `?owner=1%2C3` from `?owner=1,3`, so one view would
+ * have two URLs; and leaving the loader to build the target as `pathname +
+ * ownerSearch(...)` silently drops the `range` and `start`/`end` the same
+ * address carries. `?owner=` present but empty is not canonical — the
+ * unfiltered spelling is no parameter at all.
  *
- * It returns the whole search rather than a yes/no for two reasons. A boolean
- * would have to be computed from the *decoded* values, which cannot tell
- * `?owner=1%2C3` from `?owner=1,3` — so a screen emitting the first would be
- * reported canonical and one view would have two URLs. And it leaves the
- * loader to build the target, where the obvious `pathname + ownerSearch(...)`
- * silently drops the `range` and `start`/`end` the same address is carrying.
- *
- * `?owner=` present but empty is not canonical: it is the unfiltered screen,
- * whose spelling is no parameter at all.
- *
- * `owners` overrides what the address says, for the one caller that needs a
- * *different* selection spelled into the same address: a screen bouncing an
- * all-roster selection back to the household, and the "Show everyone" link
- * beside it, which keeps the range or the sort the reader had.
+ * `owners` overrides the address, for the caller spelling a *different*
+ * selection into the same address: bouncing an all-roster selection back to
+ * the household, and the "Show everyone" link that keeps range and sort.
  */
 export function canonicalOwnerSearch(params: URLSearchParams, owners?: OwnerFilter): string {
   const rest = new URLSearchParams(params);
@@ -185,18 +138,14 @@ export function canonicalOwnerSearch(params: URLSearchParams, owners?: OwnerFilt
 }
 
 /**
- * Sorted, de-duplicated, and nothing dropped.
- *
- * **Roster-free on purpose.** Three screens redirect a non-canonical `owner` to
- * its canonical spelling *before* any database work, so this cannot know which
- * ids name a real person. It follows that an id naming nobody survives here and
- * empties the screen later, and that a hand-typed selection naming the whole
- * household is legal and renders exactly as the unfiltered screen — the control
- * never emits that spelling, because the control is the one place with a roster.
- *
- * It must also be idempotent. The string it produces is the one every loader
- * redirects to, and a canonical spelling that is not a fixed point is an
- * infinite redirect loop that nothing notices until someone opens the screen.
+ * Sorted, de-duplicated, nothing dropped. **Roster-free on purpose**: screens
+ * redirect a non-canonical `owner` before any database work, so this cannot
+ * know which ids name a real person — an id naming nobody survives and
+ * empties the screen later, and a hand-typed selection naming the whole
+ * household renders as the unfiltered screen (the control, the one place
+ * with a roster, never emits that spelling). Must be idempotent: this string
+ * is what every loader redirects to, and a canonical spelling that is not a
+ * fixed point is an infinite redirect loop.
  */
 function canonicalise(ids: readonly string[]): OwnerFilter {
   const seen = [...new Set(ids.map(withoutLeadingZeros))].sort(compareIds);
@@ -205,31 +154,24 @@ function canonicalise(ids: readonly string[]): OwnerFilter {
 }
 
 /**
- * `03` and `3` are one owner, not two.
- *
- * Stripped before de-duplication, and only from an id that is all digits —
- * there is nothing to normalise about a string that was never a number.
- * An id of only zeros keeps one, so `?owner=000` is `"0"` rather than `""`:
- * no person can have id 0, so it correctly matches nothing.
+ * `03` and `3` are one owner. Stripped before de-duplication, only from
+ * all-digit ids — nothing to normalise about a string that was never a
+ * number. All zeros keeps one (`?owner=000` → `"0"`): no person has id 0,
+ * so it correctly matches nothing.
  */
 function withoutLeadingZeros(id: string): string {
   return DIGITS.test(id) ? id.replace(/^0+(?=\d)/, "") : id;
 }
 
 /**
- * A total order that never calls `Number()`.
- *
- * Digit-only ids first, by length then lexicographically — which *is* numeric
- * order once the leading zeros are gone — and anything else after them,
- * lexicographically. A `Number(a) - Number(b)` comparator returns `NaN` for a
- * non-digit id, which makes `sort` implementation-defined, the canonical
- * spelling undefined, and the redirect loop above possible.
- *
- * Code-unit comparison, deliberately, and **not** `localeCompare` — which
- * `holdings-view.ts` argues for at length and is right to, for text a person
- * reads. This is not that: collation depends on the ICU data in the image, so
- * a locale-aware canonical spelling would be a URL that differs between two
- * deployments of the same application.
+ * A total order that never calls `Number()`: digit-only ids first, by length
+ * then lexicographically — numeric order once leading zeros are gone — then
+ * the rest lexicographically. `Number(a) - Number(b)` returns `NaN` for a
+ * non-digit id, making `sort` implementation-defined, the canonical spelling
+ * undefined, and the redirect loop above possible. Code-unit comparison,
+ * **not** `localeCompare` (right for text a person reads, `holdings-view.ts`):
+ * collation depends on the image's ICU data, and a locale-aware canonical
+ * spelling is a URL that differs between deployments.
  */
 function compareIds(a: string, b: string): number {
   const aNumeric = DIGITS.test(a);

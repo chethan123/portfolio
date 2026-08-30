@@ -1,44 +1,29 @@
 /**
  * The upload draft — the staging row behind an in-progress statement upload
- * (DESIGN.md §5.1, docs/specs/0004-ingest.md).
+ * (DESIGN.md §5.1, docs/specs/0004-ingest.md). The flow is four screens, each
+ * a real URL with no client state, so everything a step needs lives where a
+ * URL can reach it: one `upload_draft` row holding the bytes, the filename
+ * and — once the columns step passes — the mapping and whether the file
+ * raised a first sighting. Each step reads the draft, writes its part back
+ * and redirects: reload, back button and bookmarked half-finished uploads all
+ * behave. Also the application's first multipart read — `formFields` drops
+ * file parts by design, so the size bound and file handling live here.
  *
- * The upload flow is four screens and every one of them is a real URL with no
- * client state, so everything a step needs has to live where a URL can reach
- * it. This module owns that place: one `upload_draft` row holding the bytes,
- * the filename and, once the columns step passes, the mapping and whether the
- * file raised any first sighting. Each step reads the draft, writes its own
- * part back and redirects — which is what makes a reload, the back button and
- * a bookmarked half-finished upload all behave.
+ * Three decisions worth stating. **Drafts are swept, not scheduled**: rows
+ * older than 24h are deleted at the next upload's start ({@link createDraft})
+ * — a cron for a handful of rows is machinery without a payer. **A dead draft
+ * is one 404, not four**: swept, committed, mistyped and closed-account all
+ * read the same expired-or-recorded page, because the next move — start again
+ * — is the same. **The size cap is guarded twice, and the early one is the
+ * header**: `request.formData()` buffers the whole body, so
+ * {@link refuseOversizedBody} checks `Content-Length` first and the
+ * `File.size` check catches whatever arrives without one.
  *
- * It is also where the application's first multipart form is read. Every other
- * action goes through `formFields`, which drops file parts by design, so the
- * size bound and the file handling live here rather than at each caller.
- *
- * Three decisions worth stating:
- *
- * **Drafts are swept, not scheduled.** Anything older than 24 hours is deleted
- * at the start of the next upload, inside {@link createDraft}. A cron for a
- * table that holds at most a handful of rows in a single-household application
- * is machinery without a payer.
- *
- * **A dead draft is one 404, not four.** Swept, already committed, mistyped
- * and belonging-to-a-closed-account all read the same expired-or-recorded
- * page, because the reader's next move — start again from /upload — is the
- * same in every case, and the differences are not actionable.
- *
- * **The size cap is guarded twice, and the early one is the header.**
- * `request.formData()` buffers the whole body, so by the time a `File` exists
- * the memory is already spent. {@link refuseOversizedBody} reads
- * `Content-Length` before the body; the `File.size` check inside
- * {@link parseUploadForm} catches whatever arrives without one.
- *
- * The module also owns the flow's last step: {@link diffForDraft} states what
- * the staged file changes against what the account holds now, and
- * {@link commitUpload} is the flow's one write — the immutable `position_set`,
- * its holdings, the draft deleted, one transaction. {@link uploadReceipt} is
- * the read the account page's `?uploaded=` confirmation comes from, recomputed
- * from the database so a hand-typed parameter can only ever describe what was
- * actually recorded.
+ * The flow's last step lives here too: {@link diffForDraft} states what the
+ * staged file changes, {@link commitUpload} is the one write (immutable
+ * `position_set`, its holdings, the draft deleted, one transaction), and
+ * {@link uploadReceipt} recomputes the `?uploaded=` confirmation from the
+ * database so a hand-typed parameter can only describe what was recorded.
  */
 import { z } from "zod";
 
@@ -85,15 +70,15 @@ export type UploadDraft = {
   accountId: string;
   accountName: string;
   /**
-   * The account's owner, for the identity strip's "owned by" — a draft
-   * survives a closed laptop, and a bare name is least sufficient exactly
-   * when the reader resumes cold with two same-named accounts in the house.
+   * For the identity strip's "owned by" — a draft survives a closed laptop,
+   * and a bare name is least sufficient exactly when the reader resumes cold
+   * with two same-named accounts in the house.
    */
   ownerName: string;
   /**
-   * `····` plus the last four characters of the account's recorded number,
-   * or null without one — pre-masked so the raw number never leaves the
-   * commit path (`DraftRecord`), while the strip still gets its tiebreaker.
+   * `····` plus the last four of the recorded number, or null — pre-masked so
+   * the raw number never leaves the commit path (`DraftRecord`), while the
+   * strip keeps its tiebreaker.
    */
   accountNumberTail: string | null;
   filename: string;
@@ -105,10 +90,10 @@ export type UploadDraft = {
    */
   mapping: unknown;
   /**
-   * Whether the columns step's parse raised any first sighting — the step
-   * strip's dimmed "· none" memory, null until that step decides. Written at
-   * that moment because it is unrecoverable afterwards: an alias, once
-   * written, does not say which draft wrote it.
+   * Whether the columns parse raised any first sighting — the step strip's
+   * dimmed "· none", null until that step decides. Written at that moment
+   * because it is unrecoverable after: an alias does not say which draft
+   * wrote it.
    */
   hadFirstSightings: boolean | null;
   createdAt: Date;
@@ -122,12 +107,9 @@ export type DraftInput = {
 };
 
 /**
- * Refuse a request whose declared body is over the cap, before reading it.
- *
- * The `Content-Length` header is the only thing available before the body is
- * buffered. A request that does not carry one falls through to the
- * `File.size` check in {@link parseUploadForm}, which enforces the same cap
- * after the fact.
+ * Refuse a declared-oversize body before reading it: `Content-Length` is all
+ * that exists before the body is buffered. A request without one falls
+ * through to {@link parseUploadForm}'s `File.size` check.
  *
  * @throws {ValidationError} form-level, naming the limit.
  */
@@ -155,17 +137,14 @@ const uploadInput = z.object({
 });
 
 /**
- * The drop screen's submission, validated down to bytes.
+ * The drop screen's submission, validated down to bytes. Guards run in spec
+ * order, each refusing as the thing it is: missing field → field message;
+ * oversize → the limit; empty file → a fact about the download; non-UTF-8 →
+ * a sentence about the file, never a driver error. A leading BOM is valid
+ * UTF-8, not a failure — step 02 strips it.
  *
- * The guards run in the order the spec fixes, each refusing as the thing it
- * is: a missing field is a field-level message like every other form's, an
- * oversized file names the limit, an empty file is a fact about the download
- * rather than a parse error, and bytes that are not UTF-8 text get a sentence
- * about the file, never a driver error. A leading BOM is valid UTF-8 and is
- * not a failure — step 02 strips it.
- *
- * @param form the submitted `multipart/form-data`. The file is read from it
- *             directly, because `formFields` drops file parts by design.
+ * @param form the `multipart/form-data`; the file is read directly because
+ *             `formFields` drops file parts by design.
  * @throws {ValidationError} with a message per bad field.
  */
 export async function parseUploadForm(form: FormData): Promise<DraftInput> {
@@ -202,18 +181,15 @@ export async function parseUploadForm(form: FormData): Promise<DraftInput> {
 }
 
 /**
- * Open a draft: sweep the stale ones, then stage this file.
+ * Open a draft: sweep the stale ones, then stage this file. The sweep runs
+ * immediately before the insert because the start of an upload is the one
+ * moment the table is guaranteed to be looked at — no scheduler.
  *
- * The sweep runs here, immediately before the insert, because the start of an
- * upload is the one moment the table is guaranteed to be looked at — no
- * scheduler, no background job.
- *
- * @param input already through {@link parseUploadForm}; validating the account
- *        still happens here, so a second caller cannot stage a file against a
- *        closed one.
+ * @param input already through {@link parseUploadForm}; the account is still
+ *        validated here so a second caller cannot stage against a closed one.
  * @throws {NotFoundError} when no such account exists.
- * @throws {ValidationError} form-level, for a closed account — the same
- *         refusal `setBalance` makes, because it is the same rule.
+ * @throws {ValidationError} form-level for a closed account — `setBalance`'s
+ *         refusal, because it is the same rule.
  */
 export async function createDraft(
   { accountId, filename, bytes }: DraftInput,
@@ -243,9 +219,9 @@ export async function createDraft(
 }
 
 /**
- * A draft with the two account facts only the commit reads: whether the
- * account has closed underneath it, and the number a statement's
- * account-number column is guarded against.
+ * A draft plus the two account facts only the commit reads: whether the
+ * account closed underneath it, and the number the statement's account-number
+ * column is guarded against.
  */
 type DraftRecord = UploadDraft & {
   accountClosedAt: Date | null;
@@ -254,17 +230,16 @@ type DraftRecord = UploadDraft & {
 };
 
 /**
- * The draft a step URL names, joined with its account — or undefined when the
- * row is gone. Closed accounts are *not* filtered here: {@link requireDraft}
- * reads a closed account's draft as expired, while {@link commitUpload} owes
- * it a sentence in `setBalance`'s words, and both start from this read.
+ * The draft a step URL names, joined with its account — or undefined. Closed
+ * accounts are *not* filtered here: {@link requireDraft} reads one as
+ * expired, {@link commitUpload} owes it a sentence, and both start from this.
  */
 async function findDraft(
   draftId: string,
   db: Kysely<Database>,
 ): Promise<DraftRecord | undefined> {
   // Anything a URL carries reaches here; "abc" would fail as a malformed
-  // bigint in the driver, which is a 500 wearing a bookmark.
+  // bigint — a 500 wearing a bookmark.
   if (!/^\d+$/.test(draftId)) return undefined;
 
   const row = await db
@@ -308,10 +283,9 @@ async function findDraft(
 /**
  * The draft a step URL names, with its account resolved.
  *
- * @throws {NotFoundError} for an id that is not one, a draft that is gone —
- *         swept or committed — and a draft whose account has since closed,
- *         all with the same expired-or-recorded sentence. The step routes turn
- *         it into a 404, never a 500.
+ * @throws {NotFoundError} for a non-id, a gone draft (swept or committed) and
+ *         a closed account's draft alike, all with the expired-or-recorded
+ *         sentence; the step routes turn it into a 404, never a 500.
  */
 export async function requireDraft(
   draftId: string,
@@ -319,8 +293,8 @@ export async function requireDraft(
 ): Promise<UploadDraft> {
   const row = await findDraft(draftId, db);
 
-  // A closed account's draft is expired, not forbidden: its history does not
-  // change, so the upload this row was staging can never land.
+  // A closed account's draft is expired, not forbidden: its history cannot
+  // change, so this staged upload can never land.
   if (row === undefined || row.accountClosedAt !== null) throw new NotFoundError(EXPIRED);
 
   return row;
@@ -328,45 +302,31 @@ export async function requireDraft(
 
 /**
  * The columns step passing, in one answer: the mapping lands on the draft —
- * which is what makes "how far did this draft get" a property of the row and
- * lets a later step, or a return to this one, read it back — and the step the
+ * how a later step, or a return to this one, reads it back — and the step the
  * reader goes to next comes back to the caller.
  *
- * `had_first_sightings` is decided and written here too, because this is the
- * one moment the answer exists: whether *this* mapping's parse raised any
- * string no alias resolves. The instruments step then writes the aliases, and
- * afterwards nothing can tell "the step was skipped" from "the step was
- * passed" — an alias does not say which draft wrote it. The review screen's
- * step strip dims its entry off this bit (brief §2.1, §7.5).
+ * `had_first_sightings` is decided and written here because this is the one
+ * moment the answer exists: once the instruments step writes aliases, nothing
+ * can tell "skipped" from "passed". The review's step strip dims off this bit
+ * (brief §2.1, §7.5). `nextStep` is that same bit handed back, never a second
+ * look — the route used to re-ask after the write, and an alias landing
+ * between the two questions left the stored bit disagreeing with where the
+ * reader was sent. One question, one answer, one moment.
  *
- * `nextStep` is that same bit handed back, never a second look. The route used
- * to ask {@link unresolvedStrings} again after this write, and an alias landing
- * between the two questions left the stored bit disagreeing with the step the
- * reader was actually sent to — a review screen dimming an instruments entry
- * the reader had just been walked through, or the reverse. One question, one
- * answer, one moment.
+ * Everything derives from the draft's own bytes, re-read here — rows handed
+ * down would be a second copy of the truth. The two writes are deliberately
+ * not one transaction: the draft's mapping *is* the columns step, the
+ * institution's remembered mapping is a rebuildable cache, and a failure in
+ * the cache must not destroy a step that passed.
  *
- * Everything is derived from the draft's own bytes, re-read here rather than
- * passed in: rows handed down from a caller are a second copy of the truth,
- * and the point of this function is that there is only one. The mapping
- * carries the delimiter those rows were read with, so the re-read reaches the
- * same rows the caller saw.
- *
- * The two writes are deliberately not one transaction. The draft's mapping is
- * load-bearing — it *is* the columns step — while the institution's remembered
- * mapping is a convenience cache the next upload can rebuild by asking the
- * reader again. A failure in the cache must not destroy a step that passed.
- *
- * @returns the parse's problems, having written nothing, when the mapping does
- *          not parse clean — the screen hangs them under its own selects, so
- *          they come back structured rather than as sentences; otherwise the
- *          step the flow moves to.
+ * @returns the parse's problems, having written nothing, when the mapping
+ *          does not parse clean (structured, for the screen's own selects);
+ *          otherwise the step the flow moves to.
  * @throws {ValidationError} keyed `instrument` when the mapped instrument
- *         column is empty on every data row — refused here, naming the column,
- *         rather than producing an empty diff two screens later.
- * @throws {NotFoundError} through {@link requireDraft}, with the same
- *         expired-or-recorded sentence — a mapping posted against a draft the
- *         sweep or a commit has taken is a dead bookmark, not a fault.
+ *         column is empty on every data row — refused here, naming the
+ *         column, rather than as an empty diff two screens later.
+ * @throws {NotFoundError} through {@link requireDraft} — a mapping posted
+ *         against a swept or committed draft is a dead bookmark, not a fault.
  */
 export async function rememberMapping(
   draftId: string,
@@ -378,16 +338,14 @@ export async function rememberMapping(
   const { rows } = readCsv(draft.bytes, mapping.delimiter);
   const parsed = parseStatement(rows, mapping);
 
-  // Problems mean no columns step has genuinely passed, so nothing is written:
-  // a draft that carried a mapping its own file cannot parse would send every
-  // later step back here anyway, and the half-written row would outlast the
-  // screen that could fix it.
+  // Problems mean no columns step genuinely passed, so nothing is written: a
+  // draft carrying a mapping its own file cannot parse would bounce every
+  // later step back here anyway.
   if (parsed.problems.length > 0) return { problems: parsed.problems };
 
-  // No positions and nothing skipped means the mapped instrument column is
-  // empty on every data row. (All rows skipped is different: the column has
-  // content, the quantities are absence markers, and the review screen owns
-  // what an empty statement means.)
+  // No positions and nothing skipped = the instrument column is empty on
+  // every data row. (All-skipped is different: the column has content, and
+  // the review screen owns what an empty statement means.)
   if (parsed.positions.length === 0 && parsed.skipped.length === 0) {
     throw new ValidationError({
       instrument:
@@ -396,8 +354,8 @@ export async function rememberMapping(
     });
   }
 
-  // Asked once. This one answer is both the bit the step strip reads and the
-  // step this call sends the reader to.
+  // Asked once: this one answer is both the bit the strip reads and the step
+  // the reader is sent to.
   const hadFirstSightings =
     (
       await unresolvedStrings(
@@ -416,9 +374,8 @@ export async function rememberMapping(
     .execute();
 
   // The institution's remembered mapping, so the next file with this header
-  // opens the columns screen already filled in. Derived here rather than asked
-  // of the caller: the institution is the draft's account's, and the header is
-  // the row the mapping itself names.
+  // opens prefilled. Derived here: the institution is the draft's account's,
+  // the header the row the mapping itself names.
   const account = await getAccount(draft.accountId, db);
   await upsertMapping(
     account.institution,
@@ -431,16 +388,11 @@ export async function rememberMapping(
 }
 
 /**
- * Where a draft's file stands against the flow's steps, in one read. The rule
- * — parse the draft through its saved mapping; a malformed mapping or parse
- * problems mean the columns step, an unresolved string means the instruments
- * step, and otherwise the file is ready — exists once, here, rather than once
- * per route that resumes a draft.
- *
- * `step` names the earliest step still owed; `null` means none is, and the
- * draft can be diffed and committed. The instruments variant carries the
- * parse and the unresolved strings, because that screen's whole job is to ask
- * about them; the columns variant carries nothing, because a mapping that
+ * Where a draft's file stands against the flow's steps, in one read — the
+ * rule exists once, here, not once per resuming route. `step` names the
+ * earliest step still owed; null means diffable and committable. The
+ * instruments variant carries the parse and unresolved strings (that screen's
+ * whole job); the columns variant carries nothing, because a mapping that
  * does not parse has nothing trustworthy to carry.
  */
 export type DraftParse =
@@ -455,10 +407,9 @@ export type DraftParse =
   | { step: null; parsed: ParsedStatement; mapping: StatementMapping };
 
 /**
- * Parse a draft's file through its saved mapping and say which step, if any,
- * the draft still owes. The index route redirects to `step`, the instruments
- * route renders or bounces on it, and {@link diffForDraft} turns a non-null
- * `step` into a {@link DraftNotReadyError}.
+ * Parse a draft through its saved mapping and name the step still owed: the
+ * index route redirects on it, the instruments route renders or bounces, and
+ * {@link diffForDraft} turns non-null into a {@link DraftNotReadyError}.
  */
 export async function parseDraft(
   draft: UploadDraft,
@@ -467,14 +418,13 @@ export async function parseDraft(
   const saved = statementMapping.safeParse(draft.mapping);
   if (!saved.success) return { step: "columns" };
 
-  // The mapping's own delimiter, never a second sniff: re-reading the same
-  // bytes must not depend on the sniff reaching the same verdict twice.
+  // The mapping's own delimiter, never a second sniff: the re-read must not
+  // depend on the sniff reaching the same verdict twice.
   const { rows } = readCsv(draft.bytes, saved.data.delimiter);
   const parsed = parseStatement(rows, saved.data);
 
-  // A saved mapping only lands after a clean parse, so problems here mean the
-  // stored row predates a rule or was written by hand — either way, remapping
-  // is the fix, and columns is where remapping lives.
+  // A saved mapping only lands after a clean parse, so problems mean the row
+  // predates a rule or was written by hand — remapping is the fix.
   if (parsed.problems.length > 0) return { step: "columns" };
 
   const unresolved = await unresolvedStrings(
@@ -489,11 +439,9 @@ export async function parseDraft(
 }
 
 /**
- * A review-step read over a draft that has not genuinely reached review: the
- * mapping is absent or no longer reads back through its schema, or the file
- * still carries a string no alias resolves. Not a refusal and not a 404 — the
- * reader's next move is an earlier step, and the routes translate this into a
- * redirect to the one named here.
+ * A review-step read over a draft that has not genuinely reached review. Not
+ * a refusal and not a 404 — the reader's next move is an earlier step, and
+ * the routes redirect to the one named here.
  */
 export class DraftNotReadyError extends Error {
   override readonly name = "DraftNotReadyError";
@@ -512,9 +460,8 @@ type DiffInstrument = {
   symbol: string | null;
   name: string;
   /**
-   * The `.cell-sub` under the name: `holdingNote`'s words — asset class,
-   * "never priced", "price is stale" — plus this row's own notes, "3 rows
-   * combined" and "cost basis no longer reported" among them. Composed here so
+   * The `.cell-sub` under the name: `holdingNote`'s words plus this row's own
+   * ("3 rows combined", "cost basis no longer reported") — composed here so
    * two screens cannot spell one condition two ways.
    */
   note: string;
@@ -582,11 +529,10 @@ export type UploadDiff = {
   /** Which of §6.3's two cases this statement is — the screen says it plainly. */
   asOf: { source: "file"; date: IsoDate } | { source: "asked" };
   /**
-   * True when the columns step recorded that this draft's file raised no
-   * first sightings, so the step strip dims its instruments entry with
-   * "· none" (brief §2.1, §7.5). False both for a draft that genuinely
-   * visited the step and for one saved before the bit existed — dimming is a
-   * claim, and an unknown history does not get to make it.
+   * True when the columns step recorded no first sightings, so the strip dims
+   * its instruments entry "· none" (brief §2.1, §7.5). False both for a
+   * genuinely visited step and a pre-bit draft — dimming is a claim, and an
+   * unknown history does not get to make it.
    */
   instrumentsSkipped: boolean;
 };
@@ -601,9 +547,8 @@ type FileRow = {
   /** The instrument's current quote, for the value column and the product guard. */
   price: string | null;
   /**
-   * The instrument's projected annual dividend per share, for the product
-   * guard alone — the diff renders no dividend column. Null where no refresh
-   * has ever supplied one, which the view reads as zero.
+   * For the product guard alone — the diff renders no dividend column. Null
+   * where no refresh ever supplied one, which the view reads as zero.
    */
   annualDividendPerShare: string | null;
   /** How many file lines fed this row — parser combines and spelling folds both. */
@@ -619,10 +564,9 @@ type AssembledDiff = {
 };
 
 /**
- * Run `body` in a transaction, unless one is already open — the same helper
- * `instrument-resolution.server.ts` carries, for the same reason: Kysely
- * refuses `.transaction()` on a handle that is already one, and the test seam
- * *is* a transaction.
+ * Run `body` in a transaction unless one is already open — Kysely refuses
+ * `.transaction()` on a handle that already is one, and the test seam *is* a
+ * transaction (the same helper `instrument-resolution.server.ts` carries).
  */
 function inTransaction<T>(
   db: Kysely<Database>,
@@ -662,23 +606,19 @@ function sameQuantity(before: string, after: string): boolean {
 }
 
 /**
- * Parse the draft's file through its saved mapping, resolve every string, and
- * classify the result against what the account holds now.
+ * Parse the draft through its saved mapping, resolve every string, and
+ * classify against what the account holds now. Current holdings come through
+ * {@link accountHoldings} — never a second `order by as_of_date desc` here:
+ * §8.2's drift is a tie-break copied into a new caller.
  *
- * Current holdings come through {@link accountHoldings} — the shared module
- * over `holding_valued`, which resolves "current" through
- * `latest_position_set` — never a second `order by as_of_date desc` written
- * here: §8.2's drift is a tie-break copied into a new caller.
+ * Two spellings of one fund (both aliased to it) fold here exactly as the
+ * parser folds a duplicated string: quantities summed, basis
+ * quantity-weighted, null when any lot's basis is unknown. `parseStatement`
+ * groups by the raw string and defers this on purpose; here resolution has
+ * decided.
  *
- * Two spellings of one fund — `FCASH` and `CASH & CASH INVESTMENTS`, both
- * aliased to the same instrument — fold here exactly as the parser folds a
- * duplicated string: quantities summed, basis quantity-weighted, null when any
- * lot's basis is unknown or the lots net to nothing. `parseStatement` groups
- * by the raw string and defers this on purpose ("combining them now would
- * guess what resolution decides"); this is where resolution has decided.
- *
- * @throws {DraftNotReadyError} when the columns or instruments step has not
- *         genuinely been passed — the routes redirect there.
+ * @throws {DraftNotReadyError} when a step has not genuinely been passed —
+ *         the routes redirect there.
  */
 async function assembleDiff(
   draft: UploadDraft,
@@ -740,9 +680,8 @@ async function assembleDiff(
       continue;
     }
 
-    // The spelling fold. Signs were already applied by the parser, so the sum
-    // is over the final quantities; `foldLots` is the parser's own
-    // duplicate-row rule, stated once in `statement.ts` and called from both.
+    // The spelling fold. Signs were already applied, so the sum is over final
+    // quantities; `foldLots` is the parser's own rule, called from both.
     const fold = foldLots(group);
 
     folded.push({
@@ -754,10 +693,9 @@ async function assembleDiff(
     });
   }
 
-  // What each named instrument is, and what it currently quotes at — the
-  // Value column's other operand, and the two provider-supplied operands of
-  // the product guard. The dividend rate is read here and nowhere rendered:
-  // `holding_valued` multiplies it by whatever quantity this commit writes.
+  // What each instrument is and quotes at — the Value column's other operand
+  // and the product guard's provider operands. The dividend rate is read and
+  // nowhere rendered: the view multiplies it by whatever this commit writes.
   const ids = folded.map((row) => row.instrumentId);
   const factRows =
     ids.length === 0
@@ -853,8 +791,7 @@ async function assembleDiff(
   }
 
   // Every current holding the file does not carry is removed — in full, each
-  // with its last known value, or `holdingNote`'s "never priced" where nothing
-  // ever quoted it.
+  // with its last known value or "never priced".
   const removed: DiffRemoved[] = current
     .filter((holding) => !inFile.has(holding.instrumentId))
     .map((holding) => ({
@@ -867,9 +804,9 @@ async function assembleDiff(
       value: holding.value,
     }));
 
-  // "No statement yet" through `lastRecorded`, not through an empty holdings
-  // read: an account sold down to nothing has a statement and gets an honest
-  // three-count diff, while a first upload reads as "14 added".
+  // "No statement yet" through `lastRecorded`, not an empty holdings read: an
+  // account sold to nothing has a statement and gets an honest diff, while a
+  // first upload reads as "14 added".
   const firstStatement = (await lastRecorded(draft.accountId, db)) === null;
 
   return {
@@ -920,8 +857,8 @@ export type CommitInput = {
   asOf?: string;
   /** "true" when the majority-removal sentence was ticked. */
   confirmRemovals?: string;
-  /** The hidden account-id field. It feeds the expired page's link, and here
-   *  only guards that the post and the draft agree about the account. */
+  /** Hidden account id: feeds the expired page's link; here it only guards
+   *  that the post and the draft agree. */
   accountId?: string;
 };
 
@@ -937,35 +874,25 @@ export type CommittedUpload = {
 
 /**
  * The flow's one write: the immutable `position_set`, one holding per parsed
- * row, the draft deleted — one transaction, so nothing partially applied can
- * exist.
+ * row, the draft deleted — one transaction, nothing partially applied.
  *
- * The refusals run before it, state-level first and every one a sentence:
+ * The refusals run before it, every one a sentence: a closed account (in
+ * `setBalance`'s words); a posted account id disagreeing with the draft's (a
+ * stale or forged form); the account-number guard, both halves naming both
+ * numbers — a file disagreeing with itself is not a statement of one account,
+ * and a mapped column disagreeing with the recorded number is §5.1's
+ * silent-collision failure caught at the moment it would happen (a guard,
+ * never a selector); the as-of date via `recordedDate` when the file did not
+ * date itself — when it did, a posted date is not consulted: the review
+ * renders no control, so one can only arrive from a stale or hand-built post,
+ * and a statement's own date must not be overridable; the product guard per
+ * row — all three multiplications `holding_valued` casts, one failing row
+ * refusing the whole commit by name; and the majority-removal tick, refused
+ * in the ratio's words.
  *
- * - a closed account, in `setBalance`'s words — closed while the draft sat open
- * - a posted account id disagreeing with the draft's — a stale or forged form
- * - the account-number guard, both halves naming both numbers: a file whose
- *   own rows disagree about the number is not a statement of one account, and
- *   a mapped account-number column disagreeing with the number recorded on
- *   the account is the silent-collision failure §5.1 made accounts
- *   first-class to avoid, caught at the moment it would happen; the number is
- *   a guard, never a selector
- * - the as-of date, validated by `recordedDate` when the file did not date
- *   itself. When it did, the file's date is used and a posted one is not
- *   consulted — the review renders no control in that case, so a date can only
- *   arrive from a stale or hand-built post, and a statement's own date must
- *   not be overridable by one
- * - the product guard, per row: `quantity × cost_basis_per_share`, and the
- *   same product against the instrument's current price and against its
- *   current dividend rate where those exist, since `holding_valued` casts all
- *   three. One failing row refuses the whole commit and names the instrument
- * - the majority-removal tick, unticked: refused in the ratio's words, nothing
- *   written
- *
- * A second upload for a date that already has one is allowed —
- * `latest_position_set`'s `created_at`-then-`id` tie-break already resolves
- * it. Posting a committed draft again is a {@link NotFoundError}, which the
- * route renders as the expired-or-recorded page.
+ * A second upload for an already-recorded date is allowed —
+ * `latest_position_set`'s tie-break resolves it. Re-posting a committed draft
+ * is a {@link NotFoundError} → the expired-or-recorded page.
  *
  * @throws {ValidationError} for every refusal above.
  * @throws {NotFoundError} for a dead draft, including a re-POST after commit.
@@ -979,9 +906,8 @@ export async function commitUpload(
   const draft = await findDraft(draftId, db);
   if (draft === undefined) throw new NotFoundError(EXPIRED);
 
-  // Before everything else, deliberately, and in `setBalance`'s words: a
-  // person whose account closed while the draft sat open has a problem no
-  // ticked box or typed date will fix.
+  // First, deliberately, and in `setBalance`'s words: an account closed while
+  // the draft sat open is a problem no ticked box or typed date will fix.
   if (draft.accountClosedAt !== null) {
     throw ValidationError.form(
       `${draft.accountName} is closed, and a closed account's history does not change. ` +
@@ -989,9 +915,8 @@ export async function commitUpload(
     );
   }
 
-  // The hidden field feeds the expired page's link, never a write — but a post
-  // naming a different account than the draft's is a stale or forged form, and
-  // it is refused rather than wondered about.
+  // The hidden field feeds the expired page's link, never a write — but a
+  // post naming a different account is stale or forged, and is refused.
   if (raw.accountId !== undefined && raw.accountId !== draft.accountId) {
     throw ValidationError.form(
       "This form was posted for a different account than the one this upload is recording " +
@@ -1001,10 +926,9 @@ export async function commitUpload(
 
   const { diff, rows, fileAccountNumber } = await assembleDiff(draft, db);
 
-  // The intra-file half of the account-number guard: a file carrying two
-  // different numbers is not a statement of one account, whatever number the
-  // account has recorded — refused naming both, never resolved by picking
-  // one, the same shape as the parser's as-of disagreement.
+  // Intra-file half of the guard: a file carrying two numbers is not a
+  // statement of one account — refused naming both, never resolved by picking
+  // one (the parser's as-of-disagreement shape).
   const numbers = rows.flatMap((row) =>
     row.accountNumber !== null ? [row.accountNumber] : [],
   );
@@ -1039,11 +963,10 @@ export async function commitUpload(
       : parseInput(z.object({ asOf: recordedDate("The statement date") }), { asOf: raw.asOf })
           .asOf;
 
-  // The product guard, all three multiplications `holding_valued` will
-  // perform. A product past `numeric(20, 4)` does not fail the write — it
-  // succeeds, and then the view raises on every request, taking Holdings,
-  // Analysis, Overview and Account detail down together. One failing row
-  // refuses the whole commit; nothing partially applied.
+  // The product guard, all three multiplications the view performs. An
+  // overflow does not fail the write — it succeeds, then the view raises on
+  // every request, taking four screens down together. One failing row refuses
+  // the whole commit.
   for (const row of rows) {
     if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
       throw ValidationError.form(
@@ -1079,10 +1002,9 @@ export async function commitUpload(
   }
 
   return inTransaction(db, async (trx) => {
-    // The draft's deletion leads, and is the transaction's guard: a concurrent
-    // commit that got here first has already taken the row, and a second
-    // position set must not land behind its back. Nothing before this point
-    // wrote anything, so aborting here aborts everything.
+    // The deletion leads and is the transaction's guard: a concurrent commit
+    // already took the row, and a second position set must not land behind
+    // its back. Nothing was written before this point.
     const taken = await trx
       .deleteFrom("upload_draft")
       .where("id", "=", draft.id)
@@ -1108,9 +1030,8 @@ export async function commitUpload(
           rows.map((row) => ({
             position_set_id: set.id,
             instrument_id: row.instrumentId,
-            // Zero stays zero and null stays null: a dropped row is
-            // unreachable from the table that no longer prints it, and a
-            // defaulted basis reports a fake gain (§5.4, 0001).
+            // Zero stays zero and null stays null: a defaulted basis reports
+            // a fake gain (§5.4, 0001).
             quantity: row.quantity,
             cost_basis_per_share: row.costBasisPerShare,
           })),
@@ -1118,8 +1039,8 @@ export async function commitUpload(
         .execute();
     }
 
-    // Captured only where the column is still empty, so a number recorded by
-    // hand — or by a concurrent upload — is never silently overwritten.
+    // Captured only where the column is still empty, so a hand-recorded or
+    // concurrent number is never silently overwritten.
     if (fileAccountNumber !== null && draft.accountNumber === null) {
       await trx
         .updateTable("account")
@@ -1155,27 +1076,23 @@ export type UploadReceipt = {
   firstStatement: boolean;
   counts: { added: number; updated: number; unchanged: number; removed: number };
   /**
-   * How many positions the recorded set holds — the receipt's closing
-   * "now holds N positions" (brief §6.5), counted from the set's own rows so
-   * a hand-typed parameter can only ever describe what is stored.
+   * Positions in the recorded set — the receipt's "now holds N" (brief §6.5),
+   * counted from the set's own rows so a hand-typed parameter can only
+   * describe what is stored.
    */
   holdingCount: number;
 };
 
 /**
  * The receipt for `?uploaded=<setId>` — recomputed from the database, never
- * trusted from the URL. The parameter names *which* set was written and says
- * nothing about what is in it, so a hand-typed value can only ever produce a
- * sentence describing what the account actually holds (the same guarantee the
- * `?recorded=` receipt already has).
+ * trusted from the URL: the parameter names *which* set, not what is in it
+ * (the `?recorded=` receipt's guarantee). Counts are the set diffed against
+ * its predecessor under the same `as_of_date desc, created_at desc, id desc`
+ * ordering `latest_position_set` implements — cited here rather than
+ * re-derived as a new rule.
  *
- * The counts are the named set diffed against its predecessor under the same
- * `as_of_date desc, created_at desc, id desc` ordering `latest_position_set`
- * implements — the function itself cannot answer "what was latest before this
- * one", so its ordering is cited here rather than re-derived as a new rule.
- *
- * @returns null for a set that is not the account's latest, not the account's
- *          at all, or not an id — a stale bookmark renders no receipt.
+ * @returns null for a set that is not the account's latest, not the
+ *          account's, or not an id — a stale bookmark renders no receipt.
  */
 export async function uploadReceipt(
   accountId: string,

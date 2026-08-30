@@ -1,69 +1,45 @@
 /**
- * The only thing in the application that writes a price.
+ * The only thing in the application that writes a price. DESIGN.md §6.2
+ * splits storage in two; ADR-0006 added a third tier and a sibling that is
+ * not a price tier at all:
  *
- * DESIGN.md §6.2 splits price storage in two, and the split is the reason this
- * module is careful rather than short:
- *
- *   quote        one row per instrument, overwritten in place — the intraday tier
- *   price_daily  one row per instrument per trading day — the immutable spine
- *
- * ADR-0006 added a third, and a sibling that is not a price tier at all:
- *
+ *   quote              one row per instrument, overwritten — the intraday tier
+ *   price_daily        one row per instrument per trading day — the immutable spine
  *   price_observation  one row per instrument per provider instant — append-only
- *   price_poll         one row per refresh attempt, whether or not it wrote anything
+ *   price_poll         one row per refresh attempt, whether or not it wrote
  *
- * A refresh writes both tiers, the log and the poll record. What keeps
- * `price_daily` honest is which date it writes under: **the date inside the
- * quote's own timestamp, in the market's zone — never today's date.** Two
- * failures follow from getting that wrong, and both are silent:
+ * What keeps `price_daily` honest is which date it writes under: **the date
+ * inside the quote's own timestamp, in the market's zone — never today's.**
+ * Two silent failures follow from getting that wrong: an afternoon poll sees
+ * a mutual fund's yesterday NAV still standing — filed under today it is a
+ * fabricated close for an unfinished day, and the real one lands a day late,
+ * permanently; a holiday poll sees Friday's quote — filed under the holiday
+ * it manufactures a row for a day the market did not trade, which §6.2
+ * forbids since carry-forward reads a real row and an absent one differently.
+ * Keyed on the quote's own instant, both collapse into rewriting the row that
+ * quote already owns — also why the market calendar may be approximate: it
+ * decides whether to spend a request, never what to store. Today's row is
+ * provisional and converges on the close as the session runs.
  *
- *   * A mutual fund strikes one NAV after the close (§6.2). An afternoon poll
- *     sees yesterday's NAV still standing; filed under today, it becomes a
- *     fabricated close for a day that has not finished, and tomorrow's poll
- *     files the real one a day late, permanently.
- *   * A poll on a market holiday sees Friday's quote. Filed under the holiday,
- *     it manufactures a row for a day the market did not trade — which §6.2
- *     forbids outright, because history queries carry the last close forward
- *     and a real row and an absent one mean different things.
+ * The log and the poll record share the same transaction, so a committed
+ * fetch lands in all four tables or none — what makes the 1D chart's last
+ * point and the headline agree on the normal path. Three divergences remain,
+ * narrow and deliberate, named so nobody looks for a fourth: a provider
+ * re-stating an instant at a different price (`quote` upserts; the deduped
+ * observation keeps the first — ADR-0006 accepts it); a hand-typed manual
+ * price, once the form exists (a quote with no observation, so the headline
+ * moves and the 1D line does not); a provider returning one symbol twice
+ * (both become observations; `quote` keeps whichever came last). A refresh
+ * whose writes fail commits nothing, poll row included — an attempt that dies
+ * leaves no trace of having been made.
  *
- * Keyed on the quote's own instant, both cases collapse into rewriting the row
- * that quote already owns. That is also why the market calendar is allowed to
- * be approximate: it decides whether to spend a request, never what to store.
+ * A past date's row *can* be rewritten, deliberately — only ever with the
+ * provider's own price for the day the provider says it belongs to, so a
+ * rewrite is idempotent unless the provider itself revises a close: a
+ * correction, not corruption.
  *
- * Today's row is provisional and converges on the close as the session runs.
- *
- * The observation log and the poll record are written in that same transaction,
- * so a committed fetch is recorded in all four tables or in none — which is what
- * makes the 1D chart's last point and the headline above it agree on the normal
- * path. Three divergences remain, all narrow, all deliberate, and named here so
- * that nobody looks for a fourth:
- *
- *   * A provider re-stating an instant it has already given us with a different
- *     price. `quote` upserts to the new price; the deduped observation keeps the
- *     first. Accepted by ADR-0006 rather than reconciled.
- *   * A hand-typed manual price, once the Settings → Instruments form exists to
- *     type one (DESIGN.md §6). It writes a quote with no observation behind it,
- *     so the headline moves and the 1D line does not.
- *   * A provider returning the same symbol twice in one response. Both entries
- *     become observations; `quote` keeps whichever came last, which need not be
- *     the one with the later instant.
- *
- * A refresh whose writes fail commits nothing at all, the poll row included. So
- * the poll table distinguishes a quiet market from a server that was not
- * running, but not from a refresh that ran and could not commit — an attempt
- * that dies leaves no trace of having been made.
- *
- * A past date's row *can* be rewritten, and deliberately so: an afternoon poll
- * returning yesterday's NAV, and a holiday poll returning Friday's, are exactly
- * the two cases above, and both rewrite a past row with the same price it
- * already holds. What §6.2's "an intraday refresh can never corrupt history"
- * amounts to here is narrower than "past rows are immutable": a row is only
- * ever rewritten with the provider's own price for the day that provider says
- * it belongs to, so a rewrite is idempotent unless the provider itself revises
- * a close — which is a correction, not corruption.
- *
- * Every exported query takes an optional `db` handle: it defaults to the
- * process-wide one, and tests pass a transaction they roll back.
+ * Every exported query takes an optional `db`; tests pass a transaction they
+ * roll back.
  */
 import { sql } from "kysely";
 
@@ -75,37 +51,28 @@ import type { Kysely } from "kysely";
 import type pg from "pg";
 
 /**
- * The lock a refresh contends for.
- *
- * Arbitrary, and must not change — and must not equal the migration runner's
- * `7295380114023641`, or a cold start would have a poll and a migration
- * blocking each other for no reason.
+ * The lock a refresh contends for. Arbitrary, must not change — and must not
+ * equal the migration runner's `7295380114023641`, or a cold start would have
+ * a poll and a migration blocking each other for no reason.
  */
 const ADVISORY_LOCK_KEY = "7295380114023642";
 
 /**
- * Run a refresh, or decline because one is already running.
+ * Run a refresh, or decline because one is already running. Beside the
+ * refresh rather than in the poller because the poller stopped being the only
+ * caller when a person could press a button — two browser tabs is the
+ * contention that actually happens. Guards the *decision* to spend a request,
+ * never the rows (convergent upserts either way).
  *
- * Lives beside the refresh rather than in the poller, because the poller stopped
- * being the only caller the moment a person could press a button. What it
- * guards has not changed — the *decision* to spend a request, never the rows,
- * which are convergent upserts either way — but the contention it guards
- * against has: two containers and a slow tick meeting the next one were the
- * cases 0002-pricing.md anticipated, and two browser tabs is the one that
- * actually happens.
- *
- * `null` for a refusal rather than a throw. Nothing has gone wrong: another
- * caller is doing the work, and the prices will be fresh either way, which is
- * the only thing either caller wanted.
- *
- * A dedicated connection, because an advisory lock belongs to the session that
- * took it, so taking and releasing it have to happen on the same client. The
- * work itself goes through Kysely on a different connection.
+ * `null` for a refusal, not a throw: another caller is doing the work and the
+ * prices will be fresh either way. A dedicated connection, because an
+ * advisory lock belongs to the session that took it; the work itself goes
+ * through Kysely on a different connection.
  */
 export async function withRefreshLock<T>(body: () => Promise<T>): Promise<T | null> {
-  // Declared before the `try` and acquired inside it: a database that is
-  // briefly unreachable is the ordinary case, and a throw from `connect` above
-  // the `finally` would leak the client.
+  // Declared before the `try`, acquired inside it: a briefly unreachable
+  // database is ordinary, and a throw from `connect` above the `finally`
+  // would leak the client.
   let client: pg.PoolClient | undefined;
   let broken = false;
 
@@ -124,11 +91,9 @@ export async function withRefreshLock<T>(body: () => Promise<T>): Promise<T | nu
       await client.query(`select pg_advisory_unlock(${ADVISORY_LOCK_KEY})`);
     }
   } catch (error) {
-    // A session-level lock outlives the query that failed but not the session
-    // holding it, and a connection handed back to the pool keeps its session.
-    // If anything above threw, this connection may still hold the lock, and
-    // returning it to the pool would block every future refresh forever — so it
-    // is destroyed rather than reused.
+    // A session-level lock outlives the failed query but not the session, and
+    // a pooled connection keeps its session — returned still holding the
+    // lock, it would block every future refresh forever. Destroyed, not reused.
     broken = true;
     throw error;
   } finally {
@@ -147,24 +112,17 @@ export type RefreshReport = {
   /** `price_daily` rows written or rewritten. */
   closes: number;
   /**
-   * Observations the log did not already hold.
-   *
-   * The only field that separates a refresh that learned something from one
-   * that re-fetched a price it already had. Every other count says the same
-   * thing on a Saturday evening as it does mid-session: forty instruments
-   * requested, forty priced, forty closes rewritten — with the same Friday
-   * close going back into every row. This one says nought, which is the truth
-   * the person pressing the button asked for.
+   * Observations the log did not already hold — the only field separating a
+   * refresh that learned something from one that re-fetched what it had. On a
+   * Saturday evening every other count reads the same as mid-session; this
+   * one says nought, the truth the person pressing the button asked for.
    */
   observed: number;
   /**
-   * Did the provider call itself fail?
-   *
-   * A failed call is swallowed here on purpose (see the catch below), so every
-   * aggregate on this report looks exactly like a provider that answered and
-   * knew nothing: `priced: 0`, everything stale. The two want different
-   * sentences on screen — one says the feed is down, the other says these
-   * symbols are wrong — and this is the only thing that can tell them apart.
+   * Did the provider call itself fail? A failed call is swallowed (see the
+   * catch), so the aggregates look exactly like a provider that answered and
+   * knew nothing. The two want different sentences — feed down versus wrong
+   * symbols — and this is the only thing that can tell them apart.
    */
   providerFailed: boolean;
 };
@@ -173,21 +131,13 @@ export type RefreshReport = {
 type FeedInstrument = { id: string; symbol: string };
 
 /**
- * Which instruments a refresh is allowed to fetch.
- *
- * `price_source = 'feed'` and a symbol that exists. The two exclusions are not
- * the same exclusion (§4.3):
- *
- *   * `fixed` is the seeded `USD` row, priced at 1.00 since 1970. Asking Yahoo
- *     what a dollar costs would overwrite the constant that cash and every
- *     liability are valued against.
- *   * `manual` is a collective investment trust in a workplace plan — no public
- *     ticker, no quote on any retail API. Its price is typed in by hand and
- *     carried forward, and a fetch would only ever fail.
- *
- * A null symbol is filtered separately from `manual` even though today every
- * manual instrument has one, because `symbol` is nullable for `feed` too: an
- * instrument can be created before anyone knows its ticker.
+ * Which instruments a refresh may fetch: `price_source = 'feed'` with a
+ * symbol. The two exclusions are not the same exclusion (§4.3): `fixed` is
+ * the seeded `USD` row — asking Yahoo what a dollar costs would overwrite the
+ * constant cash and every liability are valued against; `manual` is a
+ * workplace-plan trust with no public ticker — a fetch would only ever fail.
+ * A null symbol is filtered separately because `symbol` is nullable for
+ * `feed` too: an instrument can be created before anyone knows its ticker.
  */
 const selectFeedInstruments = (db: Kysely<Database>) =>
   db
@@ -198,13 +148,10 @@ const selectFeedInstruments = (db: Kysely<Database>) =>
     .orderBy("symbol");
 
 /**
- * Every instrument the provider will be asked about, by symbol.
- *
- * A map to a *list*, not to one instrument. `instrument.symbol` carries no
- * unique constraint (§4.1), so two rows can legitimately share a ticker — the
- * same fund held under two classifications, or a duplicate created before an
- * alias was repointed. One quote must update all of them, and a `Map<string,
- * Instrument>` would silently price whichever row happened to come last.
+ * Every instrument the provider will be asked about, by symbol — a map to a
+ * *list*, not one instrument: `instrument.symbol` has no unique constraint
+ * (§4.1), so two rows can share a ticker, one quote must update all of them,
+ * and a `Map<string, Instrument>` would silently price whichever came last.
  */
 function bySymbol(instruments: FeedInstrument[]): Map<string, FeedInstrument[]> {
   const map = new Map<string, FeedInstrument[]>();
@@ -218,29 +165,19 @@ function bySymbol(instruments: FeedInstrument[]): Map<string, FeedInstrument[]> 
 }
 
 /**
- * The form a symbol is matched on.
- *
- * Upper-cased, because the provider answers in its own canonical case and an
- * instrument stored as `vti` would otherwise never match the `VTI` that comes
- * back — marking itself stale on every run, permanently, with nothing in the
- * log naming it. Matching is deliberately the *only* thing this normalises: the
- * stored symbol is left exactly as typed, since §4.3 makes it a mutable
- * attribute a person edits rather than a key the app owns.
+ * The form a symbol is matched on: upper-cased, or an instrument stored `vti`
+ * never matches the `VTI` that comes back — stale on every run, permanently,
+ * with nothing in the log naming it. Matching is the *only* thing normalised:
+ * the stored symbol stays exactly as typed (§4.3 makes it a mutable attribute
+ * a person edits, not a key the app owns).
  */
 const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
 
 /**
- * Run `body` in a transaction, unless one is already open.
- *
- * Kysely refuses `.transaction()` on a handle that is already a transaction,
- * and the repository's test isolation *is* a transaction — `withDatabase` opens
- * one, hands it to the test, and rolls it back so nothing survives. Without
- * this, the write path would be untestable through the seam every other module
- * is tested through.
- *
- * Joining the caller's transaction rather than opening a second one is also the
- * right behaviour in production, where it means a future caller can wrap a
- * refresh in a larger unit of work and have it roll back with everything else.
+ * Run `body` in a transaction unless one is already open: Kysely refuses
+ * `.transaction()` on a transaction, and the test seam *is* one
+ * (`withDatabase`). Joining the caller's is also right in production — a
+ * future caller can wrap a refresh in a larger unit of work.
  */
 function inTransaction<T>(
   db: Kysely<Database>,
@@ -250,55 +187,47 @@ function inTransaction<T>(
 }
 
 /**
- * Fetch every feed instrument's price and store it.
+ * Fetch every feed instrument's price and store it. One transaction — not for
+ * atomicity against readers (`holding_valued` tolerates a half-priced
+ * portfolio by design) but so a crash midway cannot leave instruments marked
+ * stale by a run that never got to unmark them.
  *
- * The whole write runs in one transaction. Not for atomicity against a reader —
- * `holding_valued` tolerates a half-priced portfolio by design — but so that a
- * crash midway cannot leave some instruments marked stale by a run that then
- * never got to unmark them.
- *
- * @param provider the price source. Injected rather than constructed, because
- *                 this is the seam DESIGN.md §6.1 exists for: tests pass a fake
- *                 and CI never reaches the network.
- * @param marketTimeZone `MARKET_TIMEZONE`. Decides which calendar day a quote's
- *                 instant belongs to, and nothing else.
+ * @param provider injected, the seam DESIGN.md §6.1 exists for: tests pass a
+ *                 fake and CI never reaches the network.
+ * @param marketTimeZone decides which calendar day a quote's instant belongs
+ *                 to, and nothing else.
  */
 export async function refreshQuotes(
   provider: PriceProvider,
   marketTimeZone: string,
   db: Kysely<Database> = getDb(),
 ): Promise<RefreshReport> {
-  // Read before anything else, because this is the figure the poll record is
-  // for: the span from here to the commit is how long the attempt took, and an
-  // attempt that dies before committing leaves no row at all.
+  // Read first: the poll records the span from here to commit, and an attempt
+  // that dies before committing leaves no row at all.
   const startedAt = new Date();
 
   const instruments = await selectFeedInstruments(db).execute();
 
   const feed: FeedInstrument[] = instruments.map((row) => ({
     id: String(row.id),
-    // Narrowing only. The query already refuses null symbols; TypeScript cannot
-    // see that through a `where`.
+    // Narrowing only: the query refuses null symbols; TypeScript cannot see
+    // that through a `where`.
     symbol: row.symbol as string,
   }));
 
   const lookup = bySymbol(feed);
 
-  // An instance with nothing to price still made an attempt, and ADR-0006 wants
-  // the attempt recorded: without it, a stretch of silence in the observation
-  // log cannot be told apart from a stretch when nothing was running. So this
-  // no longer returns early — it skips the provider (there is nothing to ask
-  // about) and falls through to the transaction, which writes the poll row and
-  // nothing else.
+  // An instance with nothing to price still made an attempt, and ADR-0006
+  // wants it recorded — else a silent stretch in the log cannot be told from
+  // a server that was not running. So no early return: skip the provider,
+  // fall through to the transaction, write the poll row and nothing else.
   //
-  // A provider that throws — a network failure, a rate limit, the unofficial
-  // endpoint changing shape — is the case §6.1 says to expect. Left to
-  // propagate, the run would end here with every `is_stale` flag exactly as it
-  // was, so the UI would keep presenting last week's prices as current: the
-  // §11 failure this slice exists to prevent. An empty batch instead falls
-  // through to the same path a symbol that did not come back takes, which marks
-  // every selected instrument stale and writes no price — and, because the
-  // absence of a price is the truth about that instant, no observation either.
+  // A provider that throws is the case §6.1 says to expect. Left to
+  // propagate, every `is_stale` flag stays as it was and the UI keeps
+  // presenting last week's prices as current — the §11 failure this slice
+  // exists to prevent. An empty batch instead takes the same path as a symbol
+  // that did not come back: everything selected marked stale, no price
+  // written, and — the absence being the truth — no observation either.
   let quotes: ProviderQuote[] = [];
   let providerFailed = false;
   if (feed.length > 0) {
@@ -311,10 +240,9 @@ export async function refreshQuotes(
     }
   }
 
-  // Matched outside the transaction, because nothing here writes: a quote for a
-  // symbol nobody asked about is not an error worth failing the run for — a
-  // provider is entitled to normalise a symbol — but it has no instrument to
-  // belong to, so there is nothing to do with it.
+  // Matched outside the transaction — nothing here writes. A quote for a
+  // symbol nobody asked about is not worth failing the run (a provider may
+  // normalise a symbol), but it has no instrument to belong to.
   const matched: Array<{ instrumentId: string; quote: ProviderQuote }> = [];
   for (const quote of quotes) {
     for (const instrument of lookup.get(matchKey(quote.symbol)) ?? []) {
@@ -323,9 +251,8 @@ export async function refreshQuotes(
   }
 
   return inTransaction(db, async (trx) => {
-    // The log first, then the tiers derived from it. Order inside a transaction
-    // changes nothing about what survives, but it is the order the facts are in:
-    // the observation records what the provider said, and the quote and the
+    // The log first, then the tiers derived from it — the order the facts are
+    // in: the observation records what the provider said; the quote and the
     // close are what we now believe because of it.
     const observed = await writeObservations(trx, observationsOf(matched, marketTimeZone));
 
@@ -340,11 +267,9 @@ export async function refreshQuotes(
       closes += 1;
     }
 
-    // Everything asked for that did not come back. §6.2: the last known price is
-    // kept and used, and the row is flagged — never zeroed, never nulled into a
-    // sum. An instrument that has never been priced has no row to flag, and
-    // `holding_valued` already reports it as `is_priced = false`, so the absence
-    // needs no special case here.
+    // Everything asked for that did not come back. §6.2: the last known price
+    // is kept, used, and flagged — never zeroed. A never-priced instrument
+    // has no row to flag; `holding_valued` already reports it unpriced.
     const missing = feed.filter((instrument) => !pricedIds.has(instrument.id));
     if (missing.length > 0) {
       await trx
@@ -374,12 +299,10 @@ export async function refreshQuotes(
 }
 
 /**
- * The intraday tier: one row per instrument, overwritten.
- *
- * `is_stale` is reset to false on every successful write, which is the only
- * thing that ever clears it. A price that was stale an hour ago and fetched
- * cleanly now is not stale, and leaving the flag set would train a reader to
- * ignore it.
+ * The intraday tier: one row per instrument, overwritten. `is_stale` resets
+ * to false on every successful write — the only thing that ever clears it: a
+ * price fetched cleanly now is not stale, and a lingering flag trains the
+ * reader to ignore it.
  */
 async function writeQuote(
   db: Kysely<Database>,
@@ -410,25 +333,19 @@ async function writeQuote(
 }
 
 /**
- * What the provider calls the instrument, kept current on the instrument row.
+ * What the provider calls the instrument, kept current on the row. Written at
+ * creation (`instrument-resolution.server.ts`) and refreshed here — what
+ * makes it true of instruments created before the column existed; without
+ * that, the stocks-versus-funds split (§4.4) would be right only for newer
+ * instruments, every older holding sitting in the catch-all row looking like
+ * a panel fault.
  *
- * The column is written at creation (`instrument-resolution.server.ts`) and
- * refreshed here, which is what makes it true of instruments created before it
- * was written at all: every feed instrument passes through this loop on the
- * next poll. Without that, the Analysis screen's stocks-versus-funds split
- * (§4.4) would be right only for instruments added after the column started
- * being filled in, and every older holding would sit in the catch-all row
- * looking like a fault in the panel rather than an empty column.
- *
- * **Only ever set from something the provider actually said.** A quote that
- * omits the field leaves the stored value alone rather than nulling it: an
- * absent field is the provider being terse, not the instrument changing into
- * something unclassifiable. A changed value is written, because that is the
- * provider correcting itself — a fund reclassified, a ticker reused — and the
- * column is its vocabulary to define.
- *
- * `is distinct from` rather than `<>`: a stored null must count as a change, and
- * `<>` answers null to that comparison, which updates nothing.
+ * **Only ever set from something the provider actually said**: an omitted
+ * field leaves the stored value alone (the provider being terse, not the
+ * instrument turning unclassifiable); a changed value is written (the
+ * provider correcting itself — the column is its vocabulary). `is distinct
+ * from`, not `<>`: a stored null must count as a change, and `<>` answers
+ * null, updating nothing.
  */
 async function writeQuoteType(
   db: Kysely<Database>,
@@ -446,16 +363,11 @@ async function writeQuoteType(
 }
 
 /**
- * The immutable spine: one row per instrument per trading day.
- *
- * The date comes from the quote, not the clock — see the module comment for the
- * two silent failures that decision prevents.
- *
- * The upsert is what makes an intraday poll safe: during the session the row is
- * rewritten every fifteen minutes and settles on the day's last price, which is
- * the close. It is also what makes a holiday poll harmless, since the quote it
- * receives still carries the previous trading day and simply rewrites that day
- * with the value already there.
+ * The immutable spine: one row per instrument per trading day, dated by the
+ * quote, not the clock (see the module header). The upsert is what makes an
+ * intraday poll safe — the row is rewritten through the session and settles
+ * on the close — and a holiday poll harmless: its quote still carries the
+ * previous trading day and rewrites it with the value already there.
  */
 async function writeDailyClose(
   db: Kysely<Database>,
@@ -489,21 +401,14 @@ type ObservationRow = {
 };
 
 /**
- * The provider's raw entry as the text the `jsonb` column will parse, or null.
- *
- * Serialised rather than handed over as an object so that the value crossing the
- * driver is unambiguously the JSON document the column holds. TypeScript reads
- * the result as a JSON *string* — `Json` admits one — while Postgres parses it
- * into a document, and the two readings differ only in a type the write path
- * never reads back. ADR-0006 makes `price` the only column here anything may
- * compute from, so nothing depends on which reading is right.
- *
- * A payload that will not serialise is dropped, with a line in the log, rather
- * than thrown. It is an archive: failing an entire refresh — every instrument's
- * price, and the record that the refresh happened — to preserve an audit
- * artifact would invert the priority the artifact exists under. `null` is
- * treated as absent for the same reason a fake's missing payload is: a stored
- * `jsonb` null and a stored nothing would be two spellings of one fact.
+ * The provider's raw entry as the text the `jsonb` column will parse, or
+ * null. Serialised so the value crossing the driver is unambiguously the
+ * stored document; ADR-0006 makes `price` the only column anything may
+ * compute from, so nothing depends on the type reading. A payload that will
+ * not serialise is dropped with a log line, never thrown: failing a whole
+ * refresh to preserve an audit artifact would invert the priority. `null` is
+ * treated as absent — a stored `jsonb` null and a stored nothing would be two
+ * spellings of one fact.
  */
 function archived(payload: unknown): string | null {
   if (payload === undefined || payload === null) return null;
@@ -517,13 +422,10 @@ function archived(payload: unknown): string | null {
 }
 
 /**
- * The batch of observations one refresh writes.
- *
- * Keyed by instrument and instant rather than appended, because two entries in
- * one provider response can name the same symbol — a provider is entitled to
- * echo an alias back — and the primary key would then see the same row twice
- * inside one statement. `on conflict do nothing` would absorb that; deduping
- * here means the batch says what it means before Postgres has to decide.
+ * One refresh's observation batch, keyed by instrument and instant rather
+ * than appended: a provider can echo an alias back, and the primary key would
+ * then see the same row twice inside one statement. Deduping here means the
+ * batch says what it means before Postgres has to decide.
  */
 function observationsOf(
   matched: ReadonlyArray<{ instrumentId: string; quote: ProviderQuote }>,
@@ -535,10 +437,9 @@ function observationsOf(
     batch.set(`${instrumentId} at ${quote.asOf.toISOString()}`, {
       instrument_id: instrumentId,
       as_of: quote.asOf,
-      // The same instant run through the same rule that files the close,
-      // stamped now so that resolving a session later is an indexed date lookup
-      // rather than a timezone computation, and so the instant-to-day rule keeps
-      // living in exactly one place.
+      // The same instant through the same rule that files the close, stamped
+      // now so resolving a session later is an indexed date lookup — and the
+      // instant-to-day rule lives in exactly one place.
       market_date: marketDateOf(quote.asOf, marketTimeZone),
       price: quote.price,
       fetched_at: quote.fetchedAt,
@@ -550,27 +451,19 @@ function observationsOf(
 }
 
 /**
- * The observation log: one insert for the whole refresh.
- *
- * `do nothing` rather than `do update` is the append-only rule in one clause. An
- * unchanged quote — the common case, since most instruments are re-fetched long
- * before they re-price — writes nothing at all, which is what keeps the log a
- * record of distinct instants rather than of polls. The poll table records the
- * polls.
- *
- * The first of the header's three divergences happens in this clause: a
- * provider re-stating an instant it has already given us with a different price
- * loses the second price here, while `quote` upserts to it.
+ * The observation log: one insert for the whole refresh. `do nothing` is the
+ * append-only rule in one clause — an unchanged quote (the common case)
+ * writes nothing, keeping the log a record of distinct instants rather than
+ * of polls. The header's first divergence happens here: a re-stated instant
+ * at a different price loses the second price, while `quote` upserts to it.
  */
 async function writeObservations(db: Kysely<Database>, rows: ObservationRow[]): Promise<number> {
   if (rows.length === 0) return 0;
 
-  // `returning` rather than a count query: under `do nothing` Postgres returns a
-  // row only for an insert that actually happened, so the length is the number
-  // of instants new to the log — counted where it is known, at no extra
-  // round trip. Deriving it afterwards would mean scanning an append-only table
-  // that grows about half a gigabyte a year and carries no index on the column
-  // a time-bounded scan would need.
+  // `returning`, not a count query: under `do nothing` a row comes back only
+  // for a real insert, so the length is the number of new instants — counted
+  // where it is known. Deriving it afterwards would scan an append-only table
+  // growing ~half a GB a year with no index a time-bounded scan could use.
   const inserted = await db
     .insertInto("price_observation")
     .values(rows)
@@ -582,22 +475,13 @@ async function writeObservations(db: Kysely<Database>, rows: ObservationRow[]): 
 }
 
 /**
- * The attempt itself, recorded whether or not it wrote a price.
- *
- * This is what makes the log's silences readable. Dedup means an hour with no
- * observations can mean a quiet market, a provider that failed, or a server that
- * was not running, and only the last of those is a fact about the deployment.
- * With a poll row per attempt the three come apart.
- *
- * With one gap, stated rather than hidden: this row is written in the same
- * transaction as the prices it describes, so a refresh that ran and could not
- * commit leaves no row either. Writing it on a second connection would buy that
- * case and cost the property the rest of this module is built on — one fetch,
- * one unit of work — so the case is documented instead.
- *
- * The report's `closes` is deliberately not stored: it counts writes to another
- * tier rather than describing this attempt, and `priced` already says how many
- * instruments answered.
+ * The attempt itself, recorded whether or not it wrote a price — what makes
+ * the log's silences readable: with a poll row per attempt, a quiet market, a
+ * failed provider and a stopped server come apart. One stated gap: this row
+ * shares the prices' transaction, so a refresh that ran and could not commit
+ * leaves no row either — a second connection would buy that case and cost
+ * "one fetch, one unit of work". `closes` is deliberately not stored: it
+ * counts another tier's writes, and `priced` already says how many answered.
  */
 async function writePoll(
   db: Kysely<Database>,
@@ -617,18 +501,12 @@ async function writePoll(
 
 /**
  * How fresh the stored prices are, for the "as of" line §11 calls
- * non-negotiable.
- *
- * Returns the *oldest* `as_of` among priced holdings rather than the newest,
- * and the stale count beside it. A newest-first reading is the dangerous one:
- * a portfolio where ninety-nine instruments updated a second ago and one has
- * been failing for a week would report itself current, which is exactly the
- * "silently showing yesterday's net worth as though it were live" failure §11
- * names as the worst available in a finance app.
- *
- * Scoped to instruments actually held in an open account, through
- * `holding_valued`. An instrument nobody owns going stale is not a fact about
- * anyone's net worth, and reporting it would make the banner unclearable.
+ * non-negotiable. Returns the *oldest* `as_of` among priced holdings — the
+ * newest would let ninety-nine fresh instruments hide one failing for a week:
+ * §11's "silently showing yesterday's net worth as though it were live".
+ * Scoped through `holding_valued` to instruments held in open accounts: an
+ * unowned instrument going stale is not a fact about anyone's net worth, and
+ * reporting it would make the banner unclearable.
  */
 export async function priceFreshness(
   db: Kysely<Database> = getDb(),
@@ -636,19 +514,16 @@ export async function priceFreshness(
   const row = await db
     .selectFrom("holding_valued")
     .innerJoin("quote", "quote.instrument_id", "holding_valued.instrument_id")
-    // `fixed` is the seeded `USD` row, whose `as_of` is written once by the
-    // initial migration and never again. Every bank and loan account holds one,
-    // so without this filter `oldest` is pinned to the install timestamp for the
-    // life of the instance — an "as of" line that never moves, which is a worse
-    // lie than no line at all. `manual` is excluded for the same reason from the
-    // other direction: a hand-typed price is as fresh as the person who typed
-    // it, and a refresh loop has no claim on it.
+    // `fixed` (the seeded USD row, `as_of` written once in 0001) would pin
+    // `oldest` to the install timestamp for the life of the instance — an "as
+    // of" line that never moves is a worse lie than none. `manual` is
+    // excluded from the other direction: a hand-typed price is as fresh as
+    // the person who typed it.
     .where("holding_valued.price_source", "=", "feed")
     .select([
       sql<Date | null>`min(quote.as_of)`.as("oldest"),
-      // Distinct instruments, not holdings. One fund held in three accounts is
-      // three rows of `holding_valued` and one thing that is stale, and the
-      // count is going to be read as "3 of 40 prices are stale".
+      // Distinct instruments, not holdings: one fund in three accounts is one
+      // stale thing, and the count reads "3 of 40 prices are stale".
       sql<string>`count(distinct holding_valued.instrument_id) filter (where holding_valued.is_stale)`.as(
         "stale",
       ),
@@ -658,27 +533,20 @@ export async function priceFreshness(
 
   return {
     oldest: row?.oldest ?? null,
-    // Cardinalities of held instruments, not money — `Number` is safe here in a
-    // way it never is on a `numeric` column.
+    // Cardinalities, not money — `Number` is safe here.
     stale: Number(row?.stale ?? 0),
     priced: Number(row?.priced ?? 0),
   };
 }
 
 /**
- * The as-of caption, rendered.
- *
- * One place rather than five: every screen that shows a figure asks the same
- * question and must not answer it differently. The stamp is formatted here
- * rather than in the component because the market zone is configuration and a
- * component has no business reading it — and because these pages are rendered
- * on the server, where the reader's clock does not exist.
- *
- * Note what `priceFreshness` counts and this inherits: the *oldest* quote, over
- * feed-priced instruments actually held. A household of nothing but cash and a
- * hand-priced trust is fully valued and still says "no prices yet", because
- * there is no fetched price behind any of it — which is the truth, if a blunt
- * one.
+ * The as-of caption, rendered in one place rather than five: every screen
+ * asks the same question and must not answer it differently. Formatted here
+ * because the market zone is configuration a component has no business
+ * reading, and these pages render on the server, where the reader's clock
+ * does not exist. Inherits what `priceFreshness` counts: a household of cash
+ * and a hand-priced trust is fully valued and still says "no prices yet" —
+ * the truth, if a blunt one.
  */
 export async function asOfView(
   marketTimeZone: string,

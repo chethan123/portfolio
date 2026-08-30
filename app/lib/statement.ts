@@ -1,23 +1,17 @@
 /**
  * Applying a column mapping to a file's rows: the second half of the parser,
- * where cells become positions (DESIGN.md §5.3, spec 0004).
+ * where cells become positions (DESIGN.md §5.3, spec 0004). Pure — no
+ * database, no request — so every awkward file is a fixture and a test, not a
+ * bug found on the review screen with a household's real statement in hand.
  *
- * Pure — no database, no request — so every awkward file in existence is a
- * fixture and a test rather than a bug found on the review screen with a
- * household's real statement in hand.
+ * **Refusals are data, not throws**: structured problems addressed to a row
+ * and column, because the mapping screen renders each beside the row that
+ * caused it and a throw could name only the first fault. Problems present
+ * means no commit; the positions that did parse are still returned so the
+ * screen has something to show beside the complaint.
  *
- * **Refusals are data, not throws.** The result carries structured problems,
- * each addressed to a row and column, because the mapping screen renders a
- * refusal beside the row that caused it and remapping is the fix — a thrown
- * error could name only the first fault, and a screen cannot point at a stack
- * trace. Problems present means the file must not be committed; the positions
- * that did parse are still returned so the screen has something to show beside
- * the complaint.
- *
- * **Numbers stay strings.** Every figure goes through `normaliseFigure` and
- * the digit-level arithmetic in `money.ts`; nothing here touches a JavaScript
- * number, because §4.1 keeps money out of floats end to end and 0003 made that
- * one module wide by construction.
+ * **Numbers stay strings**: every figure goes through `normaliseFigure` and
+ * `money.ts`'s digit arithmetic — §4.1 keeps money out of floats end to end.
  */
 import { z } from "zod";
 
@@ -34,19 +28,18 @@ import { recordedDate } from "./input.server.ts";
 import type { Delimiter } from "./csv.ts";
 
 /**
- * What `numeric(20, 8)` and `numeric(20, 4)` hold before the point — the same
- * bounds `signedQuantity` and `perShareAmount` enforce on the forms, applied
- * here so an oversized figure is a sentence naming its row rather than a
- * driver error at commit.
+ * What `numeric(20, 8)`/`numeric(20, 4)` hold before the point — the bounds
+ * the forms enforce, applied here so an oversized figure is a sentence naming
+ * its row rather than a driver error at commit.
  */
 const QUANTITY_INTEGER_DIGITS = 12;
 const PER_SHARE_INTEGER_DIGITS = 16;
 
 /**
- * The mapping JSON a draft carries (spec 0004, "The mapping JSON"). Columns are
- * named, not indexed: the header fingerprint already guarantees the header row
- * is the one the mapping was built against, so a name is the readable half of
- * an equivalent key. An optional column that is null or absent is unmapped.
+ * The mapping JSON a draft carries (spec 0004). Columns are named, not
+ * indexed: the header fingerprint already guarantees the header row is the
+ * one the mapping was built against. A null or absent optional column is
+ * unmapped.
  */
 export type StatementMapping = {
   /** Zero-based index into the file's rows. */
@@ -61,32 +54,26 @@ export type StatementMapping = {
     accountNumber?: string | null;
   };
   /**
-   * Whether the basis column states one share's cost or the whole position's.
-   * Brokerages split about evenly, and assuming either is wrong by a factor of
-   * the position size on the other half — `total` is divided by the row's
-   * quantity here, at `numeric(20, 4)`'s scale.
+   * Whether the basis column states one share's cost or the whole position's
+   * — brokerages split about evenly, and assuming either is wrong by a factor
+   * of the position size on the other half. `total` divides by the quantity.
    */
   costBasisIs: "per_share" | "total";
   /**
-   * A loan statement lists what is owed as a positive number, and §2 puts the
-   * sign in the quantity — so something has to negate it, and it is this flag,
-   * not a heuristic. Unticked, the file's own sign is kept, which is how a
-   * bank export carrying a genuine overdraft records one.
+   * A loan statement lists what is owed as positive, and §2 puts the sign in
+   * the quantity — so this flag negates, never a heuristic. Unticked keeps
+   * the file's own sign, which is how a genuine overdraft records.
    */
   owedAsPositive: boolean;
   combineDuplicateRows: boolean;
 };
 
 /**
- * The same shape as a schema, for the two `jsonb` columns that store it —
- * `upload_draft.mapping` and `column_mapping.mapping` share this one
- * definition, so a row written by either writer reads back through the same
- * gate. A stored value that fails it is treated as no mapping at all rather
- * than a throw: a malformed row is a fact about old data, not a fault in the
- * request that happened to read it.
- *
- * Annotated as `z.ZodType<StatementMapping>` so the type above and the schema
- * cannot drift apart without the compiler saying so.
+ * The schema for both `jsonb` columns that store this shape
+ * (`upload_draft.mapping`, `column_mapping.mapping`), so both writers read
+ * back through one gate. A stored value that fails it is treated as no
+ * mapping, not a throw: a malformed row is a fact about old data. Annotated
+ * `z.ZodType<StatementMapping>` so the type and schema cannot drift silently.
  */
 export const statementMapping: z.ZodType<StatementMapping> = z.object({
   headerRow: z.number().int().nonnegative(),
@@ -109,16 +96,15 @@ export type ParsedPosition = {
   /** Zero-based file row the position came from — the first, when combined. */
   row: number;
   /**
-   * The exact weighted numerator behind {@link ParsedPosition.costBasisPerShare}
-   * when this position is several file rows folded together, so the spelling
-   * fold in `uploads.server.ts` divides once rather than averaging an average.
-   * See {@link FoldableLot}.
+   * The exact weighted numerator behind `costBasisPerShare` when this
+   * position is several rows folded, so the spelling fold in
+   * `uploads.server.ts` divides once rather than averaging an average — see
+   * {@link FoldableLot}.
    */
   weightedBasisUnits?: bigint | null;
   /**
-   * The instrument cell exactly as written, untrimmed and unresolved. Alias
-   * lookup is byte-exact (`collate "C"`), so the parser must not normalise
-   * what resolution will look up.
+   * The cell exactly as written, untrimmed and unresolved: alias lookup is
+   * byte-exact (`collate "C"`), so the parser must not normalise it.
    */
   instrument: string;
   name: string | null;
@@ -136,10 +122,9 @@ export type CombinedRows = {
 };
 
 /**
- * A row named an instrument but its quantity cell was one of the absence
- * spellings — a `Cash & Cash Investments` line, a subtotal. Skipped rather
- * than refused, and reported so the review screen can say so: a row that
- * vanishes silently is how "a missing row means sold" becomes an accident.
+ * A row naming an instrument whose quantity was an absence spelling — a sweep
+ * line, a subtotal. Skipped and reported, because a row vanishing silently is
+ * how "a missing row means sold" becomes an accident.
  */
 export type SkippedRow = {
   row: number;
@@ -147,10 +132,9 @@ export type SkippedRow = {
 };
 
 /**
- * One reason the file cannot be committed, addressed to where it happened.
- * `row` is a zero-based index into the file's rows (`null` when the fault is
- * the mapping's, not a row's); `column` is the mapped column name at fault,
- * when one is. Messages speak in one-based lines, the way a reader counts.
+ * One reason the file cannot be committed, addressed to where it happened:
+ * `row` zero-based (`null` for a mapping fault), `column` the mapped name at
+ * fault. Messages speak in one-based lines, the way a reader counts.
  */
 export type ParseProblem = {
   row: number | null;
@@ -192,36 +176,24 @@ export type FoldableLot = {
   /** Null when the lot's own basis is unknown. */
   costBasisPerShare: string | null;
   /**
-   * The exact quantity-weighted numerator this lot already carries, in units of
-   * 10^-12, when the lot is itself the result of an earlier fold.
-   *
-   * This is what makes the flow's two folds add up to one. `costBasisPerShare`
-   * is rounded to the money scale, so a second fold that re-weighted *it* would
-   * be averaging an average — and the two folds together would disagree with a
-   * single pass over the original lots. Carrying the numerator lets the second
-   * fold divide exactly once, however many times a position is folded on its
-   * way through.
-   *
-   * Absent on a lot straight off a file, where the per-share figure is the only
-   * thing there is.
+   * The exact quantity-weighted numerator (units of 10^-12) when the lot is
+   * itself an earlier fold's result — what makes the flow's two folds add up
+   * to one: `costBasisPerShare` is rounded to money scale, and a second fold
+   * re-weighting *it* would average an average. Absent on a lot straight off
+   * a file.
    */
   weightedBasisUnits?: bigint | null;
 };
 
 /**
  * Fold several lots of one instrument into one position: quantities summed,
- * basis quantity-weighted, both at the columns' scales.
- *
- * The one weighted-average rule for the two folds the flow performs — the
- * parser's duplicate-row combining here, and the post-resolution spelling fold
- * in `uploads.server.ts` — extracted so the money arithmetic stays exactly one
- * implementation wide (`money.ts` gives the reason). The weighted numerator is
- * in units of 10^-12 (money × quantity), the denominator 10^-8, so the plain
- * quotient is already in money units.
- *
- * The basis is null when the lots net to nothing — no quantity to weight by —
- * or when any lot's own basis is unknown, since a blended figure over a gap
- * would be a fake precision.
+ * basis quantity-weighted, at the columns' scales — the one weighted-average
+ * rule for both folds (the parser's duplicate combining and the spelling fold
+ * in `uploads.server.ts`), extracted so the arithmetic stays one
+ * implementation wide. Numerator in 10^-12 units (money × quantity),
+ * denominator 10^-8, so the plain quotient is already in money units. Basis
+ * is null when the lots net to nothing (no quantity to weight by) or any
+ * lot's basis is unknown — a blended figure over a gap is fake precision.
  */
 export function foldLots(lots: ReadonlyArray<FoldableLot>): {
   /** The summed quantity rendered at `numeric(20, 8)`'s scale. */
@@ -241,10 +213,8 @@ export function foldLots(lots: ReadonlyArray<FoldableLot>): {
   if (quantityUnits !== 0n && lots.every((lot) => lot.costBasisPerShare !== null)) {
     weighted = 0n;
     for (const lot of lots) {
-      // The lot's own exact numerator when it has one, and only otherwise the
-      // product of the rounded per-share figure. A lot that has been folded
-      // before is re-weighted from what it actually summed, never from what it
-      // was rounded to.
+      // The lot's own exact numerator when it has one: a previously folded
+      // lot is re-weighted from what it summed, never from what it rounded to.
       weighted +=
         lot.weightedBasisUnits ??
         toUnits(lot.costBasisPerShare ?? "0", MONEY_SCALE) *
@@ -262,12 +232,10 @@ export function foldLots(lots: ReadonlyArray<FoldableLot>): {
 
 /**
  * A statement's as-of cell as `recordedDate` reads it: ISO kept as written,
- * and the US shapes real exports carry — `MM/DD/YYYY`, `M/D/YYYY` — rewritten
- * to `YYYY-MM-DD`. Only the spelling moves; whether the result is a real,
- * recordable date is still `recordedDate`'s question, so `13/40/2026` becomes
- * `2026-13-40` and is refused as not on the calendar. Disagreement between
- * rows compares these normalised spellings, so `06/30/2026` and `2026-06-30`
- * in one file are one date, not two.
+ * the US shapes real exports carry (`MM/DD/YYYY`) rewritten. Only the
+ * spelling moves — `13/40/2026` becomes `2026-13-40` and is refused as not on
+ * the calendar. Row disagreement compares these normalised spellings, so
+ * `06/30/2026` and `2026-06-30` in one file are one date, not two.
  */
 function isoAsOf(value: string): string {
   const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
@@ -287,28 +255,17 @@ type RowRecord = {
 
 /**
  * Apply a mapping to a file's rows, yielding the positions the statement
- * states — or the problems standing between it and the commit.
- *
- * The row rules, each a checklist item in spec 0004 step 02:
- *
- * - rows above the header are preamble and never read
- * - a row whose instrument cell is blank is a footer or spacer, skipped
- * - a row naming an instrument whose quantity is an absence marker is skipped
- *   and reported (see {@link SkippedRow})
- * - a row naming an instrument whose quantity is nonsense refuses the file,
- *   naming the row — a disclaimer that happens to sit under the symbol column
- *   must not become a position
- * - quantities finer than eight decimal places, and money finer than four, are
- *   refused rather than rounded: the columns hold what the file said or the
- *   file is wrong, never a silently adjusted figure
- * - a file dating itself before the first day this application can price
- *   anything refuses, by the same rule a typed date faces
- *   ({@link recordedDate}) — carrying a close forward cannot reach a date
- *   earlier than the earliest close there is
- * - rows sharing an instrument string are combined when the mapping says so —
- *   quantities summed, basis quantity-weighted — and reported; with combining
- *   off, a duplicated instrument is a refusal, because a position set holds
- *   one row per instrument
+ * states — or the problems standing between it and the commit. The row rules
+ * (spec 0004 step 02): rows above the header are preamble; a blank instrument
+ * cell is a footer, skipped; an instrument whose quantity is an absence
+ * marker is skipped and reported ({@link SkippedRow}); a nonsense quantity
+ * refuses the file naming the row — a disclaimer under the symbol column must
+ * not become a position; quantities finer than eight places and money finer
+ * than four are refused, never rounded; a file dated before the first
+ * priceable day refuses by {@link recordedDate}'s rule; duplicate instrument
+ * strings combine when the mapping says so (summed, quantity-weighted) and
+ * are reported — with combining off, a duplicate refuses, since a position
+ * set holds one row per instrument.
  */
 export function parseStatement(
   rows: ReadonlyArray<ReadonlyArray<string>>,
@@ -327,9 +284,8 @@ export function parseStatement(
     problems,
   });
 
-  // A mapping missing a required column, or pointing at rows the file does not
-  // have, is the mapping's fault — no row can be named, and nothing below can
-  // run without the indices these checks establish.
+  // A mapping missing a required column, or pointing past the file, is the
+  // mapping's fault — no row can be named, and nothing below can run.
   if (!columns.instrument) {
     problems.push({
       row: null,
@@ -470,10 +426,10 @@ export function parseStatement(
         }
 
         if (mapping.costBasisIs === "total") {
-          // Total over quantity, at `numeric(20, 4)`'s scale. The division uses
-          // the file's own signed quantity, so a short lot's negative total
-          // still yields the positive per-share fact a price is (§2). A zero
-          // quantity has no per-share cost — null, not a division fault.
+          // Total over the file's own signed quantity, so a short lot's
+          // negative total still yields the positive per-share fact a price
+          // is (§2). A zero quantity has no per-share cost — null, not a
+          // division fault.
           costBasisPerShare = isZero(quantity.value)
             ? null
             : render(
@@ -505,9 +461,9 @@ export function parseStatement(
     });
   }
 
-  // Grouped by the raw string as written, before alias resolution: two
-  // spellings of one fund are two entries here, and become one row in step
-  // 04's resolution — combining them now would guess what resolution decides.
+  // Grouped by the raw string before alias resolution: two spellings of one
+  // fund become one row in step 04 — combining now would guess what
+  // resolution decides.
   const groups = new Map<string, RowRecord[]>();
   for (const record of records) {
     const group = groups.get(record.instrument);
@@ -515,9 +471,8 @@ export function parseStatement(
     else group.push(record);
   }
 
-  // The negation `owedAsPositive` promises, applied to the final quantities:
-  // zero keeps no sign, because "−0.00" is a debt of nothing written as though
-  // it were something (`setBalance` says the same).
+  // `owedAsPositive`'s negation, applied to final quantities. Zero keeps no
+  // sign: "−0.00" is a debt of nothing written as though it were something.
   const signed = (quantity: string): string => {
     if (!mapping.owedAsPositive || isZero(quantity)) return quantity;
     return quantity.startsWith("-") ? quantity.slice(1) : `-${quantity}`;
@@ -560,9 +515,8 @@ export function parseStatement(
     const quantity = signed(fold.quantity);
 
     // `signed` may flip the sign after the weighting, and the numerator is
-    // `basis x quantity` — so it has to flip with it, or the spelling fold
-    // would divide a positive numerator by a negative quantity and report a
-    // liability's cost basis inverted.
+    // basis × quantity — it must flip too, or the spelling fold would report
+    // a liability's cost basis inverted.
     const negated = quantity !== fold.quantity;
     const weightedBasisUnits =
       fold.weightedBasisUnits === null
@@ -583,12 +537,11 @@ export function parseStatement(
     combined.push({ instrument, rowCount: group.length, quantity });
   }
 
-  // The as-of date: the first row carrying one speaks for the file, every
-  // other row must agree with it once both are spelled the one way `isoAsOf`
-  // spells them, and the one value is validated by the same rule a typed date
-  // is — a statement dated 2126 would pin the account until 2126
-  // (`recordedDate` documents why). Two dates refuse the file naming both,
-  // never picking one: a statement is a photograph of one day.
+  // The first row carrying an as-of speaks for the file; every other row must
+  // agree once both are spelled `isoAsOf`'s way; the value is validated as a
+  // typed date is (a statement dated 2126 would pin the account until 2126).
+  // Two dates refuse the file naming both, never picking one: a statement is
+  // a photograph of one day.
   let asOfDate: string | null = null;
   const firstSighting = asOfSightings[0];
   if (firstSighting !== undefined) {

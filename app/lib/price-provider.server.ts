@@ -1,100 +1,73 @@
 /**
- * Where prices come from, and the one shape the rest of the app knows them in.
- *
- * DESIGN.md §6.1 fixes the interface at a single batched method, and the
- * reasoning is worth restating because it constrains everything below:
- * `yahoo-finance2` is an unofficial client for an endpoint Yahoo never
- * published, with no SLA, and it can break. What makes that tolerable is that
- * swapping it for FMP is a day's work — which is only true while this interface
- * is the sole thing the write path imports. Nothing outside this module may
- * import `yahoo-finance2`.
- *
- * The interface is also the test seam. CI never reaches the network; the
- * refresh tests drive a fake that implements this and nothing else.
+ * Where prices come from, and the one shape the rest of the app knows them
+ * in. DESIGN.md §6.1 fixes the interface at a single batched method:
+ * `yahoo-finance2` is an unofficial client for an unpublished endpoint and
+ * can break; what makes that tolerable is that swapping it is a day's work —
+ * true only while nothing outside this module imports `yahoo-finance2`. The
+ * interface is also the test seam: CI never reaches the network.
  *
  * **Everything numeric leaves here as a decimal string.** The provider hands
- * back JavaScript floats, and a float is exactly what §4.1 refuses to let near
- * a money column. The conversion happens once, here, at the boundary — not in
- * the write path, where it would be one more place to forget.
+ * back floats — exactly what §4.1 refuses near a money column — and the
+ * conversion happens once, here, at the boundary.
  */
 import { z } from "zod";
 
 /**
- * One instrument's price, as the application understands it.
- *
- * `price` is required and the rest are not, because a provider that cannot say
- * what a fund yields is ordinary and a provider that cannot say what it costs
- * is a failure. A missing yield writes null and the Income page reports its
- * coverage honestly (§8.2); a missing price means the symbol did not resolve at
- * all, and the caller keeps the last known price and marks it stale (§6.2).
+ * One instrument's price, as the application understands it. `price` is
+ * required and the rest are not: a provider that cannot say what a fund
+ * yields is ordinary, one that cannot say what it costs is a failure — a
+ * missing yield writes null (§8.2); a missing price means the symbol did not
+ * resolve, and the caller keeps the last known price and marks it stale (§6.2).
  */
 export type ProviderQuote = {
   /** As sent. The caller matches on this to find the instrument again. */
   symbol: string;
   /** Decimal string, scale 4. Never a number. */
   price: string;
-  /**
-   * The provider's own vocabulary — EQUITY | ETF | MUTUALFUND | … Stored on the
-   * instrument unconstrained, because it is theirs and not ours (§4.1).
-   */
+  /** The provider's own vocabulary, stored unconstrained — theirs, not ours (§4.1). */
   quoteType: string | null;
   /** Annual dividend yield as a percentage. Decimal string, scale 6. */
   yieldPct: string | null;
   /** Annual dividend per share. Decimal string, scale 4. */
   annualDividendPerShare: string | null;
   /**
-   * The instant the provider struck this price — a genuine instant, so a `Date`
-   * rather than a string (§4.1 leaves `timestamptz` alone).
-   *
-   * Load-bearing beyond the audit trail: it decides which `price_daily` row
-   * this quote becomes, and which `price_observation` row — one per instrument
-   * per instant, which is what makes an unchanged quote write nothing. See
-   * `marketDateOf` in `market-hours.ts` and ADR-0006.
+   * The instant the provider struck this price — a genuine instant, so a
+   * `Date` (§4.1 leaves `timestamptz` alone). Load-bearing: it decides which
+   * `price_daily` row this quote becomes, and which `price_observation` row —
+   * one per instrument per instant, what makes an unchanged quote write
+   * nothing (`marketDateOf`, ADR-0006).
    */
   asOf: Date;
   /**
-   * When we learned this price, as distinct from when it was struck.
-   *
-   * Required, unlike `payload`, because it is a fact about *us*: every
-   * implementation and every test fake knows what time it asked, so none of
-   * them has an excuse to omit it. It is archived beside the observation and
-   * computed from by nothing.
+   * When we learned this price, as distinct from when it was struck. Required,
+   * unlike `payload`, because it is a fact about *us* — every implementation
+   * and fake knows what time it asked. Archived, computed from by nothing.
    */
   fetchedAt: Date;
   /**
-   * The provider's raw entry for this symbol, kept opaque.
-   *
-   * Optional because it is a fact about the *provider*: a fake has no raw entry
-   * to hand over, and one absent is not one missing. Present only when the
-   * typed parse above it succeeded, so a shape change stays a refusal rather
-   * than becoming a stored surprise.
-   *
-   * `unknown` on purpose. ADR-0006: the payload is an archive, never an
+   * The provider's raw entry, kept opaque. Optional because it is a fact
+   * about the *provider* — a fake has none to hand over. Present only when
+   * the typed parse succeeded, so a shape change stays a refusal rather than
+   * a stored surprise. `unknown` on purpose (ADR-0006): an archive, never an
    * operand — nothing may compute from it, so nothing may need its type.
    */
   payload?: unknown;
 };
 
 /**
- * The provider contract, exactly as DESIGN.md §6.1 states it.
- *
- * One method taking every symbol at once, because the batching is the reason
- * Yahoo was chosen over Twelve Data and Alpha Vantage: one HTTP call for a
- * hundred symbols rather than a hundred calls or a per-symbol bill.
+ * The provider contract, exactly as DESIGN.md §6.1 states it: one method
+ * taking every symbol at once — the batching is why Yahoo was chosen: one
+ * HTTP call for a hundred symbols, not a hundred calls or a per-symbol bill.
  */
 export type PriceProvider = {
   getQuotes(symbols: string[]): Promise<ProviderQuote[]>;
 };
 
 /**
- * A quote the provider returned in a currency we cannot hold.
- *
- * DESIGN.md §6.1 puts this guard at instrument resolution, and that is still
- * where it belongs. It is enforced here too because the failure it prevents is
- * the worst kind available: no error anywhere, GBP quietly summed into a USD
- * net worth.
- *
- * Carries the symbol and the currency so the log line names both.
+ * A quote in a currency we cannot hold. §6.1 puts this guard at instrument
+ * resolution; it is enforced here too because the failure it prevents is the
+ * worst available — no error anywhere, GBP quietly summed into a USD net
+ * worth. Carries symbol and currency so the log line names both.
  */
 export class CurrencyRefused extends Error {
   override readonly name = "CurrencyRefused";
@@ -114,60 +87,37 @@ export class CurrencyRefused extends Error {
 const USD = "USD";
 
 /**
- * A float from the provider, as a decimal string at a fixed scale.
- *
- * `toFixed` rather than a decimal library: the input is already a float that
- * has been through JSON, so there is no precision left to preserve — the job is
- * only to stop the float going any further. Rounding half-away-from-zero at
- * scale 4 on a quantity that arrived with at most a few decimal places is not a
- * decision anyone can observe.
- *
- * Returns null for anything that is not a usable finite number, so that a
- * provider sending `null`, `NaN` or a string never reaches a `numeric` column.
+ * A float from the provider as a decimal string. `toFixed`, not a decimal
+ * library: the input is already a float through JSON, so there is no
+ * precision left to preserve — the job is only to stop the float going any
+ * further. Null for anything not a usable finite number, so `null`, `NaN` or
+ * a string never reaches a `numeric` column.
  */
 function decimal(value: unknown, scale: number): string | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return value.toFixed(scale);
 }
 
-/**
- * The widest yield `quote.yield_pct` can hold — `numeric(10,6)`.
- *
- * Four integer digits, so 9999.999999%.
- */
+/** The widest yield `quote.yield_pct` holds — `numeric(10,6)`, 9999.999999%. */
 const YIELD_CEILING = 10000;
 
 /**
- * The widest rate `quote.annual_dividend_per_share` can hold —
- * `numeric(20, 4)`.
- *
- * Sixteen integer digits. No security pays anything near it, which is the
- * point: a figure this big is not a rate at all, and the ceiling exists so that
- * one such figure cannot abort a refresh rather than to express a view about
- * dividends.
+ * The widest rate `quote.annual_dividend_per_share` holds — `numeric(20, 4)`,
+ * sixteen integer digits. No security pays near it, which is the point: a
+ * figure this big is not a rate, and the ceiling exists so one such figure
+ * cannot abort a refresh — not to express a view about dividends.
  */
 const RATE_CEILING = 10 ** 16;
 
 /**
- * A figure the `numeric` column it is bound for can actually store, or null.
- *
- * A distressed or mispriced instrument — a $0.02 price still carrying a $2.50
- * rate — derives a 12500% yield, and Postgres answers a `numeric` overflow by
- * aborting the statement. That statement is inside the refresh transaction, so
- * one bad symbol would roll back every other instrument's price *and* the
- * stale-marking beside it: the whole household loses its refresh over one
- * listing. The same outcome the per-symbol currency guard exists to prevent.
- *
- * Dropped rather than clamped. A yield at the ceiling is a wrong number
- * presented as a real one, and §8.2's rule throughout this codebase is to
- * report what is not known as unknown rather than to substitute a plausible
- * figure.
- *
- * Two ceilings, one reading. The yield was the only figure that needed it while
- * the per-share rate beside it was merely stored and never read;
- * {@link RATE_CEILING} is here because that rate goes into a `numeric` column
- * inside the same transaction, and an unguarded one loses the refresh in
- * exactly the way described above.
+ * A figure the bound `numeric` column can actually store, or null. A
+ * distressed instrument — a $0.02 price still carrying a $2.50 rate —
+ * derives a 12500% yield, and Postgres answers overflow by aborting the
+ * statement inside the refresh transaction: one bad symbol would cost the
+ * whole household its refresh, the outcome the per-symbol currency guard
+ * exists to prevent. Dropped, not clamped: a yield at the ceiling is a wrong
+ * number presented as real, and §8.2's rule is to report the unknown as
+ * unknown.
  */
 function inRange(value: string | null, ceiling: number): string | null {
   if (value === null) return null;
@@ -175,16 +125,12 @@ function inRange(value: string | null, ceiling: number): string | null {
 }
 
 /**
- * The subset of Yahoo's quote payload this application reads, validated.
- *
- * Zod rather than the library's own TypeScript types, deliberately. Those types
- * describe what the endpoint returned when they were written; this schema
- * describes what we require, and it fails loudly at the boundary rather than
- * producing `undefined` three layers in. It is also the documentation of
- * exactly how small our dependency on an unofficial API is — six fields.
- *
- * Everything except `symbol` is optional: Yahoo omits fields per instrument
- * type, and a mutual fund with no dividend simply has no dividend fields.
+ * The subset of Yahoo's payload this application reads, validated. Zod rather
+ * than the library's own types: those describe what the endpoint returned
+ * when they were written; this describes what we require, failing loudly at
+ * the boundary instead of producing `undefined` three layers in — and it
+ * documents how small the dependency on an unofficial API is. Everything but
+ * `symbol` is optional: Yahoo omits fields per instrument type.
  */
 const yahooQuote = z.object({
   symbol: z.string(),
@@ -193,32 +139,24 @@ const yahooQuote = z.object({
   regularMarketPrice: z.number().optional(),
   regularMarketTime: z.union([z.date(), z.number(), z.string()]).optional(),
   /**
-   * Annual dividend yield as a percentage — 2.34 meaning 2.34%.
-   *
-   * Note what is *not* read: `trailingAnnualDividendYield`, which carries the
-   * same quantity as a fraction (0.0234) while the library's own doc comment
-   * calls it a percentage too. Taking the wrong one is a silent hundredfold
-   * error landing directly on the Income page's projected dividend, with every
-   * figure looking plausible. Only the unambiguous field is read, and where it
-   * is absent the yield is derived below from the rate and the price, which
-   * cannot be misread in either unit.
+   * Annual dividend yield as a percentage — 2.34 meaning 2.34%. What is *not*
+   * read: `trailingAnnualDividendYield`, the same quantity as a fraction
+   * (0.0234) though the library's doc calls it a percentage too — taking the
+   * wrong one is a silent hundredfold error on the Income page with every
+   * figure looking plausible. Where this is absent the yield is derived below
+   * from rate over price, which cannot be misread in either unit.
    */
   dividendYield: z.number().optional(),
   /**
-   * Annual dividend per share, in the quote's currency.
-   *
-   * Declared on equities and mutual funds. An ETF's payload carries no
-   * `dividendRate` at all — the per-share figure arrives as
-   * `trailingAnnualDividendRate` on the common base — so reading only this one
-   * leaves `annual_dividend_per_share` null for every ETF a household holds,
-   * which is most of a taxable brokerage account.
+   * Annual dividend per share, declared on equities and mutual funds. An ETF
+   * carries no `dividendRate` at all — its per-share figure arrives as
+   * `trailingAnnualDividendRate` — so reading only this one would leave the
+   * column null for every ETF a household holds.
    */
   dividendRate: z.number().optional(),
   /**
-   * Trailing twelve-month dividend per share. The ETF spelling of the field
-   * above, and unambiguous in a way its `…Yield` sibling is not: this is an
-   * amount of money, not a ratio, so there is no percent-versus-fraction
-   * question to get wrong.
+   * The ETF spelling of the field above, and unambiguous where its `…Yield`
+   * sibling is not: an amount of money, no percent-versus-fraction question.
    */
   trailingAnnualDividendRate: z.number().optional(),
 });
@@ -226,20 +164,13 @@ const yahooQuote = z.object({
 type YahooQuote = z.infer<typeof yahooQuote>;
 
 /**
- * Yahoo's `regularMarketTime` as an instant.
- *
- * The library hands back a `Date`, but it has shipped epoch seconds in the
- * past and this is an unofficial client for an endpoint that can change under
- * us — so all three plausible shapes are accepted and anything unrecognised
- * falls back to the fetch time.
- *
- * Falling back is the lesser of the two available errors rather than a safe
- * one. "Now" is at worst a few hours late on a mutual fund NAV, which the next
- * poll corrects. It can also file a close against a non-trading day, if the
- * timestamp is missing on a day `isMarketOpen` wrongly called open — an
- * unlisted closure, or any date after the holiday table runs out. That is a
- * spurious row rather than a wrong price, and the alternative is discarding a
- * real price over a missing metadata field.
+ * Yahoo's `regularMarketTime` as an instant. The library hands back a `Date`
+ * but has shipped epoch seconds before, so all three plausible shapes are
+ * accepted; anything unrecognised falls back to fetch time — the lesser
+ * error, not a safe one: "now" is at worst hours late on a NAV (the next poll
+ * corrects it), and can file a close against a non-trading day when
+ * `isMarketOpen` wrongly called it open — a spurious row rather than a wrong
+ * price, versus discarding a real price over missing metadata.
  */
 function instantOf(value: YahooQuote["regularMarketTime"], fetchedAt: Date): Date {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
@@ -269,11 +200,10 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
 
   const quote = parsed.data;
 
-  // A non-positive price is not a price. Zero is what an unofficial endpoint
-  // returns for a symbol it half-knows, and storing it would value the holding
-  // at nothing — the exact understatement §6.2 refuses when it says never zero
-  // into a sum. Negative is meaningless besides: the sign of a position lives
-  // in its quantity, never in its price (§2).
+  // A non-positive price is not a price: zero is what the endpoint returns
+  // for a symbol it half-knows, and storing it would value the holding at
+  // nothing (§6.2's "never zero into a sum"); the sign of a position lives in
+  // its quantity, never its price (§2).
   const quoted =
     typeof quote.regularMarketPrice === "number" && quote.regularMarketPrice > 0
       ? quote.regularMarketPrice
@@ -281,47 +211,32 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
 
   const price = decimal(quoted, 4);
 
-  // No usable price is not an error — Yahoo drops delisted and unknown symbols,
-  // and the caller's answer to a symbol that did not come back is the same as
-  // its answer to one that came back empty: keep the last price, mark it stale.
+  // No usable price is not an error — Yahoo drops delisted and unknown
+  // symbols, and the caller's answer either way is: keep the last price, mark
+  // it stale.
   if (price === null) return null;
 
-  // Checked only once there is a price to refuse. A currency on a quote with no
-  // price would be a refusal with nothing to refuse.
+  // Checked only once there is a price to refuse.
   if (quote.currency !== undefined && quote.currency.toUpperCase() !== USD) {
     throw new CurrencyRefused(quote.symbol, quote.currency.toUpperCase());
   }
 
-  // The equity/mutual-fund spelling first, then the ETF one. Both are amounts
-  // per share in the quote's own currency, so preferring either is a matter of
-  // which the payload carries rather than of units.
+  // The equity/mutual-fund spelling first, then the ETF one — both amounts
+  // per share in the quote's currency, so preferring either is a matter of
+  // which the payload carries, not of units.
   const perShare = quote.dividendRate ?? quote.trailingAnnualDividendRate;
 
-  // Bounded like the yield beside it, and for the identical reason: this is
-  // written to `numeric(20, 4)` inside the refresh transaction, so a provider
-  // sending a figure that is not a rate at all would abort that statement and
-  // roll back every other instrument's price with it. The rate went unguarded
-  // while nothing read it — an absurd one sat in the column doing no harm — and
-  // migration 0006 ended that: `holding_valued` now multiplies it by a quantity
-  // on every read.
-  //
-  // What this ceiling does not do is bound that product. It bounds the rate to
-  // what the rate's own column holds, 10^16, while `quantity` is
-  // `numeric(20, 8)` and reaches 10^12 — so a rate comfortably inside this can
-  // still carry `quantity × rate` past the view's cast. That product is checked
-  // where the quantity is chosen rather than here, by `fitsTheMoneyColumn` in
-  // `positions.server.ts`, which `revisePosition` and `commitUpload` both call.
-  //
-  // Dropped rather than clamped, for the reason `inRange` gives. A null rate is
-  // coalesced to $0 by the view — DESIGN.md §14's accepted limitation 9, a
-  // lower bound the screens already label as one — where a clamped rate would
-  // be a projected payout a household could read as real.
+  // Bounded like the yield, same reason: written to `numeric(20, 4)` inside
+  // the refresh transaction, and a not-a-rate figure would abort it for
+  // everyone. What this does NOT bound is the product: quantity reaches
+  // 10^12, so `quantity × rate` can still pass the view's cast — that product
+  // is checked where the quantity is chosen (`fitsTheMoneyColumn`). Dropped,
+  // not clamped: a null rate coalesces to $0 in the view (§14 limitation 9, a
+  // labelled lower bound), where a clamped rate would read as real.
   const annualDividendPerShare = inRange(decimal(perShare, 4), RATE_CEILING);
 
-  // The unambiguous field first; otherwise derive it. Deriving divides two
-  // numbers that are both already in the quote's own currency, so the unit
-  // cannot be mistaken — which is the entire point of not reading the field
-  // that could be either.
+  // The unambiguous field first; otherwise derived — rate over price divides
+  // two numbers in the same currency, so the unit cannot be mistaken.
   const yieldPct =
     inRange(decimal(quote.dividendYield, 6), YIELD_CEILING) ??
     (perShare !== undefined && quoted !== undefined
@@ -337,51 +252,33 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
     asOf: instantOf(quote.regularMarketTime, fetchedAt),
     fetchedAt,
 
-    // The entry as it arrived, not the parsed narrowing of it: `parsed.data` is
-    // the eight fields this module reads, and the point of the archive is
-    // everything it does not. Attached here, past every refusal above, so a
-    // payload is only ever stored for a quote that parsed — ADR-0006.
+    // The entry as it arrived, not the parsed narrowing: the archive's point
+    // is everything this module does not read. Attached past every refusal,
+    // so a payload is only stored for a quote that parsed — ADR-0006.
     payload: raw,
   };
 }
 
 /**
- * The one `yahoo-finance2` instance this process uses, created on first use.
- *
- * A fresh `new YahooFinance()` per call — the shape this held before — costs
- * more than the object: the library redoes its cookie/crumb handshake with
- * Yahoo on every instance, so a poll tick and, worse, `probeSymbol`'s
- * once-per-symbol loop during an upload turned into a burst of fresh
- * handshakes in quick succession, exactly the pattern an unofficial endpoint
- * rate-limits. It also reset the library's own "shown once" notice tracking,
- * which is per-instance — hence the same survey banner logging on every
- * single tick and every single symbol instead of once per process.
- *
- * Held in module scope rather than passed around, and memoized as a promise
- * so two calls racing before the import resolves still share one client
- * rather than each constructing their own.
+ * The one `yahoo-finance2` instance this process uses. A fresh instance per
+ * call redoes the library's cookie/crumb handshake — `probeSymbol`'s
+ * per-symbol loop became a burst of handshakes, exactly what an unofficial
+ * endpoint rate-limits — and reset its per-instance "shown once" notices, so
+ * the survey banner logged on every tick. Memoized as a promise so two calls
+ * racing before the import resolves still share one client.
  */
 let client: Promise<{ quote(symbols: string[]): Promise<unknown> }> | undefined;
 
 /**
- * The shared `yahoo-finance2` client for this process.
- *
- * **The default export is a class, not a ready-made client.** Every module name
- * is also installed on the class as a static that throws
- * `Call \`const yahooFinance = new YahooFinance()\` first` — a v2-to-v4 upgrade
- * guard. Calling `yahooFinance.quote(...)` on the export therefore type-checks
- * as a function and fails at runtime on the first tick, forever, with the
- * failure swallowed by the poller's catch. Nothing in a fake-driven test suite
- * would ever notice, which is why `tests/price-provider.test.ts` asserts this
- * shape directly rather than trusting it.
- *
- * Imported dynamically rather than at module scope so that an unofficial,
- * network-touching dependency stays out of the module graph of anything that
- * merely imports the `PriceProvider` type.
- *
- * Typed as "an object with a callable `quote`" rather than through the
- * library's own overloads, which do not resolve on an array query. Exported for
- * the contract test.
+ * The shared `yahoo-finance2` client. **The default export is a class, not a
+ * client**: every method also exists on the class as a static that throws (a
+ * v2-to-v4 upgrade guard), so calling `quote(...)` on the export type-checks
+ * and fails at runtime on every tick, swallowed by the poller's catch — which
+ * no fake-driven test would notice, hence `tests/price-provider.test.ts`
+ * asserts the shape directly. Imported dynamically so the network-touching
+ * dependency stays out of the module graph of anything importing only the
+ * `PriceProvider` type. Typed as "an object with a callable `quote`" because
+ * the library's own overloads do not resolve on an array query.
  */
 export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise<unknown> }> {
   if (client === undefined) {
@@ -394,20 +291,18 @@ export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise
 }
 
 /**
- * What one probe of one symbol can say. A closed set, because the caller's
- * three answers are fixed by the spec: create, refuse naming the currency, or
- * create anyway and let the next refresh mark it stale.
+ * What one probe can say — a closed set, because the caller's three answers
+ * are fixed by the spec: create, refuse naming the currency, or create anyway
+ * and let the next refresh mark it stale.
  */
 export type SymbolProbe =
   | {
       status: "ok";
       /**
-       * What the provider calls the thing — `EQUITY`, `ETF`, `MUTUALFUND` —
-       * carried out of the probe rather than discarded, because the moment a
-       * symbol is confirmed to quote is the one moment the application has this
-       * fact and an instrument row to put it on. Null when the payload omitted
-       * it, which is honest: this column is the provider's vocabulary, and
-       * "the provider did not say" is a real answer.
+       * What the provider calls the thing, carried out rather than discarded:
+       * the moment a symbol is confirmed to quote is the one moment the app
+       * has this fact and a row to put it on. Null when omitted — "the
+       * provider did not say" is a real answer.
        */
       quoteType: string | null;
     }
@@ -415,36 +310,24 @@ export type SymbolProbe =
   | { status: "unavailable" };
 
 /**
- * The probe as the upload flow's resolution step receives it — just the
- * symbol, so a test stub is one async arrow and nothing else. `probeSymbol`
- * satisfies it; the client parameter is this module's private business.
+ * The probe as the resolution step receives it — just the symbol, so a test
+ * stub is one async arrow. The client parameter is this module's business.
  */
 export type ProbeSymbol = (symbol: string) => Promise<SymbolProbe>;
 
 /**
- * Does this symbol quote, and in a currency we can hold?
- *
- * The creation-time half of the guard `CurrencyRefused` anticipates above:
- * §6.1 puts this guard at instrument resolution, and that is still where it
- * belongs — this is that moment finally existing. `getQuotes` cannot serve it,
- * deliberately: there a refusal becomes an absent quote, because a refresh
- * must not lose ninety-nine prices over one foreign listing. Here the caller
- * is a person creating one instrument, and "absent" would collapse the one
- * distinction they can act on — a currency we refuse — into the one they
- * cannot — a provider having a bad day.
- *
- * So a non-USD quote comes back named, carrying the provider's currency for a
- * refusal in the refresh guard's own words, while everything else that can go
- * wrong — unknown symbol, thrown client, malformed payload — is one answer,
- * `unavailable`, and never a throw. The spec's reason: a provider failure must
- * not block creation, because the next refresh marks the instrument stale
- * exactly as it does today for any symbol that stops quoting.
- *
- * The currency rule itself lives in {@link toProviderQuote} and is not
- * restated here; the probe only translates its verdict.
- *
- * `client` is injectable for the same reason the interface exists: no test
- * touches the network.
+ * Does this symbol quote, and in a currency we can hold? The creation-time
+ * half of the guard (§6.1 puts it at instrument resolution). `getQuotes`
+ * cannot serve it: there a refusal becomes an absent quote, since a refresh
+ * must not lose ninety-nine prices over one foreign listing — but here the
+ * caller is a person creating one instrument, and "absent" would collapse the
+ * distinction they can act on (a refused currency) into the one they cannot
+ * (a provider's bad day). So non-USD comes back named; everything else —
+ * unknown symbol, thrown client, malformed payload — is one answer,
+ * `unavailable`, never a throw: a provider failure must not block creation,
+ * because the next refresh marks the instrument stale anyway. The currency
+ * rule lives in {@link toProviderQuote}; the probe only translates its
+ * verdict. `client` is injectable: no test touches the network.
  */
 export async function probeSymbol(
   symbol: string,
@@ -455,9 +338,8 @@ export async function probeSymbol(
     const fetchedAt = new Date();
     const raw = await provider.quote([symbol]);
 
-    // Not an array is the same answer as an empty one: Yahoo drops unknown
-    // symbols from the response entirely, so absence is the ordinary spelling
-    // of "never heard of it".
+    // Not-an-array equals empty: Yahoo drops unknown symbols entirely, so
+    // absence is the ordinary spelling of "never heard of it".
     for (const entry of Array.isArray(raw) ? raw : []) {
       try {
         const quote = toProviderQuote(entry, fetchedAt);
@@ -470,26 +352,21 @@ export async function probeSymbol(
       }
     }
   } catch {
-    // Deliberately everything. Whatever the provider did, the answer the
-    // caller is allowed to act on is the same: create the instrument.
+    // Deliberately everything: whatever the provider did, the caller's
+    // actionable answer is the same — create the instrument.
   }
 
   return { status: "unavailable" };
 }
 
 /**
- * The live provider.
- *
- * Constructed rather than exported as a singleton so that nothing imports
- * `yahoo-finance2` by reaching for a module-level value — a caller has to ask
- * for it, and the only caller that does is the refresh path.
- *
- * A non-USD quote is refused per symbol, not per batch: one foreign listing in
- * a household of a hundred holdings must not cost the other ninety-nine their
- * prices. The refusal is returned to the caller as an absent quote, which it
- * already knows how to treat, and logged here where the currency is still known
- * — `ProviderQuote` has nowhere to carry it, on purpose, since §6.1 stores no
- * currency column anywhere.
+ * The live provider. Constructed, not a singleton, so nothing imports
+ * `yahoo-finance2` by reaching for a module-level value — the only caller
+ * that asks is the refresh path. A non-USD quote is refused per symbol, not
+ * per batch (one foreign listing must not cost ninety-nine prices), returned
+ * as an absent quote and logged here where the currency is still known —
+ * `ProviderQuote` has nowhere to carry it, on purpose (§6.1 stores no
+ * currency column).
  */
 export function yahooPriceProvider(): PriceProvider {
   return {
@@ -499,10 +376,9 @@ export function yahooPriceProvider(): PriceProvider {
       const client = await yahooClient();
       const fetchedAt = new Date();
 
-      // `unknown[]` because `yahooClient` is typed loosely — see there. Nothing
-      // is lost: `yahooQuote` above validates every field this module reads,
-      // and validating rather than trusting is the correct posture towards an
-      // unofficial client for an unpublished endpoint (§6.1).
+      // `unknown[]` because `yahooClient` is typed loosely. Nothing is lost:
+      // `yahooQuote` validates every field read — the correct posture towards
+      // an unofficial client for an unpublished endpoint (§6.1).
       const raw = (await client.quote(symbols)) as unknown[];
 
       const quotes: ProviderQuote[] = [];

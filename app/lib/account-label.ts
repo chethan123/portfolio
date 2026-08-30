@@ -1,37 +1,24 @@
 /**
- * The upload screen's account labels — grouped by owner, quiet until two rows
- * would read the same.
+ * The upload screen's account labels — grouped by owner, quiet until two
+ * rows would read the same. Names usually carry the facts already ("Vanguard
+ * Roth IRA"), and a native <option> has no muted secondary text — but a name
+ * is free text with no uniqueness constraint, so the picker must still tell
+ * identically-named accounts apart. The rule: a row says more only when
+ * saying less would make it a twin.
  *
- * A household's account names usually carry the facts already ("Vanguard Roth
- * IRA"), so a label that always restates institution and type says everything
- * twice — inside a native <option>, where there is no muted secondary text and
- * every character gets equal weight. But a name is free text with no
- * uniqueness constraint anywhere, so the picker must still tell apart two
- * accounts the household named identically. The rule: a row says more only
- * when saying less would make it a twin.
+ *   1. The account's name, plus ····last-4 of the recorded account number
+ *      when there is one — the one part a name never carries.
+ *   2. Twins within their owner's group append "— institution · type".
+ *   3. Still twins append the tax treatment, shortened — the stored fact
+ *      separating a Traditional from a Roth (DESIGN.md §5.1's collision).
  *
- *   1. Every option is the account's name, plus ····last-4 of the recorded
- *      account number when there is one — the one part a name never carries.
- *   2. Rows that still read the same within their owner's group append
- *      "— institution · account type".
- *   3. Rows that still read the same after that append the tax treatment,
- *      shortened — the one stored fact separating a Traditional from a Roth
- *      held at the same firm under the same name (DESIGN.md §5.1's collision
- *      example).
- *
- * After that the chain stops: rows identical in every stored attribute render
- * identically, honestly. Telling them apart is a rename in Settings, not a
- * label's job.
- *
- * Grouping is by owner because that is the collision the picker actually
- * suffered — two people, one broker — and a group header says the owner once
- * instead of stamping it on every row. Groups follow the People screen's
- * order (name, then id); options keep the order they arrive in, which is the
- * account list's own (ingest brief §3: as Settings orders them).
- *
- * Pure on purpose: no test in this repo imports a route, so the one piece of
- * this screen that has rules in it lives here, where every collision tier is
- * a fixture.
+ * Then the chain stops: rows identical in every stored attribute render
+ * identically, honestly — telling them apart is a rename in Settings.
+ * Grouped by owner because that is the collision the picker actually
+ * suffered (two people, one broker); groups follow the People screen's
+ * order, options keep the account list's own (ingest brief §3). Pure on
+ * purpose: no test in this repo imports a route, so the screen's one piece
+ * with rules in it lives where every collision tier is a fixture.
  */
 import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "./account-options.ts";
 
@@ -55,9 +42,9 @@ export type PickerGroup = { ownerId: string; ownerName: string; options: PickerO
 
 /**
  * `····2245` from the stored number's last four characters, or null without
- * one. The number is stored bare and free-form (`X47-283910` is real), so the
- * tail is characters, not digits, and the mask glyphs belong to the renderer
- * — never to the stored value.
+ * one. Stored bare and free-form (`X47-283910` is real), so the tail is
+ * characters, not digits, and the mask glyphs belong to the renderer, never
+ * the stored value.
  */
 export function numberTail(externalAccountNumber: string | null): string | null {
   const trimmed = externalAccountNumber?.trim() ?? "";
@@ -66,10 +53,9 @@ export function numberTail(externalAccountNumber: string | null): string | null 
 
 /**
  * "Tax-deferred — tax due on withdrawal (Traditional)" → "Tax-deferred
- * (Traditional)". Derived, not written twice: the canonical labels in
- * `TAX_TREATMENTS` stay the single source, and the shortening is mechanical —
- * the part before the em-dash, plus the trailing parenthetical when the label
- * has one.
+ * (Traditional)". Derived, not written twice: `TAX_TREATMENTS` stays the
+ * single source, and the shortening is mechanical — the part before the
+ * em-dash plus any trailing parenthetical.
  */
 function shortTaxLabel(treatment: TaxTreatment): string {
   const label = labelOf(TAX_TREATMENTS, treatment);

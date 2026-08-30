@@ -1,19 +1,12 @@
 /**
- * The saved column mapping — how a brokerage's export format is remembered
- * once and applied to every later file (DESIGN.md §5.3, spec 0004 step 03).
- *
- * The key is `(account.institution, headerFingerprint)`: the institution
- * scopes it, and the fingerprint pins it to the exact header the mapping was
- * built against. The fingerprint is deliberately order-sensitive — a
- * reordered export is a different fingerprint and costs one re-map, which is
- * cheaper than a mapping that silently follows a column that moved — and
- * deliberately case- and padding-insensitive, because a brokerage retitling
- * `SYMBOL` as `Symbol` has not changed what any column means.
- *
- * This module also owns the columns screen's form contract,
- * {@link parseMappingForm}: the mapping's shape is this domain's, so the rules
- * for assembling one out of posted fields live beside the rules for storing
- * one, and the route stays the thin translation every other route is.
+ * Saved column mappings — a brokerage's export format remembered once and
+ * applied to every later file (DESIGN.md §5.3, spec 0004 step 03). Keyed by
+ * `(account.institution, headerFingerprint)`; the fingerprint is
+ * order-sensitive on purpose — a reordered export costs one re-map, cheaper
+ * than silently following a moved column — but case- and padding-insensitive:
+ * retitling `SYMBOL` as `Symbol` changes no column's meaning. Also owns the
+ * columns screen's form contract ({@link parseMappingForm}), so the route
+ * stays the thin translator every other route is.
  */
 import { createHash } from "node:crypto";
 
@@ -27,21 +20,19 @@ import type { Delimiter } from "./csv.ts";
 import type { Kysely } from "kysely";
 
 /**
- * What an optional column's `<select>` posts when the reader says the column
- * is deliberately absent. Distinct from the empty string, which is the
- * unchosen placeholder: "unset" and "not in this file" are different answers,
- * and only the deliberate one survives a save (both land as `null` in the
- * mapping; a saved mapping preselects this option, never the placeholder).
- * The columns route reads it out of its loader data rather than importing it,
- * because this is a `.server` module and the option is rendered client-side.
+ * What an optional column's `<select>` posts for "deliberately not in this
+ * file" — distinct from `""`, the unchosen placeholder: both land as `null`,
+ * but only the deliberate answer survives a save, and a saved mapping
+ * preselects this option. The columns route reads it from loader data —
+ * this is a `.server` module and the option renders client-side.
  */
 export const NOT_IN_FILE = "__none__";
 
 /**
- * SHA-256 hex over the header row's cells: each trimmed, lowercased, internal
- * whitespace collapsed to one space, joined with a unit separator (U+001F), in
- * file order. The header row only — data rows never affect it, so the same
- * export next quarter fingerprints the same however the positions moved.
+ * SHA-256 hex over the header row's cells: trimmed, lowercased, internal
+ * whitespace collapsed, joined with a literal U+001F, in file order. Header
+ * row only — data rows never affect it, so next quarter's export fingerprints
+ * the same however the positions moved.
  */
 export function headerFingerprint(cells: readonly string[]): string {
   const canonical = cells
@@ -52,12 +43,10 @@ export function headerFingerprint(cells: readonly string[]): string {
 }
 
 /**
- * The mapping saved for this institution and header, or null.
- *
- * Null covers a malformed stored row too — validated through
- * {@link statementMapping} on the way out, because a mapping that no longer
- * matches the shape must read as "map it again", never as a 500 on a screen
- * whose whole job is to let the reader map it again.
+ * The mapping saved for this institution and header, or null — null for a
+ * malformed stored row too, via {@link statementMapping} on the way out: a
+ * mapping that no longer matches the shape must read as "map it again",
+ * never a 500 on the screen whose whole job is re-mapping.
  */
 export async function findMapping(
   institution: string,
@@ -78,11 +67,9 @@ export async function findMapping(
 }
 
 /**
- * Remember a mapping for this institution and header.
- *
- * An upsert on `column_mapping_one_per_fingerprint`, so a corrected mapping
- * replaces the one that was wrong rather than accumulating a second row the
- * constraint would refuse.
+ * Remember a mapping for this institution and header. Upsert on
+ * `column_mapping_one_per_fingerprint`: a corrected mapping replaces the
+ * wrong one rather than accumulating a row the constraint would refuse.
  */
 export async function upsertMapping(
   institution: string,
@@ -113,10 +100,8 @@ const COLUMN_FIELDS = [
 
 type ColumnField = (typeof COLUMN_FIELDS)[number]["field"];
 
-/**
- * The chosen column, or null: the absent field, the placeholder and the
- * deliberate absence all mean "no column chosen" once the form is read.
- */
+/** The chosen column, or null — absent field, placeholder and deliberate
+ * absence all read as "no column chosen". */
 const chosenColumn = (value: string | undefined): string | null =>
   value === undefined || value === "" || value === NOT_IN_FILE ? null : value;
 
@@ -237,10 +222,9 @@ export function parseMappingForm(
     // A checkbox posts its value or nothing at all; nothing means unticked,
     // which keeps the file's own sign (the overdraft case, DESIGN.md §14.8).
     owedAsPositive: input.owedAsPositive === "true",
-    // Not a control on the screen: combining is the behaviour the spec's
-    // lot-level story promises, and a mapping that turned it off could only
-    // be authored by hand. The refusal path for a duplicated instrument still
-    // exists in `parseStatement` for exactly that mapping.
+    // No screen control: combining is what the spec's lot-level story
+    // promises; only a hand-authored mapping turns it off, and
+    // `parseStatement` still refuses duplicates for exactly that mapping.
     combineDuplicateRows: true,
   };
 }

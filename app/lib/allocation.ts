@@ -1,70 +1,39 @@
 /**
- * The portfolio cut three ways — by person, by account kind, by asset class —
- * for the analysis screen (DESIGN.md §8.1, §8.3), and a fourth cut of the same
- * array beneath them: unrealized gains by asset type, with the tax a taxable
- * one would attract. {@link unrealizedByAssetType} carries its own reasoning.
- *
- * And the same array cut by a **second figure**: what it pays rather than what
- * it is worth. {@link annualDividendBy} groups the annual dividend for the
- * Income screen, {@link weightedYield} states a group's as a fraction of what
- * it is worth, and {@link shelteredSubtotal} answers in two amounts the binary
- * question the three-way breakdown refuses to draw as a chart.
+ * The portfolio cut three ways — by person, account kind, asset class — for
+ * the analysis screen (DESIGN.md §8.1, §8.3); a fourth cut beneath them
+ * ({@link unrealizedByAssetType}); and the same array cut by what it *pays*
+ * ({@link annualDividendBy}, {@link weightedYield}, {@link shelteredSubtotal}).
  *
  * Pure functions over the {@link ValuedHolding} rows the query layer already
- * returned. No database, deliberately, for two reasons. The screen renders its
- * holdings table from the same array it groups here, so a slice and the rows
- * behind it cannot disagree — agreement is structural rather than something to
- * keep true. And three `GROUP BY` queries would be three more hand-rolled
- * dashboard queries, which is the failure §8.2 names as the weakest point in
- * the whole design; the grouping key is already on every row precisely so that
- * no new join is needed to group by it.
+ * returned — no database, so a slice and the rows behind it cannot disagree
+ * (agreement is structural), and no three more hand-rolled GROUP BY queries
+ * (§8.2's weakest point); the grouping key is already on every row.
  *
- * **Money stays a decimal string.** Nothing here calls `Number()` or
- * `parseFloat` on a value. Summing happens on the digits, as `BigInt` counts of
- * ten-thousandths — which is not the float §4.1 keeps money out of: it is exact
- * at any magnitude, and the scale it is exact at is written down rather than
- * guessed at by a driver. Those digit-level helpers used to be private to this
- * file, so that "money arithmetic in JavaScript" stayed exactly one module
- * wide; they now live in `money.ts` and this module is one of its two callers,
- * which keeps the same invariant by making it structural rather than a promise.
- * `format.ts` still refuses to compute, and that has not changed either.
+ * **Money stays a decimal string.** No `Number()`/`parseFloat`; summing is on
+ * the digits, as `BigInt` counts of ten-thousandths — exact at any magnitude,
+ * the scale written down rather than guessed by a driver. The digit helpers
+ * live in `money.ts` (this is one of its two callers); `format.ts` still
+ * refuses to compute. The import from `valuation.server.ts` is a type import
+ * — erased, so no server code reaches the client bundle, which is why a
+ * screen may import these directly.
  *
- * The import from `valuation.server.ts` below is a type import and nothing
- * else. A type import is erased, so this module pulls no server code into the
- * client bundle — the same arrangement `account-options.ts` relies on, and the
- * reason a screen may import these functions directly.
+ * **An unpriced holding contributes nothing and is still counted**, as
+ * `readTotal` does: a slice is `{ amount, coverage }` because an unknown
+ * coerced to zero reports a partial answer as a complete one.
  *
- * **An unpriced holding contributes nothing and is still counted**, exactly as
- * `readTotal` does in the query layer. A slice is `{ amount, coverage }` for
- * the same reason a total is: an unknown coerced to zero reports a partial
- * answer as a complete one.
- *
- * **What a negative slice is a share of.** A liability sums negative and stays
- * negative — nothing here takes an absolute value, because $8,000 of debt and
- * $8,000 of assets are not the same slice of anything. That leaves only the
- * denominator to decide, and the obvious choice, the net total, is the wrong
- * one. It fails twice: where debts nearly cancel assets the shares explode (a
- * $500k house against $490k of mortgage makes the house 5,000% of the
- * portfolio), and for a household in net debt the denominator itself goes
- * negative and every asset reports a negative share — the sign error
- * `netWorthChange` already refuses to make by dividing by `abs(previous)`.
- *
- * So the denominator is the **gross positive total**: the sum of the slices
- * that are positive. Consequences, all intended:
- *
- *   * The positive slices sum to exactly 1, because {@link allocateShares}
- *     hands the units that independent rounding loses back to the largest
- *     remainders. So a pie or a stacked bar drawn from them is complete and
- *     needs no residual wedge.
- *   * A negative slice is a negative fraction of what is owned — "this loan is
- *     20% of the assets" — a figure that stays finite and keeps its sign as the
- *     household's net worth crosses zero.
- *   * `share` therefore runs to 1 but not from 0: a liability's is below it. A
- *     screen must read the sign before it draws a width from it.
- *   * When nothing is positive — a household with only a loan recorded — there
- *     is no base to be a fraction of and every share is `0.000000`. That zero
- *     is not a claim that the slice is nothing; the amount beside it says what
- *     it is, and the caller should show the amounts alone.
+ * **What a negative slice is a share of.** A liability stays negative — $8k
+ * of debt is not $8k of assets. The obvious denominator, the net total, fails
+ * twice: near-cancelling debts explode the shares (a $500k house against
+ * $490k of mortgage is 5,000% of the portfolio), and net debt flips every
+ * asset's sign. So the denominator is the **gross positive total**.
+ * Consequences, all intended: the positive slices sum to exactly 1
+ * ({@link allocateShares} hands rounding losses to the largest remainders),
+ * so a pie needs no residual wedge; a negative slice is a negative fraction
+ * of what is owned, finite and signed across zero; `share` runs to 1 but not
+ * from 0, so a screen must read the sign before drawing a width; and with
+ * nothing positive every share is `0.000000` — not a claim the slice is
+ * nothing, the amount beside it says what it is, and the caller should show
+ * the amounts alone.
  */
 import { ACCOUNT_KINDS, labelOf, type Option } from "./account-options.ts";
 import { formatPercent, isPositive } from "./format.ts";
@@ -72,24 +41,17 @@ import { MONEY_SCALE, SHARE_SCALE, divide, render, sumMoney, toUnits } from "./m
 
 import type { AssetClass, Coverage, ValuedHolding } from "./valuation.server.ts";
 
-/**
- * One row of a breakdown: what it is, what it is worth, and how much of the
- * whole that is.
- */
+/** One row of a breakdown: what it is, what it is worth, how much of the whole that is. */
 export type AllocationSlice = {
   /** The grouped value itself — an owner's id, an account kind, an asset class. */
   key: string;
   /** What a person reads for that key. */
   label: string;
-  /**
-   * Decimal string at the money scale, summed exactly. Negative for a group
-   * that is net debt.
-   */
+  /** Decimal string at money scale, summed exactly; negative for net debt. */
   amount: string;
   /**
-   * Decimal string, six places. A fraction of the gross positive total, so the
-   * positive slices sum to `1.000000` and a liability's is negative. See the
-   * header for why the denominator is not the net total.
+   * Six places, a fraction of the gross positive total: positive slices sum
+   * to `1.000000`, a liability's is negative (see header).
    */
   share: string;
   /** How many of the slice's holdings the amount could actually be computed from. */
@@ -97,13 +59,10 @@ export type AllocationSlice = {
 };
 
 /**
- * The labels for `classification.asset_class`.
- *
- * Not in `account-options.ts`, because that module exists so that a form's
- * `<select>` and the schema's check constraints cannot drift, and no form
- * offers an asset class — it arrives on an instrument's classification. The
- * `Option` shape is borrowed from it all the same, so this list can move there
- * unchanged the day a screen does offer one.
+ * Labels for `classification.asset_class`. Not in `account-options.ts`: that
+ * module keeps form `<select>`s and check constraints from drifting, and no
+ * form offers an asset class. The `Option` shape is borrowed all the same, so
+ * this list can move there unchanged the day one does.
  */
 export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
   { value: "equity", label: "Equity" },
@@ -116,58 +75,36 @@ export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
 export type Grouping = (holding: ValuedHolding) => { key: string; label: string };
 
 /**
- * What a breakdown is a breakdown *of*: the figure to take off each holding,
- * and whether that figure is known for it.
+ * What a breakdown is *of*: the figure to take off each holding, and whether
+ * it is known. One decision, not two arguments — a caller mismatching the
+ * amount off one column and the coverage off another produces a caption
+ * counting the wrong holdings, reading as correct on every screen.
  *
- * The two travel together rather than as two arguments, because they are one
- * decision. `value` is null exactly when `isPriced` is false, so for a value
- * breakdown either one implies the other — but that correspondence is a fact
- * about *value*, not about figures in general. What a holding pays says nothing
- * about whether it was priced, and a pair of arguments is a pair a caller can
- * mismatch: the amount off one column and the coverage off another produces a
- * caption counting the wrong holdings, which reads as correct on every screen
- * it appears on.
- *
- * @property of the figure itself, or null where it could not be computed. A
- *           null is skipped from the sum and still counted in
- *           {@link AllocationSlice.coverage}`.total`, which is what stops the
- *           omission being silent.
- * @property isKnown whether this holding contributed. Not `of(holding) !==
- *                   null`: a figure can be a real zero for a holding nobody
- *                   could compute it from — a dividend coalesced to zero is the
- *                   case in front of us — and counting that as known is the
- *                   coercion §8.2 refuses.
+ * `of`: the figure, or null where uncomputable — skipped from the sum, still
+ * counted in `coverage.total`, which stops the omission being silent.
+ * `isKnown`: not `of(holding) !== null` — a figure can be a real zero for a
+ * holding nobody could compute it from (a dividend coalesced to zero), and
+ * counting that as known is the coercion §8.2 refuses.
  */
 export type AllocationAmount = {
   of: (holding: ValuedHolding) => string | null;
   isKnown: (holding: ValuedHolding) => boolean;
 };
 
-/**
- * What every breakdown was cut by before there was a second figure to cut by,
- * and what {@link allocationBy} still means when nobody says otherwise.
- */
+/** {@link allocationBy}'s default — what every breakdown meant before a second figure existed. */
 const VALUE: AllocationAmount = {
   of: (holding) => holding.value,
   isKnown: (holding) => holding.isPriced,
 };
 
 /**
- * What the Income screen cuts by instead (DESIGN.md §8.1).
- *
- * **`isKnown` is a constant, and that is the whole point of it being a
- * function.** Every other figure in this application is unknown for some
- * holding — a trust nobody priced has no value, a 401k line with no basis has
- * no gain — and the coverage count is how a screen says so. The annual dividend
- * has no such case: `holding_valued` coalesces a missing rate to zero in SQL,
- * so a holding whose dividend nobody knows does not reach here (DESIGN.md §14,
- * limitation 9). Every slice therefore comes back complete, which is why the
- * Income tables carry no coverage caption — there are no unknowns to count.
- *
- * What the codebase gives up for that is written down where the coalesce is:
- * the total understates by every unquoted holding, by all interest on cash and
- * by any interest on a loan, and both screens that print it say in place that
- * it is a lower bound.
+ * The Income screen's cut (DESIGN.md §8.1). `isKnown` is a constant, and that
+ * is the point: `holding_valued` coalesces a missing rate to zero in SQL, so
+ * no holding reaches here unknown (§14, limitation 9) — every slice is
+ * complete, hence no coverage caption on the Income tables. The price paid —
+ * the total understates by every unquoted holding and all interest — is
+ * written where the coalesce is, and both printing screens call it a lower
+ * bound.
  */
 const ANNUAL_DIVIDEND: AllocationAmount = {
   of: (holding) => holding.annualDividend,
@@ -177,11 +114,9 @@ const ANNUAL_DIVIDEND: AllocationAmount = {
 type Bucket = { label: string; amount: bigint; coverage: Coverage };
 
 /**
- * Largest first, ties broken on the label.
- *
- * Compared as integers rather than as the rendered strings, which would sort
- * "9.0000" above "10.0000". The tie-break is what stops two equal slices
- * swapping places between one render and the next.
+ * Largest first, ties on label. Integers, not rendered strings (which sort
+ * "9.0000" above "10.0000"); the tie-break stops equal slices swapping
+ * between renders.
  */
 function compare(a: Bucket, b: Bucket): number {
   if (a.amount !== b.amount) return a.amount > b.amount ? -1 : 1;
@@ -191,27 +126,18 @@ function compare(a: Bucket, b: Bucket): number {
 }
 
 /**
- * The share of each amount in a column, in the order given, as `BigInt` counts
- * of the last place at {@link SHARE_SCALE}.
+ * Each amount's share of the column, in the order given, as `BigInt` units at
+ * {@link SHARE_SCALE}. Independent rounding leaves the positives short of a
+ * whole (three equal slices → `0.999999`, a hairline gap in the ring), so
+ * positive shares are floored and the lost units handed back one apiece to
+ * the largest remainders — exactly `1.000000`, no share moved more than one
+ * last-place unit. Ties go to the earlier amount (the caller's sort order),
+ * so one input always renders one set of shares. A negative amount takes no
+ * part in the correction: it is a fraction of the gross positive total (see
+ * header), keeping its own rounding and sign; with nothing positive every
+ * share is zero.
  *
- * Rounding each share on its own leaves the positives short of a whole: three
- * equal slices each round to `0.333333` and the pie comes to `0.999999`, which
- * the analysis ring draws as a hairline gap because it adds no residual wedge.
- * So the positive shares are floored and the units that flooring lost are
- * handed back one apiece to the largest remainders — largest-remainder
- * apportionment — which reaches exactly `1.000000` while moving no share by
- * more than one unit of its last place. There are always fewer units to hand
- * back than there are positive amounts, since every remainder is below the
- * base. Ties go to the earlier amount, which is the caller's sort order, so one
- * input always renders one set of shares.
- *
- * A negative amount takes no part in the correction. It is a negative fraction
- * of the gross positive total rather than a piece of the whole being divided
- * up — see the header — so it keeps its own rounding and its sign. With nothing
- * positive there is no base to be a fraction of and every share is zero.
- *
- * Exported for `holdings-view.ts`, which shares out its groups by the same rule
- * and would otherwise need a second implementation of the correction.
+ * Exported for `holdings-view.ts`, which shares out its groups by this rule.
  */
 export function allocateShares(amounts: ReadonlyArray<bigint>): bigint[] {
   const whole = 10n ** BigInt(SHARE_SCALE);
@@ -250,21 +176,16 @@ export function allocateShares(amounts: ReadonlyArray<bigint>): bigint[] {
 }
 
 /**
- * The one grouping this module does; the adapters below only say what to group
- * by, and what to add up. Written once because "sum what is known, count all of
- * them, then divide by the gross" is the rule, and a copy of it is a chance for
- * one breakdown to treat an uncomputable holding differently from another.
- *
- * Exported because a breakdown of something other than value needs it, and the
- * alternative — an adapter here per figure per dimension — is the multiplication
- * this shape exists to avoid. The three adapters below stay adapters: this
- * function is already the parameterised implementation, and folding them into a
- * dispatch on a key would only move their four lines behind a `switch`.
+ * The one grouping; the adapters below only say what to group by and what to
+ * add up. Written once because "sum what is known, count all, divide by the
+ * gross" is the rule, and a copy is a chance for one breakdown to treat an
+ * uncomputable holding differently. Exported because a breakdown of another
+ * figure needs it — an adapter per figure per dimension is the multiplication
+ * this shape avoids.
  *
  * @param by what each holding is filed under, and what that file is called.
- * @param amount which figure to add up and when it counts as known. Value by
- *               default, which is what every breakdown meant before there was a
- *               second figure to mean.
+ * @param amount which figure to add up and when it counts as known; value by
+ *               default.
  */
 export function allocationBy(
   holdings: ValuedHolding[],
@@ -278,9 +199,8 @@ export function allocationBy(
     const bucket = buckets.get(key) ?? { label, amount: 0n, coverage: { known: 0, total: 0 } };
     const figure = amount.of(holding);
 
-    // A null is what `sum()` does with one in SQL — it is not in the total —
-    // and counting the holding anyway, one line down, is what stops the
-    // omission being silent.
+    // Null is what SQL's sum() does with one — not in the total — and
+    // counting the holding anyway is what stops the omission being silent.
     if (figure !== null) bucket.amount += toUnits(figure, MONEY_SCALE);
     if (amount.isKnown(holding)) bucket.coverage.known += 1;
     bucket.coverage.total += 1;
@@ -288,8 +208,8 @@ export function allocationBy(
     buckets.set(key, bucket);
   }
 
-  // Sorted before the shares are worked out, because the correction breaks its
-  // ties on position and the rendered order is the one it has to break them in.
+  // Sorted before the shares: the correction breaks ties on position, and the
+  // rendered order is the one to break them in.
   const ordered = [...buckets.entries()].sort(([, a], [, b]) => compare(a, b));
   const shares = allocateShares(ordered.map(([, bucket]) => bucket.amount));
 
@@ -303,11 +223,8 @@ export function allocationBy(
 }
 
 /**
- * Who owns what (DESIGN.md §4.2).
- *
- * Keyed on the owner's id rather than on their name, because two people in one
- * household can share a first name and a breakdown that merged them would be
- * wrong in a way nobody would notice.
+ * Who owns what (DESIGN.md §4.2). Keyed on id, not name: two people can share
+ * a first name, and a merged breakdown would be wrong invisibly.
  */
 export function allocationByPerson(holdings: ValuedHolding[]): AllocationSlice[] {
   return allocationBy(holdings, (holding) => ({
@@ -317,10 +234,8 @@ export function allocationByPerson(holdings: ValuedHolding[]): AllocationSlice[]
 }
 
 /**
- * What kind of account it sits in.
- *
- * The liability kind is what makes this the breakdown most likely to contain a
- * negative slice, so it is the one to read the header's rule against.
+ * What kind of account it sits in — the breakdown most likely to hold a
+ * negative slice (liabilities), so the one to read the header's rule against.
  */
 export function allocationByAccountKind(holdings: ValuedHolding[]): AllocationSlice[] {
   return allocationBy(holdings, (holding) => ({
@@ -341,62 +256,39 @@ export function allocationByAssetClass(holdings: ValuedHolding[]): AllocationSli
 }
 
 /**
- * The same array cut by what it **pays** rather than by what it is worth — the
- * Income screen's two breakdowns, by tax treatment and by account (DESIGN.md
- * §8.1).
+ * The same array cut by what it **pays** — the Income screen's breakdowns by
+ * tax treatment and by account (DESIGN.md §8.1). Takes a grouping where the
+ * three above take none, because of a cycle: the short labels live in
+ * `holdings-view.ts`, which already imports from here, so the caller hands
+ * the accessor in and the dependency stays one-way. That also makes "Holdings
+ * grouped by tax treatment agrees with the Income breakdown" structural: both
+ * screens read one accessor, and a third copy of the label table is exactly
+ * what `tests/invariants/aggregates-agree.test.ts` exists to catch.
  *
- * **One adapter taking a grouping, where the three above it take none, and the
- * reason is a cycle.** The short labels those two breakdowns need — Taxable,
- * Tax-deferred, Tax-free, and an account's own name — live in
- * `holdings-view.ts`, written short precisely so they fit a table cell;
- * `account-options.ts` carries only the long explanatory form, which is
- * unusable in one. This module cannot import them, because `holdings-view.ts`
- * already imports from here. So the caller hands the accessor in, and the
- * dependency stays one-way.
- *
- * That is not only cycle-avoidance. It is what makes "Holdings grouped by tax
- * treatment agrees with the Income breakdown" structural rather than
- * coincidental: both screens read one accessor, so they cannot group the same
- * way and label differently. A third copy of the label table is exactly the
- * failure `tests/invariants/aggregates-agree.test.ts` exists to catch, and a
- * pair of named adapters here — `annualDividendByTaxTreatment` beside
- * `annualDividendByAccount` — would have had identical bodies and no way to
- * reach the labels anyway.
- *
- * @param by what each holding is filed under — `holdings-view.ts`'s
- *           `groupingBy`, which reads the one label table.
+ * @param by `holdings-view.ts`'s `groupingBy`, which reads the one label table.
  */
 export function annualDividendBy(holdings: ValuedHolding[], by: Grouping): AllocationSlice[] {
   return allocationBy(holdings, by, ANNUAL_DIVIDEND);
 }
 
 /**
- * What a set of holdings pays over the coming year as a fraction of what it is
- * worth — the **weighted yield** CONTEXT.md reserves for a group, `"0.021874"`
- * at {@link SHARE_SCALE} and for display only.
+ * What a set of holdings pays over the coming year as a fraction of what it
+ * is worth — CONTEXT.md's **weighted yield** for a group, `"0.021874"` at
+ * {@link SHARE_SCALE}, display only. Distinct from `holdings-view.ts`'s
+ * `holdingYield`, which is one row's dividend over that row's value.
  *
- * A different figure from `holdings-view.ts`'s `holdingYield`, which is one
- * row's own dividend over that row's own value. This one has a group's
- * denominator, and therefore its own undefined cases.
+ * **The denominator is the gross positive value**, never the net — the
+ * header's two reasons: net debt would report a negative yield on a portfolio
+ * that pays money, and near-cancellation reports thousands of percent. The
+ * numerator keeps every holding, liabilities included: interest going out is
+ * part of what the group nets.
  *
- * **The denominator is the gross positive value**, the sum of the holdings
- * worth something, and never the net. It is the same denominator this module's
- * header argues for and for the same two reasons: a household in net debt would
- * divide a positive dividend by a negative net worth and report a negative
- * yield on a portfolio that pays money, and a household whose debts nearly
- * cancel its assets would divide by something near zero and report a yield in
- * the thousands of percent. The numerator keeps every holding, liabilities
- * included, because interest going out is part of what the group nets.
- *
- * Null, never `"0.000000"`, in the one case that covers both edges: nothing
- * positive to divide by. That is a group whose only holding is an unquoted
- * trust — a dividend of `0.0000` against a *null* value — and equally a group
- * that has been sold out of, whose value really is `"0.0000"`. `money.ts`'s
- * `divide` raises `RangeError` on a zero denominator, so the guard is what
- * stops one such group taking the page down with it; and the zero rule of
- * DESIGN.md §14 limitation 9 applies to the dividend, never to the value it is
- * divided by. A group nobody can price has no yield rather than a yield of
- * nothing.
+ * Null, never `"0.000000"`, when nothing is positive to divide by — a group
+ * whose only holding is an unquoted trust, and equally one sold out to
+ * `"0.0000"`. `divide` raises on a zero denominator, so the guard stops one
+ * such group taking the page down; §14 limitation 9's zero rule applies to
+ * the dividend, never to the value under it. A group nobody can price has no
+ * yield rather than a yield of nothing.
  */
 export function weightedYield(holdings: ReadonlyArray<ValuedHolding>): string | null {
   const paid = sumMoney(holdings.map((holding) => holding.annualDividend));
@@ -412,26 +304,16 @@ export function weightedYield(holdings: ReadonlyArray<ValuedHolding>): string | 
 }
 
 /**
- * The binary question the three-way breakdown deliberately does not answer:
- * how much of the annual dividend is sheltered, and how much is not.
- *
- * **Two figures, never a fraction.** "$9,800 of $14,200 is sheltered" is the
- * obvious sentence and it is wrong on real data: a taxable brokerage beside a
- * car loan whose note carries a rate sums the taxable slice to −522.20, because
- * a liability account still has a tax treatment, and "$0 of −$522 is sheltered"
- * is arithmetic nobody should be shown. So the caller gets the two amounts and
- * states them separately.
- *
- * **Sheltered is a subtotal and nothing else** (CONTEXT.md). It is never a
- * grouping key and never a slice of a chart — grouping by it would merge a
- * dated liability with the absence of one, which is the distinction tax
- * treatment exists to keep: a dividend in a Traditional account is untaxed now
- * and the whole withdrawal is ordinary income later, and one in a Roth is never
- * taxed at all.
- *
- * Both figures are amounts rather than `string | null`, for the reason
- * `HoldingsTotal.annualDividend` is: under the zero rule a group where nothing
- * pays is worth `$0` of dividend rather than an unknown amount of it.
+ * The binary question the three-way breakdown refuses: how much of the
+ * dividend is sheltered. **Two figures, never a fraction** — "$9,800 of
+ * $14,200" breaks on real data: a car loan whose note carries a rate can sum
+ * the taxable slice to −522.20 (a liability still has a tax treatment), and
+ * "$0 of −$522 is sheltered" is arithmetic nobody should be shown.
+ * **Sheltered is a subtotal and nothing else** (CONTEXT.md): never a grouping
+ * key, never a chart slice — grouping by it would merge Traditional (taxed
+ * later as ordinary income) with Roth (never taxed). Both amounts, not
+ * `string | null`: under the zero rule a group where nothing pays is worth
+ * `$0` of dividend, not an unknown amount of it.
  */
 export type ShelteredSubtotal = {
   /** Tax-deferred and tax-free taken together. */
@@ -444,9 +326,8 @@ export function shelteredSubtotal(holdings: ReadonlyArray<ValuedHolding>): Shelt
   const paid = (rows: ReadonlyArray<ValuedHolding>) =>
     render(sumMoney(rows.map((holding) => holding.annualDividend)).amount, MONEY_SCALE);
 
-  // Split off `taxable` rather than adding the other two together, so a fourth
-  // treatment — were one ever added — would arrive on the sheltered side and be
-  // visible in the sentence, instead of falling out of both figures silently.
+  // Split off `taxable` rather than summing the other two: a fourth treatment
+  // would arrive visibly on the sheltered side, not fall out of both silently.
   return {
     sheltered: paid(holdings.filter((holding) => holding.taxTreatment !== "taxable")),
     taxable: paid(holdings.filter((holding) => holding.taxTreatment === "taxable")),
@@ -454,85 +335,56 @@ export function shelteredSubtotal(holdings: ReadonlyArray<ValuedHolding>): Shelt
 }
 
 /**
- * A {@link AllocationSlice.share} as the percentage `formatPercent` expects:
- * `"0.197531"` → `"19.7531"`.
- *
- * Exists so that no screen reaches for `Number(share) * 100`. Multiplying by a
- * hundred is moving the point two places, and the digits are already the
- * digits, so this is exact by not doing any arithmetic at all.
+ * A share as the percentage `formatPercent` expects: `"0.197531"` →
+ * `"19.7531"`. Exists so no screen reaches for `Number(share) * 100` — the
+ * point moves two places on the digits, exact by doing no arithmetic at all.
  */
 export function sharePercent(share: string): string {
   return render(toUnits(share, SHARE_SCALE), SHARE_SCALE - 2);
 }
 
 /**
- * `"0.197531"` → `"19.8%"`, and a liability's `"-0.120413"` → `"−12.0%"`.
- *
- * `formatPercent` marks a positive because it was written for a *movement*,
- * where an unmarked gain is ambiguous. A share is not a movement and a column
- * of pluses is noise, so the lead it added is dropped — the lead only, never
- * the sign itself, so the minus on a liability's row survives and the rounding
- * and the U+2212 stay in `format.ts` where they are written once.
- *
- * Beside {@link sharePercent} rather than in a route, because two screens now
- * render a share and the second copy of a rule like "drop the plus but keep the
- * minus" is where the two of them start disagreeing.
+ * `"0.197531"` → `"19.8%"`, a liability's `"-0.120413"` → `"−12.0%"`. Drops
+ * the plus `formatPercent` adds for movements (a column of pluses is noise) —
+ * never the minus, so a liability's sign and the U+2212 survive. Beside
+ * {@link sharePercent} rather than in a route: two screens render a share,
+ * and a second copy of "drop the plus, keep the minus" is where they diverge.
  */
 export function formatShare(share: string): string {
   return withoutLead(formatPercent(sharePercent(share)));
 }
 
-/**
- * The plus off the front of a formatted percentage, and nothing else.
- *
- * `formatPercent` marks a positive because it was written for a *movement*; a
- * share and a tax rate are neither, and a column of pluses is noise. Only the
- * lead goes — never the sign itself, so a liability's minus and its U+2212
- * survive, and both stay written down once.
- */
+/** The plus off the front, nothing else — a liability's minus survives. */
 function withoutLead(percent: string): string {
   return percent.replace(/^\+/, "");
 }
 
 /**
- * The same portfolio, cut a fourth way: what has been gained but not sold, and
- * what settling for it would cost (DESIGN.md §4.5, §8.1).
+ * The fourth cut: what has been gained but not sold, and what settling would
+ * cost (DESIGN.md §4.5, §8.1). Here rather than its own module for the
+ * header's reason — same array, same coverage discipline, same page; a second
+ * module would also mean a third copy of the tests' holding factory, and this
+ * codebase has watched a copied helper drift.
  *
- * Here rather than in a module of its own for the reason the header gives for
- * the other three — it groups the same array the screen already holds, under
- * the same coverage discipline, for the same page. A second module would also
- * be a third copy of the twenty-field holding factory the tests build these
- * from, and this codebase has already watched one copied helper drift.
- *
- * Two rules make this cut different from the three above it, and both come from
- * §4.5's three-way tax treatment:
- *
- *   * **Only a taxable account can owe capital gains tax.** A gain inside an
- *     IRA or a 401k is never taxed at this rate — a Roth withdrawal is not
- *     taxed at all and a traditional one is taxed as ordinary income on the way
- *     out — so those holdings keep their gain in the table and contribute
- *     nothing to the tax beside it. Dropping their rows instead would hide the
- *     largest distinction on the balance sheet.
- *   * **The tax is per row, and the total is the sum of the rows.** Real tax
- *     nets a loss in one asset type against a gain in another; this does not,
- *     because a total that is smaller than one of the rows above it reads as an
- *     arithmetic fault rather than as a tax rule. What it produces is therefore
- *     an upper bound, and the screen says so.
+ * Two rules from §4.5's three-way treatment: **only a taxable account can owe
+ * capital gains tax** — an IRA/401k gain stays in the table and contributes
+ * nothing to the tax beside it (dropping those rows would hide the balance
+ * sheet's largest distinction); and **the tax is per row, summed** — real tax
+ * nets losses against gains, but a total smaller than a row above it reads as
+ * an arithmetic fault. What this produces is an upper bound, and the screen
+ * says so.
  */
 
 /** What the gains table splits on. */
 export type AssetTypeKey = "stocks" | "funds" | "other";
 
 /**
- * `quote_type` is the price provider's vocabulary, not this application's
- * (§4.4), so it is matched against an explicit list in exactly one place.
- *
- * Exact matches only, on the trimmed and uppercased string. `INDEX`,
- * `CRYPTOCURRENCY` and the seeded `CURRENCY` of the USD row are absent by
- * decision rather than by oversight: the column carries no check constraint, so
- * a substring rule loose enough to catch `MUTUAL FUND` is loose enough to file
- * an equity-linked note as an equity. Anything unlisted lands in `other`, where
- * it is visible on screen rather than quietly dropped.
+ * `quote_type` is the provider's vocabulary, not this application's (§4.4),
+ * matched against an explicit list in exactly one place. Exact matches on the
+ * trimmed uppercase string; `INDEX`, `CRYPTOCURRENCY` and the seeded
+ * `CURRENCY` are absent by decision — the column has no check constraint, and
+ * a substring rule loose enough for `MUTUAL FUND` files an equity-linked note
+ * as equity. Anything unlisted lands visibly in `other`.
  */
 const QUOTE_TYPES: ReadonlyMap<string, AssetTypeKey> = new Map([
   ["EQUITY", "stocks"],
@@ -541,15 +393,11 @@ const QUOTE_TYPES: ReadonlyMap<string, AssetTypeKey> = new Map([
 ]);
 
 /**
- * The three rows, in the order they are read.
- *
- * `other` is last and is deliberately a row rather than a footnote. It is never
- * empty on a real instance: `0001`'s seed gives every bank balance and every
- * loan the one `USD` instrument, whose `quote_type` is `CURRENCY`, and a
- * workplace-plan trust carries no `quote_type` at all. A footnote about a
- * permanently occupied bucket is a footnote nobody reads, and leaving those
- * holdings out entirely would make this table the one page whose total does not
- * reconcile with the portfolio behind it.
+ * The three rows, in reading order. `other` is a row, not a footnote: it is
+ * never empty on a real instance (every bank balance and loan is `USD`,
+ * `quote_type` `CURRENCY`; a workplace trust has none), and leaving those out
+ * would make this the one table that does not reconcile with the portfolio
+ * behind it.
  */
 const ASSET_TYPES: ReadonlyArray<{ key: AssetTypeKey; label: string }> = [
   { key: "stocks", label: "Individual stocks" },
@@ -564,10 +412,8 @@ function assetTypeOf(quoteType: string | null): AssetTypeKey {
 }
 
 /**
- * A percentage becomes a multiplier by moving the point two places, and the
- * point is moved by dividing — so this is the scale of the denominator that
- * does it: `100` written at {@link SHARE_SCALE}, the same scale the rate itself
- * is read at.
+ * `100` written at {@link SHARE_SCALE}: the denominator that turns a
+ * percentage into a multiplier, at the same scale the rate is read at.
  */
 const PERCENT_BASE = 100n * 10n ** BigInt(SHARE_SCALE);
 
@@ -576,20 +422,17 @@ export type GainRow = {
   key: AssetTypeKey | "total";
   label: string;
   /**
-   * Every account, this asset type. **Null, not zero, when no holding in the
-   * row had a gain that could be computed** — the view returns null when either
-   * the cost basis or the price is missing, so an unpriced trust counts here
-   * exactly as an untracked basis does. A group nobody can compute a gain for
-   * is not a group that gained nothing, and $0.00 is a claim (§8.2).
+   * Every account, this asset type. Null, not zero, when no gain in the row
+   * could be computed (missing basis or missing price alike): a group nobody
+   * can compute is not a group that gained nothing, and $0.00 is a claim (§8.2).
    */
   unrealized: string | null;
   /** The part of `unrealized` sitting in a taxable account, by the same rule. */
   taxable: string | null;
   /**
-   * `taxable` at the household's rate — null where there is nothing to tax,
-   * which is a row with no taxable holdings and equally a row whose taxable
-   * holdings are at a net loss. A negative tax would be a refund this
-   * application is in no position to promise.
+   * `taxable` at the household's rate — null with nothing to tax: no taxable
+   * holdings, or taxable ones at a net loss (a negative tax would be a refund
+   * this application cannot promise).
    */
   tax: string | null;
   /** How many of the row's holdings the gain could actually be computed from. */
@@ -597,11 +440,9 @@ export type GainRow = {
 };
 
 /**
- * The rows of the gains table and the total beneath them.
- *
- * `total` is null exactly when `rows` is empty — there is no total of nothing,
- * and a `$0.00` in that case would be the same fake figure a null amount is
- * kept out of everywhere else.
+ * The gains table and its total. `total` is null exactly when `rows` is empty
+ * — no total of nothing, and a `$0.00` there would be the fake figure a null
+ * amount exists to prevent.
  */
 export type GainGroups = { rows: GainRow[]; total: GainRow | null };
 
@@ -611,30 +452,19 @@ function figure(sum: { amount: bigint; known: number }): string | null {
 }
 
 /**
- * What settling a gain would cost — or null where there is no gain to tax.
+ * What settling a gain would cost — null where there is no gain to tax. Null
+ * is about the gain, not the bill: a zero rate over a real gain returns
+ * `0.0000`; a loss returns null, there being no base for a rate. Exact on the
+ * digits — an integer product, then `divide` with the same half-away-from-zero
+ * rounding `format.ts` uses; no `Number`, because this multiplies money (§4.1).
  *
- * Null is about the gain, not the bill: a rate of zero over a real gain returns
- * `0.0000`, because nothing owed on something is a figure, while a loss returns
- * null, because there is no base for a rate to be a rate of.
- *
- * Exact on the digits: the gain's units times the rate's units is a product of
- * two integers, and `divide` takes the point back out of it with the same half
- * away from zero `format.ts` rounds a displayed figure by. No `Number` at any
- * step, because this multiplies money (§4.1).
- *
- * **Rounded to the cent here, not at the point it is printed.** Every other
- * money figure in the application is stored at four places because that is what
- * a statement gave it; this one is *computed* from a percentage, so the third
- * and fourth places are essentially never zero. Carrying them would make the
- * column fail to add up in the ordinary case rather than the rare one: two rows
- * at `5391.2284` and `11459.9761` print as $5,391.23 and $11,459.98 over a
- * total of $16,851.20, and a reader adding the two figures in front of them
- * gets a different answer than the one underneath. Rounding where the figure is
- * made keeps the printed column exact — the same rule `Delta` follows in
- * classifying on the figure that will be printed rather than the one behind it.
- * The result is still rendered at the money scale, because that is the scale
- * every other amount on the row is at; it simply has zeros in the last two
- * places.
+ * **Rounded to the cent here, not at print.** This figure is *computed* from
+ * a percentage, so its third and fourth places are essentially never zero,
+ * and carrying them makes the printed column fail to add up in the ordinary
+ * case (`5391.2284` + `11459.9761` print as .23 + .98 under a total ending
+ * .20). Rounding where the figure is made keeps the printed column exact —
+ * `Delta`'s rule of classifying on what will be printed. Still rendered at
+ * money scale, with zeros in the last two places.
  */
 function taxOn(gain: bigint, ratePercent: string): string | null {
   if (gain <= 0n) return null;
@@ -647,13 +477,10 @@ function taxOn(gain: bigint, ratePercent: string): string | null {
 /**
  * Unrealized gains by asset type, with the tax a taxable one would attract.
  *
- * @param holdings the array the screen already holds — no query of its own, so
- *                 the table and the rows behind it cannot disagree.
- * @param ratePercent the household's capital gains rate as a decimal string
- *                    percentage, `"23.800000"` — a percentage, not a fraction,
- *                    all the way from the column to the heading.
- * @returns the rows that have holdings, and the total beneath them. Empty rows
- *          are dropped; the total is present whenever any row is.
+ * @param holdings the array the screen already holds — no query of its own.
+ * @param ratePercent the household's capital gains rate, `"23.800000"` — a
+ *                    percentage, not a fraction, column to heading.
+ * @returns rows that have holdings; the total is present whenever any row is.
  */
 export function unrealizedByAssetType(
   holdings: ValuedHolding[],
@@ -684,9 +511,8 @@ export function unrealizedByAssetType(
 
   if (rows.length === 0) return { rows, total: null };
 
-  // Summed from the rows rather than from the holdings a second time: two
-  // passes over one array are two things that can disagree, and the tax in
-  // particular must be the sum of what is printed above it (see the header).
+  // Summed from the rows, not the holdings a second time: two passes can
+  // disagree, and the tax must be the sum of what is printed above it.
   const total = rows.reduce(
     (running, row) => ({
       unrealized: add(running.unrealized, row.unrealized),
@@ -709,12 +535,10 @@ export function unrealizedByAssetType(
 }
 
 /**
- * Two figures added, where a null is an absence rather than a zero.
- *
- * Null plus a figure is that figure — a row nobody could compute does not drag
- * the total to unknown, it simply is not in it, which is the same thing
- * `sumMoney` does one level down. Null plus null stays null, so a total under
- * three uncomputable rows is an em dash rather than `$0.00`.
+ * Addition where null is absence, not zero: null + figure = figure (a row
+ * nobody could compute simply is not in the total, as `sumMoney` does one
+ * level down); null + null stays null, so a total under three uncomputable
+ * rows is an em dash rather than `$0.00`.
  */
 function add(running: string | null, next: string | null): string | null {
   if (next === null) return running;
@@ -724,19 +548,13 @@ function add(running: string | null, next: string | null): string | null {
 }
 
 /**
- * `"23.800000"` → `"23.8"`, `"3.750000"` → `"3.75"`, `"15.000000"` → `"15"`.
- *
- * The stored rate with its padding taken off and **nothing rounded**. The
- * column keeps six places because a rate may genuinely have them, and every
- * other percentage on these screens goes through `formatPercent`, which rounds
- * to one — fine for a share of a portfolio, wrong for a figure a person typed
- * and expects to see again. A rate shown as `3.8` after `3.75` was entered is a
- * screen disagreeing with its own database, and the settings box would write
- * the rounded version back on the next save.
- *
- * Trailing zeros go because they are the column's padding rather than anything
- * anyone typed; the digits themselves are untouched, so this is exact by doing
- * no arithmetic at all — the same reason {@link sharePercent} exists.
+ * `"23.800000"` → `"23.8"`, `"15.000000"` → `"15"` — the stored rate minus
+ * its padding, **nothing rounded**. `formatPercent` rounds to one place: fine
+ * for a share, wrong for a figure a person typed and expects to see again — a
+ * rate shown `3.8` after `3.75` was entered is a screen disagreeing with its
+ * own database, and the settings box would write the rounded version back.
+ * Trailing zeros are the column's padding, not anything typed; the digits are
+ * untouched, exact by doing no arithmetic ({@link sharePercent}'s reason).
  */
 export function rateDigits(ratePercent: string): string {
   const [whole = "0", fraction = ""] = ratePercent.trim().split(".");
@@ -746,11 +564,9 @@ export function rateDigits(ratePercent: string): string {
 }
 
 /**
- * `"23.800000"` → `"23.8%"`, for a heading.
- *
- * {@link rateDigits} plus the sign, rather than `formatPercent`, so the heading
- * and the box under Settings cannot show two different rates — which is what
- * rounding one of them and not the other would do.
+ * `"23.800000"` → `"23.8%"` for a heading — {@link rateDigits} plus the sign,
+ * not `formatPercent`, so the heading and the Settings box cannot show two
+ * different rates.
  */
 export function formatRate(ratePercent: string): string {
   return `${rateDigits(ratePercent)}%`;

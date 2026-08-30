@@ -1,34 +1,24 @@
 /**
- * The household's own settings — the capital gains rate (DESIGN.md §8.1, §8.4),
- * the masking policy (ADR-0002), and the refresh cadence (§6.2).
+ * The household's own settings — capital gains rate (DESIGN.md §8.1, §8.4),
+ * masking policy (ADR-0002), refresh cadence (§6.2). Every rule about what a
+ * rate is lives here, so a second caller cannot get a different answer than
+ * the Settings screen.
  *
- * Read and written like `people.server.ts`: the route above translates a form
- * into arguments and a refusal into a message, and every rule about what a rate
- * is lives here, so a second caller cannot get a different answer than the
- * Settings screen does.
+ * **A table, not an environment variable**: `.env.example` describes the
+ * deployment, changed by a restart; a tax rate is the household's own number,
+ * moving when their bracket does, changed by the person reading the figure
+ * (`0005_app_setting.sql` carries the argument).
  *
- * **Why a table rather than an environment variable.** Everything in
- * `.env.example` describes the deployment — where the database is, which
- * timezone a close is stamped in, whether a gate fronts the app — and changing
- * one of those is a restart either way. A tax rate is not that: it is the
- * household's own number, it moves when their bracket or their state does, and
- * the person who wants it changed is the person reading the figure it produced.
- * `0005_app_setting.sql` carries the same argument beside the schema.
+ * **The row always exists** — the migration seeds it, the schema allows one —
+ * so a read is `executeTakeFirstOrThrow`, never an invented default: a
+ * missing row and a rate of zero look identical once a default is applied,
+ * and one is a bug worth hearing about. The cost, written down: a hand-deleted
+ * row takes the Analysis screen and the Settings page that would repair it
+ * down together; the repair is `insert into app_setting default values;`,
+ * recorded here because the screen that would have told you is down.
  *
- * **The row always exists.** The migration seeds it and the schema allows only
- * one, so a read is a `selectFrom(...).executeTakeFirstOrThrow()` rather than a
- * default invented here. A settings row that had gone missing and a rate of
- * zero look identical once a default is applied, and one of them is a bug worth
- * hearing about.
- *
- * The cost of that choice, written down rather than discovered: if the row is
- * ever deleted by hand, both the Analysis screen and the Settings page that
- * would repair it fail together. The repair is one statement —
- * `insert into app_setting default values;` — and it is here because the screen
- * that would have told you is the one that is down.
- *
- * Every exported query takes an optional `db` handle: it defaults to the
- * process-wide one, and tests pass a transaction they roll back.
+ * Every exported query takes an optional `db`; tests pass a rolled-back
+ * transaction.
  */
 import { z } from "zod";
 
@@ -39,11 +29,8 @@ import { maskingPolicyValues, type MaskingPolicy } from "./masking.ts";
 import type { Kysely } from "kysely";
 
 /**
- * What the Settings form submits: a percentage, as typed.
- *
- * A percentage rather than a fraction all the way down — see `percentRate` and
- * the migration for why the conversion to a multiplier is deferred to the one
- * place that multiplies.
+ * A percentage as typed, all the way down — `percentRate` and the migration
+ * have why the conversion to a multiplier waits for the place that multiplies.
  */
 export const capitalGainsRateInput = z.object({
   capitalGainsRate: percentRate("A capital gains rate"),
@@ -52,12 +39,9 @@ export const capitalGainsRateInput = z.object({
 export type CapitalGainsRateInput = z.infer<typeof capitalGainsRateInput>;
 
 /**
- * The rate the Analysis screen applies to an unrealized gain in a taxable
- * account, as a decimal string percentage — `"23.800000"`.
- *
- * A string because it is a `numeric` column and the pool's type-parser override
- * hands those over as digits (§4.1). Nothing here calls `Number` on it, and
- * neither should anything downstream.
+ * The rate Analysis applies to a taxable unrealized gain, as a decimal string
+ * percentage (`"23.800000"`) — a string because `numeric` crosses as digits
+ * (§4.1), and nothing downstream should `Number` it either.
  */
 export async function readCapitalGainsRate(db: Kysely<Database> = getDb()): Promise<string> {
   const row = await db
@@ -69,12 +53,9 @@ export async function readCapitalGainsRate(db: Kysely<Database> = getDb()): Prom
 }
 
 /**
- * Record a new rate.
+ * Record a new rate. An update, not an upsert: the row is seeded and the
+ * schema permits one, so there is no case where this should create.
  *
- * An update rather than an upsert: the row is seeded by the migration and the
- * schema permits exactly one, so there is no case where this should create.
- *
- * @param raw the submitted fields, unvalidated.
  * @throws {ValidationError} with a message per bad field.
  * @returns the stored rate, as the column now holds it.
  */
@@ -94,11 +75,9 @@ export async function saveCapitalGainsRate(
 }
 
 /**
- * What the Display form submits: which of the three answers the household gave.
- *
- * A `z.enum` over the one list of values rather than a second copy of them, so
- * that the schema's check constraint, the form's options and this validator
- * cannot disagree about what a policy is (`masking.ts`).
+ * A `z.enum` over the one list of values, not a second copy, so the check
+ * constraint, the form's options and this validator cannot disagree about
+ * what a policy is (`masking.ts`).
  */
 export const maskingPolicyInput = z.object({
   maskingPolicy: z.enum(maskingPolicyValues, {
@@ -109,17 +88,11 @@ export const maskingPolicyInput = z.object({
 export type MaskingPolicyInput = z.infer<typeof maskingPolicyInput>;
 
 /**
- * What a browser that has not been toggled yet opens in (spec 0007, ADR-0002).
- *
- * Read from the same single row as the rate above and with the same
- * `executeTakeFirstOrThrow`, for the same reason: the migration seeds it, so a
- * default invented here would make a settings row that had gone missing
- * indistinguishable from a household that had chosen to open masked.
- *
- * This is only half of "is this screen masked" — it is the answer for a browser
- * with nothing to say. What that browser last did is a cookie, and the two are
- * combined by `resolveMasked` rather than here: this module reads a row, and
- * the precedence between a row and a cookie is a rule about a request.
+ * What an untoggled browser opens in (spec 0007, ADR-0002), read with the
+ * same `executeTakeFirstOrThrow` for the header's reason. Only half of "is
+ * this screen masked": what the browser last did is a cookie, and the two
+ * combine in `resolveMasked` — this module reads a row, and the precedence
+ * between a row and a cookie is a rule about a request.
  */
 export async function readMaskingPolicy(
   db: Kysely<Database> = getDb(),
@@ -129,27 +102,18 @@ export async function readMaskingPolicy(
     .select("masking_policy")
     .executeTakeFirstOrThrow();
 
-  // The column is `text` with a check constraint, so it arrives typed as a
-  // string. The constraint is what makes this cast true, and `0007` and
-  // `masking.ts` are kept in step by hand — which is the same arrangement
-  // `AccountKind` already has with `account_kind_valid`.
+  // The check constraint is what makes this cast true; `0007` and
+  // `masking.ts` are kept in step by hand (`AccountKind`'s arrangement).
   return row.masking_policy as MaskingPolicy;
 }
 
 /**
- * Record a new policy.
+ * Record a new policy — an update of this column alone: the row is shared,
+ * and a writer setting the whole row would silently reset a figure Analysis
+ * reads. What this does *not* do: clear the browser's state cookie — that is
+ * a response header and belongs to the route (ADR-0002); this module never
+ * sees a request.
  *
- * An update rather than an upsert, and of this column alone: the row is seeded
- * by the migration and shared with the capital gains rate, so a writer that set
- * the whole row would silently reset a figure the Analysis screen reads.
- *
- * Note what this does *not* do. Changing the policy has to clear the browser's
- * state cookie — otherwise the setting appears to do nothing on the browser that
- * changed it, and the stale cookie keeps the lifetime the old policy gave it
- * (ADR-0002). That is a header on a response, so it belongs to the route rather
- * than here; this module never sees a request.
- *
- * @param raw the submitted fields, unvalidated.
  * @throws {ValidationError} with a message per bad field.
  * @returns the stored policy, as the column now holds it.
  */
@@ -168,19 +132,15 @@ export async function saveMaskingPolicy(
   return row.masking_policy as MaskingPolicy;
 }
 
-/** The bounds the schema's check constraint enforces, stated once and read by
- * the validator and the form's `min`/`max` alike. A day is the ceiling because
- * a cadence longer than one is a poller that has been turned off without
+/** The check constraint's bounds, stated once for validator and form alike.
+ * A day is the ceiling: a longer cadence is a poller turned off without
  * saying so. */
 export const REFRESH_CADENCE_BOUNDS = { min: 1, max: 1440 } as const;
 
 /**
- * What the Prices form submits: a whole number of minutes.
- *
- * `Number.parseInt` rather than the decimal-string discipline every money field
- * keeps, because a cadence is not money — the column is `integer`, the driver
- * hands it over as a JavaScript number, and nothing ever multiplies it into a
- * figure a person reads.
+ * A whole number of minutes. `Number.parseInt`, unlike every money field: a
+ * cadence is not money — the column is `integer`, the driver hands it over as
+ * a number, and nothing multiplies it into a figure a person reads.
  */
 export const refreshCadenceInput = z.object({
   refreshCadenceMinutes: z
@@ -209,20 +169,13 @@ export const refreshCadenceInput = z.object({
 export type RefreshCadenceInput = z.infer<typeof refreshCadenceInput>;
 
 /**
- * How many minutes the poller waits between quote refreshes while the market is
- * open (DESIGN.md §6.2).
- *
- * Read from the same single row with the same `executeTakeFirstOrThrow` as the
- * rate above, for the same reason: the migration seeds it, so a default
- * invented here would make a settings row that had gone missing
- * indistinguishable from a household that had chosen the default.
- *
- * The poller reads this before scheduling every tick rather than once at
- * start-up, which is the whole of how a save takes effect: there is no restart
- * to perform and no signal to send, in this process or any other holding the
- * advisory lock. The cost is one single-row read per cycle, and the honest
- * consequence — a change applies when the *next* refresh is scheduled, up to
- * one old cadence away — is printed on the form that edits it.
+ * Minutes the poller waits between refreshes while the market is open
+ * (DESIGN.md §6.2), read with the same `executeTakeFirstOrThrow` for the
+ * header's reason. The poller reads this before scheduling every tick rather
+ * than once at start-up — the whole of how a save takes effect: no restart,
+ * no signal. The cost is one single-row read per cycle; the honest
+ * consequence — a change applies at the *next* scheduling, up to one old
+ * cadence away — is printed on the form that edits it.
  */
 export async function readRefreshCadence(db: Kysely<Database> = getDb()): Promise<number> {
   const row = await db
@@ -234,13 +187,9 @@ export async function readRefreshCadence(db: Kysely<Database> = getDb()): Promis
 }
 
 /**
- * Record a new cadence.
+ * Record a new cadence — an update of this column alone, like the two
+ * writers above: the row is seeded and shared.
  *
- * An update rather than an upsert, of this column alone, like the two writers
- * above: the row is seeded and shared, and a writer that set the whole row
- * would silently reset figures other screens read.
- *
- * @param raw the submitted fields, unvalidated.
  * @throws {ValidationError} with a message per bad field.
  * @returns the stored cadence, as the column now holds it.
  */
