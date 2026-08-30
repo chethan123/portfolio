@@ -47,7 +47,7 @@ describe("the first-run step", () => {
       // historical figures are computed from exactly this row. Re-showing the
       // setup prompt here would call a configured instance unconfigured.
       const account = await seedAccount({ owner: await seedPerson() });
-      await closeAccount(account.id, db);
+      await closeAccount(account.id, { confirmClose: "true" }, db);
 
       expect(await firstRunStep(db)).toBeNull();
     }),

@@ -42,6 +42,15 @@ is never a stored value, never a grouping key, and never a slice of a chart — 
 discard the distinction tax treatment exists to keep.
 _Avoid_: tax-advantaged, non-taxable, unsheltered.
 
+### How an account ends
+
+**Closed**:
+The retired state of an account, recorded as the date it stopped being used. A closed account
+contributes nothing to current figures and still counts on every date before its closing date.
+Closing is the only way an account ends — nothing is deleted — it must be acknowledged before it
+happens, and it is one-way in this version: there is no reopen.
+_Avoid_: deleted, removed, archived, deactivated, inactive.
+
 ### How a chart's time span is chosen
 
 **Chart range**:

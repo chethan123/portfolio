@@ -346,6 +346,12 @@ export async function updateAccount(
   return getAccount(existing.id, db);
 }
 
+/** The close form's fields, unvalidated — validating them is the close's job. */
+export type CloseAccountInput = {
+  /** "true" when the closing acknowledgement was ticked. */
+  confirmClose?: string;
+};
+
 /**
  * Retire an account without erasing the dates it was open.
  *
@@ -353,18 +359,34 @@ export async function updateAccount(
  * to current net worth and still contributes to every date before `closed_at`,
  * which is why the date is recorded rather than a flag.
  *
+ * The acknowledgement is required here rather than left to the screen, the same
+ * decision `commitUpload` makes for its majority-removal tick: closing is
+ * one-way in this version, and a one-way write that a replayed or hand-built
+ * POST can reach silently was never acknowledged at all.
+ *
  * Closing an already-closed account keeps the original date: the account
  * stopped being used when it stopped being used, and a second click must not
- * quietly move a boundary that historical figures are computed against.
+ * quietly move a boundary that historical figures are computed against. That
+ * short-circuit runs before the tick is consulted — there is no transition
+ * left for the tick to guard.
  *
+ * @throws {ValidationError} when the acknowledgement was not ticked.
  * @throws {NotFoundError} when no such account exists.
  */
 export async function closeAccount(
   id: string,
+  raw: CloseAccountInput,
   db: Kysely<Database> = getDb(),
 ): Promise<Account> {
   const existing = await getAccount(id, db);
   if (existing.isClosed) return existing;
+
+  if (raw.confirmClose !== "true") {
+    throw ValidationError.form(
+      `${existing.name} stays open — closing is one-way in this version, ` +
+        "so it asks for the acknowledgement to be ticked first.",
+    );
+  }
 
   await db
     .updateTable("account")

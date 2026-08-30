@@ -82,7 +82,10 @@ This is also where **Edit details** on [the account's own page](account-detail.m
 ### Closing an account
 
 At the foot of that page, set apart from the fields, is the control that closes it. It has its own
-button, separate from saving, so an ordinary edit can never retire an account by accident.
+button, separate from saving, so an ordinary edit can never retire an account by accident — and
+closing asks to be acknowledged first: tick the sentence that names the account and what closing
+does, then select **Close**. The button alone changes nothing; without the tick the close is
+refused and the account stays open.
 
 **Closing is not deleting.**
 
