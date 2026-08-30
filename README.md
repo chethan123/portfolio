@@ -475,11 +475,15 @@ is what keeps a schema change from rewriting every test.
 screen reads through:
 
 ```ts
-currentHoldings()          // every holding held right now, valued
-netWorth()                 // one SUM, plus how many holdings it was computed from
-holdingsAt('2026-02-14')   // the same, for any past date
-netWorthAt('2026-02-14')   // dates are 'YYYY-MM-DD' strings, both directions
+currentHoldings(ALL_OWNERS)         // every holding held right now, valued
+netWorth(ALL_OWNERS)                // one SUM, plus how many holdings it was computed from
+holdingsAt(ALL_OWNERS, '2026-02-14')  // the same, for any past date
+netWorthAt(ALL_OWNERS, '2026-02-14')  // dates are 'YYYY-MM-DD' strings, both directions
 ```
+
+Every household read names whose money it is counting. `ALL_OWNERS` is the whole household, and it
+is required rather than defaulted so that a new screen cannot read holdings without deciding
+(ADR-0008).
 
 DESIGN.md §8.2 names dashboards drifting on the definition of "current holdings" as the
 weakest point in the design; the view and this one module over it are the mitigation. A screen that

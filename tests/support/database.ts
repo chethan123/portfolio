@@ -73,7 +73,7 @@ export async function closeTestDatabase(): Promise<void> {
 export type TestContext = Fixtures & {
   /**
    * The transaction everything in this test runs in. Pass it to the query
-   * module — `currentHoldings(db)` — so the reads see the seeded rows and the
+   * module — `currentHoldings(ALL_OWNERS, db)` — so the reads see the seeded rows and the
    * whole test disappears on rollback.
    */
   db: Kysely<Database>;

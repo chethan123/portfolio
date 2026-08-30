@@ -23,6 +23,7 @@ import { lastRecorded, setBalance } from "~/lib/balances.server";
 import { accountTotal, netWorth } from "~/lib/valuation.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
@@ -80,10 +81,10 @@ describe("setBalance", () => {
       const loan = await seedAccount({ kind: "liability", owner });
 
       await setBalance(bank.id, { amount: "42000", asOf: "2026-08-16" }, db);
-      expect((await netWorth(db)).amount).toBe("42000.0000");
+      expect((await netWorth(ALL_OWNERS, db)).amount).toBe("42000.0000");
 
       await setBalance(loan.id, { amount: "14500", asOf: "2026-08-16" }, db);
-      expect((await netWorth(db)).amount).toBe("27500.0000");
+      expect((await netWorth(ALL_OWNERS, db)).amount).toBe("27500.0000");
     }),
   );
 

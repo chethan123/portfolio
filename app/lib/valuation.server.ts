@@ -24,10 +24,19 @@
  *
  * Every exported query takes an optional `db` handle: it defaults to the
  * process-wide one, and tests pass a transaction they roll back.
+ *
+ * Every household-scoped reader takes an {@link OwnerFilter} as its **first**
+ * argument, with no default (ADR-0008). `ALL_OWNERS` is the whole household,
+ * and spelling it is the point: a screen cannot read holdings without saying
+ * whose, so an omission is a word missing from a diff rather than a behaviour
+ * missing from a screen. The account-scoped readers do not take one — an
+ * account is already narrower than an owner, and asking again would invite the
+ * answer "this account, if its owner is also selected", which no screen means.
  */
 import { sql } from "kysely";
 
 import { getDb, type Database } from "./db.server.ts";
+import { isFiltered, type OwnerFilter } from "./owner-filter.ts";
 
 import type { AliasedRawBuilder, Kysely, RawBuilder, Selectable, SqlBool } from "kysely";
 
@@ -225,8 +234,12 @@ async function readHoldings(
  * substituted for an unknown price would be indistinguishable from a genuinely
  * empty account.
  */
-async function readTotal(db: Kysely<Database>, source: ValuedSource): Promise<Total> {
-  const row = await db
+async function readTotal(
+  db: Kysely<Database>,
+  source: ValuedSource,
+  where?: RawBuilder<SqlBool>,
+): Promise<Total> {
+  const all = db
     .selectFrom(source)
     .select([
       // `value` is null exactly when the holding is unpriced, and SUM skips
@@ -235,8 +248,9 @@ async function readTotal(db: Kysely<Database>, source: ValuedSource): Promise<To
       sql<string>`cast(coalesce(sum(value), 0) as numeric(20, 4))`.as("amount"),
       sql<string>`count(*) filter (where is_priced)`.as("known"),
       sql<string>`count(*)`.as("total"),
-    ])
-    .executeTakeFirstOrThrow();
+    ]);
+
+  const row = await (where === undefined ? all : all.where(where)).executeTakeFirstOrThrow();
 
   return {
     amount: row.amount,
@@ -254,15 +268,21 @@ async function readTotal(db: Kysely<Database>, source: ValuedSource): Promise<To
  * instrument has never been priced is here too, carrying `isPriced: false` —
  * dropping it would understate every total silently.
  */
-export async function currentHoldings(db: Kysely<Database> = getDb()): Promise<ValuedHolding[]> {
-  return readHoldings(db, valuedNow());
+export async function currentHoldings(
+  filter: OwnerFilter,
+  db: Kysely<Database> = getDb(),
+): Promise<ValuedHolding[]> {
+  return readHoldings(db, valuedNow(), ownedBy("holding_valued.owner_id", filter));
 }
 
 /**
  * Net worth right now, and how much of it is known.
  */
-export async function netWorth(db: Kysely<Database> = getDb()): Promise<Total> {
-  return readTotal(db, valuedNow());
+export async function netWorth(
+  filter: OwnerFilter,
+  db: Kysely<Database> = getDb(),
+): Promise<Total> {
+  return readTotal(db, valuedNow(), ownedBy("holding_valued.owner_id", filter));
 }
 
 /**
@@ -287,10 +307,11 @@ export async function netWorth(db: Kysely<Database> = getDb()): Promise<Total> {
  *             carry-forward and with no special case.
  */
 export async function holdingsAt(
+  filter: OwnerFilter,
   date: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<ValuedHolding[]> {
-  return readHoldings(db, valuedAt(date));
+  return readHoldings(db, valuedAt(date), ownedBy("holding_valued.owner_id", filter));
 }
 
 /**
@@ -303,10 +324,11 @@ export async function holdingsAt(
  * @param date `YYYY-MM-DD`.
  */
 export async function netWorthAt(
+  filter: OwnerFilter,
   date: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<Total> {
-  return readTotal(db, valuedAt(date));
+  return readTotal(db, valuedAt(date), ownedBy("holding_valued.owner_id", filter));
 }
 
 /**
@@ -368,19 +390,62 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
 }
 
 /**
- * `<column> = <id>`, or a predicate matching nothing when the id cannot be one.
+/**
+ * The largest value a `bigint` column can hold.
+ *
+ * The bound is on the *magnitude*, not on the number of characters: an id is
+ * refused when it could not be a `bigint`, never when it is merely written at
+ * length. `0000000000000000001` is nineteen characters and is account 1, which
+ * a digit-count guard would turn into a 404 for a row that exists.
+ *
+ * Compared as a `BigInt` rather than a `Number`, for the reason §5.6 gives
+ * about ids generally: past 2^53 a float rounds, and rounding here would admit
+ * exactly the values this exists to refuse.
+ */
+const MAX_BIGINT = 9223372036854775807n;
+
+/** Whether an id could name a row, rather than error inside Postgres. */
+function couldBeId(id: string): boolean {
+  return /^\d+$/.test(id) && BigInt(id) <= MAX_BIGINT;
+}
+
+/**
+ * `<column> in (<ids>)`, or a predicate matching nothing when none can be one.
  *
  * Ids cross this boundary as strings (`server/db.ts`) and land against a
- * `bigint` column, so an id taken from a URL path that is not digits would fail
- * inside Postgres — a 500 where the honest answer is "no such account". Saying
- * that in SQL rather than returning early keeps every "this account has
- * nothing" answer coming out of the query that would have answered anyway,
- * rather than out of a JavaScript copy of what it would have said.
+ * `bigint` column, so an id taken from a URL that is not digits would fail
+ * inside Postgres. Saying "no such row" in SQL rather than returning early
+ * keeps every empty answer coming out of the query that would have answered
+ * anyway, rather than out of a JavaScript copy of what it would have said.
+ *
+ * The unusable ids are dropped from the list rather than the whole predicate,
+ * so `?owner=1,abc` still narrows to owner 1 — but a list of nothing usable
+ * yields `false`, never an empty `in ()`, and never silently no filter at all.
+ * Widening a view somebody asked to narrow is the failure `holdings-view.ts`
+ * names; this is that rule at the other end of the same request.
  */
+function isOneOf(column: string, ids: readonly string[]): RawBuilder<SqlBool> {
+  const usable = ids.filter(couldBeId);
+
+  return usable.length === 0
+    ? sql<SqlBool>`false`
+    : sql<SqlBool>`${sql.ref(column)} in (${sql.join(usable.map((id) => sql`${id}`))})`;
+}
+
+/** {@link isOneOf} for the single-id case, which is every account-scoped read. */
 function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
-  return /^\d+$/.test(accountId)
-    ? sql<SqlBool>`${sql.ref(column)} = ${accountId}`
-    : sql<SqlBool>`false`;
+  return isOneOf(column, [accountId]);
+}
+
+/**
+ * The owner narrowing for a household read, or nothing when the filter is off.
+ *
+ * Returning `undefined` rather than a tautology keeps an unfiltered read the
+ * query it has always been: no clause is added, so nothing about the plan or
+ * the answer changes for the household case that every screen starts in.
+ */
+function ownedBy(column: string, filter: OwnerFilter): RawBuilder<SqlBool> | undefined {
+  return isFiltered(filter) ? isOneOf(column, filter) : undefined;
 }
 
 /**
@@ -402,9 +467,12 @@ function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
  * which is where a zero belongs, and ties break on name like any other.
  */
 export async function accountTotals(
+  filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
 ): Promise<AccountTotal[]> {
-  const rows = await db
+  const owned = ownedBy("account.owner_id", filter);
+
+  const base = db
     .selectFrom("account")
     .innerJoin("person", "person.id", "account.owner_id")
     .leftJoin("holding_valued", "holding_valued.account_id", "account.id")
@@ -425,7 +493,13 @@ export async function accountTotals(
     // The view already drops closed accounts; joining from `account` reaches
     // past that, so the rule has to be restated here to keep a closed account
     // out rather than let it in as one holding nothing.
-    .where("account.closed_at", "is", null)
+    .where("account.closed_at", "is", null);
+
+  // Narrowed on `account.owner_id` rather than through the view: this query
+  // reaches the account table directly so an account holding nothing still
+  // reports 0.0000, and the view's own owner column is null on exactly those
+  // manufactured rows.
+  const rows = await (owned === undefined ? base : base.where(owned))
     .groupBy([
       "account.id",
       "account.name",
@@ -588,10 +662,13 @@ async function readSeries(
  * find where the computed line actually starts.
  */
 export async function netWorthSeries(
+  filter: OwnerFilter,
   dates: IsoDate[],
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthPoint[]> {
-  return readSeries(db, dates);
+  // `v` is the lateral's alias, and the narrowing goes inside it — see
+  // {@link readSeries} for what an outer WHERE does to an uncovered date.
+  return readSeries(db, dates, ownedBy("v.owner_id", filter));
 }
 
 /**
@@ -815,10 +892,13 @@ export function asSessionPoints(series: NetWorthPoint[]): SessionPoint[] {
  * is not the same claim as "nothing moved".
  */
 export async function netWorthSessionSeries(
+  filter: OwnerFilter,
   session: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<SessionPoint[]> {
-  return readSessionSeries(db, session);
+  // `a` is the account alias inside the lateral, where this has to go for the
+  // same reason {@link readSeries} gives about an instant this surface is empty at.
+  return readSessionSeries(db, session, ownedBy("a.owner_id", filter));
 }
 
 /**
@@ -885,18 +965,23 @@ export type NetWorthChange = {
  * @param since `YYYY-MM-DD`, the start of the window being reported.
  */
 export async function netWorthChange(
+  filter: OwnerFilter,
   since: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthChange> {
+  // Both ends, or the delta compares one owner against the whole household and
+  // reports the difference between two different questions as a movement.
+  const owned = ownedBy("holding_valued.owner_id", filter);
+  const narrow = <T extends { where(w: RawBuilder<SqlBool>): T }>(qb: T): T =>
+    owned === undefined ? qb : qb.where(owned);
+
   const row = await db
     .with("present", (qb) =>
-      qb
-        .selectFrom(valuedNow())
+      narrow(qb.selectFrom(valuedNow()))
         .select(sql<string>`coalesce(sum(value), 0)`.as("amount")),
     )
     .with("past", (qb) =>
-      qb
-        .selectFrom(valuedAt(since))
+      narrow(qb.selectFrom(valuedAt(since)))
         .select(sql<string>`coalesce(sum(value), 0)`.as("amount")),
     )
     .selectFrom(["present", "past"])
@@ -932,12 +1017,28 @@ export async function netWorthChange(
  * range whose accounts have all since been closed.
  */
 export async function firstRecordedDate(
+  filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
 ): Promise<IsoDate | null> {
-  const row = await db
+  const base = db
     .selectFrom("position_set")
-    .select(sql<string | null>`cast(min(as_of_date) as text)`.as("date"))
-    .executeTakeFirst();
+    .select(sql<string | null>`cast(min(as_of_date) as text)`.as("date"));
+
+  // `position_set` carries an account, never an owner (DESIGN.md §4.2 keeps
+  // ownership on the account so it cannot drift), so the narrowing reaches the
+  // owner through a subquery rather than a column.
+  //
+  // That subquery spans **closed** accounts, where `holding_valued` excludes
+  // them — so a narrowed `firstRecordedDate` can report history for an owner
+  // whose current holdings are empty. That is correct: this is the date history
+  // begins, and a closed account's statements are still history.
+  const owned = isFiltered(filter)
+    ? sql<SqlBool>`position_set.account_id in (
+        select id from account where ${isOneOf("owner_id", filter)}
+      )`
+    : undefined;
+
+  const row = await (owned === undefined ? base : base.where(owned)).executeTakeFirst();
 
   return row?.date ?? null;
 }

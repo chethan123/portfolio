@@ -402,7 +402,7 @@ sequenceDiagram
     L->>H: parseQuery(searchParams)
     Note right of L: First statement in the loader. The query<br/>decides whether the fetch happens at all.
     L->>L: canonical search? else 302
-    L->>V: currentHoldings()
+    L->>V: currentHoldings(owners)
     V->>PG: select * from holding_valued order by …
     PG-->>V: rows — numeric as decimal STRINGS
     V-->>L: ValuedHolding[]
@@ -1176,15 +1176,23 @@ either source; the rest are their own queries inside the same module, which is t
 in the module, not scattered across routes.
 
 ```ts
-currentHoldings()              // every holding held right now, valued
-netWorth()                     // one SUM, plus how many holdings it was computed from
-holdingsAt('2026-02-14')       // the same, for any past date
-netWorthAt('2026-02-14')
-accountTotals() / accountTotal(id) / accountHoldings(id)
-netWorthSeries(dates) / accountSeries(id, dates)
+// Household-scoped: an OwnerFilter first, required and never defaulted (ADR-0008).
+currentHoldings(owners)                // every holding held right now, valued
+netWorth(owners)                       // one SUM, plus how many holdings it was computed from
+holdingsAt(owners, '2026-02-14')       // the same, for any past date
+netWorthAt(owners, '2026-02-14')
+accountTotals(owners)
+netWorthSeries(owners, dates)
+netWorthSessionSeries(owners, session)
+netWorthChange(owners, since) / firstRecordedDate(owners)
+
+// Account-scoped: already narrower than an owner, so they take no filter.
+accountTotal(id) / accountHoldings(id) / accountSeries(id, dates)
+accountSessionSeries(id, session) / accountFirstRecordedDate(id)
+
+// Neither: facts about the feed and about the hand-typed prefix.
 latestObservedSession()        // which session 1D plots, off the observation log
-netWorthSessionSeries(session) / accountSessionSeries(id, session)
-manualNetWorth() / netWorthChange() / firstRecordedDate() / accountFirstRecordedDate(id)
+manualNetWorth()
 ```
 
 The seam is `ValuedSource` — `valuedNow()` and `valuedAt(date)` are two adapters over the *same* row
