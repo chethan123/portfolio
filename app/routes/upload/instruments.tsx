@@ -20,18 +20,14 @@ import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
 
 /**
- * Step three — resolve the file's first sightings (ingest brief §5).
- *
- * Every distinct string in the instrument column was looked up byte-exact
- * against the alias table; the misses land here, each resolved once and
- * remembered forever — either pointed at an instrument that already exists
- * or created on the spot, and both paths write the alias, so the same
- * brokerage's next export passes through silently.
- *
- * This is the flow's one early write: resolving records vocabulary, not the
- * statement, which still waits for the review step. Reached only when there
- * is at least one miss — otherwise the loader redirects straight to review
- * and the step dims in the strip.
+ * Step three — resolve the file's first sightings (ingest brief §5). Every
+ * distinct instrument-column string was looked up byte-exact against the
+ * alias table; the misses land here, each resolved once and remembered
+ * forever — pointed at an existing instrument or created, both paths
+ * writing the alias, so the same brokerage's next export passes silently.
+ * The flow's one early write: resolving records vocabulary, not the
+ * statement, which waits for review. Reached only with at least one miss —
+ * otherwise the loader redirects straight to review and the step dims.
  */
 export function meta() {
   return [{ title: "New instruments · Upload · Portfolio" }];
@@ -50,9 +46,8 @@ export async function loader({ params }: Route.LoaderArgs) {
     const draft = await requireDraft(params.draftId);
 
     // `parseDraft` owns the resume rule: a mapping that no longer parses
-    // clean bounces to columns — a resolution screen cannot ask questions a
-    // mapping has not raised — and a file with nothing unresolved is skipped
-    // by redirect, never an empty screen: a step with nothing to do would
+    // clean bounces to columns, and a file with nothing unresolved skips by
+    // redirect, never an empty screen — a step with nothing to do would
     // charge a click for no decision (brief §7.5).
     const result = await parseDraft(draft);
     if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
@@ -71,9 +66,8 @@ export async function loader({ params }: Route.LoaderArgs) {
         instrumentsSkipped: draft.hadFirstSightings === false,
       } satisfies UploadStepsData,
       screen,
-      // The caption the context line names the file's own name column by —
-      // "Description: Vanguard Total International Stock ETF" — when one is
-      // mapped.
+      // The file's own name column, for the context line's caption —
+      // "Description: Vanguard Total…" — when one is mapped.
       nameColumn: result.mapping.columns.name ?? null,
       // The sentinel rides down with the data, because the route's component
       // cannot import a `.server` module (the columns screen's precedent).
@@ -99,12 +93,11 @@ export async function action({ params, request }: Route.ActionArgs) {
 
     const { unresolved } = result;
 
-    // The posted answers pair with the current unresolved strings by index,
-    // and each group carries its raw string in a hidden field so a stale
-    // form — another draft resolved one of these strings while this page sat
-    // open — cannot land an answer on the wrong string. Compared through
-    // `sameRawStrings`, because the browser rewrites a multi-line cell's
-    // line endings to CRLF on the way through the hidden field.
+    // Posted answers pair with the current unresolved strings by index, and
+    // each group carries its raw string in a hidden field so a stale form —
+    // another draft resolved one of these strings meanwhile — cannot land an
+    // answer on the wrong string. Compared through `sameRawStrings`: the
+    // browser rewrites a multi-line cell's line endings to CRLF in transit.
     if (unresolved.some((raw, index) => !sameRawStrings(values[`raw-${index}`] ?? "", raw))) {
       throw ValidationError.form(
         "The file's first sightings changed while this page was open — " +
@@ -137,8 +130,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
 
   const errors = actionData?.errors;
   // What was typed wins over every default on a refusal — a refusal must
-  // never cost an edit. `actionData` present means re-rendering a refused
-  // submit, so the defaults step aside entirely.
+  // never cost an edit; `actionData` present means a refused submit.
   const values = actionData?.values;
 
   const fieldError = (name: string) =>
@@ -206,9 +198,9 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
               {fieldError(`kind-${index}`)}
 
               {/* Both branches always render their controls: greying the
-                  unchosen one needs JavaScript, and a reader deciding between
-                  the two needs to see what each asks. Fields in the unchosen
-                  branch are simply ignored on submit. */}
+                  unchosen one needs JavaScript, and a reader deciding needs
+                  to see what each asks. The unchosen branch's fields are
+                  ignored on submit. */}
               <label className="choice">
                 <input
                   type="radio"

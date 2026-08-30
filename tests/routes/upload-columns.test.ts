@@ -1,20 +1,14 @@
 /**
- * Step two's loader — which row the screen calls the header, and which options
- * come back chosen (ingest brief §4, DESIGN.md §5.3).
- *
- * The form contract underneath is tested in `column-mapping-form.test.ts` and
- * the fingerprint in `column-mapping.test.ts`. What lives only here is what the
- * loader decides *before* a reader touches anything: the header row, resolved
- * through a three-step precedence, and the preselects resolved against that
- * row's cells.
- *
- * Both are worth pinning because both fail quietly. The header row decides
- * what every select can offer, so a precedence that let the saved mapping
- * outrank the reader's own "Re-read with this header row" would leave a file
- * with a preamble unmappable and no error anywhere. And the preselects are
- * resolved by column *name*: a column the file no longer carries has to come
- * back unselected and be named, because the alternative — quietly taking
- * whatever sits at that position — maps quantity onto a cost basis and reads
+ * Step two's loader — which row the screen calls the header, and which
+ * options come back chosen (ingest brief §4, §5.3). The form contract and
+ * fingerprint are other files'; what lives only here is what the loader
+ * decides before a reader touches anything: the header row's three-step
+ * precedence, and the preselects resolved against that row's cells. Both
+ * fail quietly: a precedence letting the saved mapping outrank "Re-read
+ * with this header row" leaves a preambled file unmappable with no error;
+ * and preselects resolve by column *name* — a column the file no longer
+ * carries must come back unselected and named, because quietly taking
+ * whatever sits at that position maps quantity onto a cost basis and reads
  * as a correct screen right up until the diff.
  */
 import { afterAll, describe, expect, it } from "vitest";

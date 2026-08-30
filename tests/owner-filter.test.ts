@@ -1,17 +1,13 @@
 /**
- * The owner filter's decisions about a string (spec 0013, ticket 01).
- *
- * Pure — no Postgres and no render — for `chart-range.test.ts`'s reason: the
- * awkward parts of this feature are all decisions about a query parameter, and
- * each one is a fixture here or a bug found later on four screens at once.
- *
- * Two of them are worth naming, because both are silent when wrong. Nothing is
- * ever dropped: an id naming nobody has to survive parsing and empty the
- * screen, because dropping it would show the whole portfolio to someone who
- * asked for a slice of it. And the canonical spelling has to be a fixed point:
- * every loader redirects a non-canonical `owner` to the canonical one, so a
- * canonicalisation that is not idempotent is an infinite redirect loop nobody
- * sees until they open the screen.
+ * The owner filter's decisions about a string (spec 0013, ticket 01). Pure
+ * — the awkward parts are all decisions about a query parameter, each a
+ * fixture here or a bug found later on four screens at once. Two are silent
+ * when wrong: nothing is ever dropped (an id naming nobody must survive
+ * parsing and empty the screen — dropping it shows the whole portfolio to
+ * someone who asked for a slice), and the canonical spelling must be a
+ * fixed point (every loader redirects to it, so non-idempotent
+ * canonicalisation is an infinite redirect loop nobody sees until they open
+ * the screen).
  */
 import { describe, expect, it } from "vitest";
 

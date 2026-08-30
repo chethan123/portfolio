@@ -1,25 +1,15 @@
 /**
  * A statement, from the file landing to the figures on the account page.
- *
- * Every step of this flow is already tested on its own, and those tests all
- * seed the state they need directly — a draft with a mapping already saved, an
- * alias already planted. That is the right shape for a test about one step's
- * rule, and it is exactly why none of them can catch a seam. A step that wrote
- * the right row under the wrong key, or read a column the previous step never
- * filled, passes its own test and breaks the flow.
- *
- * So nothing is seeded here past the household itself. The file is posted to
- * the drop screen, every step is driven by its own `action`, and each redirect
- * is followed to whatever the last one actually named. If a step stops handing
- * the next one what it needs, the journey stops here rather than in a bug
- * report.
- *
- * Two journeys, because the second is the point of the first. The design's
- * central promise (DESIGN.md §5.1, ingest brief §5) is that the work is paid
- * once: map an institution's columns once, name an unknown instrument once, and
- * every later export from that brokerage passes straight through. The second
- * statement below asserts that promise the only way it can be honestly
- * asserted — by arriving at review without being asked anything.
+ * Every step is tested on its own with directly seeded state — the right
+ * shape for one step's rule, and exactly why none can catch a seam: a step
+ * writing the right row under the wrong key passes its own test and breaks
+ * the flow. So nothing is seeded past the household: the file is posted to
+ * the drop screen, every step driven by its own `action`, each redirect
+ * followed to whatever the last one actually named. Two journeys, because
+ * the second is the point of the first — the design's central promise
+ * (§5.1, brief §5) is that the work is paid once, and the second statement
+ * asserts it the only honest way: arriving at review without being asked
+ * anything.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

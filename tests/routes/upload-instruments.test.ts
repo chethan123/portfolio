@@ -1,19 +1,14 @@
 /**
- * Step three's action — where an answer is paired with the string it answers
- * (ingest brief §5, §7.5).
- *
- * The rules underneath are tested in `instrument-resolution.test.ts`:
- * `sameRawStrings` normalises line endings, `resolveAll` writes the alias. What
- * lives only here is the *pairing* — the posted answers line up with the
- * draft's current unresolved strings by index, and the hidden `raw-N` field is
- * what proves the index still means what it meant when the page was drawn.
- *
- * That is worth its own file because of what a mispairing does. An alias is
- * global and permanent: point "VANGUARD TOTAL INTL" at the wrong instrument
- * once and every future export from that brokerage resolves to it silently,
- * with no error anywhere and no screen that ever asks again. The window is real
- * — two tabs on one draft, or a second draft resolving the same string while
- * this page sits open — and the guard is one `some` over an index.
+ * Step three's action — where an answer is paired with the string it
+ * answers (ingest brief §5, §7.5). The rules underneath are
+ * `instrument-resolution.test.ts`'s; what lives only here is the *pairing*:
+ * posted answers line up with the draft's unresolved strings by index, and
+ * the hidden `raw-N` field proves the index still means what it meant when
+ * the page was drawn. Worth its own file because a mispairing is global and
+ * permanent — point "VANGUARD TOTAL INTL" at the wrong instrument once and
+ * every future export resolves to it silently, with no screen that ever
+ * asks again. The window is real (two tabs, a concurrent draft) and the
+ * guard is one `some` over an index.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

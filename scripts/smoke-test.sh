@@ -1,33 +1,27 @@
 #!/usr/bin/env bash
 #
-# CI-only container smoke test.
+# CI-only container smoke test — the things a unit or integration test
+# structurally cannot reach: `docker compose up` on an empty volume produces a
+# working instance once the gate is configured (and refuses to start until it
+# is), the app waits for Postgres, a restart is safe, the front door is shut,
+# and the runtime image contains what it is specified to and nothing it is not.
 #
-# It exists for the things a unit or integration test structurally cannot reach:
-# that `docker compose up` on an empty volume produces a working instance once
-# the gate is configured — and refuses to start at all until it is — that the
-# app waits for Postgres rather than racing it, that a restart is safe, that the
-# front door is shut, and that the runtime image actually contains what it is
-# specified to contain and nothing it is specified not to.
+# The gate values below are throwaway: oauth2-proxy never contacts Google at
+# startup, so the real sidecar boots on fake credentials — everything short of
+# a real Google round trip is exercisable; that last leg is the operator's
+# checklist, not CI's.
 #
-# The gate values below are throwaway. oauth2-proxy never contacts Google at
-# startup, so the real sidecar boots on fake credentials and everything short of
-# the round trip through a real Google account is exercisable here; that last
-# leg is an operator's checklist, not CI's.
-#
-# It is slow and it is deliberately thin. Behaviour gets tested elsewhere.
+# Slow and deliberately thin. Behaviour gets tested elsewhere.
 #
 # Run from the repository root:  ./scripts/smoke-test.sh
 set -euo pipefail
 
-# compose.yaml pulls the published image. This test exists to exercise the tree
-# it was handed, so it layers the development override on top and builds from
-# source — otherwise every run would silently certify the *last release* and go
-# green no matter what the working tree does to the Dockerfile or the entrypoint.
-#
-# Set once as COMPOSE_FILE rather than passed as `-f` on each call: there are a
-# dozen `docker compose` invocations below and the ones that would break if a
-# flag were forgotten are not the ones that would look broken. `ps`, `exec`,
-# `logs` and `restart` all resolve by project name and would keep working.
+# compose.yaml pulls the published image; this test exercises the tree it was
+# handed, so layer the dev override on top and build from source — otherwise
+# every run silently certifies the *last release*. COMPOSE_FILE once, not `-f`
+# per call: of the dozen invocations below, the ones that would break with a
+# forgotten flag are not the ones that would look broken (`ps`, `exec`,
+# `logs`, `restart` resolve by project name and keep working).
 export COMPOSE_FILE="compose.yaml:compose.dev.yaml"
 
 readonly BASE_URL="http://127.0.0.1"
@@ -45,8 +39,7 @@ cleanup() {
   log "Tearing down"
   docker compose logs --no-color app db caddy gate 2>&1 | tail -80 || true
   docker compose down -v --remove-orphans || true
-  # Only the one this script wrote. A developer running this on their own
-  # machine has a real allowlist sitting there.
+  # Only the one this script wrote — a developer may have a real allowlist here.
   [[ "$allowlist_is_ours" == true ]] && rm -f "$ALLOWLIST"
   return 0
 }
@@ -66,9 +59,8 @@ wait_for_healthy() {
 
 expect_status() {
   local expected="$1" actual
-  # `app` reporting healthy only guarantees the app is up, not that the separate
-  # `caddy` container has finished starting and bound its own port yet, so this
-  # retries briefly rather than assuming the first connection lands.
+  # `app` healthy does not mean the separate `caddy` container has bound its
+  # own port yet, so retry briefly.
   actual="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
     --retry 10 --retry-connrefused --retry-delay 1 "$HEALTH_URL" || true)"
   [[ "$actual" == "$expected" ]] || fail "GET /healthz returned ${actual}, expected ${expected}"
@@ -76,11 +68,10 @@ expect_status() {
 }
 
 # --- The stack refuses to start half-protected --------------------------------
-# Before anything is configured: compose must stop rather than bring up an
-# instance with no gate in front of it. `config` rather than `up` because
-# interpolation is the first thing `up` does and it needs no daemon; `--env-file
-# /dev/null` so a developer's own .env cannot quietly satisfy the variables and
-# turn this assertion green for the wrong reason.
+# Unconfigured, compose must stop rather than bring up an ungated instance.
+# `config`, not `up`: interpolation is `up`'s first step and needs no daemon.
+# `--env-file /dev/null` so a developer's own .env cannot quietly satisfy the
+# variables and green this assertion for the wrong reason.
 log "Checking the stack refuses to start without gate credentials"
 if refusal="$(env -u GATE_CLIENT_ID -u GATE_CLIENT_SECRET -u GATE_COOKIE_SECRET \
   -u PUBLIC_ORIGIN docker compose --env-file /dev/null config --quiet 2>&1)"; then
@@ -92,15 +83,13 @@ fi
 printf 'compose refused: %s\n' "$refusal"
 
 # --- Throwaway gate configuration ---------------------------------------------
-# Exported rather than written to .env: the environment wins over .env, so the
-# run is identical on a bare CI runner and on a machine with a real instance
-# configured beside it.
+# Exported, not written to .env: the environment wins over .env, so the run is
+# identical on a bare CI runner and beside a real configured instance.
 export GATE_CLIENT_ID="smoke-test.apps.googleusercontent.com"
 export GATE_CLIENT_SECRET="smoke-test-client-secret"
-# The generation command from .env.example, run rather than quoted: the sidecar
-# builds an AES cipher from this and refuses to start unless it decodes to 16,
-# 24 or 32 bytes, and a hand-written placeholder of the wrong length would fail
-# in a way that reads like a gate bug.
+# The generation command from .env.example, run rather than quoted: the
+# sidecar refuses a value not decoding to 16/24/32 bytes, and a wrong-length
+# placeholder would fail in a way that reads like a gate bug.
 GATE_COOKIE_SECRET="$(openssl rand -base64 32 | tr -- '+/' '-_')"
 export GATE_COOKIE_SECRET
 export PUBLIC_ORIGIN="https://smoke.example.test"
@@ -120,13 +109,12 @@ wait_for_healthy
 expect_status 200
 
 # --- Migrations ran before the server started ---------------------------------
-# The instance is healthy, and /healthz is a non-200 while any migration on disk
-# is unrecorded — so a 200 above is already proof the schema is current. This
-# checks the other half: that the runner is what made it so, rather than the app
-# having started against whatever happened to be there.
+# /healthz is non-200 while any on-disk migration is unrecorded, so the 200
+# above already proves the schema current. This checks the other half: the
+# runner made it so, not an app started against whatever happened to be there.
 log "Checking migrations ran at startup"
-# Captured into a variable rather than piped: `grep -q` exits at the first match
-# and the SIGPIPE that gives the producer would trip `pipefail`.
+# Captured, not piped: `grep -q` exits at first match and the producer's
+# SIGPIPE would trip `pipefail`.
 app_logs() { docker compose logs --no-color app 2>/dev/null; }
 
 logs="$(app_logs)"
@@ -135,9 +123,9 @@ logs="$(app_logs)"
 printf 'migrations applied at startup\n'
 
 # --- A restart is always safe -------------------------------------------------
-# This is what proves migrations are idempotent: the second boot re-runs the
-# runner against a database that already has the schema, and a non-zero exit
-# there would stop the server and never reach healthy.
+# What proves migrations idempotent: the second boot re-runs the runner
+# against an already-migrated database; a non-zero exit would never reach
+# healthy.
 log "Restarting the app container"
 docker compose restart app
 wait_for_healthy
@@ -148,8 +136,7 @@ logs="$(app_logs)"
   fail "the restarted container did not skip already-applied migrations"
 printf 'restart skipped applied migrations\n'
 
-# Running the runner a third time, inside the real image against the real
-# database, must exit 0 and apply nothing.
+# A third run, inside the real image against the real database: exit 0, apply nothing.
 log "Re-running the migration runner inside the container"
 migrate_output="$(docker compose exec -T app node ./server/migrate.ts)" ||
   fail "re-running migrations exited non-zero"
@@ -177,8 +164,8 @@ for path in /app/app /app/tests /app/vite.config.ts /app/react-router.config.ts;
 done
 printf 'no source tree\n'
 
-# The database is the source of truth, so the .sql files are part of the image.
-# Without them a fresh volume would come up with no schema at all.
+# The .sql files are part of the image — without them a fresh volume comes up
+# with no schema at all.
 migration_count="$(run_in_image 'ls /app/migrations/*.sql 2>/dev/null | wc -l' | tr -d '[:space:]')"
 [[ "$migration_count" -gt 0 ]] || fail "the runtime image contains no migration .sql files"
 printf 'migration .sql files in the image: %s\n' "$migration_count"
@@ -192,17 +179,16 @@ for pkg in vitest vite typescript @react-router/dev @types/react; do
 done
 printf 'no dev dependencies\n'
 
-# The MCP server SDK and friends that `yahoo-finance2` declares but this
-# application never loads (see scripts/prune-unreachable-deps.mjs). Asserted
-# here because nothing else can catch the prune silently ceasing to fire.
+# What `yahoo-finance2` declares but the app never loads (see
+# scripts/prune-unreachable-deps.mjs). Asserted here because nothing else can
+# catch the prune silently ceasing to fire.
 for pkg in @modelcontextprotocol/sdk @deno/shim-deno fetch-mock-cache hono jose cors; do
   run_in_image "test ! -e /app/node_modules/$pkg" ||
     fail "unreachable dependency still in the runtime image: $pkg"
 done
 printf 'unreachable yahoo-finance2 dependencies pruned\n'
 
-# The other half of the same check: the prune must not have overshot into what
-# the price provider actually needs.
+# The other half: the prune must not have overshot into what the app needs.
 for pkg in yahoo-finance2 tough-cookie tldts express react-router kysely pg zod; do
   run_in_image "test -e /app/node_modules/$pkg" ||
     fail "the prune removed a dependency the app needs: $pkg"
@@ -241,9 +227,8 @@ printf 'db port not published\n'
 [[ "$(published_ports app)" != *HostPort* ]] || fail "the app port is published to the host"
 printf 'app port not published\n'
 
-# The gate believes the X-Forwarded-* headers of whatever reaches it, so a
-# published port here would be a way to walk around the gate by asserting your
-# own identity to it.
+# The gate believes X-Forwarded-* from whatever reaches it, so a published
+# port here would let a caller walk past the gate asserting its own identity.
 [[ "$(published_ports gate)" != *HostPort* ]] || fail "the gate port is published to the host"
 printf 'gate port not published\n'
 
@@ -252,15 +237,12 @@ printf 'gate port not published\n'
 printf 'caddy published on 80\n'
 
 # --- The stack actually serves a page, not just a health check ----------------
-# Everything above proves the container is up. This proves the framework inside
-# it is: `react-router-serve` over the real build, the route manifest, and the
-# server render. The vitest suite deliberately skips all of that — it loads no
-# React Router plugin — so this is the one place it is exercised at all.
-#
-# Asked of `app` from inside its own container rather than through Caddy,
-# because the gate now refuses `/` to anyone without a Google session and this
-# assertion is about the renderer, not the front door. `node -e` for the same
-# reason the healthcheck uses it: the runtime image carries no curl.
+# Everything above proves the container is up; this proves the framework in it
+# is: `react-router-serve` over the real build, the route manifest, the server
+# render. The vitest suite loads no React Router plugin, so this is the one
+# place any of that is exercised. Asked of `app` inside its own container —
+# the gate refuses `/` without a Google session and this is about the
+# renderer, not the front door. `node -e` because the image carries no curl.
 log "Fetching a real page from the app container"
 
 page="$(docker compose exec -T app node -e \
@@ -271,11 +253,11 @@ page="$(docker compose exec -T app node -e \
 printf 'GET / rendered a page\n'
 
 # The static assets Vite copies out of `public/` — the PWA manifest, the
-# service worker, the icon and the font. They are the one part of the image a
-# rendered page cannot vouch for: the markup above carries its `<link>` tags
-# whether the files behind them exist or not, which is exactly how an image
-# that 404'd all four shipped unnoticed. Asked of `app` directly, like the
-# page fetch, and for the same reasons.
+# service worker, the icon and the font. The one part of the image a rendered
+# page cannot vouch for: the markup above carries its `<link>` tags whether
+# the files behind them exist or not — exactly how an image that 404'd all
+# four shipped unnoticed. Asked of `app` directly, like the page fetch, for
+# the same reasons.
 log "Fetching the static assets from the app container"
 
 for asset in /manifest.webmanifest /sw.js /icon.svg /fonts/inter-latin-var.woff2; do
@@ -285,8 +267,8 @@ for asset in /manifest.webmanifest /sw.js /icon.svg /fonts/inter-latin-var.woff2
   printf 'GET %s -> %s\n' "$asset" "$status"
 done
 
-# The body, not just the status. `/healthz` is what Compose, the proxy and any
-# monitoring read, and "200 with the wrong body" is the failure they cannot see.
+# The body, not just the status: "200 with the wrong body" is the failure
+# Compose, the proxy and monitoring cannot see.
 health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
 [[ "$health" == *'"status":"ok"'* ]] || fail "GET /healthz body was not ok: ${health}"
 [[ "$health" == *'"migrations":"current"'* ]] ||
@@ -294,10 +276,9 @@ health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
 printf 'GET /healthz -> %s\n' "$health"
 
 # --- The front door is shut ---------------------------------------------------
-# "Every path is behind the gate" is a property of the running stack — of Caddy
-# consulting the sidecar — rather than of anything the vitest suite can call, so
-# this is the only place it is checked at all. None of it needs a Google account:
-# the browser is turned away before Google is ever consulted.
+# "Every path is behind the gate" is a property of the running stack — Caddy
+# consulting the sidecar — so this is the only place it is checked. No Google
+# account needed: the browser is turned away before Google is consulted.
 log "Checking the gate refuses an unauthenticated request"
 
 status_of() {
@@ -320,10 +301,9 @@ sign_in="$(location_of "$BASE_URL/")"
   fail "the redirect to the gate did not carry where the visitor was going: ${sign_in}"
 printf 'GET / -> 302 %s\n' "$sign_in"
 
-# Following that hop proves two things at once: that /oauth2/* is answered by
-# the sidecar rather than the app — the app has no such route and would 404 —
-# and that skip_provider_button is on, so the next thing a family member sees is
-# Google itself rather than an interstitial.
+# One hop proves two things: /oauth2/* is answered by the sidecar (the app has
+# no such route and would 404), and skip_provider_button is on — the next
+# screen is Google itself, not an interstitial.
 google="$(location_of "$BASE_URL$sign_in")"
 [[ "$google" == https://accounts.google.com/o/oauth2/auth\?* ]] ||
   fail "the gate's sign-in went to '${google}', expected Google's authorization endpoint"
@@ -334,15 +314,15 @@ google="$(location_of "$BASE_URL$sign_in")"
   fail "the redirect to Google did not carry the configured redirect URL: ${google}"
 printf 'GET %s -> 302 Google, carrying the client id\n' "$sign_in"
 
-# The gate's verdict endpoint, which Caddy consults on every request. The app
-# would answer 404 here; a 401 can only have come from the sidecar.
+# The gate's verdict endpoint, consulted by Caddy on every request. The app
+# would 404 here; a 401 can only be the sidecar's.
 auth_status="$(status_of "$BASE_URL/oauth2/auth")"
 [[ "$auth_status" == "401" ]] ||
   fail "GET /oauth2/auth returned ${auth_status}, expected the gate's 401"
 printf 'GET /oauth2/auth -> %s from the gate\n' "$auth_status"
 
-# And the one exemption still holds. If this ever needs credentials, every
-# uptime monitor pointed at this instance goes blind at once.
+# The one exemption still holds — if this ever needs credentials, every uptime
+# monitor pointed here goes blind at once.
 expect_status 200
 
 log "Smoke test passed"

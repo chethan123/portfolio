@@ -52,32 +52,23 @@ import type { Route } from "./+types/holdings";
 
 /**
  * Holdings — every position across every account, grouped and filterable.
+ * DESIGN.md §8.1's workhorse: "a groupable, filterable Holdings table
+ * absorbs what would otherwise be four more pages... the same table with
+ * the grouping changed, not separate features."
  *
- * DESIGN.md §8.1's workhorse: "a groupable, filterable Holdings table absorbs
- * what would otherwise be four more pages — by person, by account, tax view,
- * unrealized. Those are the same table with the grouping changed, not separate
- * features."
+ * The whole screen is one query and one array: `currentHoldings` returns
+ * the rows; `holdings-view.ts` filters, sorts, groups and totals them with
+ * no second database touch, because every dimension is already a column on
+ * the row (§8.2) — so nothing here can disagree with Overview or Account
+ * detail, and no subtotal can disagree with the rows printed above it.
  *
- * The whole screen is one query and one array. `currentHoldings(ALL_OWNERS)` returns the
- * rows; `holdings-view.ts` filters, sorts, groups and totals them without
- * touching the database again, because every dimension is already a column on
- * the row (§8.2). Nothing here can disagree with Overview or Account detail
- * about what is currently held, and no subtotal here can disagree with the rows
- * printed above it.
- *
- * **No client-side state.** Every control is a link or a GET form, and the view
- * is entirely described by the query string — the same arrangement Overview's
- * range control uses, and for the same reasons: it works with JavaScript off, a
- * chosen view survives a reload, and it can be bookmarked or sent to the other
- * person in the household. The application has no React state anywhere and a
- * filter bar is not the place to start.
- *
- * That rule is also what decides the shape of the one write this screen has
- * (§5.4). "Editable cells" is a `useState` per row and a table where any figure
- * is one mis-click from being overwritten; `?edit=12.7` is a link, and it opens
- * exactly one row, and it survives a reload, and it works with JavaScript off.
- * The editor is the screen's existing grammar applied to a form rather than a
- * new mechanism bolted beside it.
+ * **No client-side state.** Every control is a link or a GET form and the
+ * view is entirely the query string (Overview's range-control arrangement):
+ * works with JavaScript off, survives a reload, can be bookmarked or sent.
+ * That rule also shapes the one write here (§5.4): "editable cells" is a
+ * `useState` per row and any figure one mis-click from overwritten;
+ * `?edit=12.7` is a link that opens exactly one row — the screen's existing
+ * grammar applied to a form, not a new mechanism bolted beside it.
  */
 export function meta() {
   return [{ title: "Holdings · Portfolio" }];
@@ -86,53 +77,38 @@ export function meta() {
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const query = parseQuery(url.searchParams);
-  // Household-wide and not one of `query`'s own dimensions (ADR-0008): it
-  // followed the reader here from another screen and it follows them off this
-  // one. Read before the redirect below, because `toSearch` spells it.
+  // Household-wide, not one of `query`'s own dimensions (ADR-0008): it
+  // followed the reader here and follows them off. Read before the redirect
+  // below, because `toSearch` spells it.
   const owners = readOwnerFilter(url.searchParams);
 
-  // Canonicalise the URL before rendering anything.
-  //
-  // A GET form submits every control it holds, including the ones nobody
-  // touched, so pressing Apply with one filter chosen arrives here as
-  // `?owner=1&account=&institution=&kind=&tax=&classification=&assetClass=`.
-  // That is the URL a person would then bookmark or send to the other person in
-  // the household, and it is unreadable. `toSearch` already knows what the
-  // minimal spelling of a view is — it omits every default so that the
-  // unfiltered table is bare `/holdings` — so the fix is to bounce once to
-  // whatever it says rather than to teach the form not to submit.
-  //
-  // This also drops parameters that mean nothing here, which is the same
-  // reading `parseQuery` gives them. The bounce cannot loop: `toSearch` is
-  // deterministic and `parseQuery(toSearch(q))` is `q`, so the second pass is
-  // already canonical — and its spelling is a fixed point of URL parsing
-  // (`spellId` in `owner-filter.ts` says why that holds and what broke when it
-  // did not), so `url.search`, which the parser has already respelled, can
-  // equal it.
-  // Grouping hides the column it grouped by, so a URL that sorts by that same
-  // column leaves the table ordered by a heading nobody can see: no caret, no
-  // `aria-sort`, and no control to reverse it. Fall back to the default sort,
-  // and do it here rather than in the component so the URL stops claiming a
-  // sort the screen is not applying.
+  // Canonicalise the URL before rendering anything. A GET form submits every
+  // control it holds, touched or not, so Apply with one filter arrives as
+  // `?owner=1&account=&institution=&kind=&…` — unreadable in a bookmark.
+  // `toSearch` knows the minimal spelling (it omits every default, so the
+  // unfiltered table is bare `/holdings`); bounce once to it rather than
+  // teach the form not to submit. This also drops parameters that mean
+  // nothing here, matching `parseQuery`'s reading. The bounce cannot loop:
+  // `parseQuery(toSearch(q))` is `q`, and the spelling is a fixed point of
+  // URL parsing (`spellId` in `owner-filter.ts`), so the respelled
+  // `url.search` can equal it.
+  // Grouping hides the column it grouped by, so a URL sorting by that column
+  // would leave the table ordered by a heading nobody can see — no caret, no
+  // `aria-sort`, no control to reverse it. Fall back here, not in the
+  // component, so the URL stops claiming a sort the screen is not applying.
   if (query.group !== null && !columnsFor(query.group).some((column) => column.key === query.sort)) {
     query.sort = DEFAULT_SORT;
     query.direction = DEFAULT_DIRECTION;
   }
 
-  // `edit` and `saved` are deliberately *not* part of `HoldingsQuery`.
-  //
-  // They are not how you are reading the table, they are one thing you are
-  // doing to one row of it, and keeping them out of the query object is what
-  // makes every control on the screen close the editor for free: each of those
-  // controls is a link built by `toSearch`, which knows nothing about either
-  // parameter and therefore drops both. Filtering while a row is open should
-  // not carry a half-typed correction into a different view, and adding a field
-  // to `HoldingsQuery` would have had it do exactly that on all seven controls
-  // at once.
-  //
-  // They are still canonicalised, by being re-serialised from the pair they
-  // parse to rather than echoed: a mangled `edit=` bounces to the URL without
-  // it, which is the same "no editor" a missing one produces.
+  // `edit` and `saved` are deliberately *not* part of `HoldingsQuery`: they
+  // are one thing being done to one row, not how the table is read, and
+  // keeping them out is what closes the editor for free on every control —
+  // each is a link built by `toSearch`, which knows neither parameter and
+  // drops both. Filtering while a row is open must not carry a half-typed
+  // correction into a different view. Still canonicalised, by re-serialising
+  // the parsed pair rather than echoing: a mangled `edit=` bounces to the
+  // URL without it — the same "no editor" a missing one produces.
   const editing = parseRowKey(url.searchParams.get("edit"));
   const saved = parseRowKey(url.searchParams.get("saved"));
 
@@ -162,26 +138,21 @@ export async function loader({ request }: Route.LoaderArgs) {
   const filters = availableFilters(household, query);
   const visible = applyFilters(holdings, query);
 
-  // Everybody ticked is the household, and the household's URL carries no owner
-  // parameter at all (ADR-0008: "selecting every owner is spelled the same as
-  // selecting none"). A `<Form method="get">` of checkboxes has no way to
-  // decline to submit, so the collapse happens on this side — the one that has
-  // a roster to compare against. After the roster read rather than before it,
-  // because it needs one; the canonical redirect above still runs first and
-  // still asks nothing of the database.
+  // Everybody ticked is the household, whose URL carries no owner parameter
+  // (ADR-0008). A GET form of checkboxes cannot decline to submit that
+  // spelling, so the collapse happens on this side — the one with a roster —
+  // after the roster read; the canonical redirect above still runs first and
+  // asks nothing of the database.
   if (roster.coversEveryone) {
     throw redirect(`${url.pathname}${withRow(toSearch(query, ALL_OWNERS), "edit", editing)}`);
   }
 
-  // The receipt quotes the database, never the URL.
-  //
-  // `?saved=` says *which* row was written and nothing about what was written
-  // to it, and the figures beside the confirmation are read back out of
-  // `currentHoldings(ALL_OWNERS)` here — so a hand-typed parameter can only ever produce
-  // a sentence describing what the account actually holds, which is the
-  // guarantee Account detail's `?recorded=` has for the same reason (§13.7).
-  // Looked up in every holding rather than in the filtered set, so that the
-  // sentence still appears if the write is confirmed from a narrowed view.
+  // The receipt quotes the database, never the URL: `?saved=` says *which*
+  // row was written, and the figures beside the confirmation are read back
+  // out of the household read — so a hand-typed parameter can only produce a
+  // sentence describing what the account actually holds (Account detail's
+  // `?recorded=` guarantee, §13.7). Looked up in every holding, not the
+  // filtered set, so the sentence survives a narrowed view.
   const open = saved === null ? editing : null;
 
   const written =
@@ -240,16 +211,12 @@ export async function loader({ request }: Route.LoaderArgs) {
             quantity: written.quantity,
           },
     /**
-     * The date the open row's correction will be filed under.
-     *
-     * From the server, so it is not a date the reader's clock invented — and
-     * through the same {@link effectiveDate} the write uses, so it is not
-     * merely today either. A statement may legitimately be dated tomorrow, and
-     * a correction against it carries that date instead; a note promising
-     * "dated today" would then be the screen misreporting its own effect, which
-     * is exactly the thing the note exists to prevent.
-     *
-     * One extra query, and only while a row is open.
+     * The date the open row's correction will be filed under — from the
+     * server, through the same {@link effectiveDate} the write uses: a
+     * statement may legitimately be dated tomorrow, and a correction against
+     * it carries that date, so a note promising "dated today" would be the
+     * screen misreporting its own effect. One extra query, only while a row
+     * is open.
      */
     asOf:
       open === null
@@ -259,21 +226,14 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 /**
- * Restate one position.
- *
- * The route reads two boxes and hands them over; everything that decides
- * whether the correction is allowed, and everything that decides what lands in
- * the database, is in `positions.server.ts` (§5.4).
- *
- * **Which row is being corrected comes from the URL, not from a hidden field.**
- * The form posts back to the address that opened it — `?…&edit=12.7` — so the
- * row's identity travels the same way the rest of this screen's state does, and
- * there is no field a submission could carry that disagrees with the page it
- * was submitted from.
- *
- * The redirect target is rebuilt by `toSearch` from a parsed query rather than
- * taken from what arrived, which is what keeps it a Holdings view: the only
- * strings it can produce are the ones this screen already speaks.
+ * Restate one position. The route reads two boxes and hands them over;
+ * everything deciding whether and what lands is `positions.server.ts`
+ * (§5.4). **Which row is corrected comes from the URL, not a hidden
+ * field**: the form posts back to the address that opened it, so the row's
+ * identity travels as the rest of this screen's state does and no field can
+ * disagree with the page it was submitted from. The redirect target is
+ * rebuilt by `toSearch` from a parsed query, never echoed — the only
+ * strings it can produce are ones this screen already speaks.
  */
 export async function action({ request }: Route.ActionArgs) {
   const url = new URL(request.url);
@@ -290,14 +250,11 @@ export async function action({ request }: Route.ActionArgs) {
   try {
     await revisePosition(target.accountId, target.instrumentId, values);
 
-    // Redirect rather than render, for the three reasons Account detail gives:
-    // a reload cannot re-submit the write, the boxes are gone because this is a
-    // fresh GET rather than the same elements re-rendered, and the confirmation
-    // is forced to describe what the database says instead of what the
-    // submission claimed.
-    // The owner filter comes off the same URL the row's identity does, so the
-    // correction returns to the narrowed view rather than to the household's.
-    // No hidden field: the form posts back to the address that opened it.
+    // Redirect rather than render, for Account detail's three reasons: a
+    // reload cannot re-submit, the boxes are gone (a fresh GET), and the
+    // confirmation is forced to describe what the database says. The owner
+    // filter comes off the same URL the row's identity does, so the
+    // correction returns to the narrowed view.
     const view = toSearch(parseQuery(url.searchParams), readOwnerFilter(url.searchParams));
     throw redirect(`${url.pathname}${withRow(view, "saved", target)}`);
   } catch (error) {
@@ -406,10 +363,10 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
 
   const query: HoldingsQuery = { filters: new Map(active), group, sort, direction };
   const shown = total.valueCoverage.total;
-  // The owner filter counts here as much as this screen's own do. Without it a
-  // table narrowed to one person reads as the whole portfolio to anyone who did
-  // not set the filter — which is the honesty condition ADR-0008 attaches to
-  // the filter surviving navigation, and the notice below is where it is kept.
+  // The owner filter counts here as much as this screen's own: without it a
+  // table narrowed to one person reads as the whole portfolio to anyone who
+  // did not set the filter — the honesty condition ADR-0008 attaches to the
+  // filter surviving navigation, kept in the notice below.
   const filtered = active.length > 0 || isFiltered(owners);
   const hidden = hiddenFields(query);
 
@@ -424,31 +381,26 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
     values: actionData?.values,
   };
 
-  // Clearing the filters clears the filters. The grouping and the sort are how
-  // you were reading the table rather than what you were reading, and the form
-  // above already carries them through an Apply for exactly that reason — a
-  // "Clear" beside it that quietly threw them away would undo more than it
-  // says.
-  //
-  // The owner filter is not this screen's to clear either, and for a stronger
-  // reason: it is household-wide, so clearing it from here would reach out and
-  // change what Overview shows next. "Show everyone" lives on the owner control
-  // itself, which is where the reader set it.
+  // Clearing the filters clears the filters: grouping and sort are how you
+  // were reading the table, not what — a "Clear" that threw them away would
+  // undo more than it says. The owner filter is not this screen's to clear
+  // either, for a stronger reason: household-wide, so clearing it here would
+  // change what Overview shows next. "Show everyone" lives on the owner
+  // control, where the reader set it.
   const cleared = toSearch({ ...query, filters: new Map() }, owners) || ".";
   const columns = columnsFor(group);
-  // One column past the data columns: the row's own Edit control. It sorts by
-  // nothing and sums to nothing, so it is not a `Column` — the array is what
-  // the headers, the sort links and `columnsFor` are all built from, and an
-  // entry in it with no `SortKey` would have to be special-cased in each.
+  // One column past the data columns: the row's Edit control. It sorts by
+  // nothing and sums to nothing, so it is not a `Column` — an entry with no
+  // `SortKey` would need special-casing in headers, sort links and
+  // `columnsFor` alike.
   const span = columns.length + 1;
   const labelSpan = columns.length - FIGURES;
 
   // The one state that may say nothing has been uploaded, because it is the
-  // only one where nothing has been. An owner filter that reaches no holdings
-  // is an instance full of data this reading does not reach, and it falls
-  // through to the panel below — which is where this screen has always drawn
-  // "the question has an answer and it is nothing", and says so without the
-  // false claim.
+  // only one where nothing has been. An owner filter reaching no holdings is
+  // an instance full of data this reading does not reach; it falls through
+  // to the panel below, where "the question's answer is nothing" has always
+  // been drawn.
   if (!hasHoldings) {
     return (
       <section className="page">
@@ -483,32 +435,29 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
         </header>
 
         {shown === 0 ? (
-          // Not the empty state above. The instance has data; this particular
-          // question has no answer, and saying "there is no data yet" would be
-          // a different and false claim. That is now three questions rather
-          // than one — this screen's own filters, an owner naming nobody, and
-          // owners who hold nothing — and each gets its own sentence and its
-          // own way out.
+          // Not the empty state above: the instance has data; this question
+          // has no answer, and "there is no data yet" would be a false claim.
+          // Three questions now — this screen's filters, an owner naming
+          // nobody, owners holding nothing — each with its own sentence and
+          // way out.
           <div className="panel-body panel-body--empty">
             <p className="empty-note">
               {describe({ filters, narrowedTo, unknownOwner, ownersHoldNothing })}{" "}
               <span className="u-data">{totalHoldings}</span>{" "}
               {totalHoldings === 1 ? "holding is" : "holdings are"} recorded in all.
             </p>
-            {/* The `.button--text` §7.2 names, and not a link inside the
-                sentence. This screen already draws one "Clear filters" as a
-                40px text button in the bar above; drawn a second time as an
-                underlined 17px inline link — the only underlined-at-rest link
-                on the page — the same words pointing at the same URL were two
-                different components 280px apart. */}
+            {/* The `.button--text` §7.2 names, not an inline link: the bar
+                above already draws "Clear filters" as a text button, and the
+                same words at the same URL as an underlined inline link were
+                two different components 280px apart. */}
             {active.length > 0 ? (
               <Link className="button button--text" to={cleared}>
                 Clear filters
               </Link>
             ) : null}
-            {/* Its own way out, because the owner filter is not this screen's
-                to clear: it is household-wide, and this link says so by naming
-                everyone rather than by saying "clear". */}
+            {/* Its own way out: the owner filter is household-wide, not this
+                screen's to clear, and the link says so by naming everyone
+                rather than saying "clear". */}
             {isFiltered(owners) ? (
               <Link className="button button--text" to={toSearch(query, ALL_OWNERS) || "."}>
                 Show everyone
@@ -518,26 +467,22 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
         ) : (
           <>
             <div className="data-table-scroll">
-              {/* Explicit roles, matching the implicit ones exactly.
-                    Below 768px the stylesheet reflows this table to cards with
-                    `display: block`, and browsers drop a table's implicit ARIA
-                    roles when they do — taking `scope`, `aria-sort` and every
-                    header-to-cell association with them, so a screen reader on
-                    a phone would get a pile of unlabelled text held together
-                    only by CSS-generated `::before` captions. Spelling the
-                    roles out costs nothing on desktop, where they are what the
-                    elements already mean. */}
+              {/* Explicit roles, matching the implicit ones exactly: below
+                    768px the stylesheet reflows this table to cards with
+                    `display: block`, and browsers then drop the implicit ARIA
+                    roles — `scope`, `aria-sort`, every header-to-cell
+                    association — leaving a screen reader a pile of unlabelled
+                    text. Spelling them out costs nothing on desktop. */}
                 <table className="data-table data-table--holdings" role="table">
                 <thead role="rowgroup">
                   <tr role="row">
                     {columns.map((column) => (
                       <SortHeader key={column.key} column={column} query={query} owners={owners} />
                     ))}
-                    {/* Named for a screen reader and blank for everyone else:
-                        a word over a column of icons would be a heading for a
-                        control rather than for data, and on the phone the head
-                        row is a strip of sort links where it would read as one
-                        more of those. */}
+                    {/* Named for a screen reader, blank for everyone else: a
+                        word over a column of icons would head a control, not
+                        data — and on the phone it would read as one more sort
+                        link. */}
                     <th scope="col" role="columnheader" className="is-actions">
                       <span className="visually-hidden">Correct</span>
                     </th>
@@ -592,27 +537,19 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
 }
 
 /**
- * Why the table is empty, in words — "Nothing in the portfolio is at Chase and
- * in a bank account."
- *
- * An empty result that only says "no holding matches every filter at once"
- * leaves the reader looking back up at six dropdowns to work out which pair
- * cannot coexist. The controls know their own chosen option and each dimension
- * knows how to say itself in a sentence, so the screen can name them.
- *
- * The stale-key case gets its own words. "Nothing is at Chase and in a bank
- * account" is a fact about the portfolio; a filter pointing at an account that
- * has since been closed is a fact about the URL, and telling the reader to look
- * for an overlap that was never the problem would waste their time.
- *
- * The owner filter adds two more answers and takes precedence over both, in the
- * order they stop being the reader's problem: an owner the household cannot be
- * read as is a fact about the address, an owner holding nothing is a fact about
- * the household, and only then is an overlap of this screen's own selects worth
- * naming. And when both are on, the sentence has to say *whose* portfolio holds
- * nothing — the selects are built from every holding now, so "nothing in the
- * portfolio is in Bob Roth" would be a plain falsehood on a table narrowed to
- * Alice.
+ * Why the table is empty, in words — "Nothing in the portfolio is at Chase
+ * and in a bank account." Saying only "no holding matches every filter"
+ * leaves the reader working out which pair of six dropdowns cannot coexist;
+ * the controls know their chosen options, so the screen names them. The
+ * stale-key case gets its own words: a filter pointing at a since-closed
+ * account is a fact about the URL, not the portfolio. The owner filter adds
+ * two more answers and takes precedence, in the order they stop being the
+ * reader's problem: an unreadable owner is a fact about the address, an
+ * owner holding nothing a fact about the household, and only then an
+ * overlap of this screen's own selects. With both on, the sentence must say
+ * *whose* portfolio holds nothing — the selects are built from every
+ * holding, so "nothing in the portfolio is in Bob Roth" would be a plain
+ * falsehood on a table narrowed to Alice.
  */
 function describe({
   filters,
@@ -625,10 +562,9 @@ function describe({
   unknownOwner: boolean;
   ownersHoldNothing: boolean;
 }): string {
-  // The owner filter first, because it is the more fundamental fact: if the
-  // household cannot be read as these people at all, or they hold nothing at
-  // all, then what this screen's own selects say about the rest is beside the
-  // point.
+  // The owner filter first — the more fundamental fact: if the household
+  // cannot be read as these people, or they hold nothing, the selects are
+  // beside the point.
   if (unknownOwner) return UNREADABLE_OWNER;
 
   const holds = holdsNothing(narrowedTo);
@@ -639,10 +575,8 @@ function describe({
     .map((filter) => filter.selectedPhrase)
     .filter((phrase): phrase is string => phrase !== null);
 
-  // Narrowed *and* filtered. The selects are built from every holding now, so
-  // "nothing in the portfolio is in Bob Roth" would be a plain falsehood on a
-  // table narrowed to Alice — the portfolio does hold something there. The
-  // sentence has to name whose portfolio it is talking about.
+  // Narrowed *and* filtered: the sentence names whose portfolio it is
+  // talking about (the doc above has why).
   if (narrowedTo.length > 0 && chosen.length > 0) {
     return `${holds} nothing ${joinWords(chosen)}.`;
   }
@@ -690,17 +624,12 @@ function Header({
 }
 
 /**
- * This screen's own state, for the owner control's hidden fields.
- *
- * A GET form submits its own fields and nothing else, so changing the owner
- * would otherwise reset the sort, the grouping and every dimension filter.
- * Defaults are left out, for `toSearch`'s reason: the unfiltered table's URL is
- * `/holdings`.
- *
- * `edit` and `saved` are not here and must never be. They are one thing you are
- * doing to one row rather than how you are reading the table, and narrowing
- * while a row is open must not carry a half-typed correction into a different
- * view — the rule the loader states for every other control on this screen.
+ * This screen's own state, for the owner control's hidden fields: a GET
+ * form submits its own fields and nothing else, so changing the owner would
+ * otherwise reset the sort, grouping and every dimension filter. Defaults
+ * left out, for `toSearch`'s reason. `edit` and `saved` are not here and
+ * must never be — narrowing while a row is open must not carry a half-typed
+ * correction into a different view (the loader's rule).
  */
 function hiddenFields(query: HoldingsQuery): Record<string, string> {
   const fields: Record<string, string> = {};
@@ -722,12 +651,10 @@ function groupTitle(group: DimensionId): string {
 }
 
 /**
- * The filter bar.
- *
- * A plain GET form: the selects write the query string the loader already
- * reads, so the control needs no JavaScript and the resulting view is a URL.
- * The grouping and the sort ride along as hidden fields, because narrowing to
- * one person should not also throw away the way you were reading the table.
+ * The filter bar — a plain GET form: the selects write the query string the
+ * loader already reads, so no JavaScript and the view is a URL. Grouping
+ * and sort ride along as hidden fields: narrowing should not also throw
+ * away the way you were reading the table.
  */
 function Filters({
   filters,
@@ -747,14 +674,11 @@ function Filters({
 
   return (
     <Form method="get" className="filter-bar" aria-label="Filter holdings">
-      {/* The owner filter travels with every other control on this screen, or
-          picking an account type would silently widen the table back to the
-          whole household.
-
-          One field per id, exactly as the owner control's own checkboxes
-          submit, rather than a comma-joined string — which would be a fourth
-          place spelling a grammar `toOwnerParam` exists to be the only speller
-          of. The canonical redirect turns either into the same address. */}
+      {/* The owner filter travels with every control here, or picking an
+          account type would silently widen the table to the household. One
+          field per id, as the owner control's checkboxes submit — a
+          comma-joined string would be a fourth place spelling a grammar
+          `toOwnerParam` exists to be the only speller of. */}
       {owners.map((owner) => (
         <input key={owner} type="hidden" name="owner" value={owner} />
       ))}
@@ -795,17 +719,12 @@ function Filters({
 }
 
 /**
- * The group-by strip — anchors, not buttons, exactly as the range control on
- * Overview and Account detail is. `aria-current` carries the active state and
- * every chip preserves whatever filters and sort are already in force.
- *
- * The caption is what brief §4.1 opens with, and it doubles as the strip's
- * accessible name rather than sitting beside a second one. The strip stands on
- * the canvas between two panels with no heading over it, so a screen reader had
- * "Group holdings by" and everyone else had eight chips and nothing on screen
- * saying what they group — the leading chip reading "No grouping" was the only
- * hint. Pointing `aria-labelledby` at the visible words is also what stops the
- * two names drifting apart the next time one of them is edited.
+ * The group-by strip — anchors, not buttons, as the range control is;
+ * `aria-current` carries the active state and every chip preserves the
+ * filters and sort in force. The visible caption doubles as the strip's
+ * accessible name via `aria-labelledby`: with a separate name, a screen
+ * reader had "Group holdings by" while everyone else had eight chips and
+ * nothing saying what they group — and one name cannot drift from itself.
  */
 function GroupBy({ query, owners }: { query: HoldingsQuery; owners: OwnerFilter }) {
   const chip = (id: DimensionId | null) => toSearch({ ...query, group: id }, owners);
@@ -835,11 +754,9 @@ function GroupBy({ query, owners }: { query: HoldingsQuery; owners: OwnerFilter 
 }
 
 /**
- * A column heading that sorts.
- *
- * `aria-sort` on the header is what tells a screen reader which column the
- * table is ordered by and in which direction — the caret beside the label says
- * the same thing to everyone else, and neither is left to carry it alone.
+ * A column heading that sorts. `aria-sort` tells a screen reader which
+ * column orders the table and which way; the caret says the same to
+ * everyone else, and neither is left to carry it alone.
  */
 function SortHeader({
   column,
@@ -879,15 +796,12 @@ function SortHeader({
 }
 
 /**
- * A summed column, with what it was summed from written under it.
- *
- * The coverage goes here rather than only in the sentence below the table
- * because these three figures sit side by side and invite subtraction. A cost
- * basis over eleven holdings printed flush against a value over seventeen would
- * otherwise read as a $428,000 gain, which is not a figure anything in the
- * database supports. Where a column is complete it says nothing — a caption on
- * every cell would be noise, and the absence of one is the claim that there is
- * nothing missing.
+ * A summed column, with what it was summed from written under it — here,
+ * not only in the sentence below the table, because these figures sit side
+ * by side and invite subtraction: a cost basis over eleven holdings flush
+ * against a value over seventeen reads as a $428,000 gain nothing in the
+ * database supports. A complete column says nothing — the absence of a
+ * caption is the claim that nothing is missing.
  */
 function Figures({ total }: { total: Total }) {
   // Nothing known at all is already said by the dash above; "0 of 1" beneath it
@@ -900,18 +814,12 @@ function Figures({ total }: { total: Total }) {
       </span>
     );
 
-  // A figure and its caption share a wrapper, exactly as the annual-dividend
-  // cell of a row already does, and below 768px that wrapper is the whole
-  // difference between the four figures sharing a right edge and not. There the
-  // cell becomes a `display: flex` label-and-figure row (§8), and
-  // `space-between` distributes however many items it is handed: bare, a
-  // partial column hands it three — label, figure, caption — and parks the
-  // money in the middle of the card, so three of the grand total's four figures
-  // sat at 236, 254 and 264px against a complete column's 357 and against every
-  // figure in the cards above them. Wrapped, it hands over two whatever the
-  // coverage is, and `.cell-sub`'s own `display: block` puts the count back
-  // directly beneath its figure — where §7.3 puts it, and where it already sits
-  // on desktop.
+  // A figure and its caption share a wrapper (the annual-dividend cell's
+  // shape) — below 768px the cell becomes a flex label-and-figure row, and
+  // `space-between` over three bare items (label, figure, caption) parked
+  // the money mid-card, off the right edge every other figure shared.
+  // Wrapped, it hands over two items whatever the coverage, and `.cell-sub`'s
+  // `display: block` puts the count back beneath its figure (§7.3).
   return (
     <>
       <td className="is-numeric" role="cell" data-label="Value">
@@ -932,19 +840,13 @@ function Figures({ total }: { total: Total }) {
           {note(total.unrealizedCoverage)}
         </div>
       </td>
-      {/* No caption, and no weighted yield either.
-
-          No caption because there are no unknowns to count: the view coalesces
-          a missing rate to zero, so this figure is summed from every row above
-          it and "4 of 4" would be noise on a column that is complete by
-          construction.
-
-          No percentage because the one under a row is that row's own — a
-          fraction of a single holding's value. The same ratio taken over a
-          subtotal is a *weighted* yield, a different figure with the group's
-          value as its denominator and its own undefined cases, and the screen
-          it belongs on is Income. Printing it here in the same typeface as the
-          row percentages would invite them to be read as the same number. */}
+      {/* No caption — the view coalesces a missing rate to zero, so this
+          column is complete by construction and "4 of 4" would be noise.
+          No weighted yield either: the ratio under a row is that row's own;
+          the same ratio over a subtotal is a *weighted* yield — a different
+          figure with its own undefined cases, and Income's to show. Printed
+          here in the row percentages' typeface, the two would read as the
+          same number. */}
       <td className="is-numeric" role="cell" data-label="Annual dividend">
         <Amount value={total.annualDividend} />
       </td>
@@ -991,11 +893,11 @@ function GroupBody({
       <tr className="row-subtotal" role="row">
         <th scope="row" colSpan={labelSpan} role="rowheader">
           {group.label} subtotal
-          {/* "Of gross assets", not "of the total below". The denominator is
-              the sum of the positive groups, so with a loan in the set these
-              shares reach 100% above a `<tfoot role="rowgroup">` total that is smaller — see
-              `allocation.ts` for why the net total is refused. A group nothing
-              could price has no fraction to state at all. */}
+          {/* "Of gross assets", not "of the total below": the denominator is
+              the positive groups' sum, so with a loan in the set the shares
+              reach 100% above a smaller total (`allocation.ts` has why the
+              net total is refused). A group nothing could price has no
+              fraction to state. */}
           <span className="cell-sub">
             {group.share === null ? "—" : `${formatShare(group.share)} of gross assets`}
           </span>
@@ -1022,29 +924,23 @@ type Editor = {
 };
 
 /**
- * One holding, and — for at most one of them at a time — the boxes that correct
- * it (§5.4).
+ * One holding, and — for at most one at a time — the boxes that correct it
+ * (§5.4).
  *
- * **The inputs are in their own columns and the form is in the row beneath.** A
- * `<form>` cannot wrap a `<tr>`; the only legal places for one inside a table
- * are inside a cell. Putting the whole editor in a single cell would take the
- * quantity out of the Quantity column and out of its right-aligned tabular
- * figures, which is most of what makes an inline correction readable — you are
- * meant to be checking the number against the ones above and below it. So the
- * form element sits in the full-width row below and the inputs join it by
- * `form=`, which is what the attribute is for, and which associates a control
- * with a form wherever either one sits in the document.
+ * **Inputs in their own columns, form in the row beneath**: a `<form>`
+ * cannot wrap a `<tr>`, and a single-cell editor would take the quantity
+ * out of its column's right-aligned tabular figures — most of what makes an
+ * inline correction readable. The form sits in the full-width row below and
+ * the inputs join it by `form=`.
  *
- * **Price, Value and Unrealized keep showing the stored figures while a row is
- * open.** They are what the correction is being made against. Blanking them, or
- * projecting them from the half-typed quantity, would replace the reference
- * with a guess at the exact moment it is being read.
- *
- * The boxes open on `formatQuantity`'s output rather than on the raw column, so
- * a row reading `120.5` opens as `120.5` and not as `120.50000000` — and
- * `signedQuantity` and `perShareAmount` were written to take that spelling
- * back, U+2212 and thousands separators and all, precisely so the prefill and
- * the parser could be the same string.
+ * **Price, Value and Unrealized keep showing the stored figures while a row
+ * is open** — they are what the correction is made against; blanking or
+ * projecting them from the half-typed quantity would replace the reference
+ * with a guess at the moment it is read. The boxes open on
+ * `formatQuantity`'s output, not the raw column (`120.5`, never
+ * `120.50000000`) — `signedQuantity` and `perShareAmount` take that
+ * spelling back, U+2212 and separators and all, so prefill and parser are
+ * the same string.
  */
 function Row({
   holding,
@@ -1062,17 +958,12 @@ function Row({
   const open = editor.editing === key;
   const { errors, values } = editor;
 
-  // Every refusal, in a fixed order, gathered for the line beneath the row.
-  //
-  // They go there rather than under the box each belongs to because the boxes
-  // are in table columns: "A quantity must be a number, like 120.5 — or −8,000
-  // for something owed." is a sentence, and the Quantity column is as wide as
-  // the widest share count in the household. A message set in a 6rem column
-  // either wraps to five lines or widens the column and shifts every figure in
-  // the table sideways, and it does whichever it does at the moment the reader
-  // is trying to read it. The full-width line below has room for the sentence;
-  // `aria-invalid` and `aria-describedby` are what keep it attached to its box
-  // for a reader who is not looking at the layout at all.
+  // Every refusal, in a fixed order, gathered for the line beneath the row —
+  // not under each box, because the boxes are in table columns: a refusal is
+  // a sentence, and a sentence in a 6rem column either wraps to five lines
+  // or shifts every figure sideways, at the moment it is being read. The
+  // full-width line has room; `aria-invalid`/`aria-describedby` keep each
+  // message attached to its box for a reader not looking at the layout.
   const messages =
     errors === undefined
       ? []
@@ -1126,11 +1017,9 @@ function Row({
               form={EDITOR}
               name="quantity"
               defaultValue={typedQuantity}
-              // `text`, not `number`, for the reason the set-balance box gives:
-              // a number input silently drops what it cannot parse, so a pasted
-              // "1,250.00" arrives as an empty string and the family is told a
-              // quantity is required. The parsing this app wants is exact and
-              // lives in `input.server`.
+              // `text`, not `number` (the set-balance box's reason): a number
+              // input silently drops what it cannot parse, so a pasted
+              // "1,250.00" arrives empty and a quantity is "required".
               type="text"
               inputMode="decimal"
               className="cell-input"
@@ -1184,21 +1073,14 @@ function Row({
         <td className="is-numeric" role="cell" data-label="Unrealized">
           {holding.unrealized === null ? "—" : <Delta amount={holding.unrealized} />}
         </td>
-        {/* `$0`, not a dash, for a holding whose instrument carries no rate —
-            including one nobody can price, which shows a blank Value and a `$0`
-            here in the same row. That pairing looks wrong and is the accepted
-            limitation working as chosen (DESIGN.md §14, limitation 9): `quote`
-            cannot tell "the provider said it pays nothing" from "nobody asked",
-            so both are read as nothing.
-
-            A plain `Amount` rather than a `Delta`: a payout is not a movement,
-            so it takes no arrow and no leading plus, and a liability whose note
-            carries a rate keeps its minus like every other negative figure in
-            the table.
-
-            The amount and the percentage share a wrapper so that the phone gets
-            one right-aligned block against the card's `data-label`, rather than
-            two flex items pushed apart by it. */}
+        {/* `$0`, not a dash, for an instrument carrying no rate — even one
+            nobody can price, which pairs a blank Value with a `$0` here.
+            That looks wrong and is the accepted limitation working as chosen
+            (§14, limitation 9): `quote` cannot tell "pays nothing" from
+            "nobody asked". A plain `Amount`, not `Delta`: a payout is not a
+            movement — no arrow, no leading plus, and a liability's rate
+            keeps its minus. Amount and percentage share a wrapper so the
+            phone gets one right-aligned block against the card's label. */}
         <td className="is-numeric" role="cell" data-label="Annual dividend">
           <div>
             <Amount value={holding.annualDividend} />
@@ -1224,16 +1106,12 @@ function Row({
       </tr>
 
       {open ? (
-        // The line beneath the open row is the editor's footer: what saving
-        // will do, and the two controls that do it.
-        //
-        // Save and Cancel are *here* rather than in the actions cell, which is
-        // where they started. That column is sized by `width: 1%` to the 32px
-        // control it holds at rest, and two buttons in it widened the table
-        // past its panel — putting the whole screen into a horizontal scroll to
-        // reach a Save button, on the one interaction that is supposed to be
-        // quick. This row is already full width and already carries the
-        // sentence explaining the click, so the button belongs beside it.
+        // The editor's footer: what saving will do, and the two controls that
+        // do it. Save and Cancel are *here*, not in the actions cell — that
+        // column is sized `width: 1%` to its 32px resting control, and two
+        // buttons in it widened the table into a horizontal scroll to reach
+        // Save. This row is already full width and already carries the
+        // sentence explaining the click.
         <tr className="row-note" role="row">
           <td colSpan={span} role="cell" data-label="">
             <div className="row-editor">
@@ -1250,12 +1128,10 @@ function Row({
                     </p>
                   ))
                 ) : (
-                  // Said before the click rather than after it, exactly as the
-                  // set-balance form says its own version: what saving does
-                  // here is not what "edit" usually means, and a reader who
-                  // expects one number to be overwritten would not expect a
-                  // statement dated today to appear carrying every other
-                  // position in the account.
+                  // Said before the click (the set-balance form's rule): what
+                  // saving does is not what "edit" usually means, and a
+                  // reader expecting one number overwritten would not expect
+                  // a new statement carrying every other position forward.
                   <p className="form-note">
                     Saving records a new statement for {holding.accountName}
                     {editor.asOf === null ? null : <>, dated {editor.asOf},</>} carrying every
@@ -1302,14 +1178,11 @@ function Row({
 }
 
 /**
- * What the totals were computed from (§8.2's rule: sum what is known and label
- * the coverage).
- *
- * Three counts, not one, because they are genuinely three. A workplace plan
- * routinely reports a price and no cost basis at all, so the value total can be
- * complete while the unrealized total is short; and an instrument nobody can
- * quote is missing from the value total while its cost basis is on file. Saying
- * "40 of 42" once would have to pick one of those and misreport the others.
+ * What the totals were computed from (§8.2: sum what is known and label the
+ * coverage). Three counts, not one, because they are genuinely three: a
+ * workplace plan reports a price and no cost basis (value complete,
+ * unrealized short), and an unquotable instrument is the reverse. One
+ * "40 of 42" would pick one and misreport the others.
  */
 function Coverage({ total, grouped }: { total: Total; grouped: boolean }) {
   const { valueCoverage: value, unrealizedCoverage: unrealized } = total;

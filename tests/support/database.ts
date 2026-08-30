@@ -1,17 +1,11 @@
 /**
- * The primary test seam: a real Postgres with the migrations applied, seeded
- * through the fixture builder, read through the query module.
- *
- * No mock, no in-memory substitute, no SQLite. The risk this slice exists to
- * contain lives in Postgres-specific SQL and in `numeric` handling, and both
- * disappear under a substitute — a fake database would pass while the real one
- * silently rounded money or resolved the wrong position set.
- *
- * **Isolation is by transaction rollback.** Every test body runs inside a
- * transaction that is always rolled back, so no test can see another's rows and
- * ordering never matters. That also means a test may read its own writes but
- * nothing survives the test, so the suite leaves the database exactly as it
- * found it — including after a failure.
+ * The primary test seam: real Postgres with the migrations applied, seeded
+ * through the fixture builder, read through the query module. No mock, no
+ * SQLite: the risk lives in Postgres-specific SQL and `numeric` handling,
+ * and both disappear under a substitute. **Isolation is by transaction
+ * rollback** — every test body runs in a transaction always rolled back, so
+ * no test sees another's rows, ordering never matters, and the suite leaves
+ * the database exactly as found, failures included.
  *
  * Requires a database. See `compose.test.yaml`:
  *   docker compose -f compose.test.yaml up -d --wait

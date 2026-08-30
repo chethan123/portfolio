@@ -1,24 +1,17 @@
-/* Portfolio Tracker — the whole stylesheet.
- *
- * Tokens are DESIGN.md §13, extracted from the Stitch screens (Portfolio
- * Dashboard, Account Details, Views Analysis; desktop and mobile; light and
- * dark). The brief is an instrument panel: unsaturated surfaces, depth from a
- * tonal step plus a hairline, and the only saturated colour on the page
- * carried by the data itself.
- *
- * Nothing below hardcodes a colour. Charts included — §12 requires them to
- * resolve from the same custom properties as everything else, which is what
- * makes a theme change re-colour the trend line for free.
+/* Portfolio Tracker — the whole stylesheet. Tokens are DESIGN.md §13,
+ * extracted from the Stitch screens; the brief is an instrument panel:
+ * unsaturated surfaces, depth from a tonal step plus a hairline, the only
+ * saturated colour carried by the data itself. Nothing below hardcodes a
+ * colour, charts included — §12 requires them to resolve from the same
+ * custom properties, which is what re-colours the trend line on a theme
+ * change for free.
  */
 
 /* --- Fonts ---------------------------------------------------------------
- * Self-hosted, latin subset, variable weight (DESIGN.md §13.4). Not the CDN
- * the mocks use: this is an offline-capable PWA holding a household's
- * finances, and a per-visit third-party request fails both of those.
- *
- * One family. The previous system split interface type from data type across
- * Inter and JetBrains Mono; the new screens set every figure in Inter, and the
- * alignment that mono bought is bought instead by `tabular-nums` below.
+ * Self-hosted, latin subset, variable weight (§13.4) — not the mocks' CDN:
+ * an offline-capable PWA holding a household's finances fails on a
+ * per-visit third-party request twice over. One family: every figure sets
+ * in Inter, and the alignment mono once bought comes from `tabular-nums`.
  */
 
 @font-face {
@@ -33,10 +26,10 @@
 }
 
 /* --- Tokens --------------------------------------------------------------
- * The three-block structure is DESIGN.md §12, kept exactly so the cookie-backed
- * toggle drops in later without touching a token. The `:not([data-theme=
- * "light"])` guard is what lets an explicit light choice beat a dark OS
- * setting — without it the toggle only ever works in one direction.
+ * The three-block structure is DESIGN.md §12, kept exactly so the
+ * cookie-backed toggle drops in later without touching a token. The
+ * `:not([data-theme="light"])` guard lets an explicit light choice beat a
+ * dark OS setting — without it the toggle works in one direction only.
  */
 
 :root {
@@ -63,46 +56,30 @@
   --warning: #92500e;
   --warning-surface: #fef3c7;
 
-  /* The panel surface is a *role*, and the role resolves to a different step
-   * of the ramp per theme: light lifts a card off the canvas by going lighter,
-   * dark by going lighter too — but from opposite ends (§13.2). */
+  /* The panel surface is a *role*, resolving to a different ramp step per
+   * theme: both lift a card by going lighter, from opposite ends (§13.2). */
   --panel: var(--surface-container-lowest);
   --panel-hover: var(--surface-container-low);
 
-  /* The ground under a table header, a ticker badge, an account tile, a group
-   * heading or a total row: one legible step above `--panel`, in whichever
-   * direction the theme runs.
+  /* The ground under a table header, ticker badge, account tile, group
+   * heading or total row: one legible step above `--panel`, whichever way
+   * the theme runs. Its own role because `--panel` is not the same ramp step
+   * in both themes — naming `--surface-container-high` directly drew a
+   * legible 1.23:1 strip in light and a 1.02:1 nothing in dark, collapsing
+   * all five grounds into the panel. Dark spends its spare step
+   * (`-highest`); light keeps its value to the byte.
    *
-   * It has to be its own role, because `--panel` is not the same step of the
-   * ramp in both themes — light's is `--surface-container-lowest`, two steps
-   * below `-high`, and dark's is `--surface-container`, one. All ten rules
-   * that draw one of those grounds used to name `--surface-container-high`
-   * directly, so a single declaration drew a legible 1.23:1 strip in light and
-   * a 1.02:1 nothing in dark, and the header band, the badges, the tile, the
-   * group heading and the grand total all collapsed into the panel. Dark
-   * spends the step it has spare (`-highest`, which nothing else claims);
-   * light keeps the value it already had, to the byte.
+   * `--panel-hover` deliberately does not move with it: it is also the
+   * subtotal's ground, and lifting it would put a subtotal *further* from
+   * the panel than the grand total it rolls up into. The ordering is
+   * `panel < subtotal < header = group = total` in both themes.
    *
-   * `--panel-hover` deliberately does not move with it. It is the subtotal's
-   * ground as well as a row's hover, and lifting it too puts a group subtotal
-   * *further* from the panel than the grand total it rolls up into. Light
-   * orders these `panel < subtotal < header = group = total`; dark has to
-   * mirror that ordering, not merely find separation somewhere.
-   *
-   * The cost, knowingly accepted: dark row hover stays at 1.02:1. Above
-   * `--panel` dark has only `-high`, `-highest` and `--surface-bright`, and
-   * four roles want a step — hover, subtotal, group and total, header band.
-   * Hover is the one left flat: it is the only one of the four that is
-   * transient, and the only one that arrives with the cursor already pointing
-   * at the row it is describing. It is measured, and it is a decision rather
-   * than an oversight.
-   *
-   * One measured cost on the other side, also accepted: a *loss* figure in a
-   * grand total row now sits on `-highest` rather than `-high` in dark, and
-   * `--loss` (#f87171) measures 4.47:1 there against 5.18:1 before — 0.03 under
-   * the 4.5:1 §13.2 picked that value to clear on `--panel`. Only the grand
-   * total is affected (a subtotal keeps `--panel-hover`), and only when it is
-   * negative. Moving the value is §13.2's decision to make, not this rule's. */
+   * Two measured costs, knowingly accepted: dark row hover stays at 1.02:1
+   * (of the four roles wanting a step, hover is the only transient one, and
+   * arrives with the cursor already on the row); and a dark grand-total
+   * *loss* figure sits at 4.47:1 on `-highest` against §13.2's 4.5:1 target
+   * — only the grand total, only when negative. Moving the value is §13.2's
+   * decision, not this rule's. */
   --surface-emphasis: var(--surface-container-high);
 
   /* Light is the only theme with elevation; dark is flat (§13.5). */
@@ -138,15 +115,11 @@
   --space-xl: 40px;
   --canvas-margin: 32px;
   --rail: 280px;
-  /* Wide enough for the Holdings table, which is what it is measured against.
-   * That table is the widest thing the application draws — DESIGN.md §8.1 calls
-   * it the workhorse and gives it the columns that would otherwise be four more
-   * pages — so it is the one screen that decides this number. At 1152 it fitted
-   * exactly, to the pixel, until the annual dividend made a ninth column; the
-   * panel then gave 1086 to a table wanting 1206 and every desktop scrolled
-   * sideways to read the last column. `.data-table-scroll` still catches a
-   * narrow window, which is its job; it should not be what a full-size desktop
-   * relies on to see a column. */
+  /* Measured against the Holdings table, the widest thing the app draws
+   * (§8.1's workhorse) — the one screen that decides this number. At 1152
+   * the ninth column (annual dividend) overflowed and every desktop
+   * scrolled sideways; `.data-table-scroll` catches a narrow window, but a
+   * full-size desktop must not rely on it to see a column. */
   --content-max: 1280px;
   --control-h: 40px;
   /* A field's caption block: one line of body-sm plus `label`'s gap. What an
@@ -282,10 +255,10 @@ a {
   color: var(--primary);
 }
 
-/* Every figure in the app routes through this. The mono family is gone
- * (§13.4); `tabular-nums` is what now holds a column of money in line, and it
- * is not optional — proportional digits do not align, and a figure that
- * changes width as it updates makes the whole row twitch. */
+/* Every figure routes through this. The mono family is gone (§13.4);
+ * `tabular-nums` holds a column of money in line, and it is not optional —
+ * proportional digits do not align, and a figure changing width as it
+ * updates makes the whole row twitch. */
 .u-data {
   font-variant-numeric: tabular-nums;
 }
@@ -299,25 +272,15 @@ a {
   color: var(--on-surface-variant);
 }
 
-/* A masked amount (spec 0007, story 8).
- *
- * The run of dots is a constant — ADR-0002 refuses to size it to the figure it
- * replaces, because digit count is the magnitude being masked — and it is
- * narrower than most amounts. Left alone, every numeric column would visibly
- * narrow the moment the screen was masked and a reader would lose their place
- * mid-row.
- *
- * The floor is on the *cell* as well as on the dots, and it has to be both.
- * Sizing only the dots holds a column of wide figures still and does nothing
- * for a column of narrow ones: `$0.00` is five characters, so Annual dividend
- * would still jump outward on masking. One shared floor means both states of
- * every amount column start from the same width.
- *
- * It is a floor, not a fixed size: an unusually wide figure still sets its own
- * column, so a portfolio with an eight-figure balance in one column will still
- * move a little when that column is masked. Sizing every amount identically
- * would mean a fixed table layout, which is a larger change than the complaint
- * warrants. */
+/* A masked amount (spec 0007, story 8). The dot run is a constant (ADR-0002:
+ * digit count is the magnitude being masked) and narrower than most amounts,
+ * so unfloored, every numeric column would narrow on masking and lose the
+ * reader's place mid-row. The floor is on the *cell* as well as the dots —
+ * sizing only the dots does nothing for a narrow column, which would still
+ * jump outward. A floor, not a fixed size: an eight-figure balance still
+ * sets its own column and moves a little when masked; sizing every amount
+ * identically would mean a fixed table layout, a larger change than the
+ * complaint warrants. */
 .amount-dots {
   display: inline-block;
   min-width: 9ch;
@@ -350,9 +313,9 @@ a {
 }
 
 /* --- Shell ---------------------------------------------------------------
- * A fixed 280px rail (§13.1) whose *items* are §8.4's five, ordered by how
- * often each page is opened. Below 1024px the rail is replaced by a bottom
- * bar, which is what all four mobile mocks do — no drawer, no hamburger.
+ * A fixed 280px rail (§13.1) whose items are §8.4's five, ordered by how
+ * often each is opened. Below 1024px a bottom bar replaces it, as all four
+ * mobile mocks do — no drawer, no hamburger.
  */
 
 .app {
@@ -460,25 +423,19 @@ a {
   height: 24px;
 }
 
-/* The rail's foot holds one filled button. The mock spends it on "Invest Now";
- * this app has nothing to sell, so it spends it on the only action that
- * writes (§13.1).
- *
- * The width is deliberately left alone: as a flex item of the column rail it
- * already stretches to the rail minus these margins. `.button--block` here
- * would resolve `width: 100%` against the full rail and then add the margins
- * on top of it, hanging the button 23px past the rail's edge. */
+/* The rail's foot holds one filled button — the mock's "Invest Now" slot,
+ * spent on the only action that writes (§13.1). Width deliberately left
+ * alone: a flex item already stretches to the rail minus margins, and
+ * `.button--block` would resolve `width: 100%` against the full rail plus
+ * margins, hanging the button 23px past the edge. */
 .app-rail-action {
   margin: 0 var(--space-lg) var(--space-lg);
 }
 
-/* The masking toggle (spec 0007). Drawn as a nav item rather than as a button
- * so that the rail's foot reads as one column: it sits beside Settings, and a
- * second filled button above the upload one would compete with it.
- *
- * Full width and left-aligned like the links above it, because the label
- * changes length between its two states — "Hide amounts" and "Show amounts" —
- * and a centred control would shift its own glyph every time it was pressed. */
+/* The masking toggle (spec 0007), drawn as a nav item so the rail's foot
+ * reads as one column — a second filled button would compete with Upload.
+ * Full width and left-aligned because the label changes length between its
+ * two states, and a centred control would shift its own glyph on press. */
 .app-rail-masking {
   margin-inline: 0 var(--space-lg);
 }
@@ -551,11 +508,10 @@ a {
     justify-content: space-between;
     height: 64px;
     padding-inline: var(--space-md);
-    /* The ground the rail this bar replaces has, and the one the bottom bar
-     * already takes. §13.5: depth is a tonal step plus a 1px border. On
-     * `--background` the bar took only the border, drew the same colour as the
-     * canvas it floats over in both themes, and read as part of the page
-     * rather than as chrome — while the bottom bar, its other half, stepped. */
+    /* The ground the rail this bar replaces has, and the bottom bar takes
+     * (§13.5: depth is a tonal step plus a border). On `--background` the
+     * bar drew the canvas colour and read as page, not chrome, while its
+     * other half stepped. */
     background: var(--panel);
     border-bottom: 1px solid var(--outline-variant);
   }
@@ -573,17 +529,12 @@ a {
     gap: var(--space-sm);
   }
 
-  /* On the phone the label is the first thing to go: the bar is 64px of a
-   * 360px screen and it is already carrying the brand and Upload. The glyph
-   * stays, and the accessible name comes off the label that is still in the
-   * markup rather than out of an attribute that could drift from it.
-   *
-   * A DELIBERATE DUPLICATION of `.visually-hidden`, named here as
-   * `docs/README.md` asks. The class itself cannot be used: the label is
-   * visible in the rail and hidden in the bar, so which treatment applies is a
-   * question of viewport rather than of markup, and plain CSS has no way to
-   * borrow one rule inside a media query. If `.visually-hidden` changes, this
-   * changes with it. */
+  /* On the phone the label goes; the glyph stays, and the accessible name
+   * comes off the label still in the markup, not an attribute free to drift.
+   * A DELIBERATE DUPLICATION of `.visually-hidden` (named as docs/README.md
+   * asks): the label is visible in the rail and hidden in the bar — a
+   * viewport question, not a markup one, and plain CSS cannot borrow a rule
+   * inside a media query. If `.visually-hidden` changes, change this too. */
   .app-topbar .masking-toggle {
     width: auto;
     padding: var(--space-sm);
@@ -618,29 +569,20 @@ a {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
 
-  /* The list markup is real for assistive technology and invisible to the
-   * layout, so the links themselves are the flex items that share the bar. */
+  /* List markup real for assistive technology, invisible to layout — the
+   * links themselves are the flex items sharing the bar. */
   .app-bottomnav .app-nav,
   .app-bottomnav .app-nav li {
     display: contents;
   }
 
-  /*
-   * Content-sized, because the active item's `--primary-container` ground is a
-   * pill and a pill is the shape of what is in it. On `flex: 1` each item took
-   * a fifth of the bar whatever it held, so the app's one saturated fill was
-   * painted across 144px at 768 and 195px at 1023 — a fifth of the screen, and
-   * the largest area of colour on any page — while the same component was 68px
-   * at 390. `justify-content: space-around` on the bar was inert for the same
-   * reason, and now does the distributing it was written to do.
-   *
-   * `0 1 auto` and not `none`, which is the same thing with `flex-shrink: 0`:
-   * the five items measure 330px content-sized, and the bar has 288px of room
-   * at 320px and 328px at 360px, so with shrinking switched off the last item
-   * is drawn past the right edge of a bar it is fixed inside. Shrinking gives
-   * a 320px phone five even items again, as `flex: 1` did, and every width
-   * from 375 up — an iPhone SE is 375 — gets the pill at its content size.
-   */
+  /* Content-sized: the active item's ground is a pill, and a pill is the
+   * shape of what is in it — on `flex: 1` the app's one saturated fill
+   * stretched to a fifth of the bar (195px at 1023 vs 68px at 390), and
+   * `space-around` was inert. `0 1 auto`, not `none`: the five items
+   * measure 330px and a 320px phone offers 288px, so with shrinking off the
+   * last item drew past the bar's edge; shrinking keeps small phones even
+   * and every width from 375 up gets the pill at content size. */
   .app-bottomnav .app-nav-link {
     flex-direction: column;
     gap: 2px;
@@ -698,12 +640,10 @@ a {
   gap: var(--space-md);
   padding-bottom: var(--space-lg);
   border-bottom: 1px solid var(--outline-variant);
-  /* The actions are `flex: none` — the freshness line and the owner control
-   * both size to their contents and neither shrinks legibly — so between about
-   * 768 and 1100 the strip was wider than the canvas and the page scrolled
-   * sideways, taking the narration off screen with it. Wrapping the whole
-   * actions block onto its own line is what a `flex: none` item needs; it
-   * changes nothing at the widths where it already fitted. */
+  /* The actions are `flex: none` (neither shrinks legibly), so between
+   * ~768 and 1100 the strip out-measured the canvas and the page scrolled
+   * sideways. Wrapping the actions block onto its own line is what a
+   * `flex: none` item needs; nothing changes where it already fitted. */
   flex-wrap: wrap;
 }
 
@@ -729,21 +669,17 @@ a {
   flex: none;
 }
 
-/*
- * A header strip that is only there for what sits in it (spec 0013).
- *
- * The Overview's title is its headline figure, not a heading, so its strip has
- * nothing on the left and the rule and the padding beneath would draw a line
- * under an empty row. It keeps the row and drops the ornament, which is what
- * puts the owner control in the same place on all four screens without giving
- * this one a heading it deliberately does not have.
+/* A header strip only there for what sits in it (spec 0013): Overview's
+ * title is its headline figure, so the strip has nothing on the left and
+ * the rule beneath would underline an empty row. Keep the row, drop the
+ * ornament — the owner control stays in the same place on all four screens.
  */
 .page-header--bare {
   padding-bottom: 0;
   border-bottom: 0;
-  /* `space-between` has nothing to space when the left is a hidden heading,
-   * and would leave the control at the far left — three screens away from
-   * where the same control sits on the other three. */
+  /* `space-between` has nothing to space against a hidden heading and would
+   * park the control at the far left, away from its place on the other
+   * three screens. */
   justify-content: flex-end;
 }
 
@@ -754,26 +690,19 @@ a {
     gap: var(--space-sm);
   }
 
-  /* The stacked column would shrink-wrap the actions row (`align-items:
-   * flex-start` above), and anything inside it sized in percentages then
-   * resolves against the row's own content — a circle that always answers
-   * "as wide as the chips already were". The owner filter's phone rules
-   * depend on this row being honestly full width; see `.owner-filter` in
-   * its own 767px block. */
+  /* The stacked column would shrink-wrap the actions row, so percentage
+   * sizes inside it resolve against the row's own content — a circle always
+   * answering "as wide as the chips already were". The owner filter's phone
+   * rules need this row honestly full width (`.owner-filter`, 767px block). */
   .page-actions {
     align-self: stretch;
   }
 
-  /* headline-sm entire, weight included.
-   *
-   * These declarations moved the size, the line height and the tracking and
-   * left `font-weight: 700` standing from the display-lg rule above, so a phone
-   * drew the title at 24/32/**700** — display-lg's weight at headline-sm's
-   * size, which is a step of neither ramp. §13.4 gives headline-sm weight 600,
-   * and the holdings brief §1.2 names this owner on the same line as the step
-   * ("`.page-title` below 768px"). A ramp step is a triple of size, weight and
-   * tracking; taking two thirds of one is how a component ends up between
-   * steps rather than on one. */
+  /* headline-sm entire, weight included: moving size and tracking while
+   * leaving display-lg's `font-weight: 700` drew 24/32/700 — a step of
+   * neither ramp. §13.4 gives headline-sm weight 600. A ramp step is a
+   * triple of size, weight and tracking; taking two thirds of one puts a
+   * component between steps. */
   .page-title {
     font-size: 24px;
     line-height: 32px;
@@ -863,13 +792,10 @@ a {
   color: var(--on-surface-variant);
 }
 
-/* `margin: 0` because this is rendered as a `<p>` on Holdings, Analysis and the
- * income breakdowns and as a `<span>` on Overview and account detail, and there
- * is no `p` reset in this stylesheet — the reset above covers `body`, `h1`–`h4`
- * and `a`. So the UA's `margin: 1em 0` applied at 12px and the same panel header
- * stood 89px tall on one screen and 77px on the next (105 against 81 at 390px,
- * where the header stacks and the `<p>`'s margin replaces `.panel-header`'s own
- * 4px gap with 16px). §2 specifies 77: 24px padding around a 28px title. */
+/* `margin: 0` because this renders as a `<p>` on some screens and a
+ * `<span>` on others, and this stylesheet has no `p` reset — the UA's
+ * `margin: 1em 0` made the same panel header 89px tall on one screen and
+ * 77px on the next. §2 specifies 77: 24px padding around a 28px title. */
 .panel-count {
   margin: 0;
   font-size: 12px;
@@ -887,8 +813,8 @@ a {
     padding: var(--space-md);
   }
 
-  /* Side by side, a title and the note qualifying it fight over a 390px row
-   * and both wrap. Stacked, each gets the full width and neither breaks. */
+  /* Side by side, a title and its qualifying note fight over a 390px row
+   * and both wrap; stacked, neither breaks. */
   .panel-header {
     flex-direction: column;
     align-items: flex-start;
@@ -896,33 +822,18 @@ a {
   }
 }
 
-/*
- * The same stack, on the other signal: a panel too narrow to hold its own
- * header on one row, whatever the window is doing.
- *
- * The rule above is right about the phone and blind to the bento grid. Overview
- * puts a `2fr 1fr` pair below the chart, and the narrow column measures 218.7px
- * at 1024, 237.3px at 768, 244px at 1100, 304px at 1280 and 377.3px at 1500 —
- * narrow at every desktop width, and never once narrow at the same time as the
- * window is. So "Allocation by account" wrapped to two lines from 768 to 1500
- * and to three at 1024 with "SHARE OF / ASSETS" wrapping beside it, while the
- * "Accounts" header in the wide column never wrapped, and two panels that share
- * a top edge stopped sharing the header edge that makes them read as one row.
- * No media query can express that, because the window is wide in every one of
- * those cases; the panel is what is narrow, and a container query is what asks.
- *
- * 390px is measured, not chosen. That header needs 389.2px to lay itself out on
- * one line — 24px of padding, a 209.7px title, the 12px gap, a 119.5px count
- * and 24px of padding — and the narrow column is 377.3px at 1500 and 397.3px at
- * 1600. So the threshold is the header's own requirement, and it happens to
- * land in the only gap the measured column widths leave: everything that wraps
- * stacks, and 1600 — the one width where the row genuinely fits — keeps it.
- *
- * Both rules, not one. Dropping the viewport rule and keying only on the panel
- * looks tidier and is worse: a `.panel-count` is sometimes a whole sentence
- * rather than a count, and at 500px the Net worth panel is 468px wide — over
- * the threshold — where its note takes enough of the row to break the title
- * across "Net / worth". The two rules answer two different questions.
+/* The same stack on the other signal: a panel too narrow to hold its
+ * header on one row, whatever the window does. The media query above is
+ * blind to the bento grid — Overview's `2fr 1fr` narrow column is narrow at
+ * every desktop width (218.7px at 1024 up to 377.3px at 1500) while the
+ * window never is, so "Allocation by account" wrapped beside an "Accounts"
+ * header that never did. The panel is what is narrow; a container query is
+ * what asks. 390px is measured, not chosen: that header needs 389.2px to
+ * fit one line, and the threshold lands in the only gap the measured column
+ * widths leave — 1600, the one width where the row genuinely fits, keeps it.
+ * Both rules, not one: a `.panel-count` is sometimes a whole sentence, and
+ * at 500px the Net worth panel is 468px — over the threshold — with a note
+ * long enough to break the title. The two rules answer two questions.
  */
 @container (max-width: 390px) {
   .panel-header {
@@ -950,14 +861,11 @@ a {
   margin: 0 0 var(--space-xs);
 }
 
-/* The closing half of the eyebrow's 4px. `.coverage-note` is `margin: 0`
- * everywhere it is used, and everywhere else something around it opens the
- * space: the account detail's `.detail-total` is a flex column with a
- * `--space-xs` gap, and the breakdown panels and Overview's allocation list put
- * it in a padded block of its own. Income's headline is a plain `div`, so the
- * note landed flush against the figure — 4px above the figure, 0 below it, a
- * block spaced on one side only. Written here rather than on the class so the
- * places that already space it do not get 4px twice. */
+/* The closing half of the eyebrow's 4px: everywhere else something around
+ * `.coverage-note` opens the space (a gapped flex column, a padded block),
+ * but Income's headline is a plain `div` and the note landed flush against
+ * the figure. Here rather than on the class so places that already space it
+ * do not get 4px twice. */
 .kpi .coverage-note {
   margin-top: var(--space-xs);
 }
@@ -976,18 +884,12 @@ a {
   color: var(--on-surface);
 }
 
-/* On a phone the headline steps down to headline-lg — the whole step.
- *
- * It was 36px/44px, which is not a row of §13.4's ramp and not a line height
- * the 4px grid pairs with any size in it: a figure invented between display-lg
- * and headline-lg because 48px does not fit a 390px canvas. `.page-title` has
- * the right answer to the same problem one screen up — it steps to a real step
- * — so this takes headline-lg's weight and tracking along with its size, for
- * the reason given there: two thirds of a step is between steps.
- *
- * The account detail's figure takes the same step in its own block below, so
- * that the one role — the big money figure at the top of a screen — is one
- * size on a phone rather than two. */
+/* On a phone the headline steps down to headline-lg — the whole step,
+ * weight and tracking included: 36px/44px was a figure invented between
+ * ramp rows because 48px does not fit a 390px canvas, and two thirds of a
+ * step is between steps (`.page-title`'s reason). The account detail's
+ * figure takes the same step below, so the one role — the big money figure
+ * atop a screen — is one size on a phone, not two. */
 @media (max-width: 767px) {
   .kpi-figure {
     font-size: 32px;
@@ -997,10 +899,9 @@ a {
   }
 }
 
-/* A second figure beside the headline: the ratio the headline is the numerator
- * of. Not a `.delta`, which is a chip for a *movement* — a yield takes no
- * arrow, no leading plus and neither of the gain/loss hues, because there is
- * nothing here for colour to be the redundant channel for (§12). */
+/* A second figure beside the headline: the ratio it is the numerator of.
+ * Not a `.delta` — that chip is for a *movement*; a yield takes no arrow,
+ * no leading plus, neither gain/loss hue (§12). */
 .kpi-aside {
   font-size: 14px;
   line-height: 20px;
@@ -1165,19 +1066,13 @@ a {
   box-shadow: var(--shadow-card);
 }
 
-/*
- * A strip that has to say what it does, over the same 4px caption gap a `label`
- * gives its control.
- *
- * Overview and Account detail put their range strip inside a `.kpi` row, where
- * the figure beside it supplies the context and a caption would be repeating
- * the obvious. The group-by strip on Holdings stands alone on the canvas
- * between two panels, where nothing else on the page says what eight chips are
- * for (holdings-ui-brief §4.1).
- *
- * The default `align-items: stretch` is load-bearing: the strip carries its own
- * `overflow-x: auto` below 768px, and a nav shrink-wrapped to its content has
- * nothing to scroll inside.
+/* A strip that must say what it does, over a `label`'s 4px caption gap:
+ * Overview's range strip sits in a `.kpi` row where the figure supplies
+ * context, but the group-by strip stands alone between two panels with
+ * nothing saying what eight chips are for (holdings brief §4.1). The
+ * default `align-items: stretch` is load-bearing — the strip carries its
+ * own `overflow-x: auto` below 768px, and a shrink-wrapped nav has nothing
+ * to scroll inside.
  */
 .segmented-group {
   display: flex;
@@ -1217,17 +1112,11 @@ a {
   }
 }
 
-/*
- * Bled by half a label line at each end so that `space-between` centres every
- * label on the rule it names.
- *
- * On `inset: 0` the column is exactly as tall as the plot, so `space-between`
- * puts the first span's *top* on the top rule and the last span's *bottom* on
- * the bottom rule; only the middle one lands centred. Measured at 1600, rules
- * at y 280/440/600 carried labels centred at 288/440/592 — the top figure hung
- * below its line and the bottom one floated above its own. Extending the box
- * 8px past each end (half of the 16px line-height below) moves the two outer
- * centres onto 280 and 600 exactly, and leaves the middle where it was.
+/* Bled half a label line past each end so `space-between` centres every
+ * label on its rule: on `inset: 0` the first span's *top* sits on the top
+ * rule and the last's *bottom* on the bottom one — only the middle lands
+ * centred (measured: labels at 288/440/592 against rules at 280/440/600).
+ * The 8px bleed is half the 16px line-height.
  */
 .chart-axis {
   position: absolute;
@@ -1248,11 +1137,9 @@ a {
   display: flex;
   justify-content: space-between;
   gap: var(--space-base);
-  /* 16px, not the 8px this row sat at, because the axis above it now bleeds
-   * 8px past the bottom of the plot: the lowest y label's box used to end on
-   * the plot's bottom edge and now ends level with this row's top, closing the
-   * gap between the two to nothing. 8px of separation plus the 8px of bleed is
-   * what keeps the y axis and the x axis as far apart as they looked before. */
+  /* 16px, not 8px: the axis above bleeds 8px past the plot's bottom, so
+   * 8px of separation plus the bleed keeps the y and x axes as far apart
+   * as they looked before. */
   margin-top: var(--space-md);
   font-size: 12px;
   line-height: 16px;
@@ -1323,13 +1210,10 @@ a {
 
 /* --- The point readout (spec 0010, ADR-0004) ------------------------------
  * Every point's caption and guide are already in the markup; these rules
- * choose which one shows. There is no JavaScript in this interaction.
- *
- * `.chart-readout` is the strip at rest, in flow at the top of the panel
- * body. Each `.chart-point-readout` is one point's alternate, positioned
- * over that same line — absolute against `.chart-hits`, not against its own
- * hit (the hits are deliberately static), so one rule places all of them and
- * `bottom` only has to clear the strip's own margin below.
+ * choose which shows — no JavaScript in this interaction. `.chart-readout`
+ * is the strip at rest; each `.chart-point-readout` is one point's
+ * alternate, absolute against `.chart-hits` (the hits are deliberately
+ * static), so one rule places all of them.
  */
 
 .chart-readout,
@@ -1442,13 +1326,10 @@ a {
   transform: rotate(-90deg);
 }
 
-/* `--surface-container-low` is the role DESIGN.md §13.2 gives that token —
- * "row hover in light; the donut track" — and the holdings brief gives it the
- * same one. The track was stroked a step higher, at the table-header tone,
- * which is a louder ring than an empty track wants in either theme. Nothing on
- * the demo data shows it, because `ring()` makes the positive slices sum to 1
- * and the wedges cover the track completely; it is corrected here only because
- * this change is already moving every other rule that named that token. */
+/* `--surface-container-low` is the role §13.2 gives that token ("row hover
+ * in light; the donut track"). It was stroked a step higher, at the
+ * table-header tone — louder than an empty track wants; nothing on demo
+ * data shows it, since the positive slices sum to 1 and cover the track. */
 .donut-track {
   fill: none;
   stroke: var(--surface-container-low);
@@ -1459,14 +1340,11 @@ a {
   transition: opacity 150ms;
 }
 
-/* The gap is `--space-xs` because a caption over a figure is the one job §13.5
- * gives that token, and this is that pairing: `.u-label` "TOTAL" over
- * `.donut-total`. It was 2px, which is off the 4px grid and half what the
- * identical pairing gets on Overview, where `.kpi-eyebrow` sits 4px above
- * `.kpi-figure`. Two panels drawing the same two elements at two gaps.
- *
- * `.cell-sub`'s 2px, the other sub-scale gap in this file, stays: the holdings
- * brief §2 asks for that one by name. This one nothing asked for. */
+/* `--space-xs` because a caption over a figure is the one job §13.5 gives
+ * that token, and this is that pairing. It was 2px — off the 4px grid and
+ * half what the identical pairing gets on Overview. `.cell-sub`'s 2px
+ * stays: the holdings brief asks for that one by name; this one nothing
+ * asked for. */
 .donut-center {
   position: absolute;
   inset: 0;
@@ -1524,30 +1402,16 @@ a {
   min-width: 0;
 }
 
-/*
- * One column grid for every breakdown, rather than one per table.
- *
- * Analysis stacks three of these panels down the page and Income stacks two,
- * and each drew the same three columns — a label, a money figure, a share —
- * at whatever width its own longest label happened to want. `table-layout` is
- * `auto` by default, so "Alex Rivera", "Workplace plan (401k, 403b)" and
- * "Equity" each sized their own first column and the money column stepped right
- * and back left as you read down: measured at 1600px its right edge landed at
- * 1292.2, 1341.8 and 1274.3, a 67.5px spread between panels of identical
- * structure. The `% of total` column is pinned to the panel edge in all of them,
- * so the middle column was the only thing moving, which is what makes it read
- * as a rendering wobble rather than as three tables.
- *
- * §13.5 gives the general principle when it explains why `--control-h` is a
- * token at all: so that things in different columns line up across a dashboard.
- * A fixed layout is what lets three separate tables share one grid.
- *
- * The two numeric columns are sized and the label takes what is left, because
- * they are the two that cannot be given less than their content: both are
- * `nowrap` by rule, a money figure broken across lines being unreadable. 34%
- * holds `−$14,500.00` at 14px/600 tabular down to 320px, and 20% holds a
- * two-line `% of total` over `−2.1%`. The label wraps instead, which is what a
- * label can do.
+/* One column grid for every breakdown, not one per table: stacked panels
+ * drew the same three columns at whatever width each panel's longest label
+ * wanted (`table-layout: auto`), so the money column's right edge landed at
+ * 1292.2, 1341.8 and 1274.3px down one page — a 67.5px wobble between
+ * panels of identical structure. A fixed layout lets three tables share one
+ * grid (§13.5's `--control-h` principle: things in different columns line
+ * up). The two numeric columns are sized — both `nowrap`, a broken money
+ * figure being unreadable: 34% holds `−$14,500.00` down to 320px, 20% holds
+ * a two-line `% of total` over `−2.1%` — and the label wraps instead, which
+ * is what a label can do.
  */
 .breakdown .data-table {
   table-layout: fixed;
@@ -1561,18 +1425,13 @@ a {
   width: 20%;
 }
 
-/* The headings wrap, for the same reason `.data-table--gains`' do: a fixed grid
- * hands each heading a width chosen for the figures under it, and `% of total`
- * and `Annual dividend` are wider than that below about 1100px. Wrapping the
- * words costs 16px of header height; leaving them `nowrap` costs a table that
- * scrolls sideways behind its own edge. The figures underneath stay `nowrap`,
- * which is the point of the exercise — a money figure broken across lines is
- * unreadable, and a two-line heading over it still says what the column is.
- *
- * The second selector is the two headings this is actually about. `.data-table
- * th.is-numeric` carries the `nowrap` further down this file at the same
- * specificity as `.breakdown .data-table th`, so naming the class is what
- * decides it here rather than which rule happens to come last. */
+/* The headings wrap (`.data-table--gains`' reason): a fixed grid hands each
+ * heading a width chosen for the figures under it. Wrapping costs 16px of
+ * header height; `nowrap` costs a table scrolling behind its own edge. The
+ * figures stay `nowrap` — the point of the exercise. The second selector is
+ * the two headings this is about: `.data-table th.is-numeric` carries
+ * `nowrap` at the same specificity, so naming the class decides it rather
+ * than rule order. */
 .breakdown .data-table th,
 .breakdown .data-table th.is-numeric {
   white-space: normal;
@@ -1591,20 +1450,12 @@ a {
   }
 }
 
-/*
- * …and on a phone the cells give back the padding the grid needs, exactly as
- * the gains table's own rule does below.
- *
- * This is the companion the fixed grid does not work without, and the numbers
- * are the argument for it. A fixed grid divides the canvas it is given; 16px on
- * both sides of three columns takes 96px of a 356px phone canvas before a
- * figure is drawn, and the two right-hand columns are the ones that cannot give
- * any of it back. Without this rule the grid alone paints every share figure
- * 5.8px past its own cell at 390px, and at 320px it puts every money figure
- * 23.9px past its cell and all five tables 4px over their canvas. With it,
- * every overflow and every spill on both screens is 0 at 320 as well as at 390
- * — including Income's two tables, which scroll sideways by 50px and 28px today
- * at 390 and which nobody filed.
+/* …and on a phone the cells give back the padding the grid needs (the
+ * gains table's rule below). The companion the fixed grid does not work
+ * without: 16px both sides of three columns takes 96px of a 356px canvas,
+ * and without this rule the grid paints share figures 5.8px past their
+ * cells at 390px and money figures 23.9px past at 320px. With it, every
+ * overflow on both screens is 0.
  */
 @media (max-width: 767px) {
   .breakdown .data-table th,
@@ -1625,26 +1476,15 @@ a {
  * numeric column right-aligned so the digits stack (§13.4).
  */
 
-/*
- * `position: relative` is not decoration here — it is what keeps the whole
- * document from scrolling sideways.
- *
- * The Holdings actions column heads its column with a `.visually-hidden` span
- * (the "Correct" label a screen reader needs and nobody else sees), and
- * `.visually-hidden` is `position: absolute`. Every ancestor between that span
- * and the root — the `th`, the `table`, this element, `.panel` — was `static`,
- * so its containing block was the *initial* containing block: it laid out at
- * the table's unclipped right edge, at the same document x whatever the
- * viewport, and `overflow-x: auto` here could not clip a box it was not the
- * containing block for. The span then extended the document's scrollable
- * overflow to that edge — 1503px on the ungrouped table, 1387–1482px on the
- * views that drop a column or open the row editor — so every window narrower
- * than that scrolled the entire canvas, rail and all, and §5 of the holdings
- * brief promises the opposite: "the page body never scrolls sideways".
- *
- * The one declaration gives the span a containing block inside the clip. It is
- * safe to make this element a containing block because that span is the only
- * absolutely positioned descendant any `.data-table-scroll` in the app has.
+/* `position: relative` is not decoration — it keeps the whole document
+ * from scrolling sideways. The Holdings actions column heads itself with a
+ * `.visually-hidden` span, which is `position: absolute`; with every
+ * ancestor `static` its containing block was the *initial* one, so it laid
+ * out at the table's unclipped right edge (~1503px) beyond the clip's
+ * reach, and every narrower window scrolled the entire canvas — against the
+ * holdings brief §5's "the page body never scrolls sideways". This gives
+ * the span a containing block inside the clip; safe because that span is
+ * the only absolutely positioned descendant any `.data-table-scroll` has.
  */
 .data-table-scroll {
   position: relative;
@@ -1703,40 +1543,19 @@ a {
   gap: var(--space-sm);
 }
 
-/*
- * …and on a phone it centres on the first line instead of on the block.
- *
- * `align-items: center` is the pricing brief's own word for this row
- * (`pricing-ui-brief.md:144`), and it is right for exactly as long as the text
- * block is about the chip's own height: an instrument name that fits one line
- * makes a 38px block against a 32px badge, and the badge lands 9.5px under the
- * line, which reads as centred. Below 768px the name wraps and the rule goes on
- * centring against whatever that produces. On `/accounts/7` at 390px the SPAXX
- * block is five lines and 118px tall, so its badge sits 49px low — level with
- * the fourth line of the fund's own title, labelling nothing. `/income` does
- * the same to the legend dots, which land beside the *second* line of "Ally
- * Online Savings" and "Vanguard Roth IRA".
- *
- * So below the breakpoint the chip stops centring on the block and centres on
- * the line. Flush tops would be the smaller change and it is the wrong one: a
- * 12px dot top-aligned against a 20px line sits up at the ascender rather than
- * beside the word, and a 32px badge top-aligned hangs 6px low. Each chip is
- * instead offset by half the difference between its own height and the 20px
- * line it labels — the badge up 6px, the dot down 4px — which is what `center`
- * itself computes when the block is that one line and nothing more.
- *
- * The badge's rise costs nothing: there is 16px above it either way — on the
- * cell, in every table that is still a table, and on the card itself once
- * Holdings reflows — and the flex container's height is the text block's
- * whatever the chip does, so no row grows and no card moves. Measured at 390px,
- * the worst offset on `/accounts/7`, `/holdings` and `/income` goes from 49.5px
- * to 0.5px and every block keeps the height it had.
- *
- * Scoped below 768px and left alone above it, including the one place above it
- * where the same thing happens: at exactly 768px the Holdings table still has
- * thirteen columns, so its names wrap and its badges run up to 65px low. That
- * is the desktop table being too narrow for its columns, which is a different
- * argument from this one, and it is not settled by moving a chip.
+/* …and on a phone it centres on the first line instead of on the block.
+ * `align-items: center` (the pricing brief's word) is right while the text
+ * block is about the chip's height; below 768px names wrap, and a
+ * five-line SPAXX block put its badge 49px low — level with the fourth line
+ * of the title, labelling nothing. Not flush tops (a 12px dot top-aligned
+ * sits at the ascender; a 32px badge hangs 6px low): each chip offsets by
+ * half the difference between its height and the 20px line it labels —
+ * badge up 6px, dot down 4px — which is what `center` itself computes for a
+ * one-line block. Costs nothing: the flex container's height is the text
+ * block's, so no row grows; measured worst offset goes 49.5px → 0.5px.
+ * Scoped below 768px: at exactly 768 the thirteen-column table also wraps
+ * names, but that is the desktop table being too narrow for its columns — a
+ * different argument, not settled by moving a chip.
  */
 @media (max-width: 767px) {
   .cell-stack {
@@ -1752,20 +1571,12 @@ a {
   }
 }
 
-/*
- * A caption under a cell's primary line.
- *
- * The weight and the numeric variant are set rather than inherited, and both
- * for the same reason: this class is used inside four different row roles and
- * every one of them sets type of its own. Left to inherit, one caption class
- * rendered at three weights on a single grouped table — 400 under a body row,
- * 600 under a group heading and a subtotal, 700 under the grand total — so
- * "17 of 18" beneath the total was bold and the identical caption two rows
- * above it was not. §1.2 of the holdings brief gives the class one weight, 400,
- * and §13.4 gives every figure `tabular-nums`; the captions that carry a figure
- * were picking the variant up only when they happened to sit in an
- * `.is-numeric` cell, which is how "$47,838.57 of it in taxable accounts" on
- * Analysis ended up the one non-tabular figure in the app.
+/* A caption under a cell's primary line. Weight and numeric variant are
+ * set, not inherited: the class sits inside four row roles that each set
+ * type of their own, so left to inherit it rendered at three weights on one
+ * grouped table (the brief gives it one, 400) — and captions picked up
+ * `tabular-nums` only inside `.is-numeric` cells, leaving one figure on
+ * Analysis the app's only non-tabular one.
  */
 .cell-sub {
   display: block;
@@ -1943,9 +1754,9 @@ a.account-row:hover {
   letter-spacing: -0.01em;
 }
 
-/* Label and value differ by weight *and* colour, with the colon belonging to
- * the label — the mock's typesetting, and the reason the pairs stay legible
- * when they wrap. */
+/* Label and value differ by weight *and* colour, the colon belonging to
+ * the label — the mock's typesetting, and why the pairs stay legible when
+ * they wrap. */
 .detail-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1980,27 +1791,18 @@ a.account-row:hover {
   border-top: 1px solid var(--outline-variant);
 }
 
-/*
- * The header's actions, side by side.
- *
- * `.detail-total` is a column and stays one — the figure and its coverage note
- * belong stacked. Two buttons stacked read as two unrelated decisions, so they
- * get a row of their own inside it, right-aligned on desktop by the column's
- * own `align-items`.
- */
+/* The header's actions, side by side: `.detail-total` stays a column (the
+ * figure and its coverage note belong stacked), but two buttons stacked
+ * read as two unrelated decisions, so they get a row of their own. */
 .detail-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-sm);
 }
 
-/* display-lg, and now its line height too.
- *
- * Size, weight and tracking were the step's already; the line height was 48px
- * against the ramp's 56px. On a 48px Inter face that makes the half-leading
- * *negative*, so the account's total sat about 10px tighter under "TOTAL VALUE"
- * than `/income`'s headline — the same role, the same 4px `--space-xs` gap
- * above it, two different amounts of air. `.kpi-figure` had the step right;
+/* display-lg, line height included: 48px line height on a 48px face makes
+ * the half-leading *negative*, sitting this total ~10px tighter under its
+ * label than the same role on `/income`. `.kpi-figure` had the step right;
  * this is the same step, written the same way. */
 .detail-figure {
   margin: 0;
@@ -2012,14 +1814,11 @@ a.account-row:hover {
 }
 
 @media (min-width: 768px) {
-  /* Wraps rather than crushes. `.detail-total` must not shrink — the figure
-   * is money and the actions are a row of their own — so when both sides
-   * outgrow the card (three actions on a balance-kind account against the
-   * ~630px a header gets just past the rail's breakpoint) something has to
-   * give, and without a wrap it was the identity: squeezed to a sliver, the
-   * account name breaking one word per line. The total drops to a line of its
-   * own instead, held against the right edge by its auto margin — a wrapped
-   * line under `space-between` alone would sit on the left. */
+  /* Wraps rather than crushes: `.detail-total` must not shrink (the figure
+   * is money), so when both sides outgrow the card the identity was what
+   * gave — squeezed to a sliver, the name breaking one word per line. The
+   * total drops to its own line instead, held right by its auto margin —
+   * a wrapped line under `space-between` alone would sit on the left. */
   .detail-header {
     flex-direction: row;
     flex-wrap: wrap;
@@ -2028,13 +1827,10 @@ a.account-row:hover {
     gap: var(--space-lg);
   }
 
-  /* The basis is the identity's graceful floor — the tile and a few words of
-   * name on one line — and is what the wrap decision weighs, since a flex
-   * line breaks on base sizes, never on how far an item could shrink. Below
-   * the floor plus the total's own width the header stacks; above it the
-   * identity takes the slack and its meta pairs wrap inside as they always
-   * have. Without a basis the identity's full one-line width decides, and the
-   * header stacks at widths the old layout handled gracefully. */
+  /* The basis is the identity's graceful floor — a flex line breaks on base
+   * sizes, never on how far an item could shrink. Without one, the
+   * identity's full one-line width decides and the header stacks at widths
+   * the old layout handled gracefully. */
   .detail-identity {
     flex: 1 1 360px;
     min-width: 0;
@@ -2057,12 +1853,9 @@ a.account-row:hover {
     letter-spacing: 0;
   }
 
-  /* The same headline-lg step `.kpi-figure` takes above, and for the second
-   * half of the same finding: this was 36px/**40px** while `.kpi-figure` was
-   * 36px/**44px**, so one role — the screen's own money figure — was drawn at
-   * two line heights on a phone and neither of them was in the ramp. Now both
-   * are 32/40/600 at −0.01em, and the account total and the net-worth headline
-   * are the same size again. */
+  /* The same headline-lg step `.kpi-figure` takes: this was 36/40 while
+   * `.kpi-figure` was 36/44 — one role at two line heights, neither in the
+   * ramp. Both are now 32/40/600 at −0.01em. */
   .detail-figure {
     font-size: 32px;
     line-height: 40px;
@@ -2070,47 +1863,25 @@ a.account-row:hover {
     letter-spacing: -0.01em;
   }
 
-  /*
-   * The tile belongs to the title, not to the header block.
-   *
-   * `align-items: center` centres the tile against everything to its right —
-   * the `h1` *and* the four-pair meta list under it. On a desktop row that list
-   * is one line and the tile lands within 6px of the title's own centre, which
-   * is what the rule was written against. At 390px the pairs wrap to four rows,
-   * the block is 148px tall, and the tile settles 22px *below* the bottom of
-   * the title, level with the Institution row and reading as that row's icon.
-   * It also left 52px of empty gutter above and below itself, with the account
-   * name the one heading on the page indented off the left margin for a tile
-   * that was nowhere near it.
-   */
+  /* The tile belongs to the title, not the header block: `align-items:
+   * center` centres it against the `h1` *and* the meta list, so at 390px —
+   * pairs wrapped to four rows, a 148px block — the tile settled 22px below
+   * the title, level with the Institution row and reading as its icon. */
   .detail-identity {
     align-items: flex-start;
   }
 }
 
-/* The ticker badge in a holdings row. A rounded rect rather than the mock's
- * circle: a four-character ticker does not fit a 32px circle at 12px.
- *
- * The floor is 60px rather than the 40px both briefs quote, because 40px is a
- * floor only three-letter tickers ever reach: above it the badge sizes to its
- * own text and the instrument name beside it starts wherever that lands.
- * Measured on `/accounts/7`, seven rows put their name at seven different left
- * edges spanning 18.5px, and across accounts the same column starts at 403px on
- * one page and 421px on another. The name is the primary text of the widest
- * column on the screen, and a primary text column that begins in a different
- * place on every row is not a column.
- *
- * 60px is the widest badge a five-character ticker draws here — `VTSNX`
- * measures exactly 60.0px at 12px/700 with this letter-spacing and 8px of
- * inline padding, and five characters is the longest a US symbol gets. It is
- * also the largest floor that costs nothing: at 62px the Asset column takes a
- * fourth wrapped line on the longest instrument name, and at 64px the Holdings
- * table stops fitting its panel at 1600px and starts scrolling inside itself.
- *
- * It stays a floor rather than becoming a fixed width because no width covers
- * every symbol — `SWPPX` measures 61.9px and `VMMXX` 66.3px — and a ticker that
- * exceeds the floor should widen its own badge and rag the column by those few
- * pixels rather than spill its text over the name beside it. */
+/* The ticker badge. A rounded rect, not the mock's circle: four characters
+ * do not fit a 32px circle at 12px. The floor is 60px, not the briefs' 40px
+ * — 40 is a floor only three-letter tickers reach, so names started at
+ * seven different left edges on one page, and a primary text column that
+ * begins in a different place per row is not a column. 60px is the widest a
+ * five-character ticker draws (`VTSNX` measures 60.0px exactly) and the
+ * largest floor that costs nothing: 62px takes a fourth wrapped line on the
+ * longest name, 64px scrolls the Holdings table at 1600. A floor, not a
+ * fixed width: `VMMXX` measures 66.3px, and an over-floor ticker should rag
+ * the column by a few pixels rather than spill over the name beside it. */
 .badge {
   flex: none;
   display: grid;
@@ -2176,13 +1947,10 @@ a.account-row:hover {
   border-color: var(--outline);
 }
 
-/*
- * The third weight: no box at all, for an action that must not compete with
- * the filled one beside it. It keeps `.button`'s height rather than collapsing
- * to its text — the box is what this modifier drops, not the line — so a text
- * action stands on the same line as the button it accompanies instead of on
- * the bottom edge of the row.
- */
+/* The third weight: no box at all, for an action that must not compete with
+ * the filled one beside it. It keeps `.button`'s height — the box is what
+ * this drops, not the line — so a text action stands level with the button
+ * it accompanies. */
 .button--text {
   padding: 0;
   border: 0;
@@ -2224,20 +1992,11 @@ textarea {
   padding: var(--space-base) var(--space-sm);
 }
 
-/* A box that a figure is typed into is a figure (§13.4: "**Every figure sets
- * `font-variant-numeric: tabular-nums`.** … it is not optional").
- *
- * `inputmode="decimal"` is already how this application marks the boxes that
- * take one — the balance, the amount owed, the capital gains rate, and the two
- * in the holdings editor — so it is the selector rather than a new class or an
- * id. `.cell-input` sets the same property for itself further down and keeps
- * doing so: there it is half of a pair with `text-align: right`, and the reason
- * given is the column it sits in rather than the digits alone.
- *
- * `#set-balance-amount` was the one money box in the application computing
- * `normal` here — every displayed figure already had it and both editor boxes
- * did — so the balance was the only figure in the app that changed width under
- * the hand typing it. */
+/* A box a figure is typed into is a figure (§13.4's non-optional
+ * `tabular-nums`). `inputmode="decimal"` already marks every such box, so
+ * it is the selector rather than a new class. `#set-balance-amount` was the
+ * one money box computing `normal` — the only figure in the app changing
+ * width under the hand typing it. */
 input[inputmode="decimal"] {
   font-variant-numeric: tabular-nums;
 }
@@ -2250,21 +2009,12 @@ textarea:focus-visible {
   border-color: var(--primary);
 }
 
-/*
- * A box that was refused.
- *
- * Every form in this application already sets `aria-invalid` and prints the
- * reason underneath, and until now nothing drew it — which was survivable while
- * the message sat directly beneath its own box. The Holdings editor is where it
- * stops being survivable: its boxes are in table columns and their messages are
- * in the row below, so with two of them open a reader has to match a sentence
- * to a column by reading it.
- *
- * Never colour alone (§12). The sentence is the claim and it is still there in
- * words; this is the second channel, and the border thickens as well as
- * changing hue so it survives being seen without colour at all. The focus ring
- * still wins while the box is focused, because where the cursor is is the more
- * urgent of the two facts.
+/* A box that was refused. Every form sets `aria-invalid` and prints the
+ * reason underneath; nothing drew it until the Holdings editor made that
+ * unsurvivable — its boxes are in table columns, their messages in the row
+ * below. Never colour alone (§12): the border thickens as well as changing
+ * hue, so it survives being seen without colour. The focus ring still wins
+ * while focused — where the cursor is is the more urgent fact.
  */
 input[aria-invalid="true"],
 select[aria-invalid="true"],
@@ -2273,31 +2023,17 @@ textarea[aria-invalid="true"] {
   border-width: 2px;
 }
 
-/*
- * The file input's own button.
- *
- * Left alone it is the browser's — 14px Arial on a grey ground, a 2px outset
- * border, square corners — which makes it the one control in the application
- * not drawn by this stylesheet, sitting inside a box that is.
- *
- * It is drawn as the field's **leading action** rather than as a button placed
- * inside a field: full height, flush to the field's left edge, a tonal step off
- * its ground and one hairline dividing it from the filename beside it. Physical
- * `border-right` and `margin-right` rather than logical properties, because that
- * is what the rest of this stylesheet uses and the application is LTR-only.
- * A bordered button inside a bordered box is two edges arguing at 8px and 4px
- * radius over the same corner, which is what a first attempt here looked like;
- * an inset region has no second edge to argue with. The box keeps the standard
- * 40px control treatment the ingest brief §3 asks for, which is also what keeps
- * the refusal channel — `aria-invalid`'s 2px `--loss` border — and the focus
- * ring drawn on the control the reader is actually operating.
- *
- * `height: 100%` rather than a figure: it resolves against the box's content
- * height, so the inset still fits exactly when a refusal thickens the border
- * from 1px to 2px. Nothing here has to clip the inset's square corner against
- * the box's 8px one — the UA stylesheet already clips an `<input>`'s overflow
- * and an author cannot override it, which an `overflow: hidden` written here
- * only looked like it was doing.
+/* The file input's own button — left alone it is the browser's (14px Arial,
+ * outset border), the one control not drawn by this stylesheet inside a box
+ * that is. Drawn as the field's **leading action**: full height, flush
+ * left, a tonal step and one hairline before the filename. A bordered
+ * button inside a bordered box is two edges arguing over one corner; an
+ * inset region has no second edge. The box keeps the standard 40px control
+ * treatment (ingest brief §3), which also keeps `aria-invalid`'s 2px
+ * refusal border and the focus ring on the control being operated.
+ * `height: 100%` resolves against content height, so the inset still fits
+ * when a refusal thickens the border; the UA stylesheet already clips an
+ * `<input>`'s overflow, which an author `overflow: hidden` only pretends to.
  */
 input[type="file"] {
   padding: 0 var(--space-sm) 0 0;
@@ -2317,19 +2053,14 @@ input[type="file"]::file-selector-button {
   cursor: pointer;
 }
 
-/* One more step of the same ramp, derived rather than named: `--panel-hover` is
- * spent on the resting ground here, and the tokens left are roles rather than
- * steps — `--secondary-container` is the app's "you are here" (the active nav
- * item, the current settings tab), which is not a thing a hover may say.
- *
- * `color-mix` for a hover is `.button:hover`'s idiom, but the second colour is
- * not: that one mixes toward black, which darkens in both themes and would sink
- * this ground into the dark canvas. Mixing toward `--on-surface` moves away from
- * the surface in whichever direction the theme runs — #f2f4f6 → #e1e3e5 in
- * light, #222a3d → #333b4c in dark. It lands within a couple of units of dark's
- * `--surface-bright`, which is a coincidence of the ramp rather than that
- * token's role: `--surface-bright` is the tinted half of a split panel and has
- * no light-theme value that would work here. */
+/* One more ramp step, derived rather than named: `--panel-hover` is spent
+ * on the resting ground and the tokens left are roles, not steps
+ * (`--secondary-container` is "you are here", not a thing a hover may say).
+ * `color-mix` is `.button:hover`'s idiom but not its second colour: mixing
+ * toward black sinks this ground into the dark canvas, while
+ * `--on-surface` moves away from the surface whichever way the theme runs.
+ * It lands near dark's `--surface-bright` by coincidence of the ramp, not
+ * that token's role. */
 input[type="file"]::file-selector-button:hover {
   background: color-mix(in srgb, var(--panel-hover) 92%, var(--on-surface));
 }
@@ -2342,15 +2073,10 @@ label {
   line-height: 20px;
 }
 
-/*
- * The checkbox/radio carve-out (ingest brief §10).
- *
- * The shared rule above sizes every input at --control-h, which is right for
- * a box someone types into and absurd for a tick. These two keep their
- * intrinsic size and native drawing, accented from the one solid fill so a
- * tick reads in the same blue as the button that commits it — in both themes,
- * because --primary-container is the same value in both.
- */
+/* The checkbox/radio carve-out (ingest brief §10): the shared rule sizes
+ * every input at --control-h — right for a typing box, absurd for a tick.
+ * These keep intrinsic size and native drawing, accented from the one solid
+ * fill so a tick reads in the same blue as the button that commits it. */
 input[type="checkbox"],
 input[type="radio"] {
   height: auto;
@@ -2361,22 +2087,17 @@ input[type="radio"] {
   accent-color: var(--primary-container);
 }
 
-/*
- * The inline label variant: the global label stacks its caption above the
- * control, and a checkbox's sentence belongs beside the box — the whole pair
- * one hit target, exactly as the stacked form is.
- */
+/* The inline label variant: the global label stacks caption over control; a
+ * checkbox's sentence belongs beside the box, the pair one hit target. */
 label.choice {
   flex-direction: row;
   align-items: center;
   gap: var(--space-base);
 }
 
-/*
- * A radio pair's group. A fieldset so the caption is announced with the
- * choice, reset to the bare labelled column every other control already is —
- * the browser's inset border box is furniture no form here wears.
- */
+/* A radio pair's group: a fieldset so the caption is announced with the
+ * choice, reset to the bare labelled column every other control is — the
+ * browser's inset border box is furniture no form here wears. */
 fieldset {
   margin: 0;
   padding: 0;
@@ -2465,11 +2186,10 @@ code {
   color: var(--on-surface-variant);
 }
 
-/* The body of a panel whose filter matched nothing: the sentence, then the way
- * out of it (holdings brief §7.2). `align-items: flex-start` is what keeps the
- * `.button--text` to the width of its own words — it is an `inline-flex` box and
- * would otherwise stretch the full panel, giving a 1166px hit area to two
- * words. */
+/* The body of a panel whose filter matched nothing: the sentence, then the
+ * way out (holdings brief §7.2). `align-items: flex-start` keeps the
+ * `.button--text` to its own words — stretched, two words get a 1166px hit
+ * area. */
 .panel-body--empty {
   display: flex;
   flex-direction: column;
@@ -2497,34 +2217,15 @@ code {
   color: var(--on-surface-variant);
 }
 
-/* The three of those four that are prose get a measure, like every other prose
- * class here does.
- *
- * They were the only ones without one: `.empty-state-detail` and `.empty-note`
- * cap at 52ch and `.panel-statement` at 60ch, while these ran as far as their
- * container allowed — `/income`'s coverage note reached 1025.7px at 1600 and a
- * `.form-note` on `/accounts/12` reached 1166px, one unbroken line of 12px type
- * either way. On Income's first panel that put the 14px `.panel-statement`
- * wrapping at 530px beside a 12px note that would run 765px: the smaller type
- * with the wider measure, which is the wrong way round twice over.
- *
- * `.field-note` is here for a second reason as well as that one, and it is the
- * reason this rule is load-bearing rather than cosmetic: a note under a control
- * is a child of that control's flex item, and a flex item with no basis sizes to
- * its widest child. On Settings → Tax that child was this note, laid out on one
- * line, and a two-digit percentage was typed into a 1113px box. The field rule
- * below gives the wrapper a basis; this cap is the guard that stops the note
- * ever being what sets the width again. With both in place it is inert at every
- * width the application is used at, which is exactly what it should be.
- *
- * The two halves arrived from opposite directions — the reading measure with the
- * type ramp, the field measure with the forms work — and each deferred the
- * other's selector to the other change. They are one rule because they are one
- * number, and 60ch is `.panel-statement`'s: at 12px it resolves narrower in
- * pixels than the same count does at 14px, which is the point.
- *
- * Not `.record-note`, the fourth of the group above. It is a count beside a box,
- * not a sentence, and it has no measure to take. */
+/* The three of the four that are prose get a measure, like every other
+ * prose class here — they ran as far as their container allowed (a
+ * `.form-note` reached 1166px of unbroken 12px type), putting smaller type
+ * on a wider measure than the body text beside it. `.field-note` is here
+ * for a load-bearing second reason: a flex item with no basis sizes to its
+ * widest child, and on Settings → Tax that child was this note — a
+ * two-digit percentage typed into a 1113px box. The field rule below gives
+ * the wrapper a basis; this cap stops the note ever setting the width
+ * again. Not `.record-note`: a count beside a box has no measure to take. */
 .coverage-note,
 .field-note,
 .form-note {
@@ -2539,27 +2240,16 @@ code {
   color: var(--loss);
 }
 
-/*
- * A refusal that belongs to a page rather than to a field.
- *
- * Two of these exist — Settings → People refusing to remove someone who still
- * owns accounts, and an account page refusing a balance for an account that
- * takes none — and both render outside any panel, because the panel they would
- * sit in is not always on the screen. Outside a panel there is no ground, and
- * until this rule a 1216px line of unbounded red was the only text in the
- * application making a claim on the raw canvas with nothing under it.
- *
- * The geometry is `.first-run`'s, the other canvas-level statement here: a tonal
- * card at `--radius-xl` with the same padding. Only the ground and the border
- * differ — `--loss-surface` behind a 1px `--loss`, the pair
- * `.button--danger:hover` already draws — so a refusal and a prompt are one
- * object in two registers rather than two inventions.
- *
- * The measure is `.panel-statement`'s 60ch, and it costs height: the sentence
- * names every account the person owns, so what was two lines at 1216px is five
- * at 60ch, and the list below moves further on a refusal than it did before.
- * That shift is the other half of the finding, and its answer is the sentence
- * moving inside the panel above the rows — a relocation, not a measure.
+/* A refusal that belongs to a page rather than a field. Two exist (People's
+ * remove refusal, an account page refusing a balance), both outside any
+ * panel because the panel is not always on screen — a 1216px line of
+ * unbounded red was the only text claiming the raw canvas with nothing
+ * under it. The geometry is `.first-run`'s, the other canvas-level
+ * statement; only ground and border differ (`--loss-surface` behind 1px
+ * `--loss`, the pair `.button--danger:hover` draws) — a refusal and a
+ * prompt as one object in two registers. The 60ch measure costs height
+ * (two lines become five); the answer to that is relocating the sentence
+ * into the panel, not widening the measure.
  */
 .page > .form-error {
   max-width: 60ch;
@@ -2597,34 +2287,16 @@ code {
   color: var(--primary);
 }
 
-/*
- * The Settings index: four sections, each a name over the sentence describing
- * it.
- *
- * It was a browser `<dl>` with a colour on it and nothing else, which made it
- * the one panel in the application drawn by the UA stylesheet rather than by
- * this one. Three consequences, all measured at 1600: every `dd` carried the
- * UA's `margin-inline-start: 40px` — the only indented prose anywhere here, and
- * a constant that lands near `--space-xl` by coincidence rather than by
- * decision; there was **0px** between the four pairs, so eight elements ran as
- * one unbroken 160px column of identical text; and `dt` and `dd` were both
- * 14px/400 in `--on-surface-variant`, so a section's name was set exactly like
- * the sentence about it and the one `dt` with no link in it — "Classifications,
- * Instruments and History" — was indistinguishable from a description.
- *
- * So: the term takes body-sm at 600 in `--on-surface` and the description stays
- * body-sm in `--on-surface-variant`, at `.panel-statement`'s 60ch measure. That
- * is `.detail-meta`'s idiom one size down — "label and value differ by weight
- * *and* colour", which is the note above that rule and the reason its pairs
- * stay legible when they wrap. The three linked terms keep `--primary` from the
- * `a` rule, so which of the four is not yet a destination is visible without
- * hovering.
- *
- * Spacing is margins rather than a flex gap because the two gaps here differ:
- * a term belongs to the description under it (`--space-xs`, the caption-to-
- * figure step) and each pair is separated from the next by `--space-lg`. One
- * `gap` cannot say both, and saying it with two nested containers would be more
- * machinery than four pairs of text need.
+/* The Settings index: four sections, a name over each describing sentence.
+ * As a bare `<dl>` it was the one panel drawn by the UA stylesheet: `dd`
+ * indented 40px (the only indented prose here), 0px between pairs, and
+ * `dt` set exactly like `dd` — a section's name indistinguishable from its
+ * description. Now the term takes body-sm 600 in `--on-surface` over a
+ * variant-colour description at 60ch — `.detail-meta`'s idiom one size
+ * down; linked terms keep `--primary`, so the one unbuilt section is
+ * visible without hovering. Margins, not a flex gap, because the two gaps
+ * differ: `--space-xs` binds a term to its description, `--space-lg`
+ * separates pairs — one `gap` cannot say both.
  */
 .settings-summary {
   margin: 0;
@@ -2679,26 +2351,14 @@ code {
   flex-direction: column;
 }
 
-/*
- * One record on one row: the thing, what is known about it, then its actions.
- *
- * No `justify-content`. It was `space-between`, and `space-between` divides all
- * of a row's slack into all of its gaps — so the declared `gap: var(--space-md)`
- * below was never the gap drawn. At 1600 a person row's members stood 237px
- * apart, which is not on the spacing scale and is not a decision: it is the
- * viewport minus the content, over three. "4 accounts", a caption about the name
- * box, floated a quarter of the screen from the box it describes, and Save and
- * Remove — one pair of actions on one record — were drawn as far from each other
- * as from anything else. `.record-actions` groups the pair and pushes it with
- * `margin-left: auto` instead, which is `.filter-actions`' idiom and leaves the
- * real gap holding everything to its left together.
- *
- * No `padding` either. It was `var(--space-md)`, and it never drew: the
- * `.record-form, .panel-form` rule below sets `var(--space-lg)` at equal
- * specificity and later in the file, and `.record` is only ever worn with
- * `.record-form`. 24px is the figure the ingest brief asks for and 24px is what
- * rendered; the 16px was a stale declaration that told the next reader the
- * opposite of what the screen does.
+/* One record on one row: the thing, what is known about it, its actions.
+ * No `justify-content` — `space-between` divides all slack into all gaps,
+ * so the declared gap never drew and a caption floated a quarter-screen
+ * from the box it describes; `.record-actions` groups the action pair and
+ * pushes it with `margin-left: auto` (`.filter-actions`' idiom). No
+ * `padding` either: the `.record-form` rule below set `--space-lg` at equal
+ * specificity later in the file, so the declaration here never drew and
+ * told the next reader the opposite of what the screen does.
  */
 .record {
   display: flex;
@@ -2707,12 +2367,9 @@ code {
   border-top: 1px solid var(--outline-variant);
 }
 
-/* The divider between rows, and the one row that has none above it.
- *
- * `.record:first-child` was the previous spelling and it drew no hairline
- * anywhere: each `.record` is a `<Form>` that is the only child of its own
- * `<li>`, so every row is a first child and every row had its border suppressed.
- * The list's own `li` is what "first" has to be asked about. */
+/* The divider between rows. `.record:first-child` drew no hairline
+ * anywhere: each `.record` is a `<Form>` alone in its `<li>`, so every row
+ * was a first child. The list's own `li` is what "first" must be asked of. */
 .record-list > li:first-child .record {
   border-top: 0;
 }
@@ -2728,29 +2385,16 @@ code {
   opacity: 0.6;
 }
 
-/*
- * A control row: labelled fields, then the button that submits them.
- *
- * `.panel-form` aligns to the *top* of its items, and the reason is what a
- * field is made of. Above every control sits a fixed 24px — one caption line
- * plus `label`'s gap, which is `--field-caption`. Below it sits annotation: a
- * `.field-note` saying what the control means, a `.field-error` saying why it
- * was refused. Aligning the bottoms lined up the annotation instead of the
- * controls, so a note under one box lifted that box 16px above its neighbours
- * — the file input on `/upload`, Symbol against Name on the new-instruments
- * step, the statement date against the button that commits it — and a refusal,
- * being 20px, broke the row into three lines instead of two.
- *
- * The invariant this rests on: **a caption in a control row is one line.** A
- * caption that wrapped would push its own control down, which is the same
- * defect wearing the other hat. None wraps today, at any width; a longer one
- * would need `.field-note`'s job doing by the caption, which is not the shape
- * of any control here.
- *
- * `.record-form` deliberately states no alignment: it is never worn without
- * `.record`, which centres. That row has no captions to align to — a box, the
- * count beside it and two buttons — and centring is what puts the count on the
- * box's line rather than on its bottom edge.
+/* A control row: labelled fields, then the button that submits them.
+ * `.panel-form` aligns to the *top*: above every control sits a fixed 24px
+ * (caption line plus `label`'s gap — `--field-caption`), below it sits
+ * annotation, and aligning bottoms lined up the annotation instead — a note
+ * under one box lifted it 16px above its neighbours, and a 20px refusal
+ * broke the row into three lines. The invariant this rests on: **a caption
+ * in a control row is one line** — a wrapping caption is the same defect in
+ * the other hat, and none wraps today at any width. `.record-form` states
+ * no alignment: it is never worn without `.record`, which centres — that
+ * row has no captions, and centring puts the count on the box's line.
  */
 .record-form,
 .panel-form {
@@ -2764,30 +2408,16 @@ code {
   align-items: flex-start;
 }
 
-/*
- * A field is 14rem wide, whatever happens to be written under it.
- *
- * A flex item with no basis sizes to its content, and a field's content is not
- * its control: it is the widest of the caption, the box, the `.field-note`
- * explaining the box and the `.field-error` refusing it. Two findings, one
- * cause. On Settings → Tax the widest was a one-line 12px note, so a percentage
- * with two digits in it was typed into a **1113px** box. On an account's Set
- * balance the widest was a refusal, so the moment a typed amount was refused the
- * box grew from 236px to 355px and the date and the button beside it jumped
- * **119px** sideways — under the eye of the person who had just typed into it.
- *
- * `flex: 0 1`, deliberately, and not the `flex: 1 1` the filter bar carries a
- * few hundred lines below. Grow distributes free space **per line**, and a form
- * whose last line holds fewer fields than the first hands that line's fields all
- * of it: the filter bar's own bug — one select reading "All" 616px wide beside
- * six 225px siblings — reproduced here as 507px name boxes under 280px ones.
- * Without grow every field is 224px on every line and the row simply ends where
- * it ends.
- *
- * `min-width: 0` is what lets a `select` shrink below its widest option, the
- * same argument the filter bar's rule makes at length: without it the intrinsic
- * width wins and "Tax-deferred — tax due on withdrawal (Traditional)" sets the
- * box's width again through the basis.
+/* A field is 14rem wide, whatever is written under it. A flex item with no
+ * basis sizes to its content, and a field's content is the widest of
+ * caption, box, note and refusal: on Tax the widest was a one-line note, so
+ * a two-digit percentage typed into a **1113px** box; on Set balance it was
+ * a refusal, so the refused box grew 119px under the reader's eye.
+ * `flex: 0 1`, not `1 1`: grow distributes free space **per line**, handing
+ * a short last line's fields all of it (the filter bar's own 616px-select
+ * bug, reproduced here as 507px name boxes under 280px ones). `min-width: 0`
+ * lets a `select` shrink below its widest option, or "Tax-deferred — tax
+ * due on withdrawal (Traditional)" sets the width through the basis.
  */
 .record-form > div:not(.record-actions),
 .panel-form > div {
@@ -2795,21 +2425,11 @@ code {
   min-width: 0;
 }
 
-/*
- * The one field that keeps its own width: a file input.
- *
- * Every other control in a row is a box the reader writes into, and 14rem is as
- * much as any of them needs. A file input is a box the *browser* writes into:
- * the chosen filename is a read-out, the UA draws it, and it neither wraps nor
- * scrolls — it elides from the middle. At 224px `/upload`'s resting state reads
- * "No fil...osen" and a chosen `statement.csv` reads "state...nt.csv". That is
- * not a narrower control; it is a control that has stopped saying what it is
- * for. Left to its intrinsic width it is the 315px the flow has always drawn.
- *
- * Restated in the phone block below rather than left to that block's
- * `.panel-form > div`, which scores lower than this rule and would lose to it:
- * on a phone this field has to fill the line like every other.
- */
+/* The one field that keeps its own width: a file input is a box the
+ * *browser* writes into — the filename elides from the middle, so at 224px
+ * it reads "No fil...osen": not a narrower control, a control that stopped
+ * saying what it is for. Intrinsic width is the 315px the flow always drew.
+ * Restated in the phone block below, which scores lower and would lose. */
 .panel-form > div:has(input[type="file"]) {
   flex-basis: auto;
 }
@@ -2823,63 +2443,38 @@ code {
   width: 100%;
 }
 
-/*
- * The row's un-captioned members, dropped past the caption block to reach the
- * control line: the button that ends the row, and the note that sometimes
- * stands where a field would (review, when the statement dates itself).
- *
- * The sibling combinator is what leaves a form whose only child is a button
- * alone — the new-instruments step's submit row, where there is nothing to line
- * up with and the margin would be 24px of nothing. It is written against
- * `:not([type="hidden"])` rather than `*` because a hidden input *is* a
- * sibling, `display: none` and all, and half the forms here open with one:
- * `columns.tsx` carries the header row that way and `people.tsx` the person id.
- * With `*`, adding a hidden field to a one-button form would silently indent
- * the button.
+/* The row's un-captioned members, dropped past the caption block to the
+ * control line: the ending button, and the note that stands where a field
+ * would. The sibling combinator leaves a button-only form alone (nothing to
+ * line up with); `:not([type="hidden"])` rather than `*` because a hidden
+ * input *is* a sibling and half the forms here open with one — with `*`,
+ * adding a hidden field to a one-button form would silently indent the
+ * button.
  */
 .panel-form > :not([type="hidden"]) ~ :is(button, .button) {
   margin-top: var(--field-caption);
 }
 
-/*
- * ...but not *directly* below a member that took the whole line. The drop exists
- * to clear a caption; a button pushed onto a line of its own has no caption
- * above it, and dropping it there opens 40px where the row's own 16px gap is
- * what is wanted.
- *
- * `+` and not `~`: the general sibling combinator asks "is there a full-line
- * member anywhere above me", which is also true when a narrow field follows one
- * and the button shares *that* field's line — where zeroing the drop puts the
- * button 24px above the control it submits, which is the defect this whole rule
- * set removes. Adjacency is the question actually being asked.
- *
- * A full-line member is the only wrap CSS can see. A wrap the *content* forces
- * it cannot: `/upload` at 768 and 1024, Settings → Accounts and the account
- * editor at 800 and 1100. There the drop stands, and the gap reads 40px.
- *
- * Settings → Tax used to head that list — its long note widened its field past
- * the room the button needed, at every width. It no longer does: the field rule
- * above gives a field a basis and the note a measure, so the note stops sizing
- * anything, and the Save button now shares the rate box's line from 768 up.
+/* ...but not *directly* below a member that took the whole line: the drop
+ * exists to clear a caption, and a button on its own line has none — the
+ * drop would open 40px where the row's 16px gap is wanted. `+`, not `~`:
+ * the general combinator is also true when a narrow field follows the
+ * full-line member and the button shares *that* field's line — zeroing the
+ * drop there puts the button 24px above its control, the defect this rule
+ * set removes. A full-line member is the only wrap CSS can see; where
+ * content forces one (`/upload` at 768/1024), the drop stands and the gap
+ * reads 40px.
  */
 .panel-form > :is(fieldset, label.choice, .form-error) + :is(button, .button) {
   margin-top: 0;
 }
 
-/*
- * The note that stands where a field would, centred on the control line: it is
- * one 16px line and the button beside it is 40px, so it drops the caption block
- * plus half the difference.
- *
- * Margin alone, deliberately. Centring it by making the paragraph a flex
- * container costs it the collapsible space around its inline children — it ate
- * the space after this very sentence's colon, printing "dates itself:2026-08-25"
- * — and a flex row does not wrap between its items, so a longer note would come
- * apart into columns instead of running on as prose.
- *
- * No sibling guard here, unlike the button above: this note is its row's *first*
- * child in the one place it is used, so a guard would remove the very margin it
- * needs.
+/* The note standing where a field would, centred on the control line: one
+ * 16px line beside a 40px button, so it drops the caption block plus half
+ * the difference. Margin alone, deliberately — a flex paragraph eats the
+ * collapsible space around its inline children (it printed "dates
+ * itself:2026-08-25") and does not wrap between items. No sibling guard:
+ * this note is its row's *first* child in the one place it is used.
  */
 .panel-form > .form-note {
   /* The 16px is this note's own line-height, set with `.field-note` above; it is
@@ -2888,23 +2483,13 @@ code {
   margin-top: calc(var(--field-caption) + (var(--control-h) - 16px) / 2);
 }
 
-/*
- * Three members of a row that are neither a field nor an action, each taking
- * the line to itself.
- *
- * A radio group and a checkbox's sentence are decisions rather than boxes, and
- * squeezed between two selects they read as a jumble — the columns step put
- * "Cost basis is", its note, "This file lists what is owed…" and the submit
- * button on one wrapped line, bottom-aligned to each other. A form-level
- * refusal belongs above the row it refuses (ingest brief §2), never beside a
- * field inside it.
- *
- * It costs height, and on one screen that cost scales. The new-instruments
- * step's Price source is a `fieldset` too, so every unresolved string on it
- * grows by about 96px — a first import of a twenty-line export pays that twenty
- * times over in scroll. Worth it: those two radios were otherwise jammed against
- * the right of the Name box with their note running under three unrelated
- * fields.
+/* Three row members that are neither field nor action, each taking the
+ * line: a radio group and a checkbox's sentence are decisions, not boxes,
+ * and squeezed between selects they read as a jumble; a form-level refusal
+ * belongs above the row it refuses (ingest brief §2). Costs height — the
+ * new-instruments step pays ~96px per unresolved string — and worth it:
+ * the radios were jammed against the Name box with their note running
+ * under three unrelated fields.
  */
 .panel-form > fieldset,
 .panel-form > label.choice,
@@ -2912,40 +2497,26 @@ code {
   flex-basis: 100%;
 }
 
-/*
- * A panel body that is a form's caption rather than its content.
- *
- * `.panel-body` is padding alone, which is right for prose and wrong for two
- * paragraphs that must read as separate statements — an explanation and a
- * confirmation butting together read as one run-on sentence.
- */
+/* A panel body that is a form's caption: `.panel-body` is padding alone,
+ * right for prose and wrong for two paragraphs that must read as separate
+ * statements — an explanation and a confirmation butting read as one. */
 .form-intro {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
 }
 
-/*
- * A form under its own explanation.
- *
- * `.panel-body` and `.panel-form` each pad themselves, which is right when
- * either is the panel's only child and doubles the gap when one follows the
- * other. The prose is the form's caption, so the pair closes up.
- */
+/* A form under its own explanation: `.panel-body` and `.panel-form` each
+ * pad themselves — right alone, doubled when one follows the other. The
+ * prose is the form's caption, so the pair closes up. */
 .panel-body + .panel-form {
   padding-top: 0;
 }
 
-/*
- * The destructive half of an editor, below the form and inside the same panel.
- *
- * It is stated here, above the phone block rather than below it, and the reason
- * is source order rather than taste: the phone block sets this padding to 16px
- * at single-class specificity, and a media query adds none of its own. Left
- * where it used to be — after that block — this rule won at every width and the
- * account editor's two halves were set to two different left margins on a phone,
- * with the panel's hairline running between them.
- */
+/* The destructive half of an editor, below the form in the same panel.
+ * Stated above the phone block for source order, not taste: that block sets
+ * this padding at equal specificity, and placed after it this rule won at
+ * every width — two left margins on a phone with the hairline between. */
 .danger-zone {
   display: flex;
   flex-wrap: wrap;
@@ -2976,16 +2547,10 @@ code {
   flex-basis: 100%;
 }
 
-/*
- * A control row on a phone.
- *
- * Until now the stylesheet said nothing about `.panel-form` at this width, and
- * the result was not merely cramped: a `select` is as wide as its longest
- * option and `.panel` clips (`overflow: hidden`), so the columns step's
- * header-row select was 684px in a 308px column — its right border and its
- * arrow cut off the screen, with nothing to scroll to reach them. One field to
- * a line, every control filling it.
- */
+/* A control row on a phone. Unstated, this was not merely cramped: a
+ * `select` is as wide as its longest option and `.panel` clips, so the
+ * columns step's header-row select was 684px in a 308px column — arrow cut
+ * off, nothing to scroll to reach it. One field per line, controls filling. */
 @media (max-width: 767px) {
   /* `.danger-zone` is in this list because it is the same form grammar in the
    * same panel: left out of it, the account editor's heading and its
@@ -3024,15 +2589,10 @@ code {
  * radius or a control height of its own.
  */
 
-/*
- * The filter bar.
- *
- * A panel that happens to be a form, so it carries the panel's ground, border
- * and radius rather than floating on the canvas. `align-items: flex-end` is
- * what lines the Apply button up with the boxes rather than with the captions
- * above them, since a `label` here is a flex column and taller than its
- * control.
- */
+/* The filter bar: a panel that happens to be a form, so it carries the
+ * panel's ground, border and radius. `align-items: flex-end` lines Apply up
+ * with the boxes, not the captions above them — a `label` here is a flex
+ * column taller than its control. */
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -3054,23 +2614,14 @@ code {
   margin-left: auto;
 }
 
-/*
- * Every filter the same width, whatever its longest option happens to be.
- *
- * A `select` sizes to its widest option, so "Tax-deferred — tax due on
- * withdrawal (Traditional)" would otherwise make one control twice the width of
- * the rest and, on a phone, wider than the panel holding it. The flex basis
- * sets the width and `min-width: 0` is what lets the box shrink below its
- * content — without it the intrinsic width wins and the bar overflows.
- *
- * `flex: 0 1`, not `flex: 1 1`, and that is the whole of what this rule used to
- * get wrong. Grow distributes free space per *line*, and seven filters never
- * divide evenly into one: whatever is left over on the short last line goes to
- * the one or two controls standing on it. At 1100 that put a single "Asset
- * class" select holding the word "All" at 616px beside six 225px siblings, and
- * at 768 the same select at 596px — a bar whose stated intent, one line above,
- * is that every filter is the same width. Without grow they are: 192px each at
- * 1600, 1440, 1280, 1100, 900 and 768, on the first line and on the last.
+/* Every filter the same width, whatever its longest option: a `select`
+ * sizes to its widest option, so one control would otherwise be twice the
+ * rest and wider than a phone's panel. The basis sets the width;
+ * `min-width: 0` lets the box shrink below its content. `flex: 0 1`, not
+ * `1 1`: grow distributes per *line*, handing the short last line's one or
+ * two controls all the slack — a 616px "All" select beside six 225px
+ * siblings. Without grow every filter is 192px on every line at every
+ * width.
  */
 .filter-bar > div:not(.filter-actions) {
   flex: 0 1 12rem;
@@ -3082,29 +2633,13 @@ code {
   min-width: 0;
 }
 
-/*
- * The owner filter's control (spec 0013).
- *
- * The filter bar's panel, in the page header's actions rather than on its own
- * line: it is one dimension, not seven, and a full-width bar above the title
- * would out-shout the screen it narrows. So the padding comes in, the
- * checkboxes run along the bar instead of stacking, and `align-items: center`
- * replaces `flex-end` — there is no label column here for a button to line up
- * with the foot of.
- */
-/*
- * A disclosure, not a row of boxes.
- *
- * The row grew with the household: five names were wider than the header had to
- * spare, and the strip reflowed differently on every screen and every viewport —
- * so the one control meant to look identical everywhere was the one that did
- * not. Closed, this is a fixed shape whatever the household's size, which is
- * what makes the header's layout a property of the design rather than of how
- * many people happen to be recorded.
- *
- * The mechanics are `.segmented-custom`'s, which solved the same problem for the
- * custom range picker: `position: relative` on the disclosure, the panel
- * absolutely positioned under it so opening one never reflows the row it is in.
+/* The owner filter's control (spec 0013): a disclosure, not a row of boxes
+ * — the row grew with the household and reflowed the header differently per
+ * screen and viewport, so the one control meant to look identical
+ * everywhere was the one that did not. Closed, a fixed shape whatever the
+ * household's size. The mechanics are `.segmented-custom`'s: `position:
+ * relative` on the disclosure, the panel absolute under it, so opening
+ * never reflows the row.
  */
 .owner-filter {
   position: relative;
@@ -3195,16 +2730,9 @@ code {
   margin-left: 0;
 }
 
-/*
- * What a narrowed screen says beside the figure it narrowed (ADR-0008).
- *
- * The condition attached to the filter surviving navigation: a reader who set
- * it two screens ago and forgot would otherwise read a household headline that
- * quietly means something else. It is a sentence rather than a chip, because a
- * chip is a thing you stop seeing — where it sits is each screen's business, at
- * the end of the panel header's row here and under the figure on the two that
- * have one.
- */
+/* What a narrowed screen says beside the figure it narrowed (ADR-0008): the
+ * condition attached to the filter surviving navigation. A sentence, not a
+ * chip — a chip is a thing you stop seeing. */
 .narrowed-to {
   margin: var(--space-xs) 0 0;
   font-size: 14px;
@@ -3212,13 +2740,9 @@ code {
   color: var(--on-surface-variant);
 }
 
-/*
- * A column heading that sorts.
- *
- * The link inherits the header's type entirely — it is the same label doing one
- * more job, not a control dropped into a header — so only the pointer and the
- * hover colour distinguish it.
- */
+/* A column heading that sorts: the link inherits the header's type entirely
+ * — the same label doing one more job, not a control dropped in — so only
+ * the pointer and hover colour distinguish it. */
 .sortable {
   display: inline-flex;
   align-items: center;
@@ -3233,18 +2757,11 @@ code {
   color: var(--on-surface);
 }
 
-/*
- * The column the table is actually sorted by.
- *
- * `aria-sort` is already on the header — the markup has carried it since the
- * table was built — and §5 makes it the whole state: the active column "sets
- * its label in `--on-surface` rather than `--on-surface-variant`, and shows a
- * 12px caret". Only the caret was ever drawn, so on a nine-column table the one
- * sorted heading was byte-identical in colour to the other eight and an 8px
- * glyph was carrying the entire signal. The rule sits on the `th` rather than on
- * the link because `.sortable` already takes `color: inherit`, and because §10
- * is explicit that the state keys off `th[aria-sort]` and not a second class.
- */
+/* The column the table is sorted by. §5 makes the state the label colour
+ * plus a 12px caret; only the caret was drawn, so an 8px glyph carried the
+ * entire signal on a nine-column table. On the `th`, not the link:
+ * `.sortable` takes `color: inherit`, and §10 keys the state off
+ * `th[aria-sort]`, not a second class. */
 .data-table th[aria-sort] {
   color: var(--on-surface);
 }
@@ -3262,27 +2779,15 @@ code {
   justify-content: flex-end;
 }
 
-/*
- * Group heading, subtotal, grand total.
- *
- * These three `th`s sit in the table body rather than in `thead`, so the
- * uppercase label treatment `.data-table th` applies has to be undone: a
- * person's name is not a column heading and setting it in caps reads as one.
- *
- * The bottom hairline is part of that treatment and was the one piece of it
- * left standing, which cost two different defects. On the grand total it drew a
- * rule under the label cell and nothing under the figures — 47% of the row on
- * Analysis, 51% on Holdings — which reads as a rendering fault rather than a
- * divider. And on a subtotal it collided with the grand total's own top border:
- * `border-collapse: collapse` resolves a tie between two 1px solid borders in
- * favour of the topmost cell, so on a grouped table the total's rule painted
- * `--outline-variant` under the `th` the subtotal sat above and `--outline`
- * under the figure cells, which have no subtotal border to lose to. One row,
- * one rule, two colours — and ungrouped, where a plain body row sits above the
- * `tfoot`, the same rule painted one colour across its full width, so the two
- * views disagreed about how heavy the total's divider is.
- *
- * A group heading does want a bottom border, and re-asserts its own below.
+/* Group heading, subtotal, grand total: three `th`s in the table body, so
+ * `.data-table th`'s uppercase treatment must be undone — a person's name
+ * in caps reads as a column heading. The bottom hairline was the one piece
+ * left standing, costing two defects: on the grand total it ruled under the
+ * label cell and nothing under the figures (roughly half the row), and on a
+ * subtotal it collided with the total's top border — `border-collapse`
+ * resolves the tie toward the topmost cell, painting one row's rule in two
+ * colours, while the ungrouped view painted one. A group heading does want
+ * a bottom border, and re-asserts its own below.
  */
 .data-table .row-group th,
 .data-table .row-subtotal th,
@@ -3341,34 +2846,17 @@ code {
   font-weight: 700;
 }
 
-/*
- * In the gains table a delta takes its cell's type instead of its own.
- *
- * `.delta` is specified as a pill — 12px/600 at 0.03em tracking (holdings brief
- * §1.2, pricing brief §1.2) — and that is the right type for the one on the
- * Overview header, where a single movement carries the page. Inside this table
- * it is a column of money beside another column of money, and the pill's type
- * followed it in: Unrealized rendered at 12px/600/0.36px against Potential
- * tax's 14px/600/normal, one column of the same figures set two sizes smaller
- * than the one next to it.
- *
- * The `tfoot` is where it stops being a nicety. `.data-table .row-total th, …
- * td { font-weight: 700 }` promotes the whole grand-total row, but the promotion
- * lands on the `td` and `.delta` re-declares weight on the span *inside* it, so
- * `+$110,203.88` — the largest claim on the panel — printed lighter and smaller
- * than the `$16,526.36` beside it and than the word "Total" to its left.
- * Inheriting is what lets the row's own promotion reach the figure; the holdings
- * brief §5 puts it plainly for `.is-numeric`, "both get it or the column does
- * not line up".
- *
- * **Scoped to this table on purpose.** `.data-table .delta` reads as the more
- * general rule and it is the more expensive one: it re-types **twelve** cells on
- * `/holdings` — that table's whole Unrealized column plus its grand total — on a
- * nine-column table whose four money columns currently share their right edges
- * to 0.1px, and type is what sets those widths. Holdings' column has the same
- * 12px-beside-14px reading, and nobody has filed it; when someone does, it is a
- * change to that table's column widths and belongs with the measurements that
- * prove they still line up. This finding was written about Analysis.
+/* In the gains table a delta takes its cell's type instead of its own pill
+ * type (12px/600/0.03em): beside another money column that set the same
+ * figures two sizes smaller, and in the `tfoot` — where the row's
+ * `font-weight: 700` promotion lands on the `td` while `.delta` re-declared
+ * weight on the span inside — the panel's largest claim printed lighter and
+ * smaller than the figure beside it. Inheriting lets the row's promotion
+ * reach the figure (§5: "both get it or the column does not line up").
+ * **Scoped to this table on purpose**: `.data-table .delta` would re-type
+ * twelve cells on `/holdings`, whose four money columns share right edges
+ * to 0.1px and whose type sets those widths — that change belongs with the
+ * measurements proving they still line up. This finding was about Analysis.
  */
 .data-table--gains .delta {
   font-size: inherit;
@@ -3377,29 +2865,20 @@ code {
   letter-spacing: inherit;
 }
 
-/* The gains table's headings wrap; every other table's do not.
- *
- * `.data-table th` is `white-space: nowrap` because a wrapped column heading in
- * a wide desktop grid reads as two columns. This table has three columns and
- * two of the headings are two words, which on a 390px phone is the difference
- * between fitting the canvas and scrolling it sideways — and a table that
- * scrolls sideways is the failure §8.1 names. Wrapping the words is cheaper
- * than abbreviating them: "Potential tax" over two lines still says what the
- * column is, and "Tax" does not.
+/* The gains table's headings wrap; every other table's do not. On a 390px
+ * phone two two-word headings are the difference between fitting and
+ * scrolling sideways (§8.1's named failure), and wrapping beats
+ * abbreviating: "Potential tax" over two lines still says what the column
+ * is; "Tax" does not.
  */
 .data-table--gains th {
   white-space: normal;
 }
 
-/* …and on a phone its cells give back the padding the third column needs.
- *
- * Wrapping the headings was not enough on its own: the two money columns are
- * `nowrap` by rule — a figure broken across lines is unreadable — so at 390px
- * the three columns came to 385px inside a 356px canvas and the table scrolled
- * sideways behind its own edge. The horizontal padding is the only slack left
- * that costs nothing to give up, and 12px still separates the columns clearly
- * at this width. Scoped to the same 768px breakpoint the breakdown panels
- * stack at, so the desktop table is untouched.
+/* …and on a phone its cells give back the padding the third column needs:
+ * with the money columns `nowrap` by rule, the three came to 385px inside a
+ * 356px canvas. Horizontal padding is the only slack that costs nothing,
+ * and 12px still separates the columns clearly at this width.
  */
 @media (max-width: 767px) {
   .data-table--gains th,
@@ -3419,12 +2898,8 @@ code {
   }
 }
 
-/*
- * The account link in a row.
- *
- * Underlined only on hover: a column of permanently underlined account names
- * competes with the figures beside it, which are what the row is for.
- */
+/* The account link in a row, underlined only on hover: a column of
+ * permanently underlined names competes with the figures the row is for. */
 .cell-link {
   display: inline-flex;
   align-items: center;
@@ -3451,15 +2926,10 @@ code {
  * only that they occur inside a table row.
  */
 
-/*
- * The last column: the row's own Correct control.
- *
- * `width: 1%` is the table idiom for "as narrow as your content" — a `td` will
- * not go below its content's width, so the percentage collapses the column to
- * the icon and leaves every other column the space it had. No left padding, so
- * what the column costs is the control and the table's own right margin and
- * nothing else: every pixel here comes out of the Asset column, which is the
- * one that wraps.
+/* The last column: the row's Correct control. `width: 1%` is the table
+ * idiom for "as narrow as your content" — a `td` never goes below it, so
+ * the column collapses to the icon. No left padding: every pixel here comes
+ * out of the Asset column, the one that wraps.
  */
 .data-table--holdings th.is-actions,
 .data-table--holdings td.is-actions {
@@ -3469,18 +2939,12 @@ code {
   white-space: nowrap;
 }
 
-/*
- * The control itself, drawn only on approach.
- *
- * A pencil printed on all forty rows is forty pieces of chrome competing with
- * the figures the table exists to show, so it fades up on hover and on focus.
- *
- * `:focus`, not `:focus-visible`, and the distinction is the whole
- * accessibility of the control. `:focus-visible` exists to decide whether to
- * paint a focus *ring* on something already on the screen; here the reveal is
- * not the ring, it is the control, so a heuristic that withholds it leaves the
- * pencil focused, reachable, operable by Enter — and invisible. `:focus` is
- * unconditional, and a focused control being visible is never the wrong answer.
+/* The control itself, drawn only on approach: a pencil on all forty rows is
+ * forty pieces of chrome competing with the figures. `:focus`, not
+ * `:focus-visible` — that heuristic decides whether to paint a *ring* on
+ * something already visible; here the reveal is the control, and a
+ * withholding heuristic leaves the pencil focused, operable by Enter, and
+ * invisible. A focused control being visible is never the wrong answer.
  */
 .row-edit {
   display: inline-flex;
@@ -3517,32 +2981,16 @@ code {
   }
 }
 
-/*
- * A box in a cell.
- *
- * Full width of its column and right-aligned on the same tabular figures the
- * column is set in, so the digits being typed line up with the digits above and
- * below them — which is the whole reason the editor is in the columns rather
- * than in a panel underneath. Shorter than a standalone control because a row
- * that grew by 40px on open would push the rest of the table down the screen.
- *
- * It did neither of those things, because the box was 18px narrower inside than
- * the plain cell that printed the same string: the `td`'s 16px each side, then
- * the box's own 8px each side and its border, all subtracted from a column whose
- * width the box itself was setting through `min-width`. Opening the editor on
- * VBTLX's `4,570.688555` gave a text area of 78px for 98px of digits, and the
- * two least significant of them were behind the border — on the screen whose
- * entire argument is that the figure can be checked against its neighbours
- * before it is submitted.
- *
- * The two figures below are one decision. The cell gives up its horizontal
- * padding while a box is in it and the box takes it: `7.5rem + 8px` is exactly
- * the `6rem + 32px` the column asked for before, so the Quantity column is the
- * same 128px it always was and the table's width does not move — which matters,
- * because this table is already wider than the window between 768 and 1502.
- * What changes is where the 128px goes. The typed digits now sit 17px from the
- * cell's trailing edge against the printed ones' 16px, where they used to sit
- * 25px from it, so the column reads as one column with a box in it.
+/* A box in a cell: full column width, right-aligned on the column's own
+ * tabular figures — the whole reason the editor is in the columns — and
+ * shorter than a standalone control so the row does not grow 40px on open.
+ * The box used to be 18px narrower inside than the plain cell printing the
+ * same string (td padding + box padding + border, subtracted from a column
+ * the box itself sized): VBTLX's `4,570.688555` got 78px of text area for
+ * 98px of digits, the last two behind the border. The two figures below are
+ * one decision: the cell gives up its horizontal padding and the box takes
+ * it — `7.5rem + 8px` is exactly the `6rem + 32px` the column asked for
+ * before, so the column stays 128px and the table's width does not move.
  */
 .cell-input {
   width: 100%;
@@ -3569,14 +3017,10 @@ code {
   background: var(--panel-hover);
 }
 
-/*
- * The open row's footer: the sentence on one side, Save and Cancel on the
- * other.
- *
- * The flex is on a `div` and on the `form` inside the cell, never on the cell
- * — the rule against `display: flex` on a `td` holds here, because the table is
- * still a table around it.
- */
+/* The open row's footer: the sentence on one side, Save and Cancel on the
+ * other. The flex is on a `div` and the `form` inside the cell, never the
+ * cell — the rule against `display: flex` on a `td` holds while the table
+ * around it is still a table. */
 .row-editor {
   display: flex;
   flex-wrap: wrap;
@@ -3599,13 +3043,9 @@ code {
   flex: none;
 }
 
-/*
- * The line under an open row: what saving will do, or why it was refused.
- *
- * A full-width row rather than a caption inside the actions cell, because the
- * sentence is about the whole correction and the cell is 32px wide. It carries
- * the open row's ground so the two read as one block.
- */
+/* The line under an open row: what saving will do, or why it was refused.
+ * Full-width, not a caption in the 32px actions cell; it carries the open
+ * row's ground so the two read as one block. */
 .data-table--holdings tr.row-note td {
   padding-top: 0;
   background: var(--panel-hover);
@@ -3617,17 +3057,12 @@ code {
   background: var(--panel-hover);
 }
 
-/*
- * The phone (DESIGN.md §8.1, §11).
- *
- * "Thirteen columns on a phone is a horizontal scroll nobody uses. Mobile gets
- * a card list." This is that card list, produced by restyling the one table
- * rather than by rendering a second tree — a second tree is a second set of
- * cells to keep in step, and the pair drift the first time a column is added.
- *
- * Each cell carries its own heading in `data-label`, so the column headings can
- * stop being a row and become what they are on a phone: a strip of sort
- * controls.
+/* The phone (DESIGN.md §8.1, §11): "thirteen columns on a phone is a
+ * horizontal scroll nobody uses. Mobile gets a card list." This is that
+ * card list, restyled from the one table rather than a second tree — a
+ * second set of cells drifts the first time a column is added. Each cell
+ * carries its heading in `data-label`, so the column headings become what
+ * they are on a phone: a strip of sort controls.
  */
 @media (max-width: 767px) {
   .data-table--holdings,
@@ -3659,21 +3094,14 @@ code {
   }
 
   /*
-   * The card padding is the card's. A group heading and a subtotal are
-   * full-width strips between cards, and inset by 16px they read as narrower
-   * than the list they belong to — and their own top border doubles up with
-   * this one. The open row's footer is excluded for a different reason: it is
-   * not a card at all, it is the last line of the card above it (§6.5), and it
-   * has a padding and a border of its own further down.
-   *
-   * One `:not()` taking a list, not three chained ones, and the difference is
-   * not cosmetic. `:not()` contributes the specificity of its argument, so
-   * `:not(a):not(b)` scored three classes here and silently outranked both of
-   * the rules that exist to make exceptions to it — the footer was given the
-   * card's 16px padding and a hairline it had been written `border-top: 0` to
-   * refuse, and the first card drew a border immediately under the heading
-   * strip's own, which is the doubled rule the comment above is about. The list
-   * form scores one class, so an exception can be written as an exception.
+   * The card padding is the card's: a group heading and a subtotal are
+   * full-width strips between cards, and the open row's footer is not a
+   * card at all — it is the last line of the card above it (§6.5). One
+   * `:not()` taking a list, not three chained: `:not(a):not(b)` contributes
+   * its arguments' specificity, scored three classes, and silently
+   * outranked both exception rules — the footer got the padding and a
+   * hairline it was written `border-top: 0` to refuse. The list form scores
+   * one class, so an exception can be written as an exception.
    */
   .data-table--holdings tbody tr:not(.row-group, .row-subtotal, .row-note) {
     padding: var(--space-md);
@@ -3700,16 +3128,11 @@ code {
   }
 
   /*
-   * 8px between one card's fields, and none between a subtotal's.
-   *
-   * The gap is what makes a card a list of fields rather than a paragraph, and
-   * it is wrong on the two summary rows for the same reason it is right on a
-   * card: those rows are a single strip, with their own ground under them and
-   * their own padding around them. The rule was scoped to `tbody` and a
-   * subtotal lives in one, so it broke into four bands separated by 8px of bare
-   * panel, while the grand total — the same component, rendered in `<tfoot>`
-   * and so out of the rule's reach — drew as the one continuous block §8 asks
-   * both of them for.
+   * 8px between one card's fields, none between a subtotal's: the summary
+   * rows are a single strip with their own ground and padding. Scoped to
+   * `tbody`, the gap broke a subtotal into four bands over bare panel while
+   * the grand total — the same component in `<tfoot>`, out of reach — drew
+   * as the continuous block §8 asks of both.
    */
   .data-table--holdings tbody tr:not(.row-subtotal) td + td {
     margin-top: var(--space-base);
@@ -3780,13 +3203,10 @@ code {
   }
 
   /*
-   * The correction, on a card (DESIGN.md §11 — the phone reads, and writes one
-   * number).
-   *
-   * The actions cell loses its label and its right edge and becomes the card's
-   * last line, which is where a card's actions belong. On a subtotal and on the
-   * grand total the same cell carries nothing at all, and an empty flex row
-   * there would open a gap under the figures.
+   * The correction, on a card (§11: the phone reads, and writes one
+   * number). The actions cell loses its label and right edge and becomes
+   * the card's last line; on a subtotal and the grand total the same cell
+   * is empty, and an empty flex row would open a gap under the figures.
    */
   .data-table--holdings th.is-actions,
   .data-table--holdings td.is-actions {
@@ -3805,22 +3225,12 @@ code {
   }
 
   /*
-   * The tint is the card's, not its cells'.
-   *
-   * Above 768px the open row's cells tile it end to end, so painting the cells
-   * *is* painting the row, and `.row-editing td` is the natural place for it.
-   * Below 768px the `tr` is what owns the card's 16px padding and `td + td`
-   * opens 8px between one field and the next, so the same declaration drew ten
-   * tinted boxes inset from the card's edges with eight bare gutters through
-   * them: §6.3's "the one row that is different", rendered as a stack of grey
-   * stripes on a white card. The ground belongs to the card, so it goes on the
-   * card and the cells give it up.
-   *
-   * The footer takes the same ground across its own full width, which is what
-   * §6.5 means by the two reading as one block — a tinted box inset inside an
-   * untinted line is the fence the rule exists to remove. This covers the
-   * receipt too (§6.6): same row class, same treatment, under the row whose
-   * figure it is confirming.
+   * The tint is the card's, not its cells': above 768px the cells tile the
+   * row so painting them is painting it, but below, the `tr` owns the
+   * card's padding and the same declaration drew ten tinted boxes with
+   * eight bare gutters — "the one row that is different" as grey stripes on
+   * a white card. The footer takes the same ground full width (§6.5's "one
+   * block"), which covers the receipt too (§6.6).
    */
   .data-table--holdings tr.row-editing,
   .data-table--holdings tr.row-note {
@@ -3834,15 +3244,11 @@ code {
     background: none;
   }
 
-  /* A box that shared its line with the field's label would be a third of a
-   * phone wide. The card gives it the row instead — and the caption goes back
-   * to the leading edge with it, since `.is-numeric` right-aligns the cell for
-   * a column of figures that no longer exists once the table is a card.
-   *
-   * The padding is restated because the desktop rule gives the cell's trailing
-   * 8px to the box so the digits line up in their column. There is no column
-   * here — the card gives the box the whole row — so the 8px would only hold the
-   * box back from the card's edge. */
+  /* A box sharing its line with the label would be a third of a phone wide;
+   * the card gives it the row, and the caption goes back to the leading
+   * edge (`.is-numeric`'s right-align serves a column that no longer
+   * exists). Padding restated: the desktop rule gives the cell's trailing
+   * 8px to the box for column alignment, and there is no column here. */
   .data-table--holdings tbody tr.row-editing td:has(> .cell-input) {
     display: block;
     padding: 0;
@@ -3858,11 +3264,10 @@ code {
     text-align: left;
   }
 
-  /* The note is the card's own last line rather than a row of its own: at 390px
-   * the sentence is four lines and the padding between two cards would read as
-   * a break in the middle of one correction. It needs no `border-top: 0` of its
-   * own any more — the card rule above no longer claims it, so there is no
-   * border here to refuse. */
+  /* The note is the card's own last line, not a row of its own: at 390px
+   * the sentence is four lines and inter-card padding would read as a break
+   * mid-correction. No `border-top: 0` needed — the card rule no longer
+   * claims it. */
   .data-table--holdings tbody tr.row-note {
     padding: 0 var(--space-md) var(--space-md);
   }
@@ -3872,24 +3277,18 @@ code {
     padding: 0;
   }
 
-  /* The bar's own contents were inset 8px further than every other panel's on
-   * this page — `.panel-header`, `.panel-body`, `.panel-form` and `.record-form`
-   * all drop to 16px below 768px and this one kept 24px, so a single-column
-   * phone layout had a step in its left margin running the whole length of the
-   * page. It is restated here rather than added to that rule because
-   * `.filter-bar` is declared after it at equal specificity and would win. */
+  /* Every other panel drops to 16px below 768px and this one kept 24px — a
+   * step in the phone's left margin running the length of the page.
+   * Restated here because `.filter-bar` is declared after that rule at
+   * equal specificity and would win. */
   .filter-bar {
     padding: var(--space-md);
   }
 
   /* Two filters to a row: seven stacked controls is most of a phone screen
-   * before the table it filters has started.
-   *
-   * `flex: 0 1` here for the same reason as above 768px, and it has to be said
-   * twice: this rule comes later in the file at equal specificity, so it is the
-   * one that decides the phone. Changing only the desktop rule leaves the bar
-   * at `2×146 · 2×146 · 2×146 · 1×218` — a last row half again as wide as the
-   * six controls above it. */
+   * before the table starts. `flex: 0 1` said twice because this rule comes
+   * later at equal specificity and decides the phone — desktop-only left
+   * the last row half again as wide as the six controls above it. */
   .filter-bar > div:not(.filter-actions) {
     flex: 0 1 calc(50% - var(--space-md));
   }
@@ -3898,40 +3297,33 @@ code {
     margin-left: 0;
   }
 
-  /* Full width once the page header has stacked — minus whatever shares the
-   * row, which on three screens is the freshness note. `flex: 1` rather than
-   * the `width: 100%` this used to say: the actions row shrink-wrapped until
-   * its own 767px rule stretched it, so 100% resolved to the chip's own width
-   * and the promise in this comment never actually happened. The chip itself
-   * keeps its size either way — `summary` is inline-flex — only the anchor
-   * box grows. */
+  /* Full width once the page header has stacked. `flex: 1`, not
+   * `width: 100%`: the actions row shrink-wrapped, so 100% resolved to the
+   * chip's own width and the promise never happened. The chip keeps its
+   * size either way (`summary` is inline-flex); only the anchor box grows. */
   .owner-filter {
     flex: 1;
   }
 
-  /* `right: 0; width: max-content` is `.segmented-custom-form`'s geometry,
-   * and it is right beside the range strip because that summary sits at the
-   * trailing edge — a panel growing leftwards grows into the viewport. Under
-   * a chip at the leading edge of a stacked header the same rule grew the
-   * panel off the left of the phone. Spanning the now-full anchor box keeps
-   * every checkbox on screen and hands the thumb the whole row. */
+  /* `.segmented-custom-form`'s geometry is right at the trailing edge,
+   * where a panel growing leftwards grows into the viewport; under a chip
+   * at the leading edge it grew the panel off the left of the phone.
+   * Spanning the now-full anchor box keeps every checkbox on screen. */
   .owner-filter-menu {
     left: 0;
     width: auto;
     max-width: none;
   }
 
-  /* The names take the whole row, so the actions wrap under them — beside the
-   * list they floated in whatever the panel had spare, which on a spanning
-   * panel was a button adrift in empty space. */
+  /* The names take the whole row, so the actions wrap under them — beside
+   * the list they floated in whatever the panel had spare. */
   .owner-filter-owners {
     flex: 1 0 100%;
   }
 
-  /* Trailing corner, primary outermost: `margin-left: 0` above is right on a
-   * panel sized to its contents and wrong on one spanning the row — the base
-   * `.filter-actions` already knew that. Reversed so Apply takes the corner
-   * itself and Show everyone, the quieter exit, sits inside it. */
+  /* Trailing corner, primary outermost: `margin-left: 0` is right on a
+   * panel sized to its contents, wrong on one spanning the row. Reversed so
+   * Apply takes the corner and Show everyone sits inside it. */
   .owner-filter .filter-actions {
     margin-left: auto;
     flex-direction: row-reverse;

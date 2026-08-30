@@ -3,30 +3,19 @@ import { afterAll, describe, expect, it } from "vitest";
 import { closeTestDatabase, TEST_DATABASE_URL, withDatabase } from "../support/database.ts";
 
 /**
- * `GET /healthz` — the answer Compose, a reverse proxy and any monitoring read.
- *
- * `scripts/smoke-test.sh` already asserts the status code, so what is new here
- * is the body: monitoring alerts on `status`, and an operator diagnosing a
- * half-deployed instance reads `migrations` and `pendingMigrations` to tell a
- * database that is down from a schema that is behind. A key that quietly
- * changes name breaks both of those silently — the endpoint keeps answering
- * 200, and the field the dashboard reads is simply never there again.
- *
- * `Cache-Control: no-store` is here for the same reason. A proxy that is
- * allowed to cache this serves a healthy verdict for an instance that stopped
- * being healthy, which is strictly worse than serving no health check at all.
- *
- * Scope, honestly: only the healthy branch is reachable from a test. The
- * unhealthy ones are decided by `checkHealth`, which reads the migration ledger
- * through `getPool()` — the process-wide pool, which `withDatabase` does not
- * override. So the pending-migration and unreachable-database branches cannot
- * be staged from here without changing production code or the harness, and are
- * deliberately not faked. `migrations.test.ts` covers `pendingMigrations`
- * itself.
- *
- * That process-wide pool is also why `DATABASE_URL` is assigned before the
- * import: the ledger read goes to whatever it names, so it has to name the same
- * throwaway database the transaction below runs in.
+ * `GET /healthz` — the answer Compose, the proxy and monitoring read.
+ * `smoke-test.sh` asserts the status code; what is new is the body:
+ * monitoring alerts on `status`, an operator reads `migrations` and
+ * `pendingMigrations` to tell a down database from a behind schema, and a
+ * quietly renamed key breaks both silently — 200 keeps answering while the
+ * field is simply never there again. `Cache-Control: no-store` for the same
+ * reason: a cached healthy verdict for an unhealthy instance is worse than
+ * no health check. Scope, honestly: only the healthy branch is reachable —
+ * `checkHealth` reads the ledger through `getPool()`, the process-wide pool
+ * `withDatabase` does not override, so the unhealthy branches cannot be
+ * staged without changing production code, and are deliberately not faked
+ * (`migrations.test.ts` covers `pendingMigrations` itself). That pool is
+ * also why `DATABASE_URL` is assigned before the import.
  */
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 

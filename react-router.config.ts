@@ -5,13 +5,11 @@ export default {
   ssr: true,
 
   future: {
-    // Route middleware. `chart-range.ts`'s `chartRangeMiddleware` is what
-    // needs it: a middleware wraps the *response*, which is how a route can
-    // write the range cookie while its loader keeps returning the plain object
-    // every test reads fields off directly.
-    //
-    // Authentication was the original reason and is no longer a reason at all —
-    // it happens in front of the app now (ADR-0005), so nothing here is a gate.
+    // For `chart-range.ts`'s `chartRangeMiddleware`: a middleware wraps the
+    // *response*, letting a route write the range cookie while its loader
+    // keeps returning the plain object tests read directly. Auth is NOT a
+    // reason — it happens in front of the app (ADR-0005); nothing here is a
+    // gate.
     v8_middleware: true,
   },
 } satisfies Config;

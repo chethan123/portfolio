@@ -7,15 +7,10 @@ import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.serve
 import type { Route } from "./+types/tax";
 
 /**
- * Settings → Tax.
- *
- * A thin wrapper over `settings.server.ts`, exactly as People and Accounts are
- * over theirs: it reads the form, hands the raw fields down, and renders what
- * comes back. What a rate is allowed to be lives in that module.
- *
- * One field, and it is here rather than in an environment variable because it
- * is the household's number rather than the deployment's — the argument is
- * written out in `0005_app_setting.sql` and in `settings.server.ts`.
+ * Settings → Tax — a thin wrapper over `settings.server.ts`, as People and
+ * Accounts are over theirs: read the form, hand raw fields down, render what
+ * comes back. What a rate may be lives in that module; why it is a row and
+ * not an environment variable is `0005_app_setting.sql`.
  */
 export function meta() {
   return [{ title: "Tax · Settings · Portfolio" }];
@@ -36,9 +31,9 @@ export async function action({ request }: Route.ActionArgs) {
     return null;
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here rather than in the component: `FORM_ERROR` lives in a
-      // `.server` module, and a component referencing it would drag that module
-      // — and the database with it — into the client bundle.
+      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
+      // module, and a component referencing it would drag the database into
+      // the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       return { errors: fieldErrors, formError: formError ?? null, values };
@@ -70,10 +65,9 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
         </header>
 
         <Form method="post" className="panel-form">
-          {/* A refusal that names no field would otherwise be a form that did
-              nothing and said nothing. There is one field here, so this is
-              close to unreachable — which is exactly why it must not be the
-              case that goes unrendered. */}
+          {/* Close to unreachable with one field — exactly why it must not
+              be the refusal that goes unrendered: a form that did nothing
+              and said nothing. */}
           {actionData?.formError ? (
             <p className="form-error" role="alert">
               {actionData.formError}
@@ -87,11 +81,10 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
                 id="capital-gains-rate"
                 name="capitalGainsRate"
                 inputMode="decimal"
-                // What was typed survives a refusal; otherwise the box shows
-                // the stored rate with the column's padding taken off and
-                // nothing rounded. Rounding here would round-trip: a rate saved
-                // as 3.75 would come back as 3.8 and the next save would store
-                // that, quietly changing a figure nobody edited.
+                // What was typed survives a refusal; otherwise the stored
+                // rate, padding off, nothing rounded — rounding would
+                // round-trip: 3.75 shown as 3.8, and the next save quietly
+                // stores a figure nobody edited.
                 defaultValue={
                   error
                     ? (actionData?.values.capitalGainsRate ?? "")

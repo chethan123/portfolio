@@ -1,21 +1,12 @@
 /**
- * The three breakdowns the analysis screen draws, and the two the Income screen
- * draws beside them (DESIGN.md §8.1).
- *
- * No database. `app/lib/allocation.ts` is pure by design — it groups the rows
- * the query layer already returned — so these are unit tests with a fixture
- * function instead of a fixture builder, and they run without Postgres.
- *
- * Two things are being pinned here rather than three. The grouping itself is
- * the obvious one. The other is the arithmetic: every money assertion is an
- * exact decimal string, including the cases a float gets wrong, because this
- * module is the one place in the application that adds money outside SQL and
- * the whole justification for that is that it is exact.
- *
- * And the rule the file's header spends most of its length on — that a negative
- * slice is a fraction of the gross positive total, never of the net — is
- * pinned twice: once for a household that nearly cancels out, and once for one
- * in net debt. Both are where the obvious denominator produces nonsense.
+ * The three breakdowns Analysis draws, and the two Income draws beside them
+ * (DESIGN.md §8.1). No database: `allocation.ts` is pure by design, so
+ * these are unit tests over a fixture function. Pinned: the grouping, and
+ * the arithmetic — every money assertion an exact decimal string, including
+ * the cases a float gets wrong, because this module adds money outside SQL
+ * and exactness is its whole justification. The gross-positive-denominator
+ * rule is pinned twice — a household that nearly cancels out, and one in
+ * net debt — both where the obvious denominator produces nonsense.
  */
 import { describe, expect, it } from "vitest";
 

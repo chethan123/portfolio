@@ -8,15 +8,12 @@ import { listPeople } from "~/lib/people.server";
 import type { Route } from "./+types/account";
 
 /**
- * One account: correct it, or close it.
- *
- * Closing is a separate submission from saving, with its own button and its own
- * warning, because the two do very different things to a figure — a save fixes
- * what an account is, and a close changes which dates it counts on. And because
- * closing is one-way in this version, the button alone is not enough: the
- * domain refuses a close whose acknowledgement was not ticked, so a stray
- * activation of the button changes nothing. Nothing on this page deletes
- * anything; there is no delete affordance in the application at all.
+ * One account: correct it, or close it. Closing is a separate submission
+ * with its own button and warning — a save fixes what an account is, a close
+ * changes which dates it counts on — and since closing is one-way in this
+ * version, the domain refuses a close whose acknowledgement was not ticked,
+ * so a stray activation changes nothing. Nothing on this page deletes;
+ * there is no delete affordance in the application at all.
  */
 export function meta({ data }: Route.MetaArgs) {
   return [{ title: `${data?.account.name ?? "Account"} · Settings · Portfolio` }];
@@ -106,9 +103,9 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
         </p>
       ) : null}
 
-      {/* One panel, two forms. The danger zone carries the hairline that
-          separates it from the fields above, so putting it in a card of its own
-          would leave that rule floating at the top of an empty edge. */}
+      {/* One panel, two forms: the danger zone carries the hairline that
+          separates it from the fields above — its own card would leave that
+          rule floating at the top of an empty edge. */}
       <section className="panel">
         <Form method="post" className="panel-form">
           <AccountFields
@@ -133,8 +130,8 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
               </p>
             </div>
             {/* The acknowledgement `closeAccount` requires before its one-way
-                write — the tick carries the decision and its consequences, the
-                same weight the upload review gives a majority removal. */}
+                write — the tick carries the decision, the weight the upload
+                review gives a majority removal. */}
             <label className="choice">
               <input type="checkbox" name="confirmClose" value="true" />
               <strong>

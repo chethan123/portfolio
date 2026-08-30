@@ -1,15 +1,13 @@
 /**
  * Display formatting for the decimal strings the valuation layer returns.
+ * Every function takes a string, returns a string; none calls `Number()`,
+ * `parseFloat` or `Intl.NumberFormat` on money — all three need a float, and
+ * §4.1 keeps money out of floats end to end. Rounding and grouping work on
+ * the digits themselves, exact by construction.
  *
- * Every function here takes a string and returns a string. None of them calls
- * `Number()`, `parseFloat`, or `Intl.NumberFormat` on a money value — all three
- * require a float, and §4.1 keeps money out of floats end to end. The rounding
- * and the digit grouping below are done on the digits themselves, which is
- * less code than it looks and is exact by construction.
- *
- * This module formats. It does not compute: there is deliberately no add,
- * subtract or divide here. Arithmetic on money happens in SQL, in `numeric`
- * (DESIGN.md §8.2), and a helper here would be an invitation to do it twice.
+ * Formats, never computes: no add, subtract or divide here. Arithmetic on
+ * money happens in SQL, in `numeric` (DESIGN.md §8.2) — a helper here would
+ * be an invitation to do it twice.
  */
 
 /** A decimal string taken apart. `int` and `frac` are digits only. */
@@ -40,11 +38,9 @@ function increment(digits: string): string {
 }
 
 /**
- * Round to `dp` decimal places, half away from zero.
- *
- * Half-up on the magnitude rather than banker's rounding: this is a figure a
- * person reads, and matching what they would get on paper matters more here
- * than the statistical bias that banker's rounding exists to avoid.
+ * Round to `dp` decimal places, half away from zero — not banker's rounding:
+ * this is a figure a person reads, and matching what they would get on paper
+ * matters more than the statistical bias banker's rounding avoids.
  */
 function round(parts: Parts, dp: number): Parts {
   const { negative, int, frac } = parts;
@@ -70,8 +66,8 @@ function group(int: string): string {
 }
 
 /**
- * A negative zero is a rounding artefact, never a fact about money: −$0.00 on
- * a screen reads as a bug even when the arithmetic behind it was right.
+ * A negative zero is a rounding artefact, never a fact about money — −$0.00
+ * reads as a bug even when the arithmetic behind it was right.
  */
 function sign(parts: Parts): string {
   const isZero = /^0*$/.test(parts.int) && /^0*$/.test(parts.frac);
@@ -79,11 +75,10 @@ function sign(parts: Parts): string {
 }
 
 /**
- * `"1248392.1400"` → `"$1,248,392.14"`, `"-8000"` → `"−$8,000.00"`.
- *
- * The minus is U+2212, not a hyphen: at the 32px display size of the net worth
- * headline a hyphen is visibly too short to read as a minus sign, and this is
- * the one place in the app where misreading the sign matters most.
+ * `"1248392.1400"` → `"$1,248,392.14"`, `"-8000"` → `"−$8,000.00"`. The minus
+ * is U+2212, not a hyphen: at the net worth headline's 32px a hyphen is
+ * visibly too short to read as a minus, and that is the one place misreading
+ * the sign matters most.
  */
 export function formatMoney(decimal: string, dp = 2): string {
   const parts = round(parse(decimal), dp);
@@ -93,11 +88,10 @@ export function formatMoney(decimal: string, dp = 2): string {
 }
 
 /**
- * `"14921"` → `"+$14,921.00"`. For a movement, where the sign is the point.
- *
- * {@link formatMoney} marks only negatives, because a balance is not a
- * movement and `+$12,500.00` for a checking account is noise. A delta is the
- * opposite case: an unmarked positive there is ambiguous at a glance.
+ * `"14921"` → `"+$14,921.00"`, for a movement, where the sign is the point.
+ * {@link formatMoney} marks only negatives — `+$12,500.00` on a balance is
+ * noise; a delta is the opposite case, where an unmarked positive is
+ * ambiguous at a glance.
  */
 export function formatSignedMoney(decimal: string, dp = 2): string {
   const parts = round(parse(decimal), dp);
@@ -109,12 +103,9 @@ export function formatSignedMoney(decimal: string, dp = 2): string {
 }
 
 /**
- * `"1248392.14"` → `"1.2M"`. For chart axis ticks, where the full figure would
- * not fit and its precision would not be read.
- *
- * Never used for a headline or a table cell. An abbreviated balance is a
- * rounded balance, and this app does not round the numbers a person is trying
- * to reconcile against a statement.
+ * `"1248392.14"` → `"1.2M"`, for chart axis ticks only — never a headline or
+ * table cell: an abbreviated balance is a rounded balance, and this app does
+ * not round the numbers a person reconciles against a statement.
  */
 export function formatCompact(decimal: string): string {
   const parts = parse(decimal);
@@ -154,11 +145,9 @@ export function formatCompact(decimal: string): string {
 }
 
 /**
- * `"1.2043"` → `"+1.2%"`. The sign is always explicit, including the plus.
- *
- * §12: gain and loss are never carried by colour alone. This is half of that
- * guarantee — the sign is in the text — and the direction arrow beside it is
- * the other half.
+ * `"1.2043"` → `"+1.2%"`, sign always explicit. §12: gain and loss are never
+ * carried by colour alone — the sign in the text is half of that guarantee,
+ * the direction arrow beside it the other half.
  */
 export function formatPercent(decimal: string, dp = 1): string {
   const parts = round(parse(decimal), dp);
@@ -176,42 +165,31 @@ export function isNegative(decimal: string): boolean {
 }
 
 /**
- * Whether a decimal string is strictly greater than zero.
- *
- * The counterpart to {@link isNegative}, and read off the digits the same way:
- * a sign and one non-zero digit is the whole test. `Number(amount) > 0` would
- * answer the same question by way of a float, which §4.1 keeps money out of end
- * to end.
- *
- * Here rather than beside the one component that draws a ring from it: the two
- * halves of "which way does this figure point" are a pair, and a copy of one of
- * them living in a route or a component is how the pair comes apart.
+ * Whether a decimal string is strictly greater than zero — read off the
+ * digits like {@link isNegative}, never via `Number(amount) > 0` and a float.
+ * Here rather than beside the one component that draws a ring from it: the
+ * two halves of "which way does this figure point" are a pair, and a copy in
+ * a route is how the pair comes apart.
  */
 export function isPositive(decimal: string): boolean {
   return !isNegative(decimal) && /[1-9]/.test(decimal);
 }
 
 /**
- * The number a chart needs to position a point.
- *
- * This is the one place a money value becomes a float, and it is safe here for
- * a reason that does not generalise: the result is multiplied by a pixel
- * height and rounded to a screen coordinate, so an error in the fifteenth
- * significant digit cannot survive to be displayed. Never use it for a figure
- * that will be shown, compared, or summed.
+ * The number a chart needs to position a point — the one place money becomes
+ * a float, safe for a reason that does not generalise: the result is
+ * multiplied by a pixel height and rounded to a screen coordinate, so an
+ * error in the fifteenth digit cannot survive to be displayed. Never for a
+ * figure that will be shown, compared, or summed.
  */
 export function toPlotValue(decimal: string): number {
   return Number(decimal);
 }
 
 /**
- * `["a", "b", "c"]` → `"a, b and c"`.
- *
- * A list a sentence can hold. Here rather than in the two places that had it
- * — the Holdings empty note and the owner filter's narration — because a
- * screen saying "Alex, Jordan and Sam" and another saying "Alex, Jordan, Sam"
- * would be one household described two ways on adjacent pages.
- *
+ * `["a", "b", "c"]` → `"a, b and c"` — a list a sentence can hold. Here
+ * rather than in the two screens that had it: "Alex, Jordan and Sam" beside
+ * "Alex, Jordan, Sam" is one household described two ways on adjacent pages.
  * No Oxford comma, matching what the empty note already said.
  */
 export function joinWords(parts: string[]): string {

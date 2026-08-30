@@ -1,28 +1,15 @@
 /**
  * The columns screen's form contract (`parseMappingForm`, DESIGN.md §5.3,
- * spec 0004 step 03).
- *
- * Pure — no Postgres — because everything at risk here is a decision made out
- * of posted strings, and the decisions are the ones that set what every later
- * figure means. Three of them are silent when they go wrong, which is why they
- * are tested one rule at a time rather than through the route:
- *
- * **The sign of every imported liability.** `owedAsPositive` is a checkbox, and
- * a checkbox posts its value or nothing at all. Nothing means unticked, which
- * keeps the file's own sign — the overdraft case (§14.8). A reading of absence
- * as "ticked" would negate every quantity in a bank export.
- *
- * **The scale of every cost basis.** `per_share` and `total` differ by the
- * position size, so a flip does not fail: it rescales the whole file and prints
- * a plausible wrong number.
- *
- * **What the mapping is checked against.** The header row rides in a hidden
- * field, so a stale or forged one must refuse at form level and never build a
- * mapping against a row that is not in the file.
- *
- * The refusals are checked as a set, not one at a time, because the single
- * `superRefine` exists so a submission with three faults comes back with three
- * messages rather than one per round trip.
+ * spec 0004 step 03). Pure — every risk is a decision made out of posted
+ * strings, and three are silent when wrong: **the sign of every imported
+ * liability** (a checkbox posts its value or nothing; absence read as
+ * "ticked" would negate every quantity in a bank export — §14.8's overdraft
+ * case), **the scale of every cost basis** (a per_share/total flip does not
+ * fail — it rescales the file and prints a plausible wrong number), and
+ * **what the mapping is checked against** (the header row rides in a hidden
+ * field; a stale or forged one must refuse at form level). Refusals are
+ * checked as a set: the single `superRefine` exists so three faults come
+ * back as three messages.
  */
 import { describe, expect, it } from "vitest";
 

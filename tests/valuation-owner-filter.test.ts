@@ -1,21 +1,15 @@
 /**
- * The owner filter, where it meets SQL (spec 0013 ticket 02, ADR-0008).
- *
- * Every household-scoped reader in `valuation.server.ts` takes an owner filter
- * first, and these are the rules that narrowing has to keep. `ALL_OWNERS` is not exercised here on purpose — that the rest of the
- * suite still passes unchanged is what says the unfiltered read is the query it
- * always was, and a test asserting the code equals itself would say nothing.
- *
- * Two rules carry most of the weight. The narrowing lives **inside** the
- * lateral in `readSeries`/`readSessionSeries`, so a date the selected owner has
- * no rows for is still reported as uncovered rather than dropped — an outer
- * `WHERE` silently shortens the line, which no assertion about amounts would
- * catch. And `firstRecordedDate` narrows through `account` rather than through
- * the view, so it spans closed accounts: an owner who has closed everything
- * holds nothing and still has a history.
- *
- * Money is compared as exact decimal strings at the stored scale, and the one
- * sum performed in JavaScript goes through `money.ts` rather than `Number`.
+ * The owner filter where it meets SQL (spec 0013 ticket 02, ADR-0008).
+ * `ALL_OWNERS` is not exercised on purpose: the rest of the suite passing
+ * unchanged is what says the unfiltered read is the query it always was.
+ * Two rules carry the weight. The narrowing lives **inside** the lateral in
+ * `readSeries`/`readSessionSeries`, so a date the selected owner has no
+ * rows for is reported uncovered rather than dropped — an outer `WHERE`
+ * silently shortens the line, which no amount assertion would catch. And
+ * `firstRecordedDate` narrows through `account`, not the view, so it spans
+ * closed accounts: an owner who closed everything holds nothing and still
+ * has a history. Exact decimal strings; the one JavaScript sum goes through
+ * `money.ts`.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

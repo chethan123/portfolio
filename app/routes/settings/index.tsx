@@ -1,12 +1,10 @@
 import { Link } from "react-router";
 
 /**
- * What Settings holds, and what it will hold.
- *
- * DESIGN.md §8.4 names the tabs; not all of them exist yet. Saying which are
- * still coming is the honest version of a fresh install — a family member who
- * cannot find Instruments should learn that it is not built yet rather than
- * conclude they are looking in the wrong place.
+ * What Settings holds, and what it will hold. DESIGN.md §8.4 names the tabs;
+ * not all exist yet, and saying which are coming is the honest version — a
+ * family member who cannot find Instruments should learn it is not built
+ * yet, not conclude they are looking in the wrong place.
  */
 export function meta() {
   return [{ title: "Settings · Portfolio" }];

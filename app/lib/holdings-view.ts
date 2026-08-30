@@ -1,47 +1,30 @@
 /**
- * The Holdings screen's one table: which rows it shows, in what order, and what
- * the subtotals under them are (DESIGN.md §8.1).
+ * The Holdings screen's one table: which rows, in what order, what the
+ * subtotals are (DESIGN.md §8.1) — §8.1's "the same table with the grouping
+ * changed, not separate features" made executable: one row shape, one set of
+ * dimensions, a grouping argument.
  *
- * §8.1 calls Holdings the workhorse and says a groupable, filterable table
- * "absorbs what would otherwise be four more pages — by owner, by account, tax
- * view, unrealized. Those are the same table with the grouping changed, not
- * separate features." This module is that sentence made executable: one row
- * shape, one set of dimensions, and a grouping argument.
+ * **No new query, on purpose.** Every dimension is already a column on the
+ * {@link ValuedHolding} rows `currentHoldings(ALL_OWNERS)` returns —
+ * `holding_valued` was built to expose exactly them (§8.2) — so filtering and
+ * grouping are pure functions over one existing array, not seven predicates
+ * pushed into SQL. §8.2 names quietly-disagreeing hand-rolled queries as the
+ * design's weakest point; a table and subtotals computed from a single array
+ * cannot disagree.
  *
- * **No new query, on purpose.** Every dimension below is already a column on
- * the {@link ValuedHolding} rows `currentHoldings(ALL_OWNERS)` returns, because
- * `holding_valued` was built to expose exactly them (§8.2). So filtering and
- * grouping are pure functions over an array that already exists rather than
- * seven new predicates pushed into SQL. That is not laziness about `WHERE`
- * clauses — §8.2 names hand-rolled dashboard queries that can quietly disagree
- * as the weakest point in the whole design, and the way not to add a fourth one
- * is not to add a fourth one. The screen's table and its subtotals are computed
- * from a single array, so a row and the total beneath it cannot disagree.
+ * **Seven dimensions, not four and not eight.** §8.3's view builder types
+ * eight; `instrument` is the one left out — a filter over the thing each row
+ * *is* is a search box wearing a dropdown, a different control with a
+ * different argument for existing.
  *
- * **Seven dimensions, not four and not eight.** §8.1's first draft granted
- * Holdings four — person, account, tax treatment, classification (its text now
- * records the growth). §8.3's deferred view builder
- * types the same idea as eight: `person | account | institution | kind |
- * tax_treatment | classification | asset_class | instrument`. §8.1 predates
- * §8.3, `holding_valued` exposes all eight, and nothing anywhere forbids the
- * extra four, so the wider set is the one taken. `instrument` is the one left
- * out: a filter over the very thing each row *is* is a search box wearing a
- * dropdown, and a search box is a different control with a different argument
- * for its existence.
- *
- * **A filter is only offered when it can discriminate.** §13.7 refused search
- * over accounts — "a household has a dozen accounts; a filter over twelve rows
- * is a control that costs more than it saves." That refusal is honoured here
- * rather than argued with: {@link availableFilters} returns a dimension only if
- * the data actually holds two or more distinct values for it, so a household
- * with one brokerage is never shown a Brokerage select that could only mean
- * "all of them", and every option it does show is a value some holding really
- * has — so no *single*
- * filter can select an empty table. Two of them still can, and deliberately:
- * the options are read from the whole portfolio rather than from what the other
- * filters have already left, because options that vanished as you narrowed
- * would leave no way to widen again. An empty intersection is a real answer and
- * the screen says so in words.
+ * **A filter is only offered when it can discriminate** (§13.7's refusal of
+ * search over a dozen accounts, applied as a rule): {@link availableFilters}
+ * returns a dimension only when the data holds two or more distinct values,
+ * and every option shown is a value some holding has — no *single* filter can
+ * select an empty table. Two still can, deliberately: options come from the
+ * whole portfolio, because options that vanished as you narrowed would leave
+ * no way to widen again. An empty intersection is a real answer and the
+ * screen says so in words.
  *
  * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
  * either job by hand.
@@ -64,10 +47,8 @@ import { toOwnerParam, type OwnerFilter } from "./owner-filter.ts";
 import type { AccountKind, Coverage, TaxTreatment, ValuedHolding } from "./valuation.server.ts";
 
 /**
- * The seven things a holding can be **grouped** by; six of them, `owner`
- * excepted, are also what it can be **filtered** by. These double as URL
- * parameter names, so they are short and stable — renaming one silently breaks
- * every bookmark that carried it.
+ * The seven groupables; all but `owner` also filter. Double as URL parameter
+ * names — short and stable, since renaming one silently breaks every bookmark.
  */
 export type DimensionId =
   | "owner"
@@ -79,17 +60,11 @@ export type DimensionId =
   | "assetClass";
 
 /**
- * Two labels, because a dropdown and a table cell have different budgets.
- *
- * `account-options.ts` holds the canonical labels, written so a form's
- * `<select>` explains itself — "Workplace plan (401k, 403b)", "Tax-deferred —
- * tax due on withdrawal (Traditional)". That explanation is exactly right in a
- * filter dropdown, where there is room for it and the reader may be deciding.
- * It is wrong in a group header or a table cell, where it wraps to two lines and
- * pushes the figures out of alignment. So `label` is the short form and
- * `optionLabel` is the canonical one, and the short forms below are the same
- * words with the explanatory tail trimmed — never a different name for the same
- * thing.
+ * Two labels because a dropdown and a table cell have different budgets:
+ * `account-options.ts` holds the canonical self-explaining form ("Tax-deferred
+ * — tax due on withdrawal"), right in a filter dropdown, wrong in a cell
+ * where it wraps and pushes figures out of alignment. The short forms are the
+ * same words minus the explanatory tail — never a different name.
  */
 const SHORT_KIND: Record<AccountKind, string> = {
   brokerage: "Brokerage",
@@ -115,12 +90,9 @@ type Dimension = {
   /** The caption above the filter's `<select>`. */
   filterLabel: string;
   /**
-   * The chosen value as a fragment of a sentence — "at Chase", "owned by Bob".
-   *
-   * A control's caption and the same fact in prose are not the same words. The
-   * select above the box says "Brokerage" because it is labelling a field;
-   * a sentence explaining why the table is empty has to read as English, and
-   * "nothing is brokerage Chase and asset class Equity" does not.
+   * The chosen value as a sentence fragment — "at Chase", "owned by Bob". A
+   * caption and prose are not the same words: the empty-table sentence has to
+   * read as English, and "nothing is brokerage Chase" does not.
    */
   phrase: (label: string) => string;
   of: (holding: ValuedHolding) => Facet;
@@ -132,18 +104,11 @@ function plain(key: string): Facet {
 }
 
 /**
- * Owner: a **grouping**, and no longer a filter (spec 0013).
- *
- * Narrowing to an owner is household-wide now — it follows the reader onto
- * Overview, Analysis and Income — so this screen's own Owner select would have
- * been a second, screen-local way to ask the same question, with two answers
- * available at once. Grouping by owner is a different act and stays: it is how
- * you read one table as four, and it is still useful under a filter naming two
- * people.
- *
- * Keyed on the owner's id rather than their name, for the reason
- * `allocationByPerson` gives: two people in one household can share a first
- * name, and a grouping that merged them would be wrong invisibly.
+ * Owner: a **grouping**, no longer a filter (spec 0013) — narrowing to an
+ * owner is household-wide now, and a screen-local Owner select would be a
+ * second way to ask the same question with two answers at once. Grouping
+ * stays: it reads one table as four, and still works under a filter naming
+ * two people. Keyed on id, not name (`allocationByPerson`'s reason).
  */
 const OWNER: Dimension = {
   id: "owner",
@@ -158,8 +123,8 @@ const OWNER: Dimension = {
 };
 
 /**
- * The dimensions the filter bar offers, ordered as it renders them: where it
- * sits, then what it is. That is the order a person narrows in.
+ * The filter bar's dimensions, in render order: where it sits, then what it
+ * is — the order a person narrows in.
  */
 export const DIMENSIONS: ReadonlyArray<Dimension> = [
   {
@@ -170,9 +135,8 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     of: (holding) => ({
       key: holding.accountId,
       label: holding.accountName,
-      // Two accounts at two institutions can carry the same name — "Roth IRA"
-      // is the obvious one — so the dropdown says which is which even though
-      // the table cell, which has the institution on its own line, need not.
+      // Two accounts at two institutions can share a name ("Roth IRA"), so
+      // the dropdown disambiguates; the cell has the institution on its own line.
       optionLabel: `${holding.accountName} · ${holding.institution}`,
     }),
   },
@@ -226,44 +190,27 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
 ];
 
 /**
- * The dimensions the table can be grouped by: the filterable ones plus
- * {@link OWNER}, which is a grouping and not a filter.
- *
- * Two lists rather than one flag on `Dimension`, because everything that reads
- * these reads one of the two whole: the filter bar and `toSearch`'s parameters
- * are {@link DIMENSIONS}, the group-by strip and the `group=` vocabulary are
- * these.
+ * The groupables: the filterable ones plus {@link OWNER}. Two lists, not a
+ * flag, because every reader reads one whole: the filter bar and `toSearch`
+ * read {@link DIMENSIONS}; the group-by strip and `group=` vocabulary, these.
  */
 export const GROUPINGS: ReadonlyArray<Dimension> = [OWNER, ...DIMENSIONS];
 
 const DIMENSION_BY_ID = new Map(GROUPINGS.map((dimension) => [dimension.id, dimension]));
 
 /**
- * One dimension's accessor, for a breakdown built outside this module.
+ * One dimension's accessor, for a breakdown built outside this module. The
+ * Income screen needs the short labels above, and `allocation.ts` cannot
+ * import them (it is imported *by* this module — a cycle), so the label table
+ * stays here, single, and the accessor travels. That makes the two screens'
+ * agreement structural: both read one `of`, so they cannot group the same way
+ * and label differently — which a third copy of the labels would have
+ * allowed, silently, on the page where the words carry the tax rule.
  *
- * The Income screen groups by tax treatment and by account, and it needs the
- * short labels above — Taxable, Tax-deferred, Tax-free, and an account's own
- * name — rather than `account-options.ts`'s canonical ones, which this file
- * says in place wrap to two lines in a table cell. `allocation.ts` cannot reach
- * them: it is imported *by* this module, so the other direction is a cycle. So
- * the label table stays here, single, and the accessor travels to the caller.
- *
- * That is what makes the two screens' agreement structural. Holdings grouped by
- * tax treatment and the Income breakdown read one `of`, so they cannot group
- * the same way and label differently — which a third copy of the labels would
- * have allowed, silently, on the one page where the words carry the tax rule.
- *
- * Typed as `allocation.ts`'s {@link Grouping}: a {@link Facet} is a `key` and a
- * `label` with the dropdown's longer wording alongside, and a breakdown reads
- * the first two.
- *
- * Throws on an id no dimension carries, which no caller can reach:
- * {@link DimensionId} is a closed union, {@link GROUPINGS} covers it, and the
- * map is built from the second. `groupHoldings` answers the same impossible
- * lookup with an empty table, because an empty table is still a legible screen.
- * There is no such answer here — a grouping that filed every holding under one
- * unnamed bucket would render as a plausible breakdown of a portfolio nobody
- * owns.
+ * Throws on an id no dimension carries, which no caller can reach (closed
+ * union, covered map). `groupHoldings` answers the same impossible lookup
+ * with an empty table — still a legible screen; here, a one-bucket grouping
+ * would render as a plausible breakdown of a portfolio nobody owns.
  */
 export function groupingBy(id: DimensionId): Grouping {
   const dimension = DIMENSION_BY_ID.get(id);
@@ -298,19 +245,15 @@ const SORT_KEYS: ReadonlyArray<SortKey> = [
 ];
 
 /**
- * Biggest position first.
- *
- * The default is descending by value because the first question anyone asks a
- * holdings table is "what is the largest thing I own", and because the query
- * layer's own ordering — alphabetical by account, then by instrument — answers
- * a question nobody asks.
+ * Descending by value: the first question anyone asks a holdings table is
+ * "what is the largest thing I own" — the query layer's alphabetical ordering
+ * answers a question nobody asks.
  */
 export const DEFAULT_SORT: SortKey = "value";
 export const DEFAULT_DIRECTION: SortDirection = "desc";
 
 /**
- * The text columns sort by what is printed in them, so that the order on screen
- * is the order of the words on screen. `localeCompare` rather than `<` because
+ * Text columns sort by what is printed in them. `localeCompare`, not `<`:
  * these are names a person reads, and `"Ålesund"` belongs with the A's.
  */
 function compareText(a: string, b: string): number {
@@ -335,26 +278,19 @@ function compareBy(key: SortKey, a: ValuedHolding, b: ValuedHolding): number {
       return compareDecimal(a.costBasis, b.costBasis, MONEY_SCALE);
     case "unrealized":
       return compareDecimal(a.unrealized, b.unrealized, MONEY_SCALE);
-    // At the money scale like the four above it, and not at `SHARE_SCALE`: the
-    // column sorts on the amount it prints, never on the percentage printed
-    // under it. Sorting a money column by a derived ratio would order the table
-    // by something no cell in it adds up to.
+    // Money scale, not SHARE_SCALE: the column sorts on the amount it prints,
+    // never on the ratio printed under it.
     case "annualDividend":
       return compareDecimal(a.annualDividend, b.annualDividend, MONEY_SCALE);
   }
 }
 
 /**
- * Is the figure this column sorts on absent altogether? Only the four money
- * columns can be, and only because nothing could price the holding or nothing
- * recorded what it cost.
- *
- * The annual dividend is not among them, on purpose. The view coalesces a
- * missing rate to zero, so on the current path — the only path this screen
- * reads — every holding has a figure and a holding that pays nothing pays
- * `$0`. A case here would sink those rows to the bottom of their own column as
- * though nobody knew what they paid, which is the opposite of what the zero
- * rule claims (DESIGN.md §14, limitation 9).
+ * Whether the sorted figure is absent — only the four money columns can be.
+ * The annual dividend is not among them on purpose: the view coalesces a
+ * missing rate to zero, so every holding has a figure, and a case here would
+ * sink pays-nothing rows to the bottom as though nobody knew what they paid —
+ * the opposite of the zero rule (DESIGN.md §14, limitation 9).
  */
 function isMissing(key: SortKey, holding: ValuedHolding): boolean {
   switch (key) {
@@ -372,17 +308,12 @@ function isMissing(key: SortKey, holding: ValuedHolding): boolean {
 }
 
 /**
- * Sort a copy, never the caller's array.
- *
- * Two details that are not incidental. **Absence is settled before the
- * direction is applied**, so the rows with no figure at all stay at the bottom
- * whichever way the column is sorted. Reversing them along with everything else
- * is the plausible version of this function, and it puts every holding nobody
- * can price at the top of the page the moment someone sorts ascending — which
- * reads as "these are the smallest", the one thing a null must never be
- * mistaken for. And the tie-break is explicit: equal figures fall back to
- * instrument then account then instrument id, which is what stops two identical
- * rows swapping places between one render and the next.
+ * Sort a copy, never the caller's array. **Absence settles before direction**:
+ * no-figure rows stay at the bottom whichever way the column sorts — reversed
+ * with everything else, every unpriced holding would top an ascending sort
+ * and read as "these are the smallest", the one thing a null must never be
+ * mistaken for. The explicit tie-break (instrument, account, instrument id)
+ * stops identical rows swapping between renders.
  */
 export function sortHoldings(
   holdings: ValuedHolding[],
@@ -416,30 +347,25 @@ export type HoldingsQuery = {
 };
 
 /**
- * Read the screen's state out of the query string (DESIGN.md §8.3).
+ * The screen's state, read out of the query string (DESIGN.md §8.3). State
+ * lives in the URL so a chosen view survives reload, bookmarks, and being
+ * sent to the other person — and it is why this screen needs no client-side
+ * JavaScript.
  *
- * State lives in the URL rather than in React for the same reason Overview's
- * range control does: a chosen view survives a reload, can be bookmarked, and
- * can be sent to the other person in the household. It is also the whole of the
- * reason this screen needs no client-side JavaScript — there is none anywhere
- * in the application, and a filter bar is not the place to introduce it.
- *
- * **Anything unrecognised is ignored, never rejected.** A stale bookmark naming
- * a dimension that has since been renamed, a hand-edited parameter, a crawler
- * appending nonsense — none of them should produce an error page. They produce
- * the unfiltered table, which is the honest reading of "I could not understand
- * that request". A filter key that no holding carries is kept rather than
- * dropped, because dropping it would silently show the whole portfolio to
- * someone who asked for a slice of it; it renders as an empty result that says
- * so.
+ * **Anything unrecognised is ignored, never rejected**: a stale bookmark, a
+ * hand-edited parameter, crawler nonsense all produce the unfiltered table —
+ * the honest reading of "I could not understand that". But a filter key no
+ * holding carries is kept rather than dropped: dropping it would silently
+ * show the whole portfolio to someone who asked for a slice; it renders as an
+ * empty result that says so.
  */
 export function parseQuery(params: URLSearchParams): HoldingsQuery {
   const filters = new Map<DimensionId, string>();
 
   for (const dimension of DIMENSIONS) {
     const value = params.get(dimension.id);
-    // An empty string is what a `<select>` with nothing chosen submits, and it
-    // means "all" — not a filter for the empty key.
+    // An empty string is a `<select>` with nothing chosen: "all", not a
+    // filter for the empty key.
     if (value !== null && value !== "") filters.set(dimension.id, value);
   }
 
@@ -456,26 +382,19 @@ export function parseQuery(params: URLSearchParams): HoldingsQuery {
 }
 
 /**
- * The query string for a variant of the current view — the form every control
- * on the screen is built from, because every control is a link or a GET form
- * and each one changes exactly one thing.
+ * The query string for a variant of the current view — what every control on
+ * the screen is built from, each changing exactly one thing. Defaults are
+ * omitted, so the unfiltered URL is `/holdings`, not
+ * `/holdings?sort=value&dir=desc&group=`.
  *
- * Defaults are omitted rather than written out, so the unfiltered table's URL
- * is `/holdings` and not `/holdings?sort=value&dir=desc&group=`.
- *
- * **The owner filter arrives as its own argument, not as a member of
- * {@link HoldingsQuery}.** It is household-wide (ADR-0008) where everything in
- * that object is this screen's own; but it has to be here, and first, because
- * every link on the screen is built from this function and a control that
- * rebuilt the query without it would clear the filter on a column click. A
- * parameter this writes and {@link parseQuery} refuses to read would be a seam
- * with a hole in it, so `readOwnerFilter` is the other half and the loader
- * passes both.
- *
- * Emitted **first**, and with literal commas, because this is the single
- * definition of a canonical Holdings URL and the loader redirects anything
- * spelled differently. `URLSearchParams` would percent-encode the separator,
- * which is a second spelling of one view.
+ * **The owner filter arrives as its own argument**, not in
+ * {@link HoldingsQuery}: household-wide (ADR-0008) where the rest is this
+ * screen's own — but it must be here, and first, or a column click would
+ * clear it; `readOwnerFilter` is the other half of the seam. Emitted first,
+ * with literal commas, because this is the single definition of a canonical
+ * Holdings URL and the loader redirects anything spelled differently
+ * (`URLSearchParams` would percent-encode the comma — a second spelling of
+ * one view).
  */
 export function toSearch(query: HoldingsQuery, owners: OwnerFilter): string {
   const params = new URLSearchParams();
@@ -511,27 +430,17 @@ export type FilterControl = {
 };
 
 /**
- * The filters worth drawing, each with its options read off the holdings
- * themselves.
+ * The filters worth drawing, options read off the holdings themselves.
  *
- * **A dimension with fewer than two distinct values is not a filter**, it is a
- * fact about the household, and drawing it as a control implies a choice that
- * does not exist. One brokerage, one account kind, everything taxable — each of
- * those simply loses a select. This is §13.7's objection to searching a dozen
- * accounts, applied as a rule rather than as a one-off refusal.
- *
- * Owner is no longer among them: it left {@link DIMENSIONS} with spec 0013 and
- * this function never sees it. The household-wide control answers that question
- * now, and it has its own version of this same rule — it does not draw under a
- * roster of fewer than two.
- *
- * The options come from the unfiltered holdings, not from the enumerations in
- * `account-options.ts`. A household with no Roth account is not offered
- * "Tax-free", because choosing it could only ever produce an empty table.
- *
- * A filter the caller has selected is always drawn even if it fell below the
- * threshold — otherwise narrowing to a single brokerage would make the control
- * you narrowed with disappear, leaving no way back.
+ * **A dimension with fewer than two distinct values is not a filter** — one
+ * brokerage, everything taxable — it is a fact about the household, and
+ * drawing it implies a choice that does not exist (§13.7 as a rule). Owner
+ * left {@link DIMENSIONS} with spec 0013; the household-wide control answers
+ * that now. Options come from the unfiltered holdings, not the enumerations:
+ * a household with no Roth is not offered "Tax-free", which could only
+ * produce an empty table. A selected filter is always drawn even below the
+ * threshold — otherwise narrowing to one brokerage would make the control you
+ * narrowed with disappear, leaving no way back.
  */
 export function availableFilters(
   holdings: ValuedHolding[],
@@ -541,8 +450,8 @@ export function availableFilters(
 
   for (const dimension of DIMENSIONS) {
     const options = new Map<string, string>();
-    // The short label, for prose — the option label carries a disambiguating
-    // tail that reads badly in a sentence.
+    // The short label for prose — the option label's disambiguating tail
+    // reads badly in a sentence.
     const phrases = new Map<string, string>();
 
     for (const holding of holdings) {
@@ -558,11 +467,10 @@ export function availableFilters(
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => compareText(a.label, b.label));
 
-    // A key nothing in the portfolio carries — a bookmark from before an
-    // account was closed, a hand-edited URL. `parseQuery` keeps it rather than
-    // widening the request behind the reader's back, so the select needs
-    // somewhere to point: without an option of its own it would fall back to
-    // the first, and every filter would read "All" beside an empty table.
+    // A key nothing carries (stale bookmark, hand-edit): `parseQuery` keeps
+    // it rather than widening behind the reader's back, so the select needs
+    // an option to point at — else it falls back to the first and every
+    // filter reads "All" beside an empty table.
     if (selected !== "" && !options.has(selected)) {
       listed.unshift({ value: selected, label: "Not in this portfolio" });
     }
@@ -592,35 +500,24 @@ export function applyFilters(holdings: ValuedHolding[], query: HoldingsQuery): V
 }
 
 /**
- * What a set of holdings comes to, and how much of it could be computed.
- *
- * **Three coverages, not one.** They are genuinely three different counts, and
- * collapsing them would misreport at least one. A 401k statement routinely
- * carries a price and no cost basis at all, so `basis` is short where `value`
- * is complete; and `unrealized` needs both sides, so it is the shortest of the
- * three rather than the same count as either. §8.2's rule is to sum what is
- * known and label the coverage — this is that rule with the labels kept apart.
- *
- * Each figure is `null`, never `"0.0000"`, when nothing behind it was known. A
- * group of holdings nobody can price is not a group worth nothing.
+ * What a set of holdings comes to, and how much could be computed. **Three
+ * coverages, not one** — genuinely three counts: a 401k statement routinely
+ * carries a price and no basis, so `basis` runs short where `value` is
+ * complete, and `unrealized` needs both sides, shortest of the three. Each
+ * figure is `null`, never `"0.0000"`, when nothing behind it was known: a
+ * group nobody can price is not a group worth nothing.
  */
 export type HoldingsTotal = {
   value: string | null;
   costBasis: string | null;
   unrealized: string | null;
   /**
-   * Never null, and the one figure here that is not. A group where nothing
-   * pays is worth `$0` of dividend rather than an unknown amount of it,
-   * because the view already resolved the ambiguity: a missing rate is
-   * coalesced to zero in SQL, so there is no such thing as a holding whose
-   * payout nobody knows (DESIGN.md §14, limitation 9). The three figures above
-   * are null when nothing behind them was known; dashing this one would
-   * reintroduce, in the totals row, exactly the distinction the coalesce was
-   * chosen to give up — and it would read as "we could not work out what this
-   * group pays" on a group that pays nothing.
-   *
-   * It is also why there is no dividend coverage: with no unknowns there is
-   * nothing to count.
+   * Never null — the one figure that is not. The view coalesces a missing
+   * rate to zero in SQL, so no holding's payout is unknown (§14, limitation
+   * 9): a group where nothing pays is worth `$0` of dividend, and dashing it
+   * would read as "we could not work out what this group pays" on a group
+   * that pays nothing. Also why there is no dividend coverage — no unknowns
+   * to count.
    */
   annualDividend: string;
   valueCoverage: Coverage;
@@ -643,11 +540,10 @@ function totalOf(holdings: ValuedHolding[]): { total: HoldingsTotal; units: bigi
       value: figure(value),
       costBasis: figure(basis),
       unrealized: figure(unrealized),
-      // Rendered straight, deliberately not through `figure()`. That helper
-      // reads a `known` count of zero as "nothing was known" and dashes the
-      // figure, which is right for the three above it and wrong here — see
-      // {@link HoldingsTotal.annualDividend}. An empty group sums to `$0`,
-      // which is the truthful answer to "what does nothing pay".
+      // Straight, not through `figure()`: that helper dashes a zero `known`
+      // count — right for the three above, wrong here (see
+      // {@link HoldingsTotal.annualDividend}). An empty group sums to `$0`,
+      // the truthful answer to "what does nothing pay".
       annualDividend: render(dividend.amount, MONEY_SCALE),
       valueCoverage: { known: value.known, total: value.total },
       basisCoverage: { known: basis.known, total: basis.total },
@@ -667,37 +563,26 @@ export type HoldingsGroup = {
   holdings: ValuedHolding[];
   total: HoldingsTotal;
   /**
-   * Decimal string, six places, of the **gross positive total** — the same
-   * denominator `allocation.ts` argues for at length, so that a liability's
-   * share stays finite and keeps its sign as the household's net worth crosses
-   * zero, and so the positive groups sum to `1.000000` exactly — `allocateShares`
-   * hands the units independent rounding loses back to the largest remainders,
-   * rather than leaving the column a millionth short. A screen must read the
-   * sign before it draws a width from it, and must say which denominator it
-   * used: it is not a share of the total printed at the foot of the table, and
-   * with a liability in the set the two differ.
+   * Six places, of the **gross positive total** (`allocation.ts`'s
+   * denominator): a liability's share stays finite and signed, and the
+   * positive groups sum to `1.000000` exactly via `allocateShares`. A screen
+   * must read the sign before drawing a width, and must say the denominator —
+   * with a liability in the set this is not a share of the footer total.
    *
-   * `null` in the two cases where there is no fraction to state rather than a
-   * fraction that happens to be zero: a group nothing could price, whose value
-   * is itself `null`, and a filtered set with nothing positive in it, which
-   * offers no base to be a fraction of. Both render as a dash. Coercing either
-   * to `0.000000` would be the same null-as-zero this module refuses
-   * everywhere else, and it would read as "this group is none of the
-   * portfolio".
+   * `null` where there is no fraction to state, not a zero fraction: a group
+   * nothing could price (value itself null), and a set with nothing positive
+   * (no base). Both render as a dash; coercing either to `0.000000` would
+   * read as "this group is none of the portfolio".
    */
   share: string | null;
 };
 
 /**
- * Split the rows into groups, largest subtotal first.
- *
- * Ordered by subtotal rather than alphabetically because the grouping exists to
- * answer "where is the money", and the answer should be the first row. Ties
- * fall back to the label so the order is stable between renders.
- *
- * A group that is entirely unpriced sums to nothing and sorts among the zeros;
- * its subtotal is `null`, and the screen renders that as a dash rather than as
- * a claim that the group is worth nothing.
+ * Split the rows into groups, largest subtotal first — grouping exists to
+ * answer "where is the money", so the answer is the first row; ties fall to
+ * the label for stable renders. An entirely-unpriced group sorts among the
+ * zeros with a `null` subtotal, rendered as a dash rather than a claim of
+ * nothing.
  */
 export function groupHoldings(
   holdings: ValuedHolding[],
@@ -724,17 +609,14 @@ export function groupHoldings(
     ...totalOf(bucket.holdings),
   }));
 
-  // Sorted before the shares are worked out: `allocateShares` breaks its ties
-  // on position, and the rendered order is the one they have to be broken in.
+  // Sorted before the shares: `allocateShares` breaks ties on position, in
+  // the rendered order.
   const ordered = summed.sort((a, b) =>
     a.units === b.units ? compareText(a.label, b.label) : a.units > b.units ? -1 : 1,
   );
 
-  // The denominator, out of the positive groups only, is `allocateShares`'s to
-  // work out. What it cannot decide is the difference between a share of zero
-  // and no share at all, so the one case where there is no base to be a
-  // fraction of is still asked here. See `allocation.ts` for why the base is
-  // not the net total.
+  // `allocateShares` owns the denominator; what it cannot decide is a share
+  // of zero versus no share at all, so the no-positive-base case is asked here.
   const anyPositive = ordered.some((group) => group.units > 0n);
   const shares = allocateShares(ordered.map((group) => group.units));
 
@@ -749,21 +631,14 @@ export function groupHoldings(
 }
 
 /**
- * A share count as text: the stored digits, minus the zeros scale-8 storage pads
- * them with.
- *
- * Not in `format.ts` because nothing there formats a quantity — every function
- * in it renders money, and a quantity takes no currency mark: half a fund is
- * half a share, not fifty cents. Nothing here computes either. The digits are
- * the digits that came out of the view, grouped and trimmed as text, with the
- * same U+2212 minus `format.ts` uses so a negative quantity and a negative
- * figure read alike in the same row.
- *
- * Here rather than in a route for the reason {@link holdingNote} is: Account
- * detail and Holdings print the same holding's quantity, and a second copy of
- * this drifted immediately — losing the thousands separators, the U+2212 and
- * the negative-zero guard, so one screen showed a loan as `-14500` and the
- * other as `−14,500`.
+ * A share count as text: the stored digits minus scale-8 padding. Not in
+ * `format.ts` — everything there renders money, and a quantity takes no
+ * currency mark: half a fund is half a share, not fifty cents. No computing;
+ * the digits are grouped and trimmed as text, with the same U+2212 as
+ * `format.ts` so a negative quantity and figure read alike. Here rather than
+ * in a route because Account detail prints the same cell, and a second copy
+ * drifted immediately — one screen showed a loan as `-14500`, the other as
+ * `−14,500`.
  */
 export function formatQuantity(decimal: string): string {
   const trimmed = decimal.trim();
@@ -779,15 +654,11 @@ export function formatQuantity(decimal: string): string {
 
 /**
  * The sub-line under an instrument's name: what it is, and what is wrong with
- * its price if anything is.
- *
- * Lives here rather than in a route because Account detail renders the same
- * caption under the same instrument, and two copies is two chances for one
- * screen to call a holding "never priced" while the other calls it stale. The
- * words are load-bearing — §6.2 distinguishes a price that is merely old, which
- * is still shown and still counted, from one that has never existed, which is
- * shown as a dash and excluded from every total — and a reader can only act on
- * the difference if it is spelled out. Colour never carries it (§12).
+ * its price if anything. Here because Account detail renders the same caption
+ * — two copies is one screen calling a holding "never priced" while the other
+ * calls it stale. The words are load-bearing (§6.2: merely-old is shown and
+ * counted; never-existed is a dash and excluded) and colour never carries
+ * them (§12).
  */
 export function holdingNote(holding: {
   assetClass: ValuedHolding["assetClass"];
@@ -803,52 +674,31 @@ export function holdingNote(holding: {
 }
 
 /**
- * What one holding pays as a fraction of what it is worth — `$340` a year on a
- * `$27,000` position is `"0.012593"`, at `SHARE_SCALE` and for display only.
+ * What one holding pays as a fraction of what it is worth — `$340` a year on
+ * `$27,000` is `"0.012593"`, at `SHARE_SCALE`, display only. One holding's,
+ * never a group's (CONTEXT.md reserves *weighted yield* for that — a
+ * different denominator). Not `quote.yield_pct` either: the stored yield was
+ * struck against the provider's own snapshot, and reading it here would put
+ * two numbers for one thing in a row — §8.2's named weak point. The dividend
+ * is the one stored figure and this is a view of it.
  *
- * One holding's, never a group's. CONTEXT.md reserves *weighted yield* for a
- * group's annual dividend over that group's value, which is a different figure
- * with a different denominator; and this is not `quote.yield_pct` either. The
- * stored yield was struck against the provider's own price snapshot rather
- * than the price in our `quote` row, so reading it here would put two numbers
- * for one thing in a single row — §8.2's named weak point. The dividend is the
- * one stored figure and this is a view of it, exactly as `unrealized` is
- * literally `value − cost_basis` rather than a second expression that can
- * round its own way.
+ * A percentage because the amount alone cannot be compared: `$340` says
+ * nothing until you know the position size — so the fraction goes under the
+ * amount rather than replacing it.
  *
- * **A percentage, because the amount alone cannot be compared.** `$340` a year
- * says nothing about whether a holding pays well until you know it is a
- * $27,000 position. The amount scales with position size; the fraction is what
- * makes two rows comparable, which is why it goes under the amount rather than
- * replacing it.
+ * Null in exactly two cases, both "no percentage here", never "zero percent":
+ * **no value** — an unquoted trust has a dividend and nothing to state it
+ * against, and `0.0%` would be a claim about a holding nobody can price; and
+ * **a value of zero** — `divide` raises `RangeError` on a zero denominator,
+ * and a sold-out position reaches here as `"0.0000"`; unguarded, one such row
+ * would take the whole table down.
  *
- * Null in exactly two cases, and both mean "there is no percentage here"
- * rather than "the percentage is zero":
+ * **A liability's two negatives cancel, and that is the right answer**:
+ * `−$522.00` at `3.6%` is what the note costs and the rate it costs it at;
+ * the amount, not the percentage, says which way the money moves.
  *
- *   * **No value.** An unquoted 401k trust has a quantity and no price, so it
- *     has a dividend and nothing to state it as a fraction of. Its row shows a
- *     blank Value and a `$0` dividend, and a `0.0%` beneath that would be a
- *     claim about a holding nobody can price.
- *   * **A value of zero.** `money.ts`'s `divide` takes bigints and divides
- *     them, so a zero denominator raises `RangeError` — and nothing in the
- *     schema stops a quantity or a price being zero, so a position someone has
- *     sold out of reaches here as `"0.0000"`. Unguarded, one such row would
- *     take the whole Holdings table down with it rather than losing its own
- *     percentage.
- *
- * **A liability's two negatives cancel, and that is the right answer.** A loan
- * holds a negative quantity, so both its dividend and its value are negative
- * and the fraction between them comes out positive: the row reads `−$522.00`
- * at `3.6%`, which is what the note costs and the rate it costs it at. Forcing
- * a sign on it would be inventing one — and it is the amount, not the
- * percentage, that says which way the money is moving.
- *
- * Here rather than in a route for the reason {@link formatQuantity} and
- * {@link holdingNote} are: Account detail renders the same holding's cells, and
- * a second copy of a guard like the one above is how one screen comes to throw
- * where the other does not. The rendering is `formatShare`'s job, in
- * `allocation.ts` — the same fraction-to-percentage rule the subtotal's share
- * already goes through, minus on a negative and no plus on a positive.
+ * Here for {@link formatQuantity}'s reason — Account detail renders the same
+ * cells. Rendering is `formatShare`'s job in `allocation.ts`.
  */
 export function holdingYield(
   holding: Pick<ValuedHolding, "annualDividend" | "value">,
@@ -864,52 +714,30 @@ export function holdingYield(
 }
 
 /**
- * The name one row answers to in a URL — `12.7`, account then instrument.
- *
- * A holding has no id of its own to use here. `holding_valued` does not select
- * one, on purpose: the view answers "what is held now", and the row it returns
- * is a fact about an account and an instrument rather than about the particular
- * `holding` row that happened to carry it into the latest position set. That id
- * changes every time a statement is uploaded, and a link built on it would rot
- * on the next upload while still pointing at a real row.
- *
- * The pair does not rot, and it is exactly as unique: `holding_valued` returns
- * one position set per account and `holding_one_row_per_instrument` allows one
- * row per instrument inside it. Which is also why the editor needs no schema
- * change to address a row — the server re-resolves the pair through
- * `latest_position_set` at the moment of the write, so it always names whatever
- * the account currently holds rather than whatever it held when the page
- * rendered.
- *
- * A full stop separates them because both halves are `bigint` ids and so
- * contain only digits, which leaves the separator unambiguous and legible in a
- * query string where `%2F` or `-` would not be.
+ * The name one row answers to in a URL — `12.7`, account then instrument. A
+ * holding has no id of its own here on purpose: the view answers "what is
+ * held now", and the underlying `holding` row's id changes on every upload —
+ * a link built on it would rot while still pointing at a real row. The pair
+ * does not rot and is exactly as unique (one position set per account, one
+ * row per instrument within it), and it is why the editor needs no schema
+ * change: the server re-resolves the pair through `latest_position_set` at
+ * write time. A full stop separates two digit-only ids legibly where `%2F` or
+ * `-` would not.
  */
 export function rowKey(holding: Pick<ValuedHolding, "accountId" | "instrumentId">): string {
   return `${holding.accountId}.${holding.instrumentId}`;
 }
 
 /**
- * The pair a row key names, or null if it names nothing.
- *
- * Strict about shape and silent about failure, the way {@link parseQuery} is
- * about everything else in the query string: an `edit=` a person mangled, or
- * one carried in from a bookmark predating a change, closes the editor rather
- * than raising anything. The ids are only checked for being ids here — whether
- * they name a row the household actually holds is a question for the database,
- * and the answer is the same "no editor" either way.
- *
- * Eighteen digits, not "any run of digits". Both halves reach a `bigint` column,
- * and a nineteen-digit number can be larger than one holds — which Postgres
- * answers with `value out of range`, reaching the reader as a 500 rather than
- * as a closed editor. Ten to the eighteen is comfortably inside the type and
- * unreachably far outside anything this application will ever count to.
- *
- * And no leading zeros, so that the one spelling of a row is the spelling
- * {@link rowKey} produces. `0001.0002` names the same pair as `1.2` and would
- * otherwise pass through the loader's canonical check untouched — leaving a URL
- * that claims an open editor beside a table where no row's key matches it, and
- * a form target that would still have written.
+ * The pair a row key names, or null. Strict about shape, silent about failure
+ * ({@link parseQuery}'s way): a mangled or stale `edit=` closes the editor
+ * rather than raising; whether the ids name a real row is the database's
+ * question. Eighteen digits, not any run: a nineteen-digit number can exceed
+ * `bigint`, which Postgres answers `value out of range` — a 500 instead of a
+ * closed editor. No leading zeros, so the one spelling is the one
+ * {@link rowKey} produces: `0001.0002` would pass the loader's canonical
+ * check while matching no row's key — a URL claiming an open editor beside a
+ * table that shows none, over a form target that would still have written.
  */
 export function parseRowKey(
   value: string | null,

@@ -1,43 +1,24 @@
 /**
- * Setting the balance of a single-position account — DESIGN.md §5.2, §11.
+ * Setting the balance of a single-position account (DESIGN.md §5.2, §11). A
+ * checking account and a loan are each one number — no statement to map, no
+ * securities to reconcile — so §5.2 gives them a "set balance" form writing
+ * one `USD` row: the same append-a-position-set mechanism, no separate code
+ * path. This module writes exactly what an upload writes, differing only in
+ * `source = 'manual'` and no filename; nothing downstream learns a new shape.
  *
- * A checking account and a loan are each one number. There is no statement to
- * map columns from and no securities to reconcile, so §5.2 gives them their own
- * way in: "Checking and loan balances use a 'set balance' form writing one `USD`
- * row — the same append-a-position-set mechanism, no separate code path."
- *
- * That last clause is the whole design. This module writes exactly what an
- * upload writes — a `position_set` with holdings under it — and differs only in
- * carrying `source = 'manual'` and no filename. Nothing downstream learns a new
- * shape: `latest_position_set` picks it up by the same tie-break, the view
- * values it by the same rule, and every figure in the application moves because
- * one row landed in the table they all already read.
- *
- * Three decisions worth stating, because each is load-bearing:
- *
- * **The sign is derived, never typed.** §2 puts the sign in quantity and keeps
- * price a positive market fact, so a loan is a negative `USD` quantity. The
- * family types what they owe and this module negates it, because a form that
- * accepts a signed number accepts `14500` for a debt — which does not fail, it
- * silently moves the household's net worth by twice the loan.
- *
- * **Only `bank` and `liability`, and only while the statement lists nothing
- * else.** A position set is a photograph of everything an account holds, so
- * recording one `USD` row against a brokerage would record every security in it
- * as sold (§5.2's "a missing row means sold"). The kind refusal below states
- * that and cannot enforce it: `kind` is a label, and an account can hold
- * securities under a `bank` one — `commitUpload` never reads `kind`, and until
- * report `SET-1` a Settings edit was free to hang `Bank` on a brokerage full of
- * them. What stands between a mis-clicked form and a wiped portfolio is the
- * second refusal, which asks `current-statement.server.ts` what this account
- * holds now — and asks again inside the write itself, where no statement can
- * land between the question and the answer.
- *
- * **Both inserts are one statement.** A `position_set` that lands without its
- * holding is not a failed write — it is a *successful* write meaning "this
- * account now holds nothing", and it would outrank every earlier statement. The
- * data-modifying CTE makes that state unreachable without asking the caller to
- * own a transaction.
+ * Three load-bearing decisions. **The sign is derived, never typed**: §2 puts
+ * the sign in quantity, the family types what they owe and this negates it —
+ * a form accepting a signed number accepts `14500` for a debt, which silently
+ * moves net worth by twice the loan. **Only `bank`/`liability`, and only
+ * while the statement lists nothing else**: a position set is a photograph,
+ * so one `USD` row against a brokerage records every security as sold. The
+ * kind refusal states that but cannot enforce it — `kind` is a label, and an
+ * account can hold securities under a `bank` one (report SET-1); what stands
+ * between a mis-click and a wiped portfolio is the second refusal, which asks
+ * what the account holds now and asks again inside the write itself. **Both
+ * inserts are one statement**: a `position_set` landing without its holding
+ * is a *successful* write meaning "holds nothing" that would outrank every
+ * earlier statement; the data-modifying CTE makes that state unreachable.
  */
 import { sql } from "kysely";
 import { z } from "zod";
@@ -78,12 +59,9 @@ export type RecordedBalance = {
 /** The statement, manual or uploaded, currently speaking for an account. */
 export type LastRecorded = {
   /**
-   * The position set's id.
-   *
-   * Exposed because it is the one value that changes on every write, including
-   * a second balance recorded for a date that already had one — which is what
-   * lets the form tell "my submission was refused" from "my submission landed"
-   * without either being told to it.
+   * The position set's id — the one value that changes on every write,
+   * including a second balance for an already-recorded date, which lets the
+   * form tell "refused" from "landed" without being told.
    */
   id: string;
   asOf: IsoDate;
@@ -91,11 +69,9 @@ export type LastRecorded = {
 };
 
 /**
- * When the balance an account currently shows was recorded, and how.
- *
- * Resolved through `latest_position_set` rather than by a second
- * `order by as_of_date desc` written here — §8.2's drift is a tie-break copied
- * into a new caller, and the function exists so there is one of them.
+ * When the balance an account currently shows was recorded, and how —
+ * resolved through `latest_position_set`, never a second `order by` here
+ * (§8.2: drift is a tie-break copied into a new caller).
  *
  * @returns null when the account has no statement of any kind yet.
  */
@@ -114,24 +90,20 @@ export async function lastRecorded(
   const row = result.rows[0];
   if (row === undefined) return null;
 
-  // Safe by the same reasoning the rest of the codebase uses for enum columns:
-  // `position_set_source_valid` is what the database will and will not store.
+  // Safe: `position_set_source_valid` bounds what the database can store.
   return { id: row.id, asOf: row.as_of_date, source: row.source as LastRecorded["source"] };
 }
 
 /**
- * Record what a single-position account holds, as of a date.
- *
- * Appends; never edits. Submitting twice for one date is a correction and
- * resolves the way a re-uploaded statement does — `latest_position_set` breaks
- * the tie on `created_at` then `id`, so the last one submitted wins and the
- * earlier one stays as history.
+ * Record what a single-position account holds, as of a date. Appends, never
+ * edits: submitting twice for one date resolves like a re-uploaded statement
+ * — `latest_position_set` breaks the tie on `created_at` then `id`, so the
+ * last one wins and the earlier stays as history.
  *
  * @param raw the submitted fields, unvalidated.
  * @throws {NotFoundError} when no such account exists.
- * @throws {ValidationError} with a message per bad field, and a form-level one
- *         for an account whose kind, state or current statement refuses the
- *         write outright.
+ * @throws {ValidationError} per bad field, plus form-level where the kind,
+ *         state or current statement refuses the write outright.
  */
 export async function setBalance(
   accountId: string,
@@ -140,9 +112,8 @@ export async function setBalance(
 ): Promise<RecordedBalance> {
   const account = await getAccount(accountId, db);
 
-  // Before the field validation, deliberately. A person who reached this form
-  // for a brokerage account has a problem no amount of correcting the boxes
-  // will fix, and leading with "that is not a number" would bury it.
+  // Before field validation, deliberately: a person who reached this form for
+  // a brokerage has a problem no correcting of boxes will fix.
   if (!acceptsSetBalance(account.kind)) {
     throw ValidationError.form(
       `${account.name} holds securities, so its balance comes from a statement rather than ` +
@@ -158,26 +129,18 @@ export async function setBalance(
     );
   }
 
-  // Still before the field validation, and for the same reason: an account
-  // holding securities under a `bank` label is a problem correcting the boxes
-  // will not fix.
-  //
-  // The refusal the kind check above cannot make. It reads the rows rather than
-  // the label, which is what makes it hold however the rows got there — an
-  // upload never reads `kind` at all, and a Settings edit used to be free to
-  // relabel a brokerage full of securities (report `SET-1`). The writer that
-  // can lose them is the one that has to check.
+  // Still before field validation, same reason. The refusal the kind check
+  // cannot make: it reads the rows, not the label, so it holds however the
+  // rows got there — an upload never reads `kind`, and a Settings edit used
+  // to relabel a brokerage freely (SET-1). The writer that can lose them is
+  // the one that has to check.
   const statement = await currentStatement(accountId, db);
 
   if (statement.cashInstrumentId === null) {
-    // Seeded by `0001_initial_schema.sql`, so its absence is a broken install
-    // rather than anything a family member did. Not a ValidationError: there is
-    // no field to put it under and no edit that would fix it.
-    //
-    // Ahead of the refusal below, and that ordering is load-bearing: with no
-    // `USD` row to compare against, every holding reads as something a typed
-    // balance would drop, so an account holding anything at all would be told
-    // its statement is in the way rather than that the install is broken.
+    // Seeded by 0001, so absence is a broken install, not anything a family
+    // member did — no field to put it under, no edit that fixes it. Ahead of
+    // the refusal below, load-bearing: with no USD row to compare against,
+    // every holding reads as something a typed balance would drop.
     throw new Error("The USD instrument is missing — the initial migration has not been applied.");
   }
 
@@ -197,21 +160,15 @@ export async function setBalance(
   const zero = /^0+(\.0+)?$/.test(input.amount);
   const quantity = isOwed(account.kind) && !zero ? `-${input.amount}` : input.amount;
 
-  // The check above, again, inside the write — `revisePosition`'s pattern, for
-  // `revisePosition`'s reason. The pre-check is a read, and a statement
-  // committed between it and this insert would be sold off by a write that
-  // never saw it. `guard` yields no row in that case and both inserts select
-  // from it, so the account gets *nothing at all* rather than a position set
-  // recording securities as gone.
-  //
-  // An account with no statement still writes: `latest_position_set` is NULL
-  // for one, and `position_set_id = NULL` matches no holding, so `not exists`
-  // holds.
-  //
-  // No test covers the race, deliberately. Reaching it means committing a
-  // statement between the two reads, and the suite's rollback isolation puts
-  // that insert in the same transaction — where the pre-check sees it and
-  // refuses first. `revisePosition:377-387` is untested for the same reason.
+  // The check above, again, inside the write (`revisePosition`'s pattern):
+  // the pre-check is a read, and a statement committed between it and this
+  // insert would be sold off by a write that never saw it. `guard` yields no
+  // row then, both inserts select from it, and the account gets *nothing at
+  // all*. An account with no statement still writes: `latest_position_set` is
+  // NULL, matching no holding, so `not exists` holds. No test covers the
+  // race, deliberately: reaching it means committing a statement between the
+  // two reads, and rollback isolation puts that insert where the pre-check
+  // sees it and refuses first (`revisePosition` likewise).
   const written = await sql<{ position_set_id: string }>`
     with guard as (
       select 1

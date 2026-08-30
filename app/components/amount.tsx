@@ -1,28 +1,19 @@
 /**
- * The one component that renders an amount (spec 0007, ADR-0002).
+ * The one component that renders an amount (spec 0007, ADR-0002). Named for
+ * the glossary term — CONTEXT.md: an **amount** is any absolute figure (a
+ * value, balance, cost basis, gain, share quantity); a **ratio** never is.
+ * Every figure in that list comes through here; no percentage does.
  *
- * Named for the glossary term. `CONTEXT.md`: an **amount** is any absolute
- * figure — a value, a balance, a cost basis, a gain, a share quantity — and a
- * **ratio** is never one. So every figure in that first list comes through here
- * and every percentage on every screen does not.
- *
- * **Why one component and not a flag on the formatters.** The guarantee this
- * feature makes is "no amount is on this screen", and a guarantee is only as
- * good as its narrowest point: a bare `formatMoney` in a route added next year
- * would leak silently, ship happily, and be noticed by the person it was
- * supposed to protect. Routing every figure through one component makes the
- * rule structural. There is no linter here, so `masking-boundary.test.ts`
- * asserts the import boundary instead — that is what stops this file being one
- * of two ways to render a figure.
- *
- * **`format.ts` learns nothing about masking**, deliberately. It keeps its
- * string-in-string-out contract; a display flag threaded through every
- * signature is exactly how that contract erodes, and it would put the decision
- * back at each call site — which is the thing being fixed.
- *
- * {@link Delta} lives here too and is not a second renderer: it draws the
- * arrow and the hue around a figure and asks {@link Amount} for the figure
- * itself, so there is still exactly one place a money value becomes text.
+ * **One component, not a flag on the formatters**: the guarantee is "no
+ * amount is on this screen", only as good as its narrowest point — a bare
+ * `formatMoney` in next year's route would leak silently. One component
+ * makes the rule structural; with no linter here,
+ * `masking-boundary.test.ts` asserts the import boundary instead.
+ * **`format.ts` learns nothing about masking**: a display flag threaded
+ * through every signature is how its string-in-string-out contract erodes,
+ * putting the decision back at each call site — the thing being fixed.
+ * {@link Delta} is not a second renderer: it draws arrow and hue and asks
+ * {@link Amount} for the figure, so exactly one place turns money to text.
  */
 import { ArrowDownIcon, ArrowUpIcon, TrendingFlatIcon } from "~/components/icons";
 import { formatMoney, formatSignedMoney, isNegative } from "~/lib/format";
@@ -31,57 +22,43 @@ import { useMasked } from "~/lib/masking";
 import { render, toUnits } from "~/lib/money";
 
 /**
- * What replaces every amount, whatever it was.
- *
- * Six dots for twelve dollars and for twelve million. ADR-0002 states the rule
- * and the reason: digit count is magnitude, and magnitude is the thing being
- * masked.
- *
- * Exported because the chart cannot use this component — its axis ticks are
- * strings — and a second constant there would be a second thing a reader could
- * learn to read as a different size.
+ * What replaces every amount: six dots for twelve dollars and for twelve
+ * million — ADR-0002: digit count is magnitude, and magnitude is the thing
+ * being masked. Exported because the chart's axis ticks are strings and
+ * cannot use this component; a second constant there would be a second
+ * thing a reader could learn to read as a different size.
  */
 export const MASKED_FIGURE = "••••••";
 
 /**
- * What a masked figure is announced as.
- *
- * The dots are kept from assistive technology and this is said instead — story
- * 6 asks not to have a run of bullets read out, and story 7 asks for masking to
- * actually mask for a screen reader too, so that a person beside them cannot
- * hear the balances. What *kind* of amount it was still comes from the column
- * header, which is untouched.
- *
- * The wording is the spec's ("an accessible label saying an amount is hidden")
- * and stays in plain English, even though `CONTEXT.md` avoids *hidden* for the
- * concept: the glossary governs what this project calls masking among
- * ourselves, not the plainest word for a stranger hearing one cell read out.
- * The identifier is the project's word; the sentence is the reader's.
+ * What a masked figure is announced as. The dots are kept from assistive
+ * technology and this is said instead — story 6: no run of bullets read
+ * out; story 7: masking must mask for a screen reader too. What *kind* of
+ * amount it was still comes from the column header. "Hidden" is the spec's
+ * own wording and stays, though CONTEXT.md avoids the word for the concept:
+ * the glossary governs our vocabulary, not the plainest word for a stranger
+ * hearing one cell read out.
  */
 const MASKED_ANNOUNCEMENT = "Amount hidden";
 
 /**
- * How an amount is written when it is not masked.
+ * How an unmasked amount is written.
  *
- * - `money` — a balance, a value, a cost basis. Negatives marked, positives not.
+ * - `money` — a balance, value, cost basis. Negatives marked, positives not.
  * - `signed` — a movement, where the sign is the point: always marked. The
- *   arrow that usually accompanies one belongs to {@link Delta}, not here,
- *   because the Overview headline draws a different arrow in a different pill.
- * - `quantity` — a share count. No currency mark: half a fund is half a share,
- *   not fifty cents.
+ *   accompanying arrow belongs to {@link Delta}, because the Overview
+ *   headline draws a different arrow in a different pill.
+ * - `quantity` — a share count. No currency mark: half a fund is half a
+ *   share, not fifty cents.
  */
 export type AmountShape = "money" | "signed" | "quantity";
 
 /**
- * The sign a signed figure will be printed with, decided on the figure that
- * will actually be *printed* rather than on the one behind it.
- *
- * The stored value has four decimal places and a cell shows two, so a gain of
- * `-0.0040` is a loss by the digits and `$0.00` once rounded — and
- * `formatSignedMoney`'s own guard then suppresses the sign on a zero. Reading
- * the sign off the unrounded value would print `−$••••••` next to a figure that
- * would have read `$0.00`, which is the same "channels disagreeing" failure
- * §12 names.
+ * The sign a signed figure prints with, decided on the figure that will
+ * actually be *printed*: the stored value has four decimal places and a
+ * cell shows two, so `-0.0040` is a loss by the digits and `$0.00` once
+ * rounded — reading the sign unrounded would print `−$••••••` beside what
+ * would have read `$0.00`, the "channels disagreeing" failure §12 names.
  */
 function printedSign(amount: string): string {
   const shown = render(toUnits(amount, 2), 2);
@@ -93,20 +70,17 @@ function printedSign(amount: string): string {
 /**
  * An amount, masked or not — or a dash where there is no amount at all.
  *
- * **The dash survives masking.** A null is not an amount: an unpriced holding
- * is not a worthless one and a gain nobody recorded a cost basis for is not a
- * gain of zero, which is why the dash exists in the first place (§8.2). Masking
- * it would replace "nothing is known here" with "something is here and you may
- * not see it", which is a different and false claim. What it concedes is that a
- * masked screen still shows *which* rows are unpriced, and that is not a figure.
- *
- * **A masked figure keeps its currency mark**, so the cell still reads as
- * money — a column of bare dots says nothing about what it was a column of.
- * A quantity has no mark to keep.
+ * **The dash survives masking.** A null is not an amount: an unpriced
+ * holding is not worthless and a gain with no recorded cost basis is not
+ * zero (§8.2). Masking it would replace "nothing is known here" with
+ * "something is here you may not see" — a different and false claim. The
+ * concession: a masked screen still shows *which* rows are unpriced, and
+ * that is not a figure. **A masked figure keeps its currency mark**, so the
+ * cell still reads as money; a quantity has no mark to keep.
  *
  * @param value the decimal string to render, or null where there is none.
  * @param shape how it is written. Money by default, which is most of them.
- * @param places decimal places for a money figure. The upload diff shows four,
+ * @param places decimal places for money. The upload diff shows four,
  *        because a statement's own prices carry them.
  */
 export function Amount({
@@ -131,38 +105,30 @@ export function Amount({
   return (
     <>
       {/* `.amount-dots` carries the minimum width that keeps a column from
-          jumping when it is toggled (story 8): the dot run is a constant and is
-          narrower than most figures it replaces, so without it every numeric
-          column would visibly narrow mid-row. */}
+          jumping when toggled (story 8): the dot run is narrower than most
+          figures it replaces. */}
       <span className="amount-dots" aria-hidden="true">
         {shape === "signed" ? printedSign(value) : ""}
         {shape === "quantity" ? "" : "$"}
         {MASKED_FIGURE}
       </span>
-      {/* Announced rather than spelled. Without this the row reads as a run of
-          bullet characters, which is both meaningless and — story 7 — no
-          quieter than reading the balance out. */}
+      {/* Announced rather than spelled: a run of bullet characters is
+          meaningless and — story 7 — no quieter than the balance itself. */}
       <span className="visually-hidden">{MASKED_ANNOUNCEMENT}</span>
     </>
   );
 }
 
 /**
- * A signed money figure, said three ways at once (DESIGN.md §12) — and masked
- * without losing two of them.
- *
- * A gain, a loss or neither, classified on the rounded figure for the reason
- * {@link printedSign} gives: classifying before rounding paints a red
- * down-arrow beside an unsigned `$0.00`, leaving the arrow and the hue carrying
- * a claim the text does not make.
- *
- * Flat is its own case rather than being folded into gain: a position that has
- * not moved painted green with an up arrow would say it had.
- *
- * **Masked, the sign and the arrow stay and only the size goes.** Direction is
- * not magnitude, and dropping it would leave the hue alone to say which way the
- * figure points — the one thing §12 forbids. The concession is that a masked
- * screen still says gain or loss, and spec 0007 makes it deliberately.
+ * A signed money figure said three ways at once (DESIGN.md §12) — and
+ * masked without losing two of them. Classified on the rounded figure, for
+ * {@link printedSign}'s reason: classifying unrounded paints a red
+ * down-arrow beside an unsigned `$0.00`. Flat is its own case: a position
+ * that has not moved, painted green with an up arrow, would say it had.
+ * **Masked, the sign and arrow stay; only the size goes** — direction is
+ * not magnitude, and dropping it would leave hue alone saying which way the
+ * figure points, the one thing §12 forbids (a masked screen still says gain
+ * or loss; spec 0007 concedes that deliberately).
  */
 export function Delta({ amount }: { amount: string }) {
   const flat = toUnits(amount, 2) === 0n;

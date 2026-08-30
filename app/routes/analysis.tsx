@@ -35,27 +35,17 @@ import { getConfig } from "../../server/config.ts";
 import type { Route } from "./+types/analysis";
 
 /**
- * Analysis — the portfolio cut three ways, each as a ring beside its table.
- *
- * The layout is the Stitch "Views Analysis" screen (DESIGN.md §13): a panel per
- * breakdown, the donut on the left, the same rows as a table on the right. The
- * table is the screen; the ring is a picture of the table, which is why it is
- * the table that carries every figure and the ring that carries none.
- *
- * The panel itself is `components/breakdown.tsx` rather than something this
- * route owns. §13.3's rule — the same rank is the same colour in every panel —
- * holds across screens only for as long as there is one implementation of it,
- * and this route was where the second copy would have been made from.
- *
- * All three breakdowns are grouped from **one** read of `holding_valued`.
- * `allocation.ts` explains why that matters — three `GROUP BY` queries would be
- * three more hand-rolled dashboard queries, which §8.2 names as the weakest
- * point in the design — and it is also what stops this page from disagreeing
- * with the Overview about the same portfolio.
- *
- * The empty case comes first and renders no ring, no zero and no chart frame
- * (§8.4): a net worth of zero and an instance nothing has been uploaded to are
- * indistinguishable on screen, and only one of them is worth panicking about.
+ * Analysis — the portfolio cut three ways, each a ring beside its table
+ * (Stitch "Views Analysis", DESIGN.md §13): the table is the screen, the
+ * ring a picture of it, so the table carries every figure and the ring
+ * none. The panel is `components/breakdown.tsx`, not this route's own:
+ * §13.3's same-rank-same-colour rule holds across screens only while there
+ * is one implementation. All three breakdowns group **one** read of
+ * `holding_valued` (`allocation.ts` has why): three `GROUP BY` queries
+ * would be three more hand-rolled dashboard queries — §8.2's weakest point
+ * — and one read is what stops this page disagreeing with the Overview.
+ * The empty case renders no ring, no zero and no chart frame (§8.4): a net
+ * worth of zero and a never-uploaded instance must not look the same.
  */
 
 export function meta() {
@@ -63,17 +53,13 @@ export function meta() {
 }
 
 /**
- * Unrealized gains by asset type, and what settling them would cost.
- *
- * A table with no ring beside it, unlike the three `Breakdown` panels above it.
- * A gain is signed, and a signed figure is not a share of anything — the same
- * reason `allocation.ts` gives for leaving a liability out of the donut — so a
- * chart here would either drop the losses or draw them as if they were gains.
- *
- * **Three columns, not four.** The taxable base belongs on the row, because it
- * is what makes the tax beside it checkable; it does not belong in a fourth
- * column, because three money columns on a 390px screen is the horizontal
- * scroll §8.1 says nobody uses. `.cell-sub` already exists for exactly this.
+ * Unrealized gains by asset type, and what settling them would cost. No
+ * ring: a gain is signed, and a signed figure is not a share of anything
+ * (`allocation.ts`'s liability argument) — a chart would drop the losses or
+ * draw them as gains. **Three columns, not four**: the taxable base belongs
+ * on the row, where it makes the tax beside it checkable, not in a fourth
+ * money column — the horizontal scroll §8.1 says nobody uses; `.cell-sub`
+ * exists for exactly this.
  */
 function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
   const { rows, total } = gains;
@@ -81,9 +67,8 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
 
   const partial = total.coverage.known < total.coverage.total;
   // The netting caveat is about a loss in one row going untouched against a
-  // gain in another, so it is said only where there is a loss to net — above a
-  // table of gains it explains a subtraction nobody could have expected, and
-  // above a table taxed at 0% it would be a warning about nothing.
+  // gain in another, so it is said only where there is a loss to net — over
+  // a table taxed at 0% it would be a warning about nothing.
   const netted =
     rows.some((row) => row.tax !== null) &&
     rows.some((row) => row.taxable !== null && isNegative(row.taxable));
@@ -142,35 +127,27 @@ function GainsPanel({ rate, gains }: { rate: string; gains: GainGroups }) {
 }
 
 /**
- * One row of the gains table, and the total, which is the same row with a
- * heavier rule above it.
- *
- * Written once for both because the total differs only in where it sits: a
- * second copy is how the total would come to render a null differently from the
- * rows it is a total of.
+ * One row of the gains table — the total too, which differs only in where
+ * it sits: a second copy is how the total would come to render a null
+ * differently from the rows it totals.
  */
 function GainsRow({ row, isTotal = false }: { row: GainRow; isTotal?: boolean }) {
-  // The label is a `td` on an ordinary row and a `th` on the total, which is
-  // what the Holdings table's `tfoot` does (`holdings.tsx`) — the breakdown
-  // tables above have no total row to have taken it from. `.data-table th` sets
-  // a cell in uppercase because it is styling a column heading, and only
-  // `.row-total th` undoes that, so an asset type set in caps would read as a
-  // heading for the rows beneath it, of which there are none.
+  // A `td` on an ordinary row, a `th` on the total (the Holdings `tfoot`
+  // pattern). `.data-table th` uppercases — it styles column headings — and
+  // only `.row-total th` undoes it, so an asset type in caps would read as a
+  // heading for rows beneath it, of which there are none.
   const Label = isTotal ? "th" : "td";
 
   return (
     <tr className={isTotal ? "row-total" : undefined}>
       <Label scope={isTotal ? "row" : undefined}>
         {row.label}
-        {/* The base the tax was taken on. Beside the label rather than in a
-            column of its own, and only where it says something the tax cell
-            does not already imply.
-
-            Never on the total, where it would invite a check that fails: the
-            total's base is netted across the rows and the total's tax is the
-            sum of the un-netted row taxes, so a reader dividing one by the
-            other gets a rate nobody set. The netting is explained in words
-            under the table instead, which is where a rule belongs. */}
+        {/* The base the tax was taken on — beside the label, only where it
+            says something the tax cell does not imply. Never on the total,
+            where it would invite a check that fails: the total's base is
+            netted across rows while its tax sums the un-netted row taxes,
+            so dividing one by the other gives a rate nobody set. The
+            netting is explained in words under the table. */}
         {!isTotal && row.taxable !== null && row.taxable !== row.unrealized ? (
           <span className="cell-sub">
             <Amount value={row.taxable} /> of it in taxable accounts
@@ -191,43 +168,36 @@ export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
 
   // Before any database work, and roster-free: the canonical spelling of an
-  // owner parameter is a fact about the address, so this can be decided without
-  // asking who exists — which is what spec 0013 requires of it, and what makes
-  // it safe to do first.
+  // owner parameter is a fact about the address, decidable without asking
+  // who exists (spec 0013) — what makes it safe to do first.
   const canonical = canonicalOwnerSearch(url.searchParams);
-  // `!==` is safe here because the canonical spelling is a fixed point of URL
+  // `!==` is safe because the canonical spelling is a fixed point of URL
   // parsing (`spellId` in `owner-filter.ts` says why, and what looped when it
-  // was not): `url.search` is the parser's own spelling, so an address that
-  // differs really is non-canonical, and the target it bounces to equals its
-  // own canonical form on arrival.
+  // was not): `url.search` is the parser's own spelling, so a differing
+  // address really is non-canonical and the bounce target equals itself.
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const owners = readOwnerFilter(url.searchParams);
 
   // One read, three groupings of the array it returned. The total comes from
-  // the query module rather than from adding those groups up here: money is
-  // summed in SQL, in `numeric` (§8.2), and this is the same figure the
-  // Overview headline shows because it is the same query. Narrowing it here
-  // rather than in a second grouping is what keeps the two agreeing: the
-  // headline and the slices are one arithmetic over one read, filtered or not.
+  // the query module, not from adding those groups here: money sums in SQL
+  // (§8.2), and it is the same figure as the Overview headline because it is
+  // the same query — one arithmetic over one read, filtered or not.
   const [holdings, total, capitalGainsRate, freshness, roster, everyone] = await Promise.all([
     currentHoldings(owners),
     netWorth(owners),
     readCapitalGainsRate(),
     asOfView(getConfig().MARKET_TIMEZONE),
     ownerRoster(owners),
-    // Whether the *instance* holds anything, which is a different question from
-    // whether these owners do — and only the first may be answered with
-    // "nothing has been uploaded". Asked only while narrowed, because
-    // unnarrowed the two questions are the same one, and asked as a count
-    // rather than as a second read of every row.
+    // Whether the *instance* holds anything — a different question from
+    // whether these owners do, and only the first may be answered "nothing
+    // has been uploaded". A count, and only while narrowed.
     isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
 
-  // Everybody ticked is the household, whose URL carries no owner parameter at
-  // all (ADR-0008). The control cannot decline to submit that spelling — a GET
-  // form of checkboxes has no way to — so the collapse happens here, after the
-  // roster read that it needs and after the roster-free redirect above.
+  // Everybody ticked is the household, whose URL carries no owner parameter
+  // (ADR-0008). A GET form of checkboxes cannot decline to submit that
+  // spelling, so the collapse happens here, after the roster read it needs.
   if (roster.coversEveryone) {
     throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
   }
@@ -239,18 +209,16 @@ export async function loader({ request }: Route.LoaderArgs) {
     narrowedTo: roster.narrowedTo.map((person) => ({ id: person.id, name: person.name })),
     unknownOwner: roster.unknownOwner,
     /**
-     * Where "Show everyone" goes: this address, its own parameters kept, no
-     * owner. Built here rather than in the component, which knows no screen's
-     * vocabulary — and `"."` for a screen whose unfiltered URL is bare, the
-     * idiom the Holdings filter bar already uses.
+     * Where "Show everyone" goes: this address, its parameters kept, no
+     * owner — built here because the component knows no screen's vocabulary;
+     * `"."` for a screen whose unfiltered URL is bare (Holdings' idiom).
      */
     showEveryone: canonicalOwnerSearch(url.searchParams, ALL_OWNERS) || ".",
     total: total.amount,
     capitalGainsRate,
     gains: unrealizedByAssetType(holdings, capitalGainsRate),
-    // Counted off the rows already in hand rather than asked for separately —
-    // two counts of one thing are two things that can disagree. Narrowed, so
-    // the coverage note above the panels describes the figures beneath it.
+    // Counted off the rows already in hand — two counts of one thing are two
+    // things that can disagree. Narrowed, so the coverage note matches.
     holdingCount: holdings.length,
     /** Whether anything at all has been uploaded, narrowed or not. */
     hasHoldings: everyone === null ? holdings.length > 0 : everyone.coverage.total > 0,
@@ -280,9 +248,8 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
     freshness,
   } = loaderData;
 
-  // Empty because the filter reached nothing, rather than because the instance
-  // has nothing: two different sentences, and only the second may say nothing
-  // has been uploaded.
+  // Empty because the filter reached nothing, not because the instance has
+  // nothing — two different sentences.
   const narrowedToNothing = holdingCount === 0 && hasHoldings && isFiltered(owners);
 
   return (
@@ -300,8 +267,8 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
       </header>
 
       {narrowedToNothing ? (
-        // Below the header, deliberately: the control has to stay on screen or
-        // the filter cannot be cleared from the page it emptied.
+        // Below the header, so the control stays on screen and the filter can
+        // be cleared from the page it emptied.
         <NarrowedToNothing
           owners={narrowedTo}
           unknownOwner={unknownOwner}
@@ -327,9 +294,8 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
             </p>
           ) : null}
 
-          {/* "by owner", not "by person": an owner is the role — the single
-              person an account's money belongs to — and a person is the record
-              (`CONTEXT.md`). This was the one place the pre-glossary wording
+          {/* "by owner", not "by person": an owner is the role, a person the
+              record (CONTEXT.md) — the one place the pre-glossary wording
               survived in the UI. */}
           <Breakdown
             title="Net worth by owner"

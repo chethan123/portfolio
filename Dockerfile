@@ -1,35 +1,31 @@
 # syntax=docker/dockerfile:1
 
-# Three stages, per DESIGN.md §10.1.
+# Three stages (DESIGN.md §10.1):
+#   deps    npm ci from the lockfile alone — dependency layers cache
+#           independently of source.
+#   build   client + server bundles, then dev dependencies pruned away.
+#   runtime node:24-alpine with production deps and build output only — no
+#           compiler, no source tree, non-root.
 #
-#   deps    npm ci against the lockfile alone, so dependency layers cache
-#           independently of source: changing a route does not reinstall.
-#   build   client and server bundles, then the dev dependencies pruned away.
-#   runtime node:24-alpine with production dependencies and build output only —
-#           no compiler, no dev dependencies, no source tree, non-root.
+# `deps` and `build` pin $BUILDPLATFORM to run natively; only `runtime` varies
+# per target, and it only COPYs and chmods — what makes the arm64 image nearly
+# free. Unpinned, that leg runs npm ci and the Vite build under QEMU: slow,
+# and prone to intermittent V8 faults on the release path nobody watches.
 #
-# `deps` and `build` are pinned to $BUILDPLATFORM, so they run natively on the
-# builder's own architecture instead of under emulation. Only `runtime` varies
-# per target platform, and all it does is COPY and chmod. That is what makes the
-# linux/arm64 image nearly free to produce: without the pins, the arm64 leg runs
-# `npm ci` and the Vite build under QEMU, which is both slow and prone to
-# intermittent V8 faults on the release path where nobody is watching.
-#
-# THE INVARIANT THIS RESTS ON: nothing in the production dependency tree has a
-# native binary or a platform-specific install script, so a tree installed on
-# one architecture runs on the other — and a tree installed on the glibc build
-# stages runs on the musl runtime below. That holds today — no non-dev package
-# in package-lock.json declares `hasInstallScript`, `os` or `cpu` — and the
-# audit job in CI fails the moment one does. A production dependency that does
-# breaks this *silently*: the image builds and then fails at runtime on the box
-# that pulled it. If that happens, build each platform natively without these
+# THE INVARIANT THIS RESTS ON: nothing in the production tree has a native
+# binary or platform-specific install script, so a tree installed on one
+# architecture runs on the other — and a tree installed on the glibc build
+# stages runs on the musl runtime below. Holds today (no non-dev package in
+# package-lock.json declares `hasInstallScript`, `os` or `cpu`), and CI's
+# audit job fails the moment one does. A production dependency breaking this
+# breaks it *silently* — the image builds, then fails at runtime on the box
+# that pulled it. If that happens, build each platform natively without the
 # two pins, and give `runtime` the build stages' own base back.
 
 FROM --platform=$BUILDPLATFORM node:24-slim AS deps
 WORKDIR /app
 
-# Only the lockfile and manifest, so this layer is invalidated by a dependency
-# change and by nothing else.
+# Lockfile and manifest only: invalidated by a dependency change, nothing else.
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev
 
@@ -52,25 +48,21 @@ COPY public ./public
 
 RUN npm run build
 
-# Leave behind exactly the tree the runtime stage needs. Doing it here rather
-# than with a second `npm ci` keeps the stage count at three and guarantees the
-# production tree is a subset of the one the build was verified against.
+# Prune here rather than a second `npm ci`: keeps three stages, and the
+# production tree stays a subset of the one the build was verified against.
 RUN npm prune --omit=dev
 
-# `typescript` is an *optional peer* dependency of @react-router/node and
-# @react-router/express, declared for the types they ship. npm installs optional
-# peers, and `npm prune --omit=dev` keeps them, so `tsc` would otherwise ride
-# into the runtime image. Nothing in either package's `dist/` references it at
-# runtime. The runtime stage is specified to contain no compiler, so it goes.
+# `typescript` is an *optional peer* of @react-router/node and /express (for
+# their types); npm installs optional peers and prune keeps them, so `tsc`
+# would ride into an image specified to contain no compiler. Nothing in either
+# package's `dist/` references it at runtime, so it goes.
 RUN rm -rf node_modules/typescript node_modules/.bin/tsc node_modules/.bin/tsserver
 
-# `yahoo-finance2` declares the MCP server SDK, a Deno shim and a fetch-mocking
-# library among its runtime dependencies, for a subpath and two CLI bins this
-# application never touches: DESIGN.md §6.1 buys `quote()` and nothing else.
-# Between them they drag a second copy of Express, plus Hono, jose, cors, ajv
-# and fifty more packages into the image, where nothing can load them. The
-# script's header explains why cutting exactly those three edges is safe, and
-# why it cannot remove anything that is still reachable.
+# `yahoo-finance2` declares the MCP server SDK, a Deno shim and a fetch-mocker
+# among its *runtime* deps, for a subpath and two CLI bins never touched here
+# (DESIGN.md §6.1 buys `quote()` and nothing else) — dragging in a second
+# Express plus Hono, jose, cors, ajv and fifty more packages nothing can load.
+# The script's header explains why cutting exactly those edges is safe.
 COPY scripts/prune-unreachable-deps.mjs ./scripts/
 RUN node ./scripts/prune-unreachable-deps.mjs && rm -rf ./scripts
 
@@ -97,8 +89,8 @@ RUN rm -rf node_modules/yahoo-finance2/script
 FROM node:24-alpine AS runtime
 WORKDIR /app
 
-# Timestamps are unambiguous because the clock is UTC and the database stores
-# UTC regardless (DESIGN.md §10). Overridable via the TZ environment variable.
+# UTC clock + UTC storage (DESIGN.md §10) is what keeps timestamps
+# unambiguous. Overridable via TZ.
 ENV NODE_ENV=production \
     TZ=UTC \
     PORT=3000
@@ -107,9 +99,8 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/build ./build
 COPY --from=build --chown=node:node /app/package.json ./package.json
 
-# Operational scripts run under Node's type stripping — no build step for them
-# (DESIGN.md §9): the config gate, the pool construction site they share with
-# the app, and the migration runner.
+# Operational scripts run under Node's type stripping, no build step
+# (DESIGN.md §9): config gate, the shared pool construction site, migrations.
 COPY --chown=node:node \
   server/config.ts \
   server/validate-config.ts \
@@ -118,22 +109,22 @@ COPY --chown=node:node \
   server/migrate.ts \
   ./server/
 
-# The database is the source of truth, so the `.sql` files ship with the image
-# and the entrypoint applies them. Without this the container starts against
-# whatever schema happens to be there; the smoke test asserts they are present.
+# The `.sql` files ship with the image and the entrypoint applies them —
+# without this the container starts against whatever schema happens to be
+# there. The smoke test asserts they are present.
 COPY --chown=node:node migrations ./migrations
 
 COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 
-# The container is stateless: it writes nothing to its own filesystem, so it can
-# be destroyed and recreated freely and Postgres is the only backup target.
+# Stateless: writes nothing to its own filesystem — destroy and recreate
+# freely; Postgres is the only backup target.
 USER node
 
 EXPOSE 3000
 
-# The healthcheck is also declared in compose.yaml, where Compose uses it to
-# gate `depends_on`. Repeating it here means a plain `docker run` gets it too.
+# Also declared in compose.yaml (where it gates `depends_on`); repeated here
+# so a plain `docker run` gets it too.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

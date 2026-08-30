@@ -1,37 +1,24 @@
 /**
- * The only thing in the application that reads `holding_valued` and
- * `holding_valued_at`.
+ * The only reader of `holding_valued` and `holding_valued_at`, and — since
+ * ADR-0006 — the only thing that *values* anything from `price_observation`
+ * (the intra-session readers at the foot). DESIGN.md §8.2 names hand-rolled
+ * dashboard queries disagreeing as the design's weakest point; the mitigation
+ * is one SQL view and this one module over it. A dashboard writing its own
+ * join to `holding` has left the mitigation.
  *
- * DESIGN.md §8.2 names three hand-rolled dashboard queries disagreeing as the
- * weakest point in the whole design. The mitigation is one SQL view and this
- * one module over it: a dashboard that wants "what do I hold and what is it
- * worth" calls in here, and a dashboard that writes its own join to the
- * `holding` table has left the mitigation.
+ * A translation layer, not a service: no caching, no rules beyond assembling
+ * coverage counts — every valuation rule lives in the view, in SQL, where the
+ * arithmetic is exact. Every numeric field returned is a decimal string
+ * (`server/db.ts`); the only numbers are {@link Coverage} cardinalities.
+ * Every exported query takes an optional `db`, defaulting to the process
+ * pool; tests pass a transaction they roll back.
  *
- * Since ADR-0006 it is also the only thing that *values* anything from
- * `price_observation` — the intra-session readers at the foot of this file. The
- * observation log is a third price tier rather than a fourth source of truth,
- * and the rule that keeps it one is the same rule the view exists for.
- *
- * It is a translation layer, not a service. No caching, no business rules
- * beyond assembling the coverage counts — every valuation rule lives in the
- * view, in SQL, where the arithmetic is exact.
- *
- * Every numeric field it returns is a decimal string. `numeric` crosses the
- * driver boundary as a string on purpose (see `server/db.ts`), and this module
- * never undoes that with `Number()` or `parseFloat`. The only numbers here are
- * cardinalities in {@link Coverage}, which are counts of rows rather than money.
- *
- * Every exported query takes an optional `db` handle: it defaults to the
- * process-wide one, and tests pass a transaction they roll back.
- *
- * Every household-scoped reader takes an {@link OwnerFilter} as its **first**
- * argument, with no default (ADR-0008). `ALL_OWNERS` is the whole household,
- * and spelling it is the point: a screen cannot read holdings without saying
- * whose, so an omission is a word missing from a diff rather than a behaviour
- * missing from a screen. The account-scoped readers do not take one — an
- * account is already narrower than an owner, and asking again would invite the
- * answer "this account, if its owner is also selected", which no screen means.
+ * Every household-scoped reader takes an {@link OwnerFilter} **first**, no
+ * default (ADR-0008): a screen cannot read holdings without saying whose, so
+ * an omission is a word missing from a diff rather than a behaviour missing
+ * from a screen. Account-scoped readers take none — an account is already
+ * narrower than an owner, and asking again would invite "this account, if its
+ * owner is also selected", which no screen means.
  */
 import { sql } from "kysely";
 
@@ -44,9 +31,9 @@ import type { AliasedRawBuilder, Kysely, RawBuilder, Selectable, SqlBool } from 
 export type AccountKind = "brokerage" | "401k" | "ira" | "bank" | "liability";
 
 /**
- * `account.tax_treatment`. Three-way rather than boolean: $500k in a
- * Traditional IRA is roughly $350k of spending power while $500k in a Roth is
- * $500k, and a boolean throws away exactly that (DESIGN.md §4.5).
+ * `account.tax_treatment`. Three-way, not boolean: $500k Traditional is
+ * ~$350k of spending power where $500k Roth is $500k — a boolean throws away
+ * exactly that (DESIGN.md §4.5).
  */
 export type TaxTreatment = "taxable" | "tax_deferred" | "tax_free";
 
@@ -54,11 +41,9 @@ export type TaxTreatment = "taxable" | "tax_deferred" | "tax_free";
 export type AssetClass = "equity" | "bond" | "cash" | "other";
 
 /**
- * One holding, valued, with everything a dashboard groups by already on it.
- *
- * Cash is a `USD` position priced at 1.00 and a liability is a negative `USD`
- * quantity against that same positive price, so nothing reading this shape ever
- * needs a branch for either (DESIGN.md §2).
+ * One holding, valued, with everything a dashboard groups by on it. Cash is a
+ * `USD` position priced at 1.00 and a liability a negative `USD` quantity, so
+ * nothing reading this shape needs a branch for either (DESIGN.md §2).
  */
 export type ValuedHolding = {
   accountId: string;
@@ -73,9 +58,9 @@ export type ValuedHolding = {
   symbol: string | null;
   instrumentName: string;
   /**
-   * What the price provider calls this — `EQUITY`, `ETF`, `MUTUALFUND`, and the
-   * seeded `CURRENCY` on the USD row. Null for an instrument nobody quotes,
-   * which is a workplace-plan trust priced by hand rather than a fault.
+   * The provider's word — `EQUITY`, `ETF`, `MUTUALFUND`, the seeded
+   * `CURRENCY`. Null for an instrument nobody quotes: a hand-priced
+   * workplace-plan trust, not a fault.
    */
   quoteType: string | null;
   classification: string;
@@ -95,24 +80,19 @@ export type ValuedHolding = {
   /** A stale price is still used; this says so rather than hiding it. */
   isStale: boolean;
   /**
-   * What the holding is projected to pay over the coming year — quantity times
-   * the instrument's current per-share rate, computed in the view.
-   *
-   * Never null on the current path and always null on an as-of one, and both
-   * halves of that are deliberate. The view coalesces a missing rate to zero,
-   * because "pays nothing" and "nobody asked" are the same null in `quote` and
-   * a caption could not tell them apart (DESIGN.md §14, limitation 9); the
-   * as-of function returns the constant null, because the projection describes
-   * the portfolio now and no historical rate is stored to derive one from.
+   * Projected pay over the coming year: quantity × current per-share rate,
+   * computed in the view. Never null on the current path — a missing rate
+   * coalesces to zero because "pays nothing" and "nobody asked" are the same
+   * null in `quote` (DESIGN.md §14, limitation 9) — and always null on an
+   * as-of path: the projection describes now, and no historical rate is stored.
    */
   annualDividend: string | null;
 };
 
 /**
- * How much of a figure is actually known: "based on 8 of 12 holdings".
- *
- * The alternative — coercing the unknown to zero — reports a total that looks
- * complete and is not, which is the failure this design refuses everywhere.
+ * How much of a figure is known: "based on 8 of 12 holdings". The alternative
+ * — coercing unknown to zero — reports a total that looks complete and is
+ * not, the failure this design refuses everywhere.
  */
 export type Coverage = { known: number; total: number };
 
@@ -123,11 +103,10 @@ export type Total = { amount: string; coverage: Coverage };
 type HoldingValuedRow = Selectable<Database["holding_valued"]>;
 
 /**
- * Postgres reports every column of a view as nullable regardless of what can
- * actually appear in it, so the generated type is wider than reality: an
- * account always has a name, a holding always has a quantity. This narrows
- * that, loudly. A null here would mean the view and this module disagree about
- * the schema, which is a bug to surface rather than to paper over.
+ * Postgres reports every view column as nullable regardless of reality, so
+ * the generated type is wider than the view can produce. Narrow loudly: a
+ * null here means the view and this module disagree about the schema — a bug
+ * to surface, not paper over.
  */
 function required<T>(value: T | null, column: string): T {
   if (value === null) {
@@ -150,10 +129,9 @@ function toValuedHolding(row: HoldingValuedRow): ValuedHolding {
     instrumentId: required(row.instrument_id, "instrument_id"),
     symbol: row.symbol,
     instrumentName: required(row.instrument_name, "instrument_name"),
-    // Not `required`: `instrument.quote_type` is genuinely nullable and
-    // `instrument-resolution.server.ts` writes null on purpose for a manually
-    // priced instrument. Insisting on it here would 500 the screens over a
-    // 401k trust.
+    // Not `required`: genuinely nullable — `instrument-resolution.server.ts`
+    // writes null on purpose for a manually priced instrument, and insisting
+    // would 500 the screens over a 401k trust.
     quoteType: row.quote_type,
     classification: required(row.classification, "classification"),
     assetClass: required(row.asset_class, "asset_class") as AssetClass,
@@ -165,32 +143,25 @@ function toValuedHolding(row: HoldingValuedRow): ValuedHolding {
     unrealized: row.unrealized,
     isPriced: required(row.is_priced, "is_priced"),
     isStale: required(row.is_stale, "is_stale"),
-    // Not `required`, even though the view cannot emit a null here: the as-of
-    // function reports null on purpose, and this mapper reads both. Narrowing
-    // it would turn every historical read into a 500 (ADR-0001).
+    // Not `required`: the as-of function reports null on purpose and this
+    // mapper reads both — narrowing would 500 every historical read (ADR-0001).
     annualDividend: row.annual_dividend,
   };
 }
 
 /**
- * A calendar date, `YYYY-MM-DD`.
- *
- * A date crosses this boundary as a string in both directions: `pg` parses
- * Postgres `date` into a JavaScript `Date` at *local* midnight by default, so a
- * round trip west of UTC lands on the previous day — the same class of silent
- * bug as the numeric coercion, and one that would select the wrong position set
- * with no error anywhere. `server/db.ts` registers the parser that prevents it.
+ * A calendar date, `YYYY-MM-DD`, crossing as a string in both directions:
+ * default `pg` parses `date` at *local* midnight, and a round trip west of
+ * UTC lands on the previous day — the wrong position set, no error anywhere.
+ * `server/db.ts` registers the parser that prevents it.
  */
 export type IsoDate = string;
 
 /**
  * Where a read gets its rows: the view for "now", the function for a date.
- *
- * One type covers both because the function returns the view's row type —
- * `returns setof holding_valued` in the migration, not a re-listed set of
- * columns — so everything below this line is written once and reads either.
- * Aliasing both to `holding_valued` is what lets the column names below be the
- * same names in both cases.
+ * One type covers both because the function `returns setof holding_valued`,
+ * so everything below is written once and reads either; aliasing both to
+ * `holding_valued` keeps the column names identical.
  */
 type ValuedSource = AliasedRawBuilder<HoldingValuedRow, "holding_valued">;
 
@@ -202,12 +173,10 @@ const valuedAt = (date: IsoDate): ValuedSource =>
   sql<HoldingValuedRow>`holding_valued_at(${date}::date)`.as("holding_valued");
 
 /**
- * The ordering is for determinism, not for display; a screen sorts as it likes.
- *
- * `where` narrows the same read to a subset — one account's holdings, say.
- * Narrowing here rather than in a second function is the point: a drill-down
- * that wrote its own join to the view would be the fourth hand-rolled query
- * §8.2 warns about, and this one is the same rows filtered.
+ * Ordering is for determinism, not display; a screen sorts as it likes.
+ * `where` narrows the same read — a drill-down writing its own join to the
+ * view would be the fourth hand-rolled query §8.2 warns about; this is the
+ * same rows filtered.
  */
 async function readHoldings(
   db: Kysely<Database>,
@@ -226,13 +195,10 @@ async function readHoldings(
 }
 
 /**
- * One `SUM` over `value`, with no branch for cash or debt.
- *
- * Summed in SQL, in `numeric`, so no float ever touches it. Unpriced holdings
- * contribute nothing to `amount` and are counted in `coverage.total`, so a
- * partial answer is labelled partial rather than reported as complete — a zero
- * substituted for an unknown price would be indistinguishable from a genuinely
- * empty account.
+ * One `SUM` over `value`, no branch for cash or debt, in SQL in `numeric` so
+ * no float touches it. Unpriced holdings add nothing to `amount` but count in
+ * `coverage.total`, so a partial answer is labelled partial — a zero standing
+ * in for an unknown price would look like a genuinely empty account.
  */
 async function readTotal(
   db: Kysely<Database>,
@@ -242,9 +208,8 @@ async function readTotal(
   const all = db
     .selectFrom(source)
     .select([
-      // `value` is null exactly when the holding is unpriced, and SUM skips
-      // nulls — so "sums only priced holdings" needs no filter to say it.
-      // The coalesce is for the empty portfolio: zero of nothing, not null.
+      // `value` is null exactly when unpriced and SUM skips nulls, so no
+      // filter needed; coalesce covers the empty portfolio — zero, not null.
       sql<string>`cast(coalesce(sum(value), 0) as numeric(20, 4))`.as("amount"),
       sql<string>`count(*) filter (where is_priced)`.as("known"),
       sql<string>`count(*)`.as("total"),
@@ -254,19 +219,16 @@ async function readTotal(
 
   return {
     amount: row.amount,
-    // Counts, not money: these are cardinalities of a household's holdings and
-    // could not reach the precision limit if every row were a separate fund.
+    // Counts, not money — cardinalities cannot reach the precision limit.
     coverage: { known: Number(row.known), total: Number(row.total) },
   };
 }
 
 /**
- * Every holding currently held, valued.
- *
- * "Currently" is the view's business: the newest position set per account,
- * tie-broken deterministically, with closed accounts excluded. A holding whose
- * instrument has never been priced is here too, carrying `isPriced: false` —
- * dropping it would understate every total silently.
+ * Every holding currently held, valued. "Currently" is the view's business:
+ * newest position set per account, deterministic tie-break, closed accounts
+ * excluded. A never-priced holding is here too (`isPriced: false`) — dropping
+ * it would understate every total silently.
  */
 export async function currentHoldings(
   filter: OwnerFilter,
@@ -275,9 +237,7 @@ export async function currentHoldings(
   return readHoldings(db, valuedNow(), ownedBy("holding_valued.owner_id", filter));
 }
 
-/**
- * Net worth right now, and how much of it is known.
- */
+/** Net worth right now, and how much of it is known. */
 export async function netWorth(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -286,25 +246,16 @@ export async function netWorth(
 }
 
 /**
- * Every holding held on a past date, valued at that date's close.
+ * Every holding held on a past date, valued at that date's carried-forward
+ * close — a Saturday equals the preceding Friday, so does a holiday, no
+ * calendar anywhere. It does not invent a past: an account whose first upload
+ * is after `date` contributes no rows rather than a zero (DESIGN.md §7 — the
+ * period before belongs to `manual_networth`); an account closed after `date`
+ * is included, because it was open then. `isStale` is always false: staleness
+ * belongs to a live quote; a historical close is simply the close.
  *
- * Positions are constant between uploads by construction, so this is that
- * date's position sets priced at that date's close, with the last close carried
- * forward — a Saturday equals the preceding Friday, and so does a market
- * holiday, with no calendar anywhere.
- *
- * What it deliberately does not do is invent a past. An account whose first
- * upload is after `date` contributes no rows rather than a zero, so the earliest
- * date with any value is the first upload (DESIGN.md §7); the period before that
- * belongs to the hand-typed `manual_networth` series, not here. An account
- * closed after `date` is included, because it was open then.
- *
- * `isStale` is always false: staleness is a property of a live quote that failed
- * to refresh, and a historical close is simply the close.
- *
- * @param date `YYYY-MM-DD`. Any date, including one before the app existed —
- *             cash and debt still price at 1.00 there, through the same
- *             carry-forward and with no special case.
+ * @param date `YYYY-MM-DD`, any date — cash and debt still price at 1.00
+ *             through the same carry-forward, no special case.
  */
 export async function holdingsAt(
   filter: OwnerFilter,
@@ -315,11 +266,9 @@ export async function holdingsAt(
 }
 
 /**
- * Net worth on a past date, on the same terms as {@link netWorth}.
- *
- * A date before the first upload is `0.0000` over a coverage of zero rows —
- * "nothing was recorded yet", which is a different statement from "the household
- * had nothing", and the coverage count is what lets a chart say so.
+ * Net worth on a past date, on {@link netWorth}'s terms. Before the first
+ * upload: `0.0000` over zero coverage — "nothing was recorded yet", not "the
+ * household had nothing", and the coverage count lets a chart say so.
  *
  * @param date `YYYY-MM-DD`.
  */
@@ -332,13 +281,10 @@ export async function netWorthAt(
 }
 
 /**
- * One account's holdings, rolled up.
- *
- * Grouped in SQL for the same reason {@link readTotal} sums in SQL: the
- * alternative is adding decimal strings in JavaScript, which is either wrong
- * (via `Number`) or a decimal library doing what `numeric` already does
- * exactly. It reads the same view as everything else, so an account's total
- * here and the net worth headline above it cannot disagree (DESIGN.md §8.2).
+ * One account's holdings, rolled up in SQL — JS addition of decimal strings
+ * is either wrong (`Number`) or a decimal library redoing what `numeric` does
+ * exactly. Reads the same view as everything else, so an account's total and
+ * the net worth headline cannot disagree (DESIGN.md §8.2).
  */
 export type AccountTotal = {
   accountId: string;
@@ -358,12 +304,9 @@ export type NetWorthPoint = { date: IsoDate; amount: string; coverage: Coverage 
 export type ManualPoint = { date: IsoDate; amount: string };
 
 /**
- * The columns an account rollup selects, under the view's names.
- *
- * Two queries below produce this: one grouping the view, one grouping a single
- * account row it may have no rows for. They share the shape so that the list
- * and the drill-down cannot describe the same account differently — the same
- * reason the view exists (DESIGN.md §8.2).
+ * The rollup's columns under the view's names, shared by the list and the
+ * single-account query below so the two cannot describe one account
+ * differently — the reason the view exists (DESIGN.md §8.2).
  */
 type AccountTotalRow = {
   account_id: string | null;
@@ -390,17 +333,11 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
 }
 
 /**
-/**
- * The largest value a `bigint` column can hold.
- *
- * The bound is on the *magnitude*, not on the number of characters: an id is
- * refused when it could not be a `bigint`, never when it is merely written at
- * length. `0000000000000000001` is nineteen characters and is account 1, which
- * a digit-count guard would turn into a 404 for a row that exists.
- *
- * Compared as a `BigInt` rather than a `Number`, for the reason §5.6 gives
- * about ids generally: past 2^53 a float rounds, and rounding here would admit
- * exactly the values this exists to refuse.
+ * The largest value a `bigint` column can hold. The bound is on *magnitude*,
+ * not character count: `0000000000000000001` is nineteen characters and is
+ * account 1 — a digit-count guard would 404 a row that exists. Compared as
+ * `BigInt` (§5.6): past 2^53 a float rounds, admitting exactly the values
+ * this exists to refuse.
  */
 const MAX_BIGINT = 9223372036854775807n;
 
@@ -410,19 +347,14 @@ function couldBeId(id: string): boolean {
 }
 
 /**
- * `<column> in (<ids>)`, or a predicate matching nothing when none can be one.
- *
- * Ids cross this boundary as strings (`server/db.ts`) and land against a
- * `bigint` column, so an id taken from a URL that is not digits would fail
- * inside Postgres. Saying "no such row" in SQL rather than returning early
- * keeps every empty answer coming out of the query that would have answered
- * anyway, rather than out of a JavaScript copy of what it would have said.
- *
- * The unusable ids are dropped from the list rather than the whole predicate,
- * so `?owner=1,abc` still narrows to owner 1 — but a list of nothing usable
- * yields `false`, never an empty `in ()`, and never silently no filter at all.
- * Widening a view somebody asked to narrow is the failure `holdings-view.ts`
- * names; this is that rule at the other end of the same request.
+ * `<column> in (<ids>)`, or a match-nothing predicate when none could be an
+ * id. Ids arrive as strings against `bigint` columns, and a non-digit id from
+ * a URL would fail inside Postgres; saying "no such row" in SQL keeps every
+ * empty answer coming from the query that would have answered anyway.
+ * Unusable ids drop from the list, not the predicate — `?owner=1,abc` still
+ * narrows to owner 1 — but nothing usable yields `false`, never an empty
+ * `in ()` and never silently no filter: widening a view somebody asked to
+ * narrow is the failure `holdings-view.ts` names.
  */
 function isOneOf(column: string, ids: readonly string[]): RawBuilder<SqlBool> {
   const usable = ids.filter(couldBeId);
@@ -438,33 +370,22 @@ function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
 }
 
 /**
- * The owner narrowing for a household read, or nothing when the filter is off.
- *
- * Returning `undefined` rather than a tautology keeps an unfiltered read the
- * query it has always been: no clause is added, so nothing about the plan or
- * the answer changes for the household case that every screen starts in.
+ * The owner narrowing, or nothing when the filter is off — `undefined` rather
+ * than a tautology keeps an unfiltered read the query it has always been.
  */
 function ownedBy(column: string, filter: OwnerFilter): RawBuilder<SqlBool> | undefined {
   return isFiltered(filter) ? isOneOf(column, filter) : undefined;
 }
 
 /**
- * Every open account with its current value, largest first.
- *
- * A liability account sorts to the bottom by construction rather than by a
- * branch, because its positions sum negative (DESIGN.md §2).
- *
- * Row for row the same answer {@link accountTotal} gives for each of those
- * accounts, and that agreement is the rule rather than a coincidence of two
- * queries that happen to match: the overview's row and the drill-down's
- * headline are one figure shown twice, so they are grouped the same way from
- * the same source. Grouping the view directly would be an inner join, which
- * silently drops exactly the accounts the LEFT join below exists to keep —
- * see {@link accountTotal} for why an empty account is `0.0000` over zero rows
- * rather than missing.
- *
- * A zero-total account therefore sorts between the assets and the liabilities,
- * which is where a zero belongs, and ties break on name like any other.
+ * Every open account with its current value, largest first; a liability sorts
+ * to the bottom by construction, not a branch (negative sum, DESIGN.md §2).
+ * Row for row the same answer {@link accountTotal} gives, as a rule rather
+ * than a coincidence: the overview row and drill-down headline are one figure
+ * shown twice, grouped the same way from the same source. LEFT join, because
+ * grouping the view directly would silently drop exactly the empty accounts
+ * it exists to keep — `0.0000` over zero rows, sorting between assets and
+ * liabilities, where a zero belongs.
  */
 export async function accountTotals(
   filter: OwnerFilter,
@@ -484,21 +405,19 @@ export async function accountTotals(
       "person.name as owner_name",
       sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
       // `is_priced` is null on the row the left join manufactures for an
-      // account with no holdings, and a null does not pass the filter.
+      // empty account, and a null does not pass the filter.
       sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
-      // Counts the joined column rather than the row, for the same reason:
-      // `count(*)` would score that manufactured row as one holding.
+      // The joined column, not the row: `count(*)` would score that
+      // manufactured row as one holding.
       sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
     // The view already drops closed accounts; joining from `account` reaches
-    // past that, so the rule has to be restated here to keep a closed account
-    // out rather than let it in as one holding nothing.
+    // past that, so the rule is restated here.
     .where("account.closed_at", "is", null);
 
-  // Narrowed on `account.owner_id` rather than through the view: this query
-  // reaches the account table directly so an account holding nothing still
-  // reports 0.0000, and the view's own owner column is null on exactly those
-  // manufactured rows.
+  // Narrowed on `account.owner_id`, not through the view: an account holding
+  // nothing still reports 0.0000, and the view's owner column is null on
+  // exactly those manufactured rows.
   const rows = await (owned === undefined ? base : base.where(owned))
     .groupBy([
       "account.id",
@@ -507,8 +426,8 @@ export async function accountTotals(
       "account.kind",
       "person.name",
     ])
-    // `sum(...)` again rather than the aliased `amount`: an alias is not in
-    // scope in ORDER BY across every Postgres version this may meet.
+    // `sum(...)` again, not the alias: an alias is not in scope in ORDER BY
+    // on every Postgres version this may meet.
     .orderBy(sql`coalesce(sum(holding_valued.value), 0)`, "desc")
     .orderBy("account.name")
     .execute();
@@ -517,29 +436,20 @@ export async function accountTotals(
 }
 
 /**
- * One account's identity and current value, or null if there is no such open
- * account.
+ * One account's identity and current value, or null when there is no such
+ * open account. Deliberately the same {@link AccountTotal} as the list — the
+ * account page's headline and its overview row are one arithmetic over one
+ * view, and separate types is how they would come to disagree
+ * ({@link accountTotals} is this query without the id filter). LEFT join from
+ * `account`, so an account with no view rows — sold down to nothing, created
+ * before its first upload — reports `0.0000` over zero coverage: "nothing to
+ * value", not "worth nothing" or missing.
  *
- * Deliberately the same {@link AccountTotal} the list above returns rather than
- * a second, drill-down-shaped type: the figure at the top of an account page
- * and the figure in its row on the overview are one arithmetic over one view,
- * and giving them separate types is how they would come to disagree. The two
- * must also agree value for value — {@link accountTotals} is this query
- * without the id filter, and an account either appears in both or in neither.
+ * Null covers an id naming no account and a closed one alike. Closed is not
+ * an error and not a zero: the view excludes closed accounts (§8.2), so a
+ * drill-down would render a page of blanks — the caller should 404 instead.
  *
- * Grouped from `account` with the view LEFT joined onto it, which is what makes
- * that possible: an account whose statements are all empty — a brokerage sold
- * down to nothing, an account created before its first upload — has no rows in
- * the view at all, and an inner join would report it as missing rather than as
- * holding nothing. It comes back as `0.0000` over a coverage of
- * zero rows, which says "nothing to value" and not "worth nothing".
- *
- * Null covers both an id that names no account and a closed one. Closed is not
- * an error and not a zero: `holding_valued` excludes closed accounts (§8.2), so
- * a drill-down on one would otherwise render an account page whose every figure
- * is a blank — the caller should 404 instead.
- *
- * @param accountId the account's id as it arrives from a URL, digits or not.
+ * @param accountId as it arrives from a URL, digits or not.
  */
 export async function accountTotal(
   accountId: string,
@@ -557,15 +467,13 @@ export async function accountTotal(
       "person.name as owner_name",
       sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
       // `is_priced` is null on the manufactured row here too — see
-      // {@link accountTotals}, which runs the identical query shape.
+      // {@link accountTotals}, the identical query shape.
       sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
-      // Counts the joined column, not the row, for the same reason as above.
       sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
     .where(isAccount("account.id", accountId))
-    // The view already drops closed accounts, so this is not a second copy of
-    // that rule: it is what turns "closed" into null instead of into an
-    // account reported as holding nothing.
+    // Not a second copy of the view's closed-account rule: this is what turns
+    // "closed" into null instead of an account holding nothing.
     .where("account.closed_at", "is", null)
     .groupBy([
       "account.id",
@@ -580,16 +488,10 @@ export async function accountTotal(
 }
 
 /**
- * One account's holdings, valued, on the same terms as {@link currentHoldings}.
- *
- * The same rows that account contributes to the overview's total, filtered —
- * not a second definition of what the account holds. An unpriced holding is
- * here too, carrying `isPriced: false`, so the drill-down's table can say which
- * line the account's total is missing.
- *
- * Empty for an account that holds nothing, for one that is closed, and for an
- * id that names no account: all three hold nothing right now, and which of them
- * it is, is {@link accountTotal}'s answer rather than this one's.
+ * One account's holdings on {@link currentHoldings}' terms — the same rows it
+ * contributes to the overview total, filtered, unpriced ones included so the
+ * table can say which line the total is missing. Empty for holds-nothing,
+ * closed, and no-such-id alike; which it is, is {@link accountTotal}'s answer.
  */
 export async function accountHoldings(
   accountId: string,
@@ -599,15 +501,11 @@ export async function accountHoldings(
 }
 
 /**
- * A value at each of `dates`, over whatever `where` narrows it to, in a single
- * round trip.
+ * A value at each of `dates` in a single round trip: a lateral join over the
+ * date array evaluates `holding_valued_at` once per date inside one statement
+ * — where {@link netWorthAt} in a loop is a round trip and a re-plan per point.
  *
- * The obvious implementation is {@link netWorthAt} in a loop, which is one
- * query per point and re-plans `holding_valued_at` every time. A lateral join
- * over the date array evaluates the same function once per date inside one
- * statement, which is the difference between twenty-five round trips and one.
- *
- * @param dates `YYYY-MM-DD`, in any order; the result comes back sorted.
+ * @param dates `YYYY-MM-DD`, any order; the result comes back sorted.
  */
 async function readSeries(
   db: Kysely<Database>,
@@ -618,18 +516,16 @@ async function readSeries(
 
   const rows = await db
     .selectFrom(sql<{ date: string }>`unnest(cast(${dates} as date[]))`.as("d"))
-    // LEFT, not INNER. A date before the first upload has no rows to join, and
-    // an inner join drops that date from the result entirely — the chart would
-    // then skip it silently rather than report it as uncovered, which is the
-    // difference between "nothing was recorded" and "we did not mention it".
+    // LEFT, not INNER: a date before the first upload has no rows, and an
+    // inner join would drop it silently rather than report it uncovered —
+    // "nothing was recorded" versus "we did not mention it".
     .leftJoinLateral(
       (join) => {
         const held = join.selectFrom(sql`holding_valued_at(d.date)`.as("v")).selectAll();
 
-        // The narrowing goes inside the lateral, never in the outer WHERE. A
-        // WHERE out there is evaluated after the join and rejects the all-null
-        // row, which would take the uncovered date down with it — the LEFT
-        // join above undone by the filter beside it.
+        // Narrowing goes inside the lateral, never the outer WHERE: out there
+        // it runs after the join, rejects the all-null row, and takes the
+        // uncovered date down with it.
         return (where === undefined ? held : held.where(where)).as("v");
       },
       (join) => join.onTrue(),
@@ -638,7 +534,7 @@ async function readSeries(
       sql<string>`cast(d.date as text)`.as("date"),
       sql<string>`cast(coalesce(sum(v.value), 0) as numeric(20, 4))`.as("amount"),
       sql<string>`count(*) filter (where v.is_priced)`.as("known"),
-      // Counts the joined column, not the row: the left join manufactures one
+      // The joined column, not the row: the left join manufactures one
       // all-null row per uncovered date, and `count(*)` would score it as 1.
       sql<string>`count(v.instrument_id)`.as("total"),
     ])
@@ -654,37 +550,27 @@ async function readSeries(
 }
 
 /**
- * Net worth at each of `dates`, in a single round trip.
- *
- * A date before the first upload contributes `0.0000` over a coverage of zero
- * rows — "nothing was recorded yet", which the caller must not draw as a real
- * zero (DESIGN.md §7). {@link netWorthSeries} callers use `coverage.total` to
- * find where the computed line actually starts.
+ * Net worth at each of `dates`, one round trip. A date before the first
+ * upload is `0.0000` over zero coverage, which the caller must not draw as a
+ * real zero (DESIGN.md §7) — `coverage.total` says where the line starts.
  */
 export async function netWorthSeries(
   filter: OwnerFilter,
   dates: IsoDate[],
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthPoint[]> {
-  // `v` is the lateral's alias, and the narrowing goes inside it — see
-  // {@link readSeries} for what an outer WHERE does to an uncovered date.
+  // `v` is the lateral's alias — the narrowing goes inside it (readSeries).
   return readSeries(db, dates, ownedBy("v.owner_id", filter));
 }
 
 /**
- * One account's value at each of `dates`, on the same terms as
- * {@link netWorthSeries} and in the same single round trip.
- *
- * The same {@link NetWorthPoint} shape, deliberately: an account's line and the
- * household's line are the same measure over different row sets, and a chart
- * that can draw one can draw the other with no second code path.
- *
- * Every date the account did not exist for is reported rather than skipped.
- * Dates before its first statement come back as `0.0000` over a coverage of
- * zero rows, and so do dates after it closed — an account's chart therefore
- * starts where its history starts instead of climbing out of a fictional zero
- * (DESIGN.md §7), as long as the caller reads `coverage.total` rather than the
- * amount to decide where the line begins.
+ * One account's value at each of `dates`, same terms, same round trip, same
+ * {@link NetWorthPoint} shape — an account's line and the household's are one
+ * measure over different rows, so one chart code path draws both. Dates
+ * before its first statement and after it closed come back `0.0000` over zero
+ * coverage, reported rather than skipped: the chart starts where history
+ * starts, not out of a fictional zero (DESIGN.md §7), provided the caller
+ * reads `coverage.total`.
  */
 export async function accountSeries(
   accountId: string,
@@ -697,13 +583,9 @@ export async function accountSeries(
 /** One point on an intra-session line: the instant it describes, and the value then. */
 export type SessionPoint = {
   /**
-   * An ISO instant, not a date — which is why this is `at` and not `date`.
-   *
-   * A signpost inside this module rather than a guarantee across it: the field
-   * name keeps the two series distinguishable where they are produced, and a
-   * caller that hands one to the other will notice. It does not follow the
-   * value to the screen. The chart widens its own `date` to hold either, and is
-   * told which it is drawing rather than inferring it — see `ChartPoint`.
+   * An ISO instant, not a date — hence `at`. A signpost inside this module,
+   * not a guarantee across it: the chart widens its own `date` to hold either
+   * and is told which it is drawing rather than inferring it (`ChartPoint`).
    */
   at: string;
   amount: string;
@@ -711,18 +593,13 @@ export type SessionPoint = {
 };
 
 /**
- * The most recent trading session the observation log carries, or null on an
- * instance that has never observed anything.
- *
- * Read off what was observed rather than off the calendar (ADR-0006): the
- * session is `max(market_date)`, a column stamped at write time by the same
- * rule that files a daily close. So the UTC-today versus market-day seam never
- * decides what 1D shows, a weekend answers with Friday's session because Friday
- * is the last one anything was observed on, and a half-day simply ends where
- * its observations end.
- *
- * Matched by `price_observation_market_date_idx`, whose leading column this is —
- * a backward index scan stopping at row one.
+ * The most recent observed session, or null when nothing was ever observed.
+ * Read off the log, not the calendar (ADR-0006): `max(market_date)` is
+ * stamped at write time by the same rule that files a daily close, so the
+ * UTC-today/market-day seam never decides what 1D shows, a weekend answers
+ * with Friday's session, and a half-day ends where its observations end.
+ * Matched by `price_observation_market_date_idx` — a backward scan stopping
+ * at row one.
  */
 export async function latestObservedSession(
   db: Kysely<Database> = getDb(),
@@ -736,57 +613,35 @@ export async function latestObservedSession(
 }
 
 /**
- * What a surface was worth at each instant a session was observed at.
+ * What a surface was worth at each instant a session was observed at — the
+ * only thing that values anything from the observation log (§4.2's
+ * single-site rule extended to the third tier). Three unobvious decisions:
  *
- * The second reader of the observation log, and the only one that values
- * anything from it — the same single-site rule §4.2 states for `holding_valued`,
- * extended to the new tier. A screen that wrote its own join over
- * `price_observation` would be the disagreement DESIGN.md §8.2 calls the
- * weakest point in the design, arriving on a third tier.
+ * **The instants come from the log as a whole, not the surface.** A cash-only
+ * account observes nothing; asking it for its own instants would draw an
+ * empty chart where the honest answer is "it did not move". Both surfaces
+ * plot the same moments; the surface narrows only whose holdings are valued.
  *
- * Three decisions are worth stating, because none of them is obvious from the
- * SQL:
+ * **Each point values the positions held now at the price known then**, so an
+ * upload during the session leaves the chart consistent with the headline:
+ * same positions, only the price moves.
  *
- * **The instants come from the log as a whole, not from the surface.** A
- * cash-only account observes nothing, and asking it for its own instants would
- * give it an empty chart while the household drew a line — for an account whose
- * honest answer is "it did not move". So both surfaces plot at the same
- * moments, and the surface narrows only whose holdings are valued, exactly as
- * the account series narrows the household one.
- *
- * **Each point values the positions held now, at the price known then.** The
- * line is today's holdings walked back through today's prices, which is what
- * makes an upload during the session leave the chart consistent with the
- * headline above it: both are the same positions, and only the price moves.
- *
- * **An instrument with no observation at or before an instant is carried
- * forward from the last close *before* the session.** Strictly before, and that
- * is the load-bearing word: the session's own `price_daily` row is provisional
- * and converges on the last observation of the day, so including it would price
- * the open at the price of the close — the day's answer leaking backwards into
- * every point of its own line. Reaching past it gives the previous close, which
- * is the right price for cash (fixed at a dollar since 1970), for a
- * workplace-plan trust nobody quotes, for a feed instrument whose fetch failed
- * today, and for a feed instrument in the minutes before its first quote of the
- * day arrived.
+ * **The fallback carries forward the last close *strictly before* the
+ * session.** The session's own `price_daily` row is provisional and converges
+ * on the day's last observation — including it would price the open at the
+ * close. Reaching past it prices cash (a dollar since 1970), hand-priced
+ * trusts, failed fetches and the minutes before the first quote correctly.
  *
  * One case the fallback cannot answer, and does not pretend to: an instrument
- * whose *first close of any kind* is the session's own — bought this morning,
- * or resolved and priced for the first time today. Before its first observation
- * there is genuinely no price for it, so it contributes no value and is counted
- * out of `known`. The alternative is inventing one, which the design refuses
- * everywhere. It surfaces as a step in the line where a holding appears rather
- * than moves; `coverage` is what reports it, and a caller that wants to say so
- * has to read `coverage` per point rather than the whole-portfolio figure.
+ * whose first close of any kind is the session's own — bought this morning,
+ * or first priced today. Before its first observation there is genuinely no
+ * price, so it contributes no value and is out of `known`: a step in the
+ * line, reported per-point by `coverage`. And an account closed *during* the
+ * session is absent from the whole 1D line ("positions held now"), while
+ * `holding_valued_at` still counts it that day — 1D and 1W may disagree about
+ * it, the price of valuing today's positions rather than the day's.
  *
- * A second case worth stating: an account closed *during* the plotted session
- * is absent from the whole 1D line, because "the positions held now" is what
- * this values and a closed account holds none. `holding_valued_at` still counts
- * it on that day, so 1D and a 1W line can disagree about it — the price of
- * valuing today's positions rather than the day's.
- *
- * The arithmetic is `numeric` throughout and never leaves SQL; amounts cross
- * the boundary as decimal strings like every other money value (§5.6).
+ * Arithmetic is `numeric` throughout and never leaves SQL (§5.6).
  *
  * @param session `YYYY-MM-DD`, from {@link latestObservedSession}.
  */
@@ -795,10 +650,9 @@ async function readSessionSeries(
   session: IsoDate,
   where?: RawBuilder<SqlBool>,
 ): Promise<SessionPoint[]> {
-  // Narrowed inside the lateral, never in the outer WHERE — the same reason
-  // `readSeries` gives: a filter out there would reject the all-null row the
-  // left join manufactures for an instant this surface holds nothing at, and
-  // take the instant down with it.
+  // Narrowed inside the lateral, never the outer WHERE — `readSeries`'s
+  // reason: a filter out there rejects the manufactured all-null row and
+  // takes the instant down with it.
   const narrowing = where === undefined ? sql`true` : where;
 
   const rows = await sql<{ at: Date; amount: string; known: string; total: string }>`
@@ -835,8 +689,7 @@ async function readSessionSeries(
         limit 1
       ) observed on true
 
-      -- Otherwise the last close from before this session. See the docstring
-      -- on why the comparison is strict.
+      -- Otherwise the last close strictly before the session (see docstring).
       left join lateral (
         select pd.close
         from price_daily pd
@@ -859,8 +712,8 @@ async function readSessionSeries(
   `.execute(db);
 
   return rows.rows.map((row) => ({
-    // UTC, deterministically — the chart labels these on the market's clock and
-    // must reach the browser saying the same thing the server rendered.
+    // UTC, deterministically — the chart labels on the market's clock and
+    // must reach the browser saying what the server rendered.
     at: row.at.toISOString(),
     amount: row.amount,
     // Cardinalities of holdings, not money.
@@ -869,44 +722,34 @@ async function readSessionSeries(
 }
 
 /**
- * A day-granularity series in the intra-session series' shape.
- *
- * The two readers answer the same question at different granularities, and a
- * chart wants one contract rather than two. Here rather than in each loader
- * because there are two loaders, and a rule copied into both is a rule free to
- * drift — the reason `chart-range.ts` exists one layer up.
- *
- * The direction is deliberate. Widening a date into the instant field is honest
- * — a date names a moment, coarsely — where narrowing an instant to a date
- * would throw away the time of day the session line is drawn for.
+ * A day-granularity series in the session shape: two readers, one chart
+ * contract. Here rather than in each loader because a rule copied into two
+ * loaders drifts. The direction is deliberate — widening a date into the
+ * instant field is honest (a date names a moment, coarsely), where narrowing
+ * an instant would throw away the time of day the session line exists for.
  */
 export function asSessionPoints(series: NetWorthPoint[]): SessionPoint[] {
   return series.map((point) => ({ at: point.date, amount: point.amount, coverage: point.coverage }));
 }
 
 /**
- * Net worth at each instant of the most recent observed session.
- *
- * The 1D line on the Overview. An instance with no observations for `session`
- * returns an empty series rather than a flat one — nothing was observed, which
- * is not the same claim as "nothing moved".
+ * Net worth at each instant of the session — the Overview's 1D line. No
+ * observations returns an empty series, not a flat one: "nothing was
+ * observed" is not "nothing moved".
  */
 export async function netWorthSessionSeries(
   filter: OwnerFilter,
   session: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<SessionPoint[]> {
-  // `a` is the account alias inside the lateral, where this has to go for the
-  // same reason {@link readSeries} gives about an instant this surface is empty at.
+  // `a` is the account alias inside the lateral, where this has to go.
   return readSessionSeries(db, session, ownedBy("a.owner_id", filter));
 }
 
 /**
- * One account's value at each instant of the same session, on the same terms.
- *
- * A cash-only account draws its flat line here rather than an empty one: the
- * instants are the log's, so every account answers the same question at the
- * same moments, even when the answer is that it did not move.
+ * One account at each instant of the same session, same terms. A cash-only
+ * account draws a flat line rather than an empty one: the instants are the
+ * log's, so every account answers at the same moments.
  */
 export async function accountSessionSeries(
   accountId: string,
@@ -917,11 +760,9 @@ export async function accountSessionSeries(
 }
 
 /**
- * The hand-typed series that prefixes the chart (DESIGN.md §7).
- *
- * Returned raw and unmerged. Merging is the caller's, because rule 2 —
- * computed wins on overlapping dates, manual only fills gaps — is a display
- * rule about two lines, not a fact about either one.
+ * The hand-typed prefix series (DESIGN.md §7), raw and unmerged: rule 2 —
+ * computed wins on overlap, manual only fills gaps — is a display rule about
+ * two lines, not a fact about either one.
  */
 export async function manualNetWorth(
   db: Kysely<Database> = getDb(),
@@ -936,41 +777,31 @@ export async function manualNetWorth(
 }
 
 /**
- * Net worth now, net worth then, and the movement between them.
- *
- * The headline's "+$14,921.00 / +1.2%" pair. Both figures are computed in SQL
- * in `numeric` for the reason §4.1 gives: a difference of two six-figure
- * balances is exactly where float drift becomes visible, and the percentage
- * derived from it inherits the error. Nothing here crosses into JavaScript as
- * anything but a decimal string.
- *
- * The percentage divides by `abs(previous)` rather than `previous`, so a
- * household climbing out of net debt reports a rise as a rise. Dividing by a
- * signed negative reports recovery as `-x%`, which is the wrong sign on the one
- * figure a person reads fastest.
+ * The headline's "+$14,921.00 / +1.2%" pair, computed in SQL in `numeric`
+ * (§4.1): the difference of two six-figure balances is exactly where float
+ * drift shows, and the percentage inherits it. Divides by `abs(previous)` so
+ * a household climbing out of net debt reports a rise as a rise — a signed
+ * negative would report recovery as `-x%`, the wrong sign on the one figure a
+ * person reads fastest.
  */
 export type NetWorthChange = {
   current: string;
   previous: string;
   difference: string;
   /**
-   * Null when `previous` is zero. A percentage change from nothing is
-   * undefined, not 0% and not infinite — the screen omits it rather than
-   * inventing one.
+   * Null when `previous` is zero: a change from nothing is undefined, not 0%
+   * and not infinite — the screen omits it rather than inventing one.
    */
   percent: string | null;
 };
 
-/**
- * @param since `YYYY-MM-DD`, the start of the window being reported.
- */
+/** @param since `YYYY-MM-DD`, the start of the window being reported. */
 export async function netWorthChange(
   filter: OwnerFilter,
   since: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthChange> {
-  // Both ends, or the delta compares one owner against the whole household and
-  // reports the difference between two different questions as a movement.
+  // Both ends, or the delta compares one owner against the whole household.
   const owned = ownedBy("holding_valued.owner_id", filter);
   const narrow = <T extends { where(w: RawBuilder<SqlBool>): T }>(qb: T): T =>
     owned === undefined ? qb : qb.where(owned);
@@ -1005,16 +836,11 @@ export async function netWorthChange(
 }
 
 /**
- * The earliest date any statement records, or null on an instance with none.
- *
- * Day zero (DESIGN.md §7). The "All" range needs it because a fixed wide window
- * would spend most of its samples on the years before the app existed, where
- * every point comes back uncovered and is discarded — an all-time chart drawn
- * almost entirely from nothing.
- *
- * Read from `position_set` rather than from the view: this is the date history
- * *begins*, which is a fact about what was uploaded, and it stays correct for a
- * range whose accounts have all since been closed.
+ * The earliest date any statement records — day zero (DESIGN.md §7) — or null
+ * on an instance with none. The "All" range needs it: a fixed wide window
+ * would spend most samples on uncovered pre-app years. Read from
+ * `position_set`, not the view: this is when history *begins*, a fact about
+ * uploads, and it stays correct when every account has since closed.
  */
 export async function firstRecordedDate(
   filter: OwnerFilter,
@@ -1024,14 +850,9 @@ export async function firstRecordedDate(
     .selectFrom("position_set")
     .select(sql<string | null>`cast(min(as_of_date) as text)`.as("date"));
 
-  // `position_set` carries an account, never an owner (DESIGN.md §4.2 keeps
-  // ownership on the account so it cannot drift), so the narrowing reaches the
-  // owner through a subquery rather than a column.
-  //
-  // That subquery spans **closed** accounts, where `holding_valued` excludes
-  // them — so a narrowed `firstRecordedDate` can report history for an owner
-  // whose current holdings are empty. That is correct: this is the date history
-  // begins, and a closed account's statements are still history.
+  // `position_set` carries an account, never an owner (§4.2), so the
+  // narrowing reaches the owner through a subquery — one spanning *closed*
+  // accounts, deliberately: their statements are still history.
   const owned = isFiltered(filter)
     ? sql<SqlBool>`position_set.account_id in (
         select id from account where ${isOneOf("owner_id", filter)}
@@ -1044,18 +865,10 @@ export async function firstRecordedDate(
 }
 
 /**
- * The earliest date *this account's* own statements record, or null if it has
- * none — the account-scoped counterpart to {@link firstRecordedDate} spec 0008
- * adds.
- *
- * Read from `position_set` filtered to the account, for the same reason
- * {@link firstRecordedDate} reads it rather than the view: this is a fact
- * about what was uploaded, not about what is currently valued, and it stays
- * correct for an account whose every statement predates today.
- *
- * Before this query existed, the account page's "All" and its disabled-preset
- * rule fell back to the household-wide {@link firstRecordedDate} instead,
- * which understated how new an account with a younger household actually is.
+ * The earliest date *this account's* own statements record, or null (spec
+ * 0008) — from `position_set` for {@link firstRecordedDate}'s reason: a fact
+ * about uploads, correct even when every statement predates today. Falling
+ * back to the household-wide date understated how new an account is.
  */
 export async function accountFirstRecordedDate(
   accountId: string,

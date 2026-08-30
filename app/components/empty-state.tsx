@@ -1,11 +1,8 @@
 /**
- * What a dashboard says when it has nothing to show.
- *
- * The rule this component exists to keep is narrow and absolute: an empty
- * dashboard in a finance app must never render a figure. A zero net worth and
- * an instance that has never been uploaded to are indistinguishable on screen,
- * and one of them is alarming — so the empty case says, in words, that there is
- * no data, and shows no number and no axis at all.
+ * What a dashboard says when it has nothing to show. The rule: an empty
+ * dashboard in a finance app never renders a figure — a zero net worth and a
+ * never-uploaded instance are indistinguishable on screen, and one of them
+ * is alarming. Words, no number, no axis.
  */
 export function EmptyState({ children }: { children: React.ReactNode }) {
   return (

@@ -192,15 +192,13 @@ describe("setBalance", () => {
     }),
   );
 
-  // Written as one case over the kinds rather than three copies: what is being
-  // checked is that `SINGLE_POSITION` admits exactly two of the five.
-  //
-  // The case value is threaded in by calling `withDatabase` per case rather
-  // than handing `it.each` the wrapper directly. `withDatabase` returns a
-  // `() => Promise<void>`, which TypeScript happily accepts where `it.each`
-  // wants a one-argument body — so passing it straight through type-checks,
-  // runs once per case, and silently discards the kind. This file did exactly
-  // that, and `ira` went untested while the title claimed otherwise.
+  // One case over the kinds, not three copies: the check is that
+  // `SINGLE_POSITION` admits exactly two of the five. The case value is
+  // threaded in by calling `withDatabase` per case, never by handing
+  // `it.each` the wrapper directly: `withDatabase` returns a
+  // `() => Promise<void>`, which type-checks where `it.each` wants a
+  // one-argument body — and silently discards the kind. This file did
+  // exactly that, and `ira` went untested while the title claimed otherwise.
   it.each(["401k", "ira"] as const)("refuses a %s account for the same reason", (kind) =>
     withDatabase(async ({ db, seedAccount }) => {
       const account = await seedAccount({ kind });
@@ -288,8 +286,8 @@ describe("setBalance", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
       // Pins how "cash" is resolved: the seeded `USD` row, by symbol *and*
       // price source together. `price_source = 'fixed'` alone is the tempting
-      // answer and it is wrong — `seed-demo.ts:209` files SPAXX as `fixed`, so
-      // a reader that took `fixed` for cash would call this account cash-only
+      // answer and it is wrong — `seed-demo.ts` files SPAXX as `fixed`, so a
+      // reader that took `fixed` for cash would call this account cash-only
       // and let one typed figure sell 16,000 money-market shares.
       const bank = await seedAccount({ kind: "bank", name: "Fidelity Cash Management" });
       const spaxx = await seedInstrument({
@@ -403,11 +401,11 @@ describe("setBalance", () => {
     "reports the statement refusal before the field refusals, for the same reason",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
       // The ordering above, pinned for the guard the kind check cannot make —
-      // and this is the half that can move. The statement pre-check sits ahead
-      // of `parseInput` deliberately (`balances.server.ts:161-163`); dropped
-      // below it, the case above still passes and this reader is told their
-      // amount is not a number, with nothing about the position that a
-      // corrected amount would then have recorded as sold.
+      // and this is the half that can move. `setBalance`'s statement
+      // pre-check sits ahead of `parseInput` deliberately; dropped below it,
+      // the case above still passes and this reader is told their amount is
+      // not a number, with nothing about the position that a corrected
+      // amount would then have recorded as sold.
       const bank = await seedAccount({ kind: "bank", name: "Fidelity Individual" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
       await seedPositionSet({

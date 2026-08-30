@@ -6,11 +6,9 @@ import { createPerson, listPeople, removePerson, renamePerson } from "~/lib/peop
 import type { Route } from "./+types/people";
 
 /**
- * Settings → People.
- *
- * A thin wrapper, on purpose: it reads the form, hands the raw fields to
- * `people.server.ts`, and renders whatever comes back. Every rule about what a
- * name is, and every reason a person cannot be removed, lives in that module —
+ * Settings → People — a thin wrapper, on purpose: read the form, hand raw
+ * fields to `people.server.ts`, render what comes back. Every rule about
+ * what a name is, and every reason a person cannot be removed, lives there,
  * so a second caller cannot get a different answer than this screen does.
  */
 export function meta() {
@@ -45,14 +43,12 @@ export async function action({ request }: Route.ActionArgs) {
     // empties the add box on success.
     return null;
   } catch (error) {
-    // A refusal is an ordinary outcome of a form submission. It comes back with
-    // what was typed so the form can re-render carrying it, rather than making
-    // someone retype a name because one field was wrong.
+    // A refusal is an ordinary outcome, returned with what was typed so the
+    // form re-renders carrying it rather than making someone retype a name.
     if (error instanceof ValidationError) {
-      // Split here rather than in the component: `FORM_ERROR` lives in a
-      // `.server` module, and a component that referenced it would drag that
-      // module — and the database with it — into the client bundle. The action
-      // is stripped from that bundle, so this is the right side of the line.
+      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
+      // module, and a component referencing it would drag the database into
+      // the client bundle. The action is stripped from that bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       return {
@@ -116,12 +112,10 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                   <Form method="post" className="record record-form">
                     <input type="hidden" name="personId" value={person.id} />
 
-                    {/* The box and its refusal are one flex item, the shape
-                        `AccountFields` uses, so the sentence stacks under the
-                        box it is about. Loose in the row they were siblings:
-                        the refusal was laid out *beside* the box, 147px to the
-                        right of it, and it pushed the count and the buttons of
-                        that row out of line with every other row's. */}
+                    {/* The box and its refusal are one flex item
+                        (`AccountFields`' shape) so the sentence stacks under
+                        its box; loose in the row, the refusal sat beside the
+                        box and pushed that row out of line with the rest. */}
                     <div>
                       <label className="visually-hidden" htmlFor={`name-${person.id}`}>
                         Name
@@ -153,14 +147,13 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                       )}
                     </p>
 
-                    {/* Grouped, and pushed to the trailing edge by the group
-                        rather than by the row: two actions on one record read
-                        as a pair, and `space-between` on the row drew them a
-                        quarter of the screen apart. */}
+                    {/* Grouped and pushed to the trailing edge by the group:
+                        two actions on one record read as a pair, and
+                        `space-between` drew them a quarter-screen apart. */}
                     <div className="record-actions">
-                      {/* Outlined, not filled: a list of five Saves would leave
-                          the page with five primary actions and no obvious one.
-                          The filled button belongs to "Add person" below. */}
+                      {/* Outlined, not filled: five Saves would leave the page
+                          five primary actions and no obvious one — the filled
+                          button belongs to "Add person" below. */}
                       <button
                         type="submit"
                         name="intent"
@@ -174,8 +167,8 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                         name="intent"
                         value="remove"
                         className="button button--danger"
-                        // Not disabled when they own accounts: the refusal explains
-                        // itself, and a dead button explains nothing.
+                        // Not disabled when they own accounts: the refusal
+                        // explains itself, a dead button explains nothing.
                         aria-label={`Remove ${person.name}`}
                       >
                         Remove

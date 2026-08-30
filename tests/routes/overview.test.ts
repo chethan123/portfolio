@@ -1,23 +1,17 @@
 /**
- * Where the two net worth series meet (DESIGN.md §7).
- *
- * The computed series and the hand-typed one are read by two query functions
- * that know nothing about each other — `manualNetWorth` deliberately returns
- * its rows raw and unmerged, because "computed wins on overlapping dates" is a
- * statement about a chart rather than a fact about either series. This loader
- * is the only place that statement is written down, and it is written as one
- * `filter` over two comparisons.
- *
- * Getting it wrong draws a lie in the shape of a fact. A hand-typed annual dot
- * blended into the computed line reads as a real daily curve through a period
- * where nothing was recorded; a duplicate date puts two points at one x and
- * draws a vertical cliff between them. Neither throws, neither looks broken,
- * and the figure someone reads off the chart is their household's net worth.
- *
- * The other rules here are the loader's own contribution and nothing else's:
- * what a junk `?range` falls back to, and — through the one render below — that
- * the allocation bars are measured against the gross positive total, so a
- * household with a mortgage bigger than its portfolio gets no negative bar.
+ * Where the two net worth series meet (DESIGN.md §7). The computed and
+ * hand-typed series are read by two query functions that know nothing of
+ * each other — `manualNetWorth` returns rows raw and unmerged, because
+ * "computed wins on overlapping dates" is a statement about a chart — and
+ * this loader is the only place that statement is written down, as one
+ * `filter` over two comparisons. Getting it wrong draws a lie in the shape
+ * of a fact: a hand-typed annual dot blended into the computed line reads
+ * as a real daily curve through an unrecorded period; a duplicate date
+ * draws a vertical cliff. Neither throws, neither looks broken. The other
+ * rules are the loader's own: what a junk `?range` falls back to, and —
+ * through the one render — that the allocation bars measure against the
+ * gross positive total, so a mortgage bigger than the portfolio gets no
+ * negative bar.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

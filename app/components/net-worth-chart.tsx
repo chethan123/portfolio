@@ -1,27 +1,21 @@
 /**
- * The net worth trend line (DESIGN.md §8.1, §13.6).
+ * The net worth trend line (DESIGN.md §8.1, §13.6). Not a chart library:
+ * the brief is one 3px stroke over a vertical gradient with dashed rules
+ * behind it — a polyline, a path and a handful of CSS rules; a charting
+ * dependency would mean fighting its defaults to arrive back here.
  *
- * Not a chart library. The brief is one 3px stroke over a vertical gradient,
- * with dashed horizontal rules behind it — which is a polyline, a path and a
- * handful of CSS rules, and adding a charting dependency to get it would mean
- * fighting that library's defaults to arrive back here.
+ * **Every colour resolves from a custom property, via classes rather than
+ * SVG presentation attributes.** §12 names this as the piece that gets
+ * forgotten: `stroke="#0055ff"` cannot follow a theme, and the symptom is a
+ * light chart in a dark page. The gradient's stops are classed too, so the
+ * area re-derives from `--chart-line` along with the line it sits under.
  *
- * **Every colour resolves from a custom property, through CSS classes rather
- * than SVG presentation attributes.** §12 names this as the piece that gets
- * forgotten, and its symptom — a light-themed chart sitting in a dark page —
- * happens precisely because `stroke="#0055ff"` cannot follow a theme. Styling
- * the stroke from a class means a theme change re-colours the line with no
- * JavaScript and nothing to re-resolve on the client. The gradient obeys the
- * same rule: its stops are classed, not filled, so the area re-derives from
- * `--chart-line` along with the line it sits under.
- *
- * **Masking arrives as a prop, not as a hook** (spec 0007). Everywhere else an
- * amount is a component that asks for itself; here the figures are axis ticks,
- * an `aria-label` and the per-point readouts of spec 0010, and none of those
- * is a place a component can go. So this is the one file besides `amount.tsx`
- * allowed to call a money formatter, and `masking-boundary.test.ts` names it.
- * The line, the grid and the fill are unchanged either way: story 10 wants the
- * shape of the year without the size of it.
+ * **Masking arrives as a prop, not a hook** (spec 0007): the figures here
+ * are axis ticks, an `aria-label` and per-point readouts — no place a
+ * component can go — so this is the one file besides `amount.tsx` allowed
+ * to call a money formatter, and `masking-boundary.test.ts` names it. The
+ * line, grid and fill are unchanged either way: story 10 wants the shape of
+ * the year without the size of it.
  */
 import { useId } from "react";
 
@@ -31,12 +25,11 @@ import { marketDateOf, marketTimeOf } from "~/lib/market-hours";
 
 export type ChartPoint = {
   /**
-   * A calendar date, `YYYY-MM-DD` — or, when the chart is drawing a session, a
-   * full ISO instant. Both parse to a moment, which is all {@link buildScale}
-   * asks of it; what changes is how it is *labelled*, and that is decided by
-   * the `session` prop rather than by inspecting the string, because a chart
-   * that re-reads its own axis off punctuation is one that changes it by
-   * accident.
+   * A calendar date `YYYY-MM-DD`, or a full ISO instant when drawing a
+   * session. Both parse to a moment, which is all {@link buildScale} asks;
+   * how it is *labelled* is decided by the `session` prop, never by
+   * inspecting the string — a chart that re-reads its axis off punctuation
+   * changes it by accident.
    */
   date: string;
   amount: string;
@@ -57,19 +50,17 @@ const PADDING = 0.08;
 
 /**
  * Where the horizontal rules sit, as fractions of the drawn value domain.
- *
- * One array feeds both the grid and the axis labels, because a rule drawn at a
- * height the label beside it does not name is worse than no rule at all.
+ * One array feeds both the grid and the axis labels: a rule drawn at a
+ * height its label does not name is worse than no rule at all.
  */
 const GRID = [1, 0.5, 0];
 
 const DAY_MS = 86_400_000;
 
 /**
- * Under this span an x tick names the day; over it, the month.
- *
- * A month-long window labelled by month reads "Aug 2025" three times, and a
- * thirty-year window labelled by day offers a precision nobody reads.
+ * Under this span an x tick names the day; over it, the month. A month-long
+ * window labelled by month reads "Aug 2025" three times; a thirty-year one
+ * labelled by day offers a precision nobody reads.
  */
 const DAY_TICKS_UNDER = 180 * DAY_MS;
 
@@ -127,26 +118,21 @@ export function buildScale(points: ChartPoint[]): Scale {
 }
 
 /**
- * The horizontal rules, and the label that names each one.
- *
- * Read off the drawn domain, not off the data's own min and max. The two
- * differ by the padding above, and labelling the top of the box with the
- * largest value in the series would put every tick 8% of the range out —
- * a quiet inaccuracy on an axis is still an inaccuracy.
+ * The horizontal rules, and the label naming each. Read off the drawn
+ * domain, not the data's min and max — the two differ by the padding, and
+ * labelling the box's top with the series' largest value would put every
+ * tick 8% out. A quiet inaccuracy on an axis is still an inaccuracy.
  */
 export function gridRules(scale: Scale, masked: boolean): { y: number; label: string }[] {
   const { floor, span } = scale.domain;
 
   return GRID.map((fraction) => ({
     y: HEIGHT * (1 - fraction),
-    // A masked axis keeps its rules and loses its numbers. The same run of
-    // dots every other masked figure uses, rather than a shorter one of its
-    // own: "masked output is a constant" is the rule, and a second constant is
-    // how a reader learns to read one of them as a smaller number. No currency
-    // mark, because an unmasked tick has none either — it reads `58.4K`.
-    //
-    // The ticks are already `aria-hidden`, so there is nothing to announce
-    // here; the label below carries the chart for anyone who cannot see it.
+    // A masked axis keeps its rules and loses its numbers — the same dot run
+    // every masked figure uses: a second constant is how a reader learns to
+    // read one of them as a smaller number. No currency mark, because an
+    // unmasked tick has none either (`58.4K`). The ticks are already
+    // `aria-hidden`; the svg label carries the chart for anyone unsighted.
     label: masked ? MASKED_FIGURE : formatCompact((floor + span * fraction).toFixed(0)),
   }));
 }
@@ -156,10 +142,9 @@ const toPolyline = (points: ChartPoint[], scale: Scale) =>
 
 /**
  * One plotted point's slice of the pointer plane (spec 0010, ADR-0004).
- *
- * `left` and `right` are drawing-box coordinates. `manual` is provenance: a
- * hand-typed pre-app point says so in its readout, because a dashed stroke is
- * a claim text worded identically would quietly undo (§7).
+ * `left`/`right` are drawing-box coordinates. `manual` is provenance: a
+ * hand-typed pre-app point says so in its readout, because a dashed stroke
+ * is a claim identically-worded text would quietly undo (§7).
  */
 export type HitTarget = {
   left: number;
@@ -169,13 +154,11 @@ export type HitTarget = {
 };
 
 /**
- * Tile the drawing box from midpoint to midpoint, one target per point.
- *
- * Each target runs from halfway to its left neighbour to halfway to its right,
- * the first and last extending to the edges — full coverage, no dead regions,
- * no overlaps, so a position always selects the nearest point. Sampling is
- * geometric (ADR-0003), so widths vary enormously; a fixed width would leave
- * most of a long range inert.
+ * Tile the drawing box midpoint to midpoint, one target per point, the
+ * first and last extending to the edges — full coverage, no dead regions or
+ * overlaps, so a position always selects the nearest point. Sampling is
+ * geometric (ADR-0003), so widths vary enormously; a fixed width would
+ * leave most of a long range inert.
  */
 export function hitTargets(manual: ChartPoint[], computed: ChartPoint[], scale: Scale): HitTarget[] {
   const points = [
@@ -193,12 +176,10 @@ export function hitTargets(manual: ChartPoint[], computed: ChartPoint[], scale: 
 }
 
 /**
- * The same run of points, closed down to the floor of the box so it can be
- * filled.
- *
- * The floor rather than the lowest point: the domain is padded, so a fill that
- * stopped at the minimum would leave a strip of canvas under the trough and
- * read as a second, lower baseline.
+ * The same run of points, closed down to the box's floor so it can be
+ * filled — the floor, not the lowest point: the domain is padded, and a
+ * fill stopping at the minimum would leave a strip of canvas under the
+ * trough reading as a second, lower baseline.
  */
 function toArea(points: ChartPoint[], scale: Scale): string {
   const first = points[0];
@@ -217,12 +198,10 @@ function toArea(points: ChartPoint[], scale: Scale): string {
 const isoDate = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
 /**
- * What the chart is told about the session it is drawing, or null when it is
- * drawing days.
- *
- * A single prop rather than a flag beside a zone, because the two are one fact:
- * an intra-session line is always read on the market's clock, and neither half
- * is meaningful without the other.
+ * What the chart is told about the session it is drawing, or null when
+ * drawing days. One prop rather than a flag beside a zone: an intra-session
+ * line is always read on the market's clock — neither half means anything
+ * without the other.
  */
 export type SessionAxis = {
   /** `MARKET_TIMEZONE`. A session is 09:30 to 16:00 in exactly one zone. */
@@ -247,32 +226,28 @@ function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): s
  * is read alone (spec 0010).
  */
 function readoutDate(date: string, session: SessionAxis | null): string {
-  // Both halves of a session's stamp are read on the same clock. Slicing the
-  // ISO instant would take its *UTC* day while the time beside it came from the
-  // market's, so a session whose instants cross UTC midnight — any market east
-  // of it, and New York's own evening if the window ever widened — would date a
-  // point a day out from the time printed next to it. `market-hours.ts` exists
-  // to stop exactly that, so the day comes from there too.
+  // Both halves of a session's stamp read on the same clock. Slicing the ISO
+  // instant would take its *UTC* day beside the market's time, so a session
+  // crossing UTC midnight would date a point a day out from the time printed
+  // next to it — the exact thing `market-hours.ts` exists to stop, so the
+  // day comes from there too.
   const stamped = session === null ? date.slice(0, 10) : marketDateOf(new Date(date), session.timeZone);
   const [year = "", month = "", day = ""] = stamped.split("-");
   const stamp = `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
 
-  // The date still, and the time as well. A readout is read alone, and "which
-  // moment is this" is the whole question a session's line is asked (story 9).
   // The time joins the date rather than the amount, so masking is untouched:
-  // an instant is not an amount, and the figure beside it masks exactly as it
-  // does on every other range.
+  // an instant is not an amount, and the figure beside it masks exactly as
+  // on every other range ("which moment is this" is the whole question a
+  // session's line is asked — story 9).
   return session === null ? stamp : `${stamp}, ${marketTimeOf(new Date(date), session.timeZone)}`;
 }
 
 /**
- * One point's caption: its date, its value, and — for a hand-typed point — its
- * provenance, in words.
- *
- * The amount is full precision, identical to the headline, so that on a range
- * ending today the two agree digit for digit; masked, it is the same dollar
- * sign and run of dots as every other masked money figure, because masking is
- * a display state and this must not be the one place a figure survives it.
+ * One point's caption: date, value, and — for a hand-typed point — its
+ * provenance in words. The amount is full precision, identical to the
+ * headline, so a range ending today agrees digit for digit; masked, the
+ * same dollar sign and dot run as every masked money figure — this must not
+ * be the one place a figure survives masking.
  */
 function Readout({
   target,
@@ -307,44 +282,37 @@ export function NetWorthChart({
   /** Hand-typed pre-day-zero points (§7). Dashed, and never blended. */
   manual: ChartPoint[];
   /**
-   * What the line is, for anyone who cannot see it — the descriptive half only.
-   * The figure and date it ends at are derived here, from the last point
-   * actually plotted, so that the label is true on every range: a caller once
-   * supplied the figure, the Overview passed current net worth, and a custom
-   * range ending in the past was announced with today's number (spec 0010).
-   * Deriving it also keeps money formatting out of the routes, which is the
-   * leak the masking boundary exists to prevent.
+   * What the line is, for anyone who cannot see it — the descriptive half
+   * only. The ending figure and date are derived here from the last point
+   * actually plotted, so the label is true on every range (a caller once
+   * passed current net worth, and a range ending in the past announced
+   * today's number — spec 0010). Deriving also keeps money formatting out
+   * of the routes, the leak the masking boundary exists to prevent.
    */
   label: string;
   /**
-   * Whether this browser is masked (spec 0007).
-   *
-   * Required, with no default. Everything else in this feature fails closed —
-   * `useMasked` and the root loader both answer *masked* when they cannot tell
-   * — and a default here could only fail the other way, drawing the figures for
-   * a caller who forgot the prop. Required makes forgetting a compile error
-   * instead, which is the only version of this that cannot go wrong quietly.
+   * Whether this browser is masked (spec 0007). Required, no default:
+   * everything else in this feature fails closed (`useMasked` and the root
+   * loader answer *masked* when they cannot tell), and a default here could
+   * only fail the other way — drawing the figures for a caller who forgot
+   * the prop. Required makes forgetting a compile error.
    */
   masked: boolean;
   /**
-   * The session this line plots, or null when it plots days.
-   *
-   * Required, with no default, for the same reason `masked` is: a caller that
-   * forgot it would draw a session's instants labelled as three copies of one
-   * date, and nothing about the output would say that a prop had gone missing.
-   * The chart is *told* what it is drawing rather than inferring it from the
-   * points, so the axis can only change when a caller means it to.
+   * The session this line plots, or null when it plots days. Required, no
+   * default, for `masked`'s reason: a caller that forgot it would label a
+   * session's instants as three copies of one date, with nothing saying a
+   * prop went missing. The chart is *told* what it draws rather than
+   * inferring it, so the axis changes only when a caller means it to.
    */
   session: SessionAxis | null;
   /**
-   * Distinguishes this instance's gradient from any other on the page.
-   *
-   * A gradient is referenced by document id, so two charts sharing one would
-   * both paint from whichever `<defs>` the document happens to hold first —
-   * which is a real bug the moment a screen draws a total and a per-account
-   * series side by side. Optional because a caller with only one chart has
-   * nothing to name: `useId` covers that case, minus its punctuation, which is
-   * legal in an id but needs escaping inside a CSS `url()`.
+   * Distinguishes this instance's gradient from any other on the page: a
+   * gradient is referenced by document id, and two charts sharing one both
+   * paint from whichever `<defs>` comes first — real the moment a screen
+   * draws two series side by side. Optional: `useId` covers the one-chart
+   * case, minus its punctuation, legal in an id but needing escapes inside
+   * a CSS `url()`.
    */
   id?: string;
 }) {
@@ -371,11 +339,11 @@ export function NetWorthChart({
   const targets = hitTargets(manual, computed, scale);
   const resting = targets.at(-1);
 
-  // "an amount that is hidden" rather than a run of dots: story 6 asks for a
-  // masked figure to be announced as hidden rather than spelled out, and an
-  // `aria-label` is nothing but the announcement. The date rides along because
-  // the visible strip is kept out of the accessibility tree, and hiding it
-  // must not lose information a sighted reader gets (spec 0010, story 20).
+  // "an amount that is hidden", not a dot run: story 6 asks for a masked
+  // figure to be announced as hidden, and an `aria-label` is nothing but the
+  // announcement. The date rides along because the visible strip is out of
+  // the accessibility tree, and hiding it must not lose information a
+  // sighted reader gets (spec 0010, story 20).
   const ending =
     last === undefined
       ? ""
@@ -391,11 +359,10 @@ export function NetWorthChart({
 
   return (
     <>
-      {/* The readout at rest: the last point the line actually plots, dated
-          and at full precision, so that on a range ending today it agrees with
-          the headline digit for digit (spec 0010). Hidden from assistive
-          technology with the rest of the strip — the svg's own label below
-          carries the same fact as a sentence. */}
+      {/* The readout at rest: the last plotted point, dated, full precision,
+          agreeing with the headline digit for digit on a range ending today
+          (spec 0010). Hidden from assistive technology with the strip — the
+          svg's label carries the same fact as a sentence. */}
       {resting ? (
         <p className="chart-readout" aria-hidden="true">
           <Readout target={resting} masked={masked} session={session} />
@@ -436,11 +403,10 @@ export function NetWorthChart({
             />
           ))}
 
-          {/* Under the computed run only. The dashed prefix is a claim about
-              provenance (§7), and a hand-typed figure carrying the same solid
-              wash as a computed one would undo the distinction the dash is
-              there to make. The `fill` is inline because `.chart-area` names a
-              fixed id and this instance's gradient is its own. */}
+          {/* Under the computed run only: the dashed prefix is a provenance
+              claim (§7), and a hand-typed figure carrying the same solid
+              wash would undo it. `fill` is inline because `.chart-area`
+              names a fixed id and this instance's gradient is its own. */}
           {computed.length >= 2 ? (
             <path
               className="chart-area"
@@ -467,12 +433,10 @@ export function NetWorthChart({
 
         </svg>
 
-        {/* The marker is an HTML element rather than an SVG circle, because the
-            box is stretched with `preserveAspectRatio="none"`: on a phone the
-            1000×300 drawing is squeezed to roughly 358×208, and a circle in
-            that space is drawn as a visibly flattened ellipse. Positioning it
-            in percentages puts it on the same point without inheriting the
-            distortion the line is happy to take. */}
+        {/* An HTML element, not an SVG circle: the box is stretched with
+            `preserveAspectRatio="none"` (1000×300 → ~358×208 on a phone),
+            which draws a circle as a visibly flattened ellipse. Percent
+            positioning hits the same point without the distortion. */}
         {last ? (
           <span
             className="chart-marker"
@@ -483,24 +447,16 @@ export function NetWorthChart({
           />
         ) : null}
 
-        {/* The pointer plane (spec 0010, ADR-0004). One invisible full-height
-            target per plotted point, tiled midpoint to midpoint so a position
-            always selects the nearest point; each carries its own guide and
-            caption, and the stylesheet chooses which shows. No client state.
-
-            HTML positioned in percentages, not SVG: the drawing box is
-            stretched non-uniformly, which is survivable for a line and fatal
-            for text — the same reason the marker above is not an SVG circle.
-            The guide and caption are absolute against this plane (the targets
-            themselves are static), so one class positions every caption on the
-            resting strip, with only each target's width and its guide's offset
-            computed per point.
-
-            `tabIndex={-1}`: focusable, so a tap can pin a readout, without
-            becoming one of up to 180 tab stops between the range control and
-            the next link. The whole plane is `aria-hidden` — the alternates
-            would read as stray sentences, and the svg's label already carries
-            the chart for anyone who cannot see it. */}
+        {/* The pointer plane (spec 0010, ADR-0004): one invisible
+            full-height target per plotted point, tiled midpoint to midpoint;
+            each carries its own guide and caption, and the stylesheet
+            chooses which shows. No client state. HTML in percentages, not
+            SVG: the box stretches non-uniformly — survivable for a line,
+            fatal for text (the marker's reason). Guide and caption are
+            absolute against this plane, so one class positions every
+            caption. `tabIndex={-1}`: focusable so a tap can pin a readout,
+            without becoming one of up to 180 tab stops. The whole plane is
+            `aria-hidden` — the svg's label already carries the chart. */}
         <div className="chart-hits" aria-hidden="true">
           {targets.map((target, index) => (
             <div

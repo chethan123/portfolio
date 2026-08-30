@@ -1,21 +1,13 @@
 /**
- * The rules `holding_valued_at` exists to keep true about the past.
- *
- * The current view's rules are covered in `current-holdings.test.ts` and are not
- * repeated here; what this file drives is the three things the as-of answer
- * varies — which position set, which accounts, which price — plus the two
- * consequences the design leans on hardest: that history starts at the first
- * upload rather than at a backfilled assumption, and that a dollar is a dollar
- * on any date the system is asked about.
- *
- * The calendar in these tests is real. 2026-02-13 is a Friday, the 14th and
- * 15th are the weekend, and the 16th is Presidents' Day — a market holiday. A
- * non-trading day is represented the way the design represents it: by the
- * absence of a `price_daily` row (DESIGN.md §6.2), never by a flag.
- *
- * Every money assertion is an exact decimal string at the stored scale.
- * `toBeCloseTo` would hide precisely the driver-coercion regression this slice
- * was built to prevent.
+ * The rules `holding_valued_at` exists to keep true about the past. The
+ * current view's rules live in `current-holdings.test.ts`; this file drives
+ * the three things the as-of answer varies — which position set, which
+ * accounts, which price — plus the two consequences the design leans on
+ * hardest: history starts at the first upload, never a backfilled
+ * assumption, and a dollar is a dollar on any date asked. The calendar is
+ * real: 2026-02-13 is a Friday, the 16th Presidents' Day, and a non-trading
+ * day is the *absence* of a `price_daily` row (§6.2), never a flag. Every
+ * money assertion is an exact decimal string at the stored scale.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

@@ -5,16 +5,13 @@ import { UploadSteps, type UploadStepsData } from "~/components/upload-steps";
 
 /**
  * The shared frame around every step of one draft (ingest brief §2.1, §7.4).
- *
- * Deliberately no loader: each step loads its own draft, because a step that
- * rendered against a parent's stale read could disagree with the form beneath
- * it. What the layout adds is the two things every step shares — the page
- * header with the strip under it, and the expired-draft page, written once
- * here rather than once per step.
- *
- * The strip's data comes up from the child through `useMatches`: every step
- * loader returns a `steps` field ({@link UploadStepsData}), and the deepest
- * match that carries one is the screen being rendered.
+ * Deliberately no loader — each step loads its own draft, since a step
+ * rendered against a parent's stale read could disagree with the form
+ * beneath it. The layout adds the two things every step shares: the page
+ * header with the strip, and the expired-draft page, written once. The
+ * strip's data comes up through `useMatches`: every step loader returns a
+ * `steps` field ({@link UploadStepsData}); the deepest match carrying one is
+ * the screen being rendered.
  */
 export default function UploadDraftLayout() {
   const matches = useMatches();
@@ -25,8 +22,8 @@ export default function UploadDraftLayout() {
 
   return (
     <section className="page">
-      {/* The same title on every step — the strip beneath it is what changes,
-          and a title that mutated per step would fight it for the same job. */}
+      {/* One title on every step — the strip beneath is what changes, and a
+          title mutating per step would fight it for the same job. */}
       <header className="page-header">
         <div>
           <h1 className="page-title">Upload a statement</h1>
@@ -46,11 +43,11 @@ export default function UploadDraftLayout() {
 
 /**
  * The account id a review re-POST's 404 carries for the expired page's one
- * extra link (ingest brief §6.5, §7.4). The review action reads it from the
- * form's hidden field — the draft the id would be read from is gone by then —
- * and throws it as `data({ accountId }, { status: 404 })`. It fed a posted
- * field once, so it is validated as an id here too, before anything links to
- * it; every other step's 404 carries a plain string body and yields null.
+ * extra link (ingest brief §6.5, §7.4): the review action reads it from the
+ * form's hidden field — the draft is gone by then — and throws
+ * `data({ accountId }, { status: 404 })`. Once a posted field, so validated
+ * as an id here too before anything links to it; every other step's 404
+ * carries a plain string body and yields null.
  */
 function accountIdOf(data: unknown): string | null {
   if (typeof data !== "object" || data === null) return null;
@@ -59,23 +56,23 @@ function accountIdOf(data: unknown): string | null {
 }
 
 /**
- * A draft URL that no longer answers is ordinary, not an error in anything: a
- * bookmark outlives its draft when the sweep, the commit or a closed account
- * takes the row. The 404 the steps throw for it gets this titled page; only a
- * genuine fault falls through to the generic rendering root uses.
+ * A draft URL that no longer answers is ordinary: a bookmark outlives its
+ * draft when the sweep, the commit or a closed account takes the row. The
+ * steps' 404 gets this titled page; only a genuine fault falls through to
+ * the generic rendering root uses.
  */
 export function ErrorBoundary() {
   const error = useRouteError();
 
   if (isRouteErrorResponse(error) && error.status === 404) {
-    // "Already recorded" means the reader most likely wants to see the result,
-    // so the review re-POST's page adds the account link. A GET cannot tell a
+    // "Already recorded" means the reader likely wants the result, so the
+    // review re-POST's page adds the account link. A GET cannot tell a
     // committed draft from a swept one — same absence in the database — so it
     // gets the /upload link only, and the title's "or" stays honest.
     const accountId = accountIdOf(error.data);
 
-    // Worded here rather than echoing the response body, whose sentence leads
-    // with the same words the title already carries.
+    // Worded here, not echoing the response body, whose sentence leads with
+    // the words the title already carries.
     return (
       <section className="page">
         <header className="page-header">
@@ -100,11 +97,8 @@ export function ErrorBoundary() {
     );
   }
 
-  // Everything that is not an expired draft gets the same page it would have
-  // got from root. This was a copy of root's boundary, which meant it carried
-  // root's defect too: a `data()`-thrown 500 here would have titled itself
-  // "500 " with the trailing space, and a fault would have printed its own
-  // message. One page, one place, so a fix to it cannot reach one of them and
-  // miss the other.
+  // Everything that is not an expired draft gets the page root would give
+  // it. One page, one place, so a fix cannot reach one boundary and miss the
+  // other — this used to be a copy of root's boundary, defects included.
   return <ErrorPage error={error} />;
 }

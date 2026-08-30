@@ -1,22 +1,15 @@
 /**
- * The import boundary that keeps masking from decaying (spec 0007, ADR-0002).
- *
- * A test about file layout, which is unusual here and is on purpose. The
- * guarantee this feature makes — no amount is on this screen — is only as good
- * as its narrowest point, and the way it breaks is not a failing assertion
- * anywhere: it is a route added next year that calls `formatMoney` inline, ships
- * green, and quietly shows a household's balances to the room. There is no
- * linter in this repo, so the suite is where the rule can live.
- *
- * The cost is stated rather than discovered: this file needs updating when
- * those files move or are renamed. That was accepted deliberately, because the
- * leak it catches is silent, and the person who notices it is the person it was
- * supposed to protect (story 35).
- *
- * Ratios are deliberately absent. `formatPercent` and `formatShare` are never
- * masked — a ratio describes composition rather than size — so they are free to
- * be imported anywhere, and a boundary drawn round them would be a boundary
- * round the wrong thing.
+ * The import boundary that keeps masking from decaying (spec 0007,
+ * ADR-0002). A test about file layout, on purpose: the guarantee — no
+ * amount is on this screen — breaks not as a failing assertion but as a
+ * route added next year calling `formatMoney` inline, shipping green, and
+ * showing a household's balances to the room. No linter here, so the suite
+ * is where the rule lives. The stated cost: this file needs updating when
+ * those files move — accepted, because the leak is silent and the person
+ * who notices is the person it was supposed to protect (story 35). Ratios
+ * are deliberately absent: `formatPercent`/`formatShare` are never masked —
+ * a ratio describes composition, not size — and a boundary round them would
+ * be a boundary round the wrong thing.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";

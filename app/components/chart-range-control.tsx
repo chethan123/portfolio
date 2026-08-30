@@ -1,35 +1,21 @@
 /**
- * The segmented range control (spec 0008).
+ * The segmented range control (spec 0008) — one JSX tree for Overview and
+ * the account page, where two hand-copied `<nav>`s once stayed in step only
+ * by memory.
  *
- * Was two hand-copied `<nav>`s, one per route, in step only because someone
- * remembered to keep them that way. Both call in here now, so the eight
- * presets and Custom render identically on Overview and the account page with
- * one JSX tree to change.
+ * **No JavaScript required**: every fixed preset is a plain link naming its
+ * own `range`; Custom is a native `<details>` holding a GET form.
  *
- * **No JavaScript required.** Every fixed preset is a plain link naming its
- * own `range`; Custom is a native `<details>` disclosure holding a GET form
- * that names `range=custom` and a `start`/`end` pair. Both work with scripting
- * off, which is the same contract the four-preset control already kept, and
- * both carry the rest of the query — see below.
+ * **Every link names its range explicitly, including the default.** With the
+ * choice remembered in a cookie (spec 0008), a bare `.` would read back
+ * whatever the cookie held instead of the default just clicked.
  *
- * **Every link names its range explicitly, including the default.** The old
- * four-option control linked the default preset to `.`, stripping the query
- * string, because there was nothing to remember yet. Now that a choice is
- * remembered in a cookie (spec 0008), a bare `.` would read back whatever the
- * cookie already held instead of the default just clicked — so every option,
- * default included, links to its own `?range=` and lets the loader's explicit
- * request win.
+ * **A disabled preset is a `<span>`, never a `<Link>`** — nothing to href it
+ * to; a link the loader would just fall back from is worse than none.
  *
- * **A disabled preset is a `<span>`, never a `<Link>`.** Nothing to href it
- * to: the surface has no data before that boundary, and a link the loader
- * would just fall back from is worse than no link at all.
- *
- * **Every link carries the rest of the query.** A bare `?range=1m` is a whole
- * query string, and React Router resolves it as one — so the link replaced
- * everything else the address held. On the account page that silently ate the
- * `?uploaded=` and `?recorded=` receipts: record a statement, read the
- * confirmation, click 1M, and the sentence you were reading was gone. Both
- * the presets and Custom therefore start from the params already there.
+ * **Every link carries the rest of the query.** A bare `?range=1m` is a
+ * whole query string and React Router resolves it as one — on the account
+ * page that silently ate the `?uploaded=`/`?recorded=` receipts mid-read.
  * Which three parameters are the control's own to rewrite is
  * `chart-range.ts`'s to say, beside the function that reads them back.
  */
@@ -67,17 +53,17 @@ export function ChartRangeControl({
           return (
             <details key="custom" className="segmented-custom">
               <summary aria-current={applied ? "true" : undefined}>
-                {/* The chosen span, once there is one, rather than the word
-                    "Custom" — story 13: a reader should be able to tell what
-                    they are looking at without reopening the picker. */}
+                {/* The chosen span, once there is one, not the word "Custom"
+                    — story 13: tell what you are looking at without reopening
+                    the picker. */}
                 {applied ? `${custom.start} – ${custom.end}` : option.label}
               </summary>
 
               <form method="get" className="segmented-custom-form">
                 <input type="hidden" name="range" value="custom" />
                 {/* A GET form submits its own fields and nothing else, so
-                    everything the address already held has to be re-emitted
-                    here or applying a span drops it. */}
+                    everything the address held must be re-emitted here or
+                    applying a span drops it. */}
                 {carriedParams(params).map(([name, value], index) => (
                   <input key={`${name}-${index}`} type="hidden" name={name} value={value} />
                 ))}

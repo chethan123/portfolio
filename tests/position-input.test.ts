@@ -1,23 +1,14 @@
 /**
- * The two field shapes the inline position editor is built from
- * (DESIGN.md §4.1, §5.4).
- *
- * Pure — no Postgres — because the rules being checked are about text. What
- * makes them worth their own file, beside `balance-input.test.ts`, is that they
- * are the *opposite* decision on the one question that matters, and the reason
- * has to stay written down: `moneyMagnitude` refuses a sign because the form it
- * serves derives one from the kind of account; these boxes open containing the
- * figure the table already prints, so they have to take it back — minus sign,
- * U+2212, thousands separators and all.
- *
- * That round trip is the first `describe` below, and it is the load-bearing
- * one. `formatQuantity` is what fills the boxes; a change to either side that
- * breaks the pair would produce a form that refuses what it just displayed,
- * with the refusal blaming the reader for a string they never typed.
- *
- * Every assertion is an exact string, for `balance-input.test.ts`'s reason: a
- * test that accepted `120` or `120.000000001` for `120.5` would be testing the
- * thing these validators exist to prevent.
+ * The two field shapes the inline position editor is built from (DESIGN.md
+ * §4.1, §5.4). Pure — the rules are about text. Worth their own file beside
+ * `balance-input.test.ts` because they are the *opposite* decision on the
+ * one question that matters: `moneyMagnitude` refuses a sign (its form
+ * derives one from the account kind); these boxes open containing the
+ * figure the table prints, so they must take it back — minus sign, U+2212,
+ * thousands separators and all. That round trip is the load-bearing first
+ * `describe`: `formatQuantity` fills the boxes, and breaking the pair
+ * produces a form refusing what it just displayed, blaming the reader for a
+ * string they never typed. Every assertion is an exact string.
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";

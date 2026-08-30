@@ -1,33 +1,20 @@
 /**
- * The accounts the household holds — DESIGN.md §4.1, §4.2, §4.5, §8.4.
+ * The accounts the household holds (DESIGN.md §4.1, §4.2, §4.5, §8.4) — what
+ * gives a statement somewhere to land and every valuation something to group
+ * by. Reads and writes both; the routes above only translate.
  *
- * This is what gives a statement somewhere to land: an account is the thing an
- * upload attaches a position set to, and the thing every valuation groups by.
- * Like `people.server.ts`, it both reads and writes, and the routes above it
- * only translate.
+ * Three design decisions show up directly: **an account has exactly one
+ * owner** (§4.2 — joint accounts are not modelled; a plan holding Traditional
+ * and Roth money is two accounts); **tax treatment is three-way, never a
+ * boolean** (§4.5); and **nothing is ever deleted** — {@link closeAccount}
+ * sets a date rather than removing rows, because the history must keep
+ * valuing correctly on every date before the close (§7).
  *
- * Three decisions from the design show up directly in this module:
+ * What "closed" means for a figure is not this module's rule: the two views
+ * own it, in SQL, where every consumer gets the same answer (§8.2).
  *
- *   * **An account has exactly one owner** (§4.2). Joint accounts are not
- *     modelled, and a workplace plan holding both Traditional and Roth money is
- *     two accounts at the same institution with different tax treatments — which
- *     needs no support here beyond not forbidding it.
- *   * **Tax treatment is three-way, never a boolean** (§4.5). $500k in a
- *     Traditional IRA is roughly $350k of spending power while $500k in a Roth
- *     is $500k.
- *   * **Nothing is ever deleted.** {@link closeAccount} is the only retirement
- *     there is, and it sets a date rather than removing rows, because the
- *     account's history has to keep valuing correctly on every date before it
- *     closed (§7). There is no delete function here and no delete affordance
- *     anywhere above it.
- *
- * What "closed" then means for a figure is not this module's rule to state:
- * `holding_valued` excludes closed accounts and `holding_valued_at` includes
- * them for dates before `closed_at`, and both live in SQL where every consumer
- * gets the same answer (DESIGN.md §8.2).
- *
- * Every exported query takes an optional `db` handle: it defaults to the
- * process-wide one, and tests pass a transaction they roll back.
+ * Every exported query takes an optional `db`; tests pass a transaction they
+ * roll back.
  */
 import { z } from "zod";
 
@@ -74,30 +61,26 @@ export type Account = {
 };
 
 /**
- * What a form must supply to create or edit an account.
- *
- * Kind, tax treatment and owner are required — they are the three things a
- * later figure cannot be computed without, and guessing any of them would put a
- * wrong number on a screen rather than an obvious gap. Institution and the
- * external account number are free text: an institution the app has never heard
- * of is a normal thing to own an account at.
+ * What a form must supply. Kind, tax treatment and owner are required — the
+ * three things a later figure cannot be computed without, where a guess puts
+ * a wrong number on a screen rather than an obvious gap. Institution and
+ * account number are free text: an institution the app has never heard of is
+ * a normal thing to own an account at.
  */
 export const accountInput = z.object({
   name: requiredText("An account name", 120),
 
-  // Optional, unlike the schema column, which is `not null`. A family member
-  // recording "Mortgage" before they remember which servicer holds it should
-  // not be blocked; the column stores the empty string and the screen shows a
-  // dash. What must never be blank is what a figure depends on, below.
+  // Optional, unlike the `not null` column: recording "Mortgage" before
+  // remembering the servicer should not block; the column stores "" and the
+  // screen shows a dash.
   institution: optionalText("An institution", 120),
 
   kind: z.enum(accountKindValues, { message: "Choose what kind of account this is." }),
 
   ownerId: z
     .string({ message: "Choose an owner." })
-    // Ids cross the boundary as strings (`server/db.ts`); anything that is not
-    // digits would reach Postgres as a malformed bigint and fail as a 500
-    // rather than as a message on the form.
+    // Ids cross as strings (`server/db.ts`); non-digits would reach Postgres
+    // as a malformed bigint — a 500 instead of a message on the form.
     .regex(/^\d+$/, { message: "Choose an owner." }),
 
   taxTreatment: z.enum(taxTreatmentValues, { message: "Choose a tax treatment." }),
@@ -124,8 +107,8 @@ function toAccount(row: AccountRow): Account {
     id: row.id,
     name: row.name,
     institution: row.institution,
-    // Safe because the schema's check constraints are what the database will
-    // and will not store; the same reasoning as `valuation.server.ts`.
+    // Safe: the check constraints bound what the database can store
+    // (`valuation.server.ts`'s reasoning).
     kind: row.kind as AccountKind,
     ownerId: row.owner_id,
     ownerName: row.owner_name,
@@ -153,11 +136,9 @@ const selectAccounts = (db: Kysely<Database>) =>
     ]);
 
 /**
- * Every account, open ones first.
- *
- * Closed accounts stay in the list rather than disappearing: they are what the
- * historical figures are computed from, and a family member looking for one
- * they closed last year should find it rather than conclude it was lost.
+ * Every account, open ones first. Closed accounts stay in the list: they are
+ * what historical figures are computed from, and one closed last year should
+ * be findable rather than concluded lost.
  */
 export async function listAccounts(db: Kysely<Database> = getDb()): Promise<Account[]> {
   const rows = await selectAccounts(db)
@@ -217,30 +198,26 @@ export async function createAccount(
 }
 
 /**
- * Correct an account, including a wrong tax treatment.
+ * Correct an account, including a wrong tax treatment — unrestricted but for
+ * the kind: a wrong treatment is a figure reported wrongly for as long as it
+ * stands, and changing the owner is how a person becomes removable
+ * (`people.server.ts`).
  *
- * Editing is unrestricted but for the kind: a tax treatment recorded wrongly is
- * a figure reported wrongly for as long as it stands, and there is nothing to
- * be gained by making it hard to fix. Changing the owner is the way a person
- * who owns accounts becomes removable (`people.server.ts`).
- *
- * The kind is the exception because both views apply it retroactively to every
- * date (`0002_holding_valued.sql:84`, `0003_holding_valued_at.sql:50`), so it
- * is not a caption on an account — it is a claim about what the account's rows
- * *mean*, and the writers downstream believe it. Relabelling a brokerage full
- * of securities as a `bank` used to hand `setBalance` an account it would sell
- * out in one submission, and moving a `bank` holding savings to `liability`
- * used to file $42,000 of assets as debt on every screen and every historical
- * date, with no write at all (report `SET-1`). The two refusals below close
- * both, and only those two: any change to an account with no statement still
- * goes through, so does anything between the securities kinds, and so does
- * `bank` or `liability` onto a securities kind.
+ * The kind is the exception because both views apply it retroactively to
+ * every date: it is a claim about what the account's rows *mean*, and the
+ * writers downstream believe it. Relabelling a brokerage as `bank` used to
+ * hand `setBalance` an account it would sell out in one submission; `bank` to
+ * `liability` used to file $42,000 of assets as debt on every historical
+ * date, with no write at all (report SET-1). The two refusals below close
+ * both — and only those two: an account with no statement, moves between
+ * securities kinds, and `bank`/`liability` onto a securities kind all still
+ * go through.
  *
  * Closing is not done here — {@link closeAccount} is its own operation, so an
  * ordinary edit can never retire an account by accident.
  *
- * @throws {ValidationError} with a message per bad field, and one under `kind`
- *         for a kind the account's current statement contradicts.
+ * @throws {ValidationError} per bad field, plus one under `kind` for a kind
+ *         the account's current statement contradicts.
  * @throws {NotFoundError} when no such account exists.
  */
 export async function updateAccount(
@@ -252,40 +229,24 @@ export async function updateAccount(
   const input = parseInput(accountInput, raw);
   await requireOwner(input.ownerId, db);
 
-  // Asked of the new kind and the rows, never of the old kind. A condition with
-  // an `existing.kind` term in it would refuse one hop and permit the same
-  // destination reached in two — `liability → brokerage → bank` is the same
-  // relabelling with a station in the middle — and this way there is no
-  // sequence of edits that arrives anywhere a single edit could not.
-  //
-  // The kinds that hold securities are unaffected: a statement is what says
-  // what they hold, so there is nothing here for them to contradict.
-  //
-  // Read-then-write, with no lock, and deliberately no transaction. A statement
-  // committed between this read and the update leaves the label briefly wrong,
-  // which is a mislabel and not a loss — `setBalance` repeats its own guard
-  // inside its write statement, so the account cannot be emptied through the
-  // gap this one leaves.
+  // Asked of the new kind and the rows, never the old kind: a condition with
+  // an `existing.kind` term would refuse one hop and permit the same
+  // destination in two (`liability → brokerage → bank`); this way no sequence
+  // of edits arrives anywhere a single edit could not. Securities kinds are
+  // unaffected — a statement says what they hold. Read-then-write, no lock,
+  // no transaction, deliberately: a statement committed in the gap leaves the
+  // label briefly wrong — a mislabel, not a loss; `setBalance` repeats its
+  // own guard inside its write.
   if (input.kind !== existing.kind && acceptsSetBalance(input.kind)) {
     const { cashIsNegative, others } = await currentStatement(existing.id, db);
 
     // A one-balance kind cannot hold positions, so relabelling would strand
-    // them: the Holdings table would still list them and the account's own page
-    // would offer the form that sells them.
-    //
-    // The remedy is the sibling refusal's (`balances.server.ts:184-191`), and
-    // has to be: the positions have to stop being recorded against the account
-    // before it can be a one-balance account, and zeroing them or uploading a
-    // statement without them are the two ways to stop recording them. Naming
-    // the guard condition back at the reader — "change the kind on an account
-    // whose statement is a single cash balance" — is not advice, it is the
-    // refusal restated.
-    //
-    // Neither door is open on a closed account: `revisePosition` and
-    // `createDraft` both refuse one, `holding_valued` drops it from Holdings,
-    // and `/accounts/:id` 404s for it (`account.tsx:137-144`). §5.3 accepts
-    // that the mislabel is then permanent — but the message must say so rather
-    // than send its reader looking for a door that is not there.
+    // them: Holdings would still list them and the account's own page would
+    // offer the form that sells them. The remedy is the sibling refusal's
+    // (`balances.server.ts`): the positions must stop being recorded first —
+    // zero them, or upload a statement without them. Neither door is open on
+    // a closed account (§5.3 accepts the mislabel is then permanent), so the
+    // message says so rather than send the reader to a door that is not there.
     if (others.length > 0) {
       const them = others.length === 1 ? "it" : "them";
       const those = others.length === 1 ? "That position has" : "Those positions have";
@@ -302,19 +263,12 @@ export async function updateAccount(
     }
 
     // §2 puts the sign in the quantity, so a kind whose direction disagrees
-    // with the stored balance inverts what that balance means with no write at
-    // all — `revisePosition`'s refused sign flip (`positions.server.ts:331-339`)
-    // by another door. The remedy names Holdings as well as this account's own
-    // page because the account may be sitting on a securities kind as it is
-    // read — `liability → brokerage → bank` is refused at the second hop — and
-    // `account.tsx` mounts no Set-balance panel on one, so naming that door
-    // alone would name a remedy the account does not have.
-    //
-    // On a closed account it has neither: `setBalance` refuses one outright and
-    // `/accounts/:id` 404s for it, and `holding_valued` drops it, so Holdings
-    // lists nothing to zero. Same reasoning as the clause above — the mislabel
-    // is permanent (§5.3), and the message says that instead of naming two
-    // doors that are not there.
+    // with the stored balance inverts what it means with no write at all —
+    // `revisePosition`'s refused sign flip by another door. The remedy names
+    // Holdings as well as this account's page because the account may sit on
+    // a securities kind, which mounts no Set-balance panel. On a closed
+    // account it has neither door — the mislabel is permanent (§5.3), and the
+    // message says so.
     if (cashIsNegative !== null && isOwed(input.kind) !== cashIsNegative) {
       throw new ValidationError({
         kind:
@@ -353,22 +307,17 @@ export type CloseAccountInput = {
 };
 
 /**
- * Retire an account without erasing the dates it was open.
+ * Retire an account without erasing the dates it was open — the whole of
+ * "deleting". Afterwards it contributes nothing to current net worth and
+ * still contributes to every date before `closed_at`, which is why a date is
+ * recorded rather than a flag.
  *
- * This is the whole of "deleting" an account. Afterwards it contributes nothing
- * to current net worth and still contributes to every date before `closed_at`,
- * which is why the date is recorded rather than a flag.
- *
- * The acknowledgement is required here rather than left to the screen, the same
- * decision `commitUpload` makes for its majority-removal tick: closing is
- * one-way in this version, and a one-way write that a replayed or hand-built
- * POST can reach silently was never acknowledged at all.
- *
- * Closing an already-closed account keeps the original date: the account
- * stopped being used when it stopped being used, and a second click must not
- * quietly move a boundary that historical figures are computed against. That
- * short-circuit runs before the tick is consulted — there is no transition
- * left for the tick to guard.
+ * The acknowledgement is required here, not left to the screen
+ * (`commitUpload`'s decision for its own tick): closing is one-way, and a
+ * one-way write a replayed POST can reach silently was never acknowledged at
+ * all. Closing an already-closed account keeps the original date — a second
+ * click must not move a boundary historical figures are computed against;
+ * that short-circuit runs before the tick is consulted.
  *
  * @throws {ValidationError} when the acknowledgement was not ticked.
  * @throws {NotFoundError} when no such account exists.

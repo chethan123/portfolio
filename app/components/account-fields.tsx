@@ -3,24 +3,18 @@ import { ACCOUNT_KINDS, TAX_TREATMENTS } from "~/lib/account-options";
 import type { FieldErrors } from "~/lib/input.server";
 
 /**
- * The account form, shared by "add" and "edit".
+ * The account form, shared by "add" and "edit" — one component because the
+ * two screens must offer the same fields with the same labels, and the
+ * cheapest guarantee is having only one of them. Options come from
+ * `account-options.ts`, the list the domain validates against, so what can
+ * be chosen is exactly what the check constraints allow.
  *
- * One component rather than two similar forms: the two screens must offer the
- * same fields with the same labels, and the cheapest way to guarantee that is
- * to have only one of them. The options come from `account-options.ts`, the
- * same list the domain module validates against, so what can be chosen here is
- * exactly what the schema's check constraints allow.
- *
- * Each field is one element: `.panel-form` wraps its children across lines, so
- * a caption, a box and the note under it have to travel together or a refusal
- * message ends up beside the field after the one it is about.
- *
- * Inside that element the refusal comes before the note, which is the order
- * `tax.tsx` already uses. The contract is that a field's refusal sits *under its
- * control* (ingest brief §2): with the note first, the two fields that have one
- * printed their refusal 16px lower than the other four — a grey explanatory line
- * interposed between the box's 2px `--loss` border and the red sentence, which
- * reads as the note being the first line of the refusal.
+ * Each field is one element: `.panel-form` wraps its children, so caption,
+ * box and note must travel together or a refusal lands beside the wrong
+ * field. Within it the refusal comes before the note (`tax.tsx`'s order) —
+ * the contract is a refusal *under its control* (ingest brief §2), and
+ * note-first put a grey line between the box's `--loss` border and the red
+ * sentence, reading as the note being the refusal's first line.
  */
 export type AccountFieldValues = {
   name?: string;
@@ -56,9 +50,8 @@ export function AccountFields({
   return (
     <>
       <div>
-        {/* The box is nested in its label rather than pointed at from beside
-            it: `label` is a flex column in the stylesheet, and that is what
-            sets the caption directly above the box it names. */}
+        {/* The box nests in its label: `label` is a flex column in the
+            stylesheet, which sets the caption directly above its box. */}
         <label htmlFor={field("name")}>
           Name
           <input

@@ -1,31 +1,22 @@
 /**
  * What one tick of the refresh loop does with the connection it borrows.
+ * Not about prices (`refresh-quotes.test.ts` owns those; no `quote` row is
+ * asserted on): what lives only in the poller is the Postgres *session*
+ * holding `pg_try_advisory_lock`, and a connection handed back keeps
+ * whatever its session held. A tick that failed halfway and returned its
+ * connection intact poisons the pool: a later tick is handed the lock
+ * holder back, the lock answers "someone else has it", and prices stop
+ * refreshing for the life of the process — no throw, no failing health
+ * check (`healthz.ts` deliberately reports none of this), the screens
+ * showing last week's prices as live: §11's worst available failure.
  *
- * Nothing here is about prices — `refresh-quotes.test.ts` owns those, and this
- * file asserts on no `quote` row at all. What lives only in the poller is the
- * handling of the Postgres *session* it takes to decide whether to run: that
- * session holds `pg_try_advisory_lock`, and a connection handed back to the
- * pool keeps whatever its session was holding.
- *
- * So a tick that failed halfway and returned its connection intact would poison
- * the pool: some later tick is handed the lock holder back, `pg_try_advisory_lock`
- * answers "someone else has it", and the tick returns. Prices then stop
- * refreshing for the life of the process — no throw, no failing health check
- * (`healthz.ts` deliberately reports none of this), and nothing in the log after
- * the one line that recorded the original failure. The screens go on showing
- * last week's prices as though they were live, which §11 names as the worst
- * failure available in a finance app.
- *
- * The tick is not exported and this file does not make it so; it is driven the
- * way production drives it, through `startPricePoller`. The interval is faked
- * so that no real timer is ever created and nothing here waits — for fifteen
- * minutes or at all. That is the one piece of test machinery in this file: the
- * provider is a hand-written fake as everywhere else, and the pool is the real
- * one, patched only to say when it got its connection back.
- *
- * A tick has no caller to catch it, so a throw from one would arrive as an
- * unhandled rejection, which vitest fails the run on. Every test below is
- * therefore also a statement that the tick returned rather than threw.
+ * The tick is not exported and stays so; it is driven through
+ * `startPricePoller` as production drives it. The interval is faked so no
+ * real timer exists and nothing waits; the provider is a hand-written fake;
+ * the pool is the real one, patched only to say when it got its connection
+ * back. A tick has no caller to catch it, so a throw arrives as an
+ * unhandled rejection and vitest fails the run — every test below is also a
+ * statement that the tick returned rather than threw.
  */
 import { afterAll, describe, expect, it, vi } from "vitest";
 

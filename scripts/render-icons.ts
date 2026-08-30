@@ -1,26 +1,21 @@
 /**
- * The committed PWA icons, retaken in one command.
- *
- * `public/icon.svg` is the source of truth — the brand tile's white "P" on its
- * blue, as the rail draws it. The PNGs under `public/icons/` are
- * rasterizations of it, committed rather than generated at build time for the
- * same reason the screenshots are: the build stays a build, and the artifacts
- * only change when someone means them to. After editing the SVG:
+ * The committed PWA icons, retaken in one command. `public/icon.svg` is the
+ * source of truth; the PNGs under `public/icons/` are its rasterizations,
+ * committed so the build stays a build and artifacts change only when someone
+ * means them to. After editing the SVG:
  *
  *   node ./scripts/render-icons.ts
  *
- * The manifest's `icons` array is this script's to write, as `data:` URIs of
- * those same PNGs — everything else in `public/manifest.webmanifest` stays
- * hand-written. Inlined, not linked, because Android's install machinery
- * fetches manifest icons on its own terms: the WebAPK icon hasher sends no
- * cookies at all (Chromium `webapk_single_icon_hasher.cc`), so behind the
- * gate an icon URL gets the sign-in redirect and install greys out. A `data:`
- * URI leaves nothing to fetch and keeps every path gated.
+ * The manifest's `icons` array is this script's to write, as `data:` URIs —
+ * the rest of `public/manifest.webmanifest` stays hand-written. Inlined
+ * because Android's WebAPK icon hasher fetches manifest icons with no cookies
+ * (Chromium `webapk_single_icon_hasher.cc`): behind the gate an icon URL gets
+ * the sign-in redirect and install greys out. A `data:` URI leaves nothing to
+ * fetch and keeps every path gated.
  *
- * The maskable variant is the same drawing with the corner radius removed.
- * Android crops its own shape out of a full-bleed square and guarantees only a
- * centred circle of 40% radius; the glyph sits well inside it, so no rescaling
- * is needed — just square corners.
+ * The maskable variant is the same drawing minus the corner radius: Android
+ * crops its own shape from a full-bleed square, guaranteeing only a centred
+ * 40%-radius circle, and the glyph already sits well inside it.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 

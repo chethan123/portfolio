@@ -1,24 +1,16 @@
 /**
- * The account drill-down's three guards (DESIGN.md §13).
- *
- * Every figure on this page comes out of `valuation.server.ts` and
- * `uploads.server.ts` already tested; what is only here is what the route does
- * with the *URL* — the id in the path and the two receipt parameters hung off
- * it. All three are reachable by hand, by a stale bookmark, or by a crawler,
- * and each has a way of failing that leaves no mark on the screen.
- *
- * The gate first: `accountTotal` answers null for an id naming no account, for
- * one that is not an id at all, and for a closed account. All three have to be
- * a 404, because a closed account is excluded from `holding_valued` and would
- * otherwise render as a header of blanks with nothing anywhere saying why.
- *
- * Then the receipts, which are the reason this file matters more than its size
- * suggests. `?uploaded=` and `?recorded=` say *which* set or date was written
- * and nothing about what is in it, and the confirmation beside them is read
- * back out of the database. Only the route enforces that. A receipt that
- * believed its own URL would tell someone their statement had been recorded
- * when nothing had been written at all — a false confirmation on the one screen
- * whose job is to confirm, and one that leaves no trace to find later.
+ * The account drill-down's guards (DESIGN.md §13). Every figure comes out
+ * of modules already tested; what is only here is what the route does with
+ * the *URL* — the id in the path and the two receipt parameters, each
+ * reachable by hand, stale bookmark or crawler, each failing without a mark
+ * on the screen. The gate first: `accountTotal` answers null for no such
+ * account, a non-id, and a closed account — all three must 404, since a
+ * closed account is excluded from `holding_valued` and would render a
+ * header of blanks. Then the receipts: `?uploaded=`/`?recorded=` say
+ * *which* set or date was written and nothing about what is in it, and the
+ * confirmation is read back out of the database — a receipt that believed
+ * its own URL would confirm a statement nobody recorded, on the one screen
+ * whose job is to confirm, leaving no trace to find later.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

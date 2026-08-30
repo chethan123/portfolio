@@ -1,25 +1,15 @@
 /**
- * A balance typed by hand, got wrong, and corrected.
- *
- * `tests/set-balance.test.ts` already holds this write to account: the sign a
- * liability is stored with, the exactness of the `numeric`, the refusal of an
- * account a one-row set would erase. `tests/routes/account.test.ts` already
- * holds the receipt to account, against statements a fixture planted. Both are
- * the right shape for the rule each is about, and neither can see the seam
- * between them.
- *
- * That seam has three parts and no owner: the write decides what was stored,
- * the action decides what to put in the redirect, and the page the redirect
- * names reads that parameter back and decides whether to confirm anything. Each
- * part passes its own test while carrying the wrong thing across — an action
- * that redirects with the date that was *submitted* rather than the date that
- * was *stored*, or a loader comparing against a set the account is no longer
- * reading, produces a page that either confirms nothing after a real write or
- * confirms a write that never happened. Nothing but a round trip notices.
- *
- * So nothing is seeded here past the household itself. Every balance below is
- * put there by posting the form to the real `action`, and every page is reached
- * by following the redirect that action actually chose.
+ * A balance typed by hand, got wrong, and corrected. `set-balance.test.ts`
+ * holds the write to account and `routes/account.test.ts` the receipt;
+ * neither can see the seam between them — three parts, no owner: the write
+ * decides what was stored, the action what to put in the redirect, the page
+ * whether to confirm. Each passes its own test while carrying the wrong
+ * thing across (an action redirecting with the date *submitted* rather than
+ * *stored*, a loader comparing against a set no longer read), producing a
+ * page that confirms nothing after a real write or confirms one that never
+ * happened. Nothing but a round trip notices — so nothing is seeded past
+ * the household: every balance is posted to the real `action`, every page
+ * reached by following the redirect it actually chose.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

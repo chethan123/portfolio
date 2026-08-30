@@ -1,18 +1,13 @@
 /**
- * The queries the account drill-down reads through (DESIGN.md §8.2).
- *
- * Same contract as `dashboard-queries.test.ts`: driven through the query
- * module's public functions against a real Postgres, seeded through the fixture
- * builder, with every money assertion an exact decimal string at the stored
- * scale.
- *
- * What this file is really about is the drill-down's version of §8.2's weakest
- * point. One account's page shows a figure that also appears in a row on the
- * overview and in a slice of the total, so the first test here is that those
- * are literally the same arithmetic — and the rest are the three cases where a
- * per-account query is most tempted to invent an answer of its own: an account
- * holding nothing, a date before it held anything, and an id that is not an
- * account at all.
+ * The queries the account drill-down reads through (DESIGN.md §8.2) —
+ * `dashboard-queries.test.ts`'s contract: the query module's public
+ * functions against real Postgres, fixture-builder seeds, exact decimal
+ * strings. The subject is the drill-down's version of §8.2's weakest point:
+ * one account's figure also appears in an overview row and a slice of the
+ * total, so the first test is that those are literally the same arithmetic
+ * — and the rest are the three cases where a per-account query is most
+ * tempted to invent an answer: an account holding nothing, a date before it
+ * held anything, an id that is not an account at all.
  */
 import { afterAll, describe, expect, it } from "vitest";
 

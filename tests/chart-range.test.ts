@@ -354,16 +354,13 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
     expect(gaps.at(-1)).toBe(1);
 
     // Growth is asserted as a trend across quarters of the span, NOT pair by
-    // adjacent pair, and the difference is deliberate. Spec 01's acceptance
-    // criterion says "gaps strictly increasing walking backward"; that is not
-    // what a solved ratio of ~1.02 does once each offset is rounded to a whole
-    // day. Measured on this very span, only 56 of 178 adjacent pairs strictly
-    // increase, 100 are equal, and 22 actually decrease by a day — rounding a
-    // smooth curve to integers is not monotonic step to step. The property the
-    // chart actually depends on, and the one the spec was reaching for, is
-    // that resolution is dense near the anchor and coarse far from it. That is
-    // what this asserts. See the PR discussion: the criterion's literal wording
-    // is unachievable for any budget/span where the ratio is near one.
+    // adjacent pair, deliberately. Spec 01 says "gaps strictly increasing
+    // walking backward", but a solved ratio of ~1.02 rounded to whole days
+    // is not monotonic step to step — measured on this span, 56 of 178
+    // adjacent pairs increase, 100 are equal, 22 decrease by a day. The
+    // property the chart depends on, and the one the spec was reaching for,
+    // is dense near the anchor and coarse far from it; the literal wording
+    // is unachievable for any budget/span whose ratio is near one.
     const bucket = (from: number, to: number) =>
       gaps.slice(from, to).reduce((sum, gap) => sum + gap, 0) / (to - from);
     const quarter = Math.floor(gaps.length / 4);

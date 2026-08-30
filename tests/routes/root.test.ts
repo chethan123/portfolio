@@ -1,18 +1,12 @@
 /**
- * The one loader that runs on every page render.
- *
- * Its first-run read is a hint, not data, and `root.tsx` says so: a database
- * that is down must produce a page without a prompt rather than an error page.
- * That sentence is load-bearing and nothing enforces it. `firstRunStep()` is a
- * query like any other and will throw when Postgres is unreachable; propagated
- * from *this* loader it becomes an error boundary on the root route — which is
- * every route — so an instance whose database is merely restarting would answer
- * every screen with an error page, with `/healthz` next door reporting the real
- * cause to nobody. One `try` is the difference, and a `try` is the easiest
- * thing in a file to tidy away.
- *
- * The environment is configured before the import because `getConfig()`
- * memoises its first read, which is the order the container uses too.
+ * The one loader that runs on every page render. Its first-run read is a
+ * hint, not data, and nothing but this test enforces that: `firstRunStep()`
+ * throws when Postgres is unreachable, and propagated from *this* loader
+ * that is an error boundary on every route — a database merely restarting
+ * would answer every screen with an error page while `/healthz` reported
+ * the real cause to nobody. One `try` is the difference, and a `try` is the
+ * easiest thing in a file to tidy away. The environment is configured
+ * before the import because `getConfig()` memoises its first read.
  */
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 

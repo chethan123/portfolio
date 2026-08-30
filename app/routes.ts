@@ -12,10 +12,9 @@ export default [
   route("income", "routes/income.tsx"),
   route("upload", "routes/upload.tsx"),
 
-  // The step screens over one upload draft (DESIGN.md §5.1). Not nav entries:
-  // a step is reached only by working through the flow, and the rail's filled
-  // button stays the one way in. The layout carries the strip and the
-  // expired-draft page; the index resumes a draft at whichever step it got to.
+  // Step screens over one upload draft (DESIGN.md §5.1). Not nav entries: a
+  // step is reached only by working through the flow. The layout carries the
+  // strip and the expired-draft page; the index resumes a draft mid-flow.
   route("upload/:draftId", "routes/upload/draft.tsx", [
     index("routes/upload/index.tsx"),
     route("columns", "routes/upload/columns.tsx"),
@@ -23,15 +22,15 @@ export default [
     // brief §5, §7.5) — the strip dims the entry rather than dropping it.
     route("instruments", "routes/upload/instruments.tsx"),
     // The diff, then the commit — the flow's only write (ingest brief §6,
-    // spec 0004 step 05). POST inserts the position set, deletes the draft
-    // and redirects to /accounts/:id?uploaded=<setId> for the receipt.
+    // spec 0004 step 05): POST inserts the position set, deletes the draft,
+    // redirects to /accounts/:id?uploaded=<setId> for the receipt.
     route("review", "routes/upload/review.tsx"),
   ]),
 
-  // The per-account drill-down (DESIGN.md §13.1). §8.1 had ruled it out on the
-  // grounds that a filtered Holdings table already is one; the Stitch "Account
-  // Details" screen is more than that filter, and the queries it needs are the
-  // dashboard's with one predicate added, so the exclusion was reversed.
+  // Per-account drill-down (DESIGN.md §13.1). §8.1 had ruled it out as "a
+  // filtered Holdings table already is one"; the Stitch screen is more than
+  // that filter and its queries are the dashboard's plus one predicate, so
+  // the exclusion was reversed.
   route("accounts/:accountId", "routes/account.tsx"),
 
   // Settings is a section, not a page: `settings.tsx` is the tab strip and
@@ -41,29 +40,26 @@ export default [
     route("people", "routes/settings/people.tsx"),
     route("accounts", "routes/settings/accounts.tsx"),
     route("accounts/:accountId", "routes/settings/account.tsx"),
-    // The one preference in an application whose settings are otherwise all
-    // domain rows: the capital gains rate the Analysis screen estimates with.
-    // `0005_app_setting.sql` argues why it is not an environment variable.
+    // The capital gains rate Analysis estimates with; `0005_app_setting.sql`
+    // argues why it is not an environment variable.
     route("tax", "routes/settings/tax.tsx"),
-    // The refresh cadence — how often the poller asks the feed for quotes.
-    // `0008_refresh_cadence.sql` argues why it moved out of the environment.
+    // The poller's refresh cadence; `0008_refresh_cadence.sql` argues why it
+    // moved out of the environment.
     route("prices", "routes/settings/prices.tsx"),
-    // How the screens look before anyone touches them — today the masking
-    // policy, and §12's theme choice when it lands (spec 0007).
+    // How the screens open untouched — the masking policy today, §12's theme
+    // choice when it lands (spec 0007).
     route("display", "routes/settings/display.tsx"),
   ]),
 
-  // The masking toggle's server-side writer (spec 0007). No UI: the control is
-  // in the chrome on every page, and this is the target its form posts to so
-  // that it keeps working with JavaScript off.
+  // The masking toggle's writer (spec 0007). No UI — the chrome's control
+  // posts here so the toggle works with JavaScript off.
   route("masking", "routes/masking.ts"),
 
-  // "Refresh now" (spec 0002 story 5). No UI of its own: the control sits in
-  // the header of every screen that shows a figure, and this is what its form
-  // posts to, so a press works with JavaScript off.
+  // "Refresh now" (spec 0002 story 5). No UI — every figure screen's header
+  // control posts here, so a press works with JavaScript off.
   route("refresh", "routes/refresh.ts"),
 
-  // Resource route, no UI. Kept in the router rather than in a server wrapper
-  // so it behaves identically in dev and in the container.
+  // Resource route, no UI. In the router rather than a server wrapper so it
+  // behaves identically in dev and in the container.
   route("healthz", "routes/healthz.ts"),
 ] satisfies RouteConfig;

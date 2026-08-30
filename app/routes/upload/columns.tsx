@@ -23,17 +23,13 @@ import type { ParseProblem, StatementMapping } from "~/lib/statement";
 import type { Route } from "./+types/columns";
 
 /**
- * Step two — map the file's columns, once per institution (ingest brief §4).
- *
- * The screen's whole job is to be readable: a household maps by looking at
- * *values*, not column names, so the preview rows are the feature and every
- * control is answered against them. A saved mapping for this institution and
- * header fingerprint prefills the controls — the screen still renders, every
- * time, because a changed export must be visible rather than silently
- * reapplied.
- *
- * No client state anywhere: the header-row change is a GET round trip over
- * the `header` search param, and the mapping is one POST.
+ * Step two — map the file's columns, once per institution (ingest brief
+ * §4). The screen's whole job is to be readable: a household maps by
+ * looking at *values*, not column names, so the preview rows are the
+ * feature and every control is answered against them. A saved mapping
+ * prefills the controls — the screen still renders every time, because a
+ * changed export must be visible rather than silently reapplied. No client
+ * state: the header-row change is a GET round trip, the mapping one POST.
  */
 export function meta() {
   return [{ title: "Columns · Upload · Portfolio" }];
@@ -69,12 +65,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const account = await getAccount(draft.accountId);
     const { savedMapping, rows } = readDraftFile(draft);
 
-    // The header row: an explicit re-read (the `header` search param) wins,
-    // because it is this request's own instruction; then whatever the draft's
-    // saved mapping was built against, so returning to the step shows what
-    // was saved; then candidate detection. The GET param outranking the saved
-    // row is what keeps "Re-read with this header row" a working control on a
-    // draft that already holds a mapping.
+    // The header row: an explicit re-read (`header` param) wins — this
+    // request's own instruction; then the saved mapping's row, so returning
+    // shows what was saved; then candidate detection. The GET param
+    // outranking the saved row keeps "Re-read with this header row" working
+    // on a draft that already holds a mapping.
     const headerParam = new URL(request.url).searchParams.get("header");
     const requested =
       headerParam !== null && /^\d+$/.test(headerParam) ? Number(headerParam) : null;
@@ -88,10 +83,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const headerCells = rows[headerRow] ?? [];
 
     // A saved mapping that no longer parses clean explains itself on the GET
-    // too: review and instruments bounce such a draft back here, and problems
-    // that rendered only from a POST would leave that arrival a blank form
-    // with no word of why. Parsed against the mapping as saved — its own
-    // header row — which is exactly what the bouncing step refused.
+    // too: review and instruments bounce such a draft back here, and
+    // POST-only problems would leave that arrival a blank form with no word
+    // of why. Parsed as saved — its own header row — what the bounce refused.
     const savedParse = savedMapping === null ? null : parseStatement(rows, savedMapping);
     const savedProblems = savedParse === null ? [] : savedParse.problems;
 
@@ -148,12 +142,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       };
     }
 
-    // The header-row select's options: the candidate rows first, then every
-    // other non-blank row — a real header with two same-named columns fails
-    // candidate detection and must still be choosable; name-based mapping
-    // resolves a duplicated name to its first occurrence, and the fingerprint
-    // pins the header (`headerRowChoices` documents why) — plus the row on
-    // screen, whatever detection thinks of it.
+    // Candidate rows first, then every other non-blank row: a real header
+    // with two same-named columns fails candidate detection and must still
+    // be choosable (`headerRowChoices` documents why that is safe) — plus
+    // the row on screen, whatever detection thinks of it.
     const headerOptions = headerRowChoices(rows, headerRow).map((index) => {
       const cells = (rows[index] ?? [])
         .map((cell) => cell.trim())
@@ -241,10 +233,10 @@ export async function action({ params, request }: Route.ActionArgs) {
 
     const mapping = parseMappingForm(values, rows, delimiter);
 
-    // One call decides everything downstream of the form: whether the file
-    // parses, whether the mapping is worth remembering, and which step this
-    // reader goes to. The step is the same answer that lands on the draft, so
-    // the strip on the next screen can never describe a different journey.
+    // One call decides everything downstream: whether the file parses,
+    // whether the mapping is remembered, and which step this reader goes to
+    // — the same answer that lands on the draft, so the strip on the next
+    // screen can never describe a different journey.
     const outcome = await rememberMapping(draft.id, mapping);
 
     // Parse problems land here, not later (brief §4.5): each names the row
@@ -349,10 +341,10 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
   return (
     <section className="panel">
       <div className="panel-body form-intro">
-        {/* The file and the account lead, because a draft survives a closed
-            laptop and the reader may be resuming cold — which is exactly when
-            a bare name fails a house with two same-named accounts, so the
-            account arrives with its owner and number tail (brief §4.1). */}
+        {/* The file and the account lead: a draft survives a closed laptop
+            and the reader may be resuming cold — exactly when a bare name
+            fails a house with two same-named accounts, so the account
+            arrives with owner and number tail (brief §4.1). */}
         <p>
           <strong>{draft.filename}</strong> · {draft.accountName}
           {draft.accountNumberTail ? ` ${draft.accountNumberTail}` : ""} — owned by{" "}
@@ -395,12 +387,11 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
         </button>
       </Form>
 
-      {/* The evidence: the file's own words, verbatim — dollar signs,
-          thousands separators, n/a and all — because the reader is choosing
-          columns by these values, and laundering them would remove the
-          evidence. Deliberately no .is-numeric anywhere: the preview does not
-          yet know which columns are numbers; that is what the screen is
-          deciding. */}
+      {/* The evidence: the file's own words verbatim — dollar signs, n/a
+          and all — because the reader chooses columns by these values, and
+          laundering them removes the evidence. No .is-numeric anywhere: the
+          preview does not yet know which columns are numbers; that is what
+          the screen is deciding. */}
       <div className="data-table-scroll">
         <table className="data-table">
           <thead>

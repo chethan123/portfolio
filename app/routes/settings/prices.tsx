@@ -6,16 +6,11 @@ import { readRefreshCadence, saveRefreshCadence } from "~/lib/settings.server";
 import type { Route } from "./+types/prices";
 
 /**
- * Settings → Prices.
- *
- * A thin wrapper over `settings.server.ts`, exactly as Tax and Display are: it
- * reads the form, hands the raw fields down, and renders what comes back. What
- * a cadence is allowed to be lives in that module.
- *
- * One field, and it is here rather than in an environment variable because the
- * person who wants prices fresher — or the request spend lower — is the person
- * reading the screen, not a person with a shell on the container. The argument
- * is written out in `0008_refresh_cadence.sql`.
+ * Settings → Prices — a thin wrapper over `settings.server.ts`, as Tax and
+ * Display are: read the form, hand raw fields down, render what comes back.
+ * What a cadence may be lives in that module; a row rather than an
+ * environment variable because the person wanting prices fresher — or spend
+ * lower — is the one reading the screen (`0008_refresh_cadence.sql`).
  */
 export function meta() {
   return [{ title: "Prices · Settings · Portfolio" }];
@@ -36,9 +31,9 @@ export async function action({ request }: Route.ActionArgs) {
     return null;
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here rather than in the component: `FORM_ERROR` lives in a
-      // `.server` module, and a component referencing it would drag that module
-      // — and the database with it — into the client bundle.
+      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
+      // module, and a component referencing it would drag the database into
+      // the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       return { errors: fieldErrors, formError: formError ?? null, values };
@@ -70,10 +65,9 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
         </header>
 
         <Form method="post" className="panel-form">
-          {/* A refusal that names no field would otherwise be a form that did
-              nothing and said nothing. There is one field here, so this is
-              close to unreachable — which is exactly why it must not be the
-              case that goes unrendered. */}
+          {/* Close to unreachable with one field — exactly why it must not
+              be the refusal that goes unrendered: a form that did nothing
+              and said nothing. */}
           {actionData?.formError ? (
             <p className="form-error" role="alert">
               {actionData.formError}
@@ -113,13 +107,10 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
               cadence to apply.
             </p>
 
-            {/* The price tag, at the dial (ADR-0006, story 17). Every distinct
-                price the feed reports is kept forever, so the cadence is a
-                storage decision as much as a request-rate one — and the figure
-                belongs where the choice is made rather than in a document
-                nobody reads at the moment they turn it. Stated as the shape of
-                the relationship plus one worked figure, because the real number
-                depends on how many instruments the household holds. */}
+            {/* The price tag, at the dial (ADR-0006, story 17): every
+                distinct price is kept forever, so the cadence is a storage
+                decision as much as a request-rate one — the figure belongs
+                where the choice is made. */}
             <p className="field-note">
               It is also a storage decision. Every distinct price the feed reports is kept, and
               never pruned, so the price archive grows in proportion: about a hundred instruments

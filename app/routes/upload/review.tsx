@@ -16,17 +16,14 @@ import type { DiffAdded, DiffRemoved, DiffUpdated } from "~/lib/uploads.server";
 import type { Route } from "./+types/review";
 
 /**
- * Step four — the diff, then the commit (ingest brief §6).
- *
- * The safety valve, and the flow's only write. §5.2's "a missing row means
- * sold" is what makes a filtered export dangerous: a file showing 2 of 30
- * positions is a *valid* statement that silently sells 28 holdings, so every
- * removal is listed in full and a file removing more than half of what the
- * account holds cannot be committed without ticking a sentence that says so.
- *
- * Review is read-only plus the date and the tick: a wrong figure is fixed by
- * walking back to columns, because the figure is wrong in the mapping, not in
- * the diff.
+ * Step four — the diff, then the commit (ingest brief §6): the safety
+ * valve, and the flow's only write. §5.2's "a missing row means sold" makes
+ * a filtered export dangerous — a file showing 2 of 30 positions is a
+ * *valid* statement that silently sells 28 — so every removal is listed in
+ * full, and a file removing more than half cannot commit without ticking a
+ * sentence that says so. Review is read-only plus the date and the tick: a
+ * wrong figure is fixed by walking back to columns, because it is wrong in
+ * the mapping, not the diff.
  */
 export function meta() {
   return [{ title: "Review · Upload · Portfolio" }];
@@ -40,10 +37,10 @@ export async function loader({ params }: Route.LoaderArgs) {
       steps: {
         current: 4,
         draftId: diff.draftId,
-        // The columns step wrote down whether this draft's file raised any
-        // first sighting — the one moment the answer existed, since an alias,
-        // once written, does not say which draft wrote it. The strip dims
-        // "3 New instruments · none" off that bit (brief §2.1, §7.5).
+        // The columns step wrote down whether this file raised any first
+        // sighting — the one moment the answer existed: an alias, once
+        // written, does not say which draft wrote it. The strip dims entry 3
+        // off this bit (brief §2.1, §7.5).
         instrumentsSkipped: diff.instrumentsSkipped,
       } satisfies UploadStepsData,
       diff,
@@ -88,11 +85,10 @@ export async function action({ params, request }: Route.ActionArgs) {
       return redirect(`/upload/${params.draftId}/${error.step}`);
     }
     if (error instanceof NotFoundError) {
-      // The committed-draft re-POST — the back button pressed after success, a
-      // resubmitted tab. The draft the account id would be read from is gone,
-      // so the posted hidden field feeds the expired page's one extra link —
-      // never a write — and it is validated as an id here, before the error
-      // boundary trusts it, because it arrives from a posted form.
+      // The committed-draft re-POST — back button after success, resubmitted
+      // tab. The draft is gone, so the posted hidden field feeds the expired
+      // page's one extra link — never a write — validated as an id here
+      // because it arrives from a posted form.
       const accountId =
         values.accountId !== undefined && /^\d+$/.test(values.accountId)
           ? values.accountId
@@ -142,8 +138,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
   // never cost an edit.
   const values = actionData?.values;
 
-  // The counts each naming what they counted, in the table's own group order,
-  // so the line is the table's index rather than a second sequence. A first
+  // Counts in the table's own group order, so the line is its index. A first
   // statement reads "14 ADDED" alone: three zero counts would dress an
   // ordinary first upload as a strange one.
   const summary = diff.firstStatement
@@ -158,10 +153,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       </header>
 
       <div className="panel-body form-intro">
-        {/* The file and the account lead, because a draft survives a closed
-            laptop and the reader may be resuming cold — and this is the point
-            of no return, so the account arrives with its owner and number
-            tail (brief §4.1). */}
+        {/* The file and the account lead: a draft survives a closed laptop
+            and the reader may be resuming cold — and this is the point of no
+            return, so the account arrives with owner and number tail. */}
         <p>
           <strong>{diff.filename}</strong> · {diff.accountName}
           {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by{" "}
@@ -248,10 +242,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {diff.updated.map((row) => (
                 <tr key={row.instrumentId}>
                   <InstrumentCell row={row} />
-                  {/* Before → after in the cell for whatever changed; the
-                      unchanged cell prints its single figure. The before half
-                      recedes (`.diff-was`) so the eye lands on what will be
-                      true, not what was. */}
+                  {/* Before → after for whatever changed; the unchanged cell
+                      prints its single figure. `.diff-was` recedes so the eye
+                      lands on what will be true. */}
                   <td className="is-numeric">
                     {row.quantityChanged ? (
                       <>
@@ -309,10 +302,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         <input type="hidden" name="accountId" value={diff.accountId} />
 
         {/* The majority-removal confirmation, at the danger-zone weight the
-            app already closes an account with: a decision being put to the
-            reader, not a standing fact about the data. A file removing half
-            or less draws no confirmation at all — a tick that is always
-            demanded is a tick nobody reads. */}
+            app closes an account with: a decision put to the reader. Half or
+            less draws no confirmation — a tick always demanded is a tick
+            nobody reads. */}
         {diff.majorityRemoved ? (
           <div className="danger-zone">
             <label className="choice">
@@ -340,9 +332,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           </div>
         ) : null}
 
-        {/* The commit-time refusals — the product guard, the account-number
-            disagreement, the closed account, the unticked confirmation — all
-            render here, above the commit row. */}
+        {/* Commit-time refusals — product guard, account-number
+            disagreement, closed account, unticked confirmation — all render
+            here, above the commit row. */}
         {actionData?.formError ? (
           <div className="panel-body form-intro">
             <p className="form-error" role="alert">

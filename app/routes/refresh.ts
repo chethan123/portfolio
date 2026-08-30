@@ -1,14 +1,10 @@
 /**
- * "Refresh now": the one way a person can spend a provider request.
- *
- * A resource route rather than an action on each screen, because the control is
- * carried by five of them and an action per screen would be the same twenty
- * lines five times. It follows `masking.ts` — no component, a real form target,
- * so the control keeps working with JavaScript off.
- *
- * Nothing here guards who may press it, and nothing needs to: the deployment
- * puts an auth gate in front of the whole app (§11), and every family member
- * sees and can do everything.
+ * "Refresh now": the one way a person can spend a provider request. A
+ * resource route because five screens carry the control — an action per
+ * screen would be the same twenty lines five times. Follows `masking.ts`: no
+ * component, a real form target, so the control works with JavaScript off.
+ * Nothing guards who may press it and nothing needs to: the gate fronts the
+ * whole app (§11), and every family member sees and can do everything.
  */
 import { redirect } from "react-router";
 
@@ -40,13 +36,11 @@ export async function action({ request }: Route.ActionArgs): Promise<RefreshOutc
 
   const outcome = await run();
 
-  // A document POST means the browser submitted the form itself, which means
-  // JavaScript is off and there is no fetcher waiting for this data — it would
-  // render as a bare payload on a blank page. Send them back to the screen they
-  // pressed on and let the as-of line be the confirmation, which is what it is
-  // for. `Sec-Fetch-Mode` is set by the browser and cannot be spoofed by the
-  // page; a fetch that omits it is treated as the scripted path, which is the
-  // safe way round — a fetcher renders the outcome either way.
+  // A document POST means JavaScript is off and no fetcher waits for this
+  // data — it would render as a bare payload on a blank page. Redirect back
+  // and let the as-of line confirm. `Sec-Fetch-Mode` is browser-set,
+  // unspoofable by the page; a fetch omitting it is treated as scripted,
+  // the safe way round — a fetcher renders the outcome either way.
   if (request.headers.get("Sec-Fetch-Mode") === "navigate") {
     return redirect(safeReturn(form.get("redirectTo")?.toString()));
   }
@@ -55,12 +49,10 @@ export async function action({ request }: Route.ActionArgs): Promise<RefreshOutc
 }
 
 /**
- * Never throws.
- *
- * A throw from a route action reaches the nearest error boundary and replaces
- * the whole page — so the one failure this control promises to show inline,
- * leaving the figures exactly as they were (story 18), is the one a throw
- * cannot show. Every path returns something the control can render instead.
+ * Never throws: a throw from a route action reaches the error boundary and
+ * replaces the whole page — the one failure this control promises to show
+ * inline, figures untouched (story 18), is the one a throw cannot show.
+ * Every path returns something the control can render.
  */
 async function run(): Promise<RefreshOutcome> {
   try {
@@ -68,8 +60,8 @@ async function run(): Promise<RefreshOutcome> {
       refreshQuotes(yahooPriceProvider(), getConfig().MARKET_TIMEZONE, getDb()),
     );
 
-    // `null` is the lock being held. Not a failure: the prices are being
-    // fetched right now by whoever holds it.
+    // `null` is the lock held elsewhere — not a failure: whoever holds it is
+    // fetching the prices right now.
     if (report === null) return { status: "busy" };
 
     return {

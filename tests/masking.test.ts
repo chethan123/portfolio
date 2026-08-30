@@ -1,17 +1,12 @@
 /**
- * The precedence rule between the household's policy and one browser's cookie
- * (spec 0007, ADR-0002).
- *
- * Pure — no Postgres and no render — because this is the domain rule itself,
- * and `AGENTS.md` asks for domain rules to be tested as themselves. Exhausting
- * the same cases through database-backed renders would be slow and would prove
- * less: a screen full of dots tells you the resolver said `true`, not that it
- * said it for the right reason.
- *
- * The table is the point. Every policy is asked every question, so a rule that
- * quietly held for two of the three values cannot pass here — and the
- * combination that carries the whole feature's safety, *as last left* with
- * nothing left, is one row of it rather than a case someone remembered to add.
+ * The precedence rule between the household's policy and one browser's
+ * cookie (spec 0007, ADR-0002). Pure — the domain rule itself, tested as
+ * itself (AGENTS.md): a screen full of dots says the resolver answered
+ * `true`, not that it answered for the right reason. The table is the
+ * point: every policy is asked every question, so a rule quietly holding
+ * for two of three values cannot pass — and the combination carrying the
+ * feature's safety, *as last left* with nothing left, is one row of it
+ * rather than a case someone remembered to add.
  */
 import { describe, expect, it } from "vitest";
 

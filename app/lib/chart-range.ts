@@ -1,25 +1,16 @@
 /**
- * The chart-range vocabulary, resolution and cookie, once (spec 0008), with
- * the sampler's own density rule since spec 0009 / ADR-0003.
+ * The chart-range vocabulary, resolution and cookie, once (spec 0008), plus
+ * the sampler's density rule (spec 0009 / ADR-0003). The two routes each
+ * carried their own copies — named as debt in ARCHITECTURE.md — blocked on
+ * "All" meaning a different earliest date per screen; taking *which* surface
+ * applies as a parameter removes that, so the boundary math, disabled-state
+ * rule and sampler live here once.
  *
- * `overview.tsx` and `account.tsx` each carried their own `RANGES`/`windowDays`/
- * `sampleWindow` — `ARCHITECTURE.md` named the pair as debt, with one caveat:
- * `windowDays` could not be shared because "All" meant a different earliest
- * date on each screen. This module removes that caveat by taking *which*
- * surface's data-source rule applies as an explicit parameter, so the
- * boundary math, the disabled-state rule and the sampler live here once and
- * both routes call in rather than compute their own.
- *
- * Not a `.server` module, for `masking.ts`'s reason: nothing here touches the
- * database, and both routes' components (rendered again in the browser after
- * hydration) read the vocabulary too.
- *
- * The cookie lives here for the same reason masking's does — the vocabulary,
- * the precedence and the serialisation are one rule seen from several call
- * sites, and splitting them is how they drift. Distinct in name from
- * `MASKING_COOKIE`: this is a remembered convenience, not a household policy,
- * and unlike masking's session-scoped default it has no reason to forget
- * itself between browser sessions.
+ * Not a `.server` module (`masking.ts`'s reason): no database, and both
+ * routes' components read the vocabulary again after hydration. The cookie
+ * lives here too — vocabulary, precedence and serialisation are one rule, and
+ * splitting them is how they drift. Unlike masking's session-scoped policy,
+ * this is a remembered convenience with no reason to forget itself.
  */
 import type { IsoDate } from "./valuation.server.ts";
 
@@ -27,19 +18,11 @@ import type { IsoDate } from "./valuation.server.ts";
 export type RangeKey = "1d" | "1w" | "1m" | "3m" | "ytd" | "1y" | "5y" | "all" | "custom";
 
 /**
- * The presets and their order — identical on Overview and the account page,
- * key for key, so a bookmark from one works unchanged on the other.
- *
- * 3M is kept deliberately. It predates the wider set this spec adds and was a
- * live decision to retain it, against a recommendation raised while designing
- * this spec, rather than an oversight of the old four-option control — so a
- * future pass should not read it as leftover debt to clean up.
- *
- * 1D leads the set and is the one preset that is not a span of dates at all
- * (ADR-0006): it names the most recent trading session the observation log
- * carries, so it resolves to a session and a list of instants rather than to a
- * start date and a list of days. Everything else about a preset key — the URL
- * parameter, the cookie, the segmented control — it inherits unchanged.
+ * The presets, identical key for key on Overview and the account page, so a
+ * bookmark from one works on the other. 3M is a live decision to keep, not
+ * leftover debt. 1D is the one preset that is not a span of dates (ADR-0006):
+ * it names the most recent observed trading session and resolves to instants
+ * rather than days; everything else about a preset key it inherits unchanged.
  */
 export const RANGES: Record<RangeKey, { label: string }> = {
   "1d": { label: "1D" },
@@ -57,15 +40,11 @@ export const RANGES: Record<RangeKey, { label: string }> = {
 export const DEFAULT_RANGE = "1y" as const satisfies RangeKey;
 
 /**
- * The sampling budget (spec 0009, issue #74): how many dates a chart will
- * ever check for one range.
- *
- * A span whose whole day-count-plus-one fits inside this budget is sampled
- * at every calendar day — no gaps at all. A wider span is sampled at exactly
- * this many dates, spaced by a decay that grows geometrically walking
- * backward from `until`, so the day right next to the anchor is always
- * checked regardless of how wide the range is. Raising or lowering chart
- * density for every long-range preset at once is changing this one number.
+ * The sampling budget (spec 0009, issue #74): the most dates a chart checks
+ * for one range. A span fitting the budget is sampled every calendar day; a
+ * wider one gets exactly this many dates, geometrically decaying backward
+ * from `until` so the day beside the anchor is always checked. Chart density
+ * for every long-range preset is this one number.
  */
 export const SAMPLE_BUDGET = 180;
 
@@ -75,11 +54,9 @@ const DAY_MS = 86_400_000;
 export type Surface = "household" | "account";
 
 /**
- * The dates a surface's own history reaches back to.
- *
- * `manual` is read only for the household surface — an account's range never
- * considers hand-typed pre-app history, because that history was never any
- * one account's (`CONTEXT.md`'s "chart range" entry).
+ * The dates a surface's own history reaches back to. `manual` is read only
+ * for the household — hand-typed pre-app history was never any one account's
+ * (CONTEXT.md, "chart range").
  */
 export interface SurfaceEarliest {
   /** The earliest position-set date, or null on an instance/account with none. */
@@ -101,37 +78,27 @@ interface Window {
 }
 
 /**
- * The window to report on, and which range actually produced it.
- *
- * `range` and `custom` echo back the *effective* selection rather than the
- * one asked for: "All" always reports itself, since its boundary is the
- * surface's earliest date by definition, but an unusable custom span reports
- * back as the default preset it fell back to — a caller cannot draw a chart
- * captioned "Custom" from a span it never actually used.
+ * The window to report on, and which range actually produced it — the
+ * *effective* selection, not the one asked for: an unusable custom span
+ * reports as the default preset it fell back to, because a caller cannot draw
+ * a chart captioned "Custom" from a span it never used.
  */
 export interface RangeWindow extends Window {
   range: RangeKey;
   custom?: CustomSpan;
   /**
-   * The trading session 1D plots, present only when 1D actually resolved.
-   *
-   * Its presence is what tells a loader to read the intra-session series
-   * instead of the day-granularity one — the two cannot both be right, and a
-   * flag beside the key would be a second thing to keep in step with it. When
-   * 1D is asked for on an instance whose observation log is empty there is no
-   * session to name, and the range falls back to the default preset the way an
-   * undrawable custom span does.
+   * The session 1D plots, present only when 1D actually resolved — its
+   * presence is what tells a loader to read the intra-session series (a flag
+   * beside the key would be a second thing to keep in step). 1D on an empty
+   * observation log falls back to the default, like an undrawable custom span.
    */
   session?: IsoDate;
 }
 
 /**
- * Has anything been observed at all?
- *
- * Two spellings of "no session" reach here — `null` from a reader that looked
- * and found nothing, and `undefined` from a caller that did not pass one — and
- * both mean the same thing to 1D. Named once so the two functions that branch
- * on it cannot come to disagree about which spellings count.
+ * Two spellings of "no session" reach here — `null` (looked, found nothing)
+ * and `undefined` (not passed) — and both mean the same to 1D. Named once so
+ * the two branching functions cannot disagree about which spellings count.
  */
 const hasSession = (session?: IsoDate | null): session is IsoDate =>
   session !== undefined && session !== null;
@@ -146,13 +113,10 @@ function addDays(date: IsoDate, days: number): IsoDate {
 }
 
 /**
- * Calendar-month arithmetic, not a fixed day count.
- *
- * 1M and 3M are the trailing calendar month/quarter — today back to the same
- * day-of-month one or three months prior — the same shape 1Y and 5Y take at
- * twelve and sixty months. `setUTCMonth` handles the month-end edge (31 March
- * minus one month) the way `Date` always has: it rolls into the next month
- * rather than clamping, which is accepted here rather than special-cased.
+ * Calendar-month arithmetic, not a fixed day count: 1M/3M/1Y/5Y are trailing
+ * calendar spans back to the same day-of-month. `setUTCMonth` handles the
+ * month-end edge as `Date` always has — rolling into the next month rather
+ * than clamping — accepted rather than special-cased.
  */
 function subtractMonths(date: IsoDate, months: number): IsoDate {
   const d = new Date(`${date}T00:00:00Z`);
@@ -163,11 +127,10 @@ function subtractMonths(date: IsoDate, months: number): IsoDate {
 const startOfYear = (date: IsoDate): IsoDate => `${date.slice(0, 4)}-01-01`;
 
 /**
- * Every preset's boundary except the three that cannot be a calendar offset
- * from today: "All" and "Custom" need the surface's earliest date, and "1D"
- * needs the observation log's most recent session. Excluding them from the key
- * type is what makes the compiler demand a branch for each in the two functions
- * below rather than letting one fall through to a wrong window.
+ * Every preset's boundary except the three that cannot be a calendar offset:
+ * "All"/"Custom" need the surface's earliest date, "1D" the latest observed
+ * session. Excluding them from the key type makes the compiler demand a
+ * branch for each below rather than let one fall through to a wrong window.
  */
 const FIXED_BOUNDARY: Record<Exclude<RangeKey, "1d" | "all" | "custom">, (today: IsoDate) => IsoDate> = {
   "1w": (today) => addDays(today, -7),
@@ -179,14 +142,11 @@ const FIXED_BOUNDARY: Record<Exclude<RangeKey, "1d" | "all" | "custom">, (today:
 };
 
 /**
- * Whichever is earlier, on the surface's own terms.
- *
- * Household: the earlier of the earliest position-set date and the earliest
- * hand-typed manual point — the manual series is the part of the chart that
- * reaches furthest back, so ignoring it here would cut off the very history
- * "All", and every preset's disabled state, is supposed to reach. Account: its
- * own earliest position-set date only, never the manual series, which is the
- * household's net worth and not any one account's.
+ * Whichever is earlier, on the surface's own terms. Household: the earlier of
+ * the earliest position set and the earliest manual point — the manual series
+ * reaches furthest back, and ignoring it would cut off the history "All"
+ * exists to reach. Account: its own earliest position set only; the manual
+ * series is the household's, not any one account's.
  */
 export function surfaceEarliestDate(surface: Surface, earliest: SurfaceEarliest): IsoDate | null {
   if (surface === "account") return earliest.positionSet;
@@ -199,13 +159,10 @@ export function surfaceEarliestDate(surface: Surface, earliest: SurfaceEarliest)
 }
 
 /**
- * The ratio `r > 1` such that `n` geometrically growing terms starting at
- * `r^0 = 1` sum to exactly `target` — i.e. `1 + r + r^2 + ... + r^(n-1) =
- * target`. Solved by bisection rather than in closed form (ADR-0003): the sum
- * is continuous and strictly increasing in `r` for `r > 1`, running from `n`
- * (as `r → 1⁺`) to unbounded, and every caller here only asks for a `target`
- * greater than `n`, so a solution always exists and bisection converges on
- * it reliably.
+ * The ratio `r > 1` with `1 + r + … + r^(n-1) = target`, by bisection rather
+ * than closed form (ADR-0003): the sum is continuous and strictly increasing
+ * in `r`, callers only ask for `target > n`, so a solution always exists and
+ * bisection converges reliably.
  */
 function solveGrowthRatio(n: number, target: number): number {
   const sumAt = (r: number): number => {
@@ -219,18 +176,14 @@ function solveGrowthRatio(n: number, target: number): number {
   };
 
   // Bracket the root before bisecting. At the shipped budget this loop never
-  // runs — with 179 terms the first guess already sums past 1e53, dwarfing any
-  // real span — but it is what keeps the solve correct if `SAMPLE_BUDGET` is
-  // ever retuned far downward, where `2^(n-1)` stops outrunning a multi-year
-  // span and the bracket has to be widened for real.
+  // runs (179 terms already sum past 1e53), but it keeps the solve correct if
+  // SAMPLE_BUDGET is ever retuned far downward.
   let low = 1;
   let high = 2;
   while (sumAt(high) < target) high *= 2;
 
-  // A tolerance this tight on `r` itself is what the spec calls for: loose
-  // enough to converge in a bounded number of steps, tight enough that every
-  // downstream day-offset (up to `SAMPLE_BUDGET - 2` powers of `r`) rounds
-  // stably.
+  // Loose enough to converge in bounded steps, tight enough that every
+  // downstream day-offset (up to SAMPLE_BUDGET - 2 powers of r) rounds stably.
   while (high - low > 1e-9) {
     const mid = (low + high) / 2;
     if (sumAt(mid) < target) low = mid;
@@ -241,14 +194,11 @@ function solveGrowthRatio(n: number, target: number): number {
 }
 
 /**
- * Every calendar day from `since` to `until` when the span fits the budget;
- * otherwise exactly `SAMPLE_BUDGET` dates, geometrically decaying backward
- * from `until` (spec 0009, issue #74, ADR-0003).
- *
- * The anchor is `until`, never the real current date — every fixed preset's
- * `until` already equals today, so this only matters for a custom range
- * ending in the past, which must decay away from its own end rather than
- * from the wall clock.
+ * Every calendar day when the span fits the budget; otherwise exactly
+ * `SAMPLE_BUDGET` dates geometrically decaying backward from `until` (spec
+ * 0009, ADR-0003). The anchor is `until`, never the wall clock — it only
+ * differs for a custom range ending in the past, which must decay from its
+ * own end.
  */
 function sampleWindow(since: IsoDate, until: IsoDate): Window {
   const start = parseIso(since);
@@ -260,16 +210,13 @@ function sampleWindow(since: IsoDate, until: IsoDate): Window {
     return { since, dates };
   }
 
-  // `SAMPLE_BUDGET - 1` gap terms (`r^0` through `r^(SAMPLE_BUDGET-2)`), the
-  // first fixed at one calendar day by construction (`r^0 = 1`), solved to sum
-  // exactly to the span so the walk backward lands precisely on `since`.
+  // SAMPLE_BUDGET - 1 gap terms, the first fixed at one day (r^0 = 1), solved
+  // to sum exactly to the span so the walk backward lands precisely on `since`.
   const ratio = solveGrowthRatio(SAMPLE_BUDGET - 1, spanDays);
 
-  // Cumulative day-offsets from `until`, nearest first: offset(0) = 0,
-  // offset(k) = offset(k-1) + ratio^(k-1). The last equals `spanDays` by
-  // construction of `ratio`, landing exactly on `since`. Accumulated in a
-  // running total rather than read back out of the array, so the loop never
-  // has to index behind itself.
+  // Cumulative day-offsets from `until`, nearest first; the last equals
+  // `spanDays` by construction. A running total, so the loop never indexes
+  // behind itself.
   const offsets: number[] = [0];
   let offset = 0;
   let gap = 1;
@@ -279,20 +226,17 @@ function sampleWindow(since: IsoDate, until: IsoDate): Window {
     gap *= ratio;
   }
 
-  // Built nearest-to-`until` first above; reversed here into the ascending,
-  // oldest-first order every other caller of this function returns.
+  // Built nearest-to-`until` first; reversed into the oldest-first order
+  // every caller expects.
   const dates = offsets.map((offset) => addDays(until, -Math.round(offset))).reverse();
 
   return { since, dates };
 }
 
 /**
- * Is `custom` a span this surface can actually draw?
- *
- * Both ends have to be set, in order, and within what the surface can show —
- * an incomplete pair (one box filled in) or an out-of-bounds one is refused
- * here rather than drawn from a clamp, the same defensive posture the
- * `Object.hasOwn` guard already takes against a hand-edited `range`.
+ * Is `custom` a span this surface can actually draw? Both ends set, in order,
+ * within what the surface can show — refused rather than drawn from a clamp,
+ * the same posture the `Object.hasOwn` guard takes on a hand-edited `range`.
  */
 function isDrawableCustomSpan(span: CustomSpan, today: IsoDate, earliest: IsoDate | null): boolean {
   if (span.start > span.end) return false;
@@ -302,12 +246,9 @@ function isDrawableCustomSpan(span: CustomSpan, today: IsoDate, earliest: IsoDat
 }
 
 /**
- * The window a range resolves to for one surface, on one day.
- *
- * "All" and "Custom" are the two presets that need the surface's earliest
- * date rather than a fixed calendar offset: "All" is measured from it
- * directly, and an unusable custom span falls back to the same default every
- * other unrecognised range does rather than erroring.
+ * The window a range resolves to for one surface on one day. "All" and
+ * "Custom" need the surface's earliest date rather than a calendar offset;
+ * an unusable custom span falls back to the default rather than erroring.
  */
 export function resolveRange(
   range: RangeKey,
@@ -317,10 +258,8 @@ export function resolveRange(
     surface: Surface;
     custom?: CustomSpan;
     /**
-     * The most recent trading session the observation log carries, from
-     * `latestObservedSession`. Omitted means none — which is the safe
-     * direction, since it disables 1D rather than offering a chart that cannot
-     * be drawn.
+     * From `latestObservedSession`. Omitted means none — the safe direction:
+     * it disables 1D rather than offering a chart that cannot be drawn.
      */
     session?: IsoDate | null;
   },
@@ -328,36 +267,28 @@ export function resolveRange(
   const earliestDate = surfaceEarliestDate(opts.surface, opts.earliest);
 
   if (range === "1d") {
-    // Nothing observed yet, so there is no session to plot. The same fallback
-    // an undrawable custom span takes, and for the same reason: a caller cannot
-    // draw a chart captioned "1D" from a session it never had.
+    // Nothing observed yet = no session to plot: the undrawable-custom-span
+    // fallback, for the same reason.
     if (!hasSession(opts.session)) return resolveRange(DEFAULT_RANGE, opts);
 
-    // `dates` is empty on purpose — 1D bypasses the day-granularity sampler
-    // entirely, and its points come from the observation log's own instants
-    // rather than from a calendar. A loader that fails to notice `session` and
-    // reads the day series anyway therefore draws nothing, rather than drawing
-    // the wrong thing.
+    // `dates` is empty on purpose — 1D bypasses the day sampler; its points
+    // are the log's own instants, so a loader that misses `session` and reads
+    // the day series draws nothing rather than the wrong thing.
     //
-    // `since` is the day before the plotted session, which is what the change
-    // figure beside the headline is measured from: today's own `price_daily`
-    // row is provisional and converges on the last observation, so measuring
-    // from it would report every session as flat. Strictly before the session,
-    // carried forward by `holding_valued_at`, is the previous close — "today's
-    // change" in the sense a brokerage means it.
+    // `since` is the day before the session — what the headline's change is
+    // measured from: today's `price_daily` row converges on the last
+    // observation, so measuring from it would report every session flat.
+    // Strictly before, carried forward, is the previous close — "today's
+    // change" as a brokerage means it.
     //
     // One consequence, stated because 1D is where it first shows: the change
-    // reader compares *today's* positions against the positions held on
-    // `since`, while the 1D line holds today's positions constant across the
-    // whole session. On every other preset those agree, because the line's
-    // first point is the same `holding_valued_at(since)` call the change reads.
-    // Under 1D a statement uploaded during the session moves the delta by the
-    // whole change in holdings while the line moves only by the change in
-    // price. That is DESIGN.md §14's second accepted limitation — this app
-    // cannot separate market movement from contributions — arriving on a span
-    // short enough to notice it. Reconciling it would mean a change reader that
-    // values `since` at today's positions, which is a different figure from the
-    // one every other range shows, and is not what issue #94 asked for.
+    // reader compares today's positions against those held on `since`, while
+    // the 1D line holds today's positions constant. On other presets those
+    // agree; under 1D a statement uploaded mid-session moves the delta by the
+    // holdings change while the line moves only by price. DESIGN.md §14's
+    // second accepted limitation, arriving on a span short enough to notice;
+    // reconciling it would need a change figure no other range shows, which
+    // is not what issue #94 asked for.
     return { range, session: opts.session, since: addDays(opts.session, -1), dates: [] };
   }
 
@@ -377,13 +308,9 @@ export function resolveRange(
 
 /**
  * Whether a fixed preset's start falls before this surface's earliest date.
- *
- * A preset landing exactly on the earliest date is not disabled — the day an
- * account (or the household) opened is a real, drawable start for every
- * preset that reaches back that far, including YTD on January 1st or 2nd for
- * an instance that new. "All" and "Custom" are never disabled: "All"'s
- * boundary is the earliest date by definition, and "Custom" is a picker
- * rather than a fixed span.
+ * Landing exactly on it is not disabled — the day the account or household
+ * opened is a real, drawable start. "All" and "Custom" are never disabled:
+ * "All"'s boundary is the earliest date by definition, "Custom" is a picker.
  */
 export function isRangeDisabled(
   range: RangeKey,
@@ -395,12 +322,10 @@ export function isRangeDisabled(
     session?: IsoDate | null;
   },
 ): boolean {
-  // The one preset disabled by something other than the surface's earliest
-  // date. An instance whose observation log is entirely empty — a brand-new
-  // one, or one whose poller has never run during a session — has no session to
-  // draw, and story 13 asks for the chip to say so the way an out-of-reach
-  // preset already does. A log with a single observation is not empty: the chip
-  // is offered and the panel explains what it is short of.
+  // The one preset disabled by something other than the earliest date: an
+  // empty observation log has no session to draw, and story 13 wants the chip
+  // to say so. A log with a single observation is not empty — the chip is
+  // offered and the panel explains what it is short of.
   if (range === "1d") return !hasSession(opts.session);
 
   if (range === "all" || range === "custom") return false;
@@ -413,15 +338,13 @@ export function isRangeDisabled(
 
 /**
  * The clause a chart's accessible label names the active range with — "over
- * the last 1Y," for a fixed preset, or the actual dates for a custom span, so
- * a screen reader gets an equivalent update for every one of the eight
- * options rather than only the original four (story 24).
+ * the last 1Y", or the actual dates for a custom span — so a screen reader
+ * gets an equivalent update for every option (story 24).
  */
 export function rangeDescription(range: RangeKey, custom?: CustomSpan): string {
   if (range === "custom" && custom) return `from ${custom.start} to ${custom.end}`;
-  // "over the last 1D" would be a sentence about a span, and 1D is not one: it
-  // is one named session, which is what a listener needs to hear before the
-  // times of day that follow in the label's second half.
+  // 1D is not a span but one named session — what a listener needs to hear
+  // before the times of day that follow.
   if (range === "1d") return "over the latest trading session";
   return `over the last ${RANGES[range].label}`;
 }
@@ -442,40 +365,27 @@ export function rangeOptions(opts: {
 }
 
 /**
- * The `min` a custom date input should carry for this surface — its own
- * earliest-available date, or none where there is nothing to show yet.
- *
- * Distinct from `earliestRecordableDate` (`input.server.ts`): that is the
- * earliest date the application can price *anything*, a floor on writes. This
- * is the earliest date *this surface* actually has, a floor on what a chart
- * can read back — the same date "All" and the disabled rule above measure
- * against.
+ * The `min` a custom date input carries for this surface. Distinct from
+ * `earliestRecordableDate` (`input.server.ts`): that is a floor on writes;
+ * this is the earliest date *this surface* has — a floor on reads, the same
+ * date "All" and the disabled rule measure against.
  */
 export function customRangeMin(surface: Surface, earliest: SurfaceEarliest): IsoDate | null {
   return surfaceEarliestDate(surface, earliest);
 }
 
-/**
- * The cookie's name.
- *
- * Distinct from `MASKING_COOKIE`: a different, lower-stakes preference, named
- * so the two cannot be confused in a request's `Cookie` header.
- */
+/** Distinct from `MASKING_COOKIE` so the two cannot be confused in a header. */
 export const RANGE_COOKIE = "chart_range";
 
 /**
- * A year — long enough that a remembered range means what it says on a
- * browser someone opens every few months, and unconditional, unlike
- * masking's policy-dependent lifetime: there is no household policy here to
- * make session-scoping meaningful, only a convenience with nothing to protect
- * by forgetting itself.
+ * A year, unconditional — unlike masking's policy-dependent lifetime, this is
+ * a convenience with nothing to protect by forgetting itself.
  */
 const RANGE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
 /**
- * Serialises what to remember: a fixed preset by its key, or a custom span as
- * both of its dates. One format for both, so the reader has exactly one thing
- * to parse rather than a fixed-key case and a separate custom case.
+ * A fixed preset by its key, or a custom span as both dates — one format, so
+ * the reader has exactly one thing to parse.
  */
 export function encodeRangeCookieValue(range: RangeKey, custom?: CustomSpan): string {
   if (range === "custom" && custom) return `custom:${custom.start}:${custom.end}`;
@@ -488,9 +398,8 @@ export function rangeCookie(value: string): string {
 }
 
 /**
- * What a stored cookie value decodes to, or null if it names no range this
- * control offers — the same refusal, rather than a guess, that the
- * `Object.hasOwn` guard already gives a hand-edited `range` query parameter.
+ * What a stored cookie value decodes to, or null when it names no range this
+ * control offers — the `Object.hasOwn` guard's refusal, not a guess.
  */
 export function decodeRangeCookieValue(
   value: string,
@@ -506,10 +415,9 @@ export function decodeRangeCookieValue(
 }
 
 /**
- * What this browser last chose, or undefined if it said nothing.
- *
- * Parsed by hand like `readMaskingCookie`, matched on the whole name so a
- * cookie whose name merely ends in this one is never mistaken for it.
+ * What this browser last chose, or undefined. Parsed by hand like
+ * `readMaskingCookie`, matched on the whole name so a cookie merely ending in
+ * this one is never mistaken for it.
  */
 export function readRangeCookie(request: Request): string | undefined {
   const header = request.headers.get("Cookie");
@@ -532,29 +440,21 @@ export interface RequestedRange {
   range: RangeKey;
   custom?: CustomSpan;
   /**
-   * Whether the URL itself named a range, as opposed to falling back to the
-   * cookie or the hardcoded default.
-   *
-   * The one flag a loader needs to decide whether to write the persistence
-   * cookie: an explicit `?range=` (or, for Custom, `?start=&end=`) always wins
-   * and is what gets written back; its absence falls back to the cookie's
-   * stored value, and absence of both falls back to {@link DEFAULT_RANGE}
-   * with nothing written, so a browser that has never chosen a range does not
-   * have one invented for it.
+   * Whether the URL itself named a range — the one flag a loader needs to
+   * decide whether to write the cookie: an explicit `?range=` wins and is
+   * written back; absent, the cookie; absent both, {@link DEFAULT_RANGE} with
+   * nothing written, so a browser that never chose does not have a choice
+   * invented for it.
    */
   explicit: boolean;
 }
 
 /**
- * The one place both routes read `?range=` (and, for Custom, `?start=`/
- * `?end=`) against the persistence cookie, so the precedence rule — URL, then
- * cookie, then the hardcoded default — is written once rather than copied
- * into two loaders free to drift on the fallback order.
- *
- * Guarded with the same `Object.hasOwn` check the `RANGES` gate has always
- * used: `in` walks the prototype chain, and a hand-edited `?range=toString`
- * must fall through to the cookie or the default rather than reading
- * `RANGES.toString` as a match.
+ * The one place both routes read `?range=` (and `?start=`/`?end=`) against
+ * the cookie, so the precedence — URL, cookie, default — is written once.
+ * `Object.hasOwn`, not `in`: `in` walks the prototype chain, and a
+ * hand-edited `?range=toString` must fall through rather than match
+ * `RANGES.toString`.
  */
 export function readChartRange(request: Request): RequestedRange {
   const params = new URL(request.url).searchParams;
@@ -577,15 +477,10 @@ export function readChartRange(request: Request): RequestedRange {
 }
 
 /**
- * The three parameters this control owns. Everything else in the address
- * belongs to the screen and is carried through untouched.
- *
- * Here rather than in the component because these are exactly the three
- * {@link readChartRange} reads back, and the read side and the write side of
- * one vocabulary drift when they live in different files. They are still two
- * lists in one file — `readChartRange` names each one where it reads it,
- * because the three have different roles rather than being interchangeable —
- * so adding a fourth is an edit in both places, twenty lines apart.
+ * The three parameters this control owns; everything else in the address
+ * belongs to the screen and is carried through untouched. Here rather than in
+ * the component because these are exactly what {@link readChartRange} reads
+ * back, and a vocabulary's read and write sides drift in different files.
  */
 const RANGE_PARAMS = ["range", "start", "end"];
 
@@ -598,29 +493,15 @@ export function carriedParams(params: URLSearchParams): [string, string][] {
 }
 
 /**
- * The search string a preset points at: the rest of the query, plus its own
- * `?range=`.
- *
- * The emit side of {@link readChartRange}, and here rather than in the control
- * for `parseQuery`/`toSearch`'s reason — a parameter one function writes and
- * another refuses to read is a seam with a hole in it.
- *
- * A whole search string rather than React Router's relative resolution,
- * because a `to` beginning with `?` replaces the *entire* query: that is what
- * silently dropped the account page's `?uploaded=` receipt when a range was
- * picked. With nothing else in the address it still comes out as exactly
- * `?range=<key>`.
- *
- * `start` and `end` are rewritten rather than carried. A preset never reads a
- * custom span — {@link readChartRange} looks at them only under
- * `range=custom` — so one left behind is inert, and an address advertising a
- * span nothing draws is worse than no span at all.
- *
- * The one liberty taken with `URLSearchParams.toString`: it percent-encodes a
- * comma, and this application spells a multi-valued parameter with literal
- * commas (`?owner=1,3`, spec 0013). Both spellings parse to the same value, so
- * decoding it back keeps one view spelled one way in the address bar instead
- * of two.
+ * The search string a preset points at: the rest of the query plus its own
+ * `?range=` — the emit side of {@link readChartRange}, here for
+ * `parseQuery`/`toSearch`'s reason. A whole search string, not React Router's
+ * relative resolution: a `to` beginning with `?` replaces the *entire* query,
+ * which is what silently dropped the `?uploaded=` receipt when a range was
+ * picked. `start`/`end` are dropped, not carried — a preset never reads them,
+ * and an address advertising a span nothing draws is worse than none. The
+ * comma un-encoding keeps `?owner=1,3` (spec 0013) spelled one way in the
+ * address bar; both spellings parse the same.
  */
 export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
   const next = new URLSearchParams(carriedParams(params));
@@ -630,52 +511,35 @@ export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
 }
 
 /**
- * Remembers an explicit range choice in the persistence cookie (spec 0008).
+ * Remembers an explicit range choice in the cookie (spec 0008). A middleware,
+ * not a header on the loader's return: both routes' tests call their loader
+ * directly and read fields off the plain object, and wrapping in
+ * `data(value, { headers })` only sometimes would make the result type a
+ * union those tests never asked for. A middleware wraps the *response*,
+ * leaving each loader one shape always; one factory so the two routes cannot
+ * drift the way the range logic used to.
  *
- * A middleware rather than a header on the loader's own return, because both
- * routes' test suites call their loader directly and read its fields off the
- * plain object `Route.ComponentProps["loaderData"]` names — including many
- * tests that have nothing to do with this cookie. Wrapping that return in
- * `data(value, { headers })` only when a cookie needs writing would make the
- * loader's result type (and its runtime shape, for a test calling it
- * directly rather than through the router) a union most of those tests never
- * asked for. A middleware wraps the *response* instead, leaving each loader
- * returning one shape always. One factory here rather than one hand-copied
- * array per route, so the two cannot drift the way the range logic itself
- * used to.
- *
- * What gets remembered is the request's own `?range=` (or `start`/`end`), not
- * some database-resolved effective value — spec 0008's own wording ("an
- * explicit range query parameter... is what gets written back to the
- * cookie") and the fact that a middleware runs around the loader without
- * seeing what it returned. An explicit but undrawable custom span therefore
- * persists as asked and re-falls-back identically on every future read,
- * which costs nothing: {@link resolveRange} applies the same fallback rule
- * every time regardless of where the value came from.
+ * What is remembered is the request's own `?range=`, not a database-resolved
+ * effective value (spec 0008's wording; a middleware never sees what the
+ * loader returned). An explicit but undrawable custom span persists as asked
+ * and re-falls-back identically on every read — {@link resolveRange} applies
+ * the same rule every time.
  */
 export function chartRangeMiddleware() {
-  // Untyped against `react-router`'s own `MiddlewareFunction`, deliberately:
-  // that generic type and each route's generated `Route.MiddlewareFunction`
-  // disagree on `next`'s return type (`Response` versus `unknown`) and are
-  // not assignable to one another. Typed loosely enough to satisfy both
-  // `overview.tsx`'s and `account.tsx`'s own generated types by structural
-  // subtyping instead — the same reason `tests/support/routes.ts`'s `args()`
-  // casts rather than importing a generated `Route.*Args` type.
+  // Untyped against react-router's `MiddlewareFunction`, deliberately: it and
+  // the routes' generated `Route.MiddlewareFunction` disagree on `next`'s
+  // return type and are not mutually assignable. Loose typing satisfies both
+  // generated types structurally (the reason `args()` in tests/support casts).
   return async ({ request }: { request: Request }, next: () => Promise<unknown>): Promise<Response> => {
     const response = (await next()) as Response;
     const requested = readChartRange(request);
 
-    // Not onto a redirect. Since spec 0013 a loader may bounce to a canonical
-    // address before it draws anything, and stamping a remembered choice on a
-    // response that is not the page is a header nobody reads. Skipping it costs
-    // nothing: every redirect under this middleware lands somewhere this same
-    // middleware runs, so the cookie is written for the page that is actually
-    // drawn.
-    //
-    // Document requests only. A client-side navigation carries a redirect back
-    // as react-router's single-fetch 202 rather than a 3xx, and this does not
-    // fire for it — which is harmless, because it would write the same value
-    // the followed request writes a moment later.
+    // Not onto a redirect: since spec 0013 a loader may bounce to a canonical
+    // address, and a cookie on a response that is not the page is a header
+    // nobody reads. Every redirect lands somewhere this middleware also runs,
+    // so it is written for the page actually drawn. (A client-side navigation
+    // carries a redirect as a single-fetch 202, not a 3xx — harmless: the
+    // followed request writes the same value a moment later.)
     const redirecting = response.status >= 300 && response.status < 400;
 
     if (requested.explicit && !redirecting) {

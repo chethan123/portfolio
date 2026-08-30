@@ -1,35 +1,23 @@
 /**
- * Where two independent queries answer one question, and must not disagree.
+ * Where two independent queries answer one question, and must not disagree
+ * (§8.2's weakest point). Most of the mitigation is structural and needs no
+ * test — the readers all sum the same already-rounded `value` column, and
+ * asserting that would assert `sum` is `sum`. What is left is the pairs
+ * whose *shapes* genuinely differ — two SQL statements, SQL against a
+ * JavaScript reduction, two reductions over one array — which can come
+ * apart under an edit with nothing else noticing. The Income block at the
+ * foot is the third of those: Holdings and Income group by tax treatment
+ * through two reductions, agreeing only because both read
+ * `holdings-view.ts`'s one dimension accessor, and this test keeps that
+ * structural.
  *
- * DESIGN.md §8.2 names three hand-rolled dashboard queries drifting apart as
- * the weakest point in the whole design, and `holding_valued` plus the query
- * module over it is the entire mitigation. Most of that mitigation is
- * structural and needs no test: `netWorth`, `accountTotal`, `accountTotals`,
- * `netWorthChange` and the series all sum the same already-rounded `value`
- * column, `numeric` addition is exact, and the parts therefore add to the whole
- * by construction rather than by luck. Asserting that would be asserting that
- * `sum` is `sum`.
- *
- * What is left over is the pairs where the *shapes* genuinely differ — two SQL
- * statements, a SQL statement and a JavaScript reduction, or two JavaScript
- * reductions over one array, that nothing couples. Those can come apart under
- * an edit and nothing else would notice.
- *
- * The last of those three is what the Income block at the foot of this file is
- * for. Holdings and Income group the same holdings by the same tax treatment
- * through two different reductions, and the only thing making them agree is
- * that both read one dimension accessor out of `holdings-view.ts`. That is a
- * structural arrangement rather than a coincidence, and this is the test that
- * keeps it structural.
- *
- * **What is deliberately not asserted here:** `netWorth(ALL_OWNERS)` and
- * `netWorthAt(ALL_OWNERS, today)` do not agree, and must not be made to. The current view
- * prices from `quote.price`; the as-of function prices from `price_daily.close`
- * (`0002_holding_valued.sql:134` against `0003_holding_valued_at.sql`). With a
- * quote of 482.10 against a close of 480.00 they answer 48210.0000 and
- * 48000.0000, and with no `price_daily` row at all the second is 0.0000 over a
- * coverage of zero. A test pairing them would only pass by seeding both prices
- * to the same number, which pins a fixture rather than a rule.
+ * **Deliberately not asserted:** `netWorth` and `netWorthAt(…, today)` do
+ * not agree and must not be made to — the current view prices from
+ * `quote.price`, the as-of from `price_daily.close`
+ * (`0002_holding_valued.sql` against `0003_holding_valued_at.sql`), so
+ * 482.10 against 480.00 answers 48210.0000 and 48000.0000, and no
+ * `price_daily` row at all answers 0.0000 over zero coverage. Pairing them
+ * would only pass by seeding both prices equal — a fixture, not a rule.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -160,19 +148,14 @@ describe("the Analysis screen's own arithmetic", () => {
   it(
     "slices a total it did not compute, and the slices add back up to it",
     withDatabase(async (ctx) => {
-      // `analysis.tsx` issues two queries — `currentHoldings(ALL_OWNERS)` for the slices
-      // and `netWorth(ALL_OWNERS)` for the headline — and nothing couples them. A filter
-      // added to either side, or a grouping that dropped a row, would put a
-      // total on the screen that its own breakdown contradicts. That is §8.2's
-      // failure exactly, on one page.
-      //
-      // Summed as `BigInt` over the stored strings: adding these with `Number`
-      // is how a test of decimal arithmetic comes to pass for the wrong reason.
-      //
-      // This half cannot see a row that was never priced — an unpriced holding
-      // contributes null to every sum, so dropping one changes no total. That
-      // is what the coverage test below is for; the two are complementary and
-      // neither is sufficient alone.
+      // `analysis.tsx` issues two queries — `currentHoldings` for the slices,
+      // `netWorth` for the headline — and nothing couples them: a filter on
+      // either side, or a grouping dropping a row, puts a total on screen
+      // that its own breakdown contradicts (§8.2's failure exactly). Summed
+      // as `BigInt` over the stored strings — `Number` is how a test of
+      // decimal arithmetic passes for the wrong reason. This half cannot see
+      // a never-priced row (null contributes nothing to any sum); the
+      // coverage test below is the complement, and neither suffices alone.
       await anAwkwardPortfolio(ctx);
 
       const page = await analysisPage();

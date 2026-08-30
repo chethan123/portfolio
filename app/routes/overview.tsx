@@ -62,24 +62,16 @@ import { asOfView } from "../lib/prices.server.ts";
 import type { Route } from "./+types/overview";
 
 /**
- * Overview — the net worth headline, the trend line, and the accounts rollup.
- *
- * The layout is the Stitch "Portfolio Dashboard" screen (DESIGN.md §13). The
- * headline sits directly on the canvas rather than in a panel, which is what
- * keeps the one figure the page exists for from reading as one card among
- * several; everything under it is a panel — the trend, and a bento row of the
- * accounts beside their relative sizes.
- *
- * What is *not* taken from that mock is any of its data. Every figure it showed
- * was fabricated, and one of its four accounts was a crypto account, which §1
- * puts out of scope. The numbers here come from the shared query module, which
- * is what keeps this page and the Holdings page from disagreeing about the same
- * portfolio (§8.2).
- *
- * The empty case is load-bearing and comes first: an instance nothing has been
- * uploaded to renders **no figure at all**, because a net worth of zero and an
- * empty database look identical on screen and only one of them is worth
- * panicking about.
+ * Overview — the net worth headline, the trend line, and the accounts
+ * rollup (Stitch "Portfolio Dashboard", DESIGN.md §13). The headline sits
+ * directly on the canvas, not in a panel — what keeps the one figure the
+ * page exists for from reading as one card among several; everything under
+ * it is a panel. None of the mock's *data* is taken: every figure it showed
+ * was fabricated. The numbers come from the shared query module, which is
+ * what keeps this page and Holdings from disagreeing (§8.2). The empty case
+ * is load-bearing and comes first: a never-uploaded instance renders **no
+ * figure at all**, because a net worth of zero and an empty database look
+ * identical on screen and only one is worth panicking about.
  */
 
 export function meta() {
@@ -87,21 +79,16 @@ export function meta() {
 }
 
 /**
- * How many accounts the allocation panel draws.
- *
- * The categorical sequence is five long and §13.3 refuses to extend it: a sixth
- * flat colour is a legend nobody reads. The tail is named in a note rather than
- * folded into an "Other" bar, because an "Other" bar would have to carry a
- * summed figure and this route does no money arithmetic.
+ * How many accounts the allocation panel draws. The categorical sequence is
+ * five and §13.3 refuses to extend it. The tail is named in a note rather
+ * than folded into an "Other" bar, which would have to carry a summed
+ * figure — and this route does no money arithmetic.
  */
 const BARS = 5;
 
 /**
- * UTC throughout, deliberately.
- *
- * §4.1 and `valuation.server.ts` both warn about dates crossing a boundary and
- * landing a day early; `toISOString` is the one conversion that cannot pick up
- * the server's timezone on the way out.
+ * UTC throughout: §4.1 warns about dates crossing a boundary a day early,
+ * and `toISOString` cannot pick up the server's timezone on the way out.
  */
 const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
 
@@ -115,16 +102,14 @@ export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
 
-  // First, and before any database work: the canonical spelling of an owner
-  // parameter is a fact about the address, and the redirect is decided without
-  // asking who exists (ADR-0008). {@link chartRangeMiddleware} declines to
-  // stamp its cookie on the bounce.
+  // First, before any database work: the canonical spelling is a fact about
+  // the address, decided without asking who exists (ADR-0008).
+  // {@link chartRangeMiddleware} declines to stamp its cookie on the bounce.
   const canonical = canonicalOwnerSearch(url.searchParams);
-  // `!==` is safe here because the canonical spelling is a fixed point of URL
+  // `!==` is safe because the canonical spelling is a fixed point of URL
   // parsing (`spellId` in `owner-filter.ts` says why, and what looped when it
-  // was not): `url.search` is the parser's own spelling, so an address that
-  // differs really is non-canonical, and the target it bounces to equals its
-  // own canonical form on arrival.
+  // was not): `url.search` is the parser's own spelling, so a differing
+  // address really is non-canonical and the bounce target equals itself.
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const owners = readOwnerFilter(url.searchParams);
@@ -136,64 +121,54 @@ export async function loader({ request }: Route.LoaderArgs) {
   // which is the price of the reads and the sentence beside them agreeing.
   const roster = await ownerRoster(owners);
 
-  // Everybody ticked is the household, whose URL carries no owner parameter at
-  // all (ADR-0008) — and here that is not merely a second URL for one view: a
-  // narrowed chart drops the pre-app history, so the two would differ by every
-  // year before the first upload while the headline stayed identical.
+  // Everybody ticked is the household, whose URL carries no owner parameter
+  // (ADR-0008) — here not merely a second URL for one view: a narrowed chart
+  // drops the pre-app history, so the two would differ by every year before
+  // the first upload while the headline stayed identical.
   if (roster.coversEveryone) {
     throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
   }
 
   // What the readers narrow by: the selection resolved against the roster,
-  // never the raw ids. An owner the roster cannot offer is not reachable
-  // through the filter, their history included (DESIGN.md §14) — but
-  // `holding_valued_at` reads an account closed after the date it is asked
-  // about, so a stale id riding along in a hand-typed address would put that
-  // owner's past into the chart and the delta while the sentence beside the
-  // headline named only the others. A selection resolving to *nobody* keeps
-  // the raw ids instead, which narrow to nothing — resolving it to `[]` would
-  // read the whole household, the exact widening `owner-filter.ts` forbids.
+  // never the raw ids. `holding_valued_at` reads an account closed after the
+  // date it is asked about, so a stale id in a hand-typed address would put
+  // that owner's past into the chart and delta while the sentence beside the
+  // headline named only the others (DESIGN.md §14). A selection resolving to
+  // *nobody* keeps the raw ids, which narrow to nothing — `[]` would read
+  // the whole household, the exact widening `owner-filter.ts` forbids.
   const reading =
     roster.narrowedTo.length > 0 ? roster.narrowedTo.map((person) => person.id) : owners;
 
-  // Read before the window is sized: the household surface's earliest date
-  // (§7's "chart range" rule) is measured partly from it, and it is a handful
-  // of hand-typed rows either way.
-  // Reads that need nothing from each other. Three of them have to land before
-  // the window can be sized: the surface's earliest date (§7's "chart range"
+  // Reads that need nothing from each other; all three must land before the
+  // window can be sized — the surface's earliest date (§7's "chart range"
   // rule) is measured from the first two, and the third is which session 1D
-  // would plot — or, by its absence, whether the chip may be offered at all
-  // (ADR-0006, story 13). Every page load pays for that one whether or not 1D
-  // is selected, which is why it joins the others rather than queueing behind
+  // would plot, or by its absence whether the chip is offered at all
+  // (ADR-0006, story 13). Every load pays for that one whether or not 1D is
+  // selected, which is why it joins the others rather than queueing behind
   // them.
   const [manual, positionSet, session] = await Promise.all([
-    // Read either way, because "not drawn while narrowed" and "this instance
-    // has none" are two different screens and only the first has anything to
-    // explain. Spec 0013 gives that as the reason `manualNetWorth` does not
-    // take the filter at all: an empty answer could not be told from an empty
-    // table. It is a handful of hand-typed rows.
+    // Read either way: "not drawn while narrowed" and "this instance has
+    // none" are two different screens, and only the first has anything to
+    // explain — spec 0013's reason `manualNetWorth` takes no filter at all
+    // (an empty answer could not be told from an empty table).
     manualNetWorth(),
     firstRecordedDate(reading),
     latestObservedSession(),
   ]);
 
   // DESIGN.md §7 rule 3: the hand-typed series is the household's net worth
-  // from before there were accounts to attribute it to. There is no owner on it
-  // and no honest way to invent one, so a narrowed chart neither draws it nor
-  // reaches back through it — the decision is here, on one line, rather than in
-  // a reader that would have to lie about what it read.
+  // from before there were accounts to attribute it to — no owner on it, no
+  // honest way to invent one — so a narrowed chart neither draws it nor
+  // reaches back through it. The decision is here, on one line.
   const reachable = isFiltered(owners) ? [] : manual;
 
-  // The chart's reach, and the whole of how a filter shortens it: `positionSet`
-  // is already the selected owners' own first recorded date, and `reachable` is
-  // empty while narrowed — so the household rule, which is the earlier of the
-  // two, computes the narrowed reach without being told about the filter at
-  // all. `chart-range.ts` is untouched here: no third `Surface` member, and not
-  // even a switch to the account one, which would compute the same date twice.
-  //
-  // What follows from it is on screen: **All** shortens to the owners' own
-  // history and the long presets fall out of reach, exactly as they do on an
-  // account page.
+  // The chart's reach, and the whole of how a filter shortens it:
+  // `positionSet` is already the selected owners' first recorded date and
+  // `reachable` is empty while narrowed, so the household rule — the earlier
+  // of the two — computes the narrowed reach without being told about the
+  // filter. `chart-range.ts` is untouched: no third `Surface` member, no
+  // switch to the account one. On screen, **All** shortens to the owners'
+  // own history and the long presets fall out of reach.
   const earliest = { positionSet, manual: reachable[0]?.date };
 
   const resolved = resolveRange(requested.range, {
@@ -218,11 +193,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     accountTotals(reading),
     points,
     asOfView(getConfig().MARKET_TIMEZONE),
-    // Whether the *instance* holds anything, which is a different question from
-    // whether these owners do — and only the first may be answered with
-    // "nothing has been uploaded". Asked only while narrowed, because
-    // unnarrowed the two questions are the same one and `accounts` already
-    // answers it. The same read Analysis and Income make, for the same reason.
+    // Whether the *instance* holds anything — a different question from
+    // whether these owners do, and only the first may be answered "nothing
+    // has been uploaded". A count, only while narrowed (Analysis' read).
     isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
 
@@ -234,14 +207,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     .map((point) => ({ date: point.at, amount: point.amount }));
 
   // §7 rule 2: computed wins on overlapping dates, manual only fills the gap
-  // ahead of it. Bounded by the window at the other end too — a 1M chart
-  // carrying a hand-typed point from 2022 would squeeze the month it was asked
-  // for into the last few pixels. ISO dates compare correctly as strings.
+  // ahead — and is bounded by the window at the other end too, or a 1M chart
+  // would squeeze the asked-for month into the last pixels beside a 2022
+  // point. ISO dates compare correctly as strings.
   const firstComputed = computed[0]?.date;
   const manualPrefix =
-    // Never under 1D. The hand-typed series is the household's net worth before
-    // day zero (§7); dropping a point from 2022 onto a line of this morning's
-    // instants would claim a session that never happened.
+    // Never under 1D: dropping a 2022 point onto a line of this morning's
+    // instants would claim a session that never happened (§7).
     resolved.session !== undefined
       ? []
       : reachable.filter(
@@ -271,30 +243,24 @@ export async function loader({ request }: Route.LoaderArgs) {
     manual: manualPrefix,
     /**
      * Whether the pre-app series exists and is being withheld — a different
-     * fact from the filter being on. Naming a cause the instance does not have
-     * is how a note stops being read, which is the rule the allocation panel's
-     * own notes keep two panels down.
+     * fact from the filter being on: naming a cause the instance does not
+     * have is how a note stops being read.
      */
-    // Never under 1D, which draws no pre-app history whether or not a filter is
-    // on: the note would name the filter as the cause of an omission the range
-    // imposes, and it says the line begins at the owners' first recorded
-    // holdings where a session begins at its first observed instant. Both
-    // sentences would be wrong at once. And only for a point the *unfiltered*
-    // window would show — the same rule, one step further: a 1M chart omits a
-    // hand-typed point from years ago filtered or not, so blaming the filter
-    // for it is again naming a cause the omission does not have. A preset's or
-    // a custom span's start is date arithmetic the filter cannot move, so
-    // `resolved.since` is that counterfactual; **All**'s start is the narrowed
-    // reach itself, and unfiltered it spans back through every hand-typed
-    // point, so there any point at all is being withheld.
+    // Never under 1D, which draws no pre-app history filtered or not — the
+    // note would blame the filter for an omission the range imposes. And
+    // only for a point the *unfiltered* window would show, the same rule one
+    // step further: a preset's or custom span's start is date arithmetic the
+    // filter cannot move, so `resolved.since` is that counterfactual;
+    // **All**'s start is the narrowed reach itself, and unfiltered it spans
+    // every hand-typed point, so there any point at all is being withheld.
     manualWithheld:
       isFiltered(owners) &&
       resolved.session === undefined &&
       manual.some((point) => resolved.range === "all" || point.date >= resolved.since),
     /**
-     * Where "Show everyone" goes: this address, its own parameters kept, no
-     * owner — so clearing the filter from an emptied screen does not also throw
-     * away the range the reader had chosen.
+     * Where "Show everyone" goes: this address, its parameters kept, no
+     * owner — so clearing the filter from an emptied screen does not also
+     * throw away the range the reader had chosen.
      */
     showEveryone: canonicalOwnerSearch(url.searchParams, ALL_OWNERS) || ".",
     // Summed from the same rollup the table renders, rather than counted
@@ -310,12 +276,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 /**
- * The chart parameters a GET form has to re-emit, so that applying an owner does
- * not throw away the reader's chosen span.
- *
- * Shared by the header's control and the one on an emptied screen, because an
- * emptied screen is exactly where a reader changes owner — and the version that
- * quietly emitted nothing sent them back to the default range as well.
+ * The chart parameters a GET form must re-emit, so applying an owner does
+ * not throw away the reader's chosen span. Shared by the header's control
+ * and the one on an emptied screen — exactly where a reader changes owner,
+ * and the version that quietly emitted nothing also reset the range.
  */
 function rangeFields(range: RangeKey, custom?: CustomSpan): Record<string, string> {
   if (range === "custom" && custom !== undefined) {
@@ -326,17 +290,13 @@ function rangeFields(range: RangeKey, custom?: CustomSpan): Record<string, strin
 }
 
 /**
- * The page's header strip — which this screen draws only for what sits in it.
- *
- * The headline below is the page's title in every way but markup, so the
- * heading stays hidden and there is nothing on the left. What the strip is for
- * is the owner control, in the same `page-actions` slot Holdings, Analysis and
- * Income put it in: the chart range lives in the hero section here, so "beside
- * the range" would name a different place on every screen and the header is the
- * one the four share.
- *
- * The range's own parameters are the hidden fields, so applying an owner does
- * not throw away a chosen span.
+ * The page's header strip, drawn only for what sits in it: the headline
+ * below is the page's title in every way but markup, so the heading stays
+ * hidden and there is nothing on the left. The strip holds the owner
+ * control, in the same `page-actions` slot the other three screens use —
+ * the chart range lives in the hero here, so "beside the range" would name
+ * a different place per screen. The range's parameters ride as hidden
+ * fields, so applying an owner keeps the chosen span.
  */
 function Header({
   roster,
@@ -349,14 +309,12 @@ function Header({
   range: RangeKey;
   custom?: CustomSpan;
 }) {
-  // Nothing to put in the strip, so no strip — the row would otherwise add its
-  // own gap above a headline that is already the page's title. The heading is
-  // not the strip's, though: it is the page's, and a screen whose only `h1`
-  // disappears because the household has one owner is one a screen reader
-  // cannot navigate by heading. A `visually-hidden` heading has no box, so on
-  // its own it costs the gap nothing. A filtered address keeps the strip
-  // whatever the roster holds, because the control inside it is then the one
-  // way to clear the filter (its own header comment says why it draws).
+  // Nothing to put in the strip, so no strip — the row would add its own gap
+  // above a headline that is already the page's title. The heading is the
+  // page's, though: a screen whose only `h1` disappears because the
+  // household has one owner cannot be navigated by heading, and a
+  // `visually-hidden` heading has no box. A filtered address keeps the strip
+  // whatever the roster holds — the control is then the one way to clear it.
   if (roster.length < 2 && !isFiltered(owners)) {
     return <h1 className="visually-hidden">Overview</h1>;
   }
@@ -378,12 +336,10 @@ function Header({
 type AccountRow = Route.ComponentProps["loaderData"]["accounts"][number];
 
 /**
- * Which tile an account wears.
- *
- * Exhaustive over `AccountKind` by construction, so adding a kind to the schema
- * fails the typecheck here rather than rendering a row with no mark on it. The
- * icon never stands alone: the kind is written out beside it in the row's meta
- * line, because a drawing of a briefcase is not a label (`icons.tsx`).
+ * Which tile an account wears. Exhaustive over `AccountKind` by
+ * construction, so adding a kind fails the typecheck here rather than
+ * rendering a row with no mark. The icon never stands alone: the kind is
+ * written out beside it in the row's meta line (`icons.tsx`).
  */
 const TILES = {
   brokerage: AccountBalanceIcon,
@@ -394,26 +350,18 @@ const TILES = {
 } satisfies Record<AccountKind, typeof AccountBalanceIcon>;
 
 /**
- * The accounts as bars, largest first.
- *
- * **By account, and titled so.** It is the only breakdown this loader already
- * holds: the asset-class and per-person cuts need the holdings themselves, and
- * fetching them here would add another hand-rolled dashboard query — the
- * failure §8.2 names as the weakest point in the whole design.
- *
- * **The denominator is the gross positive total**, exactly as `allocation.ts`
- * argues at length: a share of the *net* total explodes when a mortgage nearly
- * cancels a house, and turns negative for a household in net debt. So the
- * liabilities are not bars here — a debt is not a slice of what is owned — and
- * the note under the list says so rather than leaving them silently missing.
- *
- * **This is the one place the page turns money into a float**, through the one
- * helper licensed to do it. What comes out is a bar width: it is never shown,
- * never compared against a figure, and never summed back into one. The label
- * beside each bar is the account's own value formatted from its decimal string,
- * not a percentage — a percentage would be a *displayed* figure derived from
- * these floats, and an exact share is `allocation.ts`'s arithmetic to do, not a
- * route's.
+ * The accounts as bars, largest first. **By account, and titled so** — the
+ * only breakdown this loader already holds: the asset-class and per-person
+ * cuts need the holdings themselves, another hand-rolled dashboard query
+ * (§8.2's weakest point). **The denominator is the gross positive total**
+ * (`allocation.ts` argues it at length): a share of the *net* total
+ * explodes when a mortgage nearly cancels a house — so liabilities are not
+ * bars, and the note under the list says so rather than leaving them
+ * silently missing. **The one place the page turns money into a float**,
+ * through the one licensed helper: what comes out is a bar width, never
+ * shown, compared, or summed back into a figure. The label beside each bar
+ * is the account's value from its decimal string, not a percentage — an
+ * exact share is `allocation.ts`'s arithmetic to do, not a route's.
  */
 function allocationBars(accounts: AccountRow[]) {
   const held = accounts.filter((account) => toPlotValue(account.amount) > 0);
@@ -424,8 +372,8 @@ function allocationBars(accounts: AccountRow[]) {
     held: held.length,
     bars: held.slice(0, BARS).map((account, index) => ({
       account,
-      // One-based rank. `--cat-1` is rank one in every breakdown in the app, so
-      // the same position means the same colour on every screen (§13.3).
+      // One-based rank: `--cat-1` is rank one in every breakdown, so the
+      // same position means the same colour on every screen (§13.3).
       colour: `var(--cat-${index + 1})`,
       width: `${((toPlotValue(account.amount) / base) * 100).toFixed(1)}%`,
     })),
@@ -438,11 +386,10 @@ function AccountsPanel({
 }: {
   accounts: AccountRow[];
   /**
-   * Carried into the account page — which ignores it — so that its breadcrumb
-   * can carry it back out. Spec 0013 names this round trip as the price of the
-   * account exemption: Overview → a row → back had otherwise landed on the
-   * whole household's headline, silently, from a screen a reader had narrowed
-   * two clicks earlier.
+   * Carried into the account page — which ignores it — so its breadcrumb
+   * can carry it back out. Spec 0013 names this round trip as the price of
+   * the account exemption: Overview → a row → back had otherwise landed on
+   * the whole household's headline from a screen narrowed two clicks ago.
    */
   owners: OwnerFilter;
 }) {
@@ -478,10 +425,9 @@ function AccountsPanel({
                 </div>
               </div>
 
-              {/* No per-account delta to put here: `accountTotals` is a
-                  rollup of what is held now, and a change would need the same
-                  account valued at a second date. The owner takes the slot the
-                  mock gives the delta rather than the row inventing one. */}
+              {/* No per-account delta to put here: `accountTotals` rolls up
+                  what is held now, and a change needs a second date. The
+                  owner takes the slot the mock gives the delta. */}
               <div className="account-figures">
                 <p className="account-amount u-data">
                   <Amount value={account.amount} />
@@ -573,25 +519,19 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
   } = loaderData;
 
   // Before the empty return, unconditionally: this is a hook, and the empty
-  // state is a state this same mounted route moves in and out of — the owner
-  // form navigates client-side, so a reader switching from an owner with
-  // holdings to one without would otherwise change the render's hook count,
-  // which React refuses. The chart takes it as a prop rather than asking for
-  // itself: its axis ticks and its accessible label are strings, not
-  // components (spec 0007).
+  // state is one this mounted route moves in and out of (the owner form
+  // navigates client-side) — a conditional call would change the render's
+  // hook count, which React refuses. The chart takes it as a prop: its axis
+  // ticks and accessible label are strings, not components (spec 0007).
   const masked = useMasked();
 
-  // Empty because the filter reached nothing, rather than because the instance
-  // has nothing. Only the second may say nothing has been uploaded, and the
-  // first has to keep the control on screen or the filter cannot be cleared
-  // from the page it emptied.
-  //
-  // Which of the two it is turns on `hasHoldings`, not on the filter being on:
-  // a bookmarked `/?owner=1` opened against a fresh instance is a filtered
-  // address *and* an empty instance, and answering it with "set to an owner the
-  // household can no longer be read as" would send the reader hunting for a
-  // roster on a database that has none. Analysis and Income already split it
-  // this way.
+  // Empty because the filter reached nothing, or because the instance has
+  // nothing — only the second may say nothing has been uploaded, and the
+  // first must keep the control on screen or the filter cannot be cleared
+  // from the page it emptied. Which it is turns on `hasHoldings`, not on the
+  // filter being on: a bookmarked `/?owner=1` against a fresh instance is
+  // both, and blaming a stale owner would send the reader hunting a roster
+  // the database does not have. Analysis and Income split it the same way.
   if (holdingCount === 0) {
     return (
       <section className="page">
@@ -648,10 +588,9 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
                 perception at all (§12). */}
             <span className={down ? "delta delta--loss" : "delta delta--gain"}>
               <Arrow />
-              {/* The ratio is never masked and the amount always is, so the
-                  two are separate nodes rather than one interpolated string
-                  (`CONTEXT.md`, and spec 0007's "ratios are a deliberate
-                  hole"). */}
+              {/* The ratio is never masked and the amount always is, so two
+                  separate nodes, never one interpolated string (spec 0007's
+                  "ratios are a deliberate hole"). */}
               {change.percent === null ? null : `${formatPercent(change.percent)} / `}
               <Amount value={change.difference} shape="signed" />
             </span>
@@ -687,15 +626,12 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               have never been priced.
             </p>
           ) : null}
-          {/* Said rather than left to be noticed. DESIGN.md §7 rule 3: the
-              hand-typed series is the household's net worth from before there
-              were accounts to attribute it to, so a narrowed line cannot reach
-              behind the selected owners' first statement — and a suspiciously
-              short line with nothing explaining it is the failure this codebase
-              avoids everywhere else. */}
-          {/* Only where there is such a history to withhold: on an instance
-              with no hand-typed rows the sentence would name a cause that does
-              not exist, which is how a note stops being read. */}
+          {/* Said rather than left to be noticed (§7 rule 3): the hand-typed
+              series has no owner, so a narrowed line cannot reach behind the
+              selected owners' first statement — and a suspiciously short line
+              with nothing explaining it is the failure this codebase avoids
+              everywhere else. Only where there is history to withhold: naming
+              a cause that does not exist is how a note stops being read. */}
           {manualWithheld ? (
             <p className="coverage-note">
               The hand-typed history before this instance existed is the household's and has no
@@ -716,13 +652,11 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               session={session}
             />
           ) : session !== null && computed.length > 0 ? (
-            // A session with one observed moment in it, which is a real state
-            // between the poller's first attempt and its second — and not the
-            // state the sentence below describes, since it has nothing to do
-            // with how many statements have been uploaded. Guarded on there
-            // being a moment at all: with none, nothing has been uploaded and
-            // no amount of waiting for prices will change that, so the sentence
-            // below is the true one.
+            // A session with one observed moment — a real state between the
+            // poller's first attempt and its second, nothing to do with how
+            // many statements were uploaded. Guarded on there being a moment
+            // at all: with none, nothing has been uploaded and no waiting for
+            // prices changes that, so the sentence below is the true one.
             <p className="empty-note">
               A line needs two observed moments and this session has {computed.length}. It
               appears once another price arrives.
@@ -736,11 +670,10 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
         </div>
       </section>
 
-      {/* The mock's bento row: the accounts wide, their relative sizes narrow,
-          stacked below 768px. A household with nothing positive recorded — only
-          a loan — has no allocation to put beside them, and the modifier comes
-          off so the accounts panel takes the full width rather than two thirds
-          of it and a hole. */}
+      {/* The mock's bento row: accounts wide, relative sizes narrow, stacked
+          below 768px. A household with nothing positive recorded — only a
+          loan — has no allocation panel, and the modifier comes off so the
+          accounts take the full width rather than two thirds and a hole. */}
       <div className={allocation.bars.length > 0 ? "columns columns--wide-narrow" : "columns"}>
         <AccountsPanel accounts={accounts} owners={owners} />
         {allocation.bars.length > 0 ? (

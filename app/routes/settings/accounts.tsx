@@ -8,12 +8,10 @@ import { listPeople } from "~/lib/people.server";
 import type { Route } from "./+types/accounts";
 
 /**
- * Settings → Accounts: the list, and the form that adds to it.
- *
- * Editing and closing are their own screen (`account.tsx`) rather than row
- * affordances here — an account carries six fields, and closing is a decision
- * that historical figures are computed against, so neither belongs behind an
- * inline control on a list.
+ * Settings → Accounts: the list, and the form that adds to it. Editing and
+ * closing are their own screen (`account.tsx`) — an account carries six
+ * fields, and closing is a decision historical figures are computed against;
+ * neither belongs behind an inline control on a list.
  */
 export function meta() {
   return [{ title: "Accounts · Settings · Portfolio" }];

@@ -1,15 +1,11 @@
 import { NavLink, Outlet } from "react-router";
 
 /**
- * Settings — everything that writes, except Upload (DESIGN.md §8.4).
- *
- * A layout rather than a page: the tab strip is the navigation for a section
- * opened a few times ever, so it lives one level down rather than competing
- * with the daily pages in the rail.
- *
- * Only the tabs that exist are listed. Classifications, Instruments and History
- * are named on the index page as what they will be, because a tab that renders
- * an apology is worse than a tab that is not there yet.
+ * Settings — everything that writes, except Upload (DESIGN.md §8.4). A
+ * layout: the tab strip is navigation for a section opened a few times ever,
+ * so it lives a level down rather than competing with the daily pages in the
+ * rail. Only tabs that exist are listed — a tab rendering an apology is
+ * worse than a tab not there yet.
  */
 const TABS = [
   { to: "/settings/people", label: "People" },
