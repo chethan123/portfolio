@@ -532,6 +532,15 @@ describe("the canonical bounce, through a real URL", () => {
       const { alice, bob } = await seedTwoOwners(ctx);
       const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
 
+      // Not only settling: the second spelling of the separator must actually
+      // bounce, or one view keeps two URLs — the address this application's
+      // links spell, and the one a query round-tripped through
+      // `URLSearchParams` arrives as. A comparison blind to encoding settles
+      // this list perfectly while quietly keeping both.
+      expect(
+        await redirectTo(() => loader(args(get(`/holdings?owner=${both.replace(",", "%2C")}`)))),
+      ).toBe(`/holdings?owner=${both}`);
+
       for (const search of [
         "",
         `?owner=${alice.id}`,

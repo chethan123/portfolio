@@ -37,7 +37,6 @@ import {
   isFiltered,
   ownerSearch,
   readOwnerFilter,
-  sameView,
   type OwnerFilter,
 } from "~/lib/owner-filter";
 import { ownerRoster } from "~/lib/people.server";
@@ -121,12 +120,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   // asking who exists (ADR-0008). {@link chartRangeMiddleware} declines to
   // stamp its cookie on the bounce.
   const canonical = canonicalOwnerSearch(url.searchParams);
-  // `sameView` rather than `!==`: two serialisers spell `'` and `,` differently
-  // — `encodeURIComponent` leaves both alone where `URLSearchParams` writes
-  // `%27` and `%2C` — and a comparison blind to that would bounce forever on an
-  // address it had just produced. Every multi-owner URL reaches it on some
-  // transports.
-  if (!sameView(url.search, canonical)) throw redirect(`${url.pathname}${canonical}`);
+  // `!==` is safe here because the canonical spelling is a fixed point of URL
+  // parsing (`spellId` in `owner-filter.ts` says why, and what looped when it
+  // was not): `url.search` is the parser's own spelling, so an address that
+  // differs really is non-canonical, and the target it bounces to equals its
+  // own canonical form on arrival.
+  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const owners = readOwnerFilter(url.searchParams);
   const requested = readChartRange(request);

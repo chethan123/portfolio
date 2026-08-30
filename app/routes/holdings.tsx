@@ -38,7 +38,6 @@ import {
   ALL_OWNERS,
   isFiltered,
   readOwnerFilter,
-  sameView,
   type OwnerFilter,
 } from "~/lib/owner-filter";
 import { ownerRoster } from "~/lib/people.server";
@@ -106,10 +105,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   // This also drops parameters that mean nothing here, which is the same
   // reading `parseQuery` gives them. The bounce cannot loop: `toSearch` is
   // deterministic and `parseQuery(toSearch(q))` is `q`, so the second pass is
-  // already canonical — and the comparison below is `sameView` rather than
-  // `!==` because two serialisers spell `'` and `,` differently, and a
-  // comparison that could not see past that would bounce forever on an address
-  // it had just produced.
+  // already canonical — and its spelling is a fixed point of URL parsing
+  // (`spellId` in `owner-filter.ts` says why that holds and what broke when it
+  // did not), so `url.search`, which the parser has already respelled, can
+  // equal it.
   // Grouping hides the column it grouped by, so a URL that sorts by that same
   // column leaves the table ordered by a heading nobody can see: no caret, no
   // `aria-sort`, and no control to reverse it. Fall back to the default sort,
@@ -142,7 +141,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // where the write redirects to, and the row it names has just been closed.
   const canonical =
     saved !== null ? withRow(view, "saved", saved) : withRow(view, "edit", editing);
-  if (!sameView(url.search, canonical)) throw redirect(`${url.pathname}${canonical}`);
+  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 
   const [household, freshness, roster] = await Promise.all([
     currentHoldings(ALL_OWNERS),

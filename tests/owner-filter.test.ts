@@ -58,6 +58,7 @@ const PARSES: [address: string, selected: string[], why: string][] = [
   ["?owner=a%26b", ["a&b"], "a decoded ampersand is one id, and must not become two parameters"],
   ["?owner=a+b", ["a b"], "a plus decodes to a space, and the id keeps it"],
   ["?owner=1%2C3", ["1", "3"], "a percent-encoded separator is still the separator"],
+  ["?owner=o'brien", ["o'brien"], "an apostrophe id is kept — the character URL and encodeURIComponent spell differently"],
   ["?owner=100%25", ["100%"], "a percent sign survives, and must survive being spelled again"],
   ["?owner=%C3%A9", ["é"], "a non-ASCII id is kept, sorted after the digits"],
 ];
@@ -174,6 +175,30 @@ describe("the canonical spelling", () => {
 
       expect(canonicalOwnerSearch(new URLSearchParams(once))).toBe(once);
     }
+  });
+
+  it("is a fixed point of URL parsing itself, which is what lets a loader compare with strict equality", () => {
+    // The loaders compare `url.search` — the WHATWG parser's own spelling —
+    // against the canonical search with `!==` and bounce on a difference. That
+    // cannot loop only while nothing in a canonical address is respelled on
+    // arrival, so this test round-trips through a real `URL` rather than
+    // through this module's own serialisers, which is the round trip every
+    // redirect actually takes. The apostrophe is the case that once failed:
+    // `encodeURIComponent` leaves it bare where the parser writes `%27`, and
+    // `?owner=o'brien` could never equal its own canonical spelling.
+    const arrivesAsItself = (canonical: string) =>
+      expect(new URL(`http://portfolio.test/${canonical}`).search).toBe(canonical);
+
+    for (const [address] of PARSES) {
+      arrivesAsItself(canonicalOwnerSearch(new URLSearchParams(address)));
+    }
+
+    for (const id of ["o'brien", "a b", "a&b", "100%", "é", "''", "1"]) {
+      arrivesAsItself(ownerSearch([id]));
+    }
+
+    arrivesAsItself(ownerSearch(["o'brien", "1", "3"]));
+    arrivesAsItself(canonicalOwnerSearch(new URLSearchParams("?owner=o'brien&range=1m")));
   });
 });
 

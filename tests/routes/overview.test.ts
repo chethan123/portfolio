@@ -310,6 +310,21 @@ describe("the Overview read as an owner", () => {
   );
 
   it(
+    "redirects the percent-encoded spelling of a separator, so one view has one URL",
+    withDatabase(async () => {
+      // The address `canonicalOwnerSearch`'s docstring names: a comparison
+      // blind to encoding would report `?owner=1%2C3` canonical, and the view
+      // would keep two URLs — the one this application's links spell, and the
+      // one any transport that round-trips the query through `URLSearchParams`
+      // spells. Nothing is seeded, because respelling a separator is decided
+      // from the address alone, before any database work.
+      expect(await redirectTo(() => loader(args(get("/?owner=1%2C3&range=1m"))))).toBe(
+        "/?owner=1,3&range=1m",
+      );
+    }),
+  );
+
+  it(
     "collapses a selection naming everybody, which here would cost the pre-app history",
     withDatabase(async (ctx) => {
       const { alice, bob, carol } = await seedTwoOwners(ctx, {
