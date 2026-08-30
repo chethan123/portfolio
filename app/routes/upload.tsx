@@ -145,13 +145,23 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
             <div>
               <label htmlFor="upload-account">
                 Account
-                {/* A refused submit's own choice outranks the link's prefill:
-                    the reader may have changed the account before the refusal,
-                    and snapping back would discard that. */}
+                {/* A refusal outranks the link's prefill even empty-handed —
+                    the size cap refuses on the Content-Length header before
+                    any field is read — because the reader may have changed the
+                    account before submitting, and re-applying the prefill
+                    would quietly aim the retry at the link's account. The key
+                    remounts this uncontrolled select when the effective
+                    prefill changes: same-route navigation (the rail's Upload
+                    pressed over an ?account= address) reuses the mounted
+                    component, where a changed defaultValue alone would leave
+                    the old choice standing. */}
                 <select
+                  key={prefillAccountId ?? ""}
                   id="upload-account"
                   name="accountId"
-                  defaultValue={actionData?.values.accountId ?? prefillAccountId ?? ""}
+                  defaultValue={
+                    actionData ? (actionData.values.accountId ?? "") : (prefillAccountId ?? "")
+                  }
                   aria-invalid={errors?.accountId ? true : undefined}
                 >
                   <option value="">Choose…</option>

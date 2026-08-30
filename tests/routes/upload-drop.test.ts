@@ -18,7 +18,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import Upload, { loader } from "../../app/routes/upload.tsx";
+import Upload, { action, loader } from "../../app/routes/upload.tsx";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
@@ -108,6 +108,32 @@ describe("the drop screen's ?account= prefill", () => {
         expect(markup).toContain(`<option value="${open.id}">Fidelity Taxable</option>`);
         expect(markup).not.toContain(`value="${closed.id}"`);
       }
+    }),
+  );
+
+  it(
+    "starts the retry blank after a refusal that read no fields, rather than re-applying the link's account",
+    withDatabase(async ({ seedAccount }) => {
+      const linked = await seedAccount({ name: "Fidelity Taxable" });
+      const path = `/upload?account=${linked.id}`;
+
+      // The size cap refuses on the Content-Length header, before any field is
+      // read — the one refusal that comes back with nothing captured. The
+      // reader may have changed the account before submitting, so the screen
+      // must not quietly re-aim the retry at the link's account: after any
+      // refusal the prefill has had its turn.
+      const oversized = new Request(`http://portfolio.local${path}`, {
+        method: "POST",
+        headers: { "content-length": String(Number.MAX_SAFE_INTEGER) },
+      });
+      const refusal = await action(args(oversized));
+      expect(refusal.formError).toContain("MB");
+
+      const markup = renderRoute(Upload, path, await loader(args(get(path))), {
+        actionData: refusal,
+      });
+      expect(markup).toContain('<option value="" selected="">Choose…</option>');
+      expect(markup).not.toContain(`<option value="${linked.id}" selected=""`);
     }),
   );
 });
