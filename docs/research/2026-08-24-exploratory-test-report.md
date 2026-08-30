@@ -1432,6 +1432,11 @@ form-level refusal reaches the reader whether or not the panel is mounted. It wa
 
 #### [SET-11] The account-number field's own help text says the opposite of the guide and of the code
 
+**Fixed.** The note now states the guard in the guide's terms — a check rather than a chooser,
+refusing a statement that names a different number — and the doc comment on
+`Account.externalAccountNumber` says the same. The entry below stands as it was written, as the
+record of what the defect was.
+
 - **Severity:** Low
 - **Where:** `app/components/account-fields.tsx:158-161`; also the type comment at
   `app/lib/accounts.server.ts:56`

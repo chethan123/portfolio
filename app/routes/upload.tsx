@@ -1,6 +1,7 @@
 import { Form, Link, redirect } from "react-router";
 
 import { UploadSteps } from "~/components/upload-steps";
+import { accountPickerGroups } from "~/lib/account-label";
 import { listAccounts } from "~/lib/accounts.server";
 import { FORM_ERROR, NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { createDraft, parseUploadForm, refuseOversizedBody } from "~/lib/uploads.server";
@@ -27,14 +28,13 @@ export async function loader() {
   const accounts = await listAccounts();
 
   return {
-    // Ordered as Settings orders them, because it is the same query — the two
-    // screens must never disagree about what the accounts are called or which
-    // comes first. Closed accounts are absent, not disabled: their history
-    // does not change, and a disabled option is a question a select cannot
-    // answer.
-    openAccounts: accounts
-      .filter((account) => !account.isClosed)
-      .map((account) => ({ id: account.id, name: account.name })),
+    // The same query as Settings, so the two screens can never disagree about
+    // what the accounts are called; within each owner's group the options
+    // keep that order. The groups themselves follow the People screen, and
+    // which facts an option shows is `account-label.ts`'s one rule. Closed
+    // accounts are absent, not disabled: their history does not change, and a
+    // disabled option is a question a select cannot answer.
+    accountGroups: accountPickerGroups(accounts.filter((account) => !account.isClosed)),
     hasAccounts: accounts.length > 0,
     maxUploadMb: getConfig().MAX_UPLOAD_MB,
   };
@@ -72,7 +72,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Upload({ loaderData, actionData }: Route.ComponentProps) {
-  const { openAccounts, hasAccounts, maxUploadMb } = loaderData;
+  const { accountGroups, hasAccounts, maxUploadMb } = loaderData;
   const errors = actionData?.errors;
 
   return (
@@ -94,7 +94,7 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
         // is the app's one pointer at the next step — a second voice here would
         // double it, and a select over nothing would explain less than nothing.
         null
-      ) : openAccounts.length === 0 ? (
+      ) : accountGroups.length === 0 ? (
         // Not the first-run prompt: the household is set up, and "start here"
         // would be false. No form either — a file input that can lead nowhere
         // is a dead control.
@@ -137,10 +137,14 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
                   aria-invalid={errors?.accountId ? true : undefined}
                 >
                   <option value="">Choose…</option>
-                  {openAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
+                  {accountGroups.map((group) => (
+                    <optgroup key={group.ownerId} label={`Owned by ${group.ownerName}`}>
+                      {group.options.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </label>

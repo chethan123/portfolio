@@ -5,6 +5,47 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-08-30 — Account picker conventions
+
+One document: [Account picker conventions](./2026-08-30-account-picker-conventions.md) — how
+established apps label accounts in pickers, and how their import flows map an uploaded file to an
+account, against `5aa2fb2`. Background for the upload dropdown, which renders two same-named
+accounts as two identical rows because the loader narrows away the owner, institution, kind and
+number that `listAccounts` already returns.
+
+### The three things worth knowing without reading further
+
+1. **The label anatomy converges wherever it is documented: person-meaningful name first,
+   institution and type as secondary text, masked last-4 as the tiebreaker.** Plaid's
+   `name` / `official_name` / `type`+`subtype` / `mask` decomposition is the industry template, and
+   every part already exists on this repo's `account` table — the dropdown's poverty is a
+   projection choice, not a data gap.
+
+2. **Where households exist, the owner is a structured per-account label, never a naming
+   convention.** Monarch attaches a member (or "Shared") to every account and prompts for it at
+   connect time; single-owner brokers fake it with nicknames — Schwab's own help says nicknames
+   exist "to replace account number in the Select Account pull-down menu".
+
+3. **No surveyed app auto-detects the target account from identifiers inside the file** — the
+   behavior `SET-11`'s wrong field note describes has no precedent anywhere. The two proven
+   preselects are *the page you came from* (YNAB, Simplifi, Lunch Money, Sharesight and Snowball
+   all open the account first) and *last time* (Portfolio Performance remembers the account per
+   detected bank and shows it in an editable dropdown). The ingest brief's invariant 4 matches the
+   industry, not just caution.
+
+### Evidence
+
+[`picker-2026-08-30/`](./picker-2026-08-30/) holds screenshots of the real application, taken
+while driving the fix this research fed: the two identical "Schwab" rows the old picker drew, the
+owner-grouped adaptive labels that replaced them, and the columns step's enriched identity strip.
+
+### Status
+
+Nothing here is approved work. Evidence is graded in place — ● read directly (source code, specs,
+manual sources), ◐ the owner's page reached only through search excerpts, since most commercial
+help centers are egress-blocked from the research environment. What could not be verified is
+listed in the Method section and must not be treated as settled.
+
 ## 2026-08-25 — Upload workflow UX review
 
 Two documents from one investigation: what the statement workflow costs a household, and how the
@@ -98,8 +139,8 @@ fixed and are annotated in place.
 
 ### Status
 
-Nothing here is approved work, and only `SET-1` — the critical one — and `SET-5` beside it have been
-fixed since. The report opens with the seven worth doing
+Nothing here is approved work, and only `SET-1` — the critical one — `SET-5` beside it, and
+`SET-11` (the account-number field's wrong note) have been fixed since. The report opens with the seven worth doing
 first and a duplicate table, so the same bug is not filed four times. The suite (746 tests),
 `npm run typecheck` and `npm audit` were all clean throughout — these are things the automated gates
 structurally cannot see.

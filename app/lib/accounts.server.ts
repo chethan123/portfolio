@@ -62,7 +62,7 @@ export type Account = {
   ownerId: string;
   ownerName: string;
   taxTreatment: TaxTreatment;
-  /** Recorded from a statement so an upload can pre-select this account. */
+  /** Recorded from a statement; the commit's guard against the wrong account — a check, never a selector. */
   externalAccountNumber: string | null;
   /**
    * When this account stopped being used, or null while it is open. A genuine

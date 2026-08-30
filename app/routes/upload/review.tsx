@@ -159,9 +159,13 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
       <div className="panel-body form-intro">
         {/* The file and the account lead, because a draft survives a closed
-            laptop and the reader may be resuming cold. */}
+            laptop and the reader may be resuming cold — and this is the point
+            of no return, so the account arrives with its owner and number
+            tail (brief §4.1). */}
         <p>
           <strong>{diff.filename}</strong> · {diff.accountName}
+          {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by{" "}
+          {diff.ownerName}
         </p>
 
         {diff.firstStatement ? (
