@@ -38,8 +38,8 @@ Three things it can say instead of a figure:
 **Performance** draws this account alone, over the same nine ranges Overview offers — **1D**,
 **1W**, **1M**, **3M**, **YTD**, **1Y**, **5Y**, **All** or a **Custom** span you pick yourself. It
 opens on 1Y, or on whichever range this browser last picked on either screen. **1D** plots the
-latest trading session for this account alone, one point per price refresh, with times of day along
-the axis instead of dates.
+latest trading session for this account alone — one point for each distinct moment the feed
+reported a price — with times of day along the axis instead of dates.
 
 The range is part of the address, so a chosen range survives a reload and can be bookmarked or sent
 to someone else in the household. A range this account's own history cannot reach yet — 5Y on an
@@ -51,8 +51,8 @@ range ever pulls in the household's hand-typed pre-app figures — see below.
 
 A line needs two dated points. With fewer than two in the chosen range, the panel says how many it
 has — try **All**, or wait until a second statement or balance is recorded. On **1D** the same rule
-counts the session's observed prices instead: until the day's second refresh lands, there is
-nothing to join into a line.
+counts the session's observed moments instead: until the feed has reported prices at two distinct
+times that day, there is nothing to join into a line.
 
 The readout above the line works exactly as it does on Overview: the point the line ends at until
 you point at the chart, then whichever point is nearest. Nothing here is ever marked hand-typed,

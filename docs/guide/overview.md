@@ -19,9 +19,9 @@ statement, the earlier figure is zero, a percentage of zero says nothing, and th
 amount alone. That is why the All range in the next picture reads `+$687,516.13` with no
 percentage.
 
-Under the chip, the **As of** line is the age of the prices behind every figure on the page, and
-**Refresh now** beside it fetches fresher ones — [Why a number did not change](prices.md) explains
-both.
+Under the chip, the **As of** line is the age of the household's fetched prices — the oldest quote
+the feed holds for anything anyone here owns, whoever the owner filter selects — and **Refresh
+now** beside it fetches fresher ones. [Why a number did not change](prices.md) explains both.
 
 ## The range control
 
@@ -186,8 +186,8 @@ The empty screens this page can show, and they are not the same:
 - **One dated point.** The panel says a trend needs two dated points and this instance has one.
   The line appears after the second statement.
 - **1D, early in the day.** The panel says a line needs two observed moments and this session has
-  one — the day's first refresh has landed and the second has not yet. Wait one cadence, or press
-  **Refresh now**.
+  one — the feed has reported a price at only one distinct time so far. More arrive as the market
+  trades and refreshes land.
 - **Narrowed to owners who hold nothing.** The [owner filter](owner-filter.md) is on and the
   selection has no holdings; the control stays on screen so you can clear it.
 

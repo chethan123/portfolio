@@ -5,8 +5,9 @@ Prices mostly look after themselves, so this page is three short answers.
 ## "My total is the same as yesterday"
 
 Prices refresh on their own, in the background, while the market is open. Every screen with a
-figure says how old its prices are — the **As of** line in the header — and carries a
-**Refresh now** button beside it. One press spends one request for fresh quotes and says underneath
+figure carries the same **As of** line in its header — the age of the oldest fetched price on
+anything the household owns, whichever screen or owner you are looking at — and a **Refresh now**
+button beside it. One press spends one request for fresh quotes and says underneath
 what it did: how many prices it fetched, or that nothing was new since the stamp. That answer is
 how you know it ran — the stamp itself is the *oldest* fetched price, so it can stay put after a
 press that worked.
