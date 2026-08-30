@@ -5,6 +5,35 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-08-28 — External review, validated line by line
+
+Two documents: an external (Codex) data-model and architecture review, and the validation pass that
+checked every claim in it against the tree the next day.
+
+| Document | What it answers |
+|---|---|
+| [Codex review](./2026-08-28-codex-review.md) | An outside reading of the domain model, schema, dataflows and risks, with a ranked improvement list — against `410a61f`, a tree from before the auth gate replaced the in-app password |
+| [Validation](./2026-08-29-codex-review-validation.md) | Which of those findings hold on the current tree: sixteen confirmed, the rest rejected or downgraded with the evidence, plus one finding of the validation's own that the review missed |
+
+### The three things worth knowing without reading further
+
+1. **Sixteen findings confirmed**, the sharpest being a statement row with a quantity but a blank
+   instrument cell dropped without a word, a derived-product overflow that can take every money
+   screen down at once, and the missing `pool.on('error')` that lets a database restart kill the
+   process. Where they overlap the exploratory report below, they are the same defects seen twice.
+2. **The review's auth findings were moot on arrival**: it read a tree from before the forward-auth
+   gate ([ADR-0005](../adr/0005-auth-is-a-forward-auth-gate.md)) deleted the password machinery it
+   analysed.
+3. **The validation's own finding — the open-redirect residue in `safeReturn` — has since been
+   closed**: the guard was rebuilt as `app/lib/return-path.ts`, resolving the posted path against a
+   throwaway origin, after the validation's stated HEAD (`91f901d`).
+
+### Status
+
+The validation is the document to act from; the review is kept as its input. Nothing in either is
+approved work by itself — where a finding became approved work it did so through
+[`../specs/0005-report-remediation.md`](../specs/0005-report-remediation.md), below.
+
 ## 2026-08-25 — Upload workflow UX review
 
 Two documents from one investigation: what the statement workflow costs a household, and how the
@@ -71,8 +100,9 @@ them, so this repo's `401k.csv` stays a model rather than a format.
 
 One document: [Exploratory test report](./2026-08-24-exploratory-test-report.md) — 67 findings from
 running the application and attacking every feature, against `b7f94f3`. **Nothing was fixed when it
-was written**; each entry is written to be picked up as a task. `SET-1` and `SET-5` have since been
-fixed and are annotated in place.
+was written**; each entry is written to be picked up as a task. `SET-1` and `SET-5`, the
+`SET-2`/`SET-3` date floor and the `SEC-1`/`SEC-3` return path have since been fixed, each
+annotated in place.
 
 ### The four things worth knowing without reading further
 
@@ -98,10 +128,15 @@ fixed and are annotated in place.
 
 ### Status
 
-Nothing here is approved work, and only `SET-1` — the critical one — and `SET-5` beside it have been
-fixed since. The report opens with the seven worth doing
-first and a duplicate table, so the same bug is not filed four times. The suite (746 tests),
-`npm run typecheck` and `npm audit` were all clean throughout — these are things the automated gates
+Six of these findings became approved work after the report landed:
+[`../specs/0005-report-remediation.md`](../specs/0005-report-remediation.md) sequences the date
+floor (`SET-2`/`SET-3`), pool resilience (`LEAD-8`/`LEAD-6`), the sign-in return path
+(`SEC-1`/`SEC-3`), the nameless-quantity refusal (`ING-4`) and the filed-behind statement
+(`ING-1`). Fixed on the tree so far, each annotated in place: `SET-1` — the critical one — with
+`SET-5` beside it, the date floor (`earliestRecordableDate` in `app/lib/input.server.ts`), and the
+return-path guard, rebuilt post-gate as `app/lib/return-path.ts`. The report opens with the seven
+worth doing first and a duplicate table, so the same bug is not filed four times. The whole suite,
+`npm run typecheck` and `npm audit` were clean throughout — these are things the automated gates
 structurally cannot see.
 
 ## 2026-08-23 — Dependency audit

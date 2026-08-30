@@ -1,6 +1,7 @@
 # Codex review validation — independent audit
 
-Validates the findings in `codex-review.md` against the **current tree** (HEAD `91f901d`), not
+Validates the findings in [`2026-08-28-codex-review.md`](./2026-08-28-codex-review.md) against the
+**current tree** (HEAD `91f901d`), not
 the commit the review was written against. Each claim was checked by reading the current code, and
 the load-bearing ones were reproduced empirically against a migrated throwaway Postgres. This
 document is a work-input, not a source of truth: `DESIGN.md`, `ARCHITECTURE.md`, and the migrations
@@ -8,7 +9,8 @@ remain authoritative.
 
 ## Method and framing
 
-- **The review is stale by design.** `codex-review.md` says it was reviewed against `410a61f`
+- **The review is stale by design.** [`2026-08-28-codex-review.md`](./2026-08-28-codex-review.md)
+  says it was reviewed against `410a61f`
   (2026-08-24). HEAD is ~15k lines further on, including a large "1d chart" slice (PRs #100–#108)
   and the removal of in-app authentication. So a good number of its findings were *already fixed*
   between its base and HEAD — this audit separates "still real" from "already handled."
@@ -285,6 +287,11 @@ the *correct* rounding — not a money error. No largest-remainder reconciliatio
 (`allocateShares` is percentages only). Reproduced across screens by the exploratory report.
 
 ### 15. Surviving open redirect in `safeReturn` — **Low / Low (review missed this)**
+
+**Fixed since this document's HEAD.** `safeReturn` was rebuilt as `app/lib/return-path.ts` (commit
+`c8e3a87`): the posted path is resolved by the URL parser against a throwaway origin and must come
+back on it, which closes the backslash and tab spellings below and re-serialises away the
+control-character 500. The entry stands as the record of what was found.
 
 The review's redirect finding (§7.1 item 2) is moot — `safeRedirectTarget` and the login page were
 deleted with auth. But a same-class sink survives that the review never examined:
