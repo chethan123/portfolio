@@ -66,6 +66,17 @@ RUN rm -rf node_modules/typescript node_modules/.bin/tsc node_modules/.bin/tsser
 COPY scripts/prune-unreachable-deps.mjs ./scripts/
 RUN node ./scripts/prune-unreachable-deps.mjs && rm -rf ./scripts
 
+# `yahoo-finance2` ships its compiled output twice over: `esm/`, the target of
+# its exports map's `import` condition, and `script/`, a CommonJS copy behind
+# `require`. Everything that runs here is ESM — the app, the server bundle, the
+# operational scripts — and no other package in the production tree depends on
+# `yahoo-finance2`, so nothing can `require()` it and the copy is 2.7 MB
+# nothing can load. The provider reaches the package through a lazy `import()`
+# on the first quote refresh rather than at boot, so a healthy container proves
+# nothing here: the smoke test imports the package inside the running container
+# and asserts `script/` is gone.
+RUN rm -rf node_modules/yahoo-finance2/script
+
 
 FROM node:24-slim AS runtime
 WORKDIR /app

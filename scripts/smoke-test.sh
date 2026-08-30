@@ -209,6 +209,21 @@ for pkg in yahoo-finance2 tough-cookie tldts express react-router kysely pg zod;
 done
 printf 'runtime dependencies intact\n'
 
+# The CommonJS copy of `yahoo-finance2` — the `require` half of its dual build,
+# which nothing in this ESM-only image can reach; the Dockerfile carries the
+# argument.
+run_in_image 'test ! -e /app/node_modules/yahoo-finance2/script' ||
+  fail "the CommonJS copy of yahoo-finance2 is still in the runtime image"
+
+# And the half the app does reach, proved rather than inferred: the provider
+# loads the package through a lazy `import()` on the first quote refresh, not
+# at boot, so a healthy container says nothing about it. This is the exact path
+# app/lib/price-provider.server.ts takes.
+docker compose exec -T app node -e \
+  'import("yahoo-finance2").then(({default:YahooFinance})=>{process.exit(typeof new YahooFinance().quote==="function"?0:1)}).catch(()=>process.exit(1))' ||
+  fail "the ESM half of yahoo-finance2 did not import and construct inside the image"
+printf 'yahoo-finance2 CommonJS copy removed, ESM half loads\n'
+
 for compiler in gcc cc g++ make tsc; do
   run_in_image "! command -v $compiler >/dev/null" || fail "compiler in the runtime image: $compiler"
 done

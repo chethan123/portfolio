@@ -1560,6 +1560,9 @@ Three stages, each with one job:
 │      Hono, jose, cors and ajv. The script marks the tree with those   │
 │      three edges intact and again with them cut, and deletes only     │
 │      the difference — so it cannot remove anything still reachable    │
+│ rm -rf node_modules/yahoo-finance2/script                             │
+│   ── the CommonJS half of its dual build; the tree is ESM-only, so    │
+│      only esm/ can be reached                                         │
 └───────────────────────────────┬───────────────────────────────────────┘
 ┌─ runtime ─────────────────────▼───────────────────────────────────────┐
 │ node:24-slim · USER node · NODE_ENV=production TZ=UTC PORT=3000       │
