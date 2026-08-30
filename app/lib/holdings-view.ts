@@ -34,9 +34,9 @@
  * is a control that costs more than it saves." That refusal is honoured here
  * rather than argued with: {@link availableFilters} returns a dimension only if
  * the data actually holds two or more distinct values for it, so a household
- * with one brokerage is never shown an Institution select that could only mean
- * "all of them", and
- * every option it does show is a value some holding really has — so no *single*
+ * with one brokerage is never shown a Brokerage select that could only mean
+ * "all of them", and every option it does show is a value some holding really
+ * has — so no *single*
  * filter can select an empty table. Two of them still can, and deliberately:
  * the options are read from the whole portfolio rather than from what the other
  * filters have already left, because options that vanished as you narrowed

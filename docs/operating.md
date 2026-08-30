@@ -370,7 +370,7 @@ it over the compose network.
 **The instance installs as an app, at `PUBLIC_ORIGIN` and nowhere else.** The application ships a
 web app manifest and a service worker, so a browser signed in through the house proxy's HTTPS
 origin can add it to the home screen as a real install — its own icon, a standalone window.
-Everything involved stays behind the gate, with no path exempted in the `Caddyfile` —
+Everything involved stays behind the gate, with no asset path exempted in the `Caddyfile` for it —
 [`ARCHITECTURE.md` §7.7](../ARCHITECTURE.md#77-the-installed-shell) holds the mechanism.
 
 Two properties are decisions rather than gaps

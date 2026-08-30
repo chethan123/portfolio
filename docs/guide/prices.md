@@ -8,8 +8,8 @@ Prices refresh on their own, in the background, while the market is open. Every 
 figure says how old its prices are — the **As of** line in the header — and carries a
 **Refresh now** button beside it. One press spends one request for fresh quotes and says underneath
 what it did: how many prices it fetched, or that nothing was new since the stamp. That answer is
-how you know it ran — the stamp itself is the *oldest* price on the page, so it can stay put after
-a press that worked.
+how you know it ran — the stamp itself is the *oldest* fetched price, so it can stay put after a
+press that worked.
 
 So a total that has not moved usually means the market has not moved it:
 

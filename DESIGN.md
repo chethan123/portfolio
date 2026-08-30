@@ -589,8 +589,8 @@ horizontal scroll nobody uses. Mobile gets a card list with a few fields visible
 draft granted Holdings four filter dimensions — person, account, tax treatment, classification;
 §8.3, written later, types the same idea as eight, adding institution, kind, asset class and
 instrument — and `holding_valued` (§8.2) already exposes all eight, so the extra ones cost no join
-and no new query. As built, Holdings filters on every
-dimension the view exposes except two. `instrument`, because a filter over the very thing each row
+and no new query. As built, Holdings filters on every dimension the view exposes except two.
+`instrument`, because a filter over the very thing each row
 is is a search box wearing a dropdown — a different control with a different case to make. And
 `person`, which since spec 0013 is the household-wide owner filter (ADR-0008) rather than one
 screen's dropdown, though it remains a *grouping* here. §13.7's refusal of search over a dozen

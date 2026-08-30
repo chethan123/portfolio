@@ -1285,9 +1285,9 @@ has none by definition.
 
 **A filter is only offered when it can discriminate.** `availableFilters` returns a dimension only if
 the data holds two or more distinct values for it, so a household with one brokerage is never shown
-an Institution select that could only mean "all of them". One exception, and it is the right one: a dimension that already
-carries a selection is returned anyway, with a "Not in this portfolio" option synthesised if the
-selected key matches nothing (`holdings-view.ts:565`). A stale bookmark from before an account
+an Institution select that could only mean "all of them". One exception, and it is the right one: a
+dimension that already carries a selection is returned anyway, with a "Not in this portfolio" option
+synthesised if the selected key matches nothing (`holdings-view.ts:566`). A stale bookmark from before an account
 closed therefore shows an empty table the reader can *see and clear*, rather than being silently
 widened behind their back.
 
