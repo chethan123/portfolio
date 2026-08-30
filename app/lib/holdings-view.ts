@@ -3,7 +3,7 @@
  * the subtotals under them are (DESIGN.md §8.1).
  *
  * §8.1 calls Holdings the workhorse and says a groupable, filterable table
- * "absorbs what would otherwise be four more pages — by person, by account, tax
+ * "absorbs what would otherwise be four more pages — by owner, by account, tax
  * view, unrealized. Those are the same table with the grouping changed, not
  * separate features." This module is that sentence made executable: one row
  * shape, one set of dimensions, and a grouping argument.
@@ -18,8 +18,9 @@
  * is not to add a fourth one. The screen's table and its subtotals are computed
  * from a single array, so a row and the total beneath it cannot disagree.
  *
- * **Seven dimensions, not four and not eight.** §8.1 grants Holdings four —
- * person, account, tax treatment, classification. §8.3's deferred view builder
+ * **Seven dimensions, not four and not eight.** §8.1's first draft granted
+ * Holdings four — person, account, tax treatment, classification (its text now
+ * records the growth). §8.3's deferred view builder
  * types the same idea as eight: `person | account | institution | kind |
  * tax_treatment | classification | asset_class | instrument`. §8.1 predates
  * §8.3, `holding_valued` exposes all eight, and nothing anywhere forbids the
@@ -32,9 +33,10 @@
  * over accounts — "a household has a dozen accounts; a filter over twelve rows
  * is a control that costs more than it saves." That refusal is honoured here
  * rather than argued with: {@link availableFilters} returns a dimension only if
- * the data actually holds two or more distinct values for it, so a one-person
- * household is never shown an Owner select that can only mean "everyone", and
- * every option it does show is a value some holding really has — so no *single*
+ * the data actually holds two or more distinct values for it, so a household
+ * with one brokerage is never shown a Brokerage select that could only mean
+ * "all of them", and every option it does show is a value some holding really
+ * has — so no *single*
  * filter can select an empty table. Two of them still can, and deliberately:
  * the options are read from the whole portfolio rather than from what the other
  * filters have already left, because options that vanished as you narrowed

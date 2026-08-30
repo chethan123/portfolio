@@ -9,8 +9,11 @@ page is the reference behind it.
 
 **CSV files only.** A `.csv` export, saved as text.
 
-- **No OFX, QIF, XLSX or PDF.** A spreadsheet or a PDF statement is not read. Most institutions
-  offer a CSV download beside the one you took; use that.
+- **No OFX, QIF, XLSX or PDF.** The first screen checks one thing: that the file reads as text. A
+  spreadsheet or a PDF is binary in practice and is refused there. Anything that does read as
+  text — OFX, QIF, the odd all-text PDF — gets past that check and usually stops at the mapping
+  screen instead, where the instrument and quantity can never come from the same column. Most
+  institutions offer a CSV download beside the one you took; use that.
 - **No bank linking.** Nothing here connects to an institution, so there is no account to link and
   no credentials to give. A statement gets in because you exported it and uploaded it.
 - **Not empty.** A zero-byte download is refused as what it is — export it again.
@@ -231,4 +234,5 @@ An upload in progress is a draft with its own address.
 
 ---
 
-**Next:** [One account](account-detail.md) — where a recorded statement lands.
+**Next:** [Why a number did not change](prices.md) — the statement is recorded; this is how its
+rows get their prices.

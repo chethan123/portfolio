@@ -96,9 +96,11 @@ The left rail becomes a bar across the bottom with the same items in it, and tab
 Nothing is held back on a small screen: adding people, adding accounts, setting a balance and the
 whole of Settings all work from a phone.
 
-You can bookmark the address to your home screen like any other page. There is no installable app —
-if you were expecting one to be offered, [Installing on a phone](../operating.md#installing-on-a-phone)
-explains why it is not.
+On the household's own `https://` address — the one the sign-in runs on — the browser offers a real
+install: the app gets its own icon and opens in its own window, like any store app. Installing
+stores nothing on the phone, and when the app cannot reach home — off the VPN, or the instance
+unreachable — it shows a page saying so rather than any figure.
+[Installing on a phone](../operating.md#installing-on-a-phone) is the operator's side of it.
 
 ---
 

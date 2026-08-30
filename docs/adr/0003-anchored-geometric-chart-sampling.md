@@ -4,8 +4,9 @@
 deduped by calendar day, for every chart range regardless of span. A span longer than about
 twenty-five days spread those twenty-five samples far enough apart (roughly fifteen days apart on
 the default 1Y range) that a household or account whose real recorded history is only a day or two
-old had every sample but the most recent one fall before its first upload — `coverage.total > 0` in
-`valuation.server.ts` filters those out — leaving one usable point, which is one point short of a
+old had every sample but the most recent one fall before its first upload — the routes drop those
+points on the `coverage.total > 0` that `valuation.server.ts` reports (`overview.tsx`,
+`account.tsx`) — leaving one usable point, which is one point short of a
 line. The value moves every day purely from price refreshes, so the missing line was a sampling
 artifact, not a data gap.
 

@@ -87,9 +87,9 @@ Configuration and migrations both refuse before the server starts, so the log te
 docker compose logs --tail=200 app
 ```
 
-- Configuration: the log opens `Invalid configuration. The following environment variables are
-  wrong or missing:` and lists them.
-- Migrations: the log says `Migrations failed. The server will not be started.` — go to
+- Configuration: the log opens with a refusal at the stem `Invalid configuration`, naming every
+  wrong or missing variable.
+- Migrations: a line at the stem `Migrations failed` — go to
   [A migration failed](#a-migration-failed).
 - Neither: the process is crashing later. Read the stack.
 
@@ -276,8 +276,10 @@ Rule out these before suspecting the provider.
 docker compose logs --tail=500 app | grep "Price refresh"
 ```
 
-One line per tick, always — a `Price refresh:` line with a count of what was priced and what was
-left stale. So:
+One line per refresh the poller actually runs — a `Price refresh` line with a count of what was
+priced and what was left stale. A tick that runs nothing writes nothing: the market closed, a tick
+landing while one still runs, or the advisory lock held by another process are all silent and all
+ordinary. So:
 
 - **No lines at all, and the market is closed.** The tick returns before it logs anything outside
   market hours. Expected.
@@ -296,8 +298,14 @@ left stale. So:
   and `/healthz` deliberately stays `200`, because a third-party outage must not make Compose
   restart a healthy app. Nothing to do but check egress.
 
-**Do.** Nothing destructive is ever warranted here. `docker compose restart app` is the only action,
-and it needs a page render afterwards to start the loop again.
+**Do.** Press **Refresh now** on any figure screen first — it spends a provider request
+immediately, works outside market hours, and needs no restart. The line it prints under the button
+is the confirmation: how many prices it fetched, or that there was nothing new. (With JavaScript
+off there is no line — the page simply reloads, and the stamp is all there is.) The as-of stamp
+alone is not a verdict: it is the *oldest* fetched quote, so a press that worked can leave it
+still, and outside market hours it usually will. Beyond that, nothing destructive is ever
+warranted here: `docker compose restart app` is the remaining action, and it needs a page render
+afterwards to start the loop again.
 
 Why: [Monitoring](operating.md#monitoring).
 
@@ -626,13 +634,9 @@ Why: [Backups](operating.md#backups), [Restoring](operating.md#restoring).
 docker compose logs --tail=100 app
 ```
 
-The refusal names the file and the underlying cause:
-
-```
-Migrations failed. The server will not be started.
-Error: Migration 0004_upload_draft.sql failed and was rolled back.
-  [cause]: error: relation "upload_draft" already exists
-```
+The refusal names the file and the underlying cause: one line at the stem `Migrations failed`,
+then an error naming the migration file that `failed and was rolled back`, with the Postgres error
+beneath it as its `[cause]`.
 
 Nothing is half-applied. Each file is one transaction — the file and its ledger row commit together
 or roll back together — and the entrypoint stops before the server, so the instance refused to serve

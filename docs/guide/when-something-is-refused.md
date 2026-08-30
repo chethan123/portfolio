@@ -17,9 +17,10 @@ An upload in progress is a draft, and a draft does not live forever.
 - **The account was closed while the draft was open.** A closed account's history does not change,
   so the statement can never land — the draft reads as expired rather than as forbidden.
 
-  The refusal suggests reopening the account from Settings. **There is no reopen control in this
-  version** — closing is one-way. If the statement is still real, add the account again under
-  [Settings](settings.md) and upload against the new one.
+  Trying to record anything new against a closed account — a fresh upload, a balance, a
+  correction — is refused with a sentence that suggests reopening it from Settings. **There is no
+  reopen control in this version** — closing is one-way. If the statement is still real, add the
+  account again under [Settings](settings.md) and upload against the new one.
 
 ## A securities account will not let you type a balance
 

@@ -1158,6 +1158,11 @@ change itself. The entry below stands as it was written, as the record of what t
 
 #### [SET-2] A single-character typo in the balance date (`1026` for `2026`) permanently destroys the "All" net-worth chart, with no way back
 
+**Fixed.** `recordedDate` now applies the floor this entry asks for: `earliestRecordableDate()` in
+`app/lib/input.server.ts` refuses any date before 1970-01-01, the mirror of the future rule argued
+beside it (spec 0005, step 1). The entry below stands as written, as the record of what the defect
+was.
+
 - **Severity:** High
 - **Where:** `app/lib/input.server.ts:241` (`recordedDate` — no lower bound),
   `app/lib/valuation.server.ts` `firstRecordedDate()`, `app/routes/overview.tsx` /
@@ -1197,6 +1202,9 @@ change itself. The entry below stands as it was written, as the record of what t
 ---
 
 #### [SET-3] `asOf=0000-01-01` is accepted by the validator and 500s in the driver
+
+**Fixed by the same floor as `SET-2`.** A year-zero date now falls below `earliestRecordableDate()`'s
+1970 floor and is refused as an ordinary validation answer before the driver ever sees it.
 
 - **Severity:** Medium
 - **Where:** `app/lib/input.server.ts:241` (`recordedDate`), `app/lib/balances.server.ts:218`
@@ -1712,7 +1720,7 @@ rendering; console/`pageerror` capture; JS-disabled run; accessibility basics.
   against a ring centre of `$687,247.44`.
 - **Notes:** no arithmetic is wrong — `sumMoney`/`render` and the SQL `sum()` are exact. This is
   purely "round at render" versus "round where the figure is made". Screenshots
-  `shots/desktop-holdings.png`, `shots/desktop-analysis.png`, `shots/desktop-overview.png`.
+  `«session scratch»/shots/desktop-holdings.png`, `…/desktop-analysis.png`, `…/desktop-overview.png` (uncommitted).
 
 ---
 
@@ -1773,8 +1781,8 @@ rendering; console/`pageerror` capture; JS-disabled run; accessibility basics.
   2. Scroll to the Holdings panel. Value is not on screen; Price is cut mid-figure.
   3. Measured: `.data-table-scroll` `clientWidth 356`, `scrollWidth 503`; column offsets
      `Asset 0–184, Quantity 184–301, Price 301–391, Value 391–503`.
-- **Evidence:** `shots/mobile-account-table.png` (390px). Also 360px → 177px overflow, 320px → 217px.
-  Same page at 1440x1000 is fine (`shots/desktop-*`).
+- **Evidence:** `«session scratch»/shots/mobile-account-table.png` (390px). Also 360px → 177px overflow, 320px → 217px.
+  Same page at 1440x1000 is fine (`«session scratch»/shots/desktop-*`).
 - **Notes:** smaller instance of the same thing — `/analysis`'s "Value by account type" table
   overflows its scroll box by 12px at 390px (and by 42px at 360px), so the "% of total" column is
   partly hidden. `/holdings` reflows to cards correctly at both widths and does not overflow.
@@ -1796,7 +1804,7 @@ rendering; console/`pageerror` capture; JS-disabled run; accessibility basics.
   1. Open `/analysis` at 1440x1000, look at the bottom edge of the "Unrealized gains" table.
   2. Computed styles on the `tfoot` row: `TH border-bottom: 1px solid rgb(195,197,217)`,
      both `TD`s `0px none`.
-- **Evidence:** `shots/gains-table.png` (cropped). Same on `/holdings` `tfoot` and on every
+- **Evidence:** `«session scratch»/shots/gains-table.png` (cropped). Same on `/holdings` `tfoot` and on every
   `.row-subtotal` under `?group=…`.
 - **Notes:** cosmetic only; no figure is affected.
 
@@ -1891,7 +1899,7 @@ rendering; console/`pageerror` capture; JS-disabled run; accessibility basics.
   denominator is right; only the label is wrong.
 - **Repro:** `/analysis`, "Value by account type": `$352,958.50 / 50.3%` against a centre of
   `$687,247.44`.
-- **Evidence:** `shots/desktop-analysis.png`. Denominator confirmed in SQL:
+- **Evidence:** `«session scratch»/shots/desktop-analysis.png`. Denominator confirmed in SQL:
   `sum of positive account-kind slices = 701747.4448`; `352958.4978 / 701747.4448 = 0.502971`.
 - **Notes:** the "Net worth by person" and "Value by asset class" panels have no negative slice, so
   their header is accurate; only the panel containing the loan is mislabelled.
@@ -2003,7 +2011,7 @@ Recorded so the next person does not re-walk them.
 - **Contrast.** Every text node on `/`, `/holdings`, `/analysis`, `/accounts/4` measured against its
   resolved background in both `prefers-color-scheme: light` and `dark`: no node below WCAG AA for
   its size. Chart colours resolve from custom properties, so the dark theme is coherent
-  (`shots/dark-overview.png`).
+  (`«session scratch»/shots/dark-overview.png`).
 - **Accessibility basics.** Both `nav`s are `aria-label="Primary"` and only one is ever displayed;
   the range and group-by strips are labelled navs with `aria-current`; every table has `th` with
   `scope`; sortable headers carry `aria-sort`; the donut SVG is `aria-hidden` with the table as its
@@ -2058,6 +2066,14 @@ Scratch dir: `.../«session scratch»/sec` (scripts, screenshots under `sec/shot
 ---
 
 #### [SEC-1] Open redirect: a tab in `next=` escapes `safeRedirectTarget` and sends a freshly-logged-in browser off-origin
+
+**Overtaken, then fixed in its surviving form.** The login flow this attacked was deleted whole when
+the forward-auth gate replaced the in-app password (ADR-0005); `safeRedirectTarget` no longer
+exists. The same class of input survives on the resource routes' return fields, and the guard there
+is now `safeReturn` in `app/lib/return-path.ts`: the posted path is resolved by the URL parser
+against a throwaway origin, and anything resolving elsewhere — the tab-smuggled `//` spelling
+included, since the parser strips those characters before deciding — lands on `/`. The entry stands
+as written.
 
 - **Severity:** High
 - **Where:** `app/lib/auth.server.ts:153-158` (`safeRedirectTarget`), used by
@@ -2150,6 +2166,11 @@ Scratch dir: `.../«session scratch»/sec` (scripts, screenshots under `sec/shot
 ---
 
 #### [SEC-3] A `next=` containing `%0A` or `%0D` throws an unhandled 500 out of `redirect()`
+
+**Overtaken with `SEC-1`.** The login flow is gone (ADR-0005), and the surviving return-path guard
+(`safeReturn`, `app/lib/return-path.ts`) re-serialises through the URL parser rather than passing
+the raw value to the header writer, which is exactly the "rejecting control characters and
+re-serialising" this entry's notes call for.
 
 - **Severity:** Medium
 - **Where:** `app/lib/auth.server.ts:153-158` (`safeRedirectTarget`) → `app/routes/login.tsx:24`

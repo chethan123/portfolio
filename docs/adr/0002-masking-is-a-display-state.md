@@ -42,8 +42,9 @@ writes the identical value. One cookie, two writers.
 
 `HttpOnly` is therefore off, which is correct rather than merely convenient: the cookie carries a
 display preference, not a credential, and it has to be readable by the script that owns the toggle.
-Nothing in it is a secret, and it grants nothing — the session cookie is a separate thing and stays
-`HttpOnly`.
+Nothing in it is a secret, and it grants nothing — the only session cookie anywhere is the gate's
+(ADR-0005), which the app never issues and which the gate keeps encrypted and `HttpOnly` on its own
+side of the boundary (its default; this repo pins only `SameSite` and `Secure`).
 
 ## Considered options
 

@@ -43,8 +43,8 @@ They start in dependency order: `app` waits for `db` to report healthy, and `cad
 
 **`gate` is pinned to an exact release**, not a floating major like `app`. Nobody here watches that
 image for a breaking change, and it is the thing that keeps everyone out. It is the `-alpine`
-flavour specifically, because its healthcheck needs a shell the default distroless image does not
-have.
+flavour specifically, because its healthcheck needs `wget`, which the default distroless image does
+not carry.
 
 **`gate` is stateless.** The session is an encrypted cookie in the browser, so there is no volume
 and no database behind it — only the read-only bind mount of `./allowed-emails.txt`, which is the
@@ -201,8 +201,9 @@ happens to need it.
 
 **One variable this table used to carry is gone.** How often quotes are refreshed is the
 household's dial rather than the deployment's, so it moved into the application: set it at
-Settings → Prices (whole minutes, 1–1440, default 15; the refresh still runs in the app process and
-only while the market is open). An environment that still sets the old
+Settings → Prices (whole minutes, 1–1440, default 15; the automatic poll still runs in the app
+process and only while the market is open — the **Refresh now** control on any figure screen spends
+a request at any hour). An environment that still sets the old
 `PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
 once on that screen after upgrading.
 
@@ -366,18 +367,21 @@ it over the compose network.
 
 ## Installing on a phone
 
-**No instance can be installed as an app on a phone, on any scheme.** The application ships no web
-app manifest and no service worker, so there is nothing for a browser to install. Visiting it on a
-phone works as an ordinary page, and adding it to the home screen makes an ordinary bookmark.
+**The instance installs as an app, at `PUBLIC_ORIGIN` and nowhere else.** The application ships a
+web app manifest and a service worker, so a browser signed in through the house proxy's HTTPS
+origin can add it to the home screen as a real install — its own icon, a standalone window.
+Everything involved stays behind the gate, with no asset path exempted in the `Caddyfile` for it —
+[`ARCHITECTURE.md` §7.7](../ARCHITECTURE.md#77-the-installed-shell) holds the mechanism.
 
-Serving it over HTTPS does not change this. A secure context is a *precondition* for installing —
-service workers require one, with `localhost` as the only exception — but it is not sufficient on
-its own, and a LAN address over plain HTTP is not what is standing in the way here.
+Two properties are decisions rather than gaps
+([ADR-0007](adr/0007-the-service-worker-stores-nothing.md)):
 
-If installability is wanted later it is a change to the application, not to the deployment: a
-manifest, a service worker, and the offline caching `DESIGN.md` §11 sketches. The secure context
-that would be the other half of it is already there, because the household reaches this instance
-through [a proxy that terminates TLS](#reverse-proxy-and-tls).
+- **Nothing is stored on the phone.** The service worker is network-only — no cached screens, no
+  last-known figures. Off the VPN, the installed app shows a branded connect-the-VPN page and
+  nothing else, so a phone that leaves the household holds no balances.
+- **A LAN address does not install.** Service workers require a secure context; the house proxy's
+  TLS supplies it at [`PUBLIC_ORIGIN`](#reverse-proxy-and-tls), plain-HTTP LAN addresses supply
+  none — and the gate refuses those requests anyway.
 
 ---
 
@@ -619,13 +623,16 @@ and may drift — the code owns the wording:
 - **One line per HTTP request** from the server's built-in request logger: method, path, status,
   duration. Note that the container healthcheck hits `/healthz` every ten seconds, and on an idle
   instance that is essentially the whole log.
-- **One line per price refresh attempt, always** — stem `Price refresh`. Informational when
-  everything priced, a warning when anything came back stale. It is emitted on every tick precisely
-  so that "prices stopped updating" is answerable from the log alone.
+- **One line per refresh the poller actually runs** — stem `Price refresh`. Informational when
+  everything priced, a warning when anything came back stale. A tick that runs no refresh writes no
+  line at all — [below](#there-is-no-price-line-in-the-log-has-four-causes) lists which silences
+  are ordinary.
 - **A provider outage** at error level — stem `Price provider failed` — every selected instrument
   is marked stale and the last known prices are kept. Other refresh failures (the pool, the
-  advisory lock, the transaction) log `Price refresh failed` instead, keeping prices the same way;
-  a single symbol refused over its currency logs `Price refused`. None of them zeroes anything.
+  advisory lock, the transaction) log `Price refresh failed`; the same failure on a **Refresh now**
+  press logs `Manual price refresh failed`, so grep for `price refresh failed` case-insensitively
+  to catch both. A single symbol refused over its currency logs `Price refused`. None of them
+  zeroes anything.
 - **Database trouble on the page path** at error level — stems `Database health check failed` and
   `Migration status check failed` — the lines behind a `/healthz` 503.
 - **Startup**, in order: the configuration check, one line per migration file (applied or skipped),
@@ -643,9 +650,9 @@ And in `gate`'s log, which is a different program with a different vocabulary:
 - **A refusal to start**, which crash-loops the container rather than serving anything: a
   `cookie_secret` of the wrong length is the one to expect, and it names the variable.
 
-### "There is no price line in the log" has three causes
+### "There is no price line in the log" has four causes
 
-Only one of them is a fault:
+Only the last is a fault:
 
 1. **Nobody has loaded a page since the container started.** The refresh timer is started from the
    first page render, because the app is served by the framework's own server and there is no server
@@ -654,7 +661,13 @@ Only one of them is a fault:
    loader.
 2. **The market is closed.** A tick outside market hours returns without spending a request and
    without logging anything.
-3. **The poller failed to start.** That one *does* log, once, at error level.
+3. **Another refresh was already running or held the lock.** A tick that lands while one is still
+   going, or while another process holds the advisory lock, is dropped silently — never queued.
+4. **The poller failed to start.** That one *does* log, once, at error level.
+
+A *successful* **Refresh now** press writes no `Price refresh` line: its outcome is reported on the
+screen that pressed it. The attempt still lands a `price_poll` row, and a currency refusal along
+the way still logs `Price refused`.
 
 There is also a quiet period by design: the first tick is one full interval after the first page
 view, with no immediate poll, so a freshly recreated container is silent for up to the refresh

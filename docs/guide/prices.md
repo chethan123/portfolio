@@ -1,24 +1,30 @@
 # Why a number did not change
 
-Prices look after themselves, so the two questions this page answers are the only two that need
-answering.
+Prices mostly look after themselves, so this page is three short answers.
 
 ## "My total is the same as yesterday"
 
-Prices refresh on their own, in the background, while the market is open. Nobody has to press
-anything, and there is no button to press — a refresh control is one of the things not built yet.
+Prices refresh on their own, in the background, while the market is open. Every screen with a
+figure carries the same **As of** line in its header — the age of the oldest fetched price on
+anything the household owns, whichever screen or owner you are looking at — and a **Refresh now**
+button beside it. One press spends one request for fresh quotes and says underneath
+what it did: how many prices it fetched, or that nothing was new since the stamp. That answer is
+how you know it ran — the stamp itself is the *oldest* fetched price, so it can stay put after a
+press that worked.
 
 So a total that has not moved usually means the market has not moved it:
 
-- **Outside trading hours, nothing refreshes.** Evenings, weekends and market holidays hold
-  yesterday's closing prices. This is working correctly.
+- **Outside trading hours, nothing refreshes on its own.** Evenings, weekends and market holidays
+  hold the last close. This is working correctly. Refresh now still works then — it usually finds
+  nothing new, but it is how a holding recorded on a weekend gets its first price without waiting
+  for Monday's open.
 - **Quantities only change when you record them.** A price moving is automatic; you holding more of
   something is not. That comes from [an uploaded statement](upload.md) or
   [a correction](holdings.md).
 - **How often prices refresh during the day is the refresh cadence**, set at Settings → Prices in
   whole minutes. A change is picked up when the next refresh runs, so it can take up to one old
-  cadence to apply. If a total looks genuinely stuck beyond that, see
-  [operating](../operating.md).
+  cadence to apply. If a total looks genuinely stuck beyond that, press **Refresh now** first; if
+  it reports a failure rather than "nothing new", see [operating](../operating.md).
 
 Two things you may see on a row instead of a fresh figure:
 
@@ -60,4 +66,4 @@ The reasoning behind all of this — why an unpriceable holding is excluded rath
 why a quote is filed under the day the market gave it — is in
 [the README](../../README.md#where-prices-come-from).
 
-**Next:** [When something is refused](when-something-is-refused.md).
+**Next:** [Settings](settings.md) — the dials behind these screens, the refresh cadence among them.

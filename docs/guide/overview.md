@@ -19,6 +19,10 @@ statement, the earlier figure is zero, a percentage of zero says nothing, and th
 amount alone. That is why the All range in the next picture reads `+$687,516.13` with no
 percentage.
 
+Under the chip, the **As of** line is the age of the household's fetched prices — the oldest quote
+the feed holds for anything anyone here owns, whoever the owner filter selects — and **Refresh
+now** beside it fetches fresher ones. [Why a number did not change](prices.md) explains both.
+
 ## The range control
 
 Nine options, top right: **1D**, **1W**, **1M**, **3M**, **YTD**, **1Y**, **5Y**, **All**,
@@ -174,13 +178,18 @@ to [Analysis](analysis.md).
 
 ## When there is nothing to draw
 
-Two different empty screens, and they are not the same:
+The empty screens this page can show, and they are not the same:
 
 - **Nothing uploaded yet.** No figure at all, and a sentence saying so. A net worth of zero and an
   empty instance look identical, and only one of them is worth worrying about. Start at
   [upload.md](upload.md).
 - **One dated point.** The panel says a trend needs two dated points and this instance has one.
   The line appears after the second statement.
+- **1D, early in the day.** The panel says a line needs two observed moments and this session has
+  one — the feed has reported a price at only one distinct time so far. More arrive as the market
+  trades and refreshes land.
+- **Narrowed to owners who hold nothing.** The [owner filter](owner-filter.md) is on and the
+  selection has no holdings; the control stays on screen so you can clear it.
 
 ## On a phone
 
@@ -194,4 +203,5 @@ being pointed at. Tap a point to read that one instead.
 
 ---
 
-**Next:** [Holdings](holdings.md) — every position, and how to see only the ones you want.
+**Next:** [The owner filter](owner-filter.md) — narrowing every figure on these screens to one
+person's.
