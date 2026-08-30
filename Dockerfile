@@ -5,7 +5,7 @@
 #   deps    npm ci against the lockfile alone, so dependency layers cache
 #           independently of source: changing a route does not reinstall.
 #   build   client and server bundles, then the dev dependencies pruned away.
-#   runtime node:24-slim with production dependencies and build output only —
+#   runtime node:24-alpine with production dependencies and build output only —
 #           no compiler, no dev dependencies, no source tree, non-root.
 #
 # `deps` and `build` are pinned to $BUILDPLATFORM, so they run natively on the
@@ -17,11 +17,13 @@
 #
 # THE INVARIANT THIS RESTS ON: nothing in the production dependency tree has a
 # native binary or a platform-specific install script, so a tree installed on
-# one architecture runs on the other. That holds today — no non-dev package in
-# package-lock.json declares `hasInstallScript`, `os` or `cpu`. A production
-# dependency that does breaks it, and breaks it *silently*: the arm64 image
-# builds and then fails at runtime on the box that pulled it. If that happens,
-# drop these two pins and build each platform natively instead.
+# one architecture runs on the other — and a tree installed on the glibc build
+# stages runs on the musl runtime below. That holds today — no non-dev package
+# in package-lock.json declares `hasInstallScript`, `os` or `cpu` — and the
+# audit job in CI fails the moment one does. A production dependency that does
+# breaks this *silently*: the image builds and then fails at runtime on the box
+# that pulled it. If that happens, build each platform natively without these
+# two pins, and give `runtime` the build stages' own base back.
 
 FROM --platform=$BUILDPLATFORM node:24-slim AS deps
 WORKDIR /app
@@ -84,7 +86,15 @@ RUN node ./scripts/prune-unreachable-deps.mjs && rm -rf ./scripts
 RUN rm -rf node_modules/yahoo-finance2/script
 
 
-FROM node:24-slim AS runtime
+# Alpine rather than the build stages' Debian slim: the published stage needs
+# node, a POSIX sh for the entrypoint, and nothing else. Slim was carrying a
+# second, larger userland — perl, bash, apt and dpkg included — into the
+# container that holds the family's finances, and a quarter of every pull with
+# it. The build stages stay on slim on purpose: they never ship, and their
+# caches are warm. Node on musl is what the invariant above protects — pure
+# JavaScript runs identically, and a native dependency is the moment to
+# reassess this base.
+FROM node:24-alpine AS runtime
 WORKDIR /app
 
 # Timestamps are unambiguous because the clock is UTC and the database stores
