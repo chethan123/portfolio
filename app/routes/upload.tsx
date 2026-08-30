@@ -24,8 +24,22 @@ export function meta() {
   return [{ title: "Upload · Portfolio" }];
 }
 
-export async function loader() {
+export async function loader({ request }: Route.LoaderArgs) {
   const accounts = await listAccounts();
+
+  const openAccounts = accounts.filter((account) => !account.isClosed);
+
+  // `?account=` is a prefill (CONTEXT.md), not a filter: a link from an
+  // account's own page hands the selector its starting choice, still
+  // changeable, committing nothing. One that names anything the select does
+  // not offer — closed, gone, mistyped — is quietly dropped and the form
+  // starts blank, because a prefill only ever saved the picking; it never
+  // promised the pick. Matched against the options here so the select is
+  // never defaulted to a value no option carries.
+  const requested = new URL(request.url).searchParams.get("account");
+  const prefillAccountId = openAccounts.some((account) => account.id === requested)
+    ? requested
+    : null;
 
   return {
     // The same query as Settings, so the two screens can never disagree about
@@ -34,9 +48,10 @@ export async function loader() {
     // which facts an option shows is `account-label.ts`'s one rule. Closed
     // accounts are absent, not disabled: their history does not change, and a
     // disabled option is a question a select cannot answer.
-    accountGroups: accountPickerGroups(accounts.filter((account) => !account.isClosed)),
+    accountGroups: accountPickerGroups(openAccounts),
     hasAccounts: accounts.length > 0,
     maxUploadMb: getConfig().MAX_UPLOAD_MB,
+    prefillAccountId,
   };
 }
 
@@ -72,7 +87,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Upload({ loaderData, actionData }: Route.ComponentProps) {
-  const { accountGroups, hasAccounts, maxUploadMb } = loaderData;
+  const { accountGroups, hasAccounts, maxUploadMb, prefillAccountId } = loaderData;
   const errors = actionData?.errors;
 
   return (
@@ -130,10 +145,13 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
             <div>
               <label htmlFor="upload-account">
                 Account
+                {/* A refused submit's own choice outranks the link's prefill:
+                    the reader may have changed the account before the refusal,
+                    and snapping back would discard that. */}
                 <select
                   id="upload-account"
                   name="accountId"
-                  defaultValue={actionData?.values.accountId ?? ""}
+                  defaultValue={actionData?.values.accountId ?? prefillAccountId ?? ""}
                   aria-invalid={errors?.accountId ? true : undefined}
                 >
                   <option value="">Choose…</option>
