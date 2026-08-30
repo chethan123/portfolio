@@ -577,6 +577,59 @@ export function readChartRange(request: Request): RequestedRange {
 }
 
 /**
+ * The three parameters this control owns. Everything else in the address
+ * belongs to the screen and is carried through untouched.
+ *
+ * Here rather than in the component because these are exactly the three
+ * {@link readChartRange} reads back, and the read side and the write side of
+ * one vocabulary drift when they live in different files. They are still two
+ * lists in one file — `readChartRange` names each one where it reads it,
+ * because the three have different roles rather than being interchangeable —
+ * so adding a fourth is an edit in both places, twenty lines apart.
+ */
+const RANGE_PARAMS = ["range", "start", "end"];
+
+/**
+ * What a preset link and the Custom form have to re-emit — the address
+ * stripped of this control's own vocabulary, in the order it already had.
+ */
+export function carriedParams(params: URLSearchParams): [string, string][] {
+  return [...params].filter(([name]) => !RANGE_PARAMS.includes(name));
+}
+
+/**
+ * The search string a preset points at: the rest of the query, plus its own
+ * `?range=`.
+ *
+ * The emit side of {@link readChartRange}, and here rather than in the control
+ * for `parseQuery`/`toSearch`'s reason — a parameter one function writes and
+ * another refuses to read is a seam with a hole in it.
+ *
+ * A whole search string rather than React Router's relative resolution,
+ * because a `to` beginning with `?` replaces the *entire* query: that is what
+ * silently dropped the account page's `?uploaded=` receipt when a range was
+ * picked. With nothing else in the address it still comes out as exactly
+ * `?range=<key>`.
+ *
+ * `start` and `end` are rewritten rather than carried. A preset never reads a
+ * custom span — {@link readChartRange} looks at them only under
+ * `range=custom` — so one left behind is inert, and an address advertising a
+ * span nothing draws is worse than no span at all.
+ *
+ * The one liberty taken with `URLSearchParams.toString`: it percent-encodes a
+ * comma, and this application spells a multi-valued parameter with literal
+ * commas (`?owner=1,3`, spec 0013). Both spellings parse to the same value, so
+ * decoding it back keeps one view spelled one way in the address bar instead
+ * of two.
+ */
+export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
+  const next = new URLSearchParams(carriedParams(params));
+  next.set("range", range);
+
+  return `?${next.toString().replaceAll("%2C", ",")}`;
+}
+
+/**
  * Remembers an explicit range choice in the persistence cookie (spec 0008).
  *
  * A middleware rather than a header on the loader's own return, because both
@@ -612,7 +665,20 @@ export function chartRangeMiddleware() {
     const response = (await next()) as Response;
     const requested = readChartRange(request);
 
-    if (requested.explicit) {
+    // Not onto a redirect. Since spec 0013 a loader may bounce to a canonical
+    // address before it draws anything, and stamping a remembered choice on a
+    // response that is not the page is a header nobody reads. Skipping it costs
+    // nothing: every redirect under this middleware lands somewhere this same
+    // middleware runs, so the cookie is written for the page that is actually
+    // drawn.
+    //
+    // Document requests only. A client-side navigation carries a redirect back
+    // as react-router's single-fetch 202 rather than a 3xx, and this does not
+    // fire for it — which is harmless, because it would write the same value
+    // the followed request writes a moment later.
+    const redirecting = response.status >= 300 && response.status < 400;
+
+    if (requested.explicit && !redirecting) {
       response.headers.append(
         "Set-Cookie",
         rangeCookie(encodeRangeCookieValue(requested.range, requested.custom)),

@@ -22,13 +22,13 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import Account, { loader, middleware } from "../../app/routes/account.tsx";
+import Account, { action, loader, middleware } from "../../app/routes/account.tsx";
 import { RANGE_COOKIE } from "~/lib/chart-range";
 import { earliestRecordableDate, latestRecordableDate } from "~/lib/input.server";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, responseOf, servedThrough } from "../support/routes.ts";
+import { args, get, post, redirectTo, responseOf, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -409,6 +409,106 @@ describe("a custom range", () => {
   );
 });
 
+/**
+ * Where the segmented control's `key` preset actually points — the resolved
+ * href a reader would follow, with the ampersands a multi-param query needs
+ * decoded back out of the markup.
+ *
+ * Found by parsing each candidate's query rather than by matching the string,
+ * so the assertion below is about which range the link names and not about
+ * where in the query it happens to sit.
+ */
+function presetHref(markup: string, key: string): string {
+  const href = [...markup.matchAll(/href="([^"]*)"/g)]
+    .map(([, candidate]) => (candidate ?? "").replaceAll("&amp;", "&"))
+    .find((candidate) => new URL(candidate, "http://portfolio.local").searchParams.get("range") === key);
+
+  if (href === undefined) throw new Error(`No ${key} preset link in:\n${markup}`);
+
+  return href;
+}
+
+describe("the range links and the rest of the query", () => {
+  it(
+    "keeps the upload receipt when a preset is followed, rather than replacing the whole query",
+    withDatabase(async (ctx) => {
+      const { account, february } = await seedTwoStatements(ctx);
+      const at = (path: string) => loader(args(get(path), { accountId: account.id }));
+
+      const path = `/accounts/${account.id}?uploaded=${february.id}`;
+      const markup = renderRoute(Account, path, await at(path));
+
+      // The bug: `to="?range=1m"` is a *whole* query string, and React Router
+      // resolves it as one. Upload a statement, read the confirmation, click
+      // 1M, and the sentence you were reading is gone — with nothing on screen
+      // to say it ever existed.
+      const href = presetHref(markup, "1m");
+      expect(href).toBe(`/accounts/${account.id}?uploaded=${february.id}&range=1m`);
+
+      // Followed, not merely asserted on: the receipt has to survive the click
+      // itself, which is the thing a reader actually does.
+      const clicked = await at(href);
+      expect(clicked.range).toBe("1m");
+      expect(clicked.receipt).toMatchObject({ setId: february.id, filename: "February.csv" });
+      expect(renderRoute(Account, href, clicked)).toContain("February.csv");
+    }),
+  );
+
+  it(
+    "keeps the balance receipt too, and carries it through the custom form's hidden fields",
+    withDatabase(async (ctx) => {
+      // Read once: five `daysAgo(400)` calls could straddle UTC midnight, and
+      // the failure would be a flake nobody could reproduce.
+      const recorded = daysAgo(400);
+      const account = await seedAccountDayZero(ctx, recorded);
+      const at = (path: string) => loader(args(get(path), { accountId: account.id }));
+
+      const path = `/accounts/${account.id}?recorded=${recorded}`;
+      const data = await at(path);
+      expect(data.justRecorded).toBe(true);
+
+      const markup = renderRoute(Account, path, data);
+      const href = presetHref(markup, "1m");
+      expect(href).toBe(`/accounts/${account.id}?recorded=${recorded}&range=1m`);
+      expect((await at(href)).justRecorded).toBe(true);
+
+      // A GET form submits its own fields and nothing else, so Custom drops
+      // whatever the address held unless it re-emits it as a hidden field.
+      expect(markup).toContain(`type="hidden" name="recorded" value="${recorded}"`);
+    }),
+  );
+
+  it(
+    "clears the custom span when moving off it, so a preset never leaves one in the address",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(200));
+      const path = `/accounts/${account.id}?range=custom&start=${daysAgo(100)}&end=${daysAgo(10)}`;
+
+      const data = await loader(args(get(path), { accountId: account.id }));
+      const markup = renderRoute(Account, path, data);
+
+      // `range`, `start` and `end` are the control's own vocabulary: a preset
+      // rewrites them rather than carrying them, or the address advertises a
+      // span nothing draws.
+      expect(presetHref(markup, "1m")).toBe(`/accounts/${account.id}?range=1m`);
+    }),
+  );
+
+  it(
+    "still names its own range and nothing else on a screen carrying no other params",
+    withDatabase(async (ctx) => {
+      const account = await seedAccountDayZero(ctx, daysAgo(400));
+      const path = `/accounts/${account.id}`;
+      const markup = renderRoute(Account, path, await loader(args(get(path), { accountId: account.id })));
+
+      expect(presetHref(markup, "1m")).toBe(`${path}?range=1m`);
+      // Including the default preset, which links to its own key rather than
+      // to `.` so an explicit choice beats the persistence cookie.
+      expect(presetHref(markup, "1y")).toBe(`${path}?range=1y`);
+    }),
+  );
+});
+
 describe("a preset before this account's own earliest data", () => {
   it(
     "renders disabled, with no working link, using the account-scoped earliest date rather than the household's",
@@ -427,7 +527,11 @@ describe("a preset before this account's own earliest data", () => {
       expect(data.rangeOptions.find((option) => option.key === "5y")?.disabled).toBe(true);
 
       const markup = renderRoute(Account, `/accounts/${account.id}`, data);
-      expect(markup).not.toContain('href="?range=5y"');
+      // On the resolved href, not on the relative `to`: a `<Link>` renders
+      // the address it resolves to, so the old assertion against `href="?…"`
+      // could never have failed whether the preset linked or not.
+      expect(markup).not.toContain("range=5y");
+      expect(markup).toMatch(/<span[^>]*aria-disabled="true"[^>]*>5Y</);
     }),
   );
 
@@ -496,6 +600,53 @@ describe("the 1D range on an account", () => {
       );
       expect(asked.range).toBe("1y");
       expect(asked.session).toBeNull();
+    }),
+  );
+});
+
+describe("the receipt a balance write redirects to", () => {
+  it(
+    "keeps what the submitting page was reading",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "bank", name: "Chase Checking" });
+
+      // `chartRangeMiddleware` writes no cookie onto a redirect, so a target
+      // that dropped `range` would leave the followed GET with nothing explicit
+      // to read — and send it to whatever the cookie last held, which another
+      // tab may have moved. The receipt names the range, which is what makes
+      // the middleware's rule safe.
+      const to = await redirectTo(() =>
+        action(
+          args(
+            post(`/accounts/${account.id}?range=1m&owner=7`, { amount: "1250.00", asOf: "2026-02-28" }),
+            { accountId: account.id },
+          ),
+        ),
+      );
+
+      expect(to).toContain("range=1m");
+      // And the owner filter, so a write does not end a reading either.
+      expect(to).toContain("owner=7");
+      expect(to).toContain("recorded=");
+    }),
+  );
+
+  it(
+    "does not stack a second receipt on the first",
+    withDatabase(async (ctx) => {
+      const account = await ctx.seedAccount({ kind: "bank", name: "Chase Checking" });
+
+      const to = await redirectTo(() =>
+        action(
+          args(
+            post(`/accounts/${account.id}?recorded=2026-01-31`, { amount: "10.00", asOf: "2026-02-28" }),
+            { accountId: account.id },
+          ),
+        ),
+      );
+
+      expect(to.match(/recorded=/g)).toHaveLength(1);
+      expect(to).not.toContain("recorded=2026-01-31");
     }),
   );
 });
