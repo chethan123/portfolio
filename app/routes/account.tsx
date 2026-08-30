@@ -10,6 +10,7 @@ import {
   LiabilityIcon,
   RetirementIcon,
   SavingsIcon,
+  UploadIcon,
 } from "~/components/icons";
 import { NetWorthChart } from "~/components/net-worth-chart";
 import {
@@ -467,6 +468,13 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
             )}
 
             <div className="detail-actions">
+              {/* Without the owner filter, deliberately: the upload flow has no
+                  owner concept, so there is nothing there to hand it to. */}
+              <Link className="button button--quiet" to={`/upload?account=${total.accountId}`}>
+                <UploadIcon />
+                Upload statement
+              </Link>
+
               {/* An anchor, not a second copy of the form. §11 makes this the
                   one write a phone is offered, and a phone opening this page
                   should not have to scroll a chart and a table to reach it —
@@ -544,9 +552,14 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
         <EmptyState>
           The positions this account holds are listed here, with what each is worth. Nothing has
           been recorded for this account yet —{" "}
-          {takesBalance
-            ? "set its balance below and it appears."
-            : "upload a statement for it and they appear."}
+          {takesBalance ? (
+            "set its balance below and it appears."
+          ) : (
+            <>
+              <Link to={`/upload?account=${total.accountId}`}>upload a statement</Link> for it and
+              they appear.
+            </>
+          )}
         </EmptyState>
       ) : (
         <section className="panel">

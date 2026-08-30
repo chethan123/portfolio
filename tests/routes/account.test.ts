@@ -213,6 +213,40 @@ describe("the receipts", () => {
   );
 });
 
+describe("the way into the upload flow", () => {
+  it(
+    "links the action row and the empty state's sentence to the upload screen naming this account",
+    withDatabase(async (ctx) => {
+      // A statement-kind account with nothing recorded yet: the one state that
+      // renders both ways in at once. The action row is unconditional, and an
+      // empty non-balance account is exactly who the empty state tells to
+      // upload.
+      const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
+
+      const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
+      const markup = renderRoute(Account, `/accounts/${account.id}`, data);
+
+      // The action row's button — icon, then label — pointing at the upload
+      // screen with this account named. Named without the owner filter: the
+      // upload flow has no owner concept, so unlike the breadcrumb there is
+      // nothing to hand it.
+      expect(markup).toMatch(
+        new RegExp(
+          `<a[^>]*href="/upload\\?account=${account.id}"[^>]*><svg[^>]*>.*?</svg>Upload statement</a>`,
+        ),
+      );
+
+      // And the empty state's sentence still reads as a sentence, with the
+      // verb phrase itself as the way in.
+      expect(markup).toMatch(
+        new RegExp(
+          `<a[^>]*href="/upload\\?account=${account.id}"[^>]*>upload a statement</a> for it and they appear\\.`,
+        ),
+      );
+    }),
+  );
+});
+
 describe("the chart's range", () => {
   it(
     "falls back to the default window for a value it does not offer, rather than to an empty one",
