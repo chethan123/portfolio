@@ -1,18 +1,12 @@
 /**
- * The icon set, inline.
- *
- * The Stitch screens pull Material Symbols from a CDN. These replace it for
- * the same two reasons the fonts are self-hosted (DESIGN.md §13.7): an
- * offline-capable PWA cannot depend on a network round trip to render its own
- * navigation, and a household finance app should not announce each visit to a
- * third party.
- *
- * Every icon inherits `currentColor` and sits on a 24px grid at 1.75px stroke
- * with round caps — the new system's corners are round everywhere (§13.1), and
- * an icon set drawn with mitred corners reads as a different drawing.
- *
- * They are decorative throughout: each is `aria-hidden`, and every icon in the
- * app sits beside a real text label rather than standing in for one.
+ * The icon set, inline — replacing the Stitch screens' CDN Material Symbols
+ * for the reasons the fonts are self-hosted (DESIGN.md §13.7): an
+ * offline-capable PWA cannot need a network round trip to render its own
+ * navigation, and a household finance app should not announce each visit to
+ * a third party. Every icon inherits `currentColor` on a 24px grid, 1.75px
+ * stroke, round caps (§13.1 — mitred corners read as a different drawing).
+ * Decorative throughout: each is `aria-hidden` and sits beside a real text
+ * label rather than standing in for one.
  */
 
 type IconProps = { className?: string };
@@ -35,10 +29,8 @@ function Icon({ className, children }: IconProps & { children: React.ReactNode }
   );
 }
 
-/**
- * Refresh. Two arcs chasing each other, each with its own head — the shape
- * every browser and every phone already uses for "fetch this again".
- */
+/** Refresh: two arcs chasing each other — the shape every browser already
+ * uses for "fetch this again". */
 export function RefreshIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -234,17 +226,11 @@ export function EditIcon(props: IconProps) {
 }
 
 /**
- * An unmasked screen, drawn as the eye that can see (spec 0007).
- *
- * Named for the glossary term rather than for what the eye is doing:
- * `CONTEXT.md` lists *hidden* among the words this project avoids for masking,
- * and an icon called `VisibleIcon` is how that vocabulary starts drifting back
- * in one identifier at a time.
- *
- * Beside a text label like every other icon here, never instead of one: the
- * control it sits in is labelled with the action it will perform, and story 5
- * is explicit that a reader who has to infer the state from a glyph is one
- * click away from revealing their balances.
+ * An unmasked screen, the eye that can see (spec 0007). Named for the
+ * glossary term: CONTEXT.md avoids *hidden* for masking, and `VisibleIcon`
+ * is how that vocabulary drifts back one identifier at a time. Beside a
+ * text label like every icon here, never instead of one — story 5: a reader
+ * inferring state from a glyph is one click from revealing their balances.
  */
 export function UnmaskedIcon(props: IconProps) {
   return (

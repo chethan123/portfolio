@@ -7,22 +7,16 @@ import { readMaskingPolicy, saveMaskingPolicy } from "~/lib/settings.server";
 import type { Route } from "./+types/display";
 
 /**
- * Settings → Display (spec 0007, ADR-0002).
+ * Settings → Display (spec 0007, ADR-0002) — a thin wrapper over
+ * `settings.server.ts`, as Tax is; what a policy may be lives there and in
+ * `masking.ts`.
  *
- * A thin wrapper over `settings.server.ts`, exactly as Tax is over its own: it
- * reads the form, hands the raw fields down, and renders what comes back. What
- * a policy is allowed to be lives in that module and in `masking.ts`.
- *
- * **What this tab is not.** It is not the masking control. The control is in
- * the chrome on every screen, and ADR-0002 records why it cannot move here: a
- * household's first run under the seeded policy is a page of dots, and a page
- * of dots whose only cure is three clicks into Settings is a broken app. This
- * tab sets what a browser *opens* in; the chrome decides what it is showing
- * now.
- *
- * **The tab is named Display rather than Masking** because §12's theme choice
- * lands here too when it is built. One tab for "how the screens look", rather
- * than a tab per preference.
+ * **Not the masking control.** The control is in the chrome, and ADR-0002
+ * records why it cannot move here: first run under the seeded policy is a
+ * page of dots, and dots whose only cure is three clicks into Settings is a
+ * broken app. This tab sets what a browser *opens* in; the chrome decides
+ * what it shows now. Named Display, not Masking, because §12's theme choice
+ * lands here too — one tab for "how the screens look".
  */
 export function meta() {
   return [{ title: "Display · Settings · Portfolio" }];
@@ -38,30 +32,25 @@ export async function action({ request }: Route.ActionArgs) {
   try {
     await saveMaskingPolicy(values);
 
-    // The state cookie goes with the write, and this is the whole reason this
-    // action returns a `Response` where Tax returns null (ADR-0002). Without it
-    // the setting appears to do nothing on the browser that changed it — the
-    // old cookie still wins on every screen — and the lifetime the *old* policy
-    // gave that cookie would outlive the policy itself.
+    // The state cookie goes with the write — the whole reason this returns a
+    // `Response` where Tax returns null (ADR-0002): without it the setting
+    // appears to do nothing on the browser that changed it, and the lifetime
+    // the *old* policy gave that cookie outlives the policy. Cleared, not
+    // rewritten: the resolver answers "what does a browser open in" from the
+    // policy, and only for a browser with nothing left to say.
     //
-    // Cleared rather than rewritten to match the new policy: what a browser
-    // opens in is a question the resolver answers from the policy, and it can
-    // only answer it for a browser with nothing left to say.
-    //
-    // A REDIRECT, not a bare 204. This was the version before, and with
-    // JavaScript off it made story 25 exactly false: a document POST answered
-    // 204 leaves the browser sitting on the page it submitted, so the row
-    // updated, the cookie cleared, and the screen behind the form did not
-    // change. Post/redirect/get repaints in both browsers, and it re-runs the
-    // shell's loader — which is what actually puts the new policy on screen.
+    // A REDIRECT, not a bare 204: a document POST answered 204 leaves the
+    // browser on the page it submitted — story 25 exactly false with
+    // JavaScript off. Post/redirect/get repaints in both browsers and re-runs
+    // the shell's loader, which is what puts the new policy on screen.
     return redirect("/settings/display", {
       headers: { "Set-Cookie": clearedMaskingCookie() },
     });
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here rather than in the component: `FORM_ERROR` lives in a
-      // `.server` module, and a component referencing it would drag that module
-      // — and the database with it — into the client bundle.
+      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
+      // module, and a component referencing it would drag the database into
+      // the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       // No `Set-Cookie` on this path. Clearing it after a refused write would
@@ -94,19 +83,18 @@ export default function Display({ loaderData, actionData }: Route.ComponentProps
         </header>
 
         <Form method="post" className="panel-form">
-          {/* A refusal that names no field would otherwise be a form that did
-              nothing and said nothing. There is one field here, so this is
-              close to unreachable — which is exactly why it must not be the
-              case that goes unrendered. */}
+          {/* Close to unreachable with one field — exactly why it must not
+              be the refusal that goes unrendered: a form that did nothing
+              and said nothing. */}
           {actionData?.formError ? (
             <p className="form-error" role="alert">
               {actionData.formError}
             </p>
           ) : null}
 
-          {/* Radios rather than a select: three options, all of which need a
-              sentence to be understood, and a select would hide two of them
-              behind a click at the moment someone is deciding between them. */}
+          {/* Radios, not a select: three options that each need a sentence,
+              and a select hides two of them behind a click at the moment of
+              deciding. */}
           <fieldset>
             <legend>A browser opens</legend>
 

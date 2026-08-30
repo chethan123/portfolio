@@ -11,14 +11,11 @@ import type { Route } from "./+types/upload";
 
 /**
  * The drop screen — step one of the upload flow (DESIGN.md §5.1, ingest
- * brief §3). Pick which account this statement describes, hand over the file,
- * land on the mapping step. One decision and one control; everything hard
- * comes later, and the screen is built to look like that is true.
- *
- * The POST is the application's first multipart form. Its guards — the size
- * cap read twice, the empty file, the not-text file — live in
- * `uploads.server.ts`, so this action stays the same thin translation every
- * other route is.
+ * brief §3): pick the account, hand over the file, land on mapping. One
+ * decision and one control; everything hard comes later, and the screen is
+ * built to look like that is true. The POST is the app's first multipart
+ * form; its guards — size cap read twice, empty file, not-text — live in
+ * `uploads.server.ts`, so this action stays a thin translation.
  */
 export function meta() {
   return [{ title: "Upload · Portfolio" }];
@@ -30,24 +27,21 @@ export async function loader({ request }: Route.LoaderArgs) {
   const openAccounts = accounts.filter((account) => !account.isClosed);
 
   // `?account=` is a prefill (CONTEXT.md), not a filter: a link from an
-  // account's own page hands the selector its starting choice, still
-  // changeable, committing nothing. One that names anything the select does
-  // not offer — closed, gone, mistyped — is quietly dropped and the form
-  // starts blank, because a prefill only ever saved the picking; it never
-  // promised the pick. Matched against the options here so the select is
-  // never defaulted to a value no option carries.
+  // account's page hands the selector its starting choice, still changeable,
+  // committing nothing. One naming anything the select does not offer —
+  // closed, gone, mistyped — is quietly dropped and the form starts blank: a
+  // prefill only saved the picking, never promised the pick.
   const requested = new URL(request.url).searchParams.get("account");
   const prefillAccountId = openAccounts.some((account) => account.id === requested)
     ? requested
     : null;
 
   return {
-    // The same query as Settings, so the two screens can never disagree about
-    // what the accounts are called; within each owner's group the options
-    // keep that order. The groups themselves follow the People screen, and
-    // which facts an option shows is `account-label.ts`'s one rule. Closed
-    // accounts are absent, not disabled: their history does not change, and a
-    // disabled option is a question a select cannot answer.
+    // The same query as Settings, so the two screens cannot disagree about
+    // what accounts are called; groups follow the People screen, and which
+    // facts an option shows is `account-label.ts`'s one rule. Closed accounts
+    // are absent, not disabled: their history does not change, and a disabled
+    // option is a question a select cannot answer.
     accountGroups: accountPickerGroups(openAccounts),
     hasAccounts: accounts.length > 0,
     maxUploadMb: getConfig().MAX_UPLOAD_MB,
@@ -73,11 +67,10 @@ export async function action({ request }: Route.ActionArgs) {
     throw redirect(`/upload/${draft.id}/columns`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component, for the reason people.tsx gives:
-      // `FORM_ERROR` lives in a `.server` module the client bundle must not
-      // drag in. The account choice comes back with the refusal; the chosen
-      // file inevitably does not, because a browser will not refill a file
-      // input.
+      // Split here, not in the component (`people.tsx`'s reason): the client
+      // bundle must not drag `FORM_ERROR`'s `.server` module in. The account
+      // choice comes back with the refusal; the file inevitably does not — a
+      // browser will not refill a file input.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       return { errors: fieldErrors, formError: formError ?? null, values };
     }
@@ -105,9 +98,9 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
       <UploadSteps steps={{ current: 1, draftId: null, instrumentsSkipped: false }} />
 
       {!hasAccounts ? (
-        // The shell already renders the first-run prompt on this page, and it
-        // is the app's one pointer at the next step — a second voice here would
-        // double it, and a select over nothing would explain less than nothing.
+        // The shell already renders the first-run prompt here, the app's one
+        // pointer at the next step — a second voice would double it, and a
+        // select over nothing explains less than nothing.
         null
       ) : accountGroups.length === 0 ? (
         // Not the first-run prompt: the household is set up, and "start here"
@@ -146,15 +139,13 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
               <label htmlFor="upload-account">
                 Account
                 {/* A refusal outranks the link's prefill even empty-handed —
-                    the size cap refuses on the Content-Length header before
-                    any field is read — because the reader may have changed the
-                    account before submitting, and re-applying the prefill
-                    would quietly aim the retry at the link's account. The key
-                    remounts this uncontrolled select when the effective
-                    prefill changes: same-route navigation (the rail's Upload
-                    pressed over an ?account= address) reuses the mounted
-                    component, where a changed defaultValue alone would leave
-                    the old choice standing. */}
+                    the size cap refuses on Content-Length before any field is
+                    read — because the reader may have changed the account,
+                    and re-applying the prefill would aim the retry at the
+                    link's account. The key remounts this uncontrolled select
+                    when the effective prefill changes: same-route navigation
+                    reuses the mounted component, where a changed defaultValue
+                    alone would leave the old choice standing. */}
                 <select
                   key={prefillAccountId ?? ""}
                   id="upload-account"
@@ -194,9 +185,8 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
                   aria-invalid={errors?.file ? true : undefined}
                 />
               </label>
-              {/* The number comes from configuration, never restated by hand:
-                  a hardcoded "10 MB" is wrong the day an operator changes the
-                  knob. */}
+              {/* From configuration, never restated by hand: a hardcoded
+                  "10 MB" is wrong the day an operator changes the knob. */}
               <p className="field-note">
                 Statements up to <span className="u-data">{maxUploadMb}</span> MB.
               </p>

@@ -35,47 +35,35 @@ import type { Route } from "./+types/root";
 import "./app.css";
 
 /*
- * The gate used to be wired here, as root-route middleware, and nothing
- * replaces it: authentication happens in front of the app now, so a request
- * that reaches this process has already been admitted and there is nothing left
- * for a middleware to decide.
- *
- * One thing does ride in on every request, and the only place the code says so
- * is here. The gate attaches the verified address of whoever is acting as
- * `X-Auth-Request-Email`, and the app reads it nowhere — deliberately. It is
- * attribution, never permission (CONTEXT.md, "Authenticated email"): every
- * family member sees and can do everything, so a screen that consulted it would
- * be inventing a rule the household has not made. A later feature may read it
- * to record *who* did a thing; none may read it to decide *whether* they may.
+ * The gate used to be wired here as root middleware; nothing replaces it —
+ * authentication happens in front, so a request reaching this process is
+ * already admitted. One thing rides in on every request, recorded only here:
+ * the gate attaches the verified address as `X-Auth-Request-Email`, and the
+ * app reads it nowhere, deliberately. Attribution, never permission
+ * (CONTEXT.md): every family member sees and can do everything. A later
+ * feature may read it to record *who* did a thing; none may read it to
+ * decide *whether* they may.
  */
 
 /**
- * What the shell around every page needs: whether anything guards the instance,
- * whether it has been set up yet, and whether this browser is masked.
+ * What the shell around every page needs: whether anything guards the
+ * instance, whether it is set up yet, and whether this browser is masked.
  *
- * The first-run read is deliberately failure-tolerant. It is a hint, not data —
- * so a database that is down produces a page without a prompt rather than an
- * error page over every screen in the application. `/healthz` is what reports
- * the database being down, and it reports it without crossing the gate.
- *
- * **Masking is resolved here, on the server, for the reason §12 gives for the
- * theme.** The first paint has to be correct: a page that drew the amounts and
- * then hid them is the one failure this feature cannot have, and it is exactly
- * what reading the state from `localStorage` after hydration would produce.
- * Resolving it in the loader means the markup is right before it leaves the
- * server (story 30).
- *
- * The policy read is failure-tolerant for the same reason the first-run read is,
- * and it fails to *masked*. Of the two ways to be wrong while the database is
- * down, showing a page of dots is the one that cannot expose anything.
+ * The first-run read is failure-tolerant — a hint, not data: a database that
+ * is down produces a page without a prompt, not an error page over every
+ * screen (`/healthz` is what reports the outage). **Masking is resolved
+ * here, on the server** (§12's reason for the theme): the first paint must
+ * be correct — a page that drew the amounts and then hid them is the one
+ * failure this feature cannot have, and exactly what reading `localStorage`
+ * after hydration would produce (story 30). The policy read fails to
+ * *masked*: of the two ways to be wrong with the database down, a page of
+ * dots cannot expose anything.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  // The quote refresh loop (§6.2). Started from here because the application is
-  // served by `react-router-serve` over the framework's build, so there is no
-  // server entry file to hook — and root's loader is the one server-side path
-  // every page render passes through. Idempotent: after the first call this is
-  // a property lookup. It is not awaited and cannot throw; polling is a
-  // background concern and must never be able to fail a page render.
+  // The quote refresh loop (§6.2), started here because root's loader is the
+  // one server-side path every render passes through (no server entry file
+  // under `react-router-serve`). Idempotent, not awaited, cannot throw:
+  // polling must never be able to fail a page render.
   startPricePoller();
 
   let firstRun: FirstRunStep = null;
@@ -105,13 +93,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 /**
- * DESIGN.md §8.4 — ordered by how often each page is opened.
- *
- * The rail's *shape* is the Stitch screens' (§13.1): a fixed 280px column, a
- * brand tile at its head, a 4px accent stroke on the active item, and one
- * filled button at its foot. Its *contents* are §8.4's items rather than the
- * mock's three, because that ordering is a decision about frequency of use and
- * the routes it names already exist.
+ * DESIGN.md §8.4 — ordered by how often each page is opened. The rail's
+ * *shape* is the Stitch screens' (§13.1): fixed 280px column, brand tile at
+ * its head, 4px accent stroke on the active item, one filled button at its
+ * foot. Its *contents* are §8.4's items rather than the mock's three.
  */
 const NAVIGATION = [
   { to: "/", label: "Overview", end: true, Icon: DashboardIcon },
@@ -128,19 +113,13 @@ const FOOTER_NAVIGATION = [
 type NavItem = (typeof NAVIGATION)[number] | (typeof FOOTER_NAVIGATION)[number];
 
 /**
- * `search` is the owner filter, and it is a prop rather than something read
- * here (spec 0013, ADR-0008).
- *
- * This renders four times: `NAVIGATION` in the rail and again in the phone's
- * bottom bar, and `FOOTER_NAVIGATION` — Settings — in both. Settings does not
- * read the filter, and a parameter a screen never reads should not appear in
- * its URL, so the two that carry it say so at the call site and the other two
- * pass nothing.
- *
- * The owner parameter alone, never `location.search`. Carrying the whole thing
- * would drag one screen's `range`, `sort` or half-typed `edit` row key onto
- * another that does not own it, and would bounce every nav click through
- * Holdings' canonical redirect.
+ * `search` is the owner filter, a prop rather than read here (spec 0013,
+ * ADR-0008). This renders four times — `NAVIGATION` in the rail and the
+ * phone's bottom bar, Settings in both — and Settings never reads the
+ * filter, so only the two calls that carry it say so. The owner parameter
+ * alone, never `location.search`: the whole search would drag one screen's
+ * `range`, `sort` or half-typed `edit` key onto another and bounce every
+ * nav click through Holdings' canonical redirect.
  */
 function NavItems({ items, search = "" }: { items: readonly NavItem[]; search?: string }) {
   return (
@@ -148,10 +127,9 @@ function NavItems({ items, search = "" }: { items: readonly NavItem[]; search?: 
       {items.map(({ to, label, end, Icon }) => (
         <li key={to}>
           <NavLink
-            // `NavLink` resolves its active state on the pathname alone, so
-            // `end` on "/" and the `aria-current` behaviour are unchanged by a
-            // search; an empty one collapses back to a bare path, which keeps
-            // an unfiltered instance's URLs clean.
+            // `NavLink` resolves active state on the pathname alone, so `end`
+            // and `aria-current` are unchanged by a search; an empty one
+            // collapses to a bare path, keeping unfiltered URLs clean.
             to={{ pathname: to, search }}
             end={end}
             className={({ isActive }) =>
@@ -168,11 +146,10 @@ function NavItems({ items, search = "" }: { items: readonly NavItem[]; search?: 
 }
 
 /**
- * The mark, at both sizes it is drawn: in the rail, and in the phone's top bar.
- *
- * It carries the owner filter for the same reason the nav items do: it is a nav
- * item in all but name, and landing on an unfiltered Overview from a filtered
- * Holdings would be the most-clicked way to lose the filter.
+ * The mark, at both sizes it is drawn: the rail, and the phone's top bar.
+ * It carries the owner filter because it is a nav item in all but name —
+ * landing on an unfiltered Overview from a filtered Holdings would be the
+ * most-clicked way to lose the filter.
  */
 function Brand({ search }: { search: string }) {
   return (
@@ -189,22 +166,19 @@ function Brand({ search }: { search: string }) {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  // Read from the root loader rather than taken as a prop, because `Layout`
-  // wraps error boundaries too, where there is no loader data at all. The
-  // banner is placed here rather than on a page so that every route — including
-  // ones that do not exist yet — carries it.
+  // From the root loader, not a prop: `Layout` wraps error boundaries too,
+  // where there is no loader data at all. The banner lives here so every
+  // route — including ones that do not exist — carries it.
   const rootData = useRouteLoaderData<typeof loader>("root");
   const { pathname, search } = useLocation();
 
-  // Read here rather than passed down from a loader, because `Layout` wraps
-  // error boundaries too and there is no loader data at all in one. The URL is
-  // the whole of the filter's state (ADR-0008), so the address is the only
-  // thing this needs.
+  // Read off the address, which is the whole of the filter's state
+  // (ADR-0008) — a loader could not hand it down inside an error boundary.
   const owners = ownerSearch(readOwnerFilter(new URLSearchParams(search)));
 
-  // The prompt is suppressed inside Settings, which is the one place it would
-  // be telling someone to go where they already are. Everywhere else it is the
-  // single pointer at the next step (DESIGN.md §8.4).
+  // Suppressed inside Settings — the one place it would send someone where
+  // they already are; everywhere else it is the single pointer at the next
+  // step (DESIGN.md §8.4).
   const firstRun =
     rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
@@ -293,10 +267,9 @@ export default function App() {
   return <Outlet />;
 }
 
-/* Everything this used to do is in `ErrorPage` now, including the reasoning
- * about what it must not print. It is a component rather than a function here
- * because the upload flow's own boundary needs the identical page for
- * everything that is not an expired draft, and it had a copy of the old one. */
+/* Everything this used to do is in `ErrorPage`, reasoning included — a
+ * component because the upload flow's boundary needs the identical page for
+ * everything that is not an expired draft. */
 export function ErrorBoundary() {
   return <ErrorPage error={useRouteError()} />;
 }

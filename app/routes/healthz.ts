@@ -1,24 +1,15 @@
 import { checkHealth } from "~/lib/db.server";
 
 /**
- * `GET /healthz` — 200 while the instance is genuinely serving, non-200
- * otherwise. Compose, a reverse proxy and any monitoring read this.
+ * `GET /healthz` — 200 while the instance is genuinely serving; Compose, the
+ * proxy and monitoring read it. Two questions, both must be yes: database
+ * reachable, and every migration on disk recorded as applied — a pending one
+ * means pages served against a schema older than the code reading them.
  *
- * It answers two questions, both of which have to be yes:
- *
- * - Is the database reachable?
- * - Is every migration present on disk recorded as applied? A pending one means
- *   the image and the database disagree, so the instance is serving pages
- *   against a schema older than the code reading it.
- *
- * Two deliberate non-goals:
- *
- * - It does not check the price provider. A health check that fails on a
- *   third-party outage would make Compose restart a perfectly healthy app.
- * - It never requires authentication, so monitoring needs no credentials. The
- *   app enforces nothing either way; the gate in front is what has to exempt
- *   this path, and its Caddyfile is now the only list of such exemptions
- *   anywhere in the deployment.
+ * Two non-goals: no price-provider check (failing on a third-party outage
+ * would make Compose restart a healthy app), and no authentication, so
+ * monitoring needs no credentials — the gate in front must exempt this path,
+ * and its Caddyfile is the only list of such exemptions in the deployment.
  */
 export async function loader() {
   const health = await checkHealth();

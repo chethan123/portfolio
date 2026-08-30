@@ -1,10 +1,8 @@
 /**
- * Placeholder body for the routes whose content belongs to a later slice.
- *
- * It says what the page will be rather than showing an empty frame, so a fresh
- * install never reads as broken. The page header is the real one (DESIGN.md
- * §13) — a stub that skipped it would announce itself as unfinished twice, in
- * its words and in its typography. The dashboards slice replaces these.
+ * Placeholder body for routes whose content belongs to a later slice. Says
+ * what the page will be, so a fresh install never reads as broken; the page
+ * header is the real one (DESIGN.md §13) — skipping it would announce
+ * "unfinished" twice, in words and in typography.
  */
 export function StubPage({ title, children }: { title: string; children: React.ReactNode }) {
   return (

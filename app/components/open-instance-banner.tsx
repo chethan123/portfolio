@@ -1,22 +1,18 @@
 /**
- * The persistent "nothing is guarding this" warning.
+ * The persistent "nothing is guarding this" warning — every page, whenever
+ * no gate fronts the app (`AUTH_GATE`), and deliberately not dismissible: an
+ * open instance is a state to notice every time. It must never appear behind
+ * the gate — a warning wrong on a protected instance is one the family stops
+ * reading on an unprotected one.
  *
- * Rendered on every page whenever the app has not been told a gate fronts it
- * (`AUTH_GATE`), and deliberately not dismissible: an open instance is a state
- * to be noticed every time, not an alert to be acknowledged once and then
- * forgotten. Which is also why it must never appear behind the gate — a warning
- * that is wrong on a protected instance is a warning the family stops reading
- * on an unprotected one.
+ * It names no variable, also deliberately: `AUTH_GATE=external` is the app
+ * describing its deployment, not a switch that protects anything, and a
+ * banner offering it as the fix would teach the one mistake that silences
+ * the warning while leaving the instance wide open. The fix is a gate in
+ * front — a deploy-time act; the banner points at the state, not a setting.
  *
- * It names no variable, and that is deliberate too. `AUTH_GATE=external` is the
- * app describing its deployment, not a switch that protects anything, so a
- * banner offering it as the fix would be teaching the one mistake that silences
- * the warning while leaving the instance wide open. The fix is a gate in front,
- * which is a deploy-time act; the banner points at the state, not the setting.
- *
- * The sentence is one element rather than a run of loose text around
- * `<strong>`: the banner is a flex row, and loose text nodes would each become
- * a flex item with the row's gap opened between them.
+ * One element, not loose text around `<strong>`: the banner is a flex row,
+ * and loose text nodes each become an item with the row's gap between them.
  */
 export function OpenInstanceBanner() {
   return (

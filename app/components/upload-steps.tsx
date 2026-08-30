@@ -2,19 +2,15 @@ import { Link } from "react-router";
 
 /**
  * The upload flow's step strip (ingest brief §2.1), on every step screen —
- * `/upload` included, because the drop screen is step one.
- *
- * The rule this component keeps: **four entries, always, and only a step
- * already passed is a link.** A flow that is four steps on one upload and
- * three on the next reads as a different flow, so a step with nothing to do
- * dims in place with "· none" rather than disappearing. Going back is free —
- * the draft holds every answer — so completed steps 2 and 3 link to their URLs
- * over the draft; step 1 never links, because no URL reopens account-and-file
- * for a draft that already has both; and a future step needs answers that do
- * not exist yet, so an anchor there would be a link to a refusal.
- *
- * The grammar is quiet text in the breadcrumb's voice, not chips: a chip
- * claims clickability, and two of these four entries deliberately have none.
+ * `/upload` included, since the drop screen is step one. The rule: **four
+ * entries, always, and only a step already passed is a link** — a flow that
+ * is four steps on one upload and three on the next reads as a different
+ * flow, so a step with nothing to do dims with "· none" rather than
+ * disappearing. Completed steps 2 and 3 link over the draft (going back is
+ * free — the draft holds every answer); step 1 never links, since no URL
+ * reopens account-and-file for a draft that has both; a future step's anchor
+ * would be a link to a refusal. Quiet breadcrumb text, not chips: a chip
+ * claims clickability, and two of the four entries deliberately have none.
  */
 
 /** What a step screen's loader hands the strip — the `steps` field contract. */
