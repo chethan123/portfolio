@@ -140,7 +140,7 @@ describe("requireDraft", () => {
       await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
 
       // Closed through the domain function, exactly as Settings closes one.
-      await closeAccount(account.id, db);
+      await closeAccount(account.id, { confirmClose: "true" }, db);
 
       await expect(requireDraft(draft.id, db)).rejects.toThrow(NotFoundError);
     }),

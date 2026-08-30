@@ -2916,6 +2916,16 @@ code {
   max-width: 60ch;
 }
 
+/* The account editor's zone carries the close acknowledgement, and the row
+ * layout above would seat that tick beside the heading. The full-line rule the
+ * form grammar already has is `.panel-form`-scoped, so it is restated for this
+ * zone: the tick and a refusal each take the whole line, and the zone reads
+ * heading, decision, button — top to bottom. */
+.danger-zone > label.choice,
+.danger-zone > .form-error {
+  flex-basis: 100%;
+}
+
 /*
  * A control row on a phone.
  *

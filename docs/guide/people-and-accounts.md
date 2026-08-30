@@ -95,8 +95,9 @@ and name what is in the way. An account with no statement yet can be changed to 
 any account moving between *Brokerage*, *Workplace plan* and *IRA*.
 
 **Nothing is ever deleted here.** There is no delete button anywhere in the app. An account you have
-stopped using is *closed* instead: select **Close**, followed by the account's name, at the foot of
-its page.
+stopped using is *closed* instead: at the foot of its page, tick the acknowledgement that names the
+account, then select **Close**, followed by the account's name. Without the tick the close is
+refused and nothing changes.
 
 Closing records today as the closing date. From then on:
 

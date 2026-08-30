@@ -127,7 +127,7 @@ describe("recording accounts", () => {
       const owner = await seedPerson();
       const retired = await seedAccount({ name: "Old Brokerage", owner });
       await seedAccount({ name: "Zebra Checking", owner });
-      await closeAccount(retired.id, db);
+      await closeAccount(retired.id, { confirmClose: "true" }, db);
 
       expect((await listAccounts(db)).map((account) => account.name)).toEqual([
         "Zebra Checking",
@@ -336,7 +336,7 @@ describe("changing an account's kind", () => {
         asOf: "2026-08-16",
         holdings: [{ instrument: vti, quantity: "100.00000000" }],
       });
-      await closeAccount(account.id, db);
+      await closeAccount(account.id, { confirmClose: "true" }, db);
 
       const errors = await refusalOf(updateAccount(account.id, kindChange(account, "bank"), db));
 
@@ -434,7 +434,7 @@ describe("changing an account's kind", () => {
         asOf: "2026-08-16",
         holdings: [{ instrument: await usdInstrument(), quantity: "42000.00000000" }],
       });
-      await closeAccount(savings.id, db);
+      await closeAccount(savings.id, { confirmClose: "true" }, db);
 
       const errors = await refusalOf(
         updateAccount(savings.id, kindChange(savings, "liability"), db),
@@ -528,7 +528,7 @@ describe("closing an account", () => {
     withDatabase(async ({ db, seedPerson, seedAccount }) => {
       const account = await seedAccount({ owner: await seedPerson() });
 
-      const closed = await closeAccount(account.id, db);
+      const closed = await closeAccount(account.id, { confirmClose: "true" }, db);
 
       expect(closed.isClosed).toBe(true);
       expect(closed.closedAt).toBeInstanceOf(Date);
@@ -554,7 +554,7 @@ describe("closing an account", () => {
         coverage: { known: 1, total: 1 },
       });
 
-      await closeAccount(checking.id, db);
+      await closeAccount(checking.id, { confirmClose: "true" }, db);
 
       // Gone from today's figure — and reported as zero holdings rather than as
       // a total computed from one, so nothing reads as an empty account.
@@ -572,8 +572,8 @@ describe("closing an account", () => {
     withDatabase(async ({ db, seedPerson, seedAccount }) => {
       const account = await seedAccount({ owner: await seedPerson() });
 
-      const first = await closeAccount(account.id, db);
-      const second = await closeAccount(account.id, db);
+      const first = await closeAccount(account.id, { confirmClose: "true" }, db);
+      const second = await closeAccount(account.id, { confirmClose: "true" }, db);
 
       // A second click must not move a boundary historical figures are computed
       // against.
@@ -582,9 +582,40 @@ describe("closing an account", () => {
   );
 
   it(
+    "refuses to close without the acknowledgement, and the account stays open",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const account = await seedAccount({ name: "Old Brokerage", owner: await seedPerson() });
+
+      const message = (await refusalOf(closeAccount(account.id, {}, db))).form ?? "";
+
+      // The refusal names the account and the reason the tick exists.
+      expect(message).toContain("Old Brokerage");
+      expect(message).toContain("one-way");
+      expect((await getAccount(account.id, db)).isClosed).toBe(false);
+    }),
+  );
+
+  it(
+    "keeps the original closing date on a re-close, ticked or not",
+    withDatabase(async ({ db, seedPerson, seedAccount }) => {
+      const account = await seedAccount({ owner: await seedPerson() });
+      const first = await closeAccount(account.id, { confirmClose: "true" }, db);
+
+      // A stale form for an already-closed account is a no-op, never a refusal
+      // demanding a tick for a transition that no longer exists.
+      const unticked = await closeAccount(account.id, {}, db);
+
+      expect(unticked.isClosed).toBe(true);
+      expect(unticked.closedAt).toEqual(first.closedAt);
+    }),
+  );
+
+  it(
     "refuses to close an account that does not exist",
     withDatabase(async ({ db }) => {
-      await expect(closeAccount("999999", db)).rejects.toBeInstanceOf(NotFoundError);
+      await expect(
+        closeAccount("999999", { confirmClose: "true" }, db),
+      ).rejects.toBeInstanceOf(NotFoundError);
     }),
   );
 });
@@ -615,7 +646,7 @@ describe("removing a person who owns accounts", () => {
     withDatabase(async ({ db, seedPerson, seedAccount }) => {
       const alice = await seedPerson({ name: "Alice" });
       const account = await seedAccount({ name: "Old Brokerage", owner: alice });
-      await closeAccount(account.id, db);
+      await closeAccount(account.id, { confirmClose: "true" }, db);
 
       const message = (await refusalOf(removePerson(alice.id, db))).form ?? "";
 

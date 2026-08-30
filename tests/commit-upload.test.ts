@@ -925,7 +925,7 @@ describe("commitUpload", () => {
 
       // Closed while the draft sat open, through the domain function Settings
       // uses.
-      await closeAccount(account.id, db);
+      await closeAccount(account.id, { confirmClose: "true" }, db);
 
       const refusal = await refusalOf(() =>
         commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
