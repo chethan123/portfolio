@@ -125,25 +125,6 @@ export function ownerSearch(filter: OwnerFilter): string {
 }
 
 /**
- * The address a request should be reading: its owner parameter spelled
- * canonically and first, everything else kept.
- *
- * What the screens redirect on, before any database work — so it answers from
- * the address alone, with no roster to consult. A loader compares it to
- * `url.search` and bounces once if they differ, which is what
- * `holdings.tsx`'s own canonical redirect already does with `toSearch`.
- *
- * It returns the whole search rather than a yes/no for two reasons. A boolean
- * would have to be computed from the *decoded* values, which cannot tell
- * `?owner=1%2C3` from `?owner=1,3` — so a screen emitting the first would be
- * reported canonical and one view would have two URLs. And it leaves the
- * loader to build the target, where the obvious `pathname + ownerSearch(...)`
- * silently drops the `range` and `start`/`end` the same address is carrying.
- *
- * `?owner=` present but empty is not canonical: it is the unfiltered screen,
- * whose spelling is no parameter at all.
- */
-/**
  * Whether two search strings name the same view, whatever spelled them.
  *
  * The loaders redirect an address to its canonical spelling, and the
@@ -168,6 +149,25 @@ export function sameView(a: string, b: string): boolean {
   return new URLSearchParams(a).toString() === new URLSearchParams(b).toString();
 }
 
+/**
+ * The address a request should be reading: its owner parameter spelled
+ * canonically and first, everything else kept.
+ *
+ * What the screens redirect on, before any database work — so it answers from
+ * the address alone, with no roster to consult. A loader compares it to
+ * `url.search` and bounces once if they differ, which is what
+ * `holdings.tsx`'s own canonical redirect already does with `toSearch`.
+ *
+ * It returns the whole search rather than a yes/no for two reasons. A boolean
+ * would have to be computed from the *decoded* values, which cannot tell
+ * `?owner=1%2C3` from `?owner=1,3` — so a screen emitting the first would be
+ * reported canonical and one view would have two URLs. And it leaves the
+ * loader to build the target, where the obvious `pathname + ownerSearch(...)`
+ * silently drops the `range` and `start`/`end` the same address is carrying.
+ *
+ * `?owner=` present but empty is not canonical: it is the unfiltered screen,
+ * whose spelling is no parameter at all.
+ */
 export function canonicalOwnerSearch(params: URLSearchParams): string {
   const rest = new URLSearchParams(params);
   rest.delete("owner");
