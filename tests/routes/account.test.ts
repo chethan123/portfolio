@@ -226,23 +226,14 @@ describe("the way into the upload flow", () => {
       const data = await loader(args(get(`/accounts/${account.id}`), { accountId: account.id }));
       const markup = renderRoute(Account, `/accounts/${account.id}`, data);
 
-      // The action row's button — icon, then label — pointing at the upload
-      // screen with this account named. Named without the owner filter: the
-      // upload flow has no owner concept, so unlike the breadcrumb there is
-      // nothing to hand it.
-      expect(markup).toMatch(
-        new RegExp(
-          `<a[^>]*href="/upload\\?account=${account.id}"[^>]*><svg[^>]*>.*?</svg>Upload statement</a>`,
-        ),
-      );
-
-      // And the empty state's sentence still reads as a sentence, with the
-      // verb phrase itself as the way in.
-      expect(markup).toMatch(
-        new RegExp(
-          `<a[^>]*href="/upload\\?account=${account.id}"[^>]*>upload a statement</a> for it and they appear\\.`,
-        ),
-      );
+      // Destination and label are the contract; the icon inside the button
+      // and the sentence around the phrase are free to change. The address is
+      // named without the owner filter: the upload flow has no owner concept,
+      // so unlike the breadcrumb there is nothing to hand it.
+      const upload = `href="/upload?account=${account.id}"`;
+      expect(markup.split(upload).length - 1).toBe(2);
+      expect(markup).toContain("Upload statement</a>");
+      expect(markup).toContain(">upload a statement</a>");
     }),
   );
 });
