@@ -133,8 +133,8 @@ fixed and are annotated in place.
 
 ### Status
 
-Nothing here is approved work, and only `SET-1` — the critical one — and `SET-5` beside it have been
-fixed since. The report opens with the seven worth doing
+Nothing here is approved work, and only `SET-1` — the critical one — `SET-5` beside it, and
+`SET-11` (the account-number field's wrong note) have been fixed since. The report opens with the seven worth doing
 first and a duplicate table, so the same bug is not filed four times. The suite (746 tests),
 `npm run typecheck` and `npm audit` were all clean throughout — these are things the automated gates
 structurally cannot see.

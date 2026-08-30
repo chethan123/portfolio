@@ -181,7 +181,13 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         draftId: draft.id,
         instrumentsSkipped: false,
       } satisfies UploadStepsData,
-      draft: { id: draft.id, filename: draft.filename, accountName: draft.accountName },
+      draft: {
+        id: draft.id,
+        filename: draft.filename,
+        accountName: draft.accountName,
+        ownerName: draft.ownerName,
+        accountNumberTail: draft.accountNumberTail,
+      },
       institution: account.institution,
       headerRow,
       headerOptions,
@@ -344,9 +350,13 @@ export default function Columns({ loaderData, actionData }: Route.ComponentProps
     <section className="panel">
       <div className="panel-body form-intro">
         {/* The file and the account lead, because a draft survives a closed
-            laptop and the reader may be resuming cold. */}
+            laptop and the reader may be resuming cold — which is exactly when
+            a bare name fails a house with two same-named accounts, so the
+            account arrives with its owner and number tail (brief §4.1). */}
         <p>
           <strong>{draft.filename}</strong> · {draft.accountName}
+          {draft.accountNumberTail ? ` ${draft.accountNumberTail}` : ""} — owned by{" "}
+          {draft.ownerName}
         </p>
 
         {fromInstitution ? (

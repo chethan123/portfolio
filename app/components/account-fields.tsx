@@ -164,8 +164,9 @@ export function AccountFields({
         </label>
         <Error_ name="externalAccountNumber" />
         <p className="field-note">
-          Optional, and only ever used to pre-select this account when a statement carrying the
-          same number is uploaded.
+          Optional, and a check rather than a chooser: it never picks the account for an
+          upload, but a statement naming a different number than the one recorded here is
+          refused rather than landing in the wrong place.
         </p>
       </div>
     </>
