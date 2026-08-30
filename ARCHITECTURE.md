@@ -346,7 +346,7 @@ grep. They come in three tiers.
 - `prices.server.ts:633` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
   to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
-- `uploads.server.ts:620` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:640` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -661,7 +661,7 @@ answer is a coin flip. Surrogate keys are `bigint generated always as identity` 
 The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping at
 the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1157`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1180`) needs the
 *predecessor* of a given set — "what did this account hold before this upload landed" — which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -835,7 +835,7 @@ button and a bookmarked half-finished upload all behave, and it is why the mappi
 delimiter rather than letting a second sniff reach a different verdict.
 
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:663`) folds
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:683`) folds
 again by the *resolved instrument*, so two spellings of one fund — `FCASH` and `CASH & CASH
 INVESTMENTS` — collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -857,7 +857,7 @@ Two invariants everything downstream leans on:
 
 **`parseStatement` returns refusals as data, not throws.** Each problem carries the row and the column
 that caused it. The *column* is what the screen uses structurally — `problemFieldsOf`
-(`columns.tsx:207`) marks the offending `<select>` as invalid, because remapping is the fix; the row
+(`columns.tsx:213`) marks the offending `<select>` as invalid, because remapping is the fix; the row
 travels inside the message the reader sees ("on line 12"). A thrown error could name only the first
 fault, and a screen cannot point at a stack trace.
 
@@ -1026,7 +1026,7 @@ Three of those deserve emphasis:
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:1101-1105`, guarded by
+file carries one, the commit writes it onto the account (`uploads.server.ts:1123-1129`, guarded by
 `where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
 itself on the first upload, and every later statement is checked against it.
 
@@ -1327,7 +1327,7 @@ set, no holding — and "nothing landed" is what becomes the refusal.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
 `account.kind` alone (`account.tsx:215`), and a `bank` account can be holding securities with no kind
-change behind it — `createDraft` (`uploads.server.ts:205`) reads only whether the account is closed,
+change behind it — `createDraft` (`uploads.server.ts:218`) reads only whether the account is closed,
 so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
@@ -1885,6 +1885,7 @@ still live in the current code:
 | `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
 | `account-options.ts` | The account-kind and tax-treatment vocabulary the forms are built from, and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
+| `account-label.ts` | The upload picker's labels — grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |
 | `first-run.server.ts` | One question, three answers |
 | `input.server.ts` | `ValidationError`, `parseInput`, the shared field shapes, and the one phrase-builder the refusals that name a list share |
