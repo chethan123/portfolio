@@ -528,7 +528,7 @@ read are in §8.4.
 |---|---|
 | **Overview** | Net worth headline · trend line (dashed manual prefix, solid computed) with its range control · the accounts rollup · allocation by account, drawn as bars (the asset-class cut lives on Analysis) |
 | **Holdings** | The workhorse. Full column set on desktop, cards on mobile. Filter by account / brokerage / account type / tax treatment / classification / asset class; group by any of those or by owner, with subtotals |
-| **Analysis** | Net worth cut three ways — by owner, by account kind, by asset class — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
+| **Analysis** | Net worth cut four ways — by owner, by account kind, by asset class, by classification — each a donut beside the table it is drawn from. Beneath them, unrealized gain by asset type with the tax a taxable one would attract (§4.5) |
 | **Income** | Projected annual dividend and weighted yield, grouped by account and tax treatment. The one view where the loan's negative yield does something interesting |
 
 A groupable, filterable Holdings table absorbs what would otherwise be four more pages — by owner,
@@ -658,7 +658,10 @@ owner filter (§8.1) is the `filters` half of the shape below for one dimension 
 section's table and config still call `person`, which everywhere else is now the **owner** — persisted
 across screens by the URL rather than by a stored view. Whether tax treatment or asset class should follow
 is left open here on purpose: six more of these may well be the wrong answer, and the builder the
-right one.
+right one. Classification has since followed anyway, as a fourth fixed Analysis panel (§8.1), with
+this paragraph read first: the grouping and the panel component both already existed, so the panel
+cost a loader line rather than a feature — but it does spend one of the slots this warning counts,
+and the next cut that cannot be had that cheaply is the builder's cue, not a fifth panel's.
 
 | Requirement | Group by | Measure | Time |
 |---|---|---|---|
@@ -1201,7 +1204,7 @@ other theme. They are two palettes, exactly as §12 says.
 ### 13.3 The categorical sequence
 
 The Views screen colours donut slices and their legend dots from one ordered sequence, reused from
-position 1 in every panel — so the same rank means the same colour in all three breakdowns, and no
+position 1 in every panel — so the same rank means the same colour in all four breakdowns, and no
 breakdown gets a chart palette of its own.
 
 | # | Light | Dark |

@@ -93,6 +93,7 @@ describe("every panel narrows", () => {
       ]);
       expect(data.byAccountKind.map((slice) => slice.label)).toEqual(["Brokerage"]);
       expect(data.byAssetClass).toHaveLength(1);
+      expect(data.byClassification).toHaveLength(1);
       expect(data.gains.total?.unrealized).toBe("7000.0000");
     }),
   );
@@ -128,6 +129,61 @@ describe("every panel narrows", () => {
       expect(markup).toContain(">Owner</th>");
       expect(markup).toContain("2 owners");
       expect(markup).not.toContain("2 people");
+    }),
+  );
+});
+
+describe("the classification panel", () => {
+  it(
+    "merges holdings sharing a label into one row, worded as the household wrote it",
+    withDatabase(async (ctx) => {
+      const alice = await ctx.seedPerson({ name: "Alice" });
+      const account = await ctx.seedAccount({
+        name: "Alice Brokerage",
+        owner: alice,
+        kind: "brokerage",
+      });
+
+      const broad = await ctx.seedClassification({
+        name: "Total market fund",
+        assetClass: "equity",
+      });
+      const vti = await ctx.seedInstrument({ symbol: "VTI", classification: broad });
+      const vxus = await ctx.seedInstrument({ symbol: "VXUS", classification: broad });
+      const bnd = await ctx.seedInstrument({
+        symbol: "BND",
+        classification: await ctx.seedClassification({ name: "Bond fund", assetClass: "bond" }),
+      });
+
+      await ctx.seedQuote({ instrument: vti, price: "100.0000" });
+      await ctx.seedQuote({ instrument: vxus, price: "50.0000" });
+      await ctx.seedQuote({ instrument: bnd, price: "25.0000" });
+
+      await ctx.seedPositionSet({
+        account,
+        asOf: "2026-01-31",
+        holdings: [
+          { instrument: vti, quantity: "10.00000000" },
+          { instrument: vxus, quantity: "5.00000000" },
+          { instrument: bnd, quantity: "4.00000000" },
+        ],
+      });
+
+      const data = await loader(args(get("/analysis")));
+
+      // Two instruments under one label are one row, and the label is the
+      // household's own words — there is no lookup table to translate them.
+      expect(data.byClassification.map((slice) => [slice.label, slice.amount, slice.share])).toEqual(
+        [
+          ["Total market fund", "1250.0000", "0.925926"],
+          ["Bond fund", "100.0000", "0.074074"],
+        ],
+      );
+
+      const markup = renderRoute(Analysis, "/analysis", data);
+      expect(markup).toContain("Value by classification");
+      expect(markup).toContain(">Classification</th>");
+      expect(markup).toContain("2 classifications");
     }),
   );
 });

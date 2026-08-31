@@ -1,7 +1,8 @@
 /**
- * The portfolio cut three ways — by person, account kind, asset class — for
- * the analysis screen (DESIGN.md §8.1, §8.3); a fourth cut beneath them
- * ({@link unrealizedByAssetType}); and the same array cut by what it *pays*
+ * The portfolio cut four ways — by person, account kind, asset class,
+ * classification — for the analysis screen (DESIGN.md §8.1, §8.3); a fifth
+ * cut beneath them ({@link unrealizedByAssetType}); and the same array cut
+ * by what it *pays*
  * ({@link annualDividendBy}, {@link weightedYield}, {@link shelteredSubtotal}).
  *
  * Pure functions over the {@link ValuedHolding} rows the query layer already
@@ -256,9 +257,22 @@ export function allocationByAssetClass(holdings: ValuedHolding[]): AllocationSli
 }
 
 /**
+ * The household's own labels — the fine cut the asset-class rollup above
+ * coarsens (DESIGN.md §4.4). Keyed on the label itself: `classification.name`
+ * is unique, so the name is the identity, and there is no label table to read
+ * — the stored words are what a person sees.
+ */
+export function allocationByClassification(holdings: ValuedHolding[]): AllocationSlice[] {
+  return allocationBy(holdings, (holding) => ({
+    key: holding.classification,
+    label: holding.classification,
+  }));
+}
+
+/**
  * The same array cut by what it **pays** — the Income screen's breakdowns by
  * tax treatment and by account (DESIGN.md §8.1). Takes a grouping where the
- * three above take none, because of a cycle: the short labels live in
+ * four above take none, because of a cycle: the short labels live in
  * `holdings-view.ts`, which already imports from here, so the caller hands
  * the accessor in and the dependency stays one-way. That also makes "Holdings
  * grouped by tax treatment agrees with the Income breakdown" structural: both

@@ -1279,6 +1279,7 @@ for no gain. They mirror `readSeries`'s lateral shape, narrowing and all, and fo
                                       search box wearing a dropdown)
    Analysis      currentHoldings ──▶ allocation.ts (pure)
                                      by person · by account kind · by asset class
+                                     · by classification
                                      + unrealized gains and estimated tax
    Account       accountTotal, accountHoldings, accountSeries, uploadReceipt
 ```
@@ -1917,7 +1918,7 @@ still live in the current code:
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
 | `holdings-view.ts` | The Holdings table: seven dimensions to group by, six of them to filter by, plus subtotals. `owner` is a grouping and not a filter — narrowing to an owner is household-wide (`owner-filter.ts`) |
-| `allocation.ts` | `allocationBy` — one grouper over any figure — the three cuts adapted from it, plus unrealized gains by asset type |
+| `allocation.ts` | `allocationBy` — one grouper over any figure — the four cuts adapted from it, plus unrealized gains by asset type |
 | `market-hours.ts` | `isMarketOpen` (an optimisation) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
 | `chart-range.ts` | The chart's range vocabulary: the presets, the sampled date grid under its point budget, and the range cookie middleware (ADR-0003). 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |
@@ -1947,7 +1948,7 @@ there.
 | `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes are routes for two different reasons — two are form targets that keep working with JavaScript off, and `healthz` is in the router so dev and the container behave identically |
 | `overview.tsx` | The net worth headline, the trend line and the accounts rollup. The empty case is load-bearing and comes first: an instance nothing has been uploaded to renders no figure at all |
 | `holdings.tsx` | Every position across every account — §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
-| `analysis.tsx` | The portfolio cut three ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All three breakdowns group one read — three `GROUP BY` queries would be three more of the hand-rolled dashboard queries §8.2 names as the weakest point |
+| `analysis.tsx` | The portfolio cut four ways, each a ring beside its table, plus the capital-gains estimate the stored rate feeds. All four breakdowns group one read — four `GROUP BY` queries would be four more of the hand-rolled dashboard queries §8.2 names as the weakest point |
 | `income.tsx` | What the portfolio pays over the coming year and how much of it is taxed: the same figure by tax treatment and by account, off the same array Holdings reads — which is what makes the two structurally unable to disagree |
 | `upload.tsx` | The drop screen, step one: which account, and the file. The application's first multipart form; its guards — the size cap read twice, the empty file, the not-text file — live in `uploads.server.ts` so the action stays a thin translation |
 | `upload/draft.tsx` | The shared frame around every step of one draft: page header, step strip, and the expired-draft boundary, written once rather than once per step. Deliberately no loader — the strip's data comes up from the child via `useMatches`, so it can never disagree with the form beneath it |

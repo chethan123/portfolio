@@ -1,5 +1,5 @@
 /**
- * The three breakdowns Analysis draws, and the two Income draws beside them
+ * The four breakdowns Analysis draws, and the two Income draws beside them
  * (DESIGN.md §8.1). No database: `allocation.ts` is pure by design, so
  * these are unit tests over a fixture function. Pinned: the grouping, and
  * the arithmetic — every money assertion an exact decimal string, including

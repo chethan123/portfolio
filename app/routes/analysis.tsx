@@ -11,6 +11,7 @@ import {
 import {
   allocationByAccountKind,
   allocationByAssetClass,
+  allocationByClassification,
   allocationByPerson,
   formatRate,
   unrealizedByAssetType,
@@ -35,12 +36,12 @@ import { getConfig } from "../../server/config.ts";
 import type { Route } from "./+types/analysis";
 
 /**
- * Analysis — the portfolio cut three ways, each a ring beside its table
+ * Analysis — the portfolio cut four ways, each a ring beside its table
  * (Stitch "Views Analysis", DESIGN.md §13): the table is the screen, the
  * ring a picture of it, so the table carries every figure and the ring
  * none. The panel is `components/breakdown.tsx`, not this route's own:
  * §13.3's same-rank-same-colour rule holds across screens only while there
- * is one implementation. All three breakdowns group **one** read of
+ * is one implementation. All four breakdowns group **one** read of
  * `holding_valued` (`allocation.ts` has why): three `GROUP BY` queries
  * would be three more hand-rolled dashboard queries — §8.2's weakest point
  * — and one read is what stops this page disagreeing with the Overview.
@@ -179,7 +180,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const owners = readOwnerFilter(url.searchParams);
 
-  // One read, three groupings of the array it returned. The total comes from
+  // One read, four groupings of the array it returned. The total comes from
   // the query module, not from adding those groups here: money sums in SQL
   // (§8.2), and it is the same figure as the Overview headline because it is
   // the same query — one arithmetic over one read, filtered or not.
@@ -226,6 +227,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     byPerson: allocationByPerson(holdings),
     byAccountKind: allocationByAccountKind(holdings),
     byAssetClass: allocationByAssetClass(holdings),
+    byClassification: allocationByClassification(holdings),
   };
 }
 
@@ -245,6 +247,7 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
     byPerson,
     byAccountKind,
     byAssetClass,
+    byClassification,
     freshness,
   } = loaderData;
 
@@ -275,13 +278,13 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
           showEveryone={showEveryone}
         />
       ) : holdingCount === 0 ? (
-        // One check for all three panels: every holding has an owner, an
-        // account kind and an asset class, so either all three breakdowns have
-        // rows or none of them do.
+        // One check for all four panels: every holding has an owner, an
+        // account kind, an asset class and a classification, so either all
+        // four breakdowns have rows or none of them do.
         <EmptyState>
-          The portfolio broken down by owner, by account type and by asset class — and what it
-          has gained but not yet sold — appears here once a statement has been uploaded. Nothing
-          has been uploaded to this instance yet.
+          The portfolio broken down by owner, by account type, by asset class and by
+          classification — and what it has gained but not yet sold — appears here once a
+          statement has been uploaded. Nothing has been uploaded to this instance yet.
         </EmptyState>
       ) : (
         <>
@@ -323,6 +326,16 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
             heading="Asset class"
             amountHeading="Value"
             slices={byAssetClass}
+            total={total}
+            reading="owned"
+          />
+
+          <Breakdown
+            title="Value by classification"
+            count={plural(byClassification.length, "classification", "classifications")}
+            heading="Classification"
+            amountHeading="Value"
+            slices={byClassification}
             total={total}
             reading="owned"
           />
