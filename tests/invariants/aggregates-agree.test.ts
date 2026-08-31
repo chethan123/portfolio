@@ -165,6 +165,7 @@ describe("the Analysis screen's own arithmetic", () => {
         ["by person", page.byPerson],
         ["by account kind", page.byAccountKind],
         ["by asset class", page.byAssetClass],
+        ["by classification", page.byClassification],
       ] as const) {
         expect({ grouping, sum: sumOf(slices.map((slice) => slice.amount)) }).toEqual({
           grouping,

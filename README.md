@@ -180,11 +180,12 @@ the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/analysis-dark.png">
-  <img alt="Analysis: three donut-and-table panels breaking net worth down by owner, by account type and by asset class, and a fourth table of unrealized gains by asset type with the tax a taxable one would attract" src="docs/screenshots/analysis-light.png">
+  <img alt="Analysis: four donut-and-table panels breaking net worth down by owner, by account type, by asset class and by classification, and a fifth table of unrealized gains by asset type with the tax a taxable one would attract" src="docs/screenshots/analysis-light.png">
 </picture>
 
-Three breakdowns of the same total — by owner, by account type, and by asset class — each a donut
-beside the table it is drawn from, and beneath them what has been gained and not yet sold.
+Four breakdowns of the same total — by owner, by account type, by asset class, and by
+classification — each a donut beside the table it is drawn from, and beneath them what has been
+gained and not yet sold.
 
 - **Debt is drawn as debt.** The ring paints what is owned, so the loan's row is left unfilled and
   the panel says why rather than pretending a negative is a slice.
