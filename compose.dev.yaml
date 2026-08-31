@@ -19,3 +19,14 @@ services:
     image: portfolio-app:dev
     # Overrides compose.yaml's `always`, which would try to pull this local-only tag.
     pull_policy: build
+
+  # CI asserts the dump container reaches `healthy` inside a smoke test that
+  # lasts minutes, not hours: production's 5-minute interval and 15-minute
+  # start period would still read `starting` when the run ends. The check
+  # itself is compose.yaml's — only its cadence changes here.
+  dump:
+    healthcheck:
+      interval: 5s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

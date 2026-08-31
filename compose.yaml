@@ -1,7 +1,9 @@
 # The whole deployment — DESIGN.md §10.1. The price poller runs in-process in
-# `app` (no separate worker: two images, two deployments, two logs). `caddy`
-# is the ingress front door and the only service that publishes a port; `app`,
-# `db` and `gate` exist only on the compose network.
+# `app` (no worker for it: two images, two deployments, two logs). The one
+# scheduled service is `dump`, argued in ADR-0009 — a dump that stops when the
+# app is down is worthless, and `pg_dump` belongs to the database's image.
+# `caddy` is the ingress front door and the only service that publishes a port;
+# everything else exists only on the compose network.
 #
 # `docker compose up -d` deliberately does NOT produce a working instance with
 # zero manual steps: that promise meant an instance open to anything on a home
@@ -11,11 +13,13 @@
 #
 # The two manual steps, each done once: create a Google OAuth client and put
 # its credentials in `.env` (copy .env.example; docs/google-sign-in.md walks
-# it), and `mkdir -p ./volumes/db/data` for the database (the `db-store` volume
-# at the bottom explains why the directory has to pre-exist and be empty).
+# it), and `mkdir -p ./volumes/db/data ./volumes/dumps` — the database (the
+# `db-store` volume at the bottom explains why that one has to pre-exist and be
+# empty) and the directory the nightly dump lands in, which belongs to the
+# operator rather than to a container, and is why `dump` runs as their uid.
 # Every other setting has a working default.
 #
-# Privilege posture, all four services: cap_drop ALL + no-new-privileges +
+# Privilege posture, every service: cap_drop ALL + no-new-privileges +
 # read-only rootfs; unprivileged uid pinned everywhere but `gate` (root argued
 # there). Both cap_adds were proved by a start failure without them.
 # scripts/smoke-test.sh asserts all of it — nothing else would notice a
@@ -23,9 +27,14 @@
 
 name: portfolio
 
+# One tag for the two services that speak Postgres. `pg_dump` refuses a server
+# newer than itself, so bumping `db` alone would leave `dump` failing every
+# night with nothing tying it to the tag that moved.
+x-postgres-image: &postgres-image postgres:17-alpine
+
 services:
   db:
-    image: postgres:17-alpine
+    image: *postgres-image
     restart: unless-stopped
     # The image's postgres account (70:70 in postgres:17-alpine), pinned so no
     # root process ever exists — skips the entrypoint's root-then-gosu drop.
@@ -75,6 +84,91 @@ services:
     # No `ports:` by design: the app reaches Postgres over the Compose
     # network; publishing would put the database on the host for nothing.
 
+  # The nightly dump — spec docs/specs/0014-scheduled-dump.md, decided in
+  # ADR-0009. It prunes, checks there is room, dumps, proves the archive decodes
+  # end to end, and leaves it in ./volumes/dumps for whatever the operator uses
+  # to take it off this machine. It never reaches off the host itself, and holds
+  # no credential the stack does not already have.
+  dump:
+    # The database's own image: pg_dump must match the server it dumps, which is
+    # a fact about `db` rather than about this service — hence the shared tag.
+    image: *postgres-image
+    # `on-failure`, not `unless-stopped` like everything else here: a crash or a
+    # bad knob must come back, but DUMP_ENABLED=false exits 0 and has to STAY
+    # exited, so that turning dumps off reads as `Exited (0)` under
+    # `docker compose ps -a` rather than as another healthy-looking row.
+    restart: on-failure
+    depends_on:
+      db:
+        # A cold boot must not race initdb. This is also what ties the service
+        # to the bundled database: an operator running against their own
+        # Postgres deletes `db`, and deletes this service with it.
+        condition: service_healthy
+    # The operator's own account, because the directory is theirs: whatever uid
+    # a container runs as, Docker creates a missing bind source root-owned, so
+    # no choice here rescues an absent directory — `mkdir -p` does, and then the
+    # files have to be readable to whatever collects them. Required rather than
+    # defaulted: 1000 would silently collide with `app`'s uid, and shared uids
+    # share bind-mount rights (see `caddy` below).
+    user: "${DUMP_UID:?set DUMP_UID to the account owning ./volumes/dumps — `id -u`}:${DUMP_GID:?set DUMP_GID to that account's group — `id -g`}"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
+      # Recorded beside each dump, so the archive says which image wrote it —
+      # the half of a rollback that a dump alone cannot tell you.
+      APP_VERSION: ${APP_VERSION:-1}
+      DUMP_ENABLED: ${DUMP_ENABLED:-true}
+      DUMP_AT: ${DUMP_AT:-02}
+      DUMP_KEEP_DAYS: ${DUMP_KEEP_DAYS:-7}
+      DUMP_COMPRESS: ${DUMP_COMPRESS:-0}
+      # Pinned, not `${TZ:-UTC}` like the others: DUMP_AT is documented as a UTC
+      # hour, and inheriting the operator's zone would quietly move the window.
+      TZ: UTC
+    # An entrypoint rather than a command, because `docker compose run dump
+    # verify <file>` REPLACES the command — with the script as the command the
+    # image would try to execute `verify` itself. `sh` in front so a lost
+    # executable bit cannot break the deployment.
+    entrypoint: ["sh", "/usr/local/bin/dump-loop.sh"]
+    command: ["loop"]
+    volumes:
+      # Long syntax for `create_host_path: false` on both, same as the gate's
+      # allowlist: a missing script or a missing dumps directory stops `up` with
+      # a message naming the path, rather than creating a root-owned directory
+      # this service then cannot write.
+      - type: bind
+        source: ./scripts/dump-loop.sh
+        target: /usr/local/bin/dump-loop.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./volumes/dumps
+        target: /dumps
+        bind:
+          create_host_path: false
+    # No ports, no egress, and nothing written outside the bind above.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      # pg_dump's stderr is captured here; the archive itself is written
+      # straight into /dumps, never staged on a tmpfs — a cross-device `mv` is
+      # a copy, and a collector would see the half of it that had landed.
+      - /tmp
+    healthcheck:
+      # The age of the newest dump, not the last exit status: a run that
+      # succeeded three weeks ago exited 0 too. Nothing acts on the result —
+      # restart policies react to a process exiting, not to health — so this is
+      # for a human reading `docker compose ps`, and the marker files in
+      # ./volumes/dumps are what reach the operator's own monitoring.
+      test: ["CMD", "sh", "/usr/local/bin/dump-loop.sh", "healthcheck"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      # A first dump on a large database takes minutes, and the directory is
+      # empty until it lands.
+      start_period: 15m
   app:
     # Pulled, never built here. Published to GHCR by ci.yml's `publish` job on
     # a `v*` tag; the floating major puts every v1.x.y on `1` — set APP_VERSION

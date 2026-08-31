@@ -55,6 +55,9 @@ service lands they would describe an intention.
 - [ ] `docs/operating.md`'s "Running against your own Postgres", which tells the operator to delete
       the `db` service and `app`'s `depends_on`: this service and its own `depends_on` go with them,
       or Compose rejects the edited deployment outright
+- [ ] `docs/operating.md`'s Upgrading gains the one-time step this slice adds for an instance that
+      already exists: `mkdir -p ./volumes/dumps` and `DUMP_UID`/`DUMP_GID` in `.env` before the
+      next `docker compose up -d`, which otherwise stops naming the variable it is missing
 - [ ] `docs/operating.md`: the environment table; Installing and "Where the database lives", which
       now need a second `mkdir -p` and the `DUMP_UID`/`DUMP_GID` that must match it; the Logs
       section, for the script's grep stem; and "An unhealthy container is not restarted", which now
