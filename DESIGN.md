@@ -848,6 +848,13 @@ or a small VPS has to be able to do. Two consequences that are load-bearing:
   registry or a tag that does not exist fails immediately instead of quietly starting a
   multi-minute build on the deployment host. Building from source is `compose.dev.yaml`, used by
   the smoke test and when working on the container itself.
+- **Building from source does not have to mean standing up the deployment.** `compose.local.yaml`
+  is `app` — built from the checkout — and `db`, alone: a developer's way to run the working tree
+  as the image it ships as without a published release or a Google OAuth client. It is the one
+  place a gate is absent, which is why it publishes on `127.0.0.1` and nowhere else and leaves
+  `AUTH_GATE` at `none`: the fail-closed argument above is about an instance a household can
+  reach, and this one is reachable from a single machine. It runs as its own Compose project, so
+  nothing it does can touch a deployment's volume.
 - **The tag floats.** `APP_VERSION` defaults to the major, so every `v1.x.y` release lands on `1`
   and `docker compose up -d` is the upgrade. Pinning a full version is how an instance is held
   still, and is the "old image" half of the rollback described in `docs/operating.md`.

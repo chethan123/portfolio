@@ -426,7 +426,8 @@ always safe.
 
 One caveat today: no `v*` release tag has been cut yet, so CI has never published that image. Until
 the first release exists, run from a checkout instead —
-`docker compose -f compose.yaml -f compose.dev.yaml up -d --build`.
+`docker compose -f compose.yaml -f compose.dev.yaml up -d --build`, which builds the app image here
+rather than pulling it and is otherwise the same four services, gate included.
 
 You do not need a checkout to run this: `compose.yaml`, `Caddyfile`, `.env` and `allowed-emails.txt`
 are the whole deployment. The same command is also the upgrade — the pinned tag is the floating
@@ -534,6 +535,18 @@ npm run build
 `npm run dev` needs a migrated database and does not apply migrations itself — only the container
 entrypoint does that. Without one it starts anyway and fails on the first request instead, because
 configuration is read lazily.
+
+To run the checkout as the container it ships as, rather than under Vite, there is a standalone
+local stack — `app` built from source plus a `db`, and nothing else, so it needs no published image
+and no Google OAuth client:
+
+```sh
+docker compose -f compose.local.yaml up --build       # then http://127.0.0.1:3000
+```
+
+It has no gate, so it publishes on loopback only and keeps the app's unprotected-instance banner up.
+The full four-service deployment, gate included, is `compose.yaml`;
+[`docs/developing.md`](docs/developing.md) says which of the three to reach for when.
 
 Tests run against a real Postgres — the risk this codebase carries lives in Postgres-specific SQL
 and `numeric` handling, both of which disappear under a mock.

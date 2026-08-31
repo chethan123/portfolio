@@ -1,0 +1,125 @@
+# Build and run THIS CHECKOUT, standalone — no registry image, no gate.
+#
+#     docker compose -f compose.local.yaml up --build      # then http://127.0.0.1:3000
+#     docker compose -f compose.local.yaml logs -f app
+#     docker compose -f compose.local.yaml exec db psql -U portfolio -d portfolio
+#     docker compose -f compose.local.yaml down            # add -v to discard the data too
+#
+# Used ALONE, never layered over compose.yaml — an override file can add a
+# service but cannot remove one, and the two this stack does *not* have are
+# the whole point of it.
+#
+# What it buys: your working tree running as the container it ships as — the
+# entrypoint's validate-then-migrate-then-serve ordering, the read-only
+# rootfs, the pruned production tree — with no published release to pull and
+# no Google OAuth client to register first. `compose.dev.yaml` remains the
+# right file when the change under test is the *deployment*: it builds the
+# same image but keeps `gate` and `caddy`, so it certifies what an operator
+# actually runs, which this deliberately does not.
+#
+# THE GATE IS ABSENT, WHICH IS WHY THE PORT IS LOOPBACK. compose.yaml argues
+# that an instance reachable on a home LAN without Google sign-in is exactly
+# what its fail-closed `${VAR:?}` interpolations exist to prevent. This file
+# does not weaken that argument, it steps around it: `127.0.0.1` on the host
+# side means nothing off this machine can reach the app, so there is nothing
+# for a gate to guard. `AUTH_GATE` is left at its `none` default so the app
+# draws its unprotected-instance banner — accurate here, and the standing
+# reminder. Do not widen that bind: a LAN-reachable instance is compose.yaml's
+# job, with the gate in front of it.
+#
+# "Without pulling from a registry" means the *app*: nothing here fetches
+# ghcr.io/chethan123/portfolio-app, and `pull_policy: build` keeps it that way
+# even for the local tag. The `postgres:17-alpine` image and the Dockerfile's
+# `node:24-*` bases are still fetched once and then cached — the first build
+# is minutes, later ones seconds.
+#
+# Its own Compose project: containers, network and volume are all prefixed
+# `portfolio-local`, so `down -v` in here can never reach the deployment
+# stack's `db-data`. The privilege posture mirrors compose.yaml on purpose —
+# a local run allowed to write where production is not is a local run that
+# hides the bug.
+
+name: portfolio-local
+
+services:
+  db:
+    # compose.yaml is the authority on every line of this service, repeated
+    # rather than inherited. `extends:` is the mechanism that would have
+    # shared it, and it cannot be used here: resolving one interpolates the
+    # *whole* referenced file, so pointing at compose.yaml fails on the gate's
+    # `${VAR:?}` guards — `required variable GATE_CLIENT_SECRET is missing a
+    # value`, measured — which is precisely the setup this file exists to skip.
+    image: postgres:17-alpine
+    user: "70:70"
+    environment:
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}
+      POSTGRES_DB: portfolio
+      TZ: UTC
+      PGTZ: UTC
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=UTC
+    volumes:
+      # Survives `down`, so the accounts you typed in are still there
+      # tomorrow. Unpublished, like compose.yaml's: reach it through
+      # `exec db psql`. The test suite's throwaway database is a different
+      # thing entirely — compose.test.yaml, port 55432.
+      - db-data:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  app:
+    # The whole reason this file exists: built from the checkout, never
+    # pulled. `pull_policy: build` rather than the default `missing` is what
+    # stops an `up` after an edit quietly re-running the image the *last* `up`
+    # built — a cached rebuild costs seconds, that mistake costs an afternoon.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # A tag of its own, so this never overwrites compose.dev.yaml's build or
+    # wears a published release's name.
+    image: portfolio-app:local
+    pull_policy: build
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
+      # AUTH_GATE deliberately unset — nothing authenticates here, and the
+      # banner saying so is correct. See the header.
+      PORT: ${PORT:-3000}
+      MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
+      TZ: ${TZ:-UTC}
+    ports:
+      # Loopback only, both sides the same port so the URL you open matches
+      # what the app was told to listen on.
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    # No `restart:` on purpose, unlike compose.yaml. A container that dies in
+    # `validate-config` or `migrate` should stay dead with the reason as the
+    # last line of `logs`, not scroll it away restarting. No `healthcheck:`
+    # either — the Dockerfile declares one, so `up --wait` still works.
+
+volumes:
+  db-data:

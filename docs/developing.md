@@ -324,6 +324,26 @@ That is what the smoke test does — it sets `COMPOSE_FILE` to both files — an
 the change under test is to the `Dockerfile`, the entrypoint or `compose.yaml` itself. A plain
 `docker compose up -d` in a checkout runs the **last published release**, not your working tree.
 
+**Just running your checkout as a container.** The command above stands up the whole deployment, so
+it still refuses to start until the gate's Google credentials and `allowed-emails.txt` exist. When
+all you want is your working tree running as the image it ships as, `compose.local.yaml` is a
+standalone stack of `app` and `db` only — built from the checkout, no registry image, no OAuth
+client to register first:
+
+```sh
+docker compose -f compose.local.yaml up --build      # then http://127.0.0.1:3000
+docker compose -f compose.local.yaml down            # add -v to discard the data too
+```
+
+It has no gate, which is why it publishes on `127.0.0.1` and nowhere else, and why `AUTH_GATE` is
+left at `none` so the app keeps drawing its unprotected-instance banner. It runs as its own Compose
+project (`portfolio-local`), so its `down -v` can never reach a deployment's `db-data` volume. Use
+it to see a change in the real container — the entrypoint's migrate-then-serve ordering, the
+read-only rootfs, the pruned production tree — and `compose.dev.yaml` when the thing under test is
+the deployment itself.
+
+`npm run dev` is still the faster loop for app code: it has hot reload, and this rebuilds an image.
+
 ---
 
 ## Recipes

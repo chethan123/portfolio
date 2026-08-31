@@ -19,5 +19,6 @@ LICENSE
 .env.*
 compose.yaml
 compose.dev.yaml
+compose.local.yaml
 compose.test.yaml
 vitest.config.ts

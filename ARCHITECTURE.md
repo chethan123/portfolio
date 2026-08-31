@@ -129,7 +129,10 @@ which is evaluated before any container runs (DESIGN.md §10.1). Fail-closed rep
 no-manual-steps promise that was kept by booting an unprotected instance.
 The image is pulled from GitHub Container Registry rather than built on the host: CI publishes a
 multi-architecture image on a `v*` tag, and `compose.yaml` deliberately carries no `build:` stanza
-so a deployment cannot silently become a build (§8.2).
+so a deployment cannot silently become a build (§8.2). Two other Compose files build it instead and
+are not deployments: `compose.dev.yaml`, layered over `compose.yaml` by the smoke test, and
+`compose.local.yaml`, a standalone `app` + `db` pair for running a checkout — the one stack with no
+gate, bound to `127.0.0.1` for that reason (DESIGN.md §10.1).
 
 ### 3.1 Topology
 
