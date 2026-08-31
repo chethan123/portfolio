@@ -67,6 +67,26 @@ describe("the drop screen's loader", () => {
   );
 });
 
+describe("the drop screen's file control", () => {
+  it(
+    "offers every format the reader accepts, tab-delimited exports included",
+    withDatabase(async ({ seedAccount }) => {
+      await seedAccount({ name: "Fidelity Taxable" });
+
+      const markup = await screenAt("/upload");
+
+      // The picker is a hint, never the gate — `parseUploadForm` takes any
+      // UTF-8 text file and `readCsv` sniffs comma, semicolon or tab. A filter
+      // narrower than that hides a statement the app would have read, and the
+      // reader has no way to tell that from a refusal.
+      const accept = /accept="([^"]*)"/.exec(markup)?.[1]?.split(",") ?? [];
+      expect(accept).toContain(".csv");
+      expect(accept).toContain(".tsv");
+      expect(accept).toContain(".txt");
+    }),
+  );
+});
+
 describe("the drop screen's ?account= prefill", () => {
   it(
     "arrives with the linked open account already selected and everything else untouched",

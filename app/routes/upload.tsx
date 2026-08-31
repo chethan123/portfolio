@@ -181,7 +181,12 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
                   id="upload-file"
                   type="file"
                   name="file"
-                  accept=".csv,text/csv"
+                  // Every text export the reader can sniff a delimiter in
+                  // (`csv.ts`): comma, semicolon and tab, the last of which
+                  // brokerages ship as .tsv and .txt alike. The server takes
+                  // any UTF-8 text file whatever this says, so a narrower
+                  // filter would only hide a file it would have accepted.
+                  accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
                   aria-invalid={errors?.file ? true : undefined}
                 />
               </label>

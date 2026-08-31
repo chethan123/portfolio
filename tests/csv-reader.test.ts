@@ -133,6 +133,20 @@ describe("readCsv", () => {
     expect(rows[1]).toEqual(["ISIN", "Naam", "Aantal", "Koers", "Waarde"]);
     expect(rows).toHaveLength(4);
   });
+
+  it("reads a tab-delimited export whose figures carry commas, without the commas winning the sniff", () => {
+    // The sniff is the whole reason a TSV needs no separate path — but a tab
+    // file is also where the vote is closest, because `$352,687.55` hands the
+    // comma real fields to split on. The column-count vote settles it: five
+    // columns on four of the five rows against three on the data rows alone.
+    const { rows, delimiter } = readCsv(fixture("tab-delimited.tsv"));
+
+    expect(delimiter).toBe("\t");
+    expect(rows[1]).toEqual(["Symbol", "Description", "Quantity", "Price", "Market Value"]);
+    // The thousands separator stays inside its cell rather than becoming one.
+    expect(rows[2]?.[4]).toBe("$352,687.55");
+    expect(defaultHeaderRow(rows)).toBe(1);
+  });
 });
 
 describe("candidateHeaderRows and defaultHeaderRow", () => {
