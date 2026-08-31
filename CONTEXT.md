@@ -42,6 +42,21 @@ is never a stored value, never a grouping key, and never a slice of a chart — 
 discard the distinction tax treatment exists to keep.
 _Avoid_: tax-advantaged, non-taxable, unsheltered.
 
+### What an asset is
+
+**Classification**:
+The household's own label for what an instrument is — "S&P 500 fund", "Cash" — one per
+instrument, assigned when the instrument first enters the records and shared everywhere it is
+held. Labels are free-form and may mix axes (kind, index tracked, geography), which is fine for
+labelling; the asset class rollup is what aggregates.
+_Avoid_: category, tag, asset type, label; classification to mean the asset class.
+
+**Asset class**:
+The fixed four-way rollup every classification maps onto — equity, bond, cash, other — giving
+the coarse split the free-form labels cannot. Never household-edited, and `other` honestly
+reports "cannot be split further".
+_Avoid_: classification to mean the rollup, security type, sector.
+
 ### How an account ends
 
 **Closed**:
