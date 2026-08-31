@@ -33,8 +33,9 @@ service lands they would describe an intention.
 **The worker-service stance**
 
 - [ ] DESIGN.md §10.1's "no separate worker service" paragraph, `ARCHITECTURE.md` §3.1's "**No
-      worker container**" bullet, and `compose.yaml`'s file header all name the exception and point
-      at ADR-0009 rather than being quietly falsified
+      worker container**" bullet, `compose.yaml`'s file header, and `README.md`'s "there is no
+      worker container" under Where prices come from all name the exception and point at ADR-0009
+      rather than being quietly falsified
 
 **Counts a fifth service breaks — rewritten as rules, not bumped to five**
 
@@ -51,6 +52,9 @@ service lands they would describe an intention.
 - [ ] `ARCHITECTURE.md` §7.4's observability table (the freshness markers and the healthcheck),
       Appendix A's `scripts/` table (`dump-loop.sh`), and §3.3's Compose-level variables
 - [ ] DESIGN.md §10.1's environment surface table
+- [ ] `docs/operating.md`'s "Running against your own Postgres", which tells the operator to delete
+      the `db` service and `app`'s `depends_on`: this service and its own `depends_on` go with them,
+      or Compose rejects the edited deployment outright
 - [ ] `docs/operating.md`: the environment table; Installing and "Where the database lives", which
       now need a second `mkdir -p` and the `DUMP_UID`/`DUMP_GID` that must match it; the Logs
       section, for the script's grep stem; and "An unhealthy container is not restarted", which now
@@ -71,20 +75,24 @@ service lands they would describe an intention.
       from one that was never there
 - [ ] The restore drill gains a cadence: quarterly, and after any Postgres major upgrade
 - [ ] Restoring says how to read a dump when the operator's account does not own it
-- [ ] Upgrading and Restoring both say to stop `dump` first: `pg_dump` holds `ACCESS SHARE` for its
-      whole run and a migration's `ACCESS EXCLUSIVE` queues behind it
+- [ ] Upgrading and Restoring both say to stop `dump` first — `pg_dump` holds `ACCESS SHARE` for its
+      whole run and a migration's `ACCESS EXCLUSIVE` queues behind it — and, because a bare
+      `docker compose up -d` would start it again mid-migration and the restore recipe ends with a
+      targeted `start app` that would leave it stopped for good, both procedures name the services
+      they start and end with an explicit `docker compose start dump`
 - [ ] `docs/runbook.md` gains "my dumps have stopped" — the markers, the healthcheck under `ps -a`,
       and the free-space refusal are the three things to look at
 - [ ] `README.md`'s "the whole deployment" list gains the script and the dumps directory
-- [ ] `.env.example` documents the knobs, noting they are validated by the sidecar rather than by
-      `server/config.ts`
 
 **Vocabulary**
 
-- [ ] `CONTEXT.md` gains **Dump** and **Backup** as distinct terms in the house form, each with the
-      words it avoids. "Snapshot" stays out of both: `CONTEXT.md` already avoids it for
-      **Observation**, and `docs/operating.md` uses it for the stopped file-level copy of the cluster
-- [ ] Every use of "backup" meaning the local file is renamed — `docs/runbook.md`'s "I need to
-      restore from a backup" heading and its cross-references, `README.md`'s "Take a backup first",
-      and the uses in `docs/guide/upload.md`, `docs/google-sign-in.md` and `docs/developing.md`
+- [ ] The **Dump** and **Backup** entries landed with ADR-0009 in the decision commit, because a
+      term earns its entry when it is resolved. This ticket is the pass that makes the rest of the
+      documentation obey them, and until it lands the glossary and the runbook disagree
+- [ ] Every use of "backup" meaning the local archive is renamed, found by searching the repository
+      rather than by working through a list — an enumeration here would be a fifth place to keep in
+      step. The ones already known: `docs/runbook.md`'s "I need to restore from a backup" heading
+      and its cross-references, `README.md`'s "Take a backup first" and its "`pg_dump` backup and
+      restore procedure", and the uses in `docs/guide/upload.md`, `docs/google-sign-in.md` and
+      `docs/developing.md`
 - [ ] `docs/specs/README.md`'s slice table and ticket-directory list carry 0014 and `dump/`

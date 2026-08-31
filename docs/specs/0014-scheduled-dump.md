@@ -38,7 +38,9 @@ already have.
 ### The run
 
 1. **Prune, then check for room, then dump.** Expired dumps go first, and the run is refused unless
-   free space is at least twice the last successful dump plus a floor. A refusal logs an error,
+   there is room for the dump *about to be written* — bounded from `pg_database_size()` rather than
+   from the last archive, which says nothing about a database that has grown or a first run that has
+   no predecessor. A refusal logs an error,
    writes the failure marker, deletes nothing further and lets the healthcheck lapse. The ordering
    is the point: the dumps share a filesystem with the live cluster, Postgres PANICs when it cannot
    write, and until it does `/healthz` goes on answering `200` — the probe is `select 1`, and
@@ -50,14 +52,17 @@ already have.
    than of whatever happens to answer on the compose network.
 3. **Verify by decoding all of it**: `pg_restore -f /dev/null` on the staged file, which reads every
    data block and fails on a short read, then a comparison against the previous dump's size that
-   refuses a large shrink. `pg_restore --list` is *not* enough — the archive's table of contents is
+   refuses a large shrink — against a baseline recorded with the compression setting that produced
+   it, since changing that setting legitimately changes the size by an order of magnitude. `pg_restore --list` is *not* enough — the archive's table of contents is
    written at the front, so a dump truncated at five percent lists every object and exits 0. That is
    the failure the restore drill's row count exists to catch, and it is why the operator-facing
    instruction to check a dump with `--list` changes too (ticket 02).
 4. **Rename into place** — a real rename within one filesystem, so a reader of the directory can
-   never see a partial or unverified file — as `portfolio-YYYYMMDDTHHMMSSZ.dump`, whose lexical
-   order is its chronological order, so a collector can ask "anything newer than what I took?"
-   without trusting either clock.
+   never see a partial or unverified file — as `portfolio-YYYYMMDDTHHMMSSZ.dump`. The name is the
+   producer's clock written down, which makes the directory readable to a human and orders it
+   without a collector having to `stat` anything; it is not a cursor. A collector takes **what it
+   has not already taken**, by name, because a host clock corrected backwards produces a genuine
+   dump whose name sorts before one already collected.
 5. **Describe it**: a sidecar JSON beside the dump (sha256, `APP_VERSION`, Postgres server version,
    byte count, duration, finish time) and a rewritten success marker. Only a fully verified run
    writes either.
@@ -132,9 +137,11 @@ Copying anything off the host. Encrypting anything. Keeping history beyond the l
 Restoring anything. Rehearsing a restore — that stays the human drill in `docs/operating.md`, which
 gains a stated cadence (quarterly, and after any Postgres major upgrade) rather than being advice.
 
-An instance whose `DATABASE_URL` points at an external Postgres, which `docs/operating.md` supports:
-the service refuses to start rather than dumping something it cannot reason about, and the existing
-sentence that backups are then that server's problem stands.
+An instance whose `DATABASE_URL` points at an external Postgres, which `docs/operating.md` supports
+by telling the operator to delete the `db` service. This service goes with it — its `depends_on`
+would otherwise name a service that is no longer there, and Compose rejects that before any script
+of ours can refuse anything. The existing sentence that backups are then that server's problem
+stands, and ticket 02 adds the deletion to that section.
 
 ## Testing
 
@@ -147,9 +154,11 @@ privileges it claims — is a property of that arrangement rather than of a func
 vitest test would exercise a different shell, a different uid and a different filesystem, and would
 prove none of them.
 
-What makes that testable rather than aspirational is that the script takes a subcommand: the loop is
-the default, and `verify <file>` and `prune <dir>` are the same code paths the loop uses, invocable
-by the test through `docker compose run --rm`. No running deployment invokes them.
+What makes that testable rather than aspirational is that the script is the service's *entrypoint*
+and takes a subcommand: `loop` is the configured command, and `verify <file>` and `prune <dir>` are
+the same code paths the loop uses. A one-off `docker compose run` replaces the command rather than
+appending to it, which is exactly why the script must be the entrypoint — otherwise the image would
+try to execute `verify` itself. No running deployment invokes them.
 
 ## Tickets
 

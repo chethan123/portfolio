@@ -22,9 +22,12 @@ upload days that are not on a schedule, and the recovery goal is now stated: sur
 and be able to step back to a state from some days ago. Neither is met by a command in a document.
 
 The line moved to somewhere defensible: **the stack produces a dump and never leaves the host.** No
-backup tool inside the stack, no repository password, no remote credentials, no egress. That keeps
-intact the property the deployment's security argument rests on — Caddy is the only container that
-publishes a port, and nothing here reaches outward.
+backup tool inside the stack, no repository password, no remote credentials, no new outbound
+dependency. Being precise about the property this preserves: the stack is not egress-free and never
+has been — `ARCHITECTURE.md` §2 lists two outbound dependencies, the gate's token exchange with
+Google and the app's quote fetch from Yahoo. What holds is that both are the deployment's own
+function, are named in one place each, and carry no credential to the household's data. A backup
+tool would add a third — one whose credential unlocks every dump ever taken.
 
 ## This also reverses "no separate worker service"
 
@@ -48,10 +51,10 @@ The cost is paid honestly: a fifth service, a second schedule, and a second plac
 - **A host cron job or systemd timer calling `docker compose exec`.** Rejected because it is
   untested and unversioned — it lives on one machine, is retyped slightly differently on the next,
   and no CI run ever proves it works.
-- **A backup tool inside the stack, pushing to a repository.** Rejected: it needs egress, a
-  repository password and remote credentials inside a deployment whose whole security argument is
-  that only Caddy reaches anywhere. It also merges two failure modes — "the dump broke" and "the
-  upload broke" — into one silence.
+- **A backup tool inside the stack, pushing to a repository.** Rejected: it puts a repository
+  password and a remote destination inside the deployment, where the two outbound dependencies that
+  already exist carry nothing that would decrypt a household's finances. It also merges two failure
+  modes — "the dump broke" and "the upload broke" — into one silence.
 - **Dumping from the app container's in-process scheduler.** Rejected on the three grounds above.
 - **A dedicated least-privilege dump role.** Not done. It needs a password, a bootstrap step and
   `pg_read_all_data` to see everything; the honest position is recorded under Consequences instead.

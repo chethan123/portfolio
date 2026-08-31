@@ -178,3 +178,17 @@ because a prefill only ever saved the picking; it never promised the pick. Disti
 which narrows what a page shows: a filter that matches nothing is kept and said out loud, since
 dropping it would silently change what the reader believes they are looking at.
 _Avoid_: pre-selection, auto-select, locked, deep-link default.
+
+### How the data is kept safe
+
+**Dump**:
+A `pg_dump` archive of the whole database at one instant, verified readable end to end, held on the
+machine that produced it. It is not a backup: it is what a backup is taken *of*, and it survives
+exactly as long as the disk under it does.
+_Avoid_: backup, snapshot, export.
+
+**Backup**:
+A dump that has been copied off this machine by the operator's own tool, which owns the encryption,
+the history and the destination. The stack never takes one, and no part of it reaches the place they
+are kept.
+_Avoid_: using it for the archive still sitting on the host.

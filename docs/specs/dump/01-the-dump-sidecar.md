@@ -21,16 +21,26 @@ is reviewed by reading rather than by running.
       and leave the other dumping against a newer server — which `pg_dump` refuses with
       `aborting because of server version mismatch`, loudly but nightly, with nothing connecting it
       to a tag changed last month
-- [ ] `depends_on: {db: {condition: service_healthy}}`, or a cold boot races `initdb`
+- [ ] `depends_on: {db: {condition: service_healthy}}`, or a cold boot races `initdb`. This is what
+      ties the service to the bundled database: an operator running against their own Postgres
+      deletes `db`, and must delete this service with it (ticket 02 documents that where the
+      deletion is already described)
 - [ ] `cap_drop: ALL`, `no-new-privileges: true`, `read_only: true`, `tmpfs: /tmp`, no ports
 - [ ] `TZ: UTC` pinned on the service rather than `${TZ:-UTC}` inherited, so `DUMP_AT` is UTC as
       documented; `db` pins it the same way and for the same kind of reason
 - [ ] `user: "${DUMP_UID}:${DUMP_GID}"` — required, not defaulted. Nothing makes an absent bind
-      source writable, so the directory is the operator's to create and the service runs as them
+      source writable, so the directory is the operator's to create and the service runs as them.
+      These two are Compose-time inputs, not script-time ones: a malformed value fails `up` before
+      any of our code runs, so the script cannot be the thing that reports them. What the script can
+      and must check is the identity it actually got — running as uid 0 exits non-zero, because a
+      root dumper silently undoes the posture the rest of this list asserts
 - [ ] Both binds use the long syntax with `create_host_path: false`, as the allowlist bind does, so
       a missing `./volumes/dumps` or missing script stops `up` with a message naming the path
-- [ ] `./scripts/dump-loop.sh` bound read-only at `/usr/local/bin/dump-loop.sh`, invoked as
-      `command: ["sh", "/usr/local/bin/dump-loop.sh"]` so a lost executable bit cannot break it
+- [ ] `./scripts/dump-loop.sh` bound read-only at `/usr/local/bin/dump-loop.sh` and made the
+      service's `entrypoint: ["sh", "/usr/local/bin/dump-loop.sh"]` with `command: ["loop"]` — an
+      entrypoint rather than a command because `docker compose run dump verify …` *replaces* the
+      command, and the image would otherwise try to execute `verify` itself. `sh` in front so a lost
+      executable bit cannot break it
 - [ ] `./volumes/dumps` bound at `/dumps`
 - [ ] `environment:` carries `DATABASE_URL`, `APP_VERSION`, and the `DUMP_*` knobs; no new secret
 - [ ] `restart: on-failure` — a validation failure or a crash restarts, a deliberate disable does not
@@ -50,15 +60,20 @@ is reviewed by reading rather than by running.
 
 - [ ] Delete any staging dotfile left by a crash — there is one writer, so any `.part` is stale
 - [ ] Prune (below) **before** dumping, not after
-- [ ] Refuse unless free space is at least twice the last successful dump plus 1 GiB; with no
-      previous success recorded, require the 1 GiB floor alone and say in the log that it could not
-      size itself. A refusal logs an error, writes the failure marker, deletes nothing further
+- [ ] Refuse unless free space is at least `pg_database_size()` × 2 + 1 GiB. The bound comes from
+      the database because the file about to be written is a function of *it*, not of the last
+      archive: a first run has no predecessor, and a grown database outruns one. The factor covers
+      an uncompressed archive being larger than the pages it came from, since `jsonb` payloads are
+      TOAST-compressed in storage and expanded on the way out. A refusal logs an error, writes the
+      failure marker, deletes nothing further
 - [ ] `pg_dump -d "$DATABASE_URL" --format=custom --compress="$DUMP_COMPRESS"` to
       `/dumps/.portfolio-<stamp>.dump.part` — never a tmpfs, because a cross-filesystem `mv` is a
       copy and a reader of the directory would see a partial file
 - [ ] Verify with `pg_restore -f /dev/null` on the staged file, which decodes every data block;
       `pg_restore --list` passes a truncated archive and must not be the check
-- [ ] Refuse a dump under half the size of the last successful one
+- [ ] Refuse a dump under half the size of the last successful one taken **at the same
+      `DUMP_COMPRESS` setting** — the success marker records the setting, and a changed setting
+      resets the baseline rather than rejecting every dump from then on
 - [ ] `mv` into place as `portfolio-<stamp>.dump`, `<stamp>` being `YYYYMMDDTHHMMSSZ`
 - [ ] Write `portfolio-<stamp>.dump.json`: sha256, `APP_VERSION`, Postgres server version, byte
       count, duration, finish time. It and the success marker are written only by a verified run
@@ -72,7 +87,11 @@ is reviewed by reading rather than by running.
       free-space refusal
 - [ ] On start, dump immediately if the attempt marker is missing or more than an hour old
 - [ ] A failure retries at +15, +30, +60 minutes, then waits for the next window — except a
-      free-space refusal, which waits. The ladder is in-process and a restart resets it
+      free-space refusal, which waits
+- [ ] The ladder survives a restart, because a crash mid-run is the case that most needs it: the
+      attempt marker records the attempt's outcome, and an attempt left incomplete (no success, no
+      failure) is read on boot as a failure and resumes the ladder rather than being taken as a
+      recent attempt that suppresses the boot dump
 - [ ] The failure marker records what failed and when, so the reason outlives the container
 - [ ] Every log line carries one grep-able stem
 
@@ -104,7 +123,8 @@ is reviewed by reading rather than by running.
       run cannot pass on yesterday's file
 - [ ] A verified dump, its `.json` and the success marker appear within seconds of `up` on an empty
       directory — asserted on a **new** name, not on the presence of any
-- [ ] `run --rm dump verify` on a deliberately truncated copy of that dump exits non-zero
-- [ ] `run --rm dump prune` on a directory of pre-aged files keeps the newest, and leaves a file
-      that does not match the pattern alone
+- [ ] `docker compose run --rm dump verify <file>` on a deliberately truncated copy of that dump
+      exits non-zero
+- [ ] `docker compose run --rm dump prune <dir>` on a directory of pre-aged files keeps the newest,
+      and leaves a file that does not match the pattern alone
 - [ ] The new container holds only the privileges it claims
