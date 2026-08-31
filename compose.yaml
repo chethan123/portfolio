@@ -9,8 +9,10 @@
 # forgetting to configure it is no gate — the `${VAR:?}` interpolations stop
 # `up` naming the first missing variable rather than start half-protected.
 #
-# The one manual step, done once: create a Google OAuth client and put its
-# credentials in `.env` (copy .env.example; docs/google-sign-in.md walks it).
+# The two manual steps, each done once: create a Google OAuth client and put
+# its credentials in `.env` (copy .env.example; docs/google-sign-in.md walks
+# it), and `mkdir -p ./volumes/db/data` for the database (the `db-store` volume
+# at the bottom explains why the directory has to pre-exist and be empty).
 # Every other setting has a working default.
 #
 # Privilege posture, all four services: cap_drop ALL + no-new-privileges +
@@ -47,13 +49,14 @@ services:
       - -c
       - log_timezone=UTC
     volumes:
-      # The one named volume — the single backup target (DESIGN.md §10, `pg_dump`).
-      - db-data:/var/lib/postgresql/data
+      # The cluster — ./volumes/db/data on the host, via the bound name below.
+      # Still the single backup target (DESIGN.md §10, `pg_dump`).
+      - db-store:/var/lib/postgresql/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # All state lives in the volume above; pg_dump/pg_restore stream over exec
+    # All state lives in the mount above; pg_dump/pg_restore stream over exec
     # and write nothing in-container.
     read_only: true
     tmpfs:
@@ -261,4 +264,30 @@ services:
       start_period: 10s
 
 volumes:
-  db-data:
+  # The cluster lives at ./volumes/db/data, beside the checkout, rather than in
+  # an opaque directory under /var/lib/docker: one path to snapshot, move
+  # between machines, or point a backup at.
+  #
+  # A bound *name* rather than a plain bind mount, for the one thing a bind
+  # cannot do — ownership. `db` runs as 70:70 and Docker creates a missing bind
+  # source root-owned 0755, which stops initdb dead ("could not change
+  # permissions of directory ... Operation not permitted"). A volume mounted
+  # over an *empty* directory takes the image's ownership and mode for it
+  # (70:70, 1777) before Postgres looks, so `mkdir -p ./volumes/db/data` is the
+  # whole setup and wants no root. Empty is load-bearing: any file in there
+  # first — a .gitkeep, a half-copied backup — skips that step and initdb
+  # refuses the directory.
+  #
+  # Not called db-data any more: reusing that name over an existing instance's
+  # volume makes `up` stop and offer to recreate it (destroying it). The old
+  # volume is left alone instead; docs/operating.md has the one-time copy.
+  db-store:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      # Relative to this file — Compose resolves it against the project
+      # directory, and has since 1.27.4. The directory must exist: a missing one
+      # fails the mount naming the path, rather than quietly starting an
+      # instance whose data goes somewhere else.
+      device: ./volumes/db/data

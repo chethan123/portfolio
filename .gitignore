@@ -14,6 +14,11 @@ build/
 # `allowed-emails.example.txt` shows the format (different filename on purpose).
 allowed-emails.txt
 
+# This instance's database. compose.yaml's `db-store` binds ./volumes/db/data,
+# so a running instance leaves the whole cluster here — owned by the
+# container's uid 70, and never something to commit.
+volumes/
+
 logs
 *.log
 npm-debug.log*
