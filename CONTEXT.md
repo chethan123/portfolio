@@ -53,8 +53,9 @@ _Avoid_: category, tag, asset type, label; classification to mean the asset clas
 
 **Asset class**:
 The fixed four-way rollup every classification maps onto — equity, bond, cash, other — giving
-the coarse split the free-form labels cannot. Never household-edited, and `other` honestly
-reports "cannot be split further".
+the coarse split the free-form labels cannot. The household chooses which of the four each
+classification rolls up to; the four themselves are closed, and `other` honestly reports
+"cannot be split further".
 _Avoid_: classification to mean the rollup, security type, sector.
 
 ### How an account ends

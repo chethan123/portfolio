@@ -1,17 +1,17 @@
 # Analysis
 
-Where the money sits, as five breakdowns of the same portfolio.
+Where the money sits, as breakdowns of the same portfolio.
 
 ![The Analysis screen](images/analysis.png)
 
-There are **five panels**. The first four are a ring beside a table. The fifth is a table on its
+Every breakdown is a ring beside a table; the last panel, unrealized gains, is a table on its
 own.
 
 If a line at the top says "Based on 17 of 18 holdings", that is every figure on the page telling
 you what it was computed from: a holding nobody can price contributes nothing here rather than
 counting as zero. See [prices.md](prices.md).
 
-## The four breakdowns
+## The breakdowns
 
 - **Net worth by owner** — who owns what.
 - **Value by account type** — brokerage, workplace plan, IRA, bank, loan.
@@ -50,7 +50,7 @@ the percentages read as dashes, and the amounts are the answer.
 
 ## Unrealized gains
 
-The fifth panel: what has been gained and not yet sold, and what a taxable account would owe on
+The last panel: what has been gained and not yet sold, and what a taxable account would owe on
 it. No ring — a gain is signed, and a signed figure is not a share of anything.
 
 Three rows, by what the holding is: **Individual stocks**, **Funds and ETFs**, and **Cash, loans
@@ -103,7 +103,7 @@ Coverage is counted separately here, because a gain needs **both** a price and a
 
 ## Reading it as one owner
 
-The owner filter narrows all five panels at once, and its control at the top of this screen sets
+The owner filter narrows every panel at once, and its control at the top of this screen sets
 the same selection Overview, Holdings and Income carry — see
 [reading a screen as one owner](owner-filter.md). The **Net worth by owner** panel then shows the
 chosen owners alone, which is the one place the narrowing is visible twice: the ring is of them, and
