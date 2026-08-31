@@ -96,6 +96,10 @@ export PUBLIC_ORIGIN="https://smoke.example.test"
 
 if [[ ! -e "$ALLOWLIST" ]]; then
   printf 'smoke-test@example.test\n' > "$ALLOWLIST"
+  # 0600, only on the file this script owns: on a non-root runner this is
+  # exactly the file root cannot open without DAC_READ_SEARCH — the read
+  # asserted below exercises the cap. On a root runner it changes nothing.
+  chmod 600 "$ALLOWLIST"
   allowlist_is_ours=true
 fi
 
@@ -235,6 +239,123 @@ printf 'gate port not published\n'
 [[ "$(published_ports caddy)" == *'"HostPort":"80"'* ]] ||
   fail "caddy is not published on port 80"
 printf 'caddy published on 80\n'
+
+# The container half of that mapping, tied to the host half: host 80 must land
+# on the 8080 listener specifically, so this fails if the Caddyfile's site
+# address and compose.yaml's `ports:` drift apart.
+[[ "$(published_ports caddy)" == *'"8080/tcp":[{'*'"HostPort":"80"'* ]] ||
+  fail "caddy's host port 80 does not map to the container's 8080 listener: $(published_ports caddy)"
+printf 'caddy listens on 8080 inside\n'
+
+# --- Every container holds only the privileges it was proved to need ----------
+# Nothing else can notice this posture: a container that regained root, a
+# capability, or a writable rootfs serves every request exactly as before.
+# Caps, no-new-privileges and read-only are each checked twice — the daemon's
+# record and the kernel's answer from inside — because the two disagree in
+# exactly the interesting cases. compose.yaml carries the argument for each
+# surviving capability.
+log "Checking the containers' privileges"
+
+# Capability names in compose.yaml's spelling: null and [] both mean none,
+# and the daemon's CAP_ prefix is stripped so a failure names the exact word
+# an editor would change.
+caps_of() {
+  local raw
+  raw="$(docker inspect --format "{{json .HostConfig.$2}}" "$(docker compose ps -q "$1")")"
+  if [[ "$raw" == "null" ]]; then raw='[]'; fi
+  raw="$(printf '%s' "$raw" | tr -d '[]"')"
+  printf '%s' "${raw//CAP_/}"
+}
+
+# $2 is the exact expected CapAdd set (comma-separated, empty for none) — not
+# a "contains": a capability nobody argued for is the thing to catch. $3 is
+# the CapEff the kernel must report at PID 1 — the daemon's record alone would
+# miss a runtime that accepted the option and ignored it.
+expect_caps() {
+  local service="$1" expected="$2" want_eff="$3" dropped added eff
+  dropped="$(caps_of "$service" CapDrop)"
+  [[ "$dropped" == "ALL" ]] ||
+    fail "${service} drops '${dropped}', expected ALL"
+  added="$(caps_of "$service" CapAdd)"
+  [[ "$added" == "$expected" ]] ||
+    fail "${service} adds '${added}', expected '${expected}'"
+  eff="$(docker compose exec -T "$service" awk '/^CapEff/ { print $2 }' /proc/1/status |
+    tr -d '[:space:]')"
+  [[ "$eff" == "$want_eff" ]] ||
+    fail "${service} PID 1 holds CapEff ${eff}, expected ${want_eff}"
+  printf '%s: dropped ALL, added %s (CapEff %s)\n' "$service" "${added:-nothing}" "$eff"
+}
+
+expect_caps app "" 0000000000000000
+expect_caps db "" 0000000000000000
+# Exec, not binding: /usr/bin/caddy carries file capability
+# cap_net_bind_service=ep and the kernel refuses to exec it from an empty
+# bounding set — compose.yaml has the transcript.
+expect_caps caddy "NET_BIND_SERVICE" 0000000000000400
+# Root cannot open a file it does not own without this.
+expect_caps gate "DAC_READ_SEARCH" 0000000000000004
+
+expect_no_new_privileges() {
+  local service="$1" declared applied
+  declared="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$(docker compose ps -q "$1")")"
+  [[ "$declared" == *"no-new-privileges"* ]] ||
+    fail "${service} does not set no-new-privileges: ${declared}"
+  # The kernel's answer at PID 1 — no setuid binary can hand anything back.
+  applied="$(docker compose exec -T "$service" awk '/^NoNewPrivs/ { print $2 }' /proc/1/status |
+    tr -d '[:space:]')"
+  [[ "$applied" == "1" ]] ||
+    fail "${service} PID 1 reports NoNewPrivs '${applied:-nothing}', expected 1"
+  printf '%s: no-new-privileges, NoNewPrivs=%s at PID 1\n' "$service" "$applied"
+}
+
+for service in app db caddy gate; do
+  expect_no_new_privileges "$service"
+done
+
+# gate's root is the documented decision — asserted, so pinning a uid there is
+# a failing test and a conversation, not a sidecar that stops reading its file.
+expect_uid() {
+  local service="$1" expected="$2" actual
+  actual="$(docker compose exec -T "$service" id -u | tr -d '[:space:]')"
+  [[ "$actual" == "$expected" ]] ||
+    fail "${service} runs as uid ${actual}, expected ${expected}"
+  printf '%s runs as uid %s\n' "$service" "$actual"
+}
+
+expect_uid app 1000
+expect_uid db 70
+expect_uid caddy 65532
+expect_uid gate 0
+
+# Declared read_only, then the kernel's refusal — which must be EROFS by name:
+# a bare non-zero exit proves nothing, because / is root-owned 0755 and a
+# non-root uid gets "Permission denied" on a writable rootfs too.
+expect_read_only_root() {
+  local service="$1" declared refusal
+  declared="$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$(docker compose ps -q "$service")")"
+  [[ "$declared" == "true" ]] ||
+    fail "${service} is not mounted with a read-only root filesystem"
+  refusal="$(docker compose exec -T "$service" sh -c 'touch /smoke-test-write 2>&1' || true)"
+  [[ "$refusal" == *"Read-only file system"* ]] ||
+    fail "${service} write to / was not refused by the mount: ${refusal:-write succeeded}"
+  printf '%s: / is read-only\n' "$service"
+}
+
+for service in app db caddy gate; do
+  expect_read_only_root "$service"
+done
+
+# The capability's effect, not its declaration: read as the sidecar's own uid
+# from the same ro bind mount — on a non-root runner, the 0600 file above.
+allowlist_seen="$(docker compose exec -T gate cat /etc/oauth2-proxy/allowed-emails.txt |
+  tr -d '[:space:]')" || fail "the gate could not read its allowlist at all"
+[[ -n "$allowlist_seen" ]] ||
+  fail "the gate read an empty allowlist — nobody could ever sign in"
+if [[ "$allowlist_is_ours" == true ]]; then
+  [[ "$allowlist_seen" == *"smoke-test@example.test"* ]] ||
+    fail "the gate read '${allowlist_seen}', not the allowlist this run wrote"
+fi
+printf 'gate reads its allowlist through the bind mount\n'
 
 # --- The stack actually serves a page, not just a health check ----------------
 # Everything above proves the container is up; this proves the framework in it

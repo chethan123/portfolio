@@ -20,7 +20,11 @@
 	}
 }
 
-:80 {
+# 8080, not 80: the pinned unprivileged uid binds a high port with no kernel
+# grant. compose.yaml publishes host 80 onto it, so operator URLs are
+# unchanged — the two numbers are a pair; change one, change the `ports:`
+# line there too.
+:8080 {
 	# The one exemption: `/healthz` is read by machines, answers a pinned body,
 	# carries no household data — uptime monitoring without a Google account.
 	# Everything else, static assets included, is challenged.

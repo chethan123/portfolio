@@ -24,7 +24,8 @@ Every command below runs from the repository root, where `compose.yaml` is.
 **Confirm.** `docker compose ps` names which container is missing.
 
 - No `caddy` — nothing is listening on port 80, and the browser reports a refused connection.
-- `caddy` up, `app` down or unhealthy — the browser gets `502`. Caddy is fine; its upstream is not.
+- `caddy` up, `app` down or unhealthy — the browser gets `502`. Caddy is fine; its upstream is not,
+  and because Caddy's own healthcheck proxies through to `app` it reports unhealthy too. One fault.
 - `caddy` up, `gate` down or unhealthy — `/healthz` still answers `200`, everything else `502`. Go
   to [Nobody can sign in](#nobody-can-sign-in).
 - `502` that clears on its own — `app` was still starting, or a restore was in progress.
@@ -669,8 +670,8 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
   everywhere.
 - `docker compose down` — **without** `-v`. Stops and removes the containers and keeps `db-data`.
 - `docker compose up -d` — pulls the tag `APP_VERSION` points at and recreates. Note that Caddy's
-  `/data` is not on a volume, so a recreate discards any certificates it has issued. It needs to
-  reach `ghcr.io`: with no network this fails rather than falling back to what is already here.
+  `/data` is a tmpfs, so a recreate discards any certificates it has issued. It needs to reach
+  `ghcr.io`: with no network this fails rather than falling back to what is already here.
 - Re-running migrations, by restarting `app`. They are idempotent.
 - `curl -s localhost/healthz` — no credentials, no side effects.
 - Reading anything in `pg_stat_activity`.

@@ -872,13 +872,24 @@ gate    oauth2-proxy, pinned to an exact release
         · stateless — the session is an encrypted cookie in the browser
         · reads the allowlist file, mounted read-only
         · not published to the host, which is what keeps its verdict honest
+        · healthcheck: GET /ping, its own liveness endpoint
 
 caddy   caddy:2-alpine
         · depends_on: app and gate (condition: service_healthy)
         · the only service that publishes a port, and therefore the one place
-          the gate can be enforced
+          the gate can be enforced — host 80 onto its own :8080, because the
+          uid it runs as binds nothing privileged
         · restart: unless-stopped
+        · healthcheck: GET /healthz, through its own proxy hop to app
 ```
+
+**Every service is stripped to what it was proved to need**, and it is one decision rather than
+four: every Linux capability dropped, `no-new-privileges`, a read-only root filesystem with a tmpfs
+over whatever each still writes, and an unprivileged uid everywhere but `gate`. `gate` stays root
+because pinning a uid there would silently decide the mode of the operator's allowlist file; it is
+bounded instead to the one capability root is being kept for, `DAC_READ_SEARCH`. The only other
+survivor is `NET_BIND_SERVICE` on `caddy`, which the image's binary needs in order to `exec` at all.
+None of this changes how the stack behaves once it is up.
 
 The in-process scheduler (§10) is why there is no separate worker service. A worker container would
 mean two images, two deployments, and two places to read logs, to save a missed poll on restart.

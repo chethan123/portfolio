@@ -670,9 +670,9 @@ DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm r
 4. `npm run typecheck` — this is where a migration that broke a query surfaces.
 
 `./scripts/smoke-test.sh` is the container smoke test CI runs: it brings the stack up against an
-empty volume, waits for the app healthcheck, requests `/healthz`, restarts the app, and checks the
-runtime image contains what it is meant to and nothing it is not. It is slow and is not where
-behaviour gets tested.
+empty volume, waits for the app healthcheck, requests `/healthz`, restarts the app, and checks that
+the runtime image contains what it is meant to and nothing it is not, and that every container holds
+only the privileges it was proved to need. It is slow and is not where behaviour gets tested.
 
 ## A note on money
 
