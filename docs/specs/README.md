@@ -36,14 +36,15 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0011](0011-auth-gate.md) | The forward-auth gate replacing the in-app password (ADR-0005) |
 | [0012](0012-installable-pwa.md) | The installable shell and the storage-free worker (ADR-0007) |
 | [0013](0013-owner-filter.md) | The household-wide owner filter (ADR-0008) |
+| [0014](0014-scheduled-dump.md) | The scheduled dump sidecar and the dump/backup split (ADR-0009) |
 
 ## The ticket directories
 
 [`foundation/`](foundation/) (spec 0001), [`ingest/`](ingest/) (0004), [`pricing/`](pricing/)
 (0002 — [`05`](pricing/05-pricing-ui.md)'s stale summary and Settings → Instruments are the part of
 the slice still unbuilt), [`holdings/`](holdings/) (0003), [`auth-gate/`](auth-gate/) (0011),
-[`dynamic-chart-resolution/`](dynamic-chart-resolution/) (0009), and
-[`owner-filter/`](owner-filter/) (0013).
+[`dynamic-chart-resolution/`](dynamic-chart-resolution/) (0009),
+[`owner-filter/`](owner-filter/) (0013), and [`dump/`](dump/) (0014).
 
 A `screenshots/` directory under a slice holds before/after proof for one ticket's pull request and
 is deleted once that pull request merges — a lasting image belongs to the README's or the guide's
