@@ -55,6 +55,9 @@ service lands they would describe an intention.
 - [ ] `docs/operating.md`'s "Running against your own Postgres", which tells the operator to delete
       the `db` service and `app`'s `depends_on`: this service and its own `depends_on` go with them,
       or Compose rejects the edited deployment outright
+- [x] `docs/operating.md`'s Upgrading gained the one-time step this slice adds for an existing
+      instance, and the "stop the dumper across a migrating upgrade" recipe — both landed with
+      ticket 01 rather than here, because shipping the service without them breaks an upgrade
 - [ ] `docs/operating.md`: the environment table; Installing and "Where the database lives", which
       now need a second `mkdir -p` and the `DUMP_UID`/`DUMP_GID` that must match it; the Logs
       section, for the script's grep stem; and "An unhealthy container is not restarted", which now
@@ -82,7 +85,8 @@ service lands they would describe an intention.
       they start and end with an explicit `docker compose start dump`
 - [ ] `docs/runbook.md` gains "my dumps have stopped" — the markers, the healthcheck under `ps -a`,
       and the free-space refusal are the three things to look at
-- [ ] `README.md`'s "the whole deployment" list gains the script and the dumps directory
+- [x] `README.md`'s "the whole deployment" list gained the script and the dumps directory, with
+      ticket 01, for the same reason
 
 **Vocabulary**
 

@@ -32,6 +32,12 @@ readonly ALLOWLIST="allowed-emails.txt"
 # Where compose.yaml's `db-store` puts the cluster. Every run starts from an
 # empty one, and leaves it empty.
 readonly DB_DIR="volumes/db/data"
+# Where the dump service writes. Unlike the cluster this is the *operator's*
+# directory — the whole point of the service running as their uid — so CI
+# empties it without borrowing root, and sets that uid to its own.
+readonly DUMPS_DIR="volumes/dumps"
+export DUMP_UID="${DUMP_UID:-$(id -u)}"
+export DUMP_GID="${DUMP_GID:-$(id -g)}"
 
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
@@ -51,11 +57,21 @@ empty_db_dir() {
   docker run --rm -v "${PWD}/${DB_DIR}:/data" "$DB_IMAGE" find /data -mindepth 1 -delete
 }
 
+# The files here belong to the runner, so no root is borrowed. Emptied at both
+# ends for the same reason as the cluster: the catch-up dump only fires when
+# the newest dump is stale, so a second run on yesterday's file would assert
+# nothing.
+empty_dumps_dir() {
+  mkdir -p "$DUMPS_DIR"
+  rm -f "${DUMPS_DIR:?}"/* "${DUMPS_DIR:?}"/.portfolio-*.part 2>/dev/null || true
+}
+
 cleanup() {
   log "Tearing down"
-  docker compose logs --no-color app db caddy gate 2>&1 | tail -80 || true
+  docker compose logs --no-color app db caddy gate dump 2>&1 | tail -80 || true
   docker compose down -v --remove-orphans || true
   empty_db_dir || true
+  empty_dumps_dir || true
   # Only the one this script wrote — a developer may have a real allowlist here.
   [[ "$allowlist_is_ours" == true ]] && rm -f "$ALLOWLIST"
   return 0
@@ -130,6 +146,7 @@ fi
 log "Starting from an empty data directory"
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 empty_db_dir
+empty_dumps_dir
 docker compose up -d --build
 
 log "Waiting for the app healthcheck"
@@ -324,6 +341,7 @@ expect_caps() {
 
 expect_caps app "" 0000000000000000
 expect_caps db "" 0000000000000000
+expect_caps dump "" 0000000000000000
 # Exec, not binding: /usr/bin/caddy carries file capability
 # cap_net_bind_service=ep and the kernel refuses to exec it from an empty
 # bounding set — compose.yaml has the transcript.
@@ -344,7 +362,7 @@ expect_no_new_privileges() {
   printf '%s: no-new-privileges, NoNewPrivs=%s at PID 1\n' "$service" "$applied"
 }
 
-for service in app db caddy gate; do
+for service in app db caddy gate dump; do
   expect_no_new_privileges "$service"
 done
 
@@ -362,6 +380,9 @@ expect_uid app 1000
 expect_uid db 70
 expect_uid caddy 65532
 expect_uid gate 0
+# Not a constant like the others: this service exists to hand files to the
+# account that owns its directory, which on a runner is the runner's own.
+expect_uid dump "$DUMP_UID"
 
 # Declared read_only, then the kernel's refusal — which must be EROFS by name:
 # a bare non-zero exit proves nothing, because / is root-owned 0755 and a
@@ -377,7 +398,7 @@ expect_read_only_root() {
   printf '%s: / is read-only\n' "$service"
 }
 
-for service in app db caddy gate; do
+for service in app db caddy gate dump; do
   expect_read_only_root "$service"
 done
 
@@ -392,6 +413,93 @@ if [[ "$allowlist_is_ours" == true ]]; then
     fail "the gate read '${allowlist_seen}', not the allowlist this run wrote"
 fi
 printf 'gate reads its allowlist through the bind mount\n'
+
+# --- The dump service produces a verified dump --------------------------------
+# The catch-up rule is what makes this cheap: an empty dumps directory at
+# startup means the first dump happens within seconds of `up`, so nothing here
+# waits on a schedule.
+log "Waiting for the first dump"
+dump_path=""
+deadline=$((SECONDS + 120))
+while ((SECONDS < deadline)); do
+  dump_path="$(ls "$DUMPS_DIR"/portfolio-*.dump 2>/dev/null | head -1 || true)"
+  [[ -n "$dump_path" ]] && break
+  sleep 2
+done
+[[ -n "$dump_path" ]] || fail "no dump appeared in ${DUMPS_DIR} within 120s"
+dump_name="$(basename "$dump_path")"
+printf 'dump wrote %s\n' "$dump_name"
+
+# The name is the contract the collector orders by, so it is asserted rather
+# than eyeballed.
+[[ "$dump_name" =~ ^portfolio-[0-9]{8}T[0-9]{6}Z\.dump$ ]] ||
+  fail "dump is named '${dump_name}', not portfolio-YYYYMMDDTHHMMSSZ.dump"
+
+# 0640: the dumps are the household's finances in plaintext, readable to the
+# account that collects them and to nobody else.
+dump_mode="$(stat -c '%a' "$dump_path")"
+[[ "$dump_mode" == "640" ]] || fail "dump is mode ${dump_mode}, expected 640"
+
+# Written only by a verified run — so its presence is the claim under test.
+[[ -f "${DUMPS_DIR}/last-success.json" ]] ||
+  fail "the run wrote no success marker"
+grep -q "$dump_name" "${DUMPS_DIR}/last-success.json" ||
+  fail "the success marker does not name ${dump_name}"
+[[ -f "${dump_path}.json" ]] || fail "no sidecar json beside ${dump_name}"
+
+# The one fact no consumer can derive, checked against the file it describes.
+recorded_sha="$(sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "${dump_path}.json")"
+actual_sha="$(sha256sum "$dump_path" | cut -d' ' -f1)"
+[[ "$recorded_sha" == "$actual_sha" ]] ||
+  fail "sidecar json records sha ${recorded_sha}, file hashes to ${actual_sha}"
+printf 'sidecar json records the archive it sits beside\n'
+
+# The container's own view of freshness. Nothing acts on it, which is why it is
+# asserted here rather than trusted to wake anyone.
+# Polled, not sampled: a `no dump yet` probe that ran a moment before the
+# archive was renamed leaves the service `starting` until the next interval.
+dump_health=""
+deadline=$((SECONDS + 60))
+while ((SECONDS < deadline)); do
+  dump_health="$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q dump)" 2>/dev/null || true)"
+  [[ "$dump_health" == "healthy" ]] && break
+  [[ "$dump_health" == "unhealthy" ]] && fail "the dump container reported unhealthy with a dump on disk"
+  sleep 2
+done
+[[ "$dump_health" == "healthy" ]] ||
+  fail "the dump container reports ${dump_health:-nothing}, expected healthy"
+printf 'dump healthcheck: %s\n' "$dump_health"
+
+# --- A truncated archive is refused -------------------------------------------
+# The failure the whole verification step exists for: `pg_restore --list` reads
+# a table of contents written at the front of the archive and passes a file
+# missing almost all of its data, so the service decodes the whole thing.
+docker compose run --rm -T dump verify "/dumps/${dump_name}" >/dev/null 2>&1 ||
+  fail "the service refused an archive it had just written and verified"
+
+head -c $(( $(stat -c '%s' "$dump_path") / 20 )) "$dump_path" > "${DUMPS_DIR}/truncated.bin"
+if docker compose run --rm -T dump verify /dumps/truncated.bin >/dev/null 2>&1; then
+  fail "a 5%%-truncated archive passed verification"
+fi
+printf 'a truncated archive is refused, a whole one is not\n'
+
+# --- Retention keeps the newest and only touches its own ----------------------
+# Pre-aged by name rather than by mtime, because that is what retention reads.
+touch "${DUMPS_DIR}/portfolio-20200101T000000Z.dump" \
+      "${DUMPS_DIR}/portfolio-20200102T000000Z.dump" \
+      "${DUMPS_DIR}/portfolio-2020-01-03.dump"
+docker compose run --rm -T dump prune /dumps >/dev/null 2>&1 ||
+  fail "prune exited non-zero"
+[[ ! -e "${DUMPS_DIR}/portfolio-20200101T000000Z.dump" ]] ||
+  fail "prune kept a dump older than the retention window"
+[[ -e "$dump_path" ]] ||
+  fail "prune deleted the newest dump"
+# An operator's own `portfolio-$(date +%F).dump`, parked here before an upgrade:
+# not this service's to delete.
+[[ -e "${DUMPS_DIR}/portfolio-2020-01-03.dump" ]] ||
+  fail "prune deleted a file it did not write"
+printf 'retention: window applied, newest kept, foreign names untouched\n'
+rm -f "${DUMPS_DIR}/truncated.bin" "${DUMPS_DIR}/portfolio-2020-01-03.dump"
 
 # --- The stack actually serves a page, not just a health check ----------------
 # Everything above proves the container is up; this proves the framework in it

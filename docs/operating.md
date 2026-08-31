@@ -949,8 +949,24 @@ There is no `git pull` and no build. The `app` service is set `pull_policy: alwa
 `docker compose up -d` fetches whatever the pinned tag currently points at and recreates the
 container; with the default floating `APP_VERSION=1` that is the newest `v1.x.y` release. A
 checkout of this repository is not needed to run or upgrade an instance — only `compose.yaml`,
-`Caddyfile`, your `.env`, your `allowed-emails.txt` and the `volumes/db/data` directory beside
-them.
+`Caddyfile`, `scripts/dump-loop.sh`, your `.env`, your `allowed-emails.txt` and the
+`volumes/db/data` and `volumes/dumps` directories beside them.
+
+**An instance that predates the dump service needs three things before its next `up`**: that script
+in place, `mkdir -p ./volumes/dumps`, and `DUMP_UID`/`DUMP_GID` in `.env` set to the account that
+owns it (`id -u`, `id -g`). Missing any of them stops `docker compose up -d` naming what is
+missing — the intended behaviour rather than a failed upgrade, since nothing is recreated until it
+can start.
+
+**Stop the dumper across an upgrade that migrates.** `pg_dump` holds `ACCESS SHARE` on every table
+for its whole run and a migration's `ACCESS EXCLUSIVE` queues behind it, so a dump that happens to
+be running when the new image starts can stall the instance for the length of the dump:
+
+```sh
+docker compose stop dump
+docker compose up -d app caddy gate
+docker compose start dump
+```
 
 **This does not upgrade the gate.** `gate` is pinned to an exact release with no variable in front
 of it, so `docker compose up -d` recreates the container on the same image forever. Moving it is
