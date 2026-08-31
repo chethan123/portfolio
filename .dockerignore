@@ -17,6 +17,11 @@ scripts
 LICENSE
 .env
 .env.*
+# The running instance's database (compose.yaml's `db-store`). Excluded for
+# more than size: it is 0700 uid 70, so for a non-root operator a build from a
+# checkout that has ever run dies sending the context — `error from sender: open
+# volumes/db/data: permission denied` — before the first stage.
+volumes
 compose.yaml
 compose.dev.yaml
 compose.test.yaml

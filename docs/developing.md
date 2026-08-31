@@ -305,7 +305,7 @@ each is [§8.2](../ARCHITECTURE.md#82-ci).
 - **`smoke`** — [`../scripts/smoke-test.sh`](../scripts/smoke-test.sh) on a clean runner. The only
   thing that exercises `compose.yaml`, the `Dockerfile`, the entrypoint's migrate-then-serve
   ordering, every container's privilege posture, and the `.sql` files being present in the runtime
-  image. **Never run it locally against anything you care about: it runs `docker compose down -v` at
+  image. **Never run it locally against anything you care about: it empties `./volumes/db/data` at
   the start and again from an exit trap.**
 - **`publish`** — only on a `v*` tag, and only after all three of the above pass. Builds the image
   for `linux/amd64` and `linux/arm64` and pushes it to `ghcr.io/chethan123/portfolio-app`. Cutting a
@@ -317,10 +317,12 @@ each is [§8.2](../ARCHITECTURE.md#82-ci).
 stanza, so building from source means layering the development override:
 
 ```sh
+mkdir -p ./volumes/db/data      # once: the database directory the stack binds
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
-That is what the smoke test does — it sets `COMPOSE_FILE` to both files — and what you want whenever
+The directory has to exist and, the first time, be empty — `docs/operating.md` has why. That second
+command is what the smoke test does — it sets `COMPOSE_FILE` to both files — and what you want whenever
 the change under test is to the `Dockerfile`, the entrypoint or `compose.yaml` itself. A plain
 `docker compose up -d` in a checkout runs the **last published release**, not your working tree.
 

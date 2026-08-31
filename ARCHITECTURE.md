@@ -123,7 +123,7 @@ An operator who knows their proxy's address can narrow it in one line.
 ## 3. Deployment architecture
 
 The deliverable is one application image plus a Compose file. `docker compose up -d` on a fresh
-machine with an empty volume produces a working instance once the gate's Google credentials exist,
+machine with an empty data directory produces a working instance once the gate's Google credentials exist,
 and **refuses to start until they do** — the required gate variables use Compose's `${VAR:?}` form,
 which is evaluated before any container runs (DESIGN.md §10.1). Fail-closed replaced an older
 no-manual-steps promise that was kept by booting an unprotected instance.
@@ -142,7 +142,7 @@ graph TB
         gate["<b>gate</b><br/>oauth2-proxy, pinned exactly<br/>root, one capability (DAC_READ_SEARCH)<br/>no published port, no volume<br/>allowlist file bind-mounted read-only"]
         app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>USER node, no published port<br/><i>in-process price poller</i>"]
         db["<b>db</b><br/>postgres:17-alpine<br/>timezone=UTC<br/>uid 70, no published port"]
-        vol[("db-data<br/>named volume")]
+        vol[("db-store<br/>./volumes/db/data")]
     end
 
     host -->|"the only published port, 80:8080"| caddy
@@ -168,15 +168,19 @@ Each service is a decision rather than an accident:
   what makes the forwarded-header trust safe (§7.6), keeps the database credentials off the LAN, and
   is the *whole* reason the gate cannot be walked around: there is no route to `app` that does not
   pass the door where the check happens.
-- **One named volume.** `db-data` holds every byte of persistent state, so there is exactly one
-  backup target — `pg_dump`, documented rather than built in.
+- **One store, and it is a directory in the deployment.** `./volumes/db/data` holds every byte of
+  persistent state, so there is exactly one backup target — `pg_dump`, documented rather than built
+  in. It reaches the container as `db-store`, a volume name the local driver binds to that path,
+  because a plain bind mount arrives root-owned and stops `initdb` under the pinned uid 70; a
+  volume over an empty directory takes the image's ownership for it instead. `compose.yaml` carries
+  the transcript.
 
 **All four containers are `read_only: true`**, each with a `tmpfs` over what it still writes: `/tmp`
 for `app` and `gate`, Postgres's socket directory for `db`, `/config` and `/data` for `caddy`. That is
 enforcement, not intention — a statement that none of them writes to its own filesystem and that any
 can be destroyed and recreated freely. It holds for the gate because its sessions live in an
 encrypted cookie in the browser (a sidecar with a session database would need a volume, and this one
-does not have one), and for `db` because all of its state is in the named volume above.
+does not have one), and for `db` because all of its state is in the bound directory above.
 
 Alongside it, on all four: every Linux capability dropped and `no-new-privileges` set, an
 unprivileged uid pinned on three — `gate` runs as root, which `compose.yaml` argues and
@@ -1628,7 +1632,7 @@ job: smoke                    ── runs in parallel, on a clean runner
   ./scripts/smoke-test.sh
     ── the ONLY test of everything §3.1 and §3.2 claim: that compose
        REFUSES to start with the gate unconfigured, then compose up on an
-       empty volume, the app waiting for Postgres rather than racing it,
+       empty data directory, the app waiting for Postgres rather than racing it,
        migrations running at startup, a restart skipping applied ones,
        the .sql files actually being present in the runtime image, the
        §8.1 prune having removed what it claims and nothing more, exactly

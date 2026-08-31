@@ -856,7 +856,7 @@ or a small VPS has to be able to do. Two consequences that are load-bearing:
 
 ```
 db      postgres:17-alpine
-        · named volume for PGDATA
+        · PGDATA at ./volumes/db/data — the db-store name, bound to it
         · healthcheck: pg_isready
         · not published to the host — the app reaches it on the compose network
 
@@ -948,7 +948,9 @@ under Settings (§8.4). There is no `CAPITAL_GAINS_RATE` variable and there is n
 answer from. (An upgrade that still sets the old variable is ignored without error; the cadence is
 re-entered once at Settings → Prices.)
 
-**Volumes.** One named volume for Postgres data. The application container is otherwise
+**Volumes.** One store for Postgres data: `./volumes/db/data`, beside the Compose file, reached
+through a `db-store` volume name the local driver binds to that path — a directory the operator can
+see and move, with the ownership a volume brings (§10.1). The application container is otherwise
 **stateless** — it writes nothing to its own filesystem, so it can be destroyed and recreated
 freely, and backups have exactly one target (§10, `pg_dump`). Uploaded CSVs are retained in
 Postgres rather than on disk (§5.2) specifically to preserve this property.

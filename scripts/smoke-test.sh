@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
 # CI-only container smoke test — the things a unit or integration test
-# structurally cannot reach: `docker compose up` on an empty volume produces a
-# working instance once the gate is configured (and refuses to start until it
-# is), the app waits for Postgres, a restart is safe, the front door is shut,
-# and the runtime image contains what it is specified to and nothing it is not.
+# structurally cannot reach: `docker compose up` on an empty data directory
+# produces a working instance once the gate is configured (and refuses to start
+# until it is), the app waits for Postgres, a restart is safe, the front door is
+# shut, and the runtime image contains what it is specified to and nothing it is
+# not.
 #
 # The gate values below are throwaway: oauth2-proxy never contacts Google at
 # startup, so the real sidecar boots on fake credentials — everything short of
@@ -28,6 +29,9 @@ readonly BASE_URL="http://127.0.0.1"
 readonly HEALTH_URL="${BASE_URL}/healthz"
 readonly TIMEOUT_SECONDS=180
 readonly ALLOWLIST="allowed-emails.txt"
+# Where compose.yaml's `db-store` puts the cluster. Every run starts from an
+# empty one, and leaves it empty.
+readonly DB_DIR="volumes/db/data"
 
 log() { printf '\n=== %s\n' "$*"; }
 fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
@@ -35,10 +39,23 @@ fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 # Set before the trap, because the trap reads it.
 allowlist_is_ours=false
 
+# `down -v` no longer discards the database: the cluster lives in the checkout
+# now, and outliving the volume record is the point of that. So the directory is
+# emptied explicitly, at both ends of the run. It is 0700 uid 70 by the time
+# Postgres has touched it — unreadable to the host user on a non-root runner —
+# so the emptying borrows root from the daemon, exactly as the operator's
+# restore does (docs/operating.md).
+empty_db_dir() {
+  mkdir -p "$DB_DIR"
+  [[ -n "${DB_IMAGE:-}" ]] || return 0
+  docker run --rm -v "${PWD}/${DB_DIR}:/data" "$DB_IMAGE" find /data -mindepth 1 -delete
+}
+
 cleanup() {
   log "Tearing down"
   docker compose logs --no-color app db caddy gate 2>&1 | tail -80 || true
   docker compose down -v --remove-orphans || true
+  empty_db_dir || true
   # Only the one this script wrote — a developer may have a real allowlist here.
   [[ "$allowlist_is_ours" == true ]] && rm -f "$ALLOWLIST"
   return 0
@@ -94,6 +111,12 @@ GATE_COOKIE_SECRET="$(openssl rand -base64 32 | tr -- '+/' '-_')"
 export GATE_COOKIE_SECRET
 export PUBLIC_ORIGIN="https://smoke.example.test"
 
+# Asked of compose rather than repeated here: the image `empty_db_dir` borrows a
+# root `find` from. Resolvable only now — `config` interpolates the whole file,
+# gate variables included.
+DB_IMAGE="$(docker compose config --images db)"
+readonly DB_IMAGE
+
 if [[ ! -e "$ALLOWLIST" ]]; then
   printf 'smoke-test@example.test\n' > "$ALLOWLIST"
   # 0600, only on the file this script owns: on a non-root runner this is
@@ -103,9 +126,10 @@ if [[ ! -e "$ALLOWLIST" ]]; then
   allowlist_is_ours=true
 fi
 
-# --- A fresh machine with an empty volume -------------------------------------
-log "Starting from an empty volume"
+# --- A fresh machine with an empty data directory ------------------------------
+log "Starting from an empty data directory"
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+empty_db_dir
 docker compose up -d --build
 
 log "Waiting for the app healthcheck"
@@ -125,6 +149,18 @@ logs="$(app_logs)"
 [[ "$logs" == *"Applying migrations from"* ]] || fail "the entrypoint did not run migrations"
 [[ "$logs" == *"Migrations OK"* ]] || fail "migrations did not complete"
 printf 'migrations applied at startup\n'
+
+# --- The cluster is in the checkout, not a Docker-managed volume ---------------
+# `db-store` binds a name to ./volumes/db/data; nothing else would notice it
+# quietly reverting to a directory under /var/lib/docker, taking the operator's
+# backup target with it. Read as ownership and mode of the directory itself —
+# 0700 uid 70 is initdb's own doing, and its contents are unreadable to the host
+# user this may be running as.
+log "Checking the cluster landed at ./${DB_DIR}"
+cluster_dir="$(ls -ldn "$DB_DIR" | awk '{ print $3, $1 }')"
+[[ "$cluster_dir" == "70 drwx------"* ]] ||
+  fail "${DB_DIR} is '${cluster_dir}', expected Postgres's own 70 drwx------"
+printf '%s: %s\n' "$DB_DIR" "$cluster_dir"
 
 # --- A restart is always safe -------------------------------------------------
 # What proves migrations idempotent: the second boot re-runs the runner
