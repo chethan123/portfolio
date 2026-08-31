@@ -12,6 +12,12 @@
 # The one manual step, done once: create a Google OAuth client and put its
 # credentials in `.env` (copy .env.example; docs/google-sign-in.md walks it).
 # Every other setting has a working default.
+#
+# Privilege posture, all four services: cap_drop ALL + no-new-privileges +
+# read-only rootfs; unprivileged uid pinned everywhere but `gate` (root argued
+# there). Both cap_adds were proved by a start failure without them.
+# scripts/smoke-test.sh asserts all of it — nothing else would notice a
+# container quietly regaining root.
 
 name: portfolio
 
@@ -19,6 +25,12 @@ services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
+    # The image's postgres account (70:70 in postgres:17-alpine), pinned so no
+    # root process ever exists — skips the entrypoint's root-then-gosu drop.
+    # Fresh volumes initdb fine (image data dir already postgres-owned), and a
+    # volume from an older root run also starts: that entrypoint chowned PGDATA
+    # to postgres on every boot.
+    user: "70:70"
     environment:
       # Reachable only on the Compose network — no published port, so these
       # credentials never face the LAN. Change them = change DATABASE_URL too.
@@ -37,6 +49,20 @@ services:
     volumes:
       # The one named volume — the single backup target (DESIGN.md §10, `pg_dump`).
       - db-data:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # All state lives in the volume above; pg_dump/pg_restore stream over exec
+    # and write nothing in-container.
+    read_only: true
+    tmpfs:
+      # The one scratch path Postgres still needs: unix socket + lock file.
+      # A tmpfs inherits its mount point's mode — this dir is 3777 in-image so
+      # uid 70 can write; `/run` (0755 root) would not do. The entrypoint's
+      # chmod here logs `Operation not permitted` each boot: its own `|| :`,
+      # cosmetic.
+      - /var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
       interval: 5s
@@ -74,6 +100,10 @@ services:
     # No `ports:`, same as `db` — only `caddy` faces outside; the app is
     # reached at `app:${PORT}`. Writes nothing to its own filesystem;
     # `read_only` enforces that rather than merely intending it.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     read_only: true
     tmpfs:
       - /tmp
@@ -151,6 +181,17 @@ services:
     # pinning one would silently decide the allowlist's file mode on the
     # operator's behalf — discovered as a sidecar that won't start. Root in a
     # read-only container with no port and no volume is the smaller risk.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Root's power to open a file it does not own IS this capability. Without
+    # it cap_drop ALL breaks the promise above (allowlist of any mode/owner):
+    # measured as the sidecar crash-looping on `failed opening
+    # authenticated-emails-file: permission denied`. Nothing else here needs a
+    # capability — a Go binary on a high port.
+    cap_add:
+      - DAC_READ_SEARCH
     read_only: true
     tmpfs:
       - /tmp
@@ -166,11 +207,15 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Own uid, not the app's 1000: shared uids share bind-mount rights, and the
+    # one LAN-reachable service is the worst to join. 65532 = the distroless
+    # "nonroot" convention; nothing in this image owns it.
+    user: "65532:65532"
     depends_on:
       app:
         condition: service_healthy
-      # Caddy refuses whatever the gate hasn't vouched for, so binding :80
-      # early means down-not-open — still worth avoiding a few seconds of it.
+      # Caddy refuses whatever the gate hasn't vouched for, so opening the
+      # front door early means down-not-open — still worth avoiding.
       gate:
         condition: service_healthy
     environment:
@@ -179,10 +224,41 @@ services:
     # The only published port — the single place the gate can be enforced.
     # Plain HTTP: TLS and the public hostname belong to the operator's
     # house-wide Caddy in front.
+    #
+    # Host side stays 80 (the daemon binds it, not this uid); container side
+    # is 8080, the Caddyfile's site address. Change one, change both.
     ports:
-      - "80:80"
+      - "80:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Not for binding — 8080 needs nothing. The image ships /usr/bin/caddy
+    # with file capability cap_net_bind_service=ep, and the kernel refuses to
+    # exec a binary whose effective file caps the bounding set cannot supply:
+    # with ALL dropped the container dies at `exec … operation not permitted`
+    # before reading any config. Granted back, it goes unused on a high port.
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      # XDG_CONFIG_HOME / XDG_DATA_HOME: autosave.json and the cert cache land
+      # here. mode is load-bearing — a tmpfs inherits its mount point's mode,
+      # and both dirs are root 0755 in-image, unwritable to the pinned uid.
+      # Functionally optional (read-only caddy still serves); they buy clean logs.
+      - /config:mode=1777
+      - /data:mode=1777
+    healthcheck:
+      # One request proves config adapted, port bound, and the proxy path to
+      # `app` — /healthz is the only route answering without a Google session.
+      # busybox wget, same trick as `gate`; a 5xx exits non-zero.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   db-data:

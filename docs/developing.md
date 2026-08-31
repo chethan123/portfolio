@@ -46,7 +46,7 @@ with the Compose v2 plugin.
 ```sh
 npm install
 
-# A throwaway Postgres, published on :55432.
+# A throwaway Postgres, published on 127.0.0.1:55432 — loopback only.
 docker compose -f compose.test.yaml up -d --wait
 
 # It creates `portfolio_test` and nothing else; make your own.
@@ -303,9 +303,10 @@ each is [§8.2](../ARCHITECTURE.md#82-ci).
 - **`audit`** — `npm audit signatures` and `npm audit --omit=dev --audit-level=high` both block.
   Dev-dependency advisories and deprecation notices are reported and do not fail the build.
 - **`smoke`** — [`../scripts/smoke-test.sh`](../scripts/smoke-test.sh) on a clean runner. The only
-  thing that exercises `compose.yaml`, the `Dockerfile`, the entrypoint's migrate-then-serve ordering
-  and the `.sql` files being present in the runtime image. **Never run it locally against anything
-  you care about: it runs `docker compose down -v` at the start and again from an exit trap.**
+  thing that exercises `compose.yaml`, the `Dockerfile`, the entrypoint's migrate-then-serve
+  ordering, every container's privilege posture, and the `.sql` files being present in the runtime
+  image. **Never run it locally against anything you care about: it runs `docker compose down -v` at
+  the start and again from an exit trap.**
 - **`publish`** — only on a `v*` tag, and only after all three of the above pass. Builds the image
   for `linux/amd64` and `linux/arm64` and pushes it to `ghcr.io/chethan123/portfolio-app`. Cutting a
   release is `git tag v1.2.3 && git push origin v1.2.3`; there is no release script and nothing to

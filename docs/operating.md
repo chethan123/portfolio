@@ -30,7 +30,7 @@ The services defined in [`compose.yaml`](../compose.yaml), under the project nam
 | `db` | Postgres. All persistent state, in the named volume `db-data` | none |
 | `app` | The application: pages, uploads, and the price refresh loop, in one process | none |
 | `gate` | oauth2-proxy. Answers "may this request in?" against Google and the allowlist | none |
-| `caddy` | The ingress front door, and where the gate is enforced | **`80:80`, on every interface** |
+| `caddy` | The ingress front door, and where the gate is enforced | **`80:8080`, on every interface** — host side still 80; 8080 is Caddy's own listener |
 
 A request goes browser → `caddy` → `gate` → `caddy` → `app` → `db`: Caddy asks the gate about every
 request except `/healthz` before it forwards anything. Only `caddy` is reachable from your LAN;
@@ -50,9 +50,19 @@ not carry.
 and no database behind it — only the read-only bind mount of `./allowed-emails.txt`, which is the
 whole of who may enter.
 
-**`app` is stateless and enforced as such.** It runs as a non-root user and is mounted `read_only`
-with a tmpfs `/tmp`. It writes nothing to its own filesystem, so it can be destroyed and recreated
-freely, and every upgrade does exactly that.
+**`app` is stateless and enforced as such.** It writes nothing to its own filesystem, so it can be
+destroyed and recreated freely, and every upgrade does exactly that.
+
+**Every service holds only the privileges it was proved to need.** All four drop every Linux
+capability, set `no-new-privileges`, and run on a read-only root filesystem, with a tmpfs over what
+each still writes to — `/tmp` for `app` and `gate`, Postgres's socket directory for `db`, `/config`
+and `/data` for `caddy`. Three run as an unprivileged uid: `app` as `node`, `db` as the
+image's `postgres` (70), `caddy` as 65532. Two capabilities are granted back, each argued in
+`compose.yaml` from a start failure without it: `DAC_READ_SEARCH` on `gate`, which is
+[still root](#security), so that it can open your allowlist whatever its mode and owner; and
+`NET_BIND_SERVICE` on `caddy`, which its binary needs in order to `exec` at all rather than to bind
+anything. `scripts/smoke-test.sh` asserts all of it against a running stack — nothing else would
+notice a container quietly regaining root.
 
 **`app` is pulled, not built.** The image is `ghcr.io/chethan123/portfolio-app`, published by CI
 for `linux/amd64` and `linux/arm64` when a version tag is pushed. `compose.yaml` has no `build:`
@@ -147,9 +157,9 @@ docker compose ps
 curl -i http://localhost/healthz
 ```
 
-All four services `running`, with `db`, `app` and `gate` also `healthy` — `caddy` declares no
-healthcheck in `compose.yaml`, so `running` is all you get about it. And `/healthz` answering `200`
-with exactly:
+All four services `running` and `healthy` — `caddy`'s own check requests `/healthz` through its full
+proxy path to `app`, so a healthy `caddy` means the hop works and not merely that the process is up.
+And `/healthz` answering `200` with exactly:
 
 ```json
 {"status":"ok","database":true,"migrations":"current","pendingMigrations":[]}
@@ -194,7 +204,7 @@ happens to need it.
 |---|---|---|---|
 | `DATABASE_URL` | **Yes** | — | Postgres connection string. Compose supplies one pointing at its own `db` service, so you only set this to run against your own Postgres. |
 | `AUTH_GATE` | No | `none` | Whether the app has been *told* that something in front of it authenticates. `external` silences the unprotected-instance banner; `none` draws it. `compose.yaml` hardcodes `external` because the `gate` service is right there, so you do not set this — a developer running the app with nothing in front of it does. It is a description of the deployment, not a switch: setting it protects nothing. |
-| `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port: that is the fixed `80:80` in [`compose.yaml`](../compose.yaml), and moving it means editing that line. |
+| `PORT` | No | `3000` | The port the app listens on *inside* the compose network, and the port Caddy proxies to. It is **not** the published host port: that is the fixed `80:8080` in [`compose.yaml`](../compose.yaml). Moving the host side means editing the left half of that line; the right half is Caddy's listener and is also the `Caddyfile`'s site address, so those two only ever move together. |
 | `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`** — see below. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
@@ -266,8 +276,8 @@ docker compose exec db psql -U portfolio -d portfolio \
 
 **Two proxies, and they do different jobs.** This stack assumes you already run a house-wide
 reverse proxy that terminates TLS and owns the public hostname; the bundled `caddy` container sits
-behind it, speaks plain HTTP on port 80, and is where the gate is enforced. Caddy's configuration
-lives in [`Caddyfile`](../Caddyfile) at the repository root.
+behind it, speaks plain HTTP on the box's port 80, and is where the gate is enforced. Caddy's
+configuration lives in [`Caddyfile`](../Caddyfile) at the repository root.
 
 | | Terminates TLS, owns the hostname | Enforces the gate |
 |---|---|---|
@@ -299,34 +309,40 @@ misconfiguration.
 Everything above assumes a proxy in front. Running without one is supported, but four things change,
 and all four are yours to do:
 
-- **Give the site block a real hostname** instead of `:80` in the `Caddyfile`, so Caddy requests and
-  renews a certificate for it. Publish `443:443` alongside the existing `80:80` — Caddy serves HTTPS
-  on 443 and keeps 80 for the redirect and the HTTP challenge.
-- **Give Caddy a volume** before the first certificate is issued. The section below is then about
-  you.
+- **Give the site block a real hostname** instead of `:8080` in the `Caddyfile`, so Caddy requests
+  and renews a certificate for it, and add `http_port 8080` / `https_port 8443` to its global block.
+  Then publish `443:8443` alongside the existing `80:8080`. Caddy is pinned to an unprivileged uid
+  and cannot bind 80 or 443 inside the container; those two options are Caddy's own answer to exactly
+  that — the ports it listens on internally, with the public ones forwarded onto them — and they do
+  not change what a browser connects to. 80 still carries the redirect and the ACME HTTP challenge,
+  one hop further in.
+- **Swap Caddy's two tmpfs mounts for named volumes** before the first certificate is issued. The
+  section below is then about you, and it is a replacement rather than an addition.
 - **`PUBLIC_ORIGIN` is that hostname**, and the redirect URI registered with Google is that hostname
   plus `/oauth2/callback`. There is no second place to change.
 - **Keep the `handle` blocks as they are.** The `/healthz` exemption, the `/oauth2/*` passthrough to
   the sidecar and the `forward_auth` on everything else are the gate. Adding TLS is editing the site
-  address, not the body.
+  address and the global block, never the body.
 
 The `trusted_proxies` line stays correct either way: with no proxy in front there is simply nothing
 sending `X-Forwarded-*` for Caddy to believe.
 
-### Before you enable TLS, give Caddy a volume
+### Before you enable TLS, give Caddy volumes
 
-Relevant only if you terminate TLS here rather than at a house proxy. `compose.yaml` mounts the
-Caddyfile and nothing else, so Caddy's `/data` is the container's own filesystem. `/data` is where it
-keeps the ACME account key and every certificate it has ever issued. Recreating the container throws
-all of it away — and recreating the container is exactly what the `docker compose up -d` in
+Relevant only if you terminate TLS here rather than at a house proxy. `compose.yaml` puts Caddy's
+`/data` and `/config` on tmpfs, so both die with the container. `/data` is where it keeps the ACME
+account key and every certificate it has ever issued. Recreating the container throws all of it away
+— and recreating the container is exactly what the `docker compose up -d` in
 [Upgrading](#upgrading) does, every time. The next start asks the certificate authority for
 everything again from scratch. Enough of those in a week and Let's Encrypt's rate limit refuses,
 which leaves the site with no certificate at all and a wait before it can have one.
 
-Add the volumes *before* the first certificate is issued:
+**Replace the tmpfs entries; you cannot add volumes beside them.** Compose refuses two mounts on one
+target — `target /data already mounted as services.caddy.tmpfs` — so the whole `tmpfs:` block goes:
 
 ```yaml
   caddy:
+    # delete the `tmpfs:` block; these two take its place
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -338,8 +354,25 @@ volumes:
   caddy_config:
 ```
 
+**Then confirm Caddy can write them.** It runs as uid 65532, and the image's `/data` and `/config`
+are root-owned `0755` — which is why the tmpfs entries carry `mode=1777`, and a fresh volume can
+take that same ownership. Caddy does not fail at startup on this; it fails when the first
+certificate arrives and there is nowhere to put it.
+
+```sh
+docker compose exec caddy touch /data/ok && docker compose exec caddy rm /data/ok
+```
+
+A refusal is fixed from a throwaway root container, the only thing that can chown a volume:
+`docker run --rm -v portfolio_caddy_data:/data alpine chown 65532:65532 /data`, and the same for
+`portfolio_caddy_config`. Those names are Compose's own — the project name, plus the key.
+
 `caddy_data` is the one that matters. `caddy_config` only saves re-deriving the autosaved config,
 and costs nothing to add at the same time.
+
+**One more thing then needs adjusting: the container healthcheck.** It requests
+`http://127.0.0.1:8080/healthz`, which on a TLS site meets Caddy's redirect to HTTPS rather than the
+app. Point it at the TLS listener or drop it, or `caddy` reports unhealthy from then on.
 
 ### Forwarded headers
 
@@ -457,12 +490,14 @@ cross-site form post.
 block in the Caddyfile is where they go. Nothing in the app depends on their absence, but nothing has
 been run behind a strict CSP either, so test it rather than assuming.
 
-**The gate container runs as root.** `app` does not; `gate` does, because the published `-alpine`
-image sets no `USER` and `compose.yaml` argues that pinning a uid here would be the worse choice —
-it would decide on your behalf that your allowlist file is readable by that uid, and hand you a
-sidecar that will not start over a file mode nobody mentioned. What bounds it instead: the container
-is `read_only` with a tmpfs `/tmp`, holds no volume, and publishes no port. It is a real
-soft spot, written down rather than left to be discovered.
+**The gate container runs as root, holding one capability.** `app`, `db` and `caddy` do not; `gate`
+does, because the published `-alpine` image sets no `USER` and `compose.yaml` argues that pinning a
+uid here would be the worse choice — it would decide on your behalf that your allowlist file is
+readable by that uid, and hand you a sidecar that will not start over a file mode nobody mentioned.
+What bounds it: every capability dropped but `DAC_READ_SEARCH`, which is exactly the root power being
+kept — opening a file it does not own, whatever its mode — plus `no-new-privileges`, a `read_only`
+filesystem with a tmpfs `/tmp`, no volume and no published port. Uid 0 holding one capability is a
+far smaller soft spot than root was, and it is still written down rather than left to be discovered.
 
 **A LAN peer can forge `X-Forwarded-*` at this stack**, because the Caddyfile trusts them from any
 private address rather than from one named proxy ([Forwarded headers](#forwarded-headers)). That is
@@ -526,7 +561,7 @@ above stays yours to compensate for, in front of the app.
 If you are going to do it:
 
 - [ ] TLS terminated in front, with a real certificate, and — if that is this stack's own Caddy —
-      its `/data` [on a volume](#before-you-enable-tls-give-caddy-a-volume) so it survives an
+      its `/data` [on a volume](#before-you-enable-tls-give-caddy-volumes) so it survives an
       upgrade.
 - [ ] `PUBLIC_ORIGIN` and the registered redirect URI on the public hostname, not a LAN one.
 - [ ] `GATE_COOKIE_SECRET` generated fresh and not reused from anything else.
@@ -600,7 +635,9 @@ endpoint answering `200` while the household is locked out. Nothing watches the 
 you, and `gate`'s own container healthcheck only asks whether the sidecar is alive, not whether it
 would admit anyone.
 
-**Disk, memory, and Caddy.** Nothing here watches any of them, and `caddy` has no healthcheck at all.
+**Disk and memory.** Nothing here watches either. `caddy` does now carry a healthcheck — a
+`/healthz` request through its own proxy path to `app`, so an ingress that is up but cannot reach the
+app shows as unhealthy. It still says nothing about whether anybody can sign in.
 
 One shape worth being able to recognise: if the ledger read itself throws, the body comes back
 `"database":true` and `"migrations":"current"` with `"status":"unhealthy"` — the healthy body with a
@@ -958,7 +995,8 @@ to keeps its last abandoned draft indefinitely.
 
 **Container logs, which is the one likely to matter first.** `compose.yaml` has no `logging:` block,
 so every service uses Docker's default `json-file` driver with no size limit and no rotation. An idle
-instance still writes a request line every ten seconds from its own healthcheck. Cap it per service:
+instance still writes a request line every ten seconds from its own healthcheck, and a second from
+Caddy's. Cap it per service:
 
 ```yaml
     logging:
@@ -971,9 +1009,11 @@ instance still writes a request line every ten seconds from its own healthcheck.
 or set the same options once as the daemon default in `/etc/docker/daemon.json`, which covers
 everything on the host rather than only this.
 
-**No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. On a
-machine that runs only this, that is the right default. On a shared host it means one runaway query
-can take the box; `deploy.resources.limits` is where you would add them.
+**No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. The
+privilege options ([What runs here](#what-runs-here)) bound what a container may *do*, never what it
+may consume, and this is the axis left open. On a machine that runs only this, that is the right
+default. On a shared host it means one runaway query can take the box; `deploy.resources.limits` is
+where you would add them.
 
 **The design target is a target, not a measurement.**
 [`ARCHITECTURE.md` §10](../ARCHITECTURE.md#10-performance-and-scale-envelope) states it — one

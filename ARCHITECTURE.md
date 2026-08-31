@@ -138,14 +138,14 @@ graph TB
     host["Host machine"]
 
     subgraph compose["compose network — portfolio"]
-        caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:80 → forward_auth gate, then app:$APP_PORT<br/>Caddyfile mounted read-only"]
-        gate["<b>gate</b><br/>oauth2-proxy, pinned exactly<br/>read_only: true, tmpfs /tmp<br/>no published port, no volume<br/>allowlist file bind-mounted read-only"]
-        app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>read_only: true, tmpfs /tmp<br/>USER node, no published port<br/><i>in-process price poller</i>"]
-        db["<b>db</b><br/>postgres:17-alpine<br/>timezone=UTC<br/>no published port"]
+        caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:8080 → forward_auth gate, then app:$APP_PORT<br/>uid 65532, Caddyfile mounted read-only"]
+        gate["<b>gate</b><br/>oauth2-proxy, pinned exactly<br/>root, one capability (DAC_READ_SEARCH)<br/>no published port, no volume<br/>allowlist file bind-mounted read-only"]
+        app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>USER node, no published port<br/><i>in-process price poller</i>"]
+        db["<b>db</b><br/>postgres:17-alpine<br/>timezone=UTC<br/>uid 70, no published port"]
         vol[("db-data<br/>named volume")]
     end
 
-    host -->|"the only published port, 80:80"| caddy
+    host -->|"the only published port, 80:8080"| caddy
     caddy -->|"every request except /healthz"| gate
     caddy --> app
     app --> db
@@ -171,11 +171,20 @@ Each service is a decision rather than an accident:
 - **One named volume.** `db-data` holds every byte of persistent state, so there is exactly one
   backup target — `pg_dump`, documented rather than built in.
 
-The `app` container is `read_only: true` with a `tmpfs` at `/tmp`, and `gate` is the same. That is
-enforcement, not intention: it is a statement that neither writes anything to its own filesystem and
-that either can be destroyed and recreated freely. It holds for the gate because its sessions live
-in an encrypted cookie in the browser — a sidecar with a session database would need a volume, and
-this one does not have one.
+**All four containers are `read_only: true`**, each with a `tmpfs` over what it still writes: `/tmp`
+for `app` and `gate`, Postgres's socket directory for `db`, `/config` and `/data` for `caddy`. That is
+enforcement, not intention — a statement that none of them writes to its own filesystem and that any
+can be destroyed and recreated freely. It holds for the gate because its sessions live in an
+encrypted cookie in the browser (a sidecar with a session database would need a volume, and this one
+does not have one), and for `db` because all of its state is in the named volume above.
+
+Alongside it, on all four: every Linux capability dropped and `no-new-privileges` set, an
+unprivileged uid pinned on three — `gate` runs as root, which `compose.yaml` argues and
+`scripts/smoke-test.sh` asserts rather than leaves to drift — and exactly two capabilities granted
+back. `DAC_READ_SEARCH` on `gate`, which is the whole of what root there is for: opening the
+operator's allowlist whatever its mode and owner. `NET_BIND_SERVICE` on `caddy`, not to bind
+anything — 8080 needs nothing — but because the image's binary carries that file capability and the
+kernel will not `exec` it from an empty bounding set.
 
 ### 3.2 Startup sequence
 
@@ -1623,7 +1632,10 @@ job: smoke                    ── runs in parallel, on a clean runner
        migrations running at startup, a restart skipping applied ones,
        the .sql files actually being present in the runtime image, the
        §8.1 prune having removed what it claims and nothing more, exactly
-       one published port and it belongs to caddy, and the front door
+       one published port and it belongs to caddy, host 80 onto its own
+       8080, the privilege posture §3.1 states — capabilities, uid and
+       read-only rootfs per service, read back from the kernel at PID 1
+       rather than from the daemon's record alone — and the front door
        turning away a request the gate has not vouched for. It runs the
        real sidecar on throwaway credentials — nothing contacts Google at
        startup — so the only leg left uncovered is the round trip through
@@ -1857,7 +1869,7 @@ still live in the current code:
 | A second price provider | Implement `PriceProvider` and change one construction site. The interface was built for this |
 | A sign-out control | Not a UI change alone. The gate's sign-out URL clears only its own cookie and the next visit re-admits silently, so anything worth shipping has to end the Google session too or say plainly that it does not (DESIGN.md §14) |
 | Recording *who* did something | The verified email already arrives on every request (§2), so it is a column and a write, not an auth redesign. The rule it must not break is that it stays attribution: nothing may read it to decide what someone may do |
-| TLS inside this stack | A real hostname and a certificate in the `Caddyfile` site block, for an operator with no house-wide proxy. Nothing in the app changes — it terminates nothing and reads no forwarded header |
+| TLS inside this stack | A real hostname and a certificate in the `Caddyfile` site block, for an operator with no house-wide proxy — plus `http_port`/`https_port`, a second published pair, and Caddy's tmpfs swapped for volumes, because the pinned uid binds no privileged port and a certificate has to outlive the container (`docs/operating.md`). Nothing in the app changes — it terminates nothing and reads no forwarded header |
 | Dividend history | A transaction ledger, and therefore a different ingest problem. Not an extension of this schema |
 
 ---

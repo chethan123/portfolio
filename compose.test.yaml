@@ -18,6 +18,10 @@ services:
       POSTGRES_DB: portfolio_test
       TZ: UTC
       PGTZ: UTC
+      # Load-bearing: the tmpfs below lands root-owned, uid 70 cannot chmod a
+      # dir it does not own, initdb dies. A child of the mount is created by
+      # the entrypoint as uid 70, and initdb locks it 0700 as it insists.
+      PGDATA: /var/lib/postgresql/data/pgdata
     command:
       - postgres
       - -c
@@ -26,11 +30,25 @@ services:
       - fsync=off
       - -c
       - full_page_writes=off
+    # The image's postgres uid, pinned — no root process ever, rather than
+    # root-then-drop. Started this way Postgres needs zero capabilities:
+    # checked against a running container, not assumed.
+    user: "70:70"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    # Loopback only: trivial fixed creds are fine for a database only this
+    # machine can reach — the unqualified bind offered a superuser to the LAN.
     ports:
-      - "55432:5432"
-    # In-memory: the whole point is that nothing here survives.
+      - "127.0.0.1:55432:5432"
+    read_only: true
+    # In-memory: the whole point is that nothing here survives. The second
+    # entry is the socket + lock dir a read-only Postgres still needs, same as
+    # compose.yaml.
     tmpfs:
       - /var/lib/postgresql/data
+      - /var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio_test"]
       interval: 2s
