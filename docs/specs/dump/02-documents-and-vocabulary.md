@@ -5,57 +5,86 @@ _Part of [0014-scheduled-dump.md](../0014-scheduled-dump.md)._
 **What to build:** Nothing that runs. Every document that describes this deployment is brought level
 with a stack that now takes dumps, and `CONTEXT.md` gains the pair of terms that keeps the promise
 honest — a **dump** is what this host holds, a **backup** is what the operator's tool holds
-elsewhere. The split makes roughly fifteen existing sentences wrong by its own definition, so the
-rename pass is part of this ticket rather than a follow-up.
+elsewhere. That split makes existing sentences wrong by its own definition, so the rename pass is
+part of this ticket rather than a follow-up.
 
-Separately from [01](01-the-dump-sidecar.md) because a prose diff across nine files is reviewed by
-reading, and a container is reviewed by running.
+Separate from [01](01-the-dump-sidecar.md) because a prose diff of this size is reviewed by reading
+and a container is reviewed by running.
 
 **Blocked by:** [01](01-the-dump-sidecar.md) — these documents describe what exists, and until the
-service lands they would be describing an intention.
+service lands they would describe an intention.
 
 **Status:** ready-for-agent
 
-**The stance, in all four places it is written**
+**The backups stance, everywhere it is written**
 
-- [ ] DESIGN.md §10's Backups row, `docs/operating.md`'s Backups section, `ARCHITECTURE.md` §3's
-      "documented rather than built in", and spec 0001's out-of-scope list all say the same new
-      thing: the stack takes a verified dump on a schedule and leaves it on the host; off-site,
-      encryption and history are the operator's
-- [ ] DESIGN.md §10.1's "no separate worker service" paragraph names the exception and points at
-      ADR-0009 rather than being quietly falsified
+- [ ] DESIGN.md §10's Backups row and §10.1's "backups have exactly one target"
+- [ ] `docs/operating.md`'s Backups section, including its second thing to keep
+- [ ] `ARCHITECTURE.md` §3's "One store… exactly one backup target — `pg_dump`, documented rather
+      than built in" — `./volumes/dumps` is now a second persistent directory in the deployment
+- [ ] `compose.yaml`'s `db-store` comments: "Still the single backup target" and "one path to
+      snapshot, move between machines, or point a backup at"
+- [ ] `docs/specs/0001-foundation-day-zero.md` and
+      `docs/specs/foundation/09-proxy-trust-and-operator-docs.md` get a
+      **`Superseded in one clause:`** banner pointing at 0014 and ADR-0009, in the form
+      `foundation/09` already uses — `docs/specs/README.md` says a landed spec records what was
+      agreed at approval time and is corrected by banner, not by rewriting its history
 
-**Counts that a fifth service breaks**
+**The worker-service stance**
 
-- [ ] `ARCHITECTURE.md`'s "all four containers", `docs/operating.md`'s "all four drop every
-      capability" and "all four services running and healthy", and `compose.yaml`'s "all four
-      services" comment become rules rather than counts — `docs/README.md`'s first rule is the
-      argument, and bumping four to five is not the fix
+- [ ] DESIGN.md §10.1's "no separate worker service" paragraph, `ARCHITECTURE.md` §3.1's "**No
+      worker container**" bullet, and `compose.yaml`'s file header all name the exception and point
+      at ADR-0009 rather than being quietly falsified
 
-**Operator-facing**
+**Counts a fifth service breaks — rewritten as rules, not bumped to five**
 
-- [ ] `docs/operating.md` gains: the dump service and its knobs in the environment table; what the
-      collector must be pointed at (`volumes/dumps/`, `.env`, `allowed-emails.txt`) and what it must
-      exclude (`volumes/db/`, a torn cluster); a copy-pasteable staleness check on
-      `last-success.json`; and the retention the design assumes on the collector's side, since the
-      seven local days are a hand-off window and not the history
-- [ ] The compression paragraph in the Backups section is rewritten: it currently argues a custom
-      dump is far smaller than the table, which assumes the default compression this design turns off
-- [ ] The restore drill gains a cadence — quarterly, and after any Postgres major upgrade
-- [ ] Restoring says how to read a dump the operator's own account may not own
+- [ ] `ARCHITECTURE.md`: "all four containers are `read_only: true`", "on all four… pinned on
+      three", and §3.1's topology diagram
+- [ ] `docs/operating.md`: the "What runs here" service table, "all four drop every Linux
+      capability", "three run as an unprivileged uid", "all four services running and healthy"
+- [ ] `compose.yaml`'s "Privilege posture, all four services" comment
+- [ ] DESIGN.md §10's Packaging row, §10.1's service block and its "one decision rather than four"
+- [ ] `docs/README.md`'s first rule is the argument for making these rules rather than counts
+
+**Where the new service needs an entry**
+
+- [ ] `ARCHITECTURE.md` §7.4's observability table (the freshness markers and the healthcheck),
+      Appendix A's `scripts/` table (`dump-loop.sh`), and §3.3's Compose-level variables
+- [ ] DESIGN.md §10.1's environment surface table
+- [ ] `docs/operating.md`: the environment table; Installing and "Where the database lives", which
+      now need a second `mkdir -p` and the `DUMP_UID`/`DUMP_GID` that must match it; the Logs
+      section, for the script's grep stem; and "An unhealthy container is not restarted", which now
+      governs this service too
+
+**Operator-facing, and the instructions this design falsifies**
+
+- [ ] The Backups section's `pg_restore --list` check — "if it prints the objects, the file is a
+      real archive" — and `docs/runbook.md`'s copy of it become `pg_restore -f /dev/null`, because
+      a truncated archive passes `--list`
+- [ ] The compression paragraph, which argues a custom dump is far smaller than the table on the
+      assumption of default compression this design turns off
+- [ ] What the collector must be pointed at (`volumes/dumps/`, `.env`, `allowed-emails.txt`), what
+      it must exclude (`volumes/db/`, a torn cluster), a copy-pasteable staleness check on the
+      success marker, and the retention it must keep — the local window is a hand-off, not the
+      history
+- [ ] Verification recipes name `docker compose ps -a`, or a disabled dumper is indistinguishable
+      from one that was never there
+- [ ] The restore drill gains a cadence: quarterly, and after any Postgres major upgrade
+- [ ] Restoring says how to read a dump when the operator's account does not own it
 - [ ] Upgrading and Restoring both say to stop `dump` first: `pg_dump` holds `ACCESS SHARE` for its
       whole run and a migration's `ACCESS EXCLUSIVE` queues behind it
-- [ ] `docs/runbook.md` gains "my dumps have stopped", with the marker file, the healthcheck and the
-      free-space refusal as the three things to look at
-- [ ] `README.md`'s "the whole deployment" list gains the script
-- [ ] `.env.example` documents the knobs with the caveat that they are read by the sidecar's own
-      validation, not by `server/config.ts`
+- [ ] `docs/runbook.md` gains "my dumps have stopped" — the markers, the healthcheck under `ps -a`,
+      and the free-space refusal are the three things to look at
+- [ ] `README.md`'s "the whole deployment" list gains the script and the dumps directory
+- [ ] `.env.example` documents the knobs, noting they are validated by the sidecar rather than by
+      `server/config.ts`
 
 **Vocabulary**
 
-- [ ] `CONTEXT.md` gains **Dump** and **Backup** as distinct terms, each with the words it avoids;
-      "snapshot" stays out, because restic owns that word on the one page where both appear
-- [ ] Every existing use of "backup" that means the local file is renamed — including
-      `docs/runbook.md`'s "I need to restore from a backup" heading and its cross-references, and
-      `README.md`'s "Take a backup first"
+- [ ] `CONTEXT.md` gains **Dump** and **Backup** as distinct terms in the house form, each with the
+      words it avoids. "Snapshot" stays out of both: `CONTEXT.md` already avoids it for
+      **Observation**, and `docs/operating.md` uses it for the stopped file-level copy of the cluster
+- [ ] Every use of "backup" meaning the local file is renamed — `docs/runbook.md`'s "I need to
+      restore from a backup" heading and its cross-references, `README.md`'s "Take a backup first",
+      and the uses in `docs/guide/upload.md`, `docs/google-sign-in.md` and `docs/developing.md`
 - [ ] `docs/specs/README.md`'s slice table and ticket-directory list carry 0014 and `dump/`

@@ -22,8 +22,8 @@ Three facts about this deployment make the gap narrow and worth closing precisel
   (`ARCHITECTURE.md` §3). Uploaded CSVs are in Postgres rather than on disk specifically to keep it
   that way (DESIGN.md §5.2), and `app`, `gate` and `caddy` are `read_only: true` with nothing but
   tmpfs over what they write.
-- **A file-level copy is not a backup.** `docs/operating.md:793` — a copy of a *running* cluster is
-  torn, whatever the tool. Something has to run `pg_dump`.
+- **A file-level copy is not a backup.** `docs/operating.md`, Backups — a copy of a *running*
+  cluster is torn, whatever the tool. Something has to run `pg_dump`.
 - **The operator already backs this host up** from another machine that mounts the path and holds
   the encryption, the history and the off-site copy. What is missing is a fresh, verified archive
   sitting where that machine can find it.
@@ -31,83 +31,125 @@ Three facts about this deployment make the gap narrow and worth closing precisel
 ## Solution
 
 A `dump` service in `compose.yaml`: a shell loop in the database's own image that, once a day,
-takes a dump, proves it is readable end to end, and leaves it in `./volumes/dumps/` with a marker
-file describing the run. It never reaches off the host.
+takes a dump, proves it is readable end to end, and leaves it in `./volumes/dumps/` with files
+describing the run. It never reaches off the host, and it holds no credential the stack does not
+already have.
 
 ### The run
 
 1. **Prune, then check for room, then dump.** Expired dumps go first, and the run is refused unless
    free space is at least twice the last successful dump plus a floor. A refusal logs an error,
-   writes `last-error.json`, leaves every existing dump alone and lets the healthcheck lapse. This
-   ordering is the point: the dumps share a filesystem with the live cluster, Postgres PANICs when
-   it cannot write, and `/healthz` stays `200` through a full disk (`docs/operating.md:686`) — so
-   the dumper must never be the thing that fills it.
-2. **Dump** with `pg_dump -h db --format=custom --compress=0`, connecting with the same credentials
-   the application uses, writing to a dotfile in the destination directory.
+   writes the failure marker, deletes nothing further and lets the healthcheck lapse. The ordering
+   is the point: the dumps share a filesystem with the live cluster, Postgres PANICs when it cannot
+   write, and until it does `/healthz` goes on answering `200` — the probe is `select 1`, and
+   `docs/operating.md`'s "What `/healthz` does not catch" says a full disk leaves that succeeding.
+   The dumper must never be the thing that fills it.
+2. **Dump** with `pg_dump -d "$DATABASE_URL" --format=custom --compress="$DUMP_COMPRESS"`, writing
+   to a staging dotfile in the destination directory. Taking the whole connection from the URL the
+   application already uses is what makes the dump be *of the database the app writes to*, rather
+   than of whatever happens to answer on the compose network.
 3. **Verify by decoding all of it**: `pg_restore -f /dev/null` on the staged file, which reads every
    data block and fails on a short read, then a comparison against the previous dump's size that
    refuses a large shrink. `pg_restore --list` is *not* enough — the archive's table of contents is
-   written at the front, so a dump truncated at five percent lists every object and passes. This is
-   the same failure `docs/operating.md:914`'s row count exists to catch in the restore drill.
-4. **Rename into place** — a real rename within one filesystem, so a collector reading the directory
-   can never see a partial or unverified file — as `portfolio-YYYYMMDDTHHMMSSZ.dump`, whose lexical
-   order is its chronological order.
-5. **Describe it**: `<dump>.json` beside it (sha256, `APP_VERSION`, Postgres server version, byte
-   count, duration, finish time) and a rewritten `last-success.json`. Only a fully verified run
+   written at the front, so a dump truncated at five percent lists every object and exits 0. That is
+   the failure the restore drill's row count exists to catch, and it is why the operator-facing
+   instruction to check a dump with `--list` changes too (ticket 02).
+4. **Rename into place** — a real rename within one filesystem, so a reader of the directory can
+   never see a partial or unverified file — as `portfolio-YYYYMMDDTHHMMSSZ.dump`, whose lexical
+   order is its chronological order, so a collector can ask "anything newer than what I took?"
+   without trusting either clock.
+5. **Describe it**: a sidecar JSON beside the dump (sha256, `APP_VERSION`, Postgres server version,
+   byte count, duration, finish time) and a rewritten success marker. Only a fully verified run
    writes either.
 
-### Scheduling
+### Scheduling and failure
 
 Daily at `DUMP_AT` (UTC), computed in epoch arithmetic — busybox `date` has no relative-date
-parsing and `find -newermt` does not exist in this image. On start, the loop dumps immediately only
-if the last **attempt** is more than an hour old, which is what stops a crash-looping container
-dumping on every boot; `app/lib/price-poller.server.ts:133` records the same reasoning for the
-price poller, where an immediate poll on boot was deliberately not done.
+parsing and this image has no `find -newermt`. On start the loop dumps immediately only if the last
+**attempt** is more than an hour old; `app/lib/price-poller.server.ts:134-136` records the same
+reasoning for the price poller, where an immediate poll on boot was deliberately not done because a
+crash-looping container would fetch on every one.
 
-There is no on-demand trigger. The human on-demand path is the existing
-`docker compose exec db pg_dump …` recipe, which is what a pre-upgrade dump uses and stays
-documented. A trigger the operator's collector could pull is a later ticket if the day's staleness
-ever matters; the seam it would use — a directory and a marker file — is unchanged by adding one.
+A failed run retries at +15, +30 and +60 minutes and then waits for the next window — except a
+free-space refusal, which never retries, because the one thing that cannot help is attempting the
+same large write twice more. The ladder lives in the process: a restart resets it, and the boot rule
+above is what covers that case.
+
+There is no on-demand trigger, and the service exposes no subcommand a running deployment invokes.
+The human on-demand path is the existing `docker compose exec db pg_dump …` recipe, which is what a
+pre-upgrade dump uses. A trigger the operator's collector could pull is a later ticket if the day's
+staleness ever matters; the seam it would use — a directory and a marker file — is unchanged by
+adding one.
 
 ### Retention
 
-Files older than `DUMP_KEEP_DAYS` are deleted, but only files matching the sidecar's own name
-pattern, and never the newest whatever its age. The pattern restriction matters because
-`./volumes/dumps/` is exactly where an operator will park the hand-taken dump that
-[`docs/runbook.md`](../runbook.md)'s Postgres upgrade tells them to make.
+Files older than `DUMP_KEEP_DAYS` are deleted, but only those matching the sidecar's own anchored
+name pattern, and never the newest one whatever its age. The pattern restriction is what lets a
+hand-taken dump sit in the same directory and survive; `portfolio-2026-08-31.dump` from the
+operator's own recipe does not match `portfolio-YYYYMMDDTHHMMSSZ.dump`.
 
-**The local window is a hand-off, not the history.** Stepping back in time is the operator's
-collector's job, and `docs/operating.md` must say so where it states the retention this design
-assumes on the other side.
+**The local window is a hand-off, not the history.** Stepping back in time is the collecting tool's
+job, and `docs/operating.md` must say so where it states the retention this design assumes on the
+other side.
 
-### Ownership, and why it is not uid 70
+### Ownership, and why the service does not run as uid 70
 
-The `db-store` trick does not transfer. A volume takes the *image's* ownership of the directory at
-the mount point (`ARCHITECTURE.md` §3, `compose.yaml`'s transcript), and no image path exists for
-dumps — a fresh bind source arrives root-owned and a pinned uid cannot write it. The service
-therefore runs as `${DUMP_UID:-1000}:${DUMP_GID:-1000}`, the operator's own account: `mkdir -p
-./volumes/dumps` stays the whole setup and still wants no root, the files are readable to whatever
-reads them over a mount, and CI can delete them without borrowing root from the daemon the way
-`scripts/smoke-test.sh` does for the cluster directory.
+A missing bind source is created root-owned whatever uid the container runs as, so no choice of uid
+makes an absent directory writable. What makes this work is the operator creating it — and then the
+service must run as *them*, because the whole point of the directory is that something outside the
+stack reads it. So: `create_host_path: false` on the mount, the way the allowlist bind already does
+it, so a missing directory stops `up` with a message naming it rather than producing a root-owned
+junk dir and a crash-looping container; and `DUMP_UID`/`DUMP_GID` required rather than defaulted,
+validated at start like every other input.
+
+That deliberately shares a uid with the operator's account. `compose.yaml`'s caddy comment warns
+that "shared uids share bind-mount rights" — true, and the reasoning does not carry here: this
+service's whole contract is to hand files to that account.
 
 ### Signals
 
 - A healthcheck on the age of the newest dump, for a human at `docker compose ps`. Nothing acts on
   it: Docker restart policies react to a process exiting, not to health.
-- `last-success.json` and `last-error.json` on the mount, which is the signal that actually reaches
-  the operator's collector — and the reason the failure survives the container, which
-  `pull_policy: always` recreates on every upgrade.
-- `DUMP_ENABLED=false` exits the container 0 under `restart: on-failure`, so a disabled dumper reads
-  `Exited (0)` rather than sitting green among four healthy rows.
+- The success and failure markers on the mount, which are the signal that actually reaches the
+  collector, and the reason a failure's cause survives the container.
+- `DUMP_ENABLED=false` exits the container 0. Note what that does and does not buy: a disabled
+  dumper is *absent* from `docker compose ps`, and shows as `Exited (0)` only under `ps -a` — so the
+  operator-facing verification recipe has to name `-a`, or turning dumps off looks identical to
+  never having had them.
 - Every knob is validated at start; a bad value exits non-zero, which crash-loops loudly rather than
   scheduling something that never fires. `.env.example` promises exactly this of the app's own
   variables and these must not be the exception.
 
-## What this does not do
+### Posture
 
-Copy anything off the host. Encrypt anything. Keep history beyond the local window. Restore
-anything. Rehearse a restore — that stays the human drill in `docs/operating.md`, which gains a
-stated cadence (quarterly, and after any Postgres major upgrade) rather than being advice.
+`cap_drop: ALL`, `no-new-privileges`, `read_only: true` with a small tmpfs for `/tmp`, no published
+port, and `TZ: UTC` pinned rather than inherited from the operator's `TZ`, so `DUMP_AT` means what
+it says. The same rules every other service here obeys, asserted the same way in the smoke test.
+
+## Out of Scope
+
+Copying anything off the host. Encrypting anything. Keeping history beyond the local window.
+Restoring anything. Rehearsing a restore — that stays the human drill in `docs/operating.md`, which
+gains a stated cadence (quarterly, and after any Postgres major upgrade) rather than being advice.
+
+An instance whose `DATABASE_URL` points at an external Postgres, which `docs/operating.md` supports:
+the service refuses to start rather than dumping something it cannot reason about, and the existing
+sentence that backups are then that server's problem stands.
+
+## Testing
+
+The proof is in `scripts/smoke-test.sh` and nowhere else, which is a deliberate exception to this
+repository's testing discipline and the reason to say so here. The suite runs vitest against a real
+Postgres; this ships a shell script that runs under busybox `ash` inside a container as a specific
+uid against a live database, and every property worth asserting — that a verified dump lands, that a
+truncated one is refused, that retention keeps the newest, that the container holds only the
+privileges it claims — is a property of that arrangement rather than of a function. A host-side
+vitest test would exercise a different shell, a different uid and a different filesystem, and would
+prove none of them.
+
+What makes that testable rather than aspirational is that the script takes a subcommand: the loop is
+the default, and `verify <file>` and `prune <dir>` are the same code paths the loop uses, invocable
+by the test through `docker compose run --rm`. No running deployment invokes them.
 
 ## Tickets
 
