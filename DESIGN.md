@@ -872,6 +872,7 @@ gate    oauth2-proxy, pinned to an exact release
         · stateless — the session is an encrypted cookie in the browser
         · reads the allowlist file, mounted read-only
         · not published to the host, which is what keeps its verdict honest
+        · healthcheck: GET /ping, its own liveness endpoint
 
 caddy   caddy:2-alpine
         · depends_on: app and gate (condition: service_healthy)
@@ -888,8 +889,7 @@ over whatever each still writes, and an unprivileged uid everywhere but `gate`. 
 because pinning a uid there would silently decide the mode of the operator's allowlist file; it is
 bounded instead to the one capability root is being kept for, `DAC_READ_SEARCH`. The only other
 survivor is `NET_BIND_SERVICE` on `caddy`, which the image's binary needs in order to `exec` at all.
-None of this is visible in how the stack behaves, which is why `scripts/smoke-test.sh` asserts every
-line of it against a running one.
+None of this changes how the stack behaves once it is up.
 
 The in-process scheduler (§10) is why there is no separate worker service. A worker container would
 mean two images, two deployments, and two places to read logs, to save a missed poll on restart.

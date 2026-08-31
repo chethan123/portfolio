@@ -306,8 +306,8 @@ misconfiguration.
 
 ### If this stack's Caddy is your only Caddy
 
-Everything above assumes a proxy in front. Running without one is supported, but four things change,
-and all four are yours to do:
+Everything above assumes a proxy in front. Running without one is supported, but five things change,
+and all five are yours to do:
 
 - **Give the site block a real hostname** instead of `:8080` in the `Caddyfile`, so Caddy requests
   and renews a certificate for it, and add `http_port 8080` / `https_port 8443` to its global block.
@@ -323,6 +323,8 @@ and all four are yours to do:
 - **Keep the `handle` blocks as they are.** The `/healthz` exemption, the `/oauth2/*` passthrough to
   the sidecar and the `forward_auth` on everything else are the gate. Adding TLS is editing the site
   address and the global block, never the body.
+- **Adjust the container healthcheck, and any uptime monitor** — the end of the section below has
+  the working shape.
 
 The `trusted_proxies` line stays correct either way: with no proxy in front there is simply nothing
 sending `X-Forwarded-*` for Caddy to believe.
@@ -354,25 +356,35 @@ volumes:
   caddy_config:
 ```
 
-**Then confirm Caddy can write them.** It runs as uid 65532, and the image's `/data` and `/config`
-are root-owned `0755` — which is why the tmpfs entries carry `mode=1777`, and a fresh volume can
-take that same ownership. Caddy does not fail at startup on this; it fails when the first
-certificate arrives and there is nowhere to put it.
+**A fresh volume needs nothing more.** Volumes seed from the image, and the image's storage
+directories — `/data/caddy`, `/config/caddy` — are world-writable, so uid 65532 writes them from the
+first start. (The root-owned `0755` parents are why the tmpfs entries carry `mode=1777`: a tmpfs
+seeds nothing.) A volume created any other way must have `/data/caddy` writable to 65532 — an
+unwritable one fails at config load, `provisioning CA … permission denied`. Probe the storage path,
+not its parent:
 
 ```sh
-docker compose exec caddy touch /data/ok && docker compose exec caddy rm /data/ok
+docker compose exec caddy sh -c 'touch /data/caddy/ok && rm /data/caddy/ok'
 ```
-
-A refusal is fixed from a throwaway root container, the only thing that can chown a volume:
-`docker run --rm -v portfolio_caddy_data:/data alpine chown 65532:65532 /data`, and the same for
-`portfolio_caddy_config`. Those names are Compose's own — the project name, plus the key.
 
 `caddy_data` is the one that matters. `caddy_config` only saves re-deriving the autosaved config,
 and costs nothing to add at the same time.
 
-**One more thing then needs adjusting: the container healthcheck.** It requests
-`http://127.0.0.1:8080/healthz`, which on a TLS site meets Caddy's redirect to HTTPS rather than the
-app. Point it at the TLS listener or drop it, or `caddy` reports unhealthy from then on.
+**One more thing then needs adjusting: the container healthcheck, and any uptime monitor.** The
+check requests `http://127.0.0.1:8080/healthz`, which on a hostname site meets the HTTPS redirect —
+and pointing busybox `wget` at the TLS listener fails on SNI. Keep a plain-HTTP site carrying only
+the exemption beside the hostname block:
+
+```
+http://127.0.0.1:8080 {
+	handle /healthz {
+		reverse_proxy app:{$APP_PORT:3000}
+	}
+}
+```
+
+External monitors move to `https://<hostname>/healthz` — plain-HTTP `/healthz` now answers only from
+inside the container.
 
 ### Forwarded headers
 
@@ -658,8 +670,8 @@ sign-in is recorded at all — the application no longer sees one. The stems bel
 and may drift — the code owns the wording:
 
 - **One line per HTTP request** from the server's built-in request logger: method, path, status,
-  duration. Note that the container healthcheck hits `/healthz` every ten seconds, and on an idle
-  instance that is essentially the whole log.
+  duration. Note that the container healthchecks — the app's own and Caddy's — hit `/healthz` every
+  ten seconds, and on an idle instance that is essentially the whole log.
 - **One line per refresh the poller actually runs** — stem `Price refresh`. Informational when
   everything priced, a warning when anything came back stale. A tick that runs no refresh writes no
   line at all — [below](#there-is-no-price-line-in-the-log-has-four-causes) lists which silences
@@ -1009,11 +1021,9 @@ Caddy's. Cap it per service:
 or set the same options once as the daemon default in `/etc/docker/daemon.json`, which covers
 everything on the host rather than only this.
 
-**No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. The
-privilege options ([What runs here](#what-runs-here)) bound what a container may *do*, never what it
-may consume, and this is the axis left open. On a machine that runs only this, that is the right
-default. On a shared host it means one runaway query can take the box; `deploy.resources.limits` is
-where you would add them.
+**No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. On a
+machine that runs only this, that is the right default. On a shared host it means one runaway query
+can take the box; `deploy.resources.limits` is where you would add them.
 
 **The design target is a target, not a measurement.**
 [`ARCHITECTURE.md` §10](../ARCHITECTURE.md#10-performance-and-scale-envelope) states it — one

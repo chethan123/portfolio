@@ -1633,9 +1633,10 @@ job: smoke                    ── runs in parallel, on a clean runner
        the .sql files actually being present in the runtime image, the
        §8.1 prune having removed what it claims and nothing more, exactly
        one published port and it belongs to caddy, host 80 onto its own
-       8080, the privilege posture §3.1 states — capabilities, uid and
-       read-only rootfs per service, read back from the kernel at PID 1
-       rather than from the daemon's record alone — and the front door
+       8080, the privilege posture §3.1 states — capabilities,
+       no-new-privileges, uid and read-only rootfs per service, read back
+       from inside the running container rather than from the daemon's
+       record alone — and the front door
        turning away a request the gate has not vouched for. It runs the
        real sidecar on throwaway credentials — nothing contacts Google at
        startup — so the only leg left uncovered is the round trip through
