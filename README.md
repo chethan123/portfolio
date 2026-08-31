@@ -430,8 +430,9 @@ One caveat today: no `v*` release tag has been cut yet, so CI has never publishe
 the first release exists, run from a checkout instead —
 `docker compose -f compose.yaml -f compose.dev.yaml up -d --build`.
 
-You do not need a checkout to run this: `compose.yaml`, `Caddyfile`, `.env`, `allowed-emails.txt`
-and the `volumes/db/data` directory beside them are the whole deployment — the database is a
+You do not need a checkout to run this: `compose.yaml`, `Caddyfile`, `scripts/dump-loop.sh`,
+`.env`, `allowed-emails.txt` and the `volumes/db/data` and `volumes/dumps` directories beside them
+are the whole deployment — the database is a
 directory in it, not a volume kept somewhere under `/var/lib/docker`. The same command is also the upgrade — the pinned tag is the floating
 major, so `docker compose up -d` fetches the newest `v1.x.y` release. Take a backup first
 ([Upgrading](docs/operating.md#upgrading)).

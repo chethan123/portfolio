@@ -456,9 +456,18 @@ printf 'sidecar json records the archive it sits beside\n'
 
 # The container's own view of freshness. Nothing acts on it, which is why it is
 # asserted here rather than trusted to wake anyone.
-dump_health="$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q dump)")"
+# Polled, not sampled: a `no dump yet` probe that ran a moment before the
+# archive was renamed leaves the service `starting` until the next interval.
+dump_health=""
+deadline=$((SECONDS + 60))
+while ((SECONDS < deadline)); do
+  dump_health="$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q dump)" 2>/dev/null || true)"
+  [[ "$dump_health" == "healthy" ]] && break
+  [[ "$dump_health" == "unhealthy" ]] && fail "the dump container reported unhealthy with a dump on disk"
+  sleep 2
+done
 [[ "$dump_health" == "healthy" ]] ||
-  fail "the dump container reports ${dump_health}, expected healthy"
+  fail "the dump container reports ${dump_health:-nothing}, expected healthy"
 printf 'dump healthcheck: %s\n' "$dump_health"
 
 # --- A truncated archive is refused -------------------------------------------

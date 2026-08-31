@@ -116,10 +116,13 @@ services:
       # Recorded beside each dump, so the archive says which image wrote it —
       # the half of a rollback that a dump alone cannot tell you.
       APP_VERSION: ${APP_VERSION:-1}
-      DUMP_ENABLED: ${DUMP_ENABLED:-true}
-      DUMP_AT: ${DUMP_AT:-02}
-      DUMP_KEEP_DAYS: ${DUMP_KEEP_DAYS:-7}
-      DUMP_COMPRESS: ${DUMP_COMPRESS:-0}
+      # `-` rather than `:-`: an *unset* knob takes the default, an explicitly
+      # empty one is passed through so the script can refuse it by name. With
+      # the colon form `DUMP_ENABLED=` would silently mean `true`.
+      DUMP_ENABLED: ${DUMP_ENABLED-true}
+      DUMP_AT: ${DUMP_AT-02}
+      DUMP_KEEP_DAYS: ${DUMP_KEEP_DAYS-7}
+      DUMP_COMPRESS: ${DUMP_COMPRESS-0}
       # Pinned, not `${TZ:-UTC}` like the others: DUMP_AT is documented as a UTC
       # hour, and inheriting the operator's zone would quietly move the window.
       TZ: UTC

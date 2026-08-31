@@ -23,10 +23,14 @@ set -eu
 umask 027
 
 DUMP_DIR="${DUMP_DIR:-/dumps}"
-DUMP_ENABLED="${DUMP_ENABLED:-true}"
-DUMP_AT="${DUMP_AT:-02}"
-DUMP_KEEP_DAYS="${DUMP_KEEP_DAYS:-7}"
-DUMP_COMPRESS="${DUMP_COMPRESS:-0}"
+# `-`, not `:-`, on everything validated below: an unset knob takes the default,
+# an explicitly empty one stays empty and is refused by name. The colon form
+# would quietly turn `DUMP_ENABLED=` into `true`, which is the one value an
+# operator setting it empty certainly did not mean.
+DUMP_ENABLED="${DUMP_ENABLED-true}"
+DUMP_AT="${DUMP_AT-02}"
+DUMP_KEEP_DAYS="${DUMP_KEEP_DAYS-7}"
+DUMP_COMPRESS="${DUMP_COMPRESS-0}"
 APP_VERSION="${APP_VERSION:-unknown}"
 
 # Every line greps as `dump:` — docs/operating.md's Logs section points at it.
@@ -36,12 +40,17 @@ die() { printf 'dump: %s\n' "$*" >&2; exit 1; }
 # One gibibyte, and then some: the floor below which a dump is refused however
 # small the database claims it will be.
 FLOOR_BYTES=1073741824
-# Retry offsets in seconds after a failed run: 15, 30, 60 minutes, then the
-# next window. A free-space refusal never enters this ladder.
-RETRIES="900 1800 3600"
+# Retry offsets in seconds FROM THE FIRST FAILURE — +15, +30, +60 minutes, not
+# three waits of that length, which would put the last attempt at +105. A free-
+# space refusal never enters this ladder.
+RETRY_OFFSETS="900 1800 3600"
 
 now() { date -u +%s; }
 stamp() { date -u +%Y%m%dT%H%M%SZ; }
+
+# "08" is not 8 in POSIX arithmetic — it is an invalid octal — and `10#08` is a
+# bashism this shell does not have. Strip the zero instead.
+strip0() { v=${1#0}; printf '%s\n' "${v:-0}"; }
 
 # --- inputs -------------------------------------------------------------------
 
@@ -66,8 +75,12 @@ validate() {
   esac
   case "$DUMP_KEEP_DAYS" in
     ''|*[!0-9]*) die "DUMP_KEEP_DAYS must be a whole number of days, not '$DUMP_KEEP_DAYS'" ;;
-    0) die "DUMP_KEEP_DAYS must be at least 1 — 0 would delete today's dump" ;;
   esac
+  # After stripping, so `00` is caught here rather than becoming a zero-day
+  # window, and `08` is caught here rather than as an invalid-octal arithmetic
+  # error hours later.
+  [ "$(strip0 "$DUMP_KEEP_DAYS")" -ge 1 ] ||
+    die "DUMP_KEEP_DAYS must be at least 1 — 0 would delete the dump just written"
   case "$DUMP_COMPRESS" in
     [0-9]|none) ;;
     *) die "DUMP_COMPRESS must be 0-9 or none, not '$DUMP_COMPRESS'" ;;
@@ -82,6 +95,14 @@ validate() {
   host=$(printf '%s' "$DATABASE_URL" | sed -n 's|^[a-z+]*://[^@]*@\([^:/?]*\).*|\1|p')
   [ "$host" = "db" ] ||
     die "DATABASE_URL names '$host'; this service only dumps the bundled db service"
+  # `hostaddr` is the destination libpq actually dials, and `host` alongside it
+  # becomes a name for certificate matching — so an authority of `db` with
+  # `?hostaddr=203.0.113.1` would send the bundled credential to a stranger and
+  # dump whatever answered. Refuse the whole class rather than reason about it.
+  case "$DATABASE_URL" in
+    *hostaddr=*|*"?host="*|*"&host="*)
+      die "DATABASE_URL carries a host or hostaddr parameter, which decides the connection independently of the URL's own host" ;;
+  esac
   [ -d "$DUMP_DIR" ] || die "$DUMP_DIR does not exist"
   [ -w "$DUMP_DIR" ] || die "$DUMP_DIR is not writable as $(id -u):$(id -g)"
 }
@@ -142,7 +163,7 @@ name_epoch() {
 
 prune() {
   dir="$1"
-  cutoff=$(( $(now) - DUMP_KEEP_DAYS * 86400 ))
+  cutoff=$(( $(now) - $(strip0 "$DUMP_KEEP_DAYS") * 86400 ))
   newest=""
   for f in "$dir"/portfolio-*.dump; do
     [ -e "$f" ] || continue
@@ -189,13 +210,21 @@ free_bytes() { df -P "$DUMP_DIR" | awk 'NR==2 {print $4 * 1024}'; }
 # uncompressed dump is larger than the pages it came from — jsonb payloads are
 # TOAST-compressed in storage and expand on the way out.
 room_for_dump() {
-  size=$(db_query "select pg_database_size(current_database())") || return 1
+  size=$(db_query "select pg_database_size(current_database())") || size=""
+  # Not a space refusal: say so, or the ladder below would read a stale
+  # `stage=space` marker and skip every retry for a database that was merely
+  # unreachable for a minute.
+  if [ -z "$size" ]; then
+    fail_run "database" "could not read the database size"
+    return 1
+  fi
+  # 2 below, 1 here: the two failures want different answers, and the caller
+  # must not have to re-read a marker file to tell them apart.
   need=$(( size * 2 + FLOOR_BYTES ))
   have=$(free_bytes)
   [ "$have" -ge "$need" ] && return 0
-  log "refusing: $DUMP_DIR has $have bytes free, this run needs $need"
-  write_error "space" "needs $need bytes, has $have"
-  return 1
+  fail_run "space" "refusing: $DUMP_DIR has $have bytes free, this run needs $need"
+  return 2
 }
 
 # A dump far smaller than the last is a truncation the decode did not catch —
@@ -210,10 +239,20 @@ too_small() {
   [ "$(( $1 * 2 ))" -lt "$prev_bytes" ]
 }
 
+# `set -e` does not apply inside a function invoked as the left operand of `||`,
+# which is exactly how the loop calls run_once — so every step below is checked
+# by hand. Without that, a failed `mv` would fall through to the success marker
+# and certify a dump that is not there.
+fail_run() {
+  log "$2"
+  write_error "$1" "$2"
+  write_attempt failure
+}
+
 run_once() {
-  write_attempt started
-  prune "$DUMP_DIR"
-  room_for_dump || { write_attempt failure; return 1; }
+  write_attempt started || { log "cannot write to $DUMP_DIR"; return 1; }
+  prune "$DUMP_DIR" || log "retention pass failed; continuing to the dump"
+  room_for_dump || return $?
 
   s=$(stamp)
   part="$DUMP_DIR/.portfolio-$s.dump.part"
@@ -221,42 +260,47 @@ run_once() {
   started=$(now)
 
   if ! pg_dump -d "$DATABASE_URL" --format=custom --compress="$DUMP_COMPRESS" -f "$part" 2>/tmp/dump.err; then
-    log "pg_dump failed: $(tr -d '\n' < /tmp/dump.err | tail -c 200)"
-    write_error "pg_dump" "$(tr -d '\n\"' < /tmp/dump.err | tail -c 200)"
-    rm -f "$part"; write_attempt failure; return 1
+    fail_run "pg_dump" "pg_dump failed: $(tr -d '\n\"' < /tmp/dump.err | tail -c 200)"
+    rm -f "$part"; return 1
   fi
 
   if ! verify "$part"; then
-    log "verification failed: the archive does not decode whole"
-    write_error "verify" "pg_restore could not decode the archive"
-    rm -f "$part"; write_attempt failure; return 1
+    fail_run "verify" "verification failed: the archive does not decode whole"
+    rm -f "$part"; return 1
   fi
 
-  bytes=$(wc -c < "$part" | tr -d ' ')
+  bytes=$(wc -c < "$part" 2>/dev/null | tr -d ' ') || bytes=""
+  [ -n "$bytes" ] || { fail_run "size" "could not measure the archive"; return 1; }
   if too_small "$bytes"; then
-    log "refusing: $bytes bytes is less than half the last dump at the same compression"
-    write_error "shrink" "$bytes bytes, less than half the previous dump"
-    rm -f "$part"; write_attempt failure; return 1
+    fail_run "shrink" "refusing: $bytes bytes is less than half the last dump at the same compression"
+    rm -f "$part"; return 1
   fi
 
   # A rename within one filesystem, which is why the staging file lives here
   # and not on a tmpfs: a cross-device `mv` is a copy, and a collector reading
   # this directory would see a half-written archive.
-  mv "$part" "$final"
-  sha=$(sha256sum "$final" | cut -d' ' -f1)
-  printf '{"sha256":"%s","bytes":%s,"compress":"%s","server_version":"%s","app_version":"%s","seconds":%s}\n' \
-    "$sha" "$bytes" "$DUMP_COMPRESS" "$(db_query 'show server_version')" "$APP_VERSION" \
-    "$(( $(now) - started ))" > "$final.json"
-  write_success "$(basename "$final")" "$bytes" "$sha" "$(db_query 'show server_version')" "$(( $(now) - started ))"
-  write_attempt success
+  mv "$part" "$final" || { fail_run "publish" "could not rename the archive into place"; rm -f "$part"; return 1; }
+
+  sha=$(sha256sum "$final" | cut -d' ' -f1) || sha=""
+  [ -n "$sha" ] || { fail_run "publish" "could not hash $(basename "$final")"; return 1; }
+  server=$(db_query 'show server_version') || server="unknown"
+  finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  elapsed=$(( $(now) - started ))
+
+  # The archive's own record, which outlives it: last-success.json is overwritten
+  # by tomorrow's run, so a dump collected weeks ago would otherwise carry no
+  # finish time of its own.
+  printf '{"finished_at":"%s","sha256":"%s","bytes":%s,"compress":"%s","server_version":"%s","app_version":"%s","seconds":%s}\n' \
+    "$finished" "$sha" "$bytes" "$DUMP_COMPRESS" "$server" "$APP_VERSION" "$elapsed" > "$final.json" ||
+    { fail_run "publish" "could not write the sidecar json"; return 1; }
+
+  write_success "$(basename "$final")" "$bytes" "$sha" "$server" "$elapsed" ||
+    { fail_run "publish" "could not write the success marker"; return 1; }
+  write_attempt success || { log "wrote the dump but could not update the attempt marker"; return 1; }
   log "wrote $(basename "$final") ($bytes bytes)"
 }
 
 # --- the loop -----------------------------------------------------------------
-
-# "08" is not 8 in POSIX arithmetic — it is an invalid octal — and `10#08` is a
-# bashism this shell does not have. Strip the zero instead.
-strip0() { v=${1#0}; printf '%s\n' "${v:-0}"; }
 
 seconds_until_window() {
   target=$(( $(strip0 "$DUMP_AT") * 3600 ))
@@ -285,15 +329,16 @@ nap() {
   done
 }
 
-# Deliberately not "dump on every boot": a crash-looping container would dump
-# on each one, which app/lib/price-poller.server.ts:134-136 rejects for the far
-# cheaper price fetch. An attempt left `started` is a crash mid-run and resumes
-# the ladder; a recent finished attempt waits for the window.
+# Deliberately not "dump on every boot": a crash-looping container would dump on
+# each one, which app/lib/price-poller.server.ts:134-136 rejects for the far
+# cheaper price fetch. Only a *successful* attempt inside the last hour holds
+# the boot dump back — a restart during the retry ladder, or a crash mid-run,
+# would otherwise abandon the remaining retries until tomorrow's window, which
+# is the opposite of what a ladder is for.
 needs_catch_up() {
   a=$(marker last-attempt.json)
   [ -f "$a" ] || return 0
-  outcome=$(marker_field "$a" outcome)
-  [ "$outcome" != "started" ] || return 0
+  [ "$(marker_field "$a" outcome)" = "success" ] || return 0
   started=$(marker_field "$a" started_at)
   epoch=$(date -u -d "$(printf '%s' "$started" | tr 'TZ' ' ')" +%s 2>/dev/null || echo 0)
   [ "$(( $(now) - epoch ))" -gt 3600 ]
@@ -302,20 +347,25 @@ needs_catch_up() {
 loop() {
   rm -f "$DUMP_DIR"/.portfolio-*.dump.part
   if needs_catch_up; then
-    log "no recent completed attempt; dumping now"
-    run_once || retry_ladder
+    log "no recent successful attempt; dumping now"
+    run_once || retry_ladder $?
   fi
   while true; do
     nap "$(seconds_until_window)"
-    run_once || retry_ladder
+    run_once || retry_ladder $?
   done
 }
 
+# Takes the failed run's own exit code rather than re-reading a marker: a stale
+# `stage=space` from last week must not silence today's retries.
 retry_ladder() {
   # A space refusal is the one failure retrying cannot help and can worsen.
-  [ "$(marker_field "$(marker last-error.json)" stage)" != "space" ] || return 0
-  for delay in $RETRIES; do
-    log "retrying in $delay seconds"
+  [ "${1:-1}" != "2" ] || { log "no retries for a space refusal; waiting for the next window"; return 0; }
+  first_failure=$(now)
+  for offset in $RETRY_OFFSETS; do
+    delay=$(( first_failure + offset - $(now) ))
+    [ "$delay" -gt 0 ] || delay=1
+    log "retrying at +$(( offset / 60 )) minutes"
     nap "$delay"
     run_once && return 0
   done
