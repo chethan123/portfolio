@@ -222,7 +222,7 @@ loads. A full disk or a revoked grant does this.
 
 ```sh
 df -h
-docker system df -v | grep -i portfolio_db-data
+du -sh volumes/db 2>/dev/null || docker compose exec db du -sh /var/lib/postgresql/data
 docker compose exec db psql -U portfolio -d portfolio -c "select pg_size_pretty(pg_database_size('portfolio'))"
 docker compose logs --tail=200 app | grep -i "error"
 ```
@@ -577,11 +577,12 @@ docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom \
   > "portfolio-pre-pg-upgrade-$(date +%F).dump"
 ```
 
-Verify that file, then — **this deletes the data volume, and the dump you just verified is the only
-copy**:
+Verify that file, then — **this empties the data directory, and the dump you just verified is the
+only copy**:
 
 ```sh
-docker compose down -v
+docker compose down
+docker run --rm -v "$PWD/volumes/db/data:/data" postgres:17-alpine find /data -mindepth 1 -delete
 ```
 
 Change the image tag in `compose.yaml`, bring up `db` alone, and restore into it:
@@ -611,16 +612,19 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 - An in-progress upload draft is not data. Drafts are swept after 24 hours, and only when the next
   upload starts.
 
-**The one real destroyer is `docker compose down -v`**, which deletes the `db-data` volume — every
-statement, every original CSV, every price. There is no undo and no confirmation prompt. Same for
-`scripts/smoke-test.sh`, which runs it.
+**The one real destroyer is deleting `./volumes/db/data`** — every statement, every original CSV,
+every price. There is no undo and no confirmation prompt. `docker compose down -v` is no longer that
+command: it drops the volume record and leaves the directory standing. `scripts/smoke-test.sh` still
+is one — it empties that directory itself, at both ends of a run.
 
-**Do.** If the volume is gone, restore the most recent dump:
+**Do.** If the cluster is gone, restore the most recent dump:
 [I need to restore from a backup](#i-need-to-restore-from-a-backup). If it is not gone, nothing here
-needs a repair — find the filter.
+needs a repair — find the filter. The directory is `0700` uid 70, so ask Postgres what is in it
+rather than your own shell:
 
 ```sh
-docker volume ls | grep db-data
+ls -ld volumes/db/data
+docker compose exec db ls /var/lib/postgresql/data | head
 ```
 
 Why: [Backups](operating.md#backups), [Restoring](operating.md#restoring).
@@ -668,7 +672,8 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
   Nobody is signed out: sessions are cookies in browsers, and the gate keeps nothing.
 - Editing `allowed-emails.txt`. Adding a line admits that person; removing one signs them out
   everywhere.
-- `docker compose down` — **without** `-v`. Stops and removes the containers and keeps `db-data`.
+- `docker compose down`, with or without `-v`. Stops and removes the containers;
+  `./volumes/db/data` outlives both, and `-v` now discards only the volume record pointing at it.
 - `docker compose up -d` — pulls the tag `APP_VERSION` points at and recreates. Note that Caddy's
   `/data` is a tmpfs, so a recreate discards any certificates it has issued. It needs to reach
   `ghcr.io`: with no network this fails rather than falling back to what is already here.
@@ -678,9 +683,9 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 
 ## Things that are not
 
-- `docker compose down -v` — **deletes the `db-data` volume.** Every statement, every original CSV,
-  every price. No confirmation, no undo.
-- `scripts/smoke-test.sh` — a CI tool. It runs `docker compose down -v` at the start *and* from an
+- Deleting `./volumes/db/data` — **that is the database.** Every statement, every original CSV,
+  every price. No confirmation, no undo, and it takes root, because Postgres owns the directory.
+- `scripts/smoke-test.sh` — a CI tool. It empties `./volumes/db/data` at the start *and* from an
   exit trap. Never run it against a real instance.
 - `dropdb`, in isolation. It is safe only as the first half of the restore procedure, with a
   verified dump in hand.

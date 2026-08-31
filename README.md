@@ -407,13 +407,14 @@ it draws the panels Analysis already had.
 ```sh
 cp .env.example .env                                # fill in the gate settings
 cp allowed-emails.example.txt allowed-emails.txt    # one family address per line
+mkdir -p ./volumes/db/data                          # the database lives here
 docker compose up -d
 ```
 
-**Setup is fail-closed: one manual step, done once, and nothing starts until it is done.** Create a
-Google OAuth client, put its credentials in `.env`, and list the family's addresses in
-`allowed-emails.txt`. Leave any of that out and `docker compose up` stops before a container runs,
-naming what is missing, rather than bringing up an instance anyone who can reach it can read. The
+**Setup is fail-closed: nothing starts until it is done.** Create a Google OAuth client, put its
+credentials in `.env`, and list the family's addresses in `allowed-emails.txt`. Leave any of that
+out — or the empty database directory the third line makes — and `docker compose up` stops before a
+container runs, naming what is missing, rather than bringing up an instance anyone who can reach it can read. The
 walkthrough, console to first sign-in, is [`docs/google-sign-in.md`](docs/google-sign-in.md); the
 variables it fills in are the gate section of [`.env.example`](.env.example).
 
@@ -428,8 +429,9 @@ One caveat today: no `v*` release tag has been cut yet, so CI has never publishe
 the first release exists, run from a checkout instead —
 `docker compose -f compose.yaml -f compose.dev.yaml up -d --build`.
 
-You do not need a checkout to run this: `compose.yaml`, `Caddyfile`, `.env` and `allowed-emails.txt`
-are the whole deployment. The same command is also the upgrade — the pinned tag is the floating
+You do not need a checkout to run this: `compose.yaml`, `Caddyfile`, `.env`, `allowed-emails.txt`
+and the `volumes/db/data` directory beside them are the whole deployment — the database is a
+directory in it, not a volume kept somewhere under `/var/lib/docker`. The same command is also the upgrade — the pinned tag is the floating
 major, so `docker compose up -d` fetches the newest `v1.x.y` release. Take a backup first
 ([Upgrading](docs/operating.md#upgrading)).
 
@@ -445,7 +447,7 @@ graph LR
         caddy["caddy<br/>the only published port"]
         gate["gate<br/>Google sign-in + allowlist"]
         app["app<br/>the tracker"]
-        db[("db<br/>PostgreSQL — the one volume")]
+        db[("db<br/>PostgreSQL — ./volumes/db/data")]
     end
 
     google["Google sign-in"]
@@ -670,7 +672,7 @@ DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm r
 4. `npm run typecheck` — this is where a migration that broke a query surfaces.
 
 `./scripts/smoke-test.sh` is the container smoke test CI runs: it brings the stack up against an
-empty volume, waits for the app healthcheck, requests `/healthz`, restarts the app, and checks that
+empty data directory, waits for the app healthcheck, requests `/healthz`, restarts the app, and checks that
 the runtime image contains what it is meant to and nothing it is not, and that every container holds
 only the privileges it was proved to need. It is slow and is not where behaviour gets tested.
 

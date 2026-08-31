@@ -27,7 +27,7 @@ The services defined in [`compose.yaml`](../compose.yaml), under the project nam
 
 | Service | What it is | Published port |
 |---|---|---|
-| `db` | Postgres. All persistent state, in the named volume `db-data` | none |
+| `db` | Postgres. All persistent state, in `./volumes/db/data` beside `compose.yaml` | none |
 | `app` | The application: pages, uploads, and the price refresh loop, in one process | none |
 | `gate` | oauth2-proxy. Answers "may this request in?" against Google and the allowlist | none |
 | `caddy` | The ingress front door, and where the gate is enforced | **`80:8080`, on every interface** — host side still 80; 8080 is Caddy's own listener |
@@ -70,15 +70,20 @@ stanza on purpose: if the registry is unreachable or the tag does not exist, the
 says so, rather than starting a multi-minute Node build on this machine. Which tag it runs is
 [`APP_VERSION`](#environment-variables), and it defaults to the floating major.
 
-**`db-data` is the only named volume, and it is everything.** Every statement, every stored original
-CSV, every price. `docker compose down` leaves it alone; `docker compose down -v` deletes it.
+**`./volumes/db/data` is the whole of the state, and it is a directory you can see.** Every
+statement, every stored original CSV, every price. It reaches the container as the `db-store` volume
+name, which Compose's local driver binds to that path — so `docker compose down` leaves it alone and
+`docker compose down -v` now leaves it alone too: that removes the volume *record*, not the
+directory. Deleting the data is `rm -rf` and nothing else, which is a better place for the one
+irreversible act to sit than a flag on a routine command.
 
 ---
 
 ## Installing
 
 **Host requirements.** Docker Engine with the Compose v2 plugin — `docker compose`, two words, not
-the older `docker-compose` script. Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image
+the older `docker-compose` script; any v2 is new enough, since resolving a volume's `device:`
+relative to the Compose file has worked since 1.27.4. Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image
 is pulled, and to `quay.io`, because the gate image is. A Google account for each family member, and
 one Google Cloud project to hold the OAuth client. `linux/amd64` and `linux/arm64` are both
 published, so a Raspberry Pi or an ARM NAS needs nothing special. There is no build step and
@@ -123,6 +128,47 @@ this household also admits every other Gmail account on earth. The file is the o
 this instance has, and everyone on it sees and can do everything. Editing it is
 [a lever with real teeth](#revocation-and-the-levers-you-have).
 
+### Where the database lives
+
+`./volumes/db/data`, beside `compose.yaml`. Make it before the first `up`:
+
+```sh
+mkdir -p ./volumes/db/data
+```
+
+**It has to exist, and the first time it has to be empty.** Compose binds the `db-store` volume name
+to that path; a missing directory stops `up` with a mount error naming it, rather than starting an
+instance whose data quietly goes somewhere else. Only the full path will do — the driver mounts a
+directory, it does not create one.
+
+**You do not chown it.** `db` runs as uid 70 and never as root, and a plain bind mount would arrive
+root-owned and stop `initdb` dead. A volume mounted over an *empty* directory takes the image's
+ownership for it instead — the same seeding that gives Caddy a writable `/data`
+([below](#before-you-enable-tls-give-caddy-volumes)) — so Docker sets `70:70` before Postgres looks,
+whoever owns the checkout. Afterwards the directory is `0700` uid 70 and your own account cannot
+read inside it. Borrow root from the daemon to look:
+
+```sh
+docker run --rm -v "$PWD/volumes/db:/v" postgres:17-alpine ls -la /v/data
+```
+
+**A directory with anything already in it skips that seeding**, and Postgres then refuses it by one
+of two messages: `initdb: error: directory "/var/lib/postgresql/data" exists but is not empty` for a
+stray file such as a `.gitkeep`, and
+`initdb: error: could not access directory "/var/lib/postgresql/data": Permission denied` for a
+cluster copied in by hand with its ownership lost. Set the ownership yourself in that case, still
+without host root:
+
+```sh
+docker run --rm -v "$PWD/volumes/db:/v" postgres:17-alpine chown -R 70:70 /v/data
+```
+
+**Moving the deployment moves the database with it**, and the first `up` at the new path stops to
+ask: `Volume "portfolio_db-store" exists but doesn't match configuration in compose file. Recreate
+(data will be lost)?` — because the volume record holds the old absolute path. Answer `y`. What gets
+recreated is that pointer, not the directory; this is the one configuration where the prompt's
+warning does not apply, and `docker compose down -v` is harmless for the same reason.
+
 ### What to put in `.env`
 
 `cp .env.example .env`, then fill in its gate section — [`google-sign-in.md`](google-sign-in.md)
@@ -141,8 +187,8 @@ Set `DATABASE_URL` in `.env` to point at it. Four things that catch people:
 
 - The connection is made from inside a container, so `localhost` in that URL means the *app
   container*, not your host. Use a hostname or address the container can actually reach.
-- The bundled `db` service still starts, still creates `db-data`, and `app` still waits for it to
-  report healthy. Setting `DATABASE_URL` does not remove it — delete the `db` service and `app`'s
+- The bundled `db` service still starts, still initialises `./volumes/db/data`, and `app` still
+  waits for it to report healthy. Setting `DATABASE_URL` does not remove it — delete the `db` service and `app`'s
   `depends_on` block if you do not want it running.
 - Migrations run at every container start, against whatever `DATABASE_URL` names, so the role needs
   to be able to create tables. There is no separate migrate step to run.
@@ -180,9 +226,10 @@ want. A `200` means the gate is not in the path and every device on your LAN has
 The last leg — a real Google account completing a real sign-in — is yours to walk once, from a
 browser at your public origin. Nothing in CI can do it, and nothing on the box can either.
 
-> **`scripts/smoke-test.sh` is a CI tool and it destroys data.** It runs `docker compose down -v`
-> before it starts and again from an exit trap, which deletes the `db-data` volume — every
-> statement, every stored original, every price. It exists to prove that a *fresh* machine refuses
+> **`scripts/smoke-test.sh` is a CI tool and it destroys data.** It empties `./volumes/db/data`
+> before it starts and again from an exit trap — every statement, every stored original, every
+> price. (`docker compose down -v` no longer would, so the script deletes the contents itself,
+> through a root container.) It exists to prove that a *fresh* machine refuses
 > to start until the gate is configured and then comes up whole, using throwaway Google credentials
 > that never contact Google. Never point it at an instance you care about.
 
@@ -260,7 +307,7 @@ yourself:
 `POSTGRES_PASSWORD` also appears in `.env.example`. It configures `compose.yaml` rather than the
 app, which is why it is not in the table above.
 
-**It only takes effect on an empty volume.** Postgres reads it when it first initialises its data
+**It only takes effect on an empty data directory.** Postgres reads it when it first initialises its data
 directory and never again. On an instance that has already run, changing `POSTGRES_PASSWORD` and
 `DATABASE_URL` together does not rotate the password — it leaves the app unable to authenticate and
 crash-looping. Change it inside the database instead, then update `DATABASE_URL` to match:
@@ -351,7 +398,11 @@ target — `target /data already mounted as services.caddy.tmpfs` — so the who
       - caddy_config:/config
 
 volumes:
-  db-data:
+  # db-store keeps the driver_opts compose.yaml gives it — do not flatten it to
+  # a bare name while adding these two, or the database moves.
+  db-store:
+    driver: local
+    driver_opts: { type: none, o: bind, device: ./volumes/db/data }
   caddy_data:
   caddy_config:
 ```
@@ -732,11 +783,18 @@ What to do about any of this is [`runbook.md`](runbook.md).
 **Backups are not a built-in feature and will not become one.** Self-hosters have their own, and a
 half-built backup feature is worse than none — it is the one that looks like it is working.
 
-There is exactly one thing to back up for **data**: the `db-data` named volume, through `pg_dump`.
+There is exactly one thing to back up for **data**: the cluster at `./volumes/db/data`, through
+`pg_dump`.
 The application container is stateless — it writes nothing to its own filesystem, and `compose.yaml`
 mounts it `read_only: true` so that stays true. Uploaded CSVs are kept in Postgres rather than on
 disk (DESIGN.md §5.2) precisely so that this stays a single target. The image is rebuildable and
 needs no backup.
+
+**Being able to see the directory does not make copying it a backup.** A file-level copy of a
+*running* cluster is a torn one, whatever the tool. Stopped — `docker compose down` first — a copy
+of `./volumes/db/data` is a valid snapshot, and restoring one means putting the ownership back
+([Where the database lives](#where-the-database-lives)). `pg_dump` stays the documented path because
+it is the one that also survives a Postgres major upgrade.
 
 **Budget for the dump growing faster than it used to.** The price observation log is the largest
 table on an instance that has been running a while ([Growth and limits](#growth-and-limits)), and it
@@ -786,7 +844,7 @@ has a copy of them. What is in them that is not recoverable from anywhere:
 - `GATE_CLIENT_ID` and `GATE_CLIENT_SECRET` — recoverable, but only from the Google Cloud console,
   and the secret may have to be regenerated there rather than read back.
 - `GATE_COOKIE_SECRET` — regenerating it signs the household out. Recoverable, and annoying.
-- `POSTGRES_PASSWORD` — the worst of them, because the `db-data` directory was initialised with it
+- `POSTGRES_PASSWORD` — the worst of them, because `./volumes/db/data` was initialised with it
   and still expects it. A restored dump does not help; see [`runbook.md`](runbook.md).
 - `allowed-emails.txt` — losing it is a locked-out household until you retype it, because the stack
   will not start without the file at all.
@@ -891,7 +949,8 @@ There is no `git pull` and no build. The `app` service is set `pull_policy: alwa
 `docker compose up -d` fetches whatever the pinned tag currently points at and recreates the
 container; with the default floating `APP_VERSION=1` that is the newest `v1.x.y` release. A
 checkout of this repository is not needed to run or upgrade an instance — only `compose.yaml`,
-`Caddyfile`, your `.env` and your `allowed-emails.txt`.
+`Caddyfile`, your `.env`, your `allowed-emails.txt` and the `volumes/db/data` directory beside
+them.
 
 **This does not upgrade the gate.** `gate` is pinned to an exact release with no variable in front
 of it, so `docker compose up -d` recreates the container on the same image forever. Moving it is
@@ -929,20 +988,48 @@ the dump and the tag you wrote down are the first two lines above, and why "take
 upgrading" is not a formality here. Pin the old version with `APP_VERSION` in `.env` and restore the
 dump; either one alone leaves you worse off than before.
 
+### Moving an instance that predates the local path
+
+An instance first brought up before the database moved into the checkout keeps its cluster in a
+Docker-managed volume, `portfolio_db-data`. Nothing reads it any more: the new `db-store` name binds
+`./volumes/db/data`, and starting on the new `compose.yaml` initialises an empty cluster there — a
+working instance with none of your data, rather than an error. Move it before the first `up` on the
+new file.
+
+The volume was left under its old name deliberately, so this is a copy and not a leap: the original
+is still there afterwards, and the way back is to stop and delete the new directory.
+
+```sh
+docker compose down                       # on the old compose.yaml
+mkdir -p ./volumes/db/data
+docker run --rm \
+  -v portfolio_db-data:/from -v "$PWD/volumes/db/data:/to" \
+  postgres:17-alpine cp -a /from/. /to/   # -a keeps uid 70 and the 0700 mode
+docker compose up -d                      # on the new one
+```
+
+Check the instance, not the copy: sign in and open a screen with data on it. Then, once you are
+sure, `docker volume rm portfolio_db-data` — the last copy of anything you did not also dump.
+
+If you would rather not copy files at all, the dump-and-restore in
+[Restoring](#restoring) does the same job: dump on the old file, `up` on the new one against an
+empty directory, restore into it.
+
 ### Upgrading Postgres across a major version
 
 `compose.yaml` pins a Postgres major version by tag. Raising it does **not** migrate the data
 directory: the new server finds a directory written by the previous major version and refuses to
-start, over and over, with `db-data` left exactly as it was. Nothing is damaged, and nothing works.
+start, over and over, with `./volumes/db/data` left exactly as it was. Nothing is damaged, and nothing works.
 
 The dump-and-restore procedure above *is* the upgrade path:
 
 1. **Dump on the old version, before you change the tag.** An archive written by a newer `pg_dump`
    cannot be loaded into an older server, so doing this in the wrong order also removes your way
    back to the version that still runs.
-2. `docker compose down` (no `-v`), then remove the volume deliberately:
-   `docker volume rm portfolio_db-data`.
-3. Change the tag and `docker compose up -d db`, letting it initialise an empty directory.
+2. `docker compose down`, then empty the data directory deliberately — `down -v` will not, and
+   `0700` uid 70 means your own account cannot either:
+   `docker run --rm -v "$PWD/volumes/db/data:/data" postgres:17-alpine find /data -mindepth 1 -delete`.
+3. Change the tag and `docker compose up -d db`, letting it initialise the empty directory.
 4. Restore into it, then `docker compose up -d`.
 
 Step 3 is also the one moment `POSTGRES_PASSWORD` is read again, because the data directory is empty
