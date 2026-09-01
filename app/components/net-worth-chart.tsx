@@ -17,23 +17,14 @@
  * line, grid and fill are unchanged either way: story 10 wants the shape of
  * the year without the size of it.
  */
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 
 import { MASKED_FIGURE } from "~/components/amount";
+import { isoDate } from "~/lib/chart-range";
 import { compactScale, formatCompact, formatMoney, toPlotValue } from "~/lib/format";
 import { marketDateOf, marketTimeOf } from "~/lib/market-hours";
 
-export type ChartPoint = {
-  /**
-   * A calendar date `YYYY-MM-DD`, or a full ISO instant when drawing a
-   * session. Both parse to a moment, which is all {@link buildScale} asks;
-   * how it is *labelled* is decided by the `session` prop, never by
-   * inspecting the string — a chart that re-reads its axis off punctuation
-   * changes it by accident.
-   */
-  date: string;
-  amount: string;
-};
+import type { ChartPoint, SessionAxis } from "~/lib/chart-range";
 
 /**
  * The drawing is done in an abstract 1000×300 box and stretched to fit, so the
@@ -271,20 +262,6 @@ function toArea(points: ChartPoint[], scale: Scale): string {
     last.date,
   )},${HEIGHT} Z`;
 }
-
-/** UTC in, UTC out — the one conversion that cannot pick up a server's zone. */
-const isoDate = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
-
-/**
- * What the chart is told about the session it is drawing, or null when
- * drawing days. One prop rather than a flag beside a zone: an intra-session
- * line is always read on the market's clock — neither half means anything
- * without the other.
- */
-export type SessionAxis = {
-  /** `MARKET_TIMEZONE`. A session is 09:30 to 16:00 in exactly one zone. */
-  timeZone: string;
-};
 
 function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): string {
   // Every tick on a session's axis falls inside one trading day, so naming the
@@ -565,4 +542,42 @@ export function NetWorthChart({
       </div>
     </>
   );
+}
+
+/**
+ * The one sentence about an empty chart panel that used to be spelled twice,
+ * word for word, under two separately-worded comments (spec 0015): a
+ * session with one observed moment is real state between the poller's first
+ * attempt and its second, nothing to do with how many statements a screen
+ * has, on either surface — 1D draws the same instants whichever chart is
+ * asking. Guarded on there being a moment at all: with none, nothing has
+ * been uploaded and no waiting for prices changes that, so `children` — the
+ * caller's own fallback — is the true sentence instead. `moments` and
+ * `children` do **not** converge the same way: a caller passes its own
+ * `computed.length` and its own wording, because the fallback genuinely
+ * differs between an instance with no chart at all and a range that is
+ * merely thin, and only the account page's is reachable with none.
+ */
+export function ChartEmptyNote({
+  session,
+  moments,
+  children,
+}: {
+  /** The session this chart would draw, or null when it draws days. */
+  session: SessionAxis | null;
+  /** The caller's own `computed.length` — how many moments this session holds so far. */
+  moments: number;
+  /** The caller's own fallback, shown everywhere the session sentence does not apply. */
+  children: ReactNode;
+}) {
+  if (session !== null && moments > 0) {
+    return (
+      <p className="empty-note">
+        A line needs two observed moments and this session has {moments}. It appears once another
+        price arrives.
+      </p>
+    );
+  }
+
+  return children;
 }

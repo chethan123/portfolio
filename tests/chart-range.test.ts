@@ -14,6 +14,7 @@ import {
   RANGE_COOKIE,
   RANGES,
   SAMPLE_BUDGET,
+  chartWindow,
   customRangeMin,
   decodeRangeCookieValue,
   encodeRangeCookieValue,
@@ -585,5 +586,96 @@ describe("the address a range control points at", () => {
     expect(carriedParams(at("?recorded=2026-01-31&range=1m&start=x&end=y"))).toEqual([
       ["recorded", "2026-01-31"],
     ]);
+  });
+});
+
+describe("chartWindow: the window and the control block a loader spreads (spec 0015)", () => {
+  it("assembles the household's window and control block from a request naming an explicit range", () => {
+    const earliest = { positionSet: "2026-06-01" as const, manual: "2020-01-01" as const };
+    const shared = { today: TODAY, earliest, session: "2026-08-25" as const, timeZone: "America/New_York" };
+
+    const { resolved, controls } = chartWindow("household", {
+      request: new Request("https://x/?range=1y"),
+      ...shared,
+    });
+
+    // Literal, not `resolveRange("1y", ...)`: that would assert the function
+    // under test against itself. 1Y's own boundary math and the sampler's
+    // decay are already exhausted above; `dates` itself is 180 entries and
+    // not usefully spelled out here, so only its shape is asserted.
+    expect(resolved.range).toBe("1y");
+    expect(resolved.since).toBe("2025-08-26");
+    expect(resolved.custom).toBeUndefined();
+    expect(resolved.session).toBeUndefined();
+    expect(resolved.dates.length).toBe(SAMPLE_BUDGET);
+    expect(resolved.dates[0]).toBe("2025-08-26");
+    expect(resolved.dates.at(-1)).toBe(TODAY);
+
+    expect(controls).toEqual({
+      range: "1y",
+      custom: undefined,
+      // Off 1D: the control block carries no session even though one was
+      // observed — `resolved.session` is what says so, not `shared.session`.
+      session: null,
+      // Literal, not `rangeOptions(...)`: every preset is on, because
+      // 2020-01-01 (the manual point, earlier than the position set) predates
+      // every fixed boundary and a session was observed for 1D.
+      rangeOptions: (Object.keys(RANGES) as RangeKey[]).map((key) => ({
+        key,
+        label: RANGES[key].label,
+        disabled: false,
+      })),
+      // The earlier of the household's two dates (`surfaceEarliestDate`),
+      // not the account's.
+      customMin: "2020-01-01",
+      customMax: TODAY,
+    });
+  });
+
+  it("assembles the account's window and control block the same way, off a request naming no range at all", () => {
+    const earliest = { positionSet: "2026-06-01" as const };
+    const shared = { today: TODAY, earliest, session: null, timeZone: "America/New_York" };
+
+    const { resolved, controls } = chartWindow("account", {
+      request: new Request("https://x/"),
+      ...shared,
+    });
+
+    // Same reasoning as the household case above: a literal, not
+    // `resolveRange(DEFAULT_RANGE, ...)`. The unset `?range=` falls back to
+    // 1Y (`DEFAULT_RANGE`), which happens to resolve to the same boundary as
+    // the explicit case, because both share this file's `TODAY`.
+    expect(resolved.range).toBe(DEFAULT_RANGE);
+    expect(resolved.since).toBe("2025-08-26");
+    expect(resolved.custom).toBeUndefined();
+    expect(resolved.session).toBeUndefined();
+    expect(resolved.dates.length).toBe(SAMPLE_BUDGET);
+    expect(resolved.dates[0]).toBe("2025-08-26");
+    expect(resolved.dates.at(-1)).toBe(TODAY);
+
+    expect(controls).toEqual({
+      range: DEFAULT_RANGE,
+      custom: undefined,
+      session: null,
+      // Literal, not `rangeOptions(...)`: 1D is disabled (`session: null`
+      // above, nothing observed), and so are 3M, YTD, 1Y and 5Y, whose fixed
+      // boundaries all fall before this account's own 2026-06-01 — 1W and 1M
+      // land after it, and All and Custom are never disabled.
+      rangeOptions: [
+        { key: "1d", label: "1D", disabled: true },
+        { key: "1w", label: "1W", disabled: false },
+        { key: "1m", label: "1M", disabled: false },
+        { key: "3m", label: "3M", disabled: true },
+        { key: "ytd", label: "YTD", disabled: true },
+        { key: "1y", label: "1Y", disabled: true },
+        { key: "5y", label: "5Y", disabled: true },
+        { key: "all", label: "All", disabled: false },
+        { key: "custom", label: "Custom", disabled: false },
+      ],
+      // The account's own earliest date — there is no manual series on this
+      // surface to fall back to.
+      customMin: "2026-06-01",
+      customMax: TODAY,
+    });
   });
 });

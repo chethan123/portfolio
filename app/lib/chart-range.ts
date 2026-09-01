@@ -1,10 +1,14 @@
 /**
- * The chart-range vocabulary, resolution and cookie, once (spec 0008), plus
- * the sampler's density rule (spec 0009 / ADR-0003). The two routes each
- * carried their own copies — named as debt in ARCHITECTURE.md — blocked on
- * "All" meaning a different earliest date per screen; taking *which* surface
- * applies as a parameter removes that, so the boundary math, disabled-state
- * rule and sampler live here once.
+ * The chart's time vocabulary (spec 0015) — not the *range* vocabulary alone
+ * any more: a range, its resolution and cookie (spec 0008) with the
+ * sampler's density rule (spec 0009 / ADR-0003), the window a range resolves
+ * to, the points drawn on that window, and the axis that labels them.
+ * `ChartPoint` and `SessionAxis` moved down from `net-worth-chart.tsx` — both
+ * routes and the component depend on them, and a domain module type-
+ * importing from a component is a direction this file must not open.
+ * `chartWindow` assembles the window and the payload block a loader spreads,
+ * from pieces this file already had; the two routes each carried their own
+ * copy of that assembly, and of `isoDate` below, until this file did.
  *
  * Not a `.server` module (`masking.ts`'s reason): no database, and both
  * routes' components read the vocabulary again after hydration. The cookie
@@ -95,6 +99,30 @@ export interface RangeWindow extends Window {
   session?: IsoDate;
 }
 
+export type ChartPoint = {
+  /**
+   * One value on the window {@link resolveRange} produced — a calendar date
+   * `YYYY-MM-DD` for every preset but 1D, or a full ISO instant when the
+   * window carries a session. Both parse to a moment, which is all a chart's
+   * own scale asks; how the moment is *labelled* is decided by
+   * {@link SessionAxis}, never by inspecting the string — a chart that
+   * re-read its axis off punctuation would change it by accident.
+   */
+  date: string;
+  amount: string;
+};
+
+/**
+ * What a chart is told about the session it is drawing, or null when
+ * drawing days. One value rather than a flag beside a zone: an intra-session
+ * line is always read on the market's clock — neither half means anything
+ * without the other.
+ */
+export type SessionAxis = {
+  /** `MARKET_TIMEZONE`. A session is 09:30 to 16:00 in exactly one zone. */
+  timeZone: string;
+};
+
 /**
  * Two spellings of "no session" reach here — `null` (looked, found nothing)
  * and `undefined` (not passed) — and both mean the same to 1D. Named once so
@@ -104,7 +132,7 @@ const hasSession = (session?: IsoDate | null): session is IsoDate =>
   session !== undefined && session !== null;
 
 /** UTC throughout, deliberately — the one conversion that cannot pick up a server's zone. */
-const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
+export const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
 
 const parseIso = (date: IsoDate): number => Date.parse(`${date}T00:00:00Z`);
 
@@ -474,6 +502,88 @@ export function readChartRange(request: Request): RequestedRange {
   if (decoded !== null) return { ...decoded, explicit: false };
 
   return { range: DEFAULT_RANGE, explicit: false };
+}
+
+/**
+ * The payload block a loader spreads into its return — the same six keys,
+ * names and values both routes used to assemble by hand before spec 0015:
+ * `custom` still `undefined` off a resolved range that is not custom,
+ * `customMax` still the `today` the caller passed in. Every field but those
+ * two is derived from a type this file already declares rather than
+ * restated by hand: `range` and `custom` from `RangeWindow`, `customMin`
+ * from `customRangeMin`'s own return type, and `rangeOptions` from
+ * {@link rangeOptions}'s — so none of the four can drift from what actually
+ * produces them.
+ */
+export type ChartControls = Pick<RangeWindow, "range"> & {
+  /**
+   * Required, not optional — `undefined` off a resolved range that is not
+   * custom is a value this key always carries, never a key a caller can omit
+   * (route tests assert `toBeUndefined()`, not the key's absence).
+   */
+  custom: RangeWindow["custom"];
+  /**
+   * Null on every range but 1D, which is how the chart is told which axis it
+   * is drawing (§7). The zone travels in, never read from configuration
+   * here — see {@link chartWindow}.
+   */
+  session: SessionAxis | null;
+  rangeOptions: ReturnType<typeof rangeOptions>;
+  customMin: ReturnType<typeof customRangeMin>;
+  customMax: IsoDate;
+};
+
+/**
+ * The window a surface's chart draws, and the control block a loader spreads
+ * into its return — composed entirely from what this file already has, so
+ * the pipeline downstream of a resolved range has one home rather than two
+ * (spec 0015). Pure, like the rest of this module: the market time zone
+ * arrives as `opts.timeZone` rather than read off configuration, which is
+ * what keeps this file database-free and both loaders spell
+ * `getConfig().MARKET_TIMEZONE` already, for `asOfView`.
+ *
+ * Takes `Surface`, not `ChartScope` (`chart-series.server.ts`): this reads
+ * nothing, so it narrows nothing, and a required `reading` here would claim
+ * a narrowing that never happens — the signature saying more than the code
+ * does, which is worth less than saying nothing. `resolved` is returned
+ * rather than folded away because both loaders still need it — the Overview
+ * reads `resolved.since` for `netWorthChange` and bounds its hand-typed
+ * prefix by it, and `resolved.session` decides whether that prefix is drawn
+ * at all.
+ */
+export function chartWindow(
+  surface: Surface,
+  opts: {
+    request: Request;
+    today: IsoDate;
+    earliest: SurfaceEarliest;
+    /** From `latestObservedSession`. See {@link resolveRange}. */
+    session: IsoDate | null;
+    timeZone: string;
+  },
+): { resolved: RangeWindow; controls: ChartControls } {
+  const { request, today, earliest, session, timeZone } = opts;
+  const requested = readChartRange(request);
+
+  const resolved = resolveRange(requested.range, {
+    today,
+    earliest,
+    surface,
+    custom: requested.custom,
+    session,
+  });
+
+  return {
+    resolved,
+    controls: {
+      range: resolved.range,
+      custom: resolved.custom,
+      session: resolved.session === undefined ? null : { timeZone },
+      rangeOptions: rangeOptions({ today, earliest, surface, session }),
+      customMin: customRangeMin(surface, earliest),
+      customMax: today,
+    },
+  };
 }
 
 /**

@@ -3,13 +3,14 @@ import { describe, expect, it } from "vitest";
 
 import { MASKED_FIGURE } from "../app/components/amount.tsx";
 import {
+  ChartEmptyNote,
   NetWorthChart,
   buildScale,
   gridRules,
   hitTargets,
 } from "../app/components/net-worth-chart.tsx";
 
-import type { ChartPoint } from "../app/components/net-worth-chart.tsx";
+import type { ChartPoint } from "../app/lib/chart-range.ts";
 
 /**
  * The arithmetic behind the net worth trend line (DESIGN.md §8.1, §13.6).
@@ -445,5 +446,28 @@ describe("an intra-session line (ADR-0006)", () => {
 
     expect(markup).toContain("<span>5 Jun</span>");
     expect(markup).toContain('<span class="chart-readout-date">5 Jun 2026</span>');
+  });
+});
+
+describe("<ChartEmptyNote> (spec 0015)", () => {
+  // Nothing today asserts this sentence at all — it is spelled once now, in
+  // the component under test, so this is the case that was missing, not a
+  // regression test.
+  it("renders the waiting sentence for a session with one moment, and the caller's own fallback with none observed", () => {
+    const fallback = <p className="empty-note">The caller's own wording.</p>;
+    const render = (moments: number) =>
+      renderToStaticMarkup(
+        <ChartEmptyNote session={{ timeZone: "America/New_York" }} moments={moments}>
+          {fallback}
+        </ChartEmptyNote>,
+      );
+
+    // toContain, not a whole-string match: the surrounding markup is not
+    // what this test is protecting, and a harmless attribute change must not
+    // fail it (docs/developing.md).
+    expect(render(1)).toContain(
+      "A line needs two observed moments and this session has 1. It appears once another price arrives.",
+    );
+    expect(render(0)).toContain("The caller&#x27;s own wording.");
   });
 });
