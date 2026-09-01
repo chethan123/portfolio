@@ -1210,19 +1210,34 @@ breakdown gets a chart palette of its own.
 | # | Light | Dark |
 |---|---|---|
 | 1 | `#0041c8` | `#0055ff` |
-| 2 | `#007751` | `#10B981` |
-| 3 | `#505f76` | `#b6c4ff` |
-| 4 | `#b6c4ff` | `#EF4444` |
-| 5 | `#c3c5d9` | `#4edea3` |
+| 2 | `#eb6834` | `#d95926` |
+| 3 | `#006b46` | `#199e70` |
+| 4 | `#eda100` | `#c98500` |
+| 5 | `#e87ba4` | `#d55181` |
+| Other | `#737688` | `#a3a8b8` |
 
-These are fills, not text: 3:1 against the panel is the bar they have to clear, and the light
-sequence's tail (`#b6c4ff`, `#c3c5d9`) does not clear it — 1.7:1 and 1.4:1 on white. The slices are
-large enough to be identifiable anyway; the 12px legend dots are not, so **every legend dot carries
-a 1px `--outline-variant` ring**. That is cheaper than re-deriving a palette Stitch chose for its
-harmony, and it fixes the dot rather than the slice, which is where the problem actually is.
+Five hues and no more, because a sequence is only as long as colour vision keeps its neighbours
+apart. Each theme's five were checked mechanically, not by eye: adjacent wedge pairs simulated
+under protanopia and deuteranopia against the panel the ring actually renders on (white in light,
+`#1e293b` in dark), every pair clearing the separation target (worst adjacent ΔE 11.0 light /
+8.4 dark, OKLab×100, target ≥ 8), and the warm–cool interleaving is what buys it. The sequence's
+predecessor is the argument for the ceremony: its dark tail `#4edea3` sat one JND from rank 2's
+`#10b981`, so a breakdown with many groups read as one large green — and that `#10b981` *was*
+`--gain`, a series wearing the state pair's colour.
 
-A breakdown with more than five groups folds its tail into one "Other" slice rather than extending
-the sequence. Six flat colours in a donut is a legend nobody reads.
+A breakdown with more than five groups folds its tail into one "Other" wedge rather than
+extending the sequence — many flat colours in a donut is a legend nobody reads — and the tail
+wears the table's sixth entry: a **neutral**, deliberately grey and deliberately none of the
+five, because a merged remainder dressed in a real series colour is two different rows claiming
+to be one group. The grey also holds its own against its wedge neighbours under the same
+simulation (ΔE 8.7 light / 10.8 dark beside rank 5). Each folded row keeps its own value and
+percentage in the table; only the picture merges them, and the panel says so when it happens.
+
+These are fills, not text: 3:1 against the panel is the bar they have to clear, and the lightest
+slots do not — yellow (2.2:1) and magenta (2.7:1) on white, blue (2.6:1) on the dark panel. The
+slices are large enough to be identifiable anyway; the 12px legend dots are not, so **every
+legend dot carries a 1px `--outline-variant` ring**, and every ring ships beside its table,
+which carries every figure the wedges do not.
 
 ### 13.4 Typography
 

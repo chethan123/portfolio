@@ -40,8 +40,9 @@ in [the project tour](../../README.md#analysis--where-the-money-actually-sits).
 
 ### More than five rows
 
-Everything past the fourth row shares one colour and one wedge. Each row keeps its own value and
-its own percentage in the table; only the picture merges them. The panel says so when it happens.
+Everything past the fifth row shares one grey wedge — grey on purpose, so the merged remainder
+never looks like one of the five coloured groups. Each row keeps its own value and its own
+percentage in the table; only the picture merges them. The panel says so when it happens.
 
 ### When nothing is owned outright
 

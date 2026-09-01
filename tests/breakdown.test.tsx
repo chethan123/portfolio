@@ -51,31 +51,36 @@ describe("the arcs", () => {
     ]);
   });
 
-  it("folds everything past the fourth row into one wedge", () => {
-    // Six groups, five colours. The fold is by rank and starts at
-    // `SEQUENCE - 1`, so it is the FIFTH row and later that stop extending the
-    // sequence — they merge into the last wedge and share the last colour. The
-    // ring ends up with five arcs while the table still has six rows, which is
-    // what the panel's own note means by "everything past the fourth row".
+  it("folds everything past the fifth row into one neutral wedge", () => {
+    // Seven groups, five colours. The fold is by rank and starts at
+    // `SEQUENCE`, so it is the SIXTH row and later that stop extending the
+    // sequence — they merge into one wedge wearing `--cat-other`, the
+    // neutral, never a sixth hue and never a repeat of `--cat-5`: a tail
+    // dressed in a real series colour is two different rows reading as one
+    // group. The ring ends up with six arcs while the table still has seven
+    // rows, which is what the panel's own note means by "everything past the
+    // fifth row".
     //
     // The amounts descend with the shares rather than contradicting them: the
     // fold keys on rank, the caller sorts by amount, and a fixture whose two
     // columns disagreed would read as though the fold keyed on the share.
     const wedges = ring([
-      slice("A", "50.0000", "0.500000"),
+      slice("A", "40.0000", "0.400000"),
       slice("B", "20.0000", "0.200000"),
-      slice("C", "10.0000", "0.100000"),
+      slice("C", "12.0000", "0.120000"),
       slice("D", "10.0000", "0.100000"),
-      slice("E", "6.0000", "0.060000"),
-      slice("F", "4.0000", "0.040000"),
+      slice("E", "8.0000", "0.080000"),
+      slice("F", "6.0000", "0.060000"),
+      slice("G", "4.0000", "0.040000"),
     ]);
 
-    expect(wedges).toHaveLength(5);
+    expect(wedges).toHaveLength(6);
     expect(wedges[4]?.color).toBe("var(--cat-5)");
-    expect(wedges[4]?.fraction).toBeCloseTo(0.1, 12);
-    // Contiguous: the last arc starts exactly where the four before it ended,
+    expect(wedges[5]?.color).toBe("var(--cat-other)");
+    expect(wedges[5]?.fraction).toBeCloseTo(0.1, 12);
+    // Contiguous: the last arc starts exactly where the five before it ended,
     // so the ring closes with no residual wedge and no hairline gap.
-    expect(wedges[4]?.before).toBeCloseTo(0.9, 12);
+    expect(wedges[5]?.before).toBeCloseTo(0.9, 12);
   });
 });
 
