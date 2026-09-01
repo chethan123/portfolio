@@ -188,8 +188,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Counted off the rows already in hand — two counts of one thing are two
     // things that can disagree. Narrowed, so the coverage note matches.
     holdingCount: holdings.length,
-    /** Whether anything at all has been uploaded, narrowed or not. */
-    hasHoldings: instance > 0,
     narrowedToNothing: isNarrowedToNothing(owners, { held: holdings.length, instance }),
     pricedCount: holdings.filter((holding) => holding.isPriced).length,
     // Every cut reads `holdings-view.ts`'s one dimension registry, so a

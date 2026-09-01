@@ -104,6 +104,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   // a bounce must not close an editor the reader had open, and no link built
   // from the view (`link`, below) may carry either. `withRow` and `columnsFor`
   // are hoisted function declarations, legal to reach for from this closure.
+  //
+  // `toSearch` is this screen's own canonical spelling, not the module's
+  // default: a GET form submits every control it holds, touched or not, so
+  // Apply with one filter arrives as `?owner=1&account=&institution=&kind=&…`
+  // — unreadable in a bookmark — and the bounce cleans it in one hop. And its
+  // own bounce cannot loop, the half `owner-reading.server.ts`'s own comment
+  // does not cover (`spellId` is the shared half): `parseQuery(toSearch(q))`
+  // is `q`, so the respelled `url.search` is a fixed point of this screen's
+  // own grammar, not only of the owner parameter alone.
   const link = (owners: OwnerFilter) => toSearch(query, owners);
   const { reading, owner } = await ownerReading(request, {
     request: (owners) =>

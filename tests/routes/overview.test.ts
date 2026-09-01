@@ -526,7 +526,6 @@ describe("the Overview's three empty states", () => {
       await ctx.seedPerson({ name: "Alice" });
       const data = await loader(args(get("/?owner=999999999")));
 
-      expect(data.hasHoldings).toBe(false);
       const markup = renderRoute(Overview, "/", data);
       expect(markup).toContain("Nothing has been uploaded to this instance yet");
       expect(markup).not.toContain("no longer be read as");

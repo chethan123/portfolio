@@ -79,8 +79,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     // Counted off the rows already in hand rather than asked for separately —
     // two counts of one thing are two things that can disagree.
     holdingCount: holdings.length,
-    /** Whether anything at all has been uploaded, narrowed or not. */
-    hasHoldings: instance > 0,
     narrowedToNothing: isNarrowedToNothing(owners, { held: holdings.length, instance }),
     // `summarise`, not a `sumMoney` of its own: the Holdings total row's
     // helper, so this headline and that table's foot are the same arithmetic

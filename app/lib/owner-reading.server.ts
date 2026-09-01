@@ -98,6 +98,9 @@ export type OwnerBlock = {
   roster: Array<{ id: string; name: string }>;
   narrowedTo: Array<{ id: string; name: string }>;
   unknownOwner: boolean;
+  /** The unfiltered address, never `""`: a `<Link to="">` is the page it is
+   * already on, so a screen whose unfiltered address is bare (Analysis,
+   * Income, Overview) needs `"."` for "Show everyone" to go anywhere. */
   showEveryone: string;
 };
 
@@ -143,10 +146,16 @@ export async function ownerReading(
   // No runtime guard beyond that, though one was considered: a guard could
   // only check that the bounce target survives parsing, not that a speller is
   // idempotent — `?owner=1,3 → ?owner=3,1 → ?owner=1,3` passes such a check
-  // and loops forever. What actually catches a loop is following the chain,
-  // which `tests/owner-reading.test.ts` does for this default grammar and
-  // `holdings.test.ts` does for Holdings' own. A thrown `Error` would also be
-  // a new failure mode — a 500 where today there is a redirect.
+  // and loops forever. Nor would it catch a `request` that is constant in
+  // `owners` — ignores the argument and spells the same string regardless —
+  // which makes the everyone bounce below loop on the very first hop: its
+  // target, `spell.request(ALL_OWNERS)`, is then the same string as
+  // `canonical` above, which `url.search` already equals for this request to
+  // have reached that bounce at all, so the redirect answers with the address
+  // it was just asked to serve. What actually catches a loop is following the
+  // chain, which `tests/owner-reading.test.ts` does for this default grammar
+  // and `holdings.test.ts` does for Holdings' own. A thrown `Error` would
+  // also be a new failure mode — a 500 where today there is a redirect.
   const canonical = spell.request(owners);
   if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
 

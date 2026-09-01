@@ -227,8 +227,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       resolved.session === undefined &&
       manual.some((point) => resolved.range === "all" || point.date >= resolved.since),
     holdingCount,
-    /** Whether anything at all has been uploaded, narrowed or not. */
-    hasHoldings: instance > 0,
     narrowedToNothing: isNarrowedToNothing(owners, { held: holdingCount, instance }),
     pricedCount: accounts.reduce((total, account) => total + account.coverage.known, 0),
   };

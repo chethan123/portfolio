@@ -134,6 +134,13 @@ describe("the filter's own plumbing", () => {
         `/income?owner=${ids.join(",")}`,
       );
       expect(await redirectTo(() => loader(args(get("/income?owner="))))).toBe("/income");
+
+      // Alice and Bob are the whole seeded household, so ticking every box is
+      // the household under another name — the collapse is the second bounce
+      // this loader owes the address, not only the respelling above.
+      expect(await redirectTo(() => loader(args(get(`/income?owner=${ids.join(",")}`))))).toBe(
+        "/income",
+      );
     }),
   );
 
@@ -179,7 +186,6 @@ describe("the three empty states", () => {
 
       const data = await loader(args(get(`/income?owner=${alice.id}`)));
 
-      expect(data.hasHoldings).toBe(false);
       expect(renderRoute(Income, "/income", data)).toContain(
         "Nothing has been uploaded to this instance yet",
       );

@@ -121,16 +121,18 @@ describe("the settle chain", () => {
 
   it(
     "bounces the percent-encoded separator on its own, not only as part of the chain",
-    withDatabase(async (ctx) => {
-      const { alice, bob } = await seedTwoOwners(ctx);
-      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
-
+    withDatabase(async () => {
+      // Nothing seeded — the empty seed is itself the assertion: respelling a
+      // separator is decided from the address alone, before any database
+      // work, so a real roster must not be what makes this bounce happen.
+      //
       // A comparison blind to encoding would settle this address perfectly
       // while quietly keeping two URLs for one view — `?owner=1%2C3` never
       // itself appearing as a hop in a chain that starts elsewhere is not the
       // same claim as it bouncing when it is where a reader actually lands.
-      const encoded = get(`${PATH}?owner=${both.replace(",", "%2C")}&range=1m`);
-      expect(await redirectTo(() => ownerReading(encoded))).toBe(`${PATH}?owner=${both}&range=1m`);
+      expect(await redirectTo(() => ownerReading(get(`${PATH}?owner=1%2C3&range=1m`)))).toBe(
+        `${PATH}?owner=1,3&range=1m`,
+      );
     }),
   );
 });
@@ -214,12 +216,36 @@ describe("a screen's own request-only state", () => {
   );
 });
 
+describe("showEveryone", () => {
+  it(
+    "is '.' rather than '' for a screen whose unfiltered address is bare",
+    withDatabase(async (ctx) => {
+      const { alice } = await seedTwoOwners(ctx);
+
+      // The default `ScreenAddress` (Analysis, Income, Overview) spells the
+      // unfiltered household as no `owner` parameter at all, so
+      // `canonicalOwnerSearch(params, ALL_OWNERS)` is `""` here. A raw `""`
+      // would make `<Link to="">` resolve to the filtered page it is already
+      // on, so "Show everyone" would do nothing on the very screen it emptied.
+      const { owner } = await ownerReading(get(`${PATH}?owner=${alice.id}`));
+
+      expect(owner.showEveryone).toBe(".");
+    }),
+  );
+});
+
 describe("isNarrowedToNothing", () => {
   type Counts = { held: number; instance: number };
 
   const CASES: Array<[owners: OwnerFilter, counts: Counts, expected: boolean, why: string]> = [
     [[], { held: 0, instance: 0 }, false, "unfiltered and never uploaded — nothing to narrow"],
     [[], { held: 5, instance: 5 }, false, "unfiltered with holdings is never narrowed to nothing"],
+    [
+      [],
+      { held: 0, instance: 5 },
+      false,
+      "unfiltered and holding nothing is an empty instance, never a filter that reached nothing",
+    ],
     [["1"], { held: 3, instance: 5 }, false, "a filter that reaches something is not narrowed"],
     [["1"], { held: 0, instance: 5 }, true, "a filter reaching nothing on an instance that has data"],
     [
