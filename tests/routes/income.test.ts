@@ -16,7 +16,7 @@ import Income, { loader } from "../../app/routes/income.tsx";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, outcomeOf, redirectTo } from "../support/routes.ts";
+import { args, get, redirectTo } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -134,6 +134,13 @@ describe("the filter's own plumbing", () => {
         `/income?owner=${ids.join(",")}`,
       );
       expect(await redirectTo(() => loader(args(get("/income?owner="))))).toBe("/income");
+
+      // Alice and Bob are the whole seeded household, so ticking every box is
+      // the household under another name — the collapse is the second bounce
+      // this loader owes the address, not only the respelling above.
+      expect(await redirectTo(() => loader(args(get(`/income?owner=${ids.join(",")}`))))).toBe(
+        "/income",
+      );
     }),
   );
 
@@ -179,7 +186,6 @@ describe("the three empty states", () => {
 
       const data = await loader(args(get(`/income?owner=${alice.id}`)));
 
-      expect(data.hasHoldings).toBe(false);
       expect(renderRoute(Income, "/income", data)).toContain(
         "Nothing has been uploaded to this instance yet",
       );
@@ -212,61 +218,6 @@ describe("the three empty states", () => {
       expect(nothingMarkup).not.toContain("There is no data yet");
       expect(nothingMarkup).toContain("Alice holds nothing that has been recorded here");
       expect(nothingMarkup).toContain('aria-label="Filter by owner"');
-    }),
-  );
-});
-
-/**
- * The invariant the loader depends on, asserted the way the loader meets it:
- * through `new Request`, so every re-encoding the URL parsing does on the way in
- * is in the picture. `tests/routes/holdings.test.ts` carries the same one and
- * the reasoning behind it — two serialisers spell `'` and `,` differently, so an
- * address can differ from its own canonical spelling forever and the screen
- * answers every request with another redirect until the browser gives up.
- */
-describe("the canonical redirect settles", () => {
-  // Terminates, rather than bounces exactly once: an address can legitimately
-  // take two hops — spelling first, then the all-owners collapse — and what
-  // must never happen is a third that is the second again. Four is generous
-  // enough to prove the loop rather than to allow one.
-  const settles = async (search: string): Promise<void> => {
-    let where = `/income${search}`;
-    const seen: string[] = [];
-
-    for (let hop = 0; hop < 4; hop += 1) {
-      const outcome = await outcomeOf(() => loader(args(get(where))));
-      if (!(outcome instanceof Response)) return;
-
-      seen.push(where);
-      where = outcome.headers.get("Location") ?? "";
-      expect({ search, revisited: seen.includes(where) }).toEqual({ search, revisited: false });
-    }
-
-    expect({ search, settled: false }).toEqual({ search, settled: true });
-  };
-
-  it(
-    "in at most one hop, whatever spelled the address",
-    withDatabase(async (ctx) => {
-      const { alice, bob } = await seedTwoOwners(ctx);
-      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
-
-      for (const search of [
-        "",
-        `?owner=${alice.id}`,
-        `?owner=${both}`,
-        // Every multi-owner URL, on any transport that has already round-tripped
-        // the query through `URLSearchParams`.
-        `?owner=${both.replace(",", "%2C")}`,
-        // An id naming nobody, which this application keeps on purpose.
-        "?owner=o%27brien",
-        "?owner=o'brien",
-        `?owner=${bob.id},${alice.id}`,
-        `?owner=${alice.id}&owner=${bob.id}`,
-        "?owner=",
-      ]) {
-        await settles(search);
-      }
     }),
   );
 });

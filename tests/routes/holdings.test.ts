@@ -343,6 +343,29 @@ describe("reading the table as an owner", () => {
   );
 
   it(
+    "keeps a receipt across the everyone collapse, where its own canonical bounce already does",
+    withDatabase(async (ctx) => {
+      const { alice, bob, carol, hers } = await seedTwoOwners(ctx);
+      const narrowed = await loader(args(get(`/holdings?owner=${alice.id}`)));
+      const row = narrowed.rows?.[0];
+      const key = `${hers.id}.${row?.instrumentId ?? ""}`;
+
+      // Ticking every owner box after correcting a row used to spell a
+      // different bounce than the one the row's own edit already keeps
+      // `saved` through — one speller for both closes that gap.
+      const destination = await redirectTo(() =>
+        loader(args(get(`/holdings?owner=${ownerParam(alice, bob, carol)}&saved=${key}`))),
+      );
+      expect(destination).toBe(`/holdings?saved=${key}`);
+
+      // And the receipt still renders: `written` is looked up in the whole
+      // household, so it survives the collapse to the unfiltered view.
+      const settled = await loader(args(get(destination)));
+      expect(settled.written?.key).toBe(key);
+    }),
+  );
+
+  it(
     "names whose portfolio is empty when a dimension filter is on as well",
     withDatabase(async (ctx) => {
       const { alice, his } = await seedTwoOwners(ctx);
@@ -517,7 +540,7 @@ describe("the three empty states", () => {
 
       const data = await loader(args(get(`/holdings?owner=${alice.id}`)));
 
-      expect(data.ownersHoldNothing).toBe(true);
+      expect(data.narrowedToNothing).toBe(true);
       expect(data.unknownOwner).toBe(false);
       const markup = renderRoute(Holdings, "/holdings", data);
       expect(markup).not.toContain("There is no data yet");
@@ -580,22 +603,15 @@ describe("the canonical bounce, through a real URL", () => {
         await redirectTo(() => loader(args(get(`/holdings?owner=${both.replace(",", "%2C")}`)))),
       ).toBe(`/holdings?owner=${both}`);
 
+      // The owner-only spellings — reversed ids, the encoded separator, the
+      // apostrophe, a space either way, a repeated parameter, the bare
+      // filter — are the default grammar `ownerReading` speaks on every
+      // screen, and `tests/owner-reading.test.ts` follows that chain once for
+      // all four rather than here per screen. What stays here is what proves
+      // *this* screen's own grammar: a GET form's untouched selects, grouping
+      // before the owner parameter, and the row parameters this screen alone
+      // carries.
       for (const search of [
-        "",
-        `?owner=${alice.id}`,
-        `?owner=${both}`,
-        // The comma, spelled both ways. Some transports hand the loader a
-        // query already round-tripped through `URLSearchParams`.
-        `?owner=${both.replace(",", "%2C")}`,
-        // The apostrophe: an id naming nobody, which this application keeps on
-        // purpose. `encodeURIComponent` leaves it bare and `URL` does not.
-        "?owner=o%27brien",
-        "?owner=o'brien",
-        "?owner=a%20b",
-        "?owner=a+b",
-        `?owner=${bob.id},${alice.id}`,
-        `?owner=${alice.id}&owner=${bob.id}`,
-        "?owner=",
         `?owner=${alice.id}&account=&institution=&kind=&tax=&classification=&assetClass=`,
         `?group=kind&owner=${alice.id}`,
         `?owner=${alice.id}&sort=quantity&dir=asc&edit=1.2`,

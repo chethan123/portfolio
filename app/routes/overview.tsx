@@ -1,4 +1,4 @@
-import { Link, redirect } from "react-router";
+import { Link } from "react-router";
 
 import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount } from "~/components/amount";
@@ -33,15 +33,8 @@ import {
 } from "~/lib/chart-range";
 import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
-import {
-  ALL_OWNERS,
-  canonicalOwnerSearch,
-  isFiltered,
-  ownerSearch,
-  readOwnerFilter,
-  type OwnerFilter,
-} from "~/lib/owner-filter";
-import { ownerRoster } from "~/lib/people.server";
+import { ALL_OWNERS, isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
+import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import {
   accountTotals,
   asSessionPoints,
@@ -102,44 +95,16 @@ const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10)
 export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const url = new URL(request.url);
+  // Settled first — {@link chartRangeMiddleware} declines to stamp its cookie
+  // on either bounce `ownerReading` may throw — and ahead of `readChartRange`
+  // and `today` below: both are synchronous and database-free
+  // (`chart-range.ts`), so running them after costs nothing, but it is a
+  // reorder from this loader's previous shape worth naming as one.
+  const { reading, owner } = await ownerReading(request);
+  const { owners } = owner;
 
-  // First, before any database work: the canonical spelling is a fact about
-  // the address, decided without asking who exists (ADR-0008).
-  // {@link chartRangeMiddleware} declines to stamp its cookie on the bounce.
-  const canonical = canonicalOwnerSearch(url.searchParams);
-  // `!==` is safe because the canonical spelling is a fixed point of URL
-  // parsing (`spellId` in `owner-filter.ts` says why, and what looped when it
-  // was not): `url.search` is the parser's own spelling, so a differing
-  // address really is non-canonical and the bounce target equals itself.
-  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
-
-  const owners = readOwnerFilter(url.searchParams);
   const requested = readChartRange(request);
   const today = isoDate(Date.now());
-
-  // The roster comes first, alone, because what the money reads narrow by is
-  // the selection *resolved against it* below — one query ahead of the rest,
-  // which is the price of the reads and the sentence beside them agreeing.
-  const roster = await ownerRoster(owners);
-
-  // Everybody ticked is the household, whose URL carries no owner parameter
-  // (ADR-0008) — here not merely a second URL for one view: a narrowed chart
-  // drops the pre-app history, so the two would differ by every year before
-  // the first upload while the headline stayed identical.
-  if (roster.coversEveryone) {
-    throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
-  }
-
-  // What the readers narrow by: the selection resolved against the roster,
-  // never the raw ids. `holding_valued_at` reads an account closed after the
-  // date it is asked about, so a stale id in a hand-typed address would put
-  // that owner's past into the chart and delta while the sentence beside the
-  // headline named only the others (DESIGN.md §14). A selection resolving to
-  // *nobody* keeps the raw ids, which narrow to nothing — `[]` would read
-  // the whole household, the exact widening `owner-filter.ts` forbids.
-  const reading =
-    roster.narrowedTo.length > 0 ? roster.narrowedTo.map((person) => person.id) : owners;
 
   // Reads that need nothing from each other; all three must land before the
   // window can be sized — the surface's earliest date (§7's "chart range"
@@ -224,12 +189,14 @@ export async function loader({ request }: Route.LoaderArgs) {
             (firstComputed === undefined || point.date < firstComputed),
         );
 
+  // Summed from the same rollup the table renders, rather than counted
+  // separately — two counts of one thing are two things that can disagree.
+  const holdingCount = accounts.reduce((total, account) => total + account.coverage.total, 0);
+  const instance = everyone === null ? holdingCount : everyone.coverage.total;
+
   return {
     freshness,
-    owners,
-    roster: roster.people.map((person) => ({ id: person.id, name: person.name })),
-    narrowedTo: roster.narrowedTo.map((person) => ({ id: person.id, name: person.name })),
-    unknownOwner: roster.unknownOwner,
+    ...owner,
     range: resolved.range,
     custom: resolved.custom,
     // Null on every range but 1D, which is how the chart is told which axis it
@@ -259,20 +226,8 @@ export async function loader({ request }: Route.LoaderArgs) {
       isFiltered(owners) &&
       resolved.session === undefined &&
       manual.some((point) => resolved.range === "all" || point.date >= resolved.since),
-    /**
-     * Where "Show everyone" goes: this address, its parameters kept, no
-     * owner — so clearing the filter from an emptied screen does not also
-     * throw away the range the reader had chosen.
-     */
-    showEveryone: canonicalOwnerSearch(url.searchParams, ALL_OWNERS) || ".",
-    // Summed from the same rollup the table renders, rather than counted
-    // separately — two counts of one thing are two things that can disagree.
-    holdingCount: accounts.reduce((total, account) => total + account.coverage.total, 0),
-    /** Whether anything at all has been uploaded, narrowed or not. */
-    hasHoldings:
-      everyone === null
-        ? accounts.some((account) => account.coverage.total > 0)
-        : everyone.coverage.total > 0,
+    holdingCount,
+    narrowedToNothing: isNarrowedToNothing(owners, { held: holdingCount, instance }),
     pricedCount: accounts.reduce((total, account) => total + account.coverage.known, 0),
   };
 }
@@ -519,7 +474,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
     manual,
     session,
     holdingCount,
-    hasHoldings,
+    narrowedToNothing,
     pricedCount,
     freshness,
     manualWithheld,
@@ -540,8 +495,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
   // Empty because the filter reached nothing, or because the instance has
   // nothing — only the second may say nothing has been uploaded, and the
   // first must keep the control on screen or the filter cannot be cleared
-  // from the page it emptied. Which it is turns on `hasHoldings`, not on the
-  // filter being on: a bookmarked `/?owner=1` against a fresh instance is
+  // from the page it emptied. Which it is turns on `narrowedToNothing`, not on
+  // the filter being on: a bookmarked `/?owner=1` against a fresh instance is
   // both, and blaming a stale owner would send the reader hunting a roster
   // the database does not have. Analysis and Income split it the same way.
   if (holdingCount === 0) {
@@ -561,7 +516,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
             />
           </div>
         </header>
-        {isFiltered(owners) && hasHoldings ? (
+        {narrowedToNothing ? (
           <NarrowedToNothing
             owners={narrowedTo}
             unknownOwner={unknownOwner}

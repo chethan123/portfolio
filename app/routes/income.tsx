@@ -1,5 +1,3 @@
-import { redirect } from "react-router";
-
 import { Amount } from "~/components/amount";
 import { Breakdown, plural } from "~/components/breakdown";
 import { EmptyState } from "~/components/empty-state";
@@ -16,13 +14,8 @@ import {
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
 import { groupingBy, summarise } from "~/lib/holdings-view";
-import {
-  ALL_OWNERS,
-  canonicalOwnerSearch,
-  isFiltered,
-  readOwnerFilter,
-} from "~/lib/owner-filter";
-import { ownerRoster } from "~/lib/people.server";
+import { ALL_OWNERS, isFiltered } from "~/lib/owner-filter";
+import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
 import type { ShelteredSubtotal } from "~/lib/allocation";
@@ -66,53 +59,27 @@ export function meta() {
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const url = new URL(request.url);
+  const { reading, owner } = await ownerReading(request);
+  const { owners } = owner;
 
-  // Before any database work, and roster-free — the same rule Analysis and
-  // Holdings keep, and for the same reason (spec 0013).
-  const canonical = canonicalOwnerSearch(url.searchParams);
-  // `!==` is safe because the canonical spelling is a fixed point of URL
-  // parsing (`spellId` in `owner-filter.ts` says why, and what looped when it
-  // was not): `url.search` is the parser's own spelling, so a differing
-  // address really is non-canonical and the bounce target equals itself.
-  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
-
-  const owners = readOwnerFilter(url.searchParams);
-
-  const [holdings, freshness, roster, everyone] = await Promise.all([
-    currentHoldings(owners),
+  const [holdings, freshness, everyone] = await Promise.all([
+    currentHoldings(reading),
     asOfView(getConfig().MARKET_TIMEZONE),
-    ownerRoster(owners),
     // An empty instance and an empty reading are two different sentences
     // (`analysis.tsx`); only the first may say nothing has been uploaded.
     // A count, and only while narrowed.
     isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
 
-  // Everybody ticked is the household, whose URL carries no owner parameter
-  // (ADR-0008). A GET form of checkboxes cannot decline to submit that
-  // spelling, so the collapse happens here, after the roster read it needs.
-  if (roster.coversEveryone) {
-    throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
-  }
+  const instance = everyone === null ? holdings.length : everyone.coverage.total;
 
   return {
     freshness,
-    owners,
-    roster: roster.people.map((person) => ({ id: person.id, name: person.name })),
-    narrowedTo: roster.narrowedTo.map((person) => ({ id: person.id, name: person.name })),
-    unknownOwner: roster.unknownOwner,
-    /**
-     * Where "Show everyone" goes: this address, its parameters kept, no
-     * owner — built here because the component knows no screen's vocabulary;
-     * `"."` for a screen whose unfiltered URL is bare (Holdings' idiom).
-     */
-    showEveryone: canonicalOwnerSearch(url.searchParams, ALL_OWNERS) || ".",
+    ...owner,
     // Counted off the rows already in hand rather than asked for separately —
     // two counts of one thing are two things that can disagree.
     holdingCount: holdings.length,
-    /** Whether anything at all has been uploaded, narrowed or not. */
-    hasHoldings: everyone === null ? holdings.length > 0 : everyone.coverage.total > 0,
+    narrowedToNothing: isNarrowedToNothing(owners, { held: holdings.length, instance }),
     // `summarise`, not a `sumMoney` of its own: the Holdings total row's
     // helper, so this headline and that table's foot are the same arithmetic
     // — and the zero rule ($0, never a dash) is already honoured there.
@@ -164,7 +131,7 @@ export default function Income({ loaderData }: Route.ComponentProps) {
     narrowedTo,
     unknownOwner,
     showEveryone,
-    hasHoldings,
+    narrowedToNothing,
     holdingCount,
     total,
     weightedYield: weighted,
@@ -173,10 +140,6 @@ export default function Income({ loaderData }: Route.ComponentProps) {
     byAccount,
     freshness,
   } = loaderData;
-
-  // Empty because the filter reached nothing, rather than because the instance
-  // has nothing — two different sentences.
-  const narrowedToNothing = holdingCount === 0 && hasHoldings && isFiltered(owners);
 
   return (
     <section className="page">
