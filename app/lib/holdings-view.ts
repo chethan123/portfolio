@@ -29,7 +29,6 @@
  * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
  * either job by hand.
  */
-import { numberTail } from "./account-label.ts";
 import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "./account-options.ts";
 import { ASSET_CLASSES, allocateShares, type Grouping } from "./allocation.ts";
 import {
@@ -138,7 +137,7 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
       // listed (CONTEXT.md) — but not in `label`, which is also the words a
       // group heading and the empty-table sentence print, and prose does not
       // wear the mask glyphs. Grouping keys on the id either way.
-      const tail = numberTail(holding.externalAccountNumber);
+      const tail = holding.accountNumberTail;
 
       return {
         key: holding.accountId,

@@ -22,6 +22,7 @@
  */
 import { sql } from "kysely";
 
+import { numberTail } from "./account-label.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { isFiltered, type OwnerFilter } from "./owner-filter.ts";
 
@@ -49,12 +50,14 @@ export type ValuedHolding = {
   accountId: string;
   accountName: string;
   /**
-   * `account.external_account_number` — free-form, null when none is
-   * recorded. Display identity for the number tail (CONTEXT.md), not a
-   * view column: a label does not belong in the valuation contract
-   * (ADR-0001), so {@link readHoldings} joins `account` for it instead.
+   * The number tail (CONTEXT.md) of `account.external_account_number`, null
+   * when none is recorded. Pre-masked here because loader data is serialized
+   * to the browser: the raw number never leaves the server, exactly as the
+   * upload draft's tail already promises. Not a view column either — a label
+   * does not belong in the valuation contract (ADR-0001), so
+   * {@link readHoldings} joins `account` for it instead.
    */
-  externalAccountNumber: string | null;
+  accountNumberTail: string | null;
   institution: string;
   accountKind: AccountKind;
   taxTreatment: TaxTreatment;
@@ -128,8 +131,9 @@ function toValuedHolding(
   return {
     accountId: required(row.account_id, "account_id"),
     accountName: required(row.account_name, "account_name"),
-    // Not `required`: genuinely nullable — most accounts never record one.
-    externalAccountNumber: row.external_account_number,
+    // Nullable, and masked before it leaves the module: most accounts never
+    // record a number, and the raw one stays server-side.
+    accountNumberTail: numberTail(row.external_account_number),
     institution: required(row.institution, "institution"),
     // The schema's check constraints are what make these casts safe: the
     // database cannot hold a kind, treatment or asset class outside the set.
@@ -307,8 +311,8 @@ export async function netWorthAt(
 export type AccountTotal = {
   accountId: string;
   accountName: string;
-  /** `account.external_account_number` — {@link ValuedHolding}'s field, same terms. */
-  externalAccountNumber: string | null;
+  /** The pre-masked number tail — {@link ValuedHolding}'s field, same terms. */
+  accountNumberTail: string | null;
   institution: string;
   accountKind: AccountKind;
   ownerName: string;
@@ -344,8 +348,8 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
   return {
     accountId: required(row.account_id, "account_id"),
     accountName: required(row.account_name, "account_name"),
-    // Not `required`: genuinely nullable — most accounts never record one.
-    externalAccountNumber: row.external_account_number,
+    // Nullable, and masked before it leaves the module — as on ValuedHolding.
+    accountNumberTail: numberTail(row.external_account_number),
     institution: required(row.institution, "institution"),
     accountKind: required(row.account_kind, "account_kind") as AccountKind,
     ownerName: required(row.owner_name, "owner_name"),

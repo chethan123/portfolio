@@ -423,7 +423,7 @@ function AccountsPanel({
                 <div>
                   <p className="account-name">
                     {account.accountName}
-                    <AccountNumberTail number={account.externalAccountNumber} />
+                    <AccountNumberTail tail={account.accountNumberTail} />
                   </p>
                   <p className="account-meta">
                     {account.institution} · {labelOf(ACCOUNT_KINDS, account.accountKind)}
@@ -485,7 +485,7 @@ function AllocationPanel({
                     third item. */}
                 <span>
                   {account.accountName}
-                  <AccountNumberTail number={account.externalAccountNumber} />
+                  <AccountNumberTail tail={account.accountNumberTail} />
                 </span>
                 <b className="u-data">
                   <Amount value={account.amount} />

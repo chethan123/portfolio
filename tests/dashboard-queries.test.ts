@@ -87,8 +87,9 @@ describe("accountTotals", () => {
       });
       await seedAccount({ name: "Checking", owner, kind: "bank" });
 
-      // Only one account holds anything: the number must arrive on the empty
-      // account too, whose row the LEFT join manufactures.
+      // Only one account holds anything: the tail must arrive on the empty
+      // account too, whose row the LEFT join manufactures — and pre-masked,
+      // because these rows are loader data.
       await seedPositionSet({
         account: numbered,
         asOf: "2026-01-31",
@@ -98,9 +99,9 @@ describe("accountTotals", () => {
       const totals = await accountTotals(ALL_OWNERS, db);
 
       expect(
-        totals.map((total) => [total.accountName, total.externalAccountNumber]),
+        totals.map((total) => [total.accountName, total.accountNumberTail]),
       ).toEqual([
-        ["Fidelity Taxable", "X47-283910"],
+        ["Fidelity Taxable", "····3910"],
         ["Checking", null],
       ]);
     }),

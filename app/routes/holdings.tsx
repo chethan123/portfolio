@@ -1005,7 +1005,7 @@ function Row({
                 set-balance form live (§13.1). */}
             <Link className="cell-link" to={`/accounts/${holding.accountId}`}>
               {holding.accountName}
-              <AccountNumberTail number={holding.externalAccountNumber} />
+              <AccountNumberTail tail={holding.accountNumberTail} />
               <ChevronRightIcon />
             </Link>
             <span className="cell-sub">{holding.institution}</span>

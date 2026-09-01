@@ -88,7 +88,7 @@ describe("the valuation rule", () => {
         {
           accountId: account.id,
           accountName: "Empower 401k — Roth",
-          externalAccountNumber: null,
+          accountNumberTail: null,
           institution: "Empower",
           accountKind: "401k",
           taxTreatment: "tax_free",
@@ -117,14 +117,15 @@ describe("the valuation rule", () => {
   );
 
   it(
-    "carries the recorded account number for the tail, and null where none is recorded",
+    "returns the number pre-masked to its tail, and null where none is recorded",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
       const owner = await seedPerson({ name: "Alice" });
       const usd = await usdInstrument();
 
       // The number is not a view column — the reader joins `account` for it
       // (ADR-0001) — so it needs its own assertion rather than inheriting the
-      // full-shape one above.
+      // full-shape one above. What arrives is the tail, never the raw number:
+      // these rows are loader data, and loader data reaches the browser.
       const numbered = await seedAccount({
         name: "Fidelity Taxable",
         owner,
@@ -146,11 +147,11 @@ describe("the valuation rule", () => {
       expect(
         (await currentHoldings(ALL_OWNERS, db)).map((holding) => [
           holding.accountName,
-          holding.externalAccountNumber,
+          holding.accountNumberTail,
         ]),
       ).toEqual([
         ["Checking", null],
-        ["Fidelity Taxable", "X47-283910"],
+        ["Fidelity Taxable", "····3910"],
       ]);
     }),
   );

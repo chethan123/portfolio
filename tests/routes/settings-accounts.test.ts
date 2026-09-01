@@ -29,7 +29,17 @@ describe("the account list's number tails", () => {
       });
       await seedAccount({ name: "Checking", owner, kind: "bank" });
 
-      const markup = renderRoute(Accounts, "/settings/accounts", await loader());
+      const data = await loader();
+
+      // The loader masks, not the component: loader data is serialized into
+      // the page, so a raw number in it is a raw number in the browser.
+      expect(data.accounts.map((account) => account.accountNumberTail)).toEqual([
+        null,
+        "····3910",
+      ]);
+      expect(JSON.stringify(data)).not.toContain("X47-283910");
+
+      const markup = renderRoute(Accounts, "/settings/accounts", data);
 
       expect(markup).toContain('<span class="number-tail" aria-hidden="true">····3910</span>');
       expect(markup).toContain('<span class="visually-hidden">ending in 3910</span>');

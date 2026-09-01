@@ -51,7 +51,7 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
   const merged: ValuedHolding = {
     accountId: "1",
     accountName: "Taxable",
-    externalAccountNumber: null,
+    accountNumberTail: null,
     institution: "Fidelity",
     accountKind: "brokerage",
     taxTreatment: "taxable",
@@ -303,8 +303,8 @@ describe("availableFilters", () => {
     // bare name: no dots standing in for a number nobody recorded.
     const [account] = availableFilters(
       [
-        holding({ accountId: "1", accountName: "Roth IRA", externalAccountNumber: "X47-283910" }),
-        holding({ accountId: "2", accountName: "Checking", externalAccountNumber: null }),
+        holding({ accountId: "1", accountName: "Roth IRA", accountNumberTail: "····3910" }),
+        holding({ accountId: "2", accountName: "Checking", accountNumberTail: null }),
       ],
       query(),
     ).filter((control) => control.id === "account");
