@@ -35,11 +35,13 @@
  * it. A module that called `currentHoldings` for its caller would spend
  * that — the call would be here, not at the screen, and a reviewer would have
  * to already know this module's insides to see whose money a loader reads.
- * So the household-scoped reads stay in the loader, visible and explicit, and
- * `ownerReading` cannot be skipped or reordered ahead of them: `reading` does
- * not exist until this resolves, which makes the ordering a data dependency
- * rather than a convention a loader could quietly drop. One row of the
- * ticket's table therefore stays open by design: whether the *instance*
+ * So the household-scoped reads stay in the loader — or, for the chart's
+ * three, in the module the loader names its `reading` to (spec 0015) —
+ * visible and explicit, and `ownerReading` cannot be skipped or reordered
+ * ahead of them: `reading` does not exist until this resolves, which makes
+ * the ordering a data dependency rather than a convention a loader could
+ * quietly drop. One row of the ticket's table therefore stays open by
+ * design: whether the *instance*
  * holds anything (`isFiltered(owners) ? netWorth(ALL_OWNERS) : null`) is a
  * money read, so it stays spelled in each loader.
  *

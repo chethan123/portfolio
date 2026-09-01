@@ -13,7 +13,7 @@ import {
   TrendingDownIcon,
   TrendingUpIcon,
 } from "~/components/icons";
-import { NetWorthChart } from "~/components/net-worth-chart";
+import { ChartEmptyNote, NetWorthChart } from "~/components/net-worth-chart";
 import {
   NarrowedTo,
   NarrowedToNothing,
@@ -23,30 +23,23 @@ import { ACCOUNT_KINDS, labelOf } from "~/lib/account-options";
 import {
   DEFAULT_RANGE,
   chartRangeMiddleware,
-  customRangeMin,
+  chartWindow,
+  isoDate,
   rangeDescription,
-  rangeOptions,
-  readChartRange,
-  resolveRange,
   type CustomSpan,
   type RangeKey,
 } from "~/lib/chart-range";
+import { chartAnchors, chartSeries, type ChartScope } from "~/lib/chart-series.server";
 import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
 import { ALL_OWNERS, isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import {
   accountTotals,
-  asSessionPoints,
-  firstRecordedDate,
-  latestObservedSession,
   manualNetWorth,
   netWorth,
   netWorthChange,
-  netWorthSeries,
-  netWorthSessionSeries,
   type AccountKind,
-  type IsoDate,
 } from "~/lib/valuation.server";
 
 import { getConfig } from "../../server/config.ts";
@@ -81,46 +74,34 @@ export function meta() {
  */
 const BARS = 5;
 
-/**
- * UTC throughout: §4.1 warns about dates crossing a boundary a day early,
- * and `toISOString` cannot pick up the server's timezone on the way out.
- */
-const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
-
-/**
- * Remembers an explicit range choice in the persistence cookie (spec 0008).
- * See {@link chartRangeMiddleware}'s own docstring for why this is a
- * middleware rather than a header on the loader's own return.
- */
+/** See {@link chartRangeMiddleware}'s own docstring. */
 export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ request }: Route.LoaderArgs) {
   // Settled first — {@link chartRangeMiddleware} declines to stamp its cookie
-  // on either bounce `ownerReading` may throw — and ahead of `readChartRange`
-  // and `today` below: both are synchronous and database-free
-  // (`chart-range.ts`), so running them after costs nothing, but it is a
-  // reorder from this loader's previous shape worth naming as one.
+  // on either bounce `ownerReading` may throw — and ahead of `today` below:
+  // it is synchronous and database-free (`chart-range.ts`), so running it
+  // after costs nothing, but it is a reorder from this loader's previous
+  // shape worth naming as one.
   const { reading, owner } = await ownerReading(request);
   const { owners } = owner;
 
-  const requested = readChartRange(request);
   const today = isoDate(Date.now());
+  const scope: ChartScope = { surface: "household", reading };
 
-  // Reads that need nothing from each other; all three must land before the
-  // window can be sized — the surface's earliest date (§7's "chart range"
-  // rule) is measured from the first two, and the third is which session 1D
-  // would plot, or by its absence whether the chip is offered at all
-  // (ADR-0006, story 13). Every load pays for that one whether or not 1D is
-  // selected, which is why it joins the others rather than queueing behind
-  // them.
-  const [manual, positionSet, session] = await Promise.all([
+  // `manual` and the anchors in one round trip, not two: `earliest.manual`
+  // below is `manual`'s own first point — not something `chartAnchors`
+  // reads — so the window cannot be sized until the loader holds both, and
+  // that is a requirement on the loader rather than a style preference:
+  // written as two sequential awaits this would be two waves where it is
+  // one (spec 0015).
+  const [manual, anchors] = await Promise.all([
     // Read either way: "not drawn while narrowed" and "this instance has
     // none" are two different screens, and only the first has anything to
     // explain — spec 0013's reason `manualNetWorth` takes no filter at all
     // (an empty answer could not be told from an empty table).
     manualNetWorth(),
-    firstRecordedDate(reading),
-    latestObservedSession(),
+    chartAnchors(scope),
   ]);
 
   // DESIGN.md §7 rule 3: the hand-typed series is the household's net worth
@@ -130,32 +111,29 @@ export async function loader({ request }: Route.LoaderArgs) {
   const reachable = isFiltered(owners) ? [] : manual;
 
   // The chart's reach, and the whole of how a filter shortens it:
-  // `positionSet` is already the selected owners' first recorded date and
-  // `reachable` is empty while narrowed, so the household rule — the earlier
-  // of the two — computes the narrowed reach without being told about the
-  // filter. `chart-range.ts` is untouched: no third `Surface` member, no
-  // switch to the account one. On screen, **All** shortens to the owners'
-  // own history and the long presets fall out of reach.
-  const earliest = { positionSet, manual: reachable[0]?.date };
+  // `anchors.positionSet` is already the selected owners' first recorded
+  // date and `reachable` is empty while narrowed, so the household rule —
+  // the earlier of the two — computes the narrowed reach without being told
+  // about the filter. `chart-range.ts` is untouched: no third `Surface`
+  // member, no switch to the account one. On screen, **All** shortens to the
+  // owners' own history and the long presets fall out of reach.
+  const earliest = { positionSet: anchors.positionSet, manual: reachable[0]?.date };
 
-  const resolved = resolveRange(requested.range, {
+  const { resolved, controls } = chartWindow("household", {
+    request,
     today,
     earliest,
-    surface: "household",
-    custom: requested.custom,
-    session,
+    session: anchors.session,
+    timeZone: getConfig().MARKET_TIMEZONE,
   });
 
-  // The two series answer the same question at different granularities, so they
-  // are normalised to one shape here and there is one code path below. `at` is
-  // a date for every preset but 1D, where it is an instant; `resolved.session`
-  // is what says which, and the chart is told the same thing.
-  const points =
-    resolved.session === undefined
-      ? netWorthSeries(reading, resolved.dates).then(asSessionPoints)
-      : netWorthSessionSeries(reading, resolved.session);
+  // Created here and dropped into the `Promise.all` below, so the read runs
+  // beside the others rather than queued behind them — `chartSeries` is
+  // where the coverage rule (§6.3) and the dated/session choice now live,
+  // once, for both surfaces.
+  const points = chartSeries(scope, resolved);
 
-  const [change, accounts, series, freshness, everyone] = await Promise.all([
+  const [change, accounts, computed, freshness, everyone] = await Promise.all([
     netWorthChange(reading, resolved.since),
     accountTotals(reading),
     points,
@@ -165,13 +143,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     // has been uploaded". A count, only while narrowed (Analysis' read).
     isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
-
-  // A date before the first upload sums to 0.0000 over zero rows. That is
-  // "nothing was recorded yet", not "the household had nothing" — drawing it
-  // would put a fictional climb from zero at the head of every chart (§7).
-  const computed = series
-    .filter((point) => point.coverage.total > 0)
-    .map((point) => ({ date: point.at, amount: point.amount }));
 
   // §7 rule 2: computed wins on overlapping dates, manual only fills the gap
   // ahead — and is bounded by the window at the other end too, or a 1M chart
@@ -197,15 +168,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return {
     freshness,
     ...owner,
-    range: resolved.range,
-    custom: resolved.custom,
-    // Null on every range but 1D, which is how the chart is told which axis it
-    // is drawing. The zone is the market's, never the reader's — see
-    // `marketTimeOf`.
-    session: resolved.session === undefined ? null : { timeZone: getConfig().MARKET_TIMEZONE },
-    rangeOptions: rangeOptions({ today, earliest, surface: "household", session }),
-    customMin: customRangeMin("household", earliest),
-    customMax: today,
+    ...controls,
     change,
     accounts,
     computed,
@@ -618,21 +581,13 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               masked={masked}
               session={session}
             />
-          ) : session !== null && computed.length > 0 ? (
-            // A session with one observed moment — a real state between the
-            // poller's first attempt and its second, nothing to do with how
-            // many statements were uploaded. Guarded on there being a moment
-            // at all: with none, nothing has been uploaded and no waiting for
-            // prices changes that, so the sentence below is the true one.
-            <p className="empty-note">
-              A line needs two observed moments and this session has {computed.length}. It
-              appears once another price arrives.
-            </p>
           ) : (
-            <p className="empty-note">
-              A trend needs two dated points and this instance has one. The line appears once a
-              second statement has been uploaded.
-            </p>
+            <ChartEmptyNote session={session} points={computed.length}>
+              <p className="empty-note">
+                A trend needs two dated points and this instance has one. The line appears once a
+                second statement has been uploaded.
+              </p>
+            </ChartEmptyNote>
           )}
         </div>
       </section>

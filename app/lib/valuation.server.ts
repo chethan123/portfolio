@@ -753,17 +753,6 @@ async function readSessionSeries(
 }
 
 /**
- * A day-granularity series in the session shape: two readers, one chart
- * contract. Here rather than in each loader because a rule copied into two
- * loaders drifts. The direction is deliberate — widening a date into the
- * instant field is honest (a date names a moment, coarsely), where narrowing
- * an instant would throw away the time of day the session line exists for.
- */
-export function asSessionPoints(series: NetWorthPoint[]): SessionPoint[] {
-  return series.map((point) => ({ at: point.date, amount: point.amount, coverage: point.coverage }));
-}
-
-/**
  * Net worth at each instant of the session — the Overview's 1D line. No
  * observations returns an empty series, not a flat one: "nothing was
  * observed" is not "nothing moved".

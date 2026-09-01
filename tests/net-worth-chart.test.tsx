@@ -3,13 +3,14 @@ import { describe, expect, it } from "vitest";
 
 import { MASKED_FIGURE } from "../app/components/amount.tsx";
 import {
+  ChartEmptyNote,
   NetWorthChart,
   buildScale,
   gridRules,
   hitTargets,
 } from "../app/components/net-worth-chart.tsx";
 
-import type { ChartPoint } from "../app/components/net-worth-chart.tsx";
+import type { ChartPoint } from "../app/lib/chart-range.ts";
 
 /**
  * The arithmetic behind the net worth trend line (DESIGN.md §8.1, §13.6).
@@ -445,5 +446,25 @@ describe("an intra-session line (ADR-0006)", () => {
 
     expect(markup).toContain("<span>5 Jun</span>");
     expect(markup).toContain('<span class="chart-readout-date">5 Jun 2026</span>');
+  });
+});
+
+describe("<ChartEmptyNote> (spec 0015)", () => {
+  // Nothing today asserts this sentence at all — it is currently spelled
+  // identically, and untested, in two loaders' JSX — so this is the case that
+  // was missing, not a regression test.
+  it("renders the waiting sentence for a session with one moment, and the caller's own fallback with none observed", () => {
+    const fallback = <p className="empty-note">The caller's own wording.</p>;
+    const render = (points: number) =>
+      renderToStaticMarkup(
+        <ChartEmptyNote session={{ timeZone: "America/New_York" }} points={points}>
+          {fallback}
+        </ChartEmptyNote>,
+      );
+
+    expect(render(1)).toBe(
+      '<p class="empty-note">A line needs two observed moments and this session has 1. It appears once another price arrives.</p>',
+    );
+    expect(render(0)).toBe('<p class="empty-note">The caller&#x27;s own wording.</p>');
   });
 });

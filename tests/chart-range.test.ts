@@ -14,6 +14,7 @@ import {
   RANGE_COOKIE,
   RANGES,
   SAMPLE_BUDGET,
+  chartWindow,
   customRangeMin,
   decodeRangeCookieValue,
   encodeRangeCookieValue,
@@ -585,5 +586,53 @@ describe("the address a range control points at", () => {
     expect(carriedParams(at("?recorded=2026-01-31&range=1m&start=x&end=y"))).toEqual([
       ["recorded", "2026-01-31"],
     ]);
+  });
+});
+
+describe("chartWindow: the window and the control block a loader spreads (spec 0015)", () => {
+  it("assembles the household's window and control block from a request naming an explicit range", () => {
+    const earliest = { positionSet: "2026-06-01" as const, manual: "2020-01-01" as const };
+    const shared = { today: TODAY, earliest, session: "2026-08-25" as const, timeZone: "America/New_York" };
+
+    const { resolved, controls } = chartWindow("household", {
+      request: new Request("https://x/?range=1y"),
+      ...shared,
+    });
+
+    expect(resolved).toEqual(resolveRange("1y", { ...shared, surface: "household" }));
+    expect(controls).toEqual({
+      range: "1y",
+      custom: undefined,
+      // Off 1D: the control block carries no session even though one was
+      // observed — `resolved.session` is what says so, not `shared.session`.
+      session: null,
+      rangeOptions: rangeOptions({ ...shared, surface: "household" }),
+      // The earlier of the household's two dates (`surfaceEarliestDate`),
+      // not the account's.
+      customMin: "2020-01-01",
+      customMax: TODAY,
+    });
+  });
+
+  it("assembles the account's window and control block the same way, off a request naming no range at all", () => {
+    const earliest = { positionSet: "2026-06-01" as const };
+    const shared = { today: TODAY, earliest, session: null, timeZone: "America/New_York" };
+
+    const { resolved, controls } = chartWindow("account", {
+      request: new Request("https://x/"),
+      ...shared,
+    });
+
+    expect(resolved).toEqual(resolveRange(DEFAULT_RANGE, { ...shared, surface: "account" }));
+    expect(controls).toEqual({
+      range: DEFAULT_RANGE,
+      custom: undefined,
+      session: null,
+      rangeOptions: rangeOptions({ ...shared, surface: "account" }),
+      // The account's own earliest date — there is no manual series on this
+      // surface to fall back to.
+      customMin: "2026-06-01",
+      customMax: TODAY,
+    });
   });
 });

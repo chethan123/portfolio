@@ -12,7 +12,7 @@ import {
   SavingsIcon,
   UploadIcon,
 } from "~/components/icons";
-import { NetWorthChart } from "~/components/net-worth-chart";
+import { ChartEmptyNote, NetWorthChart } from "~/components/net-worth-chart";
 import {
   ACCOUNT_KINDS,
   TAX_TREATMENTS,
@@ -24,12 +24,11 @@ import { getAccount } from "~/lib/accounts.server";
 import { lastRecorded, setBalance, type LastRecorded } from "~/lib/balances.server";
 import {
   chartRangeMiddleware,
-  customRangeMin,
+  chartWindow,
+  isoDate,
   rangeDescription,
-  rangeOptions,
-  readChartRange,
-  resolveRange,
 } from "~/lib/chart-range";
+import { chartAnchors, chartSeries, type ChartScope } from "~/lib/chart-series.server";
 import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { uploadReceipt } from "~/lib/uploads.server";
 import { holdingNote } from "~/lib/holdings-view";
@@ -41,17 +40,7 @@ import {
   formFields,
   latestRecordableDate,
 } from "~/lib/input.server";
-import {
-  accountFirstRecordedDate,
-  accountHoldings,
-  accountSeries,
-  accountSessionSeries,
-  accountTotal,
-  asSessionPoints,
-  latestObservedSession,
-  type AccountKind,
-  type IsoDate,
-} from "~/lib/valuation.server";
+import { accountHoldings, accountTotal, type AccountKind } from "~/lib/valuation.server";
 
 import { getConfig } from "../../server/config.ts";
 
@@ -78,17 +67,7 @@ export function meta({ data }: Route.MetaArgs) {
   return [{ title: `${data?.total.accountName ?? "Account"} · Portfolio` }];
 }
 
-/**
- * UTC throughout: §4.1 warns about dates crossing a boundary a day early,
- * and `toISOString` cannot pick up the server's timezone on the way out.
- */
-const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
-
-/**
- * Remembers an explicit range choice in the persistence cookie (spec 0008).
- * See {@link chartRangeMiddleware}'s own docstring for why this is a
- * middleware rather than a header on the loader's own return.
- */
+/** See {@link chartRangeMiddleware}'s own docstring. */
 export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -100,48 +79,43 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const total = await accountTotal(params.accountId);
   if (total === null) throw new Response("Not found", { status: 404 });
 
-  const requested = readChartRange(request);
   const today = isoDate(Date.now());
+  const scope: ChartScope = { surface: "account", accountId: params.accountId };
 
-  // Both needed before the window can be sized; neither needs the other.
-  // The first is the account's own earliest statement (spec 0008) — never
-  // the household's: an account's range never reaches into the pre-app
-  // history, which was never any one account's. The second is the
-  // observation log as a whole, not this account's slice: an account holding
-  // nothing the feed quotes still draws its flat line at the household's
-  // observed instants (ADR-0006, story 10), and the 1D chip is disabled only
-  // where the log is empty outright.
-  const [positionSet, session] = await Promise.all([
-    accountFirstRecordedDate(params.accountId),
-    latestObservedSession(),
-  ]);
+  // The account's own anchors — its own earliest statement (spec 0008),
+  // never the household's, and the observation log's latest session; see
+  // `chartAnchors`'s own docstring for why. Nothing else to batch this call
+  // with: unlike the Overview, this page has no manual series to await
+  // beside it.
+  const anchors = await chartAnchors(scope);
 
-  const earliest = { positionSet };
+  const earliest = { positionSet: anchors.positionSet };
 
-  const resolved = resolveRange(requested.range, {
+  const { resolved, controls } = chartWindow("account", {
+    request,
     today,
     earliest,
-    surface: "account",
-    custom: requested.custom,
-    session,
+    session: anchors.session,
+    timeZone: getConfig().MARKET_TIMEZONE,
   });
 
   // The upload flow's landing receipt (`?uploaded=<setId>`, brief §6.5).
   // Every figure is read back from the database, never the URL: the
   // parameter names *which* set was written, so an invalid or stale value
   // yields null and no sentence — the `?recorded=` receipt's contract too.
+  // Serial, deliberately (out of scope for spec 0015): it does not compose
+  // with the window the way the anchors do.
   const uploadedParam = new URL(request.url).searchParams.get("uploaded");
   const receipt =
     uploadedParam === null ? null : await uploadReceipt(params.accountId, uploadedParam);
 
-  // Normalised to one shape so there is one code path below: `at` is a date on
-  // every preset but 1D, where it is an instant. See the Overview's loader.
-  const points =
-    resolved.session === undefined
-      ? accountSeries(params.accountId, resolved.dates).then(asSessionPoints)
-      : accountSessionSeries(params.accountId, resolved.session);
+  // Created here and dropped into the `Promise.all` below, so the read runs
+  // beside the others rather than queued behind them — `chartSeries` is
+  // where the coverage rule (§6.3) and the dated/session choice now live,
+  // once, for both surfaces. See the Overview's loader.
+  const points = chartSeries(scope, resolved);
 
-  const [account, holdings, series, recorded, freshness] = await Promise.all([
+  const [account, holdings, computed, recorded, freshness] = await Promise.all([
     // Read for one field, the tax treatment: `AccountTotal` carries what a
     // figure is computed from and no more (§4.5). Safe after the gate —
     // nothing in this application deletes an account.
@@ -154,14 +128,6 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 
-  // A date before the first statement sums to 0.0000 over zero rows —
-  // "nothing was recorded yet", not "the account was worth nothing"; drawing
-  // it would put a fictional climb out of zero at the head of the line (§7).
-  // Hence the filter is on the coverage count, not the amount.
-  const computed = series
-    .filter((point) => point.coverage.total > 0)
-    .map((point) => ({ date: point.at, amount: point.amount }));
-
   return {
     freshness,
     /**
@@ -172,14 +138,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
      * a string, read by nothing below.
      */
     owners: ownerSearch(readOwnerFilter(new URL(request.url).searchParams)),
-    range: resolved.range,
-    custom: resolved.custom,
-    // Null on every range but 1D, which is how the chart is told which axis it
-    // is drawing.
-    session: resolved.session === undefined ? null : { timeZone: getConfig().MARKET_TIMEZONE },
-    rangeOptions: rangeOptions({ today, earliest, surface: "account", session }),
-    customMin: customRangeMin("account", earliest),
-    customMax: today,
+    ...controls,
     total,
     taxTreatment: account.taxTreatment,
     holdings,
@@ -486,22 +445,14 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               masked={masked}
               session={session}
             />
-          ) : session !== null && computed.length > 0 ? (
-            // A session only one price has arrived in — nothing to do with
-            // how many statements this account has. Guarded on there being a
-            // moment at all: an account with no statements has nothing to
-            // draw at any price, and telling it to wait for one would be the
-            // same mistake the other way.
-            <p className="empty-note">
-              A line needs two observed moments and this session has {computed.length}. It
-              appears once another price arrives.
-            </p>
           ) : (
-            <p className="empty-note">
-              A line needs two dated points and this range holds {computed.length}. It appears
-              over a wider range, or once a second statement covering this account has been
-              uploaded.
-            </p>
+            <ChartEmptyNote session={session} points={computed.length}>
+              <p className="empty-note">
+                A line needs two dated points and this range holds {computed.length}. It appears
+                over a wider range, or once a second statement covering this account has been
+                uploaded.
+              </p>
+            </ChartEmptyNote>
           )}
         </div>
       </section>
