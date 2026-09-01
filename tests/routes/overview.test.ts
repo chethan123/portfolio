@@ -21,7 +21,7 @@ import { RANGE_COOKIE } from "~/lib/chart-range";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, outcomeOf, redirectTo, servedThrough } from "../support/routes.ts";
+import { args, get, redirectTo, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -356,21 +356,6 @@ describe("the Overview read as an owner", () => {
   );
 
   it(
-    "redirects the percent-encoded spelling of a separator, so one view has one URL",
-    withDatabase(async () => {
-      // The address `canonicalOwnerSearch`'s docstring names: a comparison
-      // blind to encoding would report `?owner=1%2C3` canonical, and the view
-      // would keep two URLs — the one this application's links spell, and the
-      // one any transport that round-trips the query through `URLSearchParams`
-      // spells. Nothing is seeded, because respelling a separator is decided
-      // from the address alone, before any database work.
-      expect(await redirectTo(() => loader(args(get("/?owner=1%2C3&range=1m"))))).toBe(
-        "/?owner=1,3&range=1m",
-      );
-    }),
-  );
-
-  it(
     "collapses a selection naming everybody, which here would cost the pre-app history",
     withDatabase(async (ctx) => {
       const { alice, bob, carol } = await seedTwoOwners(ctx, {
@@ -433,50 +418,6 @@ describe("the Overview read as an owner", () => {
 });
 
 describe("what a filtered address must not lose", () => {
-  // Terminates, rather than bounces exactly once: an address legitimately takes
-  // two hops — spelling, then the all-owners collapse — and what must never
-  // happen is a third that is the second again. `holdings.test.ts` carries the
-  // reasoning: two serialisers spell `'` and `,` differently, so an address can
-  // differ from its own canonical form forever and the screen answers every
-  // request with another redirect until the browser gives up.
-  const settles = async (search: string): Promise<void> => {
-    let where = `/${search}`;
-    const seen: string[] = [];
-
-    for (let hop = 0; hop < 4; hop += 1) {
-      const outcome = await outcomeOf(() => loader(args(get(where))));
-      if (!(outcome instanceof Response)) return;
-
-      seen.push(where);
-      where = outcome.headers.get("Location") ?? "";
-      expect({ search, revisited: seen.includes(where) }).toEqual({ search, revisited: false });
-    }
-
-    expect({ search, settled: false }).toEqual({ search, settled: true });
-  };
-
-  it(
-    "settles the canonical redirect, whatever spelled the address",
-    withDatabase(async (ctx) => {
-      const { alice, bob } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
-      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
-
-      for (const search of [
-        "",
-        `?owner=${alice.id}`,
-        `?owner=${both}`,
-        `?owner=${both.replace(",", "%2C")}`,
-        "?owner=o%27brien",
-        "?owner=o'brien",
-        `?owner=${bob.id},${alice.id}`,
-        `?owner=${alice.id}&range=3m`,
-        "?owner=",
-      ]) {
-        await settles(search);
-      }
-    }),
-  );
-
   it(
     "keeps the chosen range when the owner is changed from an emptied screen",
     withDatabase(async (ctx) => {

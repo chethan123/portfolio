@@ -1,4 +1,4 @@
-import { Link, redirect } from "react-router";
+import { Link } from "react-router";
 
 import { Amount, Delta } from "~/components/amount";
 import { Breakdown, plural } from "~/components/breakdown";
@@ -17,13 +17,8 @@ import {
 } from "~/lib/allocation";
 import { isNegative } from "~/lib/format";
 import { groupingBy } from "~/lib/holdings-view";
-import {
-  ALL_OWNERS,
-  canonicalOwnerSearch,
-  isFiltered,
-  readOwnerFilter,
-} from "~/lib/owner-filter";
-import { ownerRoster } from "~/lib/people.server";
+import { ALL_OWNERS, isFiltered } from "~/lib/owner-filter";
+import { isNarrowedToNothing, ownerReading } from "~/lib/owner-reading.server";
 import { readCapitalGainsRate } from "~/lib/settings.server";
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
 
@@ -164,55 +159,29 @@ function GainsRow({ row, isTotal = false }: { row: GainRow; isTotal?: boolean })
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const url = new URL(request.url);
-
-  // Before any database work, and roster-free: the canonical spelling of an
-  // owner parameter is a fact about the address, decidable without asking
-  // who exists (spec 0013) — what makes it safe to do first.
-  const canonical = canonicalOwnerSearch(url.searchParams);
-  // `!==` is safe because the canonical spelling is a fixed point of URL
-  // parsing (`spellId` in `owner-filter.ts` says why, and what looped when it
-  // was not): `url.search` is the parser's own spelling, so a differing
-  // address really is non-canonical and the bounce target equals itself.
-  if (url.search !== canonical) throw redirect(`${url.pathname}${canonical}`);
-
-  const owners = readOwnerFilter(url.searchParams);
+  const { reading, owner } = await ownerReading(request);
+  const { owners } = owner;
 
   // One read, four groupings of the array it returned. The total comes from
   // the query module, not from adding those groups here: money sums in SQL
   // (§8.2), and it is the same figure as the Overview headline because it is
   // the same query — one arithmetic over one read, filtered or not.
-  const [holdings, total, capitalGainsRate, freshness, roster, everyone] = await Promise.all([
-    currentHoldings(owners),
-    netWorth(owners),
+  const [holdings, total, capitalGainsRate, freshness, everyone] = await Promise.all([
+    currentHoldings(reading),
+    netWorth(reading),
     readCapitalGainsRate(),
     asOfView(getConfig().MARKET_TIMEZONE),
-    ownerRoster(owners),
     // Whether the *instance* holds anything — a different question from
     // whether these owners do, and only the first may be answered "nothing
     // has been uploaded". A count, and only while narrowed.
     isFiltered(owners) ? netWorth(ALL_OWNERS) : null,
   ]);
 
-  // Everybody ticked is the household, whose URL carries no owner parameter
-  // (ADR-0008). A GET form of checkboxes cannot decline to submit that
-  // spelling, so the collapse happens here, after the roster read it needs.
-  if (roster.coversEveryone) {
-    throw redirect(`${url.pathname}${canonicalOwnerSearch(url.searchParams, ALL_OWNERS)}`);
-  }
+  const instance = everyone === null ? holdings.length : everyone.coverage.total;
 
   return {
     freshness,
-    owners,
-    roster: roster.people.map((person) => ({ id: person.id, name: person.name })),
-    narrowedTo: roster.narrowedTo.map((person) => ({ id: person.id, name: person.name })),
-    unknownOwner: roster.unknownOwner,
-    /**
-     * Where "Show everyone" goes: this address, its parameters kept, no
-     * owner — built here because the component knows no screen's vocabulary;
-     * `"."` for a screen whose unfiltered URL is bare (Holdings' idiom).
-     */
-    showEveryone: canonicalOwnerSearch(url.searchParams, ALL_OWNERS) || ".",
+    ...owner,
     total: total.amount,
     capitalGainsRate,
     gains: unrealizedByAssetType(holdings, capitalGainsRate),
@@ -220,7 +189,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     // things that can disagree. Narrowed, so the coverage note matches.
     holdingCount: holdings.length,
     /** Whether anything at all has been uploaded, narrowed or not. */
-    hasHoldings: everyone === null ? holdings.length > 0 : everyone.coverage.total > 0,
+    hasHoldings: instance > 0,
+    narrowedToNothing: isNarrowedToNothing(owners, { held: holdings.length, instance }),
     pricedCount: holdings.filter((holding) => holding.isPriced).length,
     // Every cut reads `holdings-view.ts`'s one dimension registry, so a
     // panel here and the Holdings table grouped the same way cannot label a
@@ -239,7 +209,7 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
     narrowedTo,
     unknownOwner,
     showEveryone,
-    hasHoldings,
+    narrowedToNothing,
     total,
     capitalGainsRate,
     gains,
@@ -251,10 +221,6 @@ export default function Analysis({ loaderData }: Route.ComponentProps) {
     byClassification,
     freshness,
   } = loaderData;
-
-  // Empty because the filter reached nothing, not because the instance has
-  // nothing — two different sentences.
-  const narrowedToNothing = holdingCount === 0 && hasHoldings && isFiltered(owners);
 
   return (
     <section className="page">
