@@ -29,14 +29,15 @@ on the measured household at the seeded cadence shows 157,140 inner rows — 1,6
 over a million buffer hits for one render.
 
 **The cost model in `ARCHITECTURE.md` assumed an instant is a poll.** Its §10 trade-off table says
-a session is "~27 instants at the seeded cadence" and that "~390 instants at 1 minute puts the query
-in the hundreds of milliseconds"; the paragraph after it counts the lateral "about twenty-seven
-instants a session". But `as_of` is the provider's instant for *each instrument* — the moment the
+"At the seeded cadence a session is ~27 instants" and that "~390 instants at 1 minute puts the
+query in the hundreds of milliseconds"; the paragraph after it counts the lateral "about
+twenty-seven instants a session". But `as_of` is the provider's instant for *each instrument* — the moment the
 provider says that price was struck, never the poll time (ADR-0006; the header of
 `migrations/0009_price_observation.sql`). A feed stamps each instrument's last trade separately,
 so one poll of a hundred feed instruments yields up to a hundred distinct instants, and a session
 holds roughly polls × instruments of them, not polls. The demo household never showed this because
-`scripts/seed-demo.ts` gives every instrument the same instants (27 instants, 222 rows).
+`scripts/seed-demo.ts` gives every quoted instrument the same grid of instants, and each fund only
+the last of them (27 instants, 222 rows, measured on a fresh seed).
 
 Measured on a local Postgres 16, the demo scaled to the reported shape — 21 open accounts, 97
 holdings, 98 feed instruments — with each instrument carrying its own seconds on `as_of`:
@@ -47,17 +48,19 @@ holdings, 98 feed instruments — with each instrument carrying its own seconds 
 | 5 minutes | 4,740 | 10.1 s |
 | 1 minute | 23,460 | 48 s |
 
-A year of sessions in the log instead of one moved the 15-minute figure by a fraction of a second:
-the term that grows is instants × holdings, not the table. The reported eleven seconds is the
-15-minute row on a slower host with genuinely distinct seconds on every instrument.
+A year of sessions in the log instead of one moved the 15-minute figure from 3.5 s to about 5.3 s:
+the log's growth is a second-order term, and the first-order term is instants × holdings. The
+reported eleven seconds is the 15-minute row on a slower host with genuinely distinct seconds on
+every instrument.
 
 **Why every visit pays it.** The chosen range persists in the range cookie
 (`RANGE_COOKIE`, `app/lib/chart-range.ts:406`), stamped by `chartRangeMiddleware` on both chart
 routes (`app/routes/overview.tsx:78`, `app/routes/account.tsx:71`). Once 1D is picked, every
 Overview render — a cold document and a `.data` navigation from Analysis both — runs the same
 loader and the same statement. Analysis reads the `holding_valued` view at "now" and draws no
-series, which is why it feels fine. The service worker passes a document navigation through
-untouched and never sees a `.data` request (ADR-0007); it is a bystander.
+series, which is why it feels fine. The service worker proxies a document navigation through
+`fetch` unchanged and returns early on everything else, `.data` requests included (ADR-0007); it
+is a bystander.
 
 The regression dates to commit `4ee217a` ("Value a household and an account at each instant of a
 session"), which introduced the reader.
@@ -104,8 +107,10 @@ against them, not against its own convenience.**
   draws its flat line at the household's instants (the reader's own docstring).
 - The holdings are the positions held *now*: `holding` rows at `latest_position_set(a.id)` for
   accounts with `closed_at is null`, narrowed by the `where` the two public readers pass —
-  `a.owner_id in (…)` from `ownedBy`, `a.id in (…)` from `isAccount`, or `false` when no id could
-  be one (`isOneOf`). The alias `a` stays, because the narrowing is written against it.
+  `a.owner_id in (…)` from `ownedBy`, `a.id in (…)` from `isAccount`, `false` when no id could
+  be one (`isOneOf`), or the `true` the reader substitutes when the filter is off, which is the
+  unfiltered Overview and the common case. The alias `a` stays, because the narrowing is written
+  against it.
 - A holding's price at *T* is its instrument's latest observation with `as_of <= T` — from any
   date, not only the session — else the last `price_daily` close **strictly before** the session,
   else null. The strictness stays load-bearing for the reason §6.3 gives: the session's own daily
@@ -238,6 +243,12 @@ bound is an init-plan parameter the planner can put into an index condition: a b
 stops mattering. The same form bounds the opening lookup. Checked on Postgres 16; the first thing
 to re-check on the 17 image the deployment runs is that this plan survives.
 
+**`deltas` is kept although the timeline could take the change rows raw.** With the RANGE frame,
+unioning `changes` straight into `timeline` — one row per holding per observation — gives the same
+output at the same cost. Grouping first is a reading aid: the timeline then holds one row per
+instant per kind, and `deltas` says in one place what an instant adds. A reviewer who prefers the
+shorter form is not wrong; the output does not move.
+
 **Window filtering happens one CTE later than the window.** `where r.plotted` is in the final
 select, over `running`, not in `running` itself: a `WHERE` is evaluated before window functions
 and would drop the delta rows before they were summed. The two-step shape is the correctness
@@ -292,13 +303,18 @@ rather than a follow-up:
   lateral, an instant with no held rows must still be a point.
 - `ARCHITECTURE.md` §4.2's pointer to `valuation.server.ts:793` for `readSessionSeries`, which is
   already stale (it points into `manualNetWorth`; the function is at 679) and moves again.
+- `ARCHITECTURE.md` §10's opening: "there is no benchmark and no `EXPLAIN` output in the repo",
+  and "the demo household … is the largest dataset anything here has actually been run against".
+  Both stop being true the moment the research report and its harness are filed.
 - `app/lib/valuation.server.ts`, the docstring on `readSessionSeries`: the three decisions it
   states stay true and stay; the sentences that describe *how* — the per-instant lateral — go, and
-  the identity above takes their place. And the one-line comment in `netWorthSessionSeries`, "`a`
-  is the account alias inside the lateral, where this has to go", which now names a CTE.
+  the identity above takes their place. The inline comment above the query, "Narrowed inside the
+  lateral, never the outer WHERE — `readSeries`'s reason", whose reason (a LEFT-join-manufactured
+  null row) does not exist in the new shape. And the one-line comment in `netWorthSessionSeries`,
+  "`a` is the account alias inside the lateral, where this has to go", which now names a CTE.
 - `docs/specs/README.md` — a row for this spec.
-- `docs/research/README.md` — a dated section for the report, newest first, the shape every other
-  investigation there has.
+- `docs/research/README.md` — a dated section for the report, newest first, the shape the index
+  uses.
 
 Two sentences are false today, before this change, and are corrected in passing because the
 diagnosis is what exposed them: `README.md`'s and `docs/guide/overview.md`'s description of the 1D
@@ -397,8 +413,9 @@ The line changes on every poll — every fifteen minutes by default, every minut
 cadence — and on every upload or balance edit, so a cache is invalidated exactly as often as the
 value it caches changes, and the first render after each poll still pays the full query: at a
 one-minute cadence the cache is cold at almost every visit. It would mask an
-O(instants × holdings) query rather than fix it, which is the same argument DESIGN.md §8.2 makes
-against a materialised view — a stale answer with nothing failing. And it is a second stateful
+O(instants × holdings) query rather than fix it, which is the argument the header of
+`migrations/0002_holding_valued.sql` and `ARCHITECTURE.md` §10 make against a materialised view —
+a refresh step whose omission shows up as silently stale totals. And it is a second stateful
 service in a one-process, one-household deployment whose whole operating posture
 (`docs/operating.md`) is that the database is the only thing to back up. After this change the
 query is tens of milliseconds; if a cache is ever wanted for the *payload*, an in-process memo
@@ -423,7 +440,9 @@ documentation source and a running 16.13, and Kysely 0.29.5's shipped types. Fol
 `numeric` (now cast); the first proposed test duplicating an existing one (now the interleaved
 case); two sentences missing from the documents list; the section numbers. Rejected by the
 reviewer itself, with a counter-example: the charge that the timeline union is more shape than
-the problem needs.
+the problem needs. A second round found nothing material: the narrowing's fourth form, two more
+sentences for the documents list, the quotations made verbatim, the year-of-history figure, and
+`deltas` named as a reading aid rather than a necessity.
 
 **Why not a migration-defined function.** §6.3 already answers it for the current query, and the
 answer does not change: a third valuation object would be bound by ADR-0001's row-type contract
@@ -445,8 +464,8 @@ shape; its holdings CTE is one account's rows, so it was cheaper before and is c
       `bigint` and `total` a count, both numbers from `int8` strings, `amount` a `numeric(20, 4)`
       string
 - [ ] `EXPLAIN (ANALYZE, BUFFERS)` on a log of at least a few hundred thousand observation rows
-      shows the `changes` join as an index scan on `price_observation_pkey`, never a sequential
-      scan of the log
+      shows the `changes` join as an index or bitmap index scan on `price_observation_pkey`,
+      never a sequential scan of the log
 - [ ] `netWorthSessionSeries` and `accountSessionSeries` keep their signatures; `chartSeries` and
       both routes are untouched
 - [ ] Every existing test passes with zero diff to any existing test file
