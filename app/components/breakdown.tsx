@@ -22,9 +22,10 @@ const STROKE = 12;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 /**
- * How many colours the categorical sequence has (§13.3). More groups than
- * this fold their tail into one "Other" wedge rather than extending the
- * sequence: six flat colours in a donut is a legend nobody reads.
+ * How many hues the categorical sequence has (§13.3). More groups than this
+ * fold their tail into one "Other" wedge rather than extending the sequence:
+ * many flat colours in a donut is a legend nobody reads — and a palette
+ * stretched past what colour vision separates repaints two groups the same.
  */
 export const SEQUENCE = 5;
 
@@ -32,11 +33,12 @@ export const SEQUENCE = 5;
  * `--cat-1` … `--cat-5`, by rank, in every panel on every screen. Keyed on
  * rank, not on what is ranked — the whole of §13.3: the largest slice is the
  * same colour whether it is a person, an account kind or an asset class.
- * The clamp is the fold: every rank at or past the last position shares the
- * last colour, because they share the one "Other" wedge.
+ * Every rank past the sequence wears `--cat-other`, the fold's neutral —
+ * grey on purpose, so the merged remainder reads as "the rest" and never
+ * impersonates one of the five real series colours.
  */
 export function categoryColor(rank: number): string {
-  return `var(--cat-${Math.min(rank, SEQUENCE - 1) + 1})`;
+  return rank < SEQUENCE ? `var(--cat-${rank + 1})` : "var(--cat-other)";
 }
 
 /**
@@ -49,8 +51,15 @@ function fraction(share: string): number {
   return Number(share);
 }
 
-/** One drawn arc: how much of the ring it is, and where it starts. */
-export type Wedge = { color: string; fraction: number; before: number };
+/**
+ * One drawn arc: how much of the ring it is, where it starts, and what to
+ * call it under the pointer. `title` exists because colour is the one thing
+ * a wedge must never rely on alone: hover names the group — with its exact
+ * share for a ranked wedge, straight from `formatShare`, never the float.
+ * The "Other" wedge names its members and carries no figure: its only share
+ * would be a float sum, and the table beside the ring holds the exact ones.
+ */
+export type Wedge = { color: string; fraction: number; before: number; title: string };
 
 /**
  * The arcs to draw, in rank order, folded at the end of the sequence.
@@ -64,27 +73,40 @@ export type Wedge = { color: string; fraction: number; before: number };
  * residual wedge.
  */
 export function ring(slices: AllocationSlice[]): Wedge[] {
-  const folds = slices.length > SEQUENCE;
   const wedges: Wedge[] = [];
+  const folded: string[] = [];
   let before = 0;
   let tail = 0;
 
   slices.forEach((slice, rank) => {
     if (!isPositive(slice.share)) return;
 
-    // The fold is by rank, so the ranks sharing the last colour are exactly
-    // the ranks merging into the last wedge — the table's dots and the ring
+    // The fold is by rank, so the ranks wearing the neutral are exactly the
+    // ranks merging into the "Other" wedge — the table's dots and the ring
     // cannot come apart.
-    if (folds && rank >= SEQUENCE - 1) {
+    if (rank >= SEQUENCE) {
       tail += fraction(slice.share);
+      folded.push(slice.label);
       return;
     }
 
-    wedges.push({ color: categoryColor(rank), fraction: fraction(slice.share), before });
+    wedges.push({
+      color: categoryColor(rank),
+      fraction: fraction(slice.share),
+      before,
+      title: `${slice.label} — ${formatShare(slice.share)}`,
+    });
     before += fraction(slice.share);
   });
 
-  if (tail > 0) wedges.push({ color: categoryColor(SEQUENCE - 1), fraction: tail, before });
+  if (tail > 0) {
+    wedges.push({
+      color: categoryColor(SEQUENCE),
+      fraction: tail,
+      before,
+      title: `Other: ${folded.join(", ")}`,
+    });
+  }
 
   return wedges;
 }
@@ -97,6 +119,13 @@ export function ring(slices: AllocationSlice[]): Wedge[] {
  * stays *outside* the hidden subtree: the total is the one figure the table
  * does not carry. `Total` is hard-coded, unlike the amount heading — it is
  * the word for the sum of whatever the rows are.
+ *
+ * Each arc carries a `<title>`, the pointer's identity channel: hover names
+ * the wedge, because matching an arc to its row by colour alone is exactly
+ * what a colour-blind reader cannot be asked to do. Hit-testing follows the
+ * painted dash (SVG 2, verified in Chromium), so each arc answers only for
+ * its own span. Inside the hidden subtree deliberately — assistive tech has
+ * the table; this channel is for the sighted pointer.
  */
 function Donut({ wedges, total }: { wedges: Wedge[]; total: string }) {
   return (
@@ -114,7 +143,9 @@ function Donut({ wedges, total }: { wedges: Wedge[]; total: string }) {
             stroke={wedge.color}
             strokeDasharray={`${wedge.fraction * CIRCUMFERENCE} ${CIRCUMFERENCE}`}
             strokeDashoffset={-(wedge.before * CIRCUMFERENCE)}
-          />
+          >
+            <title>{wedge.title}</title>
+          </circle>
         ))}
       </svg>
 
@@ -221,20 +252,19 @@ export function Breakdown({
   // each slice is nothing.
   const hasRing = wedges.length > 0;
   const owed = slices.some((slice) => isNegative(slice.amount));
-  // The fold note describes rows *sharing* one colour and wedge, so it is
-  // said only where the sharing is visible: fold armed (more slices than
-  // colours) and two or more drawn slices past the sequence. A tail of all
-  // zeros folds nothing, and the note would explain an absence in small grey
+  // The fold note describes rows *sharing* one wedge, so it is said only
+  // where the sharing is visible: two or more drawn slices past the
+  // sequence. A tail of one merges nothing, a tail of all zeros folds
+  // nothing, and either way the note would explain an absence in small grey
   // type.
   const folded =
-    slices.length > SEQUENCE &&
-    slices.filter((slice, rank) => rank >= SEQUENCE - 1 && isPositive(slice.share)).length > 1;
+    slices.filter((slice, rank) => rank >= SEQUENCE && isPositive(slice.share)).length > 1;
 
   const notes = [
     hasRing ? (owed ? NOTES[reading].negative : null) : NOTES[reading].empty,
     folded
-      ? "Everything past the fourth row shares one colour and one wedge: a donut with a colour per" +
-        " group is a legend nobody reads. Each row keeps its own value."
+      ? "Everything past the fifth row shares one grey wedge: a donut with a colour per group is" +
+        " a legend nobody reads. Each row keeps its own value."
       : null,
   ].filter((note): note is string => note !== null);
 

@@ -95,13 +95,18 @@
   --gain-surface: rgb(0 92 62 / 0.10);
   --loss-surface: rgb(186 26 26 / 0.10);
 
-  /* The categorical sequence (§13.3). Fills, not text — 3:1 is the bar, and
-   * the tail does not clear it, which is why legend dots carry a ring. */
+  /* The categorical sequence (§13.3): five hues, machine-checked for
+   * colour-vision separation between wedge neighbours on this theme's panel,
+   * plus `--cat-other` — the folded tail's neutral, deliberately grey so the
+   * remainder of a breakdown can never impersonate a real series. Fills, not
+   * text — 3:1 is the bar, and the yellow and magenta sit under it, which is
+   * why legend dots carry a ring and every ring ships its table. */
   --cat-1: #0041c8;
-  --cat-2: #007751;
-  --cat-3: #505f76;
-  --cat-4: #b6c4ff;
-  --cat-5: #c3c5d9;
+  --cat-2: #eb6834;
+  --cat-3: #006b46;
+  --cat-4: #eda100;
+  --cat-5: #e87ba4;
+  --cat-other: #737688;
 
   /* Type (§13.4) */
   --font-ui: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -166,10 +171,11 @@
     --loss-surface: rgb(248 113 113 / 0.12);
 
     --cat-1: #0055ff;
-    --cat-2: #10b981;
-    --cat-3: #b6c4ff;
-    --cat-4: #ef4444;
-    --cat-5: #4edea3;
+    --cat-2: #d95926;
+    --cat-3: #199e70;
+    --cat-4: #c98500;
+    --cat-5: #d55181;
+    --cat-other: #a3a8b8;
   }
 }
 
@@ -206,10 +212,11 @@
   --loss-surface: rgb(248 113 113 / 0.12);
 
   --cat-1: #0055ff;
-  --cat-2: #10b981;
-  --cat-3: #b6c4ff;
-  --cat-4: #ef4444;
-  --cat-5: #4edea3;
+  --cat-2: #d95926;
+  --cat-3: #199e70;
+  --cat-4: #c98500;
+  --cat-5: #d55181;
+  --cat-other: #a3a8b8;
 }
 
 /* --- Base ---------------------------------------------------------------- */
@@ -1337,7 +1344,16 @@ a {
 
 .donut-segment {
   fill: none;
-  transition: opacity 150ms;
+  transition: opacity 150ms, stroke-width 150ms;
+}
+
+/* Hover is the wedge's identity channel: the browser shows the arc's own
+ * <title> (group, exact share), and the arc swells a step so the pointer can
+ * see which one is answering — matching arc to row by colour alone is what a
+ * colour-blind reader cannot be asked to do. Hit-testing follows the painted
+ * dash, so each arc answers only for its own span. */
+.donut-segment:hover {
+  stroke-width: 14px;
 }
 
 /* `--space-xs` because a caption over a figure is the one job §13.5 gives
@@ -1367,8 +1383,9 @@ a {
   color: var(--on-surface);
 }
 
-/* The legend dot carries a ring because the tail of the light sequence does not
- * clear 3:1 against a white panel at 12px (§13.3). */
+/* The legend dot carries a ring because the sequence's lightest fills (§13.3:
+ * yellow and magenta on the white panel, blue on the dark one) do not clear
+ * 3:1 at 12px. */
 .legend-dot {
   flex: none;
   width: 12px;

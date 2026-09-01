@@ -1,6 +1,7 @@
 import { Link, redirect } from "react-router";
 
 import { Amount } from "~/components/amount";
+import { categoryColor } from "~/components/breakdown";
 import { ChartRangeControl } from "~/components/chart-range-control";
 import { EmptyState } from "~/components/empty-state";
 import {
@@ -372,9 +373,10 @@ function allocationBars(accounts: AccountRow[]) {
     held: held.length,
     bars: held.slice(0, BARS).map((account, index) => ({
       account,
-      // One-based rank: `--cat-1` is rank one in every breakdown, so the
-      // same position means the same colour on every screen (§13.3).
-      colour: `var(--cat-${index + 1})`,
+      // The breakdowns' own assigner, so the same rank means the same
+      // colour on every screen (§13.3) — including whatever the sequence
+      // is recoloured to.
+      colour: categoryColor(index),
       width: `${((toPlotValue(account.amount) / base) * 100).toFixed(1)}%`,
     })),
   };

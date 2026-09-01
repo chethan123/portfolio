@@ -94,8 +94,9 @@ Both panels are the panel [Analysis](analysis.md) draws, and they behave the sam
 
 - **Colour means rank**, not a particular account or treatment — the same rank is the same colour in
   every panel on every screen. See [Analysis](analysis.md#the-breakdowns).
-- **A long breakdown folds its tail into one colour and one wedge**, while every row keeps its own
-  figures in the table. See [More than five rows](analysis.md#more-than-five-rows).
+- **A long breakdown folds its tail into one grey wedge** — grey on purpose, so the remainder never
+  looks like a coloured group — while every row keeps its own figures in the table. See
+  [More than five rows](analysis.md#more-than-five-rows).
 - **A negative row gets no wedge and a hollow dot**, and its percentage is a share of everything
   positive rather than of the figure in the middle of the ring. The panel says so under the table
   when it happens. The sentence differs from the one on Analysis, because a negative here is
