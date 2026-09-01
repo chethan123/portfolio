@@ -1,8 +1,9 @@
 /**
- * The portfolio cut four ways — by person, account kind, asset class,
- * classification — for the analysis screen (DESIGN.md §8.1, §8.3); a fifth
- * cut beneath them ({@link unrealizedByAssetType}); and the same array cut
- * by what it *pays*
+ * The portfolio cut whichever way the caller names ({@link allocationBy}) —
+ * the Analysis screen's four cuts and the Income screen's two are that one
+ * function over `holdings-view.ts`'s dimension registry (DESIGN.md §8.1,
+ * §8.3); a fifth cut beneath them ({@link unrealizedByAssetType}); and the
+ * same array cut by what it *pays*
  * ({@link annualDividendBy}, {@link weightedYield}, {@link shelteredSubtotal}).
  *
  * Pure functions over the {@link ValuedHolding} rows the query layer already
@@ -36,7 +37,7 @@
  * nothing, the amount beside it says what it is, and the caller should show
  * the amounts alone.
  */
-import { ACCOUNT_KINDS, labelOf, type Option } from "./account-options.ts";
+import type { Option } from "./account-options.ts";
 import { formatPercent, isPositive } from "./format.ts";
 import { MONEY_SCALE, SHARE_SCALE, divide, render, sumMoney, toUnits } from "./money.ts";
 
@@ -177,14 +178,17 @@ export function allocateShares(amounts: ReadonlyArray<bigint>): bigint[] {
 }
 
 /**
- * The one grouping; the adapters below only say what to group by and what to
- * add up. Written once because "sum what is known, count all, divide by the
- * gross" is the rule, and a copy is a chance for one breakdown to treat an
- * uncomputable holding differently. Exported because a breakdown of another
- * figure needs it — an adapter per figure per dimension is the multiplication
- * this shape avoids.
+ * The one grouping. The caller says what to file each holding under —
+ * `holdings-view.ts`'s `groupingBy`, the one registry of dimension accessors
+ * — and which figure to add up. Written once because "sum what is known,
+ * count all, divide by the gross" is the rule, and a copy is a chance for one
+ * breakdown to treat an uncomputable holding differently. Naming a dimension
+ * *here* would be the second label table: an adapter per figure per dimension
+ * is the multiplication this shape avoids, and a breakdown labelling its
+ * buckets differently from the table beside it is what it costs.
  *
- * @param by what each holding is filed under, and what that file is called.
+ * @param by what each holding is filed under, and what that file is called —
+ *           `groupingBy(id)`, never an accessor spelled out at the call site.
  * @param amount which figure to add up and when it counts as known; value by
  *               default.
  */
@@ -224,60 +228,15 @@ export function allocationBy(
 }
 
 /**
- * Who owns what (DESIGN.md §4.2). Keyed on id, not name: two people can share
- * a first name, and a merged breakdown would be wrong invisibly.
- */
-export function allocationByPerson(holdings: ValuedHolding[]): AllocationSlice[] {
-  return allocationBy(holdings, (holding) => ({
-    key: holding.ownerId,
-    label: holding.ownerName,
-  }));
-}
-
-/**
- * What kind of account it sits in — the breakdown most likely to hold a
- * negative slice (liabilities), so the one to read the header's rule against.
- */
-export function allocationByAccountKind(holdings: ValuedHolding[]): AllocationSlice[] {
-  return allocationBy(holdings, (holding) => ({
-    key: holding.accountKind,
-    label: labelOf(ACCOUNT_KINDS, holding.accountKind),
-  }));
-}
-
-/**
- * Equity, bonds, cash, other — the fixed rollup beneath the user's own
- * classification labels (DESIGN.md §4.4).
- */
-export function allocationByAssetClass(holdings: ValuedHolding[]): AllocationSlice[] {
-  return allocationBy(holdings, (holding) => ({
-    key: holding.assetClass,
-    label: labelOf(ASSET_CLASSES, holding.assetClass),
-  }));
-}
-
-/**
- * The household's own labels — the fine cut the asset-class rollup above
- * coarsens (DESIGN.md §4.4). Keyed on the label itself: `classification.name`
- * is unique, so the name is the identity, and there is no label table to read
- * — the stored words are what a person sees.
- */
-export function allocationByClassification(holdings: ValuedHolding[]): AllocationSlice[] {
-  return allocationBy(holdings, (holding) => ({
-    key: holding.classification,
-    label: holding.classification,
-  }));
-}
-
-/**
  * The same array cut by what it **pays** — the Income screen's breakdowns by
- * tax treatment and by account (DESIGN.md §8.1). Takes a grouping where the
- * four above take none, because of a cycle: the short labels live in
- * `holdings-view.ts`, which already imports from here, so the caller hands
- * the accessor in and the dependency stays one-way. That also makes "Holdings
- * grouped by tax treatment agrees with the Income breakdown" structural: both
- * screens read one accessor, and a third copy of the label table is exactly
- * what `tests/invariants/aggregates-agree.test.ts` exists to catch.
+ * tax treatment and by account (DESIGN.md §8.1). The grouping arrives from
+ * the caller for the reason every cut's does — there is a cycle: the labels
+ * live in `holdings-view.ts`, which already imports from here, so the
+ * accessor is handed in and the dependency stays one-way. That is what makes
+ * "Holdings grouped by tax treatment agrees with the Income breakdown"
+ * structural: both screens read one accessor, and a second copy of the label
+ * table is exactly what `tests/invariants/aggregates-agree.test.ts` exists to
+ * catch.
  *
  * @param by `holdings-view.ts`'s `groupingBy`, which reads the one label table.
  */

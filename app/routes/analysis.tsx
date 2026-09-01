@@ -9,15 +9,13 @@ import {
   OwnerFilterControl,
 } from "~/components/owner-filter-control";
 import {
-  allocationByAccountKind,
-  allocationByAssetClass,
-  allocationByClassification,
-  allocationByPerson,
+  allocationBy,
   formatRate,
   unrealizedByAssetType,
   type GainRow,
   type GainGroups,
 } from "~/lib/allocation";
+import { groupingBy } from "~/lib/holdings-view";
 import { isNegative } from "~/lib/format";
 import {
   ALL_OWNERS,
@@ -224,10 +222,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     /** Whether anything at all has been uploaded, narrowed or not. */
     hasHoldings: everyone === null ? holdings.length > 0 : everyone.coverage.total > 0,
     pricedCount: holdings.filter((holding) => holding.isPriced).length,
-    byPerson: allocationByPerson(holdings),
-    byAccountKind: allocationByAccountKind(holdings),
-    byAssetClass: allocationByAssetClass(holdings),
-    byClassification: allocationByClassification(holdings),
+    // Every cut reads `holdings-view.ts`'s one dimension registry, so a
+    // panel here and the Holdings table grouped the same way cannot label a
+    // bucket differently (`tests/invariants/aggregates-agree.test.ts`).
+    byPerson: allocationBy(holdings, groupingBy("owner")),
+    byAccountKind: allocationBy(holdings, groupingBy("kind")),
+    byAssetClass: allocationBy(holdings, groupingBy("assetClass")),
+    byClassification: allocationBy(holdings, groupingBy("classification")),
   };
 }
 

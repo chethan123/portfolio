@@ -315,6 +315,23 @@ describe("availableFilters", () => {
     ]);
   });
 
+  it("offers an account type in the self-explaining form, not the short one", () => {
+    // The register split this module owns: the table cell prints "Workplace
+    // plan" (below), the dropdown offering the choice spells out which
+    // accounts it means. Both come off the one dimension, so they are the
+    // same words minus the tail — and this is the only assertion left of the
+    // long form now that the Analysis panel prints a bucket like the table.
+    const [kind] = availableFilters(
+      [holding({ accountKind: "401k" }), holding({ accountKind: "brokerage" })],
+      query(),
+    ).filter((control) => control.id === "kind");
+
+    expect(kind?.options.map((option) => option.label)).toEqual([
+      "Brokerage",
+      "Workplace plan (401k, 403b)",
+    ]);
+  });
+
   it("phrases a selection as a sentence fragment, not as its field caption", () => {
     // "nothing is brokerage Chase and asset class Equity" is not English; the
     // caption above a `<select>` and the same fact in prose are different words.

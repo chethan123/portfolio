@@ -366,3 +366,130 @@ describe("the Income screen and the Holdings table", () => {
     }),
   );
 });
+
+/**
+ * A household that actually varies on all four of Analysis's cuts.
+ *
+ * `aPortfolioThatPays` above is shaped for the dividend, and on three of the
+ * four cuts every bucket there holds exactly one row — which would let the
+ * comparison below pass on a set of singletons. Here two people hold five
+ * rows: two instruments share one classification (so a bucket sums more than
+ * it counts), and the bond fund has never been quoted, so on *every* cut one
+ * whole group is unpriced — the case where the two sides genuinely say
+ * different things, `null` against `"0.0000"`.
+ */
+async function aPortfolioCutFourWays(ctx: TestContext) {
+  const [alice, bob] = await Promise.all([
+    ctx.seedPerson({ name: "Alice" }),
+    ctx.seedPerson({ name: "Bob" }),
+  ]);
+
+  const [brokerage, loan, ira] = await Promise.all([
+    ctx.seedAccount({ owner: alice, kind: "brokerage", name: "Fidelity" }),
+    ctx.seedAccount({ owner: alice, kind: "liability", name: "Mortgage" }),
+    ctx.seedAccount({ owner: bob, kind: "ira", name: "Roth IRA" }),
+  ]);
+
+  // One classification over two instruments: `seedInstrument` mints a fresh
+  // one per call, and a cut where every bucket is a singleton tests nothing.
+  const usEquity = await ctx.seedClassification({ name: "US equity", assetClass: "equity" });
+  const bonds = await ctx.seedClassification({ name: "Bond fund", assetClass: "bond" });
+
+  const [vti, schd, bnd, usd] = await Promise.all([
+    ctx.seedInstrument({ symbol: "VTI", classification: usEquity }),
+    ctx.seedInstrument({ symbol: "SCHD", classification: usEquity }),
+    ctx.seedInstrument({ symbol: "BND", classification: bonds }),
+    ctx.usdInstrument(),
+  ]);
+
+  await Promise.all([
+    ctx.seedQuote({ instrument: vti, price: "200.0000" }),
+    ctx.seedQuote({ instrument: schd, price: "27.5000" }),
+  ]);
+
+  await Promise.all([
+    ctx.seedPositionSet({
+      account: brokerage,
+      asOf: "2026-06-30",
+      holdings: [
+        { instrument: vti, quantity: "100.00000000" },
+        { instrument: schd, quantity: "300.00000000" },
+      ],
+    }),
+    ctx.seedPositionSet({
+      account: ira,
+      asOf: "2026-06-30",
+      holdings: [{ instrument: bnd, quantity: "400.00000000" }],
+    }),
+    ctx.seedPositionSet({
+      account: loan,
+      asOf: "2026-06-30",
+      holdings: [{ instrument: usd, quantity: "-14500.00000000" }],
+    }),
+  ]);
+}
+
+describe("the Analysis screen and the Holdings table", () => {
+  it(
+    "cut the household into the same buckets, by the same names, on every dimension",
+    withDatabase(async (ctx) => {
+      // What this does and does not claim. That the *labels* match is
+      // structural now — both sides call the one accessor `groupingBy(id)`
+      // returns — and that is the point of the refactor rather than a gap in
+      // the test: what would break it is Analysis growing a private label
+      // table again, which is exactly how the two screens came to print
+      // "Workplace plan (401k, 403b)" and "Workplace plan" for one bucket.
+      // The *amounts* and *counts* are independent: `allocation.ts` sums
+      // `BigInt` units and counts `isPriced`, `holdings-view.ts` sums its own
+      // subtotals and counts non-null values — so this also pins the view's
+      // own rule, asserted nowhere else, that a holding's value is null
+      // exactly when it is unpriced.
+      await aPortfolioCutFourWays(ctx);
+
+      const [page, holdings] = await Promise.all([
+        analysisPage(),
+        currentHoldings(ALL_OWNERS, ctx.db),
+      ]);
+
+      for (const [dimension, slices] of [
+        ["owner", page.byPerson],
+        ["kind", page.byAccountKind],
+        ["assetClass", page.byAssetClass],
+        ["classification", page.byClassification],
+      ] as const) {
+        const groups = groupHoldings(holdings, dimension, DEFAULT_SORT, DEFAULT_DIRECTION);
+
+        // Sorted on the key, never compared positionally: the two rank their
+        // buckets differently, and their tie-breaks differ again.
+        expect({
+          dimension,
+          cut: byKey(slices).map((slice) => [
+            slice.key,
+            slice.label,
+            slice.amount,
+            slice.coverage,
+          ]),
+        }).toEqual({
+          dimension,
+          cut: byKey(groups).map((group) => [
+            group.key,
+            group.label,
+            // A group nothing could be priced from is `null` in a table cell
+            // and zero in a sum. Both are right for their screen; reconciling
+            // them is not this invariant's business.
+            group.total.value ?? "0.0000",
+            group.total.valueCoverage,
+          ]),
+        });
+      }
+
+      // Not a set of singletons, and not all priced — the two ways this
+      // comparison could hold while proving nothing.
+      expect(page.byClassification.map((slice) => [slice.label, slice.coverage])).toEqual([
+        ["US equity", { known: 2, total: 2 }],
+        ["Bond fund", { known: 0, total: 1 }],
+        ["Cash", { known: 1, total: 1 }],
+      ]);
+    }),
+  );
+});

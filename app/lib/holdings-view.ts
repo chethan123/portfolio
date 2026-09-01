@@ -108,7 +108,8 @@ function plain(key: string): Facet {
  * owner is household-wide now, and a screen-local Owner select would be a
  * second way to ask the same question with two answers at once. Grouping
  * stays: it reads one table as four, and still works under a filter naming
- * two people. Keyed on id, not name (`allocationByPerson`'s reason).
+ * two people. Keyed on id, not name: two people can share a first name, and
+ * a merged group would be wrong invisibly.
  */
 const OWNER: Dimension = {
   id: "owner",
@@ -177,6 +178,9 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
       optionLabel: labelOf(TAX_TREATMENTS, holding.taxTreatment),
     }),
   },
+  // Keyed on the label itself: `classification.name` is unique, so the name
+  // is the identity, and there is no label table to read — the household's
+  // stored words are what a person sees.
   {
     id: "classification",
     label: "Classification",
