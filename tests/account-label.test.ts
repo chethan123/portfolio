@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { accountPickerGroups, numberTail } from "../app/lib/account-label.ts";
+import { accountPickerGroups, numberTail, numberTailCharacters } from "../app/lib/account-label.ts";
 
 import type { PickerAccount } from "../app/lib/account-label.ts";
 
@@ -153,5 +153,12 @@ describe("numberTail", () => {
   it("treats a missing or blank number as no number at all", () => {
     expect(numberTail(null)).toBeNull();
     expect(numberTail("   ")).toBeNull();
+  });
+
+  it("hands an announcement the bare characters, on the tail's own blank rule", () => {
+    // What "ending in 3910" reads out — the same characters minus the mask
+    // glyphs, null exactly when the tail is.
+    expect(numberTailCharacters("X47-283910")).toBe("3910");
+    expect(numberTailCharacters("   ")).toBeNull();
   });
 });

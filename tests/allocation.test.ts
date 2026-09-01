@@ -58,6 +58,7 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
   const merged: ValuedHolding = {
     accountId: "1",
     accountName: "Account",
+    accountNumberTail: null,
     institution: "Institution",
     accountKind: "brokerage",
     taxTreatment: "taxable",

@@ -51,6 +51,7 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
   const merged: ValuedHolding = {
     accountId: "1",
     accountName: "Taxable",
+    accountNumberTail: null,
     institution: "Fidelity",
     accountKind: "brokerage",
     taxTreatment: "taxable",
@@ -294,6 +295,24 @@ describe("availableFilters", () => {
     // never the problem.
     expect(account?.selectedIsAbsent).toBe(true);
     expect(account?.selectedPhrase).toBeNull();
+  });
+
+  it("spells an account option as name, number tail, then institution", () => {
+    // The tail rides in the option whenever a number is recorded — not only
+    // when names collide (CONTEXT.md) — and an account without one keeps the
+    // bare name: no dots standing in for a number nobody recorded.
+    const [account] = availableFilters(
+      [
+        holding({ accountId: "1", accountName: "Roth IRA", accountNumberTail: "····3910" }),
+        holding({ accountId: "2", accountName: "Checking", accountNumberTail: null }),
+      ],
+      query(),
+    ).filter((control) => control.id === "account");
+
+    expect(account?.options.map((option) => option.label)).toEqual([
+      "Checking · Fidelity",
+      "Roth IRA ····3910 · Fidelity",
+    ]);
   });
 
   it("phrases a selection as a sentence fragment, not as its field caption", () => {

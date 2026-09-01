@@ -519,6 +519,7 @@ describe("the shape a past date returns", () => {
           {
             accountId: account.id,
             accountName: "Empower 401k — Roth",
+            accountNumberTail: null,
             institution: "Empower",
             accountKind: "401k",
             taxTreatment: "tax_free",

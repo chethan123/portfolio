@@ -41,14 +41,24 @@ export type PickerOption = { id: string; label: string };
 export type PickerGroup = { ownerId: string; ownerName: string; options: PickerOption[] };
 
 /**
+ * The tail's bare characters — `2245` from the stored number, or null without
+ * one. What an "ending in 2245" announcement reads out, where the dots would
+ * be noise; {@link numberTail} is the same characters wearing the mask glyphs.
+ */
+export function numberTailCharacters(externalAccountNumber: string | null): string | null {
+  const trimmed = externalAccountNumber?.trim() ?? "";
+  return trimmed === "" ? null : trimmed.slice(-4);
+}
+
+/**
  * `····2245` from the stored number's last four characters, or null without
  * one. Stored bare and free-form (`X47-283910` is real), so the tail is
  * characters, not digits, and the mask glyphs belong to the renderer, never
  * the stored value.
  */
 export function numberTail(externalAccountNumber: string | null): string | null {
-  const trimmed = externalAccountNumber?.trim() ?? "";
-  return trimmed === "" ? null : `····${trimmed.slice(-4)}`;
+  const characters = numberTailCharacters(externalAccountNumber);
+  return characters === null ? null : `····${characters}`;
 }
 
 /**

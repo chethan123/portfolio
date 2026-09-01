@@ -1,6 +1,8 @@
 import { Form, Link } from "react-router";
 
 import { AccountFields } from "~/components/account-fields";
+import { AccountNumberTail } from "~/components/account-number-tail";
+import { numberTail } from "~/lib/account-label";
 import { createAccount, listAccounts } from "~/lib/accounts.server";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { listPeople } from "~/lib/people.server";
@@ -19,7 +21,15 @@ export function meta() {
 
 export async function loader() {
   const [accounts, people] = await Promise.all([listAccounts(), listPeople()]);
-  return { accounts, people };
+  return {
+    // The list renders only the tail, so only the tail is serialized to the
+    // browser; the edit screen loads the raw number itself, being its editor.
+    accounts: accounts.map(({ externalAccountNumber, ...account }) => ({
+      ...account,
+      accountNumberTail: numberTail(externalAccountNumber),
+    })),
+    people,
+  };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -79,7 +89,10 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
                     className={account.isClosed ? "record-row--closed" : undefined}
                   >
                     <td>
-                      <Link to={`/settings/accounts/${account.id}`}>{account.name}</Link>
+                      <Link to={`/settings/accounts/${account.id}`}>
+                        {account.name}
+                        <AccountNumberTail tail={account.accountNumberTail} />
+                      </Link>
                     </td>
                     <td>{account.institution || "—"}</td>
                     <td>{account.kind}</td>

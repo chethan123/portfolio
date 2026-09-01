@@ -310,6 +310,16 @@ a {
   border: 0;
 }
 
+/* An account's number tail — `····2245` after the name wherever accounts are
+ * listed. Muted and regular weight whatever carries the name, so a 600-weight
+ * name does not drag the tail up with it; tabular-nums because the characters
+ * are usually digits and sit beside other figures. */
+.number-tail {
+  color: var(--on-surface-variant);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
 .no-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;

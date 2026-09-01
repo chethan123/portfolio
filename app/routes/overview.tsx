@@ -1,5 +1,6 @@
 import { Link, redirect } from "react-router";
 
+import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount } from "~/components/amount";
 import { categoryColor } from "~/components/breakdown";
 import { ChartRangeControl } from "~/components/chart-range-control";
@@ -420,7 +421,10 @@ function AccountsPanel({
                   <Tile />
                 </div>
                 <div>
-                  <p className="account-name">{account.accountName}</p>
+                  <p className="account-name">
+                    {account.accountName}
+                    <AccountNumberTail tail={account.accountNumberTail} />
+                  </p>
                   <p className="account-meta">
                     {account.institution} · {labelOf(ACCOUNT_KINDS, account.accountKind)}
                   </p>
@@ -476,7 +480,13 @@ function AllocationPanel({
           {bars.map(({ account, colour, width }) => (
             <div className="alloc-row" key={account.accountId}>
               <div className="alloc-label">
-                {account.accountName}
+                {/* One span, one flex item: the label row is space-between,
+                    and an unwrapped tail would be stranded mid-row as a
+                    third item. */}
+                <span>
+                  {account.accountName}
+                  <AccountNumberTail tail={account.accountNumberTail} />
+                </span>
                 <b className="u-data">
                   <Amount value={account.amount} />
                 </b>

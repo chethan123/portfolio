@@ -132,13 +132,21 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     label: "Account",
     filterLabel: "Account",
     phrase: (label) => `in ${label}`,
-    of: (holding) => ({
-      key: holding.accountId,
-      label: holding.accountName,
-      // Two accounts at two institutions can share a name ("Roth IRA"), so
-      // the dropdown disambiguates; the cell has the institution on its own line.
-      optionLabel: `${holding.accountName} · ${holding.institution}`,
-    }),
+    of: (holding) => {
+      // The number tail rides in the option, as everywhere accounts are
+      // listed (CONTEXT.md) — but not in `label`, which is also the words a
+      // group heading and the empty-table sentence print, and prose does not
+      // wear the mask glyphs. Grouping keys on the id either way.
+      const tail = holding.accountNumberTail;
+
+      return {
+        key: holding.accountId,
+        label: holding.accountName,
+        // Two accounts at two institutions can share a name ("Roth IRA"), so
+        // the dropdown disambiguates; the cell has the institution on its own line.
+        optionLabel: `${holding.accountName}${tail === null ? "" : ` ${tail}`} · ${holding.institution}`,
+      };
+    },
   },
   {
     id: "institution",
@@ -463,6 +471,9 @@ export function availableFilters(
     const selected = query.filters.get(dimension.id) ?? "";
     if (options.size < 2 && selected === "") continue;
 
+    // Ordered by the words shown, tail included — among same-named accounts
+    // the tail decides before the institution, because it comes first in
+    // what the reader is actually scanning.
     const listed = [...options.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => compareText(a.label, b.label));

@@ -153,6 +153,22 @@ Off means the whole household, which is where every reading starts — and which
 is only another way of saying.
 _Avoid_: user filter, person filter, lens, view-as, my view, standing choice.
 
+### How an account is told apart
+
+**Account number**:
+The optional free-form identifier recorded on an account as its institution states it — captured
+from a statement's own column or typed in Settings. A guard and a label, never a selector: nothing
+auto-picks an account from it, and an upload naming a different number than the recorded one is
+refused rather than landed in the wrong place.
+_Avoid_: account ID, external ID, mask (for the stored value).
+
+**Number tail**:
+The display form of an account number — four dots and its last four characters, characters rather
+than digits because the stored number is free text. An identifier and not an amount: it rides beside
+the account name wherever accounts are listed, always and not only when names collide, and masking
+never touches it.
+_Avoid_: last 4 digits, masked number, account suffix.
+
 ### What a screen shows in public
 
 **Masked**:
