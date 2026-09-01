@@ -347,6 +347,34 @@ is the rule.
   throughout in ADR-0006's sense and stays undefined in the glossary until somebody needs it
   defined.
 
+## Alternatives considered and rejected
+
+**Indexes.** Every probe the current query makes is already an index scan stopping at its first
+row: `price_observation_pkey` and `price_daily_pkey` inside the two laterals,
+`position_set_account_as_of_idx` inside `latest_position_set`. The cost is the number of probes —
+instants × holdings, twice — not the cost of one. Measured: covering indexes on both laterals
+(`(instrument_id, as_of) include (price)`, `(instrument_id, date) include (close)`, turning both
+into index-only scans) left the 15-minute figure at 4.5 s against 3.5 s without them. The rewrite's
+own plan rides the indexes that exist and adds none.
+
+**Postgres memory and cache settings.** The plan reports 1.47 million shared-buffer *hits* and no
+reads at all for one render: the whole working set is already in memory, and the time is CPU
+spent executing the loop. `shared_buffers`, `work_mem` and `effective_cache_size` move nothing
+here. Production runs the image's defaults plus `timezone=UTC` (`compose.yaml`) and that stays.
+
+**An external cache such as Redis, or an in-process memo.** Three reasons, in order of weight.
+The line changes on every poll — every fifteen minutes by default, every minute at the fastest
+cadence — and on every upload or balance edit, so a cache is invalidated exactly as often as the
+value it caches changes, and the first render after each poll still pays the full query: at a
+one-minute cadence the cache is cold at almost every visit. It would mask an
+O(instants × holdings) query rather than fix it, which is the same argument DESIGN.md §8.2 makes
+against a materialised view — a stale answer with nothing failing. And it is a second stateful
+service in a one-process, one-household deployment whose whole operating posture
+(`docs/operating.md`) is that the database is the only thing to back up. After this change the
+query is tens of milliseconds; if a cache is ever wanted for the *payload*, an in-process memo
+keyed on the session, its latest `as_of` and the latest `position_set` id would need no new
+infrastructure, and the poller that would invalidate it already runs in the same process.
+
 ## Further Notes
 
 **The prototype's equivalence check**, run against the scaled demo before this spec was written:
