@@ -91,9 +91,8 @@ loaders that happen to call different readers.
 
 **3.** As a reader picking 1D on either screen, I want the session drawn the same way on both, so
 that the two screens cannot disagree about what a session is. Unchanged on screen; which reader a
-session window implies is decided once, and the invariant that a 1D window carries an empty `dates`
-array on purpose — so a caller that misses `session` draws nothing rather than the wrong thing — is
-now kept by the module that reads.
+session window implies is decided once, in the module that reads, rather than inferred from
+`resolved.session` by each loader in turn.
 
 **4.** As a reader narrowing the Overview to one owner, I want the same line and the same note
 about withheld pre-app history, so that the refactor is invisible. The narrowing still travels as a
@@ -169,25 +168,31 @@ above and its only reason to be exported was to reconcile two loaders' ternaries
 it has one caller, inside `chart-series.server.ts`, and belongs there. `SessionPoint` stays
 exported — it is still the session readers' return type.
 
-**The owner filter stays visible in review, and the documents that say where it stays must be
+**The owner filter stays visible in review, and the documents that say how it travels must be
 amended.** §4.2 says `owner-reading.server.ts` deliberately does not call the household-scoped
-readers itself, "so whose money a loader reads stays visible in review rather than hidden inside
-this one". That property is kept: `reading` is a required field of a required argument,
+readers itself, leaving the obligation on callers "so whose money a loader reads stays visible in
+review rather than hidden inside this one". That property is kept: `reading` is a required field of
+a required argument,
 `chartSeries({ surface: "household", reading }, resolved)` names it at the call site, and
 TypeScript refuses the call without it. What changes, and what the documents must now say, is that
-the filter travels as a *field of the scope* rather than as the reader's first positional argument,
-and that three household-scoped reads — `firstRecordedDate`, `netWorthSeries` and
+the filter travels as a *field of the scope* rather than as "a required first argument with no
+default", and that three household-scoped reads — `firstRecordedDate`, `netWorthSeries` and
 `netWorthSessionSeries` — are now made by a module the loader names its reading to, rather than by
 the loader directly. "One module values holdings" is untouched: the new module compares
 cardinalities and values nothing.
 
-**`ChartPoint` and `SessionAxis` move down to `chart-range.ts`.** `chartSeries` constructs the
-first and `chartWindow` constructs the second, and both are consumed by `net-worth-chart.tsx`.
-Leaving them in the component would make a domain module type-import from a component, which is the
-layering upside down; declaring the shapes again in the lib would be a second copy of each. Moving
-them to the pure module both sides already depend on leaves every import pointing down.
-`net-worth-chart.tsx` and `tests/net-worth-chart.test.tsx` type-import them from their new home;
-`import type` is erased under `verbatimModuleSyntax`, and no runtime edge appears anywhere.
+**`ChartPoint` and `SessionAxis` move down to `chart-range.ts`, and the file's remit is restated.**
+`chartSeries` constructs the first and `chartWindow` constructs the second, and both are consumed by
+`net-worth-chart.tsx`. Leaving them in the component would make a domain module type-import from a
+component — no module in `app/lib` imports from `app/components` today, and this change should not
+open that direction — while declaring the shapes again in the lib would be a second copy of each.
+Moving them to the pure module both sides already depend on leaves every import pointing down.
+`net-worth-chart.tsx` type-imports both and `tests/net-worth-chart.test.tsx` type-imports
+`ChartPoint`; `import type` is erased under `verbatimModuleSyntax`, and no runtime edge to a
+`.server` module appears anywhere. What `chart-range.ts` then holds is no longer the chart's *range*
+vocabulary but its *time* vocabulary — a range, the window it resolves to, the points on that
+window, and the axis that labels them — and both the file's own header and its Appendix A row have
+to say so.
 
 **The middleware export stays per-route; its docstring shrinks to a pointer.** React Router
 requires `export const middleware` on the route module, so the export itself cannot be shared. The
@@ -195,7 +200,8 @@ duplicated lines above it can, and already do, point at `chartRangeMiddleware`'s
 one line each is enough.
 
 **`isoDate` is exported from `chart-range.ts` and the other copies are deleted**, in both routes and
-in the chart component.
+in the chart component. Deleting the routes' copies leaves their `type IsoDate` import from
+`valuation.server.ts` with no user; it goes too.
 
 **The empty note converges on its 1D branch only.** The sentence a session with one observed moment
 renders is byte-identical in both routes, under a byte-identical inner guard, under a
@@ -219,13 +225,23 @@ Each of these states, today, something that stops being true, and each is part o
 than a follow-up:
 
 - `docs/specs/README.md` — a row for this spec, in the table that carries one per numbered spec.
-- `ARCHITECTURE.md` §4.2, the owner-reading row — "the household-scoped reads stay in the loader"
-  becomes "the loader names its reading to whoever reads".
-- `ARCHITECTURE.md` §6.3 — the read list and the screen/read/shape table, where the Overview's and
-  the account page's chart reads are attributed to the routes.
-- `ARCHITECTURE.md` Appendix A — a row for `chart-series.server.ts`, and the `owner-reading.server.ts`
-  row's claim about where a screen's own reads sit.
-- `app/lib/owner-reading.server.ts`'s module docstring, which makes the same claim in the same words.
+- `ARCHITECTURE.md` §4.2, the "Whose money a screen is reading" row — the owner filter is no longer
+  "a required first argument with no default" on *every* household-scoped read; on the chart's three
+  it is a required field of a required argument instead. §6.3 states the same rule again and needs
+  the same amendment.
+- `ARCHITECTURE.md` §4.2, the owner-reading row — the obligation it puts on callers, to take the
+  filter by hand and pass it to the reader, is now discharged one step further out.
+- `ARCHITECTURE.md` §6.3 — the screen/read/shape table, where the Overview's and the account page's
+  chart series reads are attributed to the routes.
+- `ARCHITECTURE.md` Appendix A — a row for `chart-series.server.ts`, and the `chart-range.ts` row,
+  which describes a file that now holds more than a range vocabulary.
+- `app/lib/chart-range.ts`'s module header, for the same reason.
+- `app/lib/owner-reading.server.ts`'s module docstring, which says the household-scoped reads stay
+  in the loader.
+
+Appendix A's `owner-reading.server.ts` row is deliberately *not* on this list: a screen's own
+`currentHoldings` and `netWorth` calls do stay in its loader, the Overview's included. Only the
+chart's reads move.
 
 ## Testing Decisions
 
@@ -278,7 +294,7 @@ type moves in this change are precisely the shape that would go unnoticed otherw
   ticket.
 - **`netWorthChange`'s documented disagreement with the 1D line** over what `since` means. It stays
   exactly as documented; this ticket moves no arithmetic.
-- **The account page's `uploadReceipt` read**, which is serial today for reasons of its own.
+- **The account page's `uploadReceipt` read**, which is serial today and left so.
 - **A CONTEXT.md entry for "coverage" or "series".** Terms are added when one is actually resolved.
   Nothing here resolves a dispute about either word.
 
