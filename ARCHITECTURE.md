@@ -345,6 +345,7 @@ grep. They come in three tiers.
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
+| Settling the owner-filter reading — the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading` — what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it, so whose money a loader reads stays visible in review rather than hidden inside this one. |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
 
@@ -1378,6 +1379,10 @@ different answer for.
 `DraftNotReadyError` is the interesting one: it is neither a refusal nor a 404. The reader's next
 move is an earlier step, so the error names that step and the routes translate it into a redirect.
 
+**One deliberate inversion of this table:** `app/lib/owner-reading.server.ts`'s `ownerReading` throws
+the redirect `Response` itself, rather than a domain error for a route to translate, because settling
+an address is not a refusal.
+
 ### 7.2 Transactions and concurrency
 
 Single-instance deployment makes contention unlikely rather than impossible — a restart can overlap a
@@ -1910,6 +1915,7 @@ still live in the current code:
 | `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
 | `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
+| `owner-reading.server.ts` | The owner-filter reading (spec 0013, ADR-0008): `ownerReading` settles a screen's address, reads the roster once, and resolves `reading` — what the calling loader's household-scoped readers narrow by, never the raw filter. Throws the redirect itself rather than handing one back, the one documented exception to §7.1's error model. Does not read money: a screen's own `currentHoldings`/`netWorth` calls stay in the loader, visible in review (ADR-0008) |
 | `account-options.ts` | The closed vocabularies the forms are built from and the domain validates against — account kind, tax treatment, asset class — and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
 | `account-label.ts` | The upload picker's labels — grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |

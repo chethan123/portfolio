@@ -153,6 +153,16 @@ Off means the whole household, which is where every reading starts — and which
 is only another way of saying.
 _Avoid_: user filter, person filter, lens, view-as, my view, standing choice.
 
+**Reading**:
+What a screen's household-scoped queries actually narrow by, once the owner filter has been resolved
+against the roster for that request: a stale id — naming nobody, or an owner whose accounts have all
+closed — is dropped, while a selection that resolves to nobody at all keeps its raw ids rather than
+widening to the whole household. Distinct from the owner filter itself, which is the address's own
+state and is never resolved against anything; the reading is what a query is allowed to believe that
+state means, and it is what makes the filter belong to "the reading in progress" the Owner filter
+entry above names.
+_Avoid_: the filter (for this — that is the raw selection), the selection, narrowed owners.
+
 ### How an account is told apart
 
 **Account number**:
