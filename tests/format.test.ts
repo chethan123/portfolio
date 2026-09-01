@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compactScale,
   formatCompact,
   formatMoney,
   formatPercent,
@@ -98,6 +99,23 @@ describe("formatCompact", () => {
 
   it("keeps the sign on a negative axis tick", () => {
     expect(formatCompact("-8000")).toBe("−8.0K");
+  });
+
+  it("keeps the decimals the caller asks for", () => {
+    expect(formatCompact("5903278.06", 2)).toBe("5.90M");
+    expect(formatCompact("5903278.06", 3)).toBe("5.903M");
+  });
+
+  it("has nothing to resolve below the scaling threshold, so ignores the decimals", () => {
+    expect(formatCompact("500", 3)).toBe("500");
+    expect(formatCompact("0", 4)).toBe("0");
+  });
+
+  it("reports the scale a value carries itself over the boundary onto", () => {
+    // The promotion inside the formatter, visible: 999,999 at one decimal
+    // rounds to 1000.0 thousands, which is a million.
+    expect(compactScale("999999", 1)).toBe(2);
+    expect(compactScale("999999", 3)).toBe(1);
   });
 });
 

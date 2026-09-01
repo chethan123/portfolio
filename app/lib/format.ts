@@ -102,46 +102,65 @@ export function formatSignedMoney(decimal: string, dp = 2): string {
   return `${lead}$${group(parts.int)}${fraction}`;
 }
 
-/**
- * `"1248392.14"` → `"1.2M"`, for chart axis ticks only — never a headline or
- * table cell: an abbreviated balance is a rounded balance, and this app does
- * not round the numbers a person reconciles against a statement.
- */
-export function formatCompact(decimal: string): string {
-  const parts = parse(decimal);
-  const suffixes = ["", "K", "M", "B"];
+const COMPACT_SUFFIXES = ["", "K", "M", "B"];
 
-  /** Shift the decimal point left by `step` groups of three and round. */
-  const render = (step: number): Parts => {
-    const cut = parts.int.length - step * 3;
+/** Shift the decimal point left by `scale` groups of three and round to `dp`. */
+function shift(parts: Parts, scale: number, dp: number): Parts {
+  const cut = parts.int.length - scale * 3;
 
-    return round(
-      {
-        negative: parts.negative,
-        int: cut > 0 ? parts.int.slice(0, cut) : "0",
-        frac: (cut > 0 ? parts.int.slice(cut) : parts.int) + parts.frac,
-      },
-      step === 0 ? 0 : 1,
-    );
-  };
-
-  let step = Math.max(
-    0,
-    Math.min(Math.floor((parts.int.length - 1) / 3), suffixes.length - 1),
+  return round(
+    {
+      negative: parts.negative,
+      int: cut > 0 ? parts.int.slice(0, cut) : "0",
+      frac: (cut > 0 ? parts.int.slice(cut) : parts.int) + parts.frac,
+    },
+    scale === 0 ? 0 : dp,
   );
-  let value = render(step);
+}
+
+/**
+ * Which suffix {@link formatCompact} would reach for — `0` plain, `1` K, `2`
+ * M, `3` B. Exported for one caller, which does not render with it: a chart
+ * axis needs to know what a decimal place is *worth* before it can decide how
+ * many to spend, and that is `10 ** (3 * scale - dp)` dollars. Reported at
+ * `dp` because the promotion depends on it — `999,999` is `1.0M` at one
+ * decimal and `999.999K` at three.
+ */
+export function compactScale(decimal: string, dp = 1): number {
+  const parts = parse(decimal);
+  const scale = Math.max(
+    0,
+    Math.min(Math.floor((parts.int.length - 1) / 3), COMPACT_SUFFIXES.length - 1),
+  );
 
   // Rounding can carry a value across the boundary it was scaled against:
   // 999,999 renders at the thousands scale as "1000.0K" where "1.0M" is meant.
   // The carry can only ever add one digit, so one promotion always settles it.
-  if (value.int.length > 3 && step < suffixes.length - 1) {
-    step += 1;
-    value = render(step);
-  }
+  return shift(parts, scale, dp).int.length > 3 && scale < COMPACT_SUFFIXES.length - 1
+    ? scale + 1
+    : scale;
+}
 
+/**
+ * `"1248392.14"` → `"1.2M"`, for chart axis ticks only — never a headline or
+ * table cell: an abbreviated balance is a rounded balance, and this app does
+ * not round the numbers a person reconciles against a statement.
+ *
+ * `dp` is how many decimals the scaled figure keeps, because one is not
+ * always enough to tell two rules apart: a suffix is chosen by the
+ * *magnitude* of a number, while an axis has to resolve the *span* it draws,
+ * and on a session those are orders of magnitude apart. The suffix stays per
+ * number — an axis holding a $96,000 rule to a neighbour's millions would
+ * render it `0.1M`, trading a real figure for a tidy one. Below `1000` there
+ * is no scaling and so nothing to resolve; `dp` is ignored there and `"500"`
+ * stays `"500"`.
+ */
+export function formatCompact(decimal: string, dp = 1): string {
+  const scale = compactScale(decimal, dp);
+  const value = shift(parse(decimal), scale, dp);
   const fraction = value.frac ? `.${value.frac}` : "";
 
-  return `${sign(value)}${group(value.int)}${fraction}${suffixes[step] ?? ""}`;
+  return `${sign(value)}${group(value.int)}${fraction}${COMPACT_SUFFIXES[scale] ?? ""}`;
 }
 
 /**

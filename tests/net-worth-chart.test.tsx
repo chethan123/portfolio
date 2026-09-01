@@ -62,6 +62,67 @@ describe("the drawn value domain", () => {
   });
 });
 
+describe("a session on a large portfolio", () => {
+  // The reported defect. A session moves a fraction of a percent, and one
+  // decimal at the millions scale cannot see under $100,000, so every rule on
+  // a $5.9M household labelled `5.9M`: an axis that has stopped saying
+  // anything while still looking like it is, on the screen a household checks
+  // most often.
+  const session = (open: string, high: string): ChartPoint[] => [
+    { date: "2026-09-01T13:30:00.000Z", amount: open },
+    { date: "2026-09-01T15:10:00.000Z", amount: high },
+  ];
+
+  it("names three different figures where a day's trading separates them", () => {
+    // $30K on $5.9M is half of one 0.1M bucket, so all three rules read
+    // "5.9M" before the span had a say in the precision.
+    expect(gridRules(buildScale(session("5900000.00", "5930000.00")), false).map((r) => r.label))
+      .toEqual(["5.932M", "5.915M", "5.898M"]);
+  });
+
+  it("spends no decimal on a span too small for the digit to mean anything", () => {
+    // $150 across the same household. Escalating until the labels differed
+    // bought four decimals here — `5.9002M` — and took them away again as the
+    // day's range grew, because "they differ" is not "the difference is worth
+    // printing". One number three times is the honest reading of $150.
+    expect(gridRules(buildScale(session("5900000.00", "5900150.00")), false).map((r) => r.label))
+      .toEqual(["5.9M", "5.9M", "5.9M"]);
+  });
+
+  it("stops short of a resolution finer than the dollar the rules are rounded to", () => {
+    // The separation above is argued on exact values, and the rules reach the
+    // formatter rounded to whole dollars, which costs each of them up to $1.
+    // Under about $4 of span there is no honest precision left to spend, so
+    // the axis stops rather than printing two rules the same at three
+    // decimals. $694,514 is the demo household, to the dollar.
+    const labels = (span: string) =>
+      gridRules(buildScale(session("694514.00", span)), false).map((r) => r.label);
+
+    expect(labels("694515.00")).toEqual(["694.5K", "694.5K", "694.5K"]);
+    expect(labels("694518.00")).toEqual(["694.518K", "694.516K", "694.514K"]);
+  });
+});
+
+describe("a range wide enough to cross a scale", () => {
+  // Not a regression test — the baseline gets this right too. It is here
+  // because the first fix for the session bug held every rule to one suffix
+  // taken from the top of the domain, which reads more tidily and renders a
+  // $96,000 rule as `0.1M`: a fifty-thousand-dollar error bar, and an axis
+  // whose bottom rule reads larger than its middle one. The whole suite was
+  // green for it. Each rule keeps its own suffix, and this says so.
+  it("states a rule far below the top of the domain at its own scale", () => {
+    expect(
+      gridRules(
+        buildScale([
+          { date: "2024-01-01", amount: "200000.00" },
+          { date: "2026-01-01", amount: "1500000.00" },
+        ]),
+        false,
+      ).map((rule) => rule.label),
+    ).toEqual(["1.6M", "850.0K", "96.0K"]);
+  });
+});
+
 describe("a portfolio that has not moved", () => {
   const flat: ChartPoint[] = [
     { date: "2025-01-01", amount: "50000.00" },
