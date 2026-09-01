@@ -37,11 +37,10 @@
  * nothing, the amount beside it says what it is, and the caller should show
  * the amounts alone.
  */
-import type { Option } from "./account-options.ts";
 import { formatPercent, isPositive } from "./format.ts";
 import { MONEY_SCALE, SHARE_SCALE, divide, render, sumMoney, toUnits } from "./money.ts";
 
-import type { AssetClass, Coverage, ValuedHolding } from "./valuation.server.ts";
+import type { Coverage, ValuedHolding } from "./valuation.server.ts";
 
 /** One row of a breakdown: what it is, what it is worth, how much of the whole that is. */
 export type AllocationSlice = {
@@ -59,19 +58,6 @@ export type AllocationSlice = {
   /** How many of the slice's holdings the amount could actually be computed from. */
   coverage: Coverage;
 };
-
-/**
- * Labels for `classification.asset_class`. Not in `account-options.ts`: that
- * module keeps form `<select>`s and check constraints from drifting, and no
- * form offers an asset class. The `Option` shape is borrowed all the same, so
- * this list can move there unchanged the day one does.
- */
-export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
-  { value: "equity", label: "Equity" },
-  { value: "bond", label: "Bonds" },
-  { value: "cash", label: "Cash" },
-  { value: "other", label: "Other" },
-];
 
 /** What a holding is grouped under, and what that group is called. */
 export type Grouping = (holding: ValuedHolding) => { key: string; label: string };

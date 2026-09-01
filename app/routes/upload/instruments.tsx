@@ -1,6 +1,7 @@
 import { Form, redirect } from "react-router";
 
 import { Amount } from "~/components/amount";
+import { ASSET_CLASSES } from "~/lib/account-options";
 import {
   FORM_ERROR,
   NotFoundError,
@@ -32,14 +33,6 @@ import type { Route } from "./+types/instruments";
 export function meta() {
   return [{ title: "New instruments · Upload · Portfolio" }];
 }
-
-/** The four asset classes, in the brief's order, with their stored values. */
-const ASSET_CLASS_OPTIONS = [
-  { value: "equity", label: "Equity" },
-  { value: "bond", label: "Bonds" },
-  { value: "cash", label: "Cash" },
-  { value: "other", label: "Other" },
-] as const;
 
 export async function loader({ params }: Route.LoaderArgs) {
   try {
@@ -358,7 +351,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                       aria-invalid={invalid(`newClassificationAssetClass-${index}`)}
                     >
                       <option value="">Choose…</option>
-                      {ASSET_CLASS_OPTIONS.map((option) => (
+                      {ASSET_CLASSES.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>

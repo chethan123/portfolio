@@ -29,8 +29,8 @@
  * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
  * either job by hand.
  */
-import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "./account-options.ts";
-import { ASSET_CLASSES, allocateShares, type Grouping } from "./allocation.ts";
+import { ACCOUNT_KINDS, ASSET_CLASSES, TAX_TREATMENTS, labelOf } from "./account-options.ts";
+import { allocateShares, type Grouping } from "./allocation.ts";
 import {
   MONEY_SCALE,
   QUANTITY_SCALE,
