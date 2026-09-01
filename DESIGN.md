@@ -1220,10 +1220,14 @@ Five hues and no more, because a sequence is only as long as colour vision keeps
 apart. Each theme's five were checked mechanically, not by eye: adjacent wedge pairs simulated
 under protanopia and deuteranopia against the panel the ring actually renders on (white in light,
 `#1e293b` in dark), every pair clearing the separation target (worst adjacent ΔE 11.0 light /
-8.4 dark, OKLab×100, target ≥ 8), and the warm–cool interleaving is what buys it. The sequence's
+8.4 dark, target ≥ 8), and the warm–cool interleaving is what buys it. The method in full, so the
+check is re-runnable when the palette next moves: simulate with Machado–Oliveira–Fernandes 2009
+at severity 1.0, measure ΔE as Euclidean distance in OKLab ×100. The sequence's
 predecessor is the argument for the ceremony: its dark tail `#4edea3` sat one JND from rank 2's
 `#10b981`, so a breakdown with many groups read as one large green — and that `#10b981` *was*
-`--gain`, a series wearing the state pair's colour.
+`--gain`, a series wearing the state pair's colour. Rank 3 keeps the green family and so stays a
+*cousin* of `--gain` — a resemblance now, not an identity, and one §12 already defuses: gain and
+loss are never load-bearing alone, every signed figure carrying its sign and its arrow.
 
 A breakdown with more than five groups folds its tail into one "Other" wedge rather than
 extending the sequence — many flat colours in a donut is a legend nobody reads — and the tail

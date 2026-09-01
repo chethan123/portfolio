@@ -82,6 +82,26 @@ describe("the arcs", () => {
     // so the ring closes with no residual wedge and no hairline gap.
     expect(wedges[5]?.before).toBeCloseTo(0.9, 12);
   });
+
+  it("gives a lone sixth slice the neutral as its own wedge", () => {
+    // Exactly one rank past the sequence: nothing merges, but the sixth row
+    // still wears `--cat-other` — the sequence never stretches to a sixth
+    // hue, whatever the count. The panel's note stays silent here (nothing
+    // is shared); the grey itself is the explanation.
+    const wedges = ring([
+      slice("A", "40.0000", "0.400000"),
+      slice("B", "20.0000", "0.200000"),
+      slice("C", "15.0000", "0.150000"),
+      slice("D", "10.0000", "0.100000"),
+      slice("E", "9.0000", "0.090000"),
+      slice("F", "6.0000", "0.060000"),
+    ]);
+
+    expect(wedges).toHaveLength(6);
+    expect(wedges[5]?.color).toBe("var(--cat-other)");
+    expect(wedges[5]?.fraction).toBeCloseTo(0.06, 12);
+    expect(wedges[5]?.before).toBeCloseTo(0.94, 12);
+  });
 });
 
 describe("<Breakdown>", () => {
