@@ -47,6 +47,8 @@ An unmarked second copy is a future contradiction; a marked one is a decision.
 | [`specs/`](specs/) | whoever builds the slice | approved work, before it is built | anything not agreed yet |
 | [`design/`](design/) | whoever builds the screen | UI briefs a slice is drawn from | the decision to build it — that is a spec |
 | [`research/`](research/) | whoever revisits a decision | investigation, including options that were rejected, and test reports written to be picked up as work | anything approved, which is a spec |
+| `research/<report>/figures/` | that report's reader | the images one research or test report renders, beside the report | anything another document renders — those belong with that document |
+| `research/<report>/harness/` | whoever reruns that report | the scripts one test report's findings were produced with, so a reader can reproduce them rather than trust them | anything the application runs — a harness is evidence, never a dependency |
 | [`agents/`](agents/) | agents, via the skills in `.claude/skills/` | this repo's answers to what a skill needs to know: issue tracker, triage labels, domain docs | project documentation — these are configuration |
 | [`screenshots/`](screenshots/) | the README | the images that file renders, and the editorial reasons behind them | the guide's images, which live beside the guide |
 | [`guide/images/`](guide/images/) | the guide | the images the guide renders | the README's images |
