@@ -1,12 +1,17 @@
 /**
- * The account kinds and tax treatments, once. Not a `.server` module,
+ * The closed vocabularies a form offers and the domain validates — account
+ * kinds, tax treatments, asset classes — once each. Not a `.server` module,
  * deliberately: the domain module validates against these values and the
- * form renders options from them — a list written twice is free to drift
- * from the schema's check constraints. Plain data and pure functions, no
- * database. The `AccountKind`/`TaxTreatment` imports are type-only and
- * erased, so this pulls no server code into the client bundle.
+ * form renders options from them, and a list written twice is free to drift
+ * from the schema's check constraints (`account_kind_valid`,
+ * `account_tax_treatment_valid`, `classification_asset_class_valid`). Plain data and
+ * pure functions, no database. The type imports are erased, so this pulls no
+ * server code into the client bundle.
+ *
+ * The name says accounts because accounts came first; what the module owns is
+ * the vocabulary, whatever a value is stored against.
  */
-import type { AccountKind, TaxTreatment } from "./valuation.server.ts";
+import type { AccountKind, AssetClass, TaxTreatment } from "./valuation.server.ts";
 
 /** A stored value and the label a person reads for it. */
 export type Option<Value extends string> = { readonly value: Value; readonly label: string };
@@ -34,6 +39,19 @@ export const TAX_TREATMENTS: ReadonlyArray<Option<TaxTreatment>> = [
   { value: "tax_free", label: "Tax-free — no tax on qualified withdrawal (Roth, HSA)" },
 ];
 
+/**
+ * The four-way rollup every classification maps onto (CONTEXT.md). Its values
+ * match `classification_asset_class_valid`; unlike its two neighbours nothing
+ * renders it in an account form, but the upload wizard's instruments step
+ * offers exactly these and the resolver refuses anything else.
+ */
+export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
+  { value: "equity", label: "Equity" },
+  { value: "bond", label: "Bonds" },
+  { value: "cash", label: "Cash" },
+  { value: "other", label: "Other" },
+];
+
 /** The stored values alone, in the shape Zod's `enum` wants. */
 export const accountKindValues = ACCOUNT_KINDS.map((kind) => kind.value) as [
   AccountKind,
@@ -44,6 +62,16 @@ export const taxTreatmentValues = TAX_TREATMENTS.map((treatment) => treatment.va
   TaxTreatment,
   ...TaxTreatment[],
 ];
+
+/**
+ * Whether a posted string is one of the four — a narrowing, not a values list
+ * a caller has to assert against. No Zod tuple like the two above, because
+ * the upload resolver refuses field by field so it can name every bad field
+ * at once, rather than parsing the step as a whole.
+ */
+export function isAssetClass(value: string | undefined): value is AssetClass {
+  return ASSET_CLASSES.some((assetClass) => assetClass.value === value);
+}
 
 /**
  * The label a stored value wears on screen. Falls back to the value itself

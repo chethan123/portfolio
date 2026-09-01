@@ -29,8 +29,8 @@
  * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
  * either job by hand.
  */
-import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "./account-options.ts";
-import { ASSET_CLASSES, allocateShares, type Grouping } from "./allocation.ts";
+import { ACCOUNT_KINDS, ASSET_CLASSES, TAX_TREATMENTS, labelOf } from "./account-options.ts";
+import { allocateShares, compareText, type Grouping } from "./allocation.ts";
 import {
   MONEY_SCALE,
   QUANTITY_SCALE,
@@ -108,7 +108,8 @@ function plain(key: string): Facet {
  * owner is household-wide now, and a screen-local Owner select would be a
  * second way to ask the same question with two answers at once. Grouping
  * stays: it reads one table as four, and still works under a filter naming
- * two people. Keyed on id, not name (`allocationByPerson`'s reason).
+ * two people. Keyed on id, not name: two people can share a first name, and
+ * a merged group would be wrong invisibly.
  */
 const OWNER: Dimension = {
   id: "owner",
@@ -177,6 +178,9 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
       optionLabel: labelOf(TAX_TREATMENTS, holding.taxTreatment),
     }),
   },
+  // Keyed on the label itself: `classification.name` is unique, so the name
+  // is the identity, and there is no label table to read — the household's
+  // stored words are what a person sees.
   {
     id: "classification",
     label: "Classification",
@@ -259,14 +263,6 @@ const SORT_KEYS: ReadonlyArray<SortKey> = [
  */
 export const DEFAULT_SORT: SortKey = "value";
 export const DEFAULT_DIRECTION: SortDirection = "desc";
-
-/**
- * Text columns sort by what is printed in them. `localeCompare`, not `<`:
- * these are names a person reads, and `"Ålesund"` belongs with the A's.
- */
-function compareText(a: string, b: string): number {
-  return a.localeCompare(b);
-}
 
 function compareBy(key: SortKey, a: ValuedHolding, b: ValuedHolding): number {
   switch (key) {

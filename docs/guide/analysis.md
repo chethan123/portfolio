@@ -14,7 +14,7 @@ counting as zero. See [prices.md](prices.md).
 ## The breakdowns
 
 - **Net worth by owner** — who owns what.
-- **Value by account type** — brokerage, workplace plan, IRA, bank, loan.
+- **Value by account type** — Brokerage, Workplace plan, IRA, Bank, Liability.
 - **Value by asset class** — Equity, Bonds, Cash, Other.
 - **Value by classification** — your own labels, exactly as instruments were filed under them
   when first uploaded. The finer cut the asset-class rollup coarsens.

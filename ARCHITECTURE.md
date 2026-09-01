@@ -343,7 +343,7 @@ grep. They come in three tiers.
 |---|---|---|
 | Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
-| Everything read off an account's kind | `app/lib/account-options.ts` | The kinds, their labels, and the two predicates derived from them — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints or from each other. The obligation is that it stays plain data: the client bundle imports it, so a rule needing a query cannot live here. |
+| Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
@@ -380,10 +380,11 @@ a real boundary, not a naming preference:
 
 - `*.server.ts` may import the database, the config, and Node built-ins.
 - `*.ts` in `app/lib` must be safe in a browser bundle. `allocation.ts` and `holdings-view.ts`
-  import `ValuedHolding`, and `account-options.ts` imports `AccountKind`/`TaxTreatment`, from
-  `valuation.server.ts` — all **type-only imports**, which are erased at compile time and pull no
-  server code across. That is what lets a
-  screen component call `allocationByPerson()` directly on loader data.
+  import `ValuedHolding`, and `account-options.ts` imports
+  `AccountKind`/`TaxTreatment`/`AssetClass`, from `valuation.server.ts` — all **type-only
+  imports**, which are erased at compile time and pull no server code across. That is what lets a
+  screen component call `allocationBy()` on loader data, and the upload wizard render its
+  asset-class options from the same list the resolver validates against.
 
 **One file breaks this today.** `app/lib/statement.ts:32` imports `recordedDate` from
 `input.server.ts` as a **value**, not a type, and uses it at `:608`. It stays out of the client bundle
@@ -1909,7 +1910,7 @@ still live in the current code:
 | `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
 | `current-statement.server.ts` | **The one reader of what an account holds now**, for the two writers that act on the difference between that and `kind`, and the one place the seeded `USD` row is resolved. A leaf: it imports the database handle and nothing else in `app/lib`, so neither writer meets a cycle reaching for it |
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
-| `account-options.ts` | The account-kind and tax-treatment vocabulary the forms are built from, and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
+| `account-options.ts` | The closed vocabularies the forms are built from and the domain validates against — account kind, tax treatment, asset class — and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
 | `account-label.ts` | The upload picker's labels — grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |
 | `first-run.server.ts` | One question, three answers |
@@ -1918,7 +1919,7 @@ still live in the current code:
 | `csv.ts` | Bytes to rows. Never throws on content; row indices are stable |
 | `statement.ts` | Rows to positions. Pure except for one value import from `input.server.ts` (§4.3) |
 | `holdings-view.ts` | The Holdings table: seven dimensions to group by, six of them to filter by, plus subtotals. `owner` is a grouping and not a filter — narrowing to an owner is household-wide (`owner-filter.ts`) |
-| `allocation.ts` | `allocationBy` — one grouper over any figure — the four cuts adapted from it, plus unrealized gains by asset type |
+| `allocation.ts` | `allocationBy` — one grouper over any figure, filed under whichever dimension `holdings-view.ts` hands it — plus unrealized gains by asset type |
 | `market-hours.ts` | `isMarketOpen` (an optimisation) and `marketDateOf` (a correctness mechanism) |
 | `format.ts` | Renders. Never computes |
 | `chart-range.ts` | The chart's range vocabulary: the presets, the sampled date grid under its point budget, and the range cookie middleware (ADR-0003). 1D is the one preset that resolves to a session rather than to a grid, and bypasses the sampler outright (ADR-0006). Pure, and in the client bundle |

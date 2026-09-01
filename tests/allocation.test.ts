@@ -1,7 +1,10 @@
 /**
  * The four breakdowns Analysis draws, and the two Income draws beside them
- * (DESIGN.md §8.1). No database: `allocation.ts` is pure by design, so
- * these are unit tests over a fixture function. Pinned: the grouping, and
+ * (DESIGN.md §8.1) — all six now one function over `holdings-view.ts`'s
+ * dimension registry, so these read `groupingBy(id)` exactly as the screens
+ * do; a local accessor here would let this file pass while the screens
+ * disagree. No database: `allocation.ts` is pure by design, so these are
+ * unit tests over a fixture function. Pinned: the grouping, and
  * the arithmetic — every money assertion an exact decimal string, including
  * the cases a float gets wrong, because this module adds money outside SQL
  * and exactness is its whole justification. The gross-positive-denominator
@@ -11,9 +14,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  allocationByAccountKind,
-  allocationByAssetClass,
-  allocationByPerson,
+  allocationBy,
   annualDividendBy,
   formatRate,
   rateDigits,
@@ -91,13 +92,16 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
   };
 }
 
-describe("allocationByPerson", () => {
+describe("the cut by owner", () => {
   it("sums each person's holdings exactly and puts the largest first", () => {
-    const slices = allocationByPerson([
-      holding({ ownerId: "1", ownerName: "Alice", value: "25000.0000" }),
-      holding({ ownerId: "1", ownerName: "Alice", value: "3000.0000" }),
-      holding({ ownerId: "2", ownerName: "Bob", value: "12500.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ ownerId: "1", ownerName: "Alice", value: "25000.0000" }),
+        holding({ ownerId: "1", ownerName: "Alice", value: "3000.0000" }),
+        holding({ ownerId: "2", ownerName: "Bob", value: "12500.0000" }),
+      ],
+      groupingBy("owner"),
+    );
 
     expect(slices).toEqual([
       {
@@ -118,10 +122,13 @@ describe("allocationByPerson", () => {
   });
 
   it("keys on the owner's id, so two people with one name stay two people", () => {
-    const slices = allocationByPerson([
-      holding({ ownerId: "1", ownerName: "Alex", value: "1000.0000" }),
-      holding({ ownerId: "2", ownerName: "Alex", value: "2000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ ownerId: "1", ownerName: "Alex", value: "1000.0000" }),
+        holding({ ownerId: "2", ownerName: "Alex", value: "2000.0000" }),
+      ],
+      groupingBy("owner"),
+    );
 
     // Merging them would be wrong in a way nobody would ever notice on screen.
     expect(slices.map((slice) => [slice.key, slice.amount])).toEqual([
@@ -131,39 +138,48 @@ describe("allocationByPerson", () => {
   });
 
   it("breaks a tie on the label, so equal slices do not swap between renders", () => {
-    const slices = allocationByPerson([
-      holding({ ownerId: "2", ownerName: "Bob", value: "1000.0000" }),
-      holding({ ownerId: "1", ownerName: "Alice", value: "1000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ ownerId: "2", ownerName: "Bob", value: "1000.0000" }),
+        holding({ ownerId: "1", ownerName: "Alice", value: "1000.0000" }),
+      ],
+      groupingBy("owner"),
+    );
 
     expect(slices.map((slice) => slice.label)).toEqual(["Alice", "Bob"]);
   });
-});
 
-describe("allocationByAccountKind", () => {
-  it("labels each kind exactly as the account form does", () => {
-    const slices = allocationByAccountKind([
-      holding({ accountKind: "brokerage", value: "28000.0000" }),
-      holding({ accountKind: "bank", value: "12500.0000" }),
-      holding({ accountKind: "401k", value: "50000.0000" }),
-    ]);
+  it("breaks it the way a person reads the labels, not by code unit", () => {
+    // `"apple" < "Banana"` is false — capitals sort first by code unit — and
+    // the Holdings table has always ranked equal groups by `localeCompare`.
+    // Two spellings would put the same two buckets in different orders on two
+    // screens, and `allocateShares` hands the rounding remainder to whichever
+    // came first, so the percentages would differ too.
+    const slices = allocationBy(
+      [
+        holding({ classification: "Banana fund", value: "1000.0000" }),
+        holding({ classification: "apple fund", value: "1000.0000" }),
+      ],
+      groupingBy("classification"),
+    );
 
-    // Reused from `account-options.ts` rather than written a second time: a
-    // legend and a form select disagreeing about what a kind is called is the
-    // same class of drift the query layer exists to prevent.
-    expect(slices.map((slice) => slice.label)).toEqual([
-      "Workplace plan (401k, 403b)",
-      "Brokerage",
-      "Bank",
+    expect(slices.map((slice) => [slice.label, slice.share])).toEqual([
+      ["apple fund", "0.500000"],
+      ["Banana fund", "0.500000"],
     ]);
   });
+});
 
+describe("the cut by account type", () => {
   it("keeps a liability negative and makes it a negative share of what is owned", () => {
-    const slices = allocationByAccountKind([
-      holding({ accountKind: "brokerage", value: "28000.0000" }),
-      holding({ accountKind: "bank", value: "12500.0000" }),
-      holding({ accountKind: "liability", value: "-8000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ accountKind: "brokerage", value: "28000.0000" }),
+        holding({ accountKind: "bank", value: "12500.0000" }),
+        holding({ accountKind: "liability", value: "-8000.0000" }),
+      ],
+      groupingBy("kind"),
+    );
 
     // The sign survives — no absolute value anywhere — and it sorts last by
     // construction rather than by a branch (§2).
@@ -182,11 +198,14 @@ describe("allocationByAccountKind", () => {
   });
 
   it("gives the unit lost to rounding back to a slice, so three equal ones make a whole pie", () => {
-    const slices = allocationByAccountKind([
-      holding({ accountKind: "brokerage", value: "10000.0000" }),
-      holding({ accountKind: "bank", value: "10000.0000" }),
-      holding({ accountKind: "401k", value: "10000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ accountKind: "brokerage", value: "10000.0000" }),
+        holding({ accountKind: "bank", value: "10000.0000" }),
+        holding({ accountKind: "401k", value: "10000.0000" }),
+      ],
+      groupingBy("kind"),
+    );
 
     // A third rounded on its own is 0.333333, and three of those come to
     // 0.999999 — the hairline gap the analysis ring drew, since it adds no
@@ -195,18 +214,21 @@ describe("allocationByAccountKind", () => {
     expect(slices.map((slice) => [slice.label, slice.share])).toEqual([
       ["Bank", "0.333334"],
       ["Brokerage", "0.333333"],
-      ["Workplace plan (401k, 403b)", "0.333333"],
+      ["Workplace plan", "0.333333"],
     ]);
     expect(wholePie(slices)).toBe(WHOLE);
   });
 
   it("leaves a liability's share out of that correction, at the value it rounds to alone", () => {
-    const slices = allocationByAccountKind([
-      holding({ accountKind: "brokerage", value: "10000.0000" }),
-      holding({ accountKind: "bank", value: "10000.0000" }),
-      holding({ accountKind: "401k", value: "10000.0000" }),
-      holding({ accountKind: "liability", value: "-10000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ accountKind: "brokerage", value: "10000.0000" }),
+        holding({ accountKind: "bank", value: "10000.0000" }),
+        holding({ accountKind: "401k", value: "10000.0000" }),
+        holding({ accountKind: "liability", value: "-10000.0000" }),
+      ],
+      groupingBy("kind"),
+    );
 
     // The liability is the same magnitude as each asset group, and the asset
     // group holding the spare unit reads 0.333334. The liability does not: it
@@ -215,22 +237,25 @@ describe("allocationByAccountKind", () => {
     expect(slices.map((slice) => [slice.label, slice.share])).toEqual([
       ["Bank", "0.333334"],
       ["Brokerage", "0.333333"],
-      ["Workplace plan (401k, 403b)", "0.333333"],
-      ["Loan or other liability", "-0.333333"],
+      ["Workplace plan", "0.333333"],
+      ["Liability", "-0.333333"],
     ]);
     expect(wholePie(slices)).toBe(WHOLE);
   });
 });
 
-describe("allocationByAssetClass", () => {
+describe("the cut by asset class", () => {
   it("rolls the user's classification labels up into the four fixed classes", () => {
-    const slices = allocationByAssetClass([
-      holding({ assetClass: "equity", classification: "US equity", value: "60000.0000" }),
-      holding({ assetClass: "equity", classification: "International equity", value: "20000.0000" }),
-      holding({ assetClass: "bond", classification: "Bond fund", value: "30000.0000" }),
-      holding({ assetClass: "cash", classification: "Cash", value: "10000.0000" }),
-      holding({ assetClass: "other", classification: "Crypto", value: "5000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ assetClass: "equity", classification: "US equity", value: "60000.0000" }),
+        holding({ assetClass: "equity", classification: "International equity", value: "20000.0000" }),
+        holding({ assetClass: "bond", classification: "Bond fund", value: "30000.0000" }),
+        holding({ assetClass: "cash", classification: "Cash", value: "10000.0000" }),
+        holding({ assetClass: "other", classification: "Crypto", value: "5000.0000" }),
+      ],
+      groupingBy("assetClass"),
+    );
 
     expect(slices.map((slice) => [slice.label, slice.amount])).toEqual([
       ["Equity", "80000.0000"],
@@ -254,21 +279,24 @@ describe("allocationByAssetClass", () => {
     const sum = (slices: { amount: string }[]): number =>
       slices.reduce((total, slice) => total + Number(slice.amount), 0);
 
-    expect(sum(allocationByPerson(holdings))).toBe(20000);
-    expect(sum(allocationByAccountKind(holdings))).toBe(20000);
-    expect(sum(allocationByAssetClass(holdings))).toBe(20000);
+    expect(sum(allocationBy(holdings, groupingBy("owner")))).toBe(20000);
+    expect(sum(allocationBy(holdings, groupingBy("kind")))).toBe(20000);
+    expect(sum(allocationBy(holdings, groupingBy("assetClass")))).toBe(20000);
   });
 });
 
 describe("coverage", () => {
   it("counts an unpriced holding without letting it into the amount", () => {
-    const slices = allocationByAssetClass([
-      holding({ assetClass: "equity", value: "2500.0000" }),
-      // A 401k trust that has never been quoted. Dropping it would understate
-      // the slice silently; zeroing it would understate it and call the result
-      // complete.
-      holding({ assetClass: "equity", value: null }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ assetClass: "equity", value: "2500.0000" }),
+        // A 401k trust that has never been quoted. Dropping it would understate
+        // the slice silently; zeroing it would understate it and call the result
+        // complete.
+        holding({ assetClass: "equity", value: null }),
+      ],
+      groupingBy("assetClass"),
+    );
 
     expect(slices).toEqual([
       {
@@ -282,10 +310,13 @@ describe("coverage", () => {
   });
 
   it("reports a slice with nothing priced as zero over no known rows", () => {
-    const slices = allocationByAssetClass([
-      holding({ assetClass: "other", value: null }),
-      holding({ assetClass: "other", value: null }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ assetClass: "other", value: null }),
+        holding({ assetClass: "other", value: null }),
+      ],
+      groupingBy("assetClass"),
+    );
 
     // "$0.00, based on 0 of 2 holdings" — which a screen must render as unknown
     // rather than as an empty slice.
@@ -296,10 +327,13 @@ describe("coverage", () => {
 
 describe("the arithmetic", () => {
   it("adds the tenths a float cannot", () => {
-    const slices = allocationByPerson([
-      holding({ value: "0.1000" }),
-      holding({ value: "0.2000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ value: "0.1000" }),
+        holding({ value: "0.2000" }),
+      ],
+      groupingBy("owner"),
+    );
 
     // 0.1 + 0.2 = 0.30000000000000004 in a float. This is the regression the
     // whole decimal-string rule exists to prevent, at the scale it is visible.
@@ -307,10 +341,13 @@ describe("the arithmetic", () => {
   });
 
   it("stays exact past the digit a float runs out at", () => {
-    const slices = allocationByPerson([
-      holding({ value: "99999999999999.9999" }),
-      holding({ value: "0.0001" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ value: "99999999999999.9999" }),
+        holding({ value: "0.0001" }),
+      ],
+      groupingBy("owner"),
+    );
 
     expect(slices[0]?.amount).toBe("100000000000000.0000");
   });
@@ -319,15 +356,21 @@ describe("the arithmetic", () => {
     // The view stores numeric(20, 4) and cannot produce this; the rule is
     // written down so that a caller handing over something finer gets the same
     // rounding `format.ts` displays with, rather than a silent truncation.
-    expect(allocationByPerson([holding({ value: "0.00005" })])[0]?.amount).toBe("0.0001");
-    expect(allocationByPerson([holding({ value: "-0.00005" })])[0]?.amount).toBe("-0.0001");
+    const [up] = allocationBy([holding({ value: "0.00005" })], groupingBy("owner"));
+    const [down] = allocationBy([holding({ value: "-0.00005" })], groupingBy("owner"));
+
+    expect(up?.amount).toBe("0.0001");
+    expect(down?.amount).toBe("-0.0001");
   });
 
   it("renders a group that nets exactly flat as zero, never as a negative zero", () => {
-    const slices = allocationByPerson([
-      holding({ value: "8000.0000" }),
-      holding({ value: "-8000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ value: "8000.0000" }),
+        holding({ value: "-8000.0000" }),
+      ],
+      groupingBy("owner"),
+    );
 
     expect(slices[0]?.amount).toBe("0.0000");
   });
@@ -335,10 +378,13 @@ describe("the arithmetic", () => {
 
 describe("what a negative slice is a share of", () => {
   it("keeps the shares finite when the debts nearly cancel the assets", () => {
-    const slices = allocationByAccountKind([
-      holding({ accountKind: "brokerage", value: "500000.0000" }),
-      holding({ accountKind: "liability", value: "-490000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ accountKind: "brokerage", value: "500000.0000" }),
+        holding({ accountKind: "liability", value: "-490000.0000" }),
+      ],
+      groupingBy("kind"),
+    );
 
     // Against the net 10,000 the house would be 5,000% of the portfolio and
     // the mortgage −4,900%. Against the 500,000 owned, both stay readable.
@@ -346,10 +392,13 @@ describe("what a negative slice is a share of", () => {
   });
 
   it("does not report an asset as a negative share when the household is in net debt", () => {
-    const slices = allocationByAccountKind([
-      holding({ accountKind: "bank", value: "100000.0000" }),
-      holding({ accountKind: "liability", value: "-150000.0000" }),
-    ]);
+    const slices = allocationBy(
+      [
+        holding({ accountKind: "bank", value: "100000.0000" }),
+        holding({ accountKind: "liability", value: "-150000.0000" }),
+      ],
+      groupingBy("kind"),
+    );
 
     // A signed net denominator of −50,000 would make the savings −200%: the
     // same wrong sign on the fastest-read figure that `netWorthChange` avoids
@@ -361,14 +410,17 @@ describe("what a negative slice is a share of", () => {
   });
 
   it("declines to invent a share when nothing at all is positive", () => {
-    const slices = allocationByAccountKind([holding({ accountKind: "liability", value: "-8000.0000" })]);
+    const slices = allocationBy(
+      [holding({ accountKind: "liability", value: "-8000.0000" })],
+      groupingBy("kind"),
+    );
 
     // There is no base to be a fraction of. The zero is not a claim that the
     // loan is nothing — the amount beside it says what it is.
     expect(slices).toEqual([
       {
         key: "liability",
-        label: "Loan or other liability",
+        label: "Liability",
         amount: "-8000.0000",
         share: "0.000000",
         coverage: { known: 1, total: 1 },
@@ -377,9 +429,9 @@ describe("what a negative slice is a share of", () => {
   });
 
   it("returns nothing at all for no holdings", () => {
-    expect(allocationByPerson([])).toEqual([]);
-    expect(allocationByAccountKind([])).toEqual([]);
-    expect(allocationByAssetClass([])).toEqual([]);
+    expect(allocationBy([], groupingBy("owner"))).toEqual([]);
+    expect(allocationBy([], groupingBy("kind"))).toEqual([]);
+    expect(allocationBy([], groupingBy("assetClass"))).toEqual([]);
   });
 });
 
@@ -392,10 +444,13 @@ describe("sharePercent", () => {
   });
 
   it("hands `formatPercent` what it expects, which is the whole point of it", () => {
-    const [equity] = allocationByAssetClass([
-      holding({ assetClass: "equity", value: "80000.0000" }),
-      holding({ assetClass: "bond", value: "20000.0000" }),
-    ]);
+    const [equity] = allocationBy(
+      [
+        holding({ assetClass: "equity", value: "80000.0000" }),
+        holding({ assetClass: "bond", value: "20000.0000" }),
+      ],
+      groupingBy("assetClass"),
+    );
 
     expect(formatPercent(sharePercent(equity?.share ?? "0"))).toBe("+80.0%");
   });
@@ -789,7 +844,7 @@ describe("the annual dividend, grouped", () => {
     const holdings = aHouseholdWithALoan();
 
     expect(annualDividendBy(holdings, groupingBy("tax")).map((slice) => slice.amount)).not.toEqual(
-      allocationByAccountKind(holdings).map((slice) => slice.amount),
+      allocationBy(holdings, groupingBy("kind")).map((slice) => slice.amount),
     );
   });
 });

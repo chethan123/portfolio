@@ -14,6 +14,7 @@
  * ask again. A draft abandoned after this step leaves the vocabulary behind —
  * correct: the next upload is quieter, and nothing was recorded as held.
  */
+import { isAssetClass } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { ValidationError } from "./input.server.ts";
 import { probeSymbol, type ProbeSymbol } from "./price-provider.server.ts";
@@ -228,8 +229,6 @@ type CreatePlan = {
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
 
-const ASSET_CLASSES: ReadonlyArray<AssetClass> = ["equity", "bond", "cash", "other"];
-
 /**
  * Run `body` in a transaction unless one is already open — Kysely refuses
  * `.transaction()` on a transaction, and the test seam *is* one (the same
@@ -365,7 +364,7 @@ export async function resolveAll(
       }
 
       const assetClass = fields.newClassificationAssetClass;
-      if (!ASSET_CLASSES.includes(assetClass as AssetClass)) {
+      if (!isAssetClass(assetClass)) {
         refuse(
           index,
           "newClassificationAssetClass",

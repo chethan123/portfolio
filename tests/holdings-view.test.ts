@@ -315,6 +315,30 @@ describe("availableFilters", () => {
     ]);
   });
 
+  it("offers an account type in the self-explaining form, not the short one", () => {
+    // The register split this module owns: the table cell prints "Workplace
+    // plan" (below), the dropdown offering the choice spells out which
+    // accounts it means. Both come off the one dimension, so they cannot
+    // name different sets — but they are not always the long form minus a
+    // parenthetical either, and `liability` is the case that proves it. This
+    // is the only assertion left of the long form now that the Analysis panel
+    // prints a bucket the way the table does.
+    const [kind] = availableFilters(
+      [
+        holding({ accountKind: "401k" }),
+        holding({ accountKind: "brokerage" }),
+        holding({ accountKind: "liability" }),
+      ],
+      query(),
+    ).filter((control) => control.id === "kind");
+
+    expect(kind?.options.map((option) => option.label)).toEqual([
+      "Brokerage",
+      "Loan or other liability",
+      "Workplace plan (401k, 403b)",
+    ]);
+  });
+
   it("phrases a selection as a sentence fragment, not as its field caption", () => {
     // "nothing is brokerage Chase and asset class Equity" is not English; the
     // caption above a `<select>` and the same fact in prose are different words.
