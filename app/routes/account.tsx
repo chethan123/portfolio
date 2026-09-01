@@ -28,7 +28,7 @@ import {
   isoDate,
   rangeDescription,
 } from "~/lib/chart-range";
-import { chartAnchors, chartSeries, type ChartScope } from "~/lib/chart-series.server";
+import { chartReach, chartSeries, type ChartScope } from "~/lib/chart-series.server";
 import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { uploadReceipt } from "~/lib/uploads.server";
 import { holdingNote } from "~/lib/holdings-view";
@@ -67,7 +67,7 @@ export function meta({ data }: Route.MetaArgs) {
   return [{ title: `${data?.total.accountName ?? "Account"} · Portfolio` }];
 }
 
-/** See {@link chartRangeMiddleware}'s own docstring. */
+/** Stamps the range cookie here too (spec 0008) — see {@link chartRangeMiddleware} for why. */
 export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -82,20 +82,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const today = isoDate(Date.now());
   const scope: ChartScope = { surface: "account", accountId: params.accountId };
 
-  // The account's own anchors — its own earliest statement (spec 0008),
-  // never the household's, and the observation log's latest session; see
-  // `chartAnchors`'s own docstring for why. Nothing else to batch this call
+  // The account's own reach — its own earliest statement (spec 0008), never
+  // the household's, and the observation log's latest session; see
+  // `chartReach`'s own docstring for why. Nothing else to batch this call
   // with: unlike the Overview, this page has no manual series to await
   // beside it.
-  const anchors = await chartAnchors(scope);
+  const reach = await chartReach(scope);
 
-  const earliest = { positionSet: anchors.positionSet };
+  const earliest = { positionSet: reach.positionSet };
 
   const { resolved, controls } = chartWindow("account", {
     request,
     today,
     earliest,
-    session: anchors.session,
+    session: reach.session,
     timeZone: getConfig().MARKET_TIMEZONE,
   });
 
@@ -103,16 +103,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // Every figure is read back from the database, never the URL: the
   // parameter names *which* set was written, so an invalid or stale value
   // yields null and no sentence — the `?recorded=` receipt's contract too.
-  // Serial, deliberately (out of scope for spec 0015): it does not compose
-  // with the window the way the anchors do.
   const uploadedParam = new URL(request.url).searchParams.get("uploaded");
   const receipt =
     uploadedParam === null ? null : await uploadReceipt(params.accountId, uploadedParam);
 
-  // Created here and dropped into the `Promise.all` below, so the read runs
-  // beside the others rather than queued behind them — `chartSeries` is
-  // where the coverage rule (§6.3) and the dated/session choice now live,
-  // once, for both surfaces. See the Overview's loader.
+  // Created here and dropped into the `Promise.all` below, for the same
+  // reason as the Overview's loader — see its own comment there.
   const points = chartSeries(scope, resolved);
 
   const [account, holdings, computed, recorded, freshness] = await Promise.all([
@@ -446,7 +442,7 @@ export default function Account({ loaderData, actionData }: Route.ComponentProps
               session={session}
             />
           ) : (
-            <ChartEmptyNote session={session} points={computed.length}>
+            <ChartEmptyNote session={session} moments={computed.length}>
               <p className="empty-note">
                 A line needs two dated points and this range holds {computed.length}. It appears
                 over a wider range, or once a second statement covering this account has been

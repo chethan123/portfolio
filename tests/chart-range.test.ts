@@ -599,14 +599,32 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
       ...shared,
     });
 
-    expect(resolved).toEqual(resolveRange("1y", { ...shared, surface: "household" }));
+    // Literal, not `resolveRange("1y", ...)`: that would assert the function
+    // under test against itself. 1Y's own boundary math and the sampler's
+    // decay are already exhausted above; `dates` itself is 180 entries and
+    // not usefully spelled out here, so only its shape is asserted.
+    expect(resolved.range).toBe("1y");
+    expect(resolved.since).toBe("2025-08-26");
+    expect(resolved.custom).toBeUndefined();
+    expect(resolved.session).toBeUndefined();
+    expect(resolved.dates.length).toBe(SAMPLE_BUDGET);
+    expect(resolved.dates[0]).toBe("2025-08-26");
+    expect(resolved.dates.at(-1)).toBe(TODAY);
+
     expect(controls).toEqual({
       range: "1y",
       custom: undefined,
       // Off 1D: the control block carries no session even though one was
       // observed — `resolved.session` is what says so, not `shared.session`.
       session: null,
-      rangeOptions: rangeOptions({ ...shared, surface: "household" }),
+      // Literal, not `rangeOptions(...)`: every preset is on, because
+      // 2020-01-01 (the manual point, earlier than the position set) predates
+      // every fixed boundary and a session was observed for 1D.
+      rangeOptions: (Object.keys(RANGES) as RangeKey[]).map((key) => ({
+        key,
+        label: RANGES[key].label,
+        disabled: false,
+      })),
       // The earlier of the household's two dates (`surfaceEarliestDate`),
       // not the account's.
       customMin: "2020-01-01",
@@ -623,12 +641,37 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
       ...shared,
     });
 
-    expect(resolved).toEqual(resolveRange(DEFAULT_RANGE, { ...shared, surface: "account" }));
+    // Same reasoning as the household case above: a literal, not
+    // `resolveRange(DEFAULT_RANGE, ...)`. The unset `?range=` falls back to
+    // 1Y (`DEFAULT_RANGE`), which happens to resolve to the same boundary as
+    // the explicit case, because both share this file's `TODAY`.
+    expect(resolved.range).toBe(DEFAULT_RANGE);
+    expect(resolved.since).toBe("2025-08-26");
+    expect(resolved.custom).toBeUndefined();
+    expect(resolved.session).toBeUndefined();
+    expect(resolved.dates.length).toBe(SAMPLE_BUDGET);
+    expect(resolved.dates[0]).toBe("2025-08-26");
+    expect(resolved.dates.at(-1)).toBe(TODAY);
+
     expect(controls).toEqual({
       range: DEFAULT_RANGE,
       custom: undefined,
       session: null,
-      rangeOptions: rangeOptions({ ...shared, surface: "account" }),
+      // Literal, not `rangeOptions(...)`: 1D is disabled (`session: null`
+      // above, nothing observed), and so are 3M, YTD, 1Y and 5Y, whose fixed
+      // boundaries all fall before this account's own 2026-06-01 — 1W and 1M
+      // land after it, and All and Custom are never disabled.
+      rangeOptions: [
+        { key: "1d", label: "1D", disabled: true },
+        { key: "1w", label: "1W", disabled: false },
+        { key: "1m", label: "1M", disabled: false },
+        { key: "3m", label: "3M", disabled: true },
+        { key: "ytd", label: "YTD", disabled: true },
+        { key: "1y", label: "1Y", disabled: true },
+        { key: "5y", label: "5Y", disabled: true },
+        { key: "all", label: "All", disabled: false },
+        { key: "custom", label: "Custom", disabled: false },
+      ],
       // The account's own earliest date — there is no manual series on this
       // surface to fall back to.
       customMin: "2026-06-01",

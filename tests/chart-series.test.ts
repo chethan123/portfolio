@@ -2,11 +2,14 @@
  * The chart's read seam (spec 0015) — three things nothing else in the suite
  * asserts: that the coverage rule (ARCHITECTURE.md §6.3) fires at the
  * assembly seam and not merely inside the reader beneath it, that an account
- * scope draws only its own account, and that a resolved window's own shape —
- * dated or session — decides which reader answers, rather than being read
- * off by a caller. The narrowing rules and 1D's own resolution are already
- * tested at their own seams (`valuation-owner-filter.test.ts`,
- * `chart-range.test.ts`) and are not restated here.
+ * scope dispatches to the account reader rather than the household one, and
+ * that a resolved window's own shape — dated or session — decides which
+ * reader answers, rather than being read off by a caller. The narrowing
+ * rules and 1D's own resolution are already tested at their own seams
+ * (`valuation-owner-filter.test.ts`, `chart-range.test.ts`); that an
+ * account's series prices only its own positions, at both the dated and
+ * session tier, is already tested in `tests/account-queries.test.ts` — none
+ * of that is restated here.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -63,7 +66,7 @@ describe("the coverage rule, at the assembly seam rather than only inside the re
 
 describe("an account scope", () => {
   it(
-    "draws that account's own line and no other's",
+    "reaches the account reader, not the household one",
     withDatabase(async ({ seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
       const alice = await seedPerson({ name: "Alice" });
       const bob = await seedPerson({ name: "Bob" });
@@ -83,8 +86,13 @@ describe("an account scope", () => {
         holdings: [{ instrument: usd, quantity: "9000.00000000" }],
       });
 
-      // 5000, not 14000: the scope narrows which account's holdings the
-      // series is built from, not merely which owner's.
+      // 5000, not 14000: dispatched to the household reader under
+      // `ALL_OWNERS` this would sum both accounts. That an account's own
+      // series prices only its own positions is already covered, at both
+      // tiers, in `tests/account-queries.test.ts` ("prices each date
+      // against that account's own positions", "one account's 1D series");
+      // what this adds is that the assembly's own dispatch reaches that
+      // reader at all, off nothing but `scope.surface`.
       expect(
         await chartSeries({ surface: "account", accountId: hers.id }, datedWindow(["2026-01-15"])),
       ).toEqual([{ date: "2026-01-15", amount: "5000.0000" }]);

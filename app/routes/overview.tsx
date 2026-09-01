@@ -29,7 +29,7 @@ import {
   type CustomSpan,
   type RangeKey,
 } from "~/lib/chart-range";
-import { chartAnchors, chartSeries, type ChartScope } from "~/lib/chart-series.server";
+import { chartReach, chartSeries, type ChartScope } from "~/lib/chart-series.server";
 import { formatPercent, isNegative, toPlotValue } from "~/lib/format";
 import { useMasked } from "~/lib/masking";
 import { ALL_OWNERS, isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
@@ -74,7 +74,7 @@ export function meta() {
  */
 const BARS = 5;
 
-/** See {@link chartRangeMiddleware}'s own docstring. */
+/** Stamps the range cookie on an explicit choice (spec 0008) — see {@link chartRangeMiddleware} for why. */
 export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -89,19 +89,19 @@ export async function loader({ request }: Route.LoaderArgs) {
   const today = isoDate(Date.now());
   const scope: ChartScope = { surface: "household", reading };
 
-  // `manual` and the anchors in one round trip, not two: `earliest.manual`
-  // below is `manual`'s own first point — not something `chartAnchors`
+  // `manual` and the reach in one round trip, not two: `earliest.manual`
+  // below is `manual`'s own first point — not something `chartReach`
   // reads — so the window cannot be sized until the loader holds both, and
   // that is a requirement on the loader rather than a style preference:
   // written as two sequential awaits this would be two waves where it is
   // one (spec 0015).
-  const [manual, anchors] = await Promise.all([
+  const [manual, reach] = await Promise.all([
     // Read either way: "not drawn while narrowed" and "this instance has
     // none" are two different screens, and only the first has anything to
     // explain — spec 0013's reason `manualNetWorth` takes no filter at all
     // (an empty answer could not be told from an empty table).
     manualNetWorth(),
-    chartAnchors(scope),
+    chartReach(scope),
   ]);
 
   // DESIGN.md §7 rule 3: the hand-typed series is the household's net worth
@@ -111,26 +111,25 @@ export async function loader({ request }: Route.LoaderArgs) {
   const reachable = isFiltered(owners) ? [] : manual;
 
   // The chart's reach, and the whole of how a filter shortens it:
-  // `anchors.positionSet` is already the selected owners' first recorded
-  // date and `reachable` is empty while narrowed, so the household rule —
-  // the earlier of the two — computes the narrowed reach without being told
+  // `reach.positionSet` is already the selected owners' first recorded date
+  // and `reachable` is empty while narrowed, so the household rule — the
+  // earlier of the two — computes the narrowed reach without being told
   // about the filter. `chart-range.ts` is untouched: no third `Surface`
   // member, no switch to the account one. On screen, **All** shortens to the
   // owners' own history and the long presets fall out of reach.
-  const earliest = { positionSet: anchors.positionSet, manual: reachable[0]?.date };
+  const earliest = { positionSet: reach.positionSet, manual: reachable[0]?.date };
 
   const { resolved, controls } = chartWindow("household", {
     request,
     today,
     earliest,
-    session: anchors.session,
+    session: reach.session,
     timeZone: getConfig().MARKET_TIMEZONE,
   });
 
   // Created here and dropped into the `Promise.all` below, so the read runs
-  // beside the others rather than queued behind them — `chartSeries` is
-  // where the coverage rule (§6.3) and the dated/session choice now live,
-  // once, for both surfaces.
+  // beside the others rather than queued behind them — `chartSeries` itself
+  // is where the coverage rule and the dated/session choice live.
   const points = chartSeries(scope, resolved);
 
   const [change, accounts, computed, freshness, everyone] = await Promise.all([
@@ -582,7 +581,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               session={session}
             />
           ) : (
-            <ChartEmptyNote session={session} points={computed.length}>
+            <ChartEmptyNote session={session} moments={computed.length}>
               <p className="empty-note">
                 A trend needs two dated points and this instance has one. The line appears once a
                 second statement has been uploaded.

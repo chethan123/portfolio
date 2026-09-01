@@ -552,7 +552,7 @@ export function NetWorthChart({
  * has, on either surface — 1D draws the same instants whichever chart is
  * asking. Guarded on there being a moment at all: with none, nothing has
  * been uploaded and no waiting for prices changes that, so `children` — the
- * caller's own fallback — is the true sentence instead. `points` and
+ * caller's own fallback — is the true sentence instead. `moments` and
  * `children` do **not** converge the same way: a caller passes its own
  * `computed.length` and its own wording, because the fallback genuinely
  * differs between an instance with no chart at all and a range that is
@@ -560,20 +560,20 @@ export function NetWorthChart({
  */
 export function ChartEmptyNote({
   session,
-  points,
+  moments,
   children,
 }: {
   /** The session this chart would draw, or null when it draws days. */
   session: SessionAxis | null;
   /** The caller's own `computed.length` — how many moments this session holds so far. */
-  points: number;
+  moments: number;
   /** The caller's own fallback, shown everywhere the session sentence does not apply. */
   children: ReactNode;
 }) {
-  if (session !== null && points > 0) {
+  if (session !== null && moments > 0) {
     return (
       <p className="empty-note">
-        A line needs two observed moments and this session has {points}. It appears once another
+        A line needs two observed moments and this session has {moments}. It appears once another
         price arrives.
       </p>
     );

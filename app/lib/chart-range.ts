@@ -8,9 +8,7 @@
  * importing from a component is a direction this file must not open.
  * `chartWindow` assembles the window and the payload block a loader spreads,
  * from pieces this file already had; the two routes each carried their own
- * copy of that assembly, and of `isoDate` below — named as debt in
- * ARCHITECTURE.md, blocked on "All" meaning a different earliest date per
- * screen until taking *which* surface applies as a parameter removed that.
+ * copy of that assembly, and of `isoDate` below, until this file did.
  *
  * Not a `.server` module (`masking.ts`'s reason): no database, and both
  * routes' components read the vocabulary again after hydration. The cookie
@@ -101,15 +99,15 @@ export interface RangeWindow extends Window {
   session?: IsoDate;
 }
 
-/**
- * One value on the window {@link resolveRange} produced — a calendar date
- * `YYYY-MM-DD` for every preset but 1D, or a full ISO instant when the
- * window carries a session. Both parse to a moment, which is all a chart's
- * own scale asks; how the moment is *labelled* is decided by
- * {@link SessionAxis}, never by inspecting the string — a chart that
- * re-read its axis off punctuation would change it by accident.
- */
 export type ChartPoint = {
+  /**
+   * One value on the window {@link resolveRange} produced — a calendar date
+   * `YYYY-MM-DD` for every preset but 1D, or a full ISO instant when the
+   * window carries a session. Both parse to a moment, which is all a chart's
+   * own scale asks; how the moment is *labelled* is decided by
+   * {@link SessionAxis}, never by inspecting the string — a chart that
+   * re-read its axis off punctuation would change it by accident.
+   */
   date: string;
   amount: string;
 };
@@ -507,16 +505,23 @@ export function readChartRange(request: Request): RequestedRange {
 }
 
 /**
- * The payload block a loader spreads into its return, unchanged from what
- * both routes assemble by hand today (spec 0015) — `custom` still
- * `undefined` off a resolved range that is not custom, `customMax` still the
- * `today` the caller passed in. `rangeOptions` is not restated by hand: its
- * element type is whatever {@link rangeOptions} itself returns, so the two
- * cannot drift.
+ * The payload block a loader spreads into its return — the same six keys,
+ * names and values both routes used to assemble by hand before spec 0015:
+ * `custom` still `undefined` off a resolved range that is not custom,
+ * `customMax` still the `today` the caller passed in. Every field but those
+ * two is derived from a type this file already declares rather than
+ * restated by hand: `range` and `custom` from `RangeWindow`, `customMin`
+ * from `customRangeMin`'s own return type, and `rangeOptions` from
+ * {@link rangeOptions}'s — so none of the four can drift from what actually
+ * produces them.
  */
-export type ChartControls = {
-  range: RangeKey;
-  custom?: CustomSpan;
+export type ChartControls = Pick<RangeWindow, "range"> & {
+  /**
+   * Required, not optional — `undefined` off a resolved range that is not
+   * custom is a value this key always carries, never a key a caller can omit
+   * (route tests assert `toBeUndefined()`, not the key's absence).
+   */
+  custom: RangeWindow["custom"];
   /**
    * Null on every range but 1D, which is how the chart is told which axis it
    * is drawing (§7). The zone travels in, never read from configuration
@@ -524,7 +529,7 @@ export type ChartControls = {
    */
   session: SessionAxis | null;
   rangeOptions: ReturnType<typeof rangeOptions>;
-  customMin: IsoDate | null;
+  customMin: ReturnType<typeof customRangeMin>;
   customMax: IsoDate;
 };
 
@@ -538,12 +543,13 @@ export type ChartControls = {
  * `getConfig().MARKET_TIMEZONE` already, for `asOfView`.
  *
  * Takes `Surface`, not `ChartScope` (`chart-series.server.ts`): this reads
- * nothing, so it narrows nothing, and a required `reading` here would be
- * exactly the false signal ARCHITECTURE.md §4.2 warns a signature can give.
- * `resolved` is returned rather than folded away because both loaders still
- * need it — the Overview reads `resolved.since` for `netWorthChange` and
- * bounds its hand-typed prefix by it, and `resolved.session` decides whether
- * that prefix is drawn at all.
+ * nothing, so it narrows nothing, and a required `reading` here would claim
+ * a narrowing that never happens — the signature saying more than the code
+ * does, which is worth less than saying nothing. `resolved` is returned
+ * rather than folded away because both loaders still need it — the Overview
+ * reads `resolved.since` for `netWorthChange` and bounds its hand-typed
+ * prefix by it, and `resolved.session` decides whether that prefix is drawn
+ * at all.
  */
 export function chartWindow(
   surface: Surface,

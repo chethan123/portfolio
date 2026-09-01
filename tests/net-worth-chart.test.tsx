@@ -450,21 +450,24 @@ describe("an intra-session line (ADR-0006)", () => {
 });
 
 describe("<ChartEmptyNote> (spec 0015)", () => {
-  // Nothing today asserts this sentence at all — it is currently spelled
-  // identically, and untested, in two loaders' JSX — so this is the case that
-  // was missing, not a regression test.
+  // Nothing today asserts this sentence at all — it is spelled once now, in
+  // the component under test, so this is the case that was missing, not a
+  // regression test.
   it("renders the waiting sentence for a session with one moment, and the caller's own fallback with none observed", () => {
     const fallback = <p className="empty-note">The caller's own wording.</p>;
-    const render = (points: number) =>
+    const render = (moments: number) =>
       renderToStaticMarkup(
-        <ChartEmptyNote session={{ timeZone: "America/New_York" }} points={points}>
+        <ChartEmptyNote session={{ timeZone: "America/New_York" }} moments={moments}>
           {fallback}
         </ChartEmptyNote>,
       );
 
-    expect(render(1)).toBe(
-      '<p class="empty-note">A line needs two observed moments and this session has 1. It appears once another price arrives.</p>',
+    // toContain, not a whole-string match: the surrounding markup is not
+    // what this test is protecting, and a harmless attribute change must not
+    // fail it (docs/developing.md).
+    expect(render(1)).toContain(
+      "A line needs two observed moments and this session has 1. It appears once another price arrives.",
     );
-    expect(render(0)).toBe('<p class="empty-note">The caller&#x27;s own wording.</p>');
+    expect(render(0)).toContain("The caller&#x27;s own wording.");
   });
 });

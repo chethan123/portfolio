@@ -6,21 +6,19 @@
  * browser-reachable may value-import it.
  *
  * `ChartScope` is the one value that says which surface is being read *and*
- * what narrows it. The owner filter still travels as a required field a
- * reviewer can see on the call line — `chartSeries({ surface: "household",
- * reading }, resolved)` names it, and TypeScript refuses the call without it
- * — which is what keeps ADR-0008's property: whose money a screen reads
- * stays visible in review. What moves, and what ARCHITECTURE.md §4.2's
- * owner-reading row must now say, is that the filter travels as a *field of
- * the scope* rather than as "a required first argument with no default",
- * and that three household-scoped reads — `firstRecordedDate`,
- * `netWorthSeries` and `netWorthSessionSeries` — are now made by this module
- * rather than by the loader directly. "One module values holdings" is
- * untouched: this module compares cardinalities and values nothing.
+ * what narrows it. The owner filter travels as a required field of a
+ * required argument — `chartSeries({ surface: "household", reading },
+ * resolved)` names it at the call site, and TypeScript refuses the call
+ * without it — so whose money this module reads stays visible in review
+ * (ADR-0008), the same property the filter had as a bare argument before
+ * three household-scoped reads — `firstRecordedDate`, `netWorthSeries` and
+ * `netWorthSessionSeries` — moved from the loader to here. "One module
+ * values holdings" is untouched: this module compares cardinalities and
+ * values nothing.
  *
  * Two entry points, not one, because the Overview cannot size its window
  * without `manualNetWorth()`'s own first point — a fact this module does not
- * read — so the loader must hold both `manual` and `chartAnchors(scope)`
+ * read — so the loader must hold both `manual` and `chartReach(scope)`
  * before either can size a window (`overview.tsx`'s loader spells the
  * `Promise.all` this forces).
  */
@@ -40,7 +38,7 @@ import type { IsoDate, NetWorthPoint, SessionPoint } from "./valuation.server.ts
 
 /**
  * Which surface is being read, and what narrows it — the one value
- * `chartAnchors` and `chartSeries` take. The account variant carries no
+ * `chartReach` and `chartSeries` take. The account variant carries no
  * `reading`: an account has exactly one owner and takes no filter
  * (ADR-0008).
  */
@@ -48,19 +46,21 @@ export type ChartScope =
   | { surface: "household"; reading: OwnerFilter }
   | { surface: "account"; accountId: string };
 
+/** What {@link chartReach} answers — see its own docstring for each field. */
+export type ChartReach = { positionSet: IsoDate | null; session: IsoDate | null };
+
 /**
- * The two dates a window is sized from, in one round trip: the surface's own
- * earliest recorded date — an account measures from its own first
- * statement, never the household's, the same rule `surfaceEarliestDate`
- * states for "All" — and the latest observed session, which takes no filter
- * and is the same value on both surfaces. An account holding nothing the
- * feed quotes still draws its flat line at the household's observed
- * instants: `readSessionSeries` (`valuation.server.ts`) takes its instants
- * from the observation log as a whole, never from the surface.
+ * How far this surface's chart can reach, in one round trip: how far back —
+ * the surface's own earliest recorded date, an account measuring from its
+ * own first statement, never the household's, the same rule
+ * `surfaceEarliestDate` states for "All" — and whether it can reach into a
+ * session at all, from the observation log's own latest instant. `session`
+ * takes no filter and is the same value on both surfaces: an account holding
+ * nothing the feed quotes still draws its flat line at the household's
+ * observed instants (`readSessionSeries`, `valuation.server.ts`, takes its
+ * instants from the log as a whole, never from the surface).
  */
-export async function chartAnchors(
-  scope: ChartScope,
-): Promise<{ positionSet: IsoDate | null; session: IsoDate | null }> {
+export async function chartReach(scope: ChartScope): Promise<ChartReach> {
   const [positionSet, session] = await Promise.all([
     scope.surface === "household"
       ? firstRecordedDate(scope.reading)
