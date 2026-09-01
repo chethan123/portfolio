@@ -46,8 +46,8 @@ describe("the arcs", () => {
     ]);
 
     expect(wedges).toEqual([
-      { color: "var(--cat-1)", fraction: 0.6, before: 0 },
-      { color: "var(--cat-3)", fraction: 0.4, before: 0.6 },
+      { color: "var(--cat-1)", fraction: 0.6, before: 0, title: "Brokerage — 60.0%" },
+      { color: "var(--cat-3)", fraction: 0.4, before: 0.6, title: "IRA — 40.0%" },
     ]);
   });
 
@@ -81,6 +81,10 @@ describe("the arcs", () => {
     // Contiguous: the last arc starts exactly where the five before it ended,
     // so the ring closes with no residual wedge and no hairline gap.
     expect(wedges[5]?.before).toBeCloseTo(0.9, 12);
+    // The merged wedge names its members under the pointer — no figure,
+    // because its only share would be a float sum and the table beside the
+    // ring holds the exact ones.
+    expect(wedges[5]?.title).toBe("Other: F, G");
   });
 
   it("gives a lone sixth slice the neutral as its own wedge", () => {
@@ -101,10 +105,39 @@ describe("the arcs", () => {
     expect(wedges[5]?.color).toBe("var(--cat-other)");
     expect(wedges[5]?.fraction).toBeCloseTo(0.06, 12);
     expect(wedges[5]?.before).toBeCloseTo(0.94, 12);
+    expect(wedges[5]?.title).toBe("Other: F");
   });
 });
 
 describe("<Breakdown>", () => {
+  it("puts each wedge's name under the pointer, so identity never rides on colour alone", () => {
+    // The wedge titles are pinned as data above; this is the render half —
+    // a Donut that dropped `wedge.title` on the floor would fail nothing
+    // else, and the feature would die exactly the silent death the hover
+    // exists to prevent.
+    const markup = renderRoute(
+      () => (
+        <Breakdown
+          title="Net worth by owner"
+          count="2 people"
+          heading="Owner"
+          amountHeading="Value"
+          slices={[
+            slice("Alex", "60000.0000", "0.600000"),
+            slice("Jordan", "40000.0000", "0.400000"),
+          ]}
+          total="100000.0000"
+          reading="owned"
+        />
+      ),
+      "/",
+      null,
+    );
+
+    expect(markup).toContain("<title>Alex — 60.0%</title>");
+    expect(markup).toContain("<title>Jordan — 40.0%</title>");
+  });
+
   it("draws no ring, no zero and no chart frame when nothing is positive", () => {
     // A household with only a loan recorded. There is no whole for a share to
     // be a part of, so there is nothing to draw — and the total handed in is a

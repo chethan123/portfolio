@@ -1243,6 +1243,12 @@ slices are large enough to be identifiable anyway; the 12px legend dots are not,
 legend dot carries a 1px `--outline-variant` ring**, and every ring ships beside its table,
 which carries every figure the wedges do not.
 
+Colour is also never the only way to tell a wedge from its row: **every arc carries a browser
+`<title>`** — the group's name with its exact share, the "Other" wedge its member list — so
+hovering names the segment outright, and the hovered arc swells a step so the pointer can see
+which one is answering. The SVG stays `aria-hidden`; assistive tech has the table, and the hover
+channel is for the sighted pointer a colour-blind reader steers.
+
 ### 13.4 Typography
 
 One family now — **Inter**, self-hosted (`public/fonts/`, latin subset, variable weight, 47KB).

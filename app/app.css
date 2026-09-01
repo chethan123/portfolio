@@ -1344,7 +1344,16 @@ a {
 
 .donut-segment {
   fill: none;
-  transition: opacity 150ms;
+  transition: opacity 150ms, stroke-width 150ms;
+}
+
+/* Hover is the wedge's identity channel: the browser shows the arc's own
+ * <title> (group, exact share), and the arc swells a step so the pointer can
+ * see which one is answering — matching arc to row by colour alone is what a
+ * colour-blind reader cannot be asked to do. Hit-testing follows the painted
+ * dash, so each arc answers only for its own span. */
+.donut-segment:hover {
+  stroke-width: 14px;
 }
 
 /* `--space-xs` because a caption over a figure is the one job §13.5 gives

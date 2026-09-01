@@ -51,8 +51,15 @@ function fraction(share: string): number {
   return Number(share);
 }
 
-/** One drawn arc: how much of the ring it is, and where it starts. */
-export type Wedge = { color: string; fraction: number; before: number };
+/**
+ * One drawn arc: how much of the ring it is, where it starts, and what to
+ * call it under the pointer. `title` exists because colour is the one thing
+ * a wedge must never rely on alone: hover names the group — with its exact
+ * share for a ranked wedge, straight from `formatShare`, never the float.
+ * The "Other" wedge names its members and carries no figure: its only share
+ * would be a float sum, and the table beside the ring holds the exact ones.
+ */
+export type Wedge = { color: string; fraction: number; before: number; title: string };
 
 /**
  * The arcs to draw, in rank order, folded at the end of the sequence.
@@ -67,6 +74,7 @@ export type Wedge = { color: string; fraction: number; before: number };
  */
 export function ring(slices: AllocationSlice[]): Wedge[] {
   const wedges: Wedge[] = [];
+  const folded: string[] = [];
   let before = 0;
   let tail = 0;
 
@@ -78,14 +86,27 @@ export function ring(slices: AllocationSlice[]): Wedge[] {
     // cannot come apart.
     if (rank >= SEQUENCE) {
       tail += fraction(slice.share);
+      folded.push(slice.label);
       return;
     }
 
-    wedges.push({ color: categoryColor(rank), fraction: fraction(slice.share), before });
+    wedges.push({
+      color: categoryColor(rank),
+      fraction: fraction(slice.share),
+      before,
+      title: `${slice.label} — ${formatShare(slice.share)}`,
+    });
     before += fraction(slice.share);
   });
 
-  if (tail > 0) wedges.push({ color: categoryColor(SEQUENCE), fraction: tail, before });
+  if (tail > 0) {
+    wedges.push({
+      color: categoryColor(SEQUENCE),
+      fraction: tail,
+      before,
+      title: `Other: ${folded.join(", ")}`,
+    });
+  }
 
   return wedges;
 }
@@ -98,6 +119,13 @@ export function ring(slices: AllocationSlice[]): Wedge[] {
  * stays *outside* the hidden subtree: the total is the one figure the table
  * does not carry. `Total` is hard-coded, unlike the amount heading — it is
  * the word for the sum of whatever the rows are.
+ *
+ * Each arc carries a `<title>`, the pointer's identity channel: hover names
+ * the wedge, because matching an arc to its row by colour alone is exactly
+ * what a colour-blind reader cannot be asked to do. Hit-testing follows the
+ * painted dash (SVG 2, verified in Chromium), so each arc answers only for
+ * its own span. Inside the hidden subtree deliberately — assistive tech has
+ * the table; this channel is for the sighted pointer.
  */
 function Donut({ wedges, total }: { wedges: Wedge[]; total: string }) {
   return (
@@ -115,7 +143,9 @@ function Donut({ wedges, total }: { wedges: Wedge[]; total: string }) {
             stroke={wedge.color}
             strokeDasharray={`${wedge.fraction * CIRCUMFERENCE} ${CIRCUMFERENCE}`}
             strokeDashoffset={-(wedge.before * CIRCUMFERENCE)}
-          />
+          >
+            <title>{wedge.title}</title>
+          </circle>
         ))}
       </svg>
 

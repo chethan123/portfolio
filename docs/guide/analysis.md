@@ -45,6 +45,9 @@ never looks like one of the five coloured groups. Each row keeps its own value a
 percentage in the table; only the picture merges them. The panel says so when two or more rows
 share the wedge; a lone sixth row simply wears the grey as its own, with nothing to explain.
 
+You never have to match a wedge to its row by colour: **hover any wedge and it names itself** —
+the group and its exact share, or the grey wedge's list of members.
+
 ### When nothing is owned outright
 
 A household with only a loan recorded has no whole for a share to be part of. There is no ring,
