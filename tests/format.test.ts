@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compactScale,
   formatCompact,
   formatMoney,
   formatPercent,
@@ -98,6 +99,28 @@ describe("formatCompact", () => {
 
   it("keeps the sign on a negative axis tick", () => {
     expect(formatCompact("-8000")).toBe("−8.0K");
+  });
+
+  it("keeps the decimals the caller asks for", () => {
+    expect(formatCompact("5903278.06", 2)).toBe("5.90M");
+    expect(formatCompact("5903278.06", 3)).toBe("5.903M");
+  });
+
+  it("has nothing to resolve below the scaling threshold, so ignores the decimals", () => {
+    expect(formatCompact("500", 3)).toBe("500");
+    expect(formatCompact("0", 4)).toBe("0");
+  });
+
+  it("reports the scale a value's size puts it at, and not the one rounding lifts it to", () => {
+    // 999,999 prints as `1.0M` at one decimal and `999.999K` at three, but its
+    // size is thousands either way. A chart axis sizes its precision off this,
+    // and reading the promotion instead lets one endpoint a rounding away from
+    // the next suffix buy the whole axis three decimals it cannot use.
+    expect(compactScale("999999")).toBe(1);
+    expect(formatCompact("999999", 1)).toBe("1.0M");
+    expect(formatCompact("999999", 3)).toBe("999.999K");
+    expect(compactScale("1000001")).toBe(2);
+    expect(compactScale("500")).toBe(0);
   });
 });
 

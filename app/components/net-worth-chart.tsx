@@ -20,7 +20,7 @@
 import { useId } from "react";
 
 import { MASKED_FIGURE } from "~/components/amount";
-import { formatCompact, formatMoney, toPlotValue } from "~/lib/format";
+import { compactScale, formatCompact, formatMoney, toPlotValue } from "~/lib/format";
 import { marketDateOf, marketTimeOf } from "~/lib/market-hours";
 
 export type ChartPoint = {
@@ -118,22 +118,100 @@ export function buildScale(points: ChartPoint[]): Scale {
 }
 
 /**
+ * The most decimals an axis will spend. Three is where the thousands scale
+ * reaches $1, which is the quantum the rules are rounded to before they are
+ * ever formatted — a fourth decimal there is ten cents of a figure that has
+ * none, always renders `0`, and, being finer than the amounts themselves,
+ * breaks the separation argument below rather than sharpening it.
+ */
+const MAX_TICK_DP = 3;
+
+/**
+ * How many decimals the rules need, from the span rather than from trying
+ * labels until two stop matching. The rules sit `span / 2` apart, so rounding
+ * to a unit of at most a quarter of the span leaves at least two units
+ * between neighbours and cannot land them on the same number — distinctness
+ * falls out of the arithmetic instead of being searched for. Fewest such
+ * decimals, so the axis never spends a digit it has no use for.
+ *
+ * The searching version of this was worse than it looked. It asked only
+ * whether the labels differed, never whether the difference was worth
+ * printing, so a $150 move on a $5.9M household bought four decimals —
+ * `5.9002M` — and, because the answer was not monotonic in the span, the
+ * axis gained and lost digits between two refreshes of the same session as
+ * the day's range crossed a threshold.
+ *
+ * `scale` is the larger end of the domain by magnitude, because that is the
+ * rule whose unit has to do the separating. The floor this leaves is worth
+ * stating: a resolution of $1 at the thousands scale, $1,000 at the millions,
+ * $1,000,000 at the billions. So a $5.9M household moving under about $400
+ * across a session, or a $1B one moving under $4M, still reads one number on
+ * all three rules.
+ *
+ * `1` in that case, and for a flat series. The axis names one number three
+ * times, which is the honest reading of a line that has not moved at any
+ * resolution it can print — the case `gridRules` has always accepted, and the
+ * reason the rules are keyed by position.
+ */
+function tickPrecision(span: number, scale: number): number {
+  const unit = 10 ** (scale * 3);
+  // Never past the dollar the amounts were rounded to before they got here.
+  // Below it the separation argument stops holding — rounding to whole
+  // dollars costs each rule up to $1, so two rules a tenth of a dollar apart
+  // on the axis are one dollar apart on the page, and land on one label. At
+  // the plain scale this is zero and the axis has nothing to spend.
+  const finest = Math.min(MAX_TICK_DP, scale * 3);
+
+  for (let dp = 1; dp <= finest; dp += 1) {
+    if (unit / 10 ** dp <= span / 4) return dp;
+  }
+
+  return 1;
+}
+
+/**
  * The horizontal rules, and the label naming each. Read off the drawn
  * domain, not the data's min and max — the two differ by the padding, and
  * labelling the box's top with the series' largest value would put every
  * tick 8% out. A quiet inaccuracy on an axis is still an inaccuracy.
+ *
+ * **The precision comes from the span, and is not left at one decimal.**
+ * `formatCompact` sizes its suffix by how large a number is; an axis has to
+ * resolve how far apart its rules are, and past a million those two stop
+ * agreeing. One decimal at the millions scale buckets in 0.1M — $100,000 —
+ * and a $5.9M household moving $30K across a session is an ordinary day's
+ * trading that fits inside one bucket, so all three rules label `5.9M`: an
+ * axis that has stopped saying anything while still looking like it is.
+ *
+ * Each rule keeps its own suffix. Holding all three to one reads more tidily
+ * on a session, where they share a magnitude anyway, and lies on every range
+ * wide enough that they do not: a $96,000 floor under a $1.6M ceiling becomes
+ * `0.1M`, a figure with a fifty-thousand-dollar error bar, where `96.0K` was
+ * exact. Tidiness is not worth that, and a domain that crosses a suffix at
+ * all is rare enough to leave mixed.
  */
 export function gridRules(scale: Scale, masked: boolean): { y: number; label: string }[] {
   const { floor, span } = scale.domain;
-
-  return GRID.map((fraction) => ({
+  const rules = GRID.map((fraction) => ({
     y: HEIGHT * (1 - fraction),
+    amount: (floor + span * fraction).toFixed(0),
+  }));
+  // Magnitude, not value: a household in net debt carries its biggest figure
+  // at the bottom of the domain, and that is the rule the span has to
+  // separate.
+  const dp = tickPrecision(
+    span,
+    Math.max(compactScale(floor.toFixed(0)), compactScale((floor + span).toFixed(0))),
+  );
+
+  return rules.map(({ y, amount }) => ({
+    y,
     // A masked axis keeps its rules and loses its numbers — the same dot run
     // every masked figure uses: a second constant is how a reader learns to
     // read one of them as a smaller number. No currency mark, because an
     // unmasked tick has none either (`58.4K`). The ticks are already
     // `aria-hidden`; the svg label carries the chart for anyone unsighted.
-    label: masked ? MASKED_FIGURE : formatCompact((floor + span * fraction).toFixed(0)),
+    label: masked ? MASKED_FIGURE : formatCompact(amount, dp),
   }));
 }
 
