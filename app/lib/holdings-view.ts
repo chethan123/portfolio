@@ -472,6 +472,9 @@ export function availableFilters(
     const selected = query.filters.get(dimension.id) ?? "";
     if (options.size < 2 && selected === "") continue;
 
+    // Ordered by the words shown, tail included — among same-named accounts
+    // the tail decides before the institution, because it comes first in
+    // what the reader is actually scanning.
     const listed = [...options.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => compareText(a.label, b.label));

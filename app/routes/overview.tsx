@@ -19,7 +19,6 @@ import {
   NarrowedToNothing,
   OwnerFilterControl,
 } from "~/components/owner-filter-control";
-import { numberTail } from "~/lib/account-label";
 import { ACCOUNT_KINDS, labelOf } from "~/lib/account-options";
 import {
   DEFAULT_RANGE,
@@ -478,26 +477,25 @@ function AllocationPanel({
 
       <div className="panel-body">
         <div className="alloc">
-          {bars.map(({ account, colour, width }) => {
-            // Plain text, tail and all: this label is one text run beside a
-            // figure, not the name-plus-hidden-announcement markup the
-            // accounts panel carries.
-            const tail = numberTail(account.externalAccountNumber);
-
-            return (
-              <div className="alloc-row" key={account.accountId}>
-                <div className="alloc-label">
-                  {tail === null ? account.accountName : `${account.accountName} ${tail}`}
-                  <b className="u-data">
-                    <Amount value={account.amount} />
-                  </b>
-                </div>
-                <div className="alloc-track">
-                  <div className="alloc-fill" style={{ width, background: colour }} />
-                </div>
+          {bars.map(({ account, colour, width }) => (
+            <div className="alloc-row" key={account.accountId}>
+              <div className="alloc-label">
+                {/* One span, one flex item: the label row is space-between,
+                    and an unwrapped tail would be stranded mid-row as a
+                    third item. */}
+                <span>
+                  {account.accountName}
+                  <AccountNumberTail number={account.externalAccountNumber} />
+                </span>
+                <b className="u-data">
+                  <Amount value={account.amount} />
+                </b>
               </div>
-            );
-          })}
+              <div className="alloc-track">
+                <div className="alloc-fill" style={{ width, background: colour }} />
+              </div>
+            </div>
+          ))}
 
           {/* Inside `.alloc` rather than after it, so the list's own gap sets
               the space above it. */}

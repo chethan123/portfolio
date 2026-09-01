@@ -965,9 +965,11 @@ describe("the number tail on the account rows", () => {
       expect(markup).toContain('<span class="number-tail" aria-hidden="true">····3910</span>');
       expect(markup).toContain('<span class="visually-hidden">ending in 3910</span>');
 
-      // The allocation bar's label is one text run, so the tail rides in it
-      // as plain text.
-      expect(markup).toContain("Fidelity Taxable ····3910");
+      // The allocation bar carries the same arrangement, wrapped in one span
+      // so the flex row keeps label and figure apart.
+      expect(markup).toContain(
+        '<div class="alloc-label"><span>Fidelity Taxable <span class="number-tail" aria-hidden="true">····3910</span>',
+      );
 
       // An account with no recorded number keeps its bare name: no dots
       // standing in for a number nobody recorded.
