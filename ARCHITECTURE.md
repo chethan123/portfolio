@@ -343,7 +343,7 @@ grep. They come in three tiers.
 |---|---|---|
 | Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
-| Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. |
+| Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 
 **Shared primitives, with exceptions that are documented rather than denied.**
@@ -380,9 +380,9 @@ a real boundary, not a naming preference:
 
 - `*.server.ts` may import the database, the config, and Node built-ins.
 - `*.ts` in `app/lib` must be safe in a browser bundle. `allocation.ts` and `holdings-view.ts`
-  import `ValuedHolding`, and `account-options.ts` imports `AccountKind`/`TaxTreatment`/`AssetClass`,
-  from `valuation.server.ts` — all **type-only imports**, which are erased at compile time and pull no
-  server code across. That is what lets a
+  import `ValuedHolding`, and `account-options.ts` imports
+  `AccountKind`/`TaxTreatment`/`AssetClass`, from `valuation.server.ts` — all **type-only
+  imports**, which are erased at compile time and pull no server code across. That is what lets a
   screen component call `allocationBy()` on loader data, and the upload wizard render its
   asset-class options from the same list the resolver validates against.
 

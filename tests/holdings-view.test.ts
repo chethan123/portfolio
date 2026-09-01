@@ -318,16 +318,23 @@ describe("availableFilters", () => {
   it("offers an account type in the self-explaining form, not the short one", () => {
     // The register split this module owns: the table cell prints "Workplace
     // plan" (below), the dropdown offering the choice spells out which
-    // accounts it means. Both come off the one dimension, so they are the
-    // same words minus the tail — and this is the only assertion left of the
-    // long form now that the Analysis panel prints a bucket like the table.
+    // accounts it means. Both come off the one dimension, so they cannot
+    // name different sets — but they are not always the long form minus a
+    // parenthetical either, and `liability` is the case that proves it. This
+    // is the only assertion left of the long form now that the Analysis panel
+    // prints a bucket the way the table does.
     const [kind] = availableFilters(
-      [holding({ accountKind: "401k" }), holding({ accountKind: "brokerage" })],
+      [
+        holding({ accountKind: "401k" }),
+        holding({ accountKind: "brokerage" }),
+        holding({ accountKind: "liability" }),
+      ],
       query(),
     ).filter((control) => control.id === "kind");
 
     expect(kind?.options.map((option) => option.label)).toEqual([
       "Brokerage",
+      "Loan or other liability",
       "Workplace plan (401k, 403b)",
     ]);
   });

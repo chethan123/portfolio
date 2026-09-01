@@ -15,8 +15,8 @@ import {
   type GainRow,
   type GainGroups,
 } from "~/lib/allocation";
-import { groupingBy } from "~/lib/holdings-view";
 import { isNegative } from "~/lib/format";
+import { groupingBy } from "~/lib/holdings-view";
 import {
   ALL_OWNERS,
   canonicalOwnerSearch,

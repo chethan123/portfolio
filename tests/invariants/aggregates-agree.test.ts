@@ -5,11 +5,12 @@
  * asserting that would assert `sum` is `sum`. What is left is the pairs
  * whose *shapes* genuinely differ — two SQL statements, SQL against a
  * JavaScript reduction, two reductions over one array — which can come
- * apart under an edit with nothing else noticing. The Income block at the
- * foot is the third of those: Holdings and Income group by tax treatment
- * through two reductions, agreeing only because both read
- * `holdings-view.ts`'s one dimension accessor, and this test keeps that
- * structural.
+ * apart under an edit with nothing else noticing. The last two blocks are
+ * both of that kind, and both about grouping: Holdings against Income by tax
+ * treatment, and Holdings against Analysis on all four of the cuts that
+ * screen draws. Each pair groups through a different reduction and agrees
+ * only because both read `holdings-view.ts`'s one dimension accessor — these
+ * tests are what keep that structural rather than lucky.
  *
  * **Deliberately not asserted:** `netWorth` and `netWorthAt(…, today)` do
  * not agree and must not be made to — the current view prices from
@@ -441,9 +442,10 @@ describe("the Analysis screen and the Holdings table", () => {
       // "Workplace plan (401k, 403b)" and "Workplace plan" for one bucket.
       // The *amounts* and *counts* are independent: `allocation.ts` sums
       // `BigInt` units and counts `isPriced`, `holdings-view.ts` sums its own
-      // subtotals and counts non-null values — so this also pins the view's
-      // own rule, asserted nowhere else, that a holding's value is null
-      // exactly when it is unpriced.
+      // subtotals and counts non-null values. The share is the sharpest of
+      // the three: both sides rank their buckets and hand the rounding
+      // remainder to the first, so they agree only while they also break ties
+      // the same way, which is why one `compareText` serves both.
       await aPortfolioCutFourWays(ctx);
 
       const [page, holdings] = await Promise.all([
@@ -467,6 +469,7 @@ describe("the Analysis screen and the Holdings table", () => {
             slice.key,
             slice.label,
             slice.amount,
+            slice.share,
             slice.coverage,
           ]),
         }).toEqual({
@@ -478,6 +481,7 @@ describe("the Analysis screen and the Holdings table", () => {
             // and zero in a sum. Both are right for their screen; reconciling
             // them is not this invariant's business.
             group.total.value ?? "0.0000",
+            group.share ?? "0.000000",
             group.total.valueCoverage,
           ]),
         });

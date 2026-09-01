@@ -14,7 +14,7 @@
  * ask again. A draft abandoned after this step leaves the vocabulary behind —
  * correct: the next upload is quieter, and nothing was recorded as held.
  */
-import { assetClassValues } from "./account-options.ts";
+import { isAssetClass } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { ValidationError } from "./input.server.ts";
 import { probeSymbol, type ProbeSymbol } from "./price-provider.server.ts";
@@ -364,7 +364,7 @@ export async function resolveAll(
       }
 
       const assetClass = fields.newClassificationAssetClass;
-      if (!assetClassValues.includes(assetClass as AssetClass)) {
+      if (!isAssetClass(assetClass)) {
         refuse(
           index,
           "newClassificationAssetClass",

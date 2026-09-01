@@ -102,15 +102,26 @@ const ANNUAL_DIVIDEND: AllocationAmount = {
 type Bucket = { label: string; amount: bigint; coverage: Coverage };
 
 /**
+ * Text sorted by what is printed in it. `localeCompare`, not `<`: these are
+ * names a person reads, so `"Ålesund"` belongs with the A's and `"apple"`
+ * before `"Banana"`. Exported for `holdings-view.ts`, which ranks the same
+ * buckets from the other side — two spellings of this would let a breakdown
+ * and the table beside it order equal groups differently, and the
+ * largest-remainder correction turns that into different percentages.
+ */
+export function compareText(a: string, b: string): number {
+  return a.localeCompare(b);
+}
+
+/**
  * Largest first, ties on label. Integers, not rendered strings (which sort
  * "9.0000" above "10.0000"); the tie-break stops equal slices swapping
  * between renders.
  */
 function compare(a: Bucket, b: Bucket): number {
   if (a.amount !== b.amount) return a.amount > b.amount ? -1 : 1;
-  if (a.label !== b.label) return a.label < b.label ? -1 : 1;
 
-  return 0;
+  return compareText(a.label, b.label);
 }
 
 /**

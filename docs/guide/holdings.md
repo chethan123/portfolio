@@ -15,7 +15,7 @@ screens, from the control at the top of this one — the button naming who you a
 - **Account** — one account by name. The dropdown adds the institution, because two accounts can
   be called "Roth IRA".
 - **Brokerage** — the institution the account is held at.
-- **Account type** — brokerage, workplace plan, IRA, bank, loan.
+- **Account type** — Brokerage, Workplace plan, IRA, Bank, Liability.
 - **Tax treatment** — taxable, tax-deferred, tax-free.
 - **Classification** — your own label for what a holding is: "S&P 500", "US total bond",
   "Money market".

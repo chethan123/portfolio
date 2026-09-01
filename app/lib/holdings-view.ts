@@ -30,7 +30,7 @@
  * either job by hand.
  */
 import { ACCOUNT_KINDS, ASSET_CLASSES, TAX_TREATMENTS, labelOf } from "./account-options.ts";
-import { allocateShares, type Grouping } from "./allocation.ts";
+import { allocateShares, compareText, type Grouping } from "./allocation.ts";
 import {
   MONEY_SCALE,
   QUANTITY_SCALE,
@@ -263,14 +263,6 @@ const SORT_KEYS: ReadonlyArray<SortKey> = [
  */
 export const DEFAULT_SORT: SortKey = "value";
 export const DEFAULT_DIRECTION: SortDirection = "desc";
-
-/**
- * Text columns sort by what is printed in them. `localeCompare`, not `<`:
- * these are names a person reads, and `"Ålesund"` belongs with the A's.
- */
-function compareText(a: string, b: string): number {
-  return a.localeCompare(b);
-}
 
 function compareBy(key: SortKey, a: ValuedHolding, b: ValuedHolding): number {
   switch (key) {

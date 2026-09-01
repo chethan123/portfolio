@@ -4,7 +4,7 @@
  * deliberately: the domain module validates against these values and the
  * form renders options from them, and a list written twice is free to drift
  * from the schema's check constraints (`account_kind_valid`,
- * `tax_treatment_valid`, `classification_asset_class_valid`). Plain data and
+ * `account_tax_treatment_valid`, `classification_asset_class_valid`). Plain data and
  * pure functions, no database. The type imports are erased, so this pulls no
  * server code into the client bundle.
  *
@@ -42,7 +42,7 @@ export const TAX_TREATMENTS: ReadonlyArray<Option<TaxTreatment>> = [
 /**
  * The four-way rollup every classification maps onto (CONTEXT.md). Its values
  * match `classification_asset_class_valid`; unlike its two neighbours nothing
- * renders it in an account form, but the upload wizard's classification step
+ * renders it in an account form, but the upload wizard's instruments step
  * offers exactly these and the resolver refuses anything else.
  */
 export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
@@ -64,13 +64,14 @@ export const taxTreatmentValues = TAX_TREATMENTS.map((treatment) => treatment.va
 ];
 
 /**
- * The asset classes' stored values alone. A plain list, not the tuple above:
- * its one caller asks whether a posted string is one of them, and the upload
- * resolver refuses field by field rather than parsing with Zod.
+ * Whether a posted string is one of the four — a narrowing, not a values list
+ * a caller has to assert against. No Zod tuple like the two above, because
+ * the upload resolver refuses field by field so it can name every bad field
+ * at once, rather than parsing the step as a whole.
  */
-export const assetClassValues: ReadonlyArray<AssetClass> = ASSET_CLASSES.map(
-  (assetClass) => assetClass.value,
-);
+export function isAssetClass(value: string | undefined): value is AssetClass {
+  return ASSET_CLASSES.some((assetClass) => assetClass.value === value);
+}
 
 /**
  * The label a stored value wears on screen. Falls back to the value itself
