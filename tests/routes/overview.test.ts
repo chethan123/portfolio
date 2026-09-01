@@ -932,6 +932,51 @@ describe("the allocation bars", () => {
   );
 });
 
+describe("the number tail on the account rows", () => {
+  it(
+    "rides beside the name in the rollup and the allocation, hidden from a reader and said as words",
+    withDatabase(async (ctx) => {
+      const owner = await ctx.seedPerson({ name: "Alice" });
+      const usd = await ctx.usdInstrument();
+
+      // Free-form, as the column is: the tail is the last four *characters*.
+      const numbered = await ctx.seedAccount({
+        name: "Fidelity Taxable",
+        owner,
+        externalAccountNumber: "X47-283910",
+      });
+      const bare = await ctx.seedAccount({ name: "Checking", owner, kind: "bank" });
+
+      await ctx.seedPositionSet({
+        account: numbered,
+        asOf: daysAgo(10),
+        holdings: [{ instrument: usd, quantity: "3000.00000000" }],
+      });
+      await ctx.seedPositionSet({
+        account: bare,
+        asOf: daysAgo(10),
+        holdings: [{ instrument: usd, quantity: "1000.00000000" }],
+      });
+
+      const markup = renderRoute(Overview, "/", await loader(args(get("/"))));
+
+      // The accounts panel: the dots are decoration a screen reader skips,
+      // and the same fact is said as words instead.
+      expect(markup).toContain('<span class="number-tail" aria-hidden="true">····3910</span>');
+      expect(markup).toContain('<span class="visually-hidden">ending in 3910</span>');
+
+      // The allocation bar's label is one text run, so the tail rides in it
+      // as plain text.
+      expect(markup).toContain("Fidelity Taxable ····3910");
+
+      // An account with no recorded number keeps its bare name: no dots
+      // standing in for a number nobody recorded.
+      expect(markup).toContain("Checking");
+      expect(markup).not.toContain("Checking ·");
+    }),
+  );
+});
+
 describe("the 1D range on the Overview", () => {
   /**
    * Day zero, plus a session of observations on `session`.

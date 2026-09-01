@@ -1,5 +1,6 @@
 import { Link, redirect } from "react-router";
 
+import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount } from "~/components/amount";
 import { categoryColor } from "~/components/breakdown";
 import { ChartRangeControl } from "~/components/chart-range-control";
@@ -18,6 +19,7 @@ import {
   NarrowedToNothing,
   OwnerFilterControl,
 } from "~/components/owner-filter-control";
+import { numberTail } from "~/lib/account-label";
 import { ACCOUNT_KINDS, labelOf } from "~/lib/account-options";
 import {
   DEFAULT_RANGE,
@@ -420,7 +422,10 @@ function AccountsPanel({
                   <Tile />
                 </div>
                 <div>
-                  <p className="account-name">{account.accountName}</p>
+                  <p className="account-name">
+                    {account.accountName}
+                    <AccountNumberTail number={account.externalAccountNumber} />
+                  </p>
                   <p className="account-meta">
                     {account.institution} · {labelOf(ACCOUNT_KINDS, account.accountKind)}
                   </p>
@@ -473,19 +478,26 @@ function AllocationPanel({
 
       <div className="panel-body">
         <div className="alloc">
-          {bars.map(({ account, colour, width }) => (
-            <div className="alloc-row" key={account.accountId}>
-              <div className="alloc-label">
-                {account.accountName}
-                <b className="u-data">
-                  <Amount value={account.amount} />
-                </b>
+          {bars.map(({ account, colour, width }) => {
+            // Plain text, tail and all: this label is one text run beside a
+            // figure, not the name-plus-hidden-announcement markup the
+            // accounts panel carries.
+            const tail = numberTail(account.externalAccountNumber);
+
+            return (
+              <div className="alloc-row" key={account.accountId}>
+                <div className="alloc-label">
+                  {tail === null ? account.accountName : `${account.accountName} ${tail}`}
+                  <b className="u-data">
+                    <Amount value={account.amount} />
+                  </b>
+                </div>
+                <div className="alloc-track">
+                  <div className="alloc-fill" style={{ width, background: colour }} />
+                </div>
               </div>
-              <div className="alloc-track">
-                <div className="alloc-fill" style={{ width, background: colour }} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
 
           {/* Inside `.alloc` rather than after it, so the list's own gap sets
               the space above it. */}

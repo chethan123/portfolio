@@ -29,6 +29,7 @@
  * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
  * either job by hand.
  */
+import { numberTail } from "./account-label.ts";
 import { ACCOUNT_KINDS, TAX_TREATMENTS, labelOf } from "./account-options.ts";
 import { ASSET_CLASSES, allocateShares, type Grouping } from "./allocation.ts";
 import {
@@ -132,13 +133,21 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     label: "Account",
     filterLabel: "Account",
     phrase: (label) => `in ${label}`,
-    of: (holding) => ({
-      key: holding.accountId,
-      label: holding.accountName,
-      // Two accounts at two institutions can share a name ("Roth IRA"), so
-      // the dropdown disambiguates; the cell has the institution on its own line.
-      optionLabel: `${holding.accountName} · ${holding.institution}`,
-    }),
+    of: (holding) => {
+      // The number tail rides in the option, as everywhere accounts are
+      // listed (CONTEXT.md) — but not in `label`, which is also the words a
+      // group heading and the empty-table sentence print, and prose does not
+      // wear the mask glyphs. Grouping keys on the id either way.
+      const tail = numberTail(holding.externalAccountNumber);
+
+      return {
+        key: holding.accountId,
+        label: holding.accountName,
+        // Two accounts at two institutions can share a name ("Roth IRA"), so
+        // the dropdown disambiguates; the cell has the institution on its own line.
+        optionLabel: `${holding.accountName}${tail === null ? "" : ` ${tail}`} · ${holding.institution}`,
+      };
+    },
   },
   {
     id: "institution",

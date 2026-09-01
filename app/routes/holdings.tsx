@@ -1,5 +1,6 @@
 import { Form, Link, redirect } from "react-router";
 
+import { AccountNumberTail } from "~/components/account-number-tail";
 import { Amount, Delta } from "~/components/amount";
 import { EmptyState } from "~/components/empty-state";
 import {
@@ -1004,6 +1005,7 @@ function Row({
                 set-balance form live (§13.1). */}
             <Link className="cell-link" to={`/accounts/${holding.accountId}`}>
               {holding.accountName}
+              <AccountNumberTail number={holding.externalAccountNumber} />
               <ChevronRightIcon />
             </Link>
             <span className="cell-sub">{holding.institution}</span>

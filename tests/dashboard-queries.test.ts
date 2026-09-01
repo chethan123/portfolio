@@ -75,6 +75,38 @@ describe("accountTotals", () => {
   );
 
   it(
+    "carries the recorded account number for the tail, and null where none is recorded",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
+      const owner = await seedPerson({ name: "Alice" });
+      const usd = await usdInstrument();
+
+      const numbered = await seedAccount({
+        name: "Fidelity Taxable",
+        owner,
+        externalAccountNumber: "X47-283910",
+      });
+      await seedAccount({ name: "Checking", owner, kind: "bank" });
+
+      // Only one account holds anything: the number must arrive on the empty
+      // account too, whose row the LEFT join manufactures.
+      await seedPositionSet({
+        account: numbered,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "3000.00000000" }],
+      });
+
+      const totals = await accountTotals(ALL_OWNERS, db);
+
+      expect(
+        totals.map((total) => [total.accountName, total.externalAccountNumber]),
+      ).toEqual([
+        ["Fidelity Taxable", "X47-283910"],
+        ["Checking", null],
+      ]);
+    }),
+  );
+
+  it(
     "sorts a liability account to the bottom without a branch for it",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
       const owner = await seedPerson();

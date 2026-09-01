@@ -62,6 +62,7 @@ describe("accountTotal", () => {
       expect(total).toEqual({
         accountId: brokerage.id,
         accountName: "Fidelity Taxable",
+        externalAccountNumber: null,
         institution: "Fidelity",
         accountKind: "brokerage",
         ownerName: "Alice",

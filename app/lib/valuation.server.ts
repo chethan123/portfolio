@@ -48,6 +48,13 @@ export type AssetClass = "equity" | "bond" | "cash" | "other";
 export type ValuedHolding = {
   accountId: string;
   accountName: string;
+  /**
+   * `account.external_account_number` — free-form, null when none is
+   * recorded. Display identity for the number tail (CONTEXT.md), not a
+   * view column: a label does not belong in the valuation contract
+   * (ADR-0001), so {@link readHoldings} joins `account` for it instead.
+   */
+  externalAccountNumber: string | null;
   institution: string;
   accountKind: AccountKind;
   taxTreatment: TaxTreatment;
@@ -115,10 +122,14 @@ function required<T>(value: T | null, column: string): T {
   return value;
 }
 
-function toValuedHolding(row: HoldingValuedRow): ValuedHolding {
+function toValuedHolding(
+  row: HoldingValuedRow & { external_account_number: string | null },
+): ValuedHolding {
   return {
     accountId: required(row.account_id, "account_id"),
     accountName: required(row.account_name, "account_name"),
+    // Not `required`: genuinely nullable — most accounts never record one.
+    externalAccountNumber: row.external_account_number,
     institution: required(row.institution, "institution"),
     // The schema's check constraints are what make these casts safe: the
     // database cannot hold a kind, treatment or asset class outside the set.
@@ -183,7 +194,14 @@ async function readHoldings(
   source: ValuedSource,
   where?: RawBuilder<SqlBool>,
 ): Promise<ValuedHolding[]> {
-  const all = db.selectFrom(source).selectAll();
+  // The account join carries only the number tail's column: display identity,
+  // deliberately not a view column (ADR-0001 makes widening `holding_valued`
+  // a paired migration, and a label is not part of the valuation contract).
+  const all = db
+    .selectFrom(source)
+    .innerJoin("account", "account.id", "holding_valued.account_id")
+    .selectAll("holding_valued")
+    .select("account.external_account_number");
 
   const rows = await (where === undefined ? all : all.where(where))
     .orderBy("account_name")
@@ -289,6 +307,8 @@ export async function netWorthAt(
 export type AccountTotal = {
   accountId: string;
   accountName: string;
+  /** `account.external_account_number` — {@link ValuedHolding}'s field, same terms. */
+  externalAccountNumber: string | null;
   institution: string;
   accountKind: AccountKind;
   ownerName: string;
@@ -311,6 +331,7 @@ export type ManualPoint = { date: IsoDate; amount: string };
 type AccountTotalRow = {
   account_id: string | null;
   account_name: string | null;
+  external_account_number: string | null;
   institution: string | null;
   account_kind: string | null;
   owner_name: string | null;
@@ -323,6 +344,8 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
   return {
     accountId: required(row.account_id, "account_id"),
     accountName: required(row.account_name, "account_name"),
+    // Not `required`: genuinely nullable — most accounts never record one.
+    externalAccountNumber: row.external_account_number,
     institution: required(row.institution, "institution"),
     accountKind: required(row.account_kind, "account_kind") as AccountKind,
     ownerName: required(row.owner_name, "owner_name"),
@@ -400,6 +423,7 @@ export async function accountTotals(
     .select([
       "account.id as account_id",
       "account.name as account_name",
+      "account.external_account_number as external_account_number",
       "account.institution as institution",
       "account.kind as account_kind",
       "person.name as owner_name",
@@ -422,6 +446,7 @@ export async function accountTotals(
     .groupBy([
       "account.id",
       "account.name",
+      "account.external_account_number",
       "account.institution",
       "account.kind",
       "person.name",
@@ -462,6 +487,7 @@ export async function accountTotal(
     .select([
       "account.id as account_id",
       "account.name as account_name",
+      "account.external_account_number as external_account_number",
       "account.institution as institution",
       "account.kind as account_kind",
       "person.name as owner_name",
@@ -478,6 +504,7 @@ export async function accountTotal(
     .groupBy([
       "account.id",
       "account.name",
+      "account.external_account_number",
       "account.institution",
       "account.kind",
       "person.name",

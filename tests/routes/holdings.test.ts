@@ -360,6 +360,58 @@ describe("reading the table as an owner", () => {
   );
 });
 
+describe("the number tail beside an account", () => {
+  it(
+    "rides in the account cell hidden from a reader, and rides the filter's option as plain text",
+    withDatabase(async (ctx) => {
+      const owner = await ctx.seedPerson({ name: "Alice" });
+      const usd = await ctx.usdInstrument();
+
+      // Two accounts, or the account filter is not offered at all; free-form
+      // number, as the column is — the tail is its last four *characters*.
+      const numbered = await ctx.seedAccount({
+        name: "Fidelity Taxable",
+        institution: "Fidelity",
+        owner,
+        externalAccountNumber: "X47-283910",
+      });
+      const bare = await ctx.seedAccount({
+        name: "Checking",
+        institution: "Chase",
+        owner,
+        kind: "bank",
+      });
+
+      await ctx.seedPositionSet({
+        account: numbered,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "3000.00000000" }],
+      });
+      await ctx.seedPositionSet({
+        account: bare,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "1000.00000000" }],
+      });
+
+      const data = await loader(args(get("/holdings")));
+      const markup = renderRoute(Holdings, "/holdings", data);
+
+      // The cell: the dots are decoration a screen reader skips, and the same
+      // fact is said as words instead.
+      expect(markup).toContain('<span class="number-tail" aria-hidden="true">····3910</span>');
+      expect(markup).toContain('<span class="visually-hidden">ending in 3910</span>');
+
+      // An <option> holds no markup, so the tail rides in the label itself.
+      expect(markup).toContain("Fidelity Taxable ····3910 · Fidelity");
+
+      // An account with no recorded number keeps its bare name — no dots
+      // standing in for a number nobody recorded, in cell or option alike.
+      expect(markup).toContain("Checking · Chase");
+      expect(markup).not.toContain("Checking ····");
+    }),
+  );
+});
+
 describe("the three empty states", () => {
   it(
     "says nothing has been uploaded only when nothing has",

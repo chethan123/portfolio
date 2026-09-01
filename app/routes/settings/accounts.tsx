@@ -1,6 +1,7 @@
 import { Form, Link } from "react-router";
 
 import { AccountFields } from "~/components/account-fields";
+import { AccountNumberTail } from "~/components/account-number-tail";
 import { createAccount, listAccounts } from "~/lib/accounts.server";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { listPeople } from "~/lib/people.server";
@@ -79,7 +80,10 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
                     className={account.isClosed ? "record-row--closed" : undefined}
                   >
                     <td>
-                      <Link to={`/settings/accounts/${account.id}`}>{account.name}</Link>
+                      <Link to={`/settings/accounts/${account.id}`}>
+                        {account.name}
+                        <AccountNumberTail number={account.externalAccountNumber} />
+                      </Link>
                     </td>
                     <td>{account.institution || "—"}</td>
                     <td>{account.kind}</td>

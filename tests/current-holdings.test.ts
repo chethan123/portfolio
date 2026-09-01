@@ -88,6 +88,7 @@ describe("the valuation rule", () => {
         {
           accountId: account.id,
           accountName: "Empower 401k — Roth",
+          externalAccountNumber: null,
           institution: "Empower",
           accountKind: "401k",
           taxTreatment: "tax_free",
@@ -111,6 +112,45 @@ describe("the valuation rule", () => {
           // view's coalesce is the whole definition of it.
           annualDividend: "0.0000",
         },
+      ]);
+    }),
+  );
+
+  it(
+    "carries the recorded account number for the tail, and null where none is recorded",
+    withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
+      const owner = await seedPerson({ name: "Alice" });
+      const usd = await usdInstrument();
+
+      // The number is not a view column — the reader joins `account` for it
+      // (ADR-0001) — so it needs its own assertion rather than inheriting the
+      // full-shape one above.
+      const numbered = await seedAccount({
+        name: "Fidelity Taxable",
+        owner,
+        externalAccountNumber: "X47-283910",
+      });
+      const bare = await seedAccount({ name: "Checking", owner, kind: "bank" });
+
+      await seedPositionSet({
+        account: numbered,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "3000.00000000" }],
+      });
+      await seedPositionSet({
+        account: bare,
+        asOf: "2026-01-31",
+        holdings: [{ instrument: usd, quantity: "12500.00000000" }],
+      });
+
+      expect(
+        (await currentHoldings(ALL_OWNERS, db)).map((holding) => [
+          holding.accountName,
+          holding.externalAccountNumber,
+        ]),
+      ).toEqual([
+        ["Checking", null],
+        ["Fidelity Taxable", "X47-283910"],
       ]);
     }),
   );
