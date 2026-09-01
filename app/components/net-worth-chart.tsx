@@ -198,8 +198,7 @@ export function gridRules(scale: Scale, masked: boolean): { y: number; label: st
   }));
   // Magnitude, not value: a household in net debt carries its biggest figure
   // at the bottom of the domain, and that is the rule the span has to
-  // separate. Read at one decimal, the coarsest, so the scale is settled
-  // before the precision that would otherwise depend on it.
+  // separate.
   const dp = tickPrecision(
     span,
     Math.max(compactScale(floor.toFixed(0)), compactScale((floor + span).toFixed(0))),

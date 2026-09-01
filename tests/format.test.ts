@@ -111,11 +111,16 @@ describe("formatCompact", () => {
     expect(formatCompact("0", 4)).toBe("0");
   });
 
-  it("reports the scale a value carries itself over the boundary onto", () => {
-    // The promotion inside the formatter, visible: 999,999 at one decimal
-    // rounds to 1000.0 thousands, which is a million.
-    expect(compactScale("999999", 1)).toBe(2);
-    expect(compactScale("999999", 3)).toBe(1);
+  it("reports the scale a value's size puts it at, and not the one rounding lifts it to", () => {
+    // 999,999 prints as `1.0M` at one decimal and `999.999K` at three, but its
+    // size is thousands either way. A chart axis sizes its precision off this,
+    // and reading the promotion instead lets one endpoint a rounding away from
+    // the next suffix buy the whole axis three decimals it cannot use.
+    expect(compactScale("999999")).toBe(1);
+    expect(formatCompact("999999", 1)).toBe("1.0M");
+    expect(formatCompact("999999", 3)).toBe("999.999K");
+    expect(compactScale("1000001")).toBe(2);
+    expect(compactScale("500")).toBe(0);
   });
 });
 

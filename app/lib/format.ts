@@ -119,26 +119,22 @@ function shift(parts: Parts, scale: number, dp: number): Parts {
 }
 
 /**
- * Which suffix {@link formatCompact} would reach for — `0` plain, `1` K, `2`
- * M, `3` B. Exported for one caller, which does not render with it: a chart
- * axis needs to know what a decimal place is *worth* before it can decide how
- * many to spend, and that is `10 ** (3 * scale - dp)` dollars. Reported at
- * `dp` because the promotion depends on it — `999,999` is `1.0M` at one
- * decimal and `999.999K` at three.
+ * The suffix a value's *size* puts it at — `0` plain, `1` K, `2` M, `3` B —
+ * before any rounding can carry it up to the next one. Exported for one
+ * caller, which does not render with it: a chart axis needs to know what a
+ * decimal place is worth, `10 ** (3 * scale - dp)` dollars, before it can
+ * decide how many to spend.
+ *
+ * Deliberately blind to the promotion below. That promotion is a fact about
+ * one rendered label, and reading it here would let a single endpoint sitting
+ * a rounding away from the next suffix — $999,968, which prints `1.0M` at one
+ * decimal — inflate the unit a thousandfold and buy the whole axis three
+ * decimals it has no use for.
  */
-export function compactScale(decimal: string, dp = 1): number {
-  const parts = parse(decimal);
-  const scale = Math.max(
-    0,
-    Math.min(Math.floor((parts.int.length - 1) / 3), COMPACT_SUFFIXES.length - 1),
-  );
+export function compactScale(decimal: string): number {
+  const digits = parse(decimal).int.length;
 
-  // Rounding can carry a value across the boundary it was scaled against:
-  // 999,999 renders at the thousands scale as "1000.0K" where "1.0M" is meant.
-  // The carry can only ever add one digit, so one promotion always settles it.
-  return shift(parts, scale, dp).int.length > 3 && scale < COMPACT_SUFFIXES.length - 1
-    ? scale + 1
-    : scale;
+  return Math.max(0, Math.min(Math.floor((digits - 1) / 3), COMPACT_SUFFIXES.length - 1));
 }
 
 /**
@@ -156,8 +152,16 @@ export function compactScale(decimal: string, dp = 1): number {
  * stays `"500"`.
  */
 export function formatCompact(decimal: string, dp = 1): string {
-  const scale = compactScale(decimal, dp);
-  const value = shift(parse(decimal), scale, dp);
+  const parts = parse(decimal);
+  const size = compactScale(decimal);
+
+  // Rounding can carry a value across the boundary it was scaled against:
+  // 999,999 renders at the thousands scale as "1000.0K" where "1.0M" is meant.
+  // The carry can only ever add one digit, so one promotion always settles it.
+  const carries =
+    shift(parts, size, dp).int.length > 3 && size < COMPACT_SUFFIXES.length - 1;
+  const scale = carries ? size + 1 : size;
+  const value = shift(parts, scale, dp);
   const fraction = value.frac ? `.${value.frac}` : "";
 
   return `${sign(value)}${group(value.int)}${fraction}${COMPACT_SUFFIXES[scale] ?? ""}`;

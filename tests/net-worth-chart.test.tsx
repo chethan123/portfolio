@@ -89,6 +89,16 @@ describe("a session on a large portfolio", () => {
       .toEqual(["5.9M", "5.9M", "5.9M"]);
   });
 
+  it("sizes its precision on the domain, not on an endpoint a rounding from the next suffix", () => {
+    // $999,968 prints `1.0M` at one decimal, and reading that promotion back
+    // as the axis's scale made a $5,336 span look like it needed three
+    // decimals at the millions scale. Every rule then rendered in thousands
+    // anyway, eight characters wide, where one decimal already separated them.
+    expect(
+      gridRules(buildScale(session("995000.00", "999600.00")), false).map((r) => r.label),
+    ).toEqual(["1.0M", "997.3K", "994.6K"]);
+  });
+
   it("stops short of a resolution finer than the dollar the rules are rounded to", () => {
     // The separation above is argued on exact values, and the rules reach the
     // formatter rounded to whole dollars, which costs each of them up to $1.
