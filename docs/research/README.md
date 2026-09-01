@@ -5,6 +5,29 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-01 — Database query performance
+
+One document: [Database query performance](./2026-09-01-database-query-performance.md) — a grounded
+audit of query shapes, indexes and caching options, with a measured delivery plan.
+
+### The three things worth knowing without reading further
+
+1. **Do not add Redis, generic caching, a materialized valuation view or speculative indexes.** The
+   deployment is one household and the important access paths already have matching indexes; there
+   is no production-shaped baseline proving another state or index is worth its cost.
+2. **Batching price-refresh writes is the clearest opportunity.** The refresh performs up to three
+   awaited statements per match inside one transaction; bulk writes can remove those round trips
+   without changing the financial answer or adding invalidation.
+3. **The 1-day series is the read to measure.** Its work grows with observed instants multiplied by
+   current holdings, but a query rewrite or covering index is conditional on an `EXPLAIN` and latency
+   baseline at the supported envelope.
+
+### Status
+
+Nothing here is approved work. The report sequences a benchmark harness first, one concrete write
+optimization second, and conditional read/query work after measurement. It records why every caching
+option is rejected today so the same infrastructure is not proposed again without new evidence.
+
 ## 2026-08-30 — Account picker conventions
 
 One document: [Account picker conventions](./2026-08-30-account-picker-conventions.md) — how
