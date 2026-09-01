@@ -35,15 +35,20 @@
  * it. A module that called `currentHoldings` for its caller would spend
  * that — the call would be here, not at the screen, and a reviewer would have
  * to already know this module's insides to see whose money a loader reads.
- * So the household-scoped reads stay in the loader — or, for the chart's
- * three, in the module the loader names its `reading` to (spec 0015) —
- * visible and explicit, and `ownerReading` cannot be skipped or reordered
- * ahead of them: `reading` does not exist until this resolves, which makes
- * the ordering a data dependency rather than a convention a loader could
- * quietly drop. One row of the ticket's table therefore stays open by
- * design: whether the *instance*
- * holds anything (`isFiltered(owners) ? netWorth(ALL_OWNERS) : null`) is a
- * money read, so it stays spelled in each loader.
+ * So the household-scoped reads stay in the loader, visible and explicit,
+ * and `ownerReading` cannot be skipped or reordered ahead of them: `reading`
+ * does not exist until this resolves, which makes the ordering a data
+ * dependency rather than a convention a loader could quietly drop. One row
+ * of the ticket's table therefore stays open by design: whether the
+ * *instance* holds anything (`isFiltered(owners) ? netWorth(ALL_OWNERS) :
+ * null`) is a money read, so it stays spelled in each loader.
+ *
+ * The chart's reads (spec 0015) are made by `chart-series.server.ts` rather
+ * than by the loader, and they do not spend that property: the loader
+ * constructs the scope naming `reading` and hands it over on the call line,
+ * so what a reviewer reads is still the screen saying whose money it wants.
+ * That is the difference from this module doing it — here `reading` is
+ * already in hand and would be used silently.
  *
  * **Why `reading`, not the raw filter.** `holding_valued_at` reads an account
  * closed *after* the date it is asked about, so a stale id in a hand-typed

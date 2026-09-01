@@ -37,7 +37,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0012](0012-installable-pwa.md) | The installable shell and the storage-free worker (ADR-0007) |
 | [0013](0013-owner-filter.md) | The household-wide owner filter (ADR-0008) |
 | [0014](0014-scheduled-dump.md) | The scheduled dump sidecar and the dump/backup split (ADR-0009) |
-| [0015](0015-chart-series-assembly.md) | One `chart-series.server.ts` read seam behind both chart surfaces, off the loaders |
+| [0015](0015-chart-series-assembly.md) | One series assembly behind both chart surfaces, and the coverage rule off the routes |
 
 ## The ticket directories
 

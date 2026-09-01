@@ -58,7 +58,7 @@ what keeps it pure and testable without a database; both routes already spell
 
 **`app/lib/chart-series.server.ts` is new**, and owns the reads. Two entry points:
 
-1. **`chartAnchors(scope)`** — the two reads a window is sized from: the surface's own earliest
+1. **`chartReach(scope)`** — how far this surface's chart can reach: the surface's own earliest
    recorded date, and the latest observed session. One `Promise.all`, so the surface rule (an
    account measures from its own first statement, never the household's) has one home.
 2. **`chartSeries(scope, resolved)`** — picks the reader the window implies, applies the
@@ -119,10 +119,10 @@ range, `customMax` still the `today` that was passed in. The payload contract do
 which is what keeps every existing route test honest about behaviour rather than about the refactor.
 
 **`chartWindow` takes `Surface`, not `ChartScope`.** It reads nothing, so it narrows nothing, and a
-required `reading` on it would be exactly the false signal ARCHITECTURE.md §4.2 warns a signature
-can give. The scope is for the module that reads.
+required `reading` on it would claim a narrowing that never happens — the signature saying more
+than the code does, which is worth less than saying nothing. The scope is for the module that reads.
 
-**`chartAnchors` returns the two dates a window is sized from.** `positionSet` is
+**`chartReach` returns how far a surface's chart can reach.** `positionSet` is
 `firstRecordedDate(scope.reading)` on the household surface and
 `accountFirstRecordedDate(scope.accountId)` on the account one; `session` is
 `latestObservedSession()`, which takes no filter and is the same value on both surfaces — an
@@ -130,19 +130,19 @@ account holding nothing the feed quotes still draws its flat line at the househo
 instants (`valuation.server.ts` says so where `readSessionSeries` takes its instants from the log
 as a whole).
 
-**The Overview reads `manualNetWorth()` in the same wave as the anchors, and this is why the module
+**The Overview reads `manualNetWorth()` in the same wave as the reach, and this is why the module
 has two entry points rather than one.** The Overview's `earliest.manual` is not an anchor: it is
 `manualNetWorth()`'s first point, emptied when the filter is on, computed in the loader. So the
-loader must have both `manual` and the anchors before it can size a window, and it must get them in
+loader must have both `manual` and the reach before it can size a window, and it must get them in
 one round trip:
 
 ```ts
-const [manual, anchors] = await Promise.all([manualNetWorth(), chartAnchors(scope)]);
+const [manual, reach] = await Promise.all([manualNetWorth(), chartReach(scope)]);
 ```
 
 That is a requirement on the loader, not an accident of it — written as two sequential `await`s it
 is two waves where the code today has one. The account loader has no manual series and simply
-awaits `chartAnchors(scope)`.
+awaits `chartReach(scope)`.
 
 **`chartSeries` returns a promise the caller drops into its own `Promise.all`.** Both loaders create
 their series promise before the `Promise.all` that gathers the rest of the page, so the read runs
