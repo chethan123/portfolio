@@ -1,16 +1,55 @@
 /**
  * Where prices come from, and the one shape the rest of the app knows them
- * in. DESIGN.md §6.1 fixes the interface at a single batched method:
+ * in. DESIGN.md §6.1 fixed the interface at a single batched method;
+ * ADR-0011 adds a second, and the reasoning that chose the first still holds:
  * `yahoo-finance2` is an unofficial client for an unpublished endpoint and
  * can break; what makes that tolerable is that swapping it is a day's work —
  * true only while nothing outside this module imports `yahoo-finance2`. The
  * interface is also the test seam: CI never reaches the network.
  *
+ *   getQuotes        every symbol at once — the batching is why Yahoo was chosen
+ *   getDailyCloses   one symbol, one range — history is per instrument, and the
+ *                    endpoint offers no batch for it
+ *
  * **Everything numeric leaves here as a decimal string.** The provider hands
  * back floats — exactly what §4.1 refuses near a money column — and the
  * conversion happens once, here, at the boundary.
+ *
+ * **The split convention the history method rests on, and what was checked.**
+ * Yahoo's chart endpoint restates `close` through later splits — `adjclose` is
+ * the split *and* dividend adjusted figure, and is not read. Statements record
+ * shares as held on the day, so a pre-split close taken as stored would value a
+ * position at a fraction of its worth, by exactly the split factor, with every
+ * figure looking plausible. {@link toProviderHistory} therefore multiplies each
+ * close back by the ratio of every split later than it (ADR-0011).
+ *
+ * That convention is stated nowhere in yahoo-finance2 4.0.2 — the installed
+ * package documents adjustment on exactly one field, `historical.d.ts:89-92`'s
+ * `adjClose` ("accounts for splits/dividends"), and says nothing about `close`.
+ * ADR-0011 requires it be observed once against a real split, and **that check
+ * has not been run**: the environment this landed in refuses every
+ * `*.finance.yahoo.com` host at CONNECT, so no figure here was read from Yahoo.
+ * `docs/developing.md` carries the recipe; it is one call — `NVDA` over a range
+ * spanning 2024-06-10 with `events: "split"` — and two things to confirm:
+ * `events.splits` carries a 10:1 dated that day, and the closes for the week
+ * before sit near $120 (adjusted) rather than near $1,200 (as struck). **If they
+ * are near $1,200 the arithmetic below is wrong** and the fallback ADR-0011
+ * fixes applies: answer `split-unresolved` for any response carrying a split
+ * inside the range, emit the rest as received, and say so here.
+ *
+ * The error class an unknown symbol throws was read out of the installed
+ * package rather than observed, for the same reason. `yahooFinanceFetch.js:131-133`
+ * builds the class name from Yahoo's own `code` with the spaces removed, looks
+ * it up among the five classes `lib/errors.js:78-84` registers, and falls back
+ * to a plain `Error` — of which only `"Bad Request"` ever resolves, so the
+ * `"Not Found"` a delisted or unknown symbol answers is a plain `Error`. That
+ * is why {@link isMissingHistory} matches the message and never the class.
  */
 import { z } from "zod";
+
+import { marketDateOf, type IsoDate } from "./market-hours.ts";
+import { divide, render, toUnits } from "./money.ts";
+import { matchKey } from "./prices.server.ts";
 
 /**
  * One instrument's price, as the application understands it. `price` is
@@ -54,13 +93,58 @@ export type ProviderQuote = {
   payload?: unknown;
 };
 
+/** The span a history call asks for. `until` is exclusive. */
+export type HistoryRange = { from: IsoDate; until: IsoDate };
+
 /**
- * The provider contract, exactly as DESIGN.md §6.1 states it: one method
- * taking every symbol at once — the batching is why Yahoo was chosen: one
- * HTTP call for a hundred symbols, not a hundred calls or a per-symbol bill.
+ * One finished trading day, ready for the spine. `close` is **already
+ * un-adjusted for splits** — the figure the shares were actually worth on the
+ * day, scale 4. The arithmetic happens here, in {@link toProviderHistory}, on
+ * `money.ts`'s units; the writer inserts what it is handed and multiplies
+ * nothing.
+ */
+export type ProviderDailyClose = { date: IsoDate; close: string };
+
+/**
+ * What one history call can say — a closed set in the shape {@link SymbolProbe}
+ * already uses, because the caller's answers are fixed: write the closes, or
+ * record one of three reasons there are none. A call that *fails* throws
+ * instead, and the caller records the text.
+ *
+ * The three refusals map one-to-one onto the ledger's outcome vocabulary
+ * (`prices.server.ts`'s `BACKFILL_OUTCOMES`). That is a deliberate duplication:
+ * one is the provider's answer in this module's own shape, the other is a
+ * `check` constraint's literals, and the mapping between them is one object in
+ * the batch rather than a vocabulary shared across the boundary.
+ */
+export type ProviderHistory =
+  | {
+      status: "ok";
+      /** At least one. A response with none is `no-history`, not an empty `ok`. */
+      closes: ProviderDailyClose[];
+    }
+  | { status: "no-history" }
+  | { status: "non-usd"; currency: string }
+  | { status: "split-unresolved" };
+
+/**
+ * The provider contract. Two methods, and the asymmetry is the endpoint's:
+ * `getQuotes` takes every symbol at once — the batching is why Yahoo was
+ * chosen, one HTTP call for a hundred symbols rather than a hundred calls or a
+ * per-symbol bill — while a range is a property of one instrument and there is
+ * no batch form for it, so history is one symbol per call.
+ *
+ * `getDailyCloses` is required, not optional: a provider that cannot answer
+ * history is not this application's provider, and an optional method would let
+ * the write path skip a batch with nothing saying so.
  */
 export type PriceProvider = {
   getQuotes(symbols: string[]): Promise<ProviderQuote[]>;
+  getDailyCloses(
+    symbol: string,
+    range: HistoryRange,
+    marketTimeZone: string,
+  ): Promise<ProviderHistory>;
 };
 
 /**
@@ -173,7 +257,21 @@ type YahooQuote = z.infer<typeof yahooQuote>;
  * price, versus discarding a real price over missing metadata.
  */
 function instantOf(value: YahooQuote["regularMarketTime"], fetchedAt: Date): Date {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  return parseInstant(value) ?? fetchedAt;
+}
+
+/**
+ * The three plausible shapes of a Yahoo timestamp, or null. The library hands
+ * back a `Date` and the raw endpoint sends epoch seconds; both have shipped.
+ *
+ * Separate from {@link instantOf} so the *parsing* is shared and the fallback
+ * is not. A quote with an unreadable timestamp falls back to fetch time,
+ * because the price is real and the day is at worst hours late. A daily bar
+ * cannot: its whole meaning is which day it is, so an unreadable one is dropped
+ * rather than filed under today.
+ */
+function parseInstant(value: unknown): Date | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
 
   // Epoch *seconds*, which is what the raw endpoint sends.
   if (typeof value === "number" && Number.isFinite(value)) return new Date(value * 1000);
@@ -183,7 +281,7 @@ function instantOf(value: YahooQuote["regularMarketTime"], fetchedAt: Date): Dat
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
 
-  return fetchedAt;
+  return null;
 }
 
 /**
@@ -259,6 +357,168 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
   };
 }
 
+/** The scale every close is stored and computed at — `price_daily.close`. */
+const CLOSE_SCALE = 4;
+
+/**
+ * The subset of Yahoo's chart payload this application reads, validated for
+ * *shape*: `quotes` is an array of things, `events.splits` is an array of
+ * things, `meta` is an object. The leaves stay `unknown` on purpose — the two
+ * narrowings that matter, {@link decimal} for a figure and {@link parseInstant}
+ * for an instant, already refuse anything they cannot use, and each refusal has
+ * a defined answer here (a bar is skipped, a split makes the whole response
+ * `split-unresolved`). Typing the leaves in Zod would collapse all of those
+ * into one whole-payload rejection.
+ *
+ * The library validates the response against its own schema first and throws
+ * `FailedYahooValidationError` if it fails, so a real shape change arrives as a
+ * throw and is ledgered with its text. This is the second line: what *we*
+ * require, in a shape the library's own types are not a promise about.
+ */
+const yahooChart = z.object({
+  // `.optional()` is load-bearing on every `unknown` below: Zod 4 requires the
+  // *key* to be present even where the value may be anything (Zod 3 treated
+  // `unknown` as implicitly optional), and Yahoo omits fields per instrument
+  // type. Without it a payload with no `currency` refuses whole.
+  meta: z.object({ currency: z.unknown().optional() }).nullish(),
+  events: z.object({ splits: z.array(z.object({}).passthrough()).nullish() }).nullish(),
+  quotes: z.array(z.object({}).passthrough()),
+});
+
+/** One split, reduced to what the arithmetic needs. */
+type Split = { date: IsoDate; numerator: bigint; denominator: bigint };
+
+/**
+ * A split's side as an exact integer, or null. `BigInt` because the products
+ * below are multiplied across every split in the range and must not round;
+ * positive because a zero or negative side is not a ratio, and dividing by one
+ * would be the silent wrong answer the refusal exists to avoid.
+ */
+function positiveInteger(value: unknown): bigint | null {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return null;
+  return BigInt(value);
+}
+
+/**
+ * One close as it stood on its own day, undoing every split that came after it.
+ *
+ * This is money arithmetic, so it happens on `money.ts`'s units and never as a
+ * float (ARCHITECTURE.md §5.6): the scale-4 string becomes `BigInt` counts of
+ * its last place, is multiplied by the cumulative numerator, divided by the
+ * cumulative denominator half away from zero, and reassembled — one rounding,
+ * at the end.
+ *
+ * A reverse split needs no case of its own: it is the same product with the
+ * ratio the other way round.
+ */
+function unadjusted(close: string, date: IsoDate, splits: readonly Split[]): string {
+  let numerator = 1n;
+  let denominator = 1n;
+
+  for (const split of splits) {
+    // Strictly later: a bar on the split's own day already trades at the new
+    // price, so it is the first row the split does not touch.
+    if (split.date > date) {
+      numerator *= split.numerator;
+      denominator *= split.denominator;
+    }
+  }
+
+  if (numerator === 1n && denominator === 1n) return close;
+
+  return render(divide(toUnits(close, CLOSE_SCALE) * numerator, denominator, 0), CLOSE_SCALE);
+}
+
+/**
+ * Yahoo's chart payload as a {@link ProviderHistory}: one close per trading day
+ * the response carried, each filed under the day inside its own timestamp and
+ * each un-adjusted for the splits after it.
+ *
+ * Exported for the tests, which need to assert the arithmetic and the date rule
+ * against a hand-written payload — hand-written rather than captured, because
+ * the point is the arithmetic and a captured payload would make the test depend
+ * on what Yahoo said one afternoon.
+ *
+ * Never throws: every refusal is one of the closed statuses, so the caller's
+ * ledger has something to record. A payload whose shape is not the one above
+ * answers `no-history`, which is also what a response of nothing but nulls
+ * answers — from the caller's side those are the same fact, that there are no
+ * closes to write and the instrument is worth one more try tomorrow.
+ */
+export function toProviderHistory(
+  raw: unknown,
+  range: HistoryRange,
+  marketTimeZone: string,
+): ProviderHistory {
+  const parsed = yahooChart.safeParse(raw);
+  if (!parsed.success) return { status: "no-history" };
+
+  const chart = parsed.data;
+
+  // Before a figure is read, as the quote path checks it before refusing a
+  // price. Absent is not a refusal: Yahoo omits it per instrument type, and the
+  // quote path proceeds on the same reasoning.
+  const currency = chart.meta?.currency;
+  if (typeof currency === "string" && currency.toUpperCase() !== USD) {
+    return { status: "non-usd", currency: currency.toUpperCase() };
+  }
+
+  // All or nothing: some rows right and some wrong is the outcome worth
+  // refusing, because every figure would look plausible.
+  const splits: Split[] = [];
+  for (const split of chart.events?.splits ?? []) {
+    const instant = parseInstant(split.date);
+    const numerator = positiveInteger(split.numerator);
+    const denominator = positiveInteger(split.denominator);
+
+    if (instant === null || numerator === null || denominator === null) {
+      return { status: "split-unresolved" };
+    }
+
+    splits.push({ date: marketDateOf(instant, marketTimeZone), numerator, denominator });
+  }
+
+  // Keyed by trading day: the library notes Yahoo inserts extra bars at event
+  // times, and two bars under one day are one day — the later instant wins,
+  // being the nearer thing to a close.
+  const byDate = new Map<IsoDate, { instant: Date; close: string }>();
+
+  for (const bar of chart.quotes) {
+    const instant = parseInstant(bar.date);
+    if (instant === null) continue;
+
+    const date = marketDateOf(instant, marketTimeZone);
+
+    // `until` is exclusive, and the cut is on the market date rather than on
+    // the `period2` the library defaults: today's row is the poller's
+    // provisional one, and the library's bound is a cost optimisation where
+    // this is the rule.
+    if (date >= range.until) continue;
+
+    // A non-positive close is not a close, for the reason `toProviderQuote`
+    // refuses one: zero is what the endpoint returns for a symbol it half
+    // knows, and storing it would value the holding at nothing.
+    const quoted = typeof bar.close === "number" && bar.close > 0 ? bar.close : undefined;
+    const close = decimal(quoted, CLOSE_SCALE);
+    if (close === null) continue;
+
+    const held = byDate.get(date);
+    if (held !== undefined && held.instant.getTime() > instant.getTime()) continue;
+
+    byDate.set(date, { instant, close });
+  }
+
+  const closes: ProviderDailyClose[] = [...byDate.entries()]
+    .map(([date, bar]) => ({ date, close: unadjusted(bar.close, date, splits) }))
+    // Ascending, so the insert reads in the order the days happened rather than
+    // in whatever order the response listed them.
+    .sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0));
+
+  if (closes.length === 0) return { status: "no-history" };
+
+  return { status: "ok", closes };
+}
+
 /**
  * The one `yahoo-finance2` instance this process uses. A fresh instance per
  * call redoes the library's cookie/crumb handshake — `probeSymbol`'s
@@ -267,7 +527,25 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
  * the survey banner logged on every tick. Memoized as a promise so two calls
  * racing before the import resolves still share one client.
  */
-let client: Promise<{ quote(symbols: string[]): Promise<unknown> }> | undefined;
+let client: Promise<YahooClient> | undefined;
+
+/** The options one history call sends. Named so a fake can state what it saw. */
+export type ChartRequest = {
+  /** The range's start. A `YYYY-MM-DD` string; the library parses it to UTC midnight. */
+  period1: IsoDate;
+  interval: "1d";
+  /**
+   * `"split"` alone. The library's default is `"div|split|earn"`, and dividends
+   * and earnings are neither read nor wanted on this path.
+   */
+  events: "split";
+};
+
+/** What this module uses the library for, and nothing else. */
+type QuoteClient = { quote(symbols: string[]): Promise<unknown> };
+type YahooClient = QuoteClient & {
+  chart(symbol: string, options: ChartRequest): Promise<unknown>;
+};
 
 /**
  * The shared `yahoo-finance2` client. **The default export is a class, not a
@@ -280,11 +558,10 @@ let client: Promise<{ quote(symbols: string[]): Promise<unknown> }> | undefined;
  * `PriceProvider` type. Typed as "an object with a callable `quote`" because
  * the library's own overloads do not resolve on an array query.
  */
-export async function yahooClient(): Promise<{ quote(symbols: string[]): Promise<unknown> }> {
+export async function yahooClient(): Promise<YahooClient> {
   if (client === undefined) {
     client = import("yahoo-finance2").then(
-      ({ default: YahooFinance }) =>
-        new YahooFinance() as unknown as { quote(symbols: string[]): Promise<unknown> },
+      ({ default: YahooFinance }) => new YahooFinance() as unknown as YahooClient,
     );
   }
   return client;
@@ -331,7 +608,8 @@ export type ProbeSymbol = (symbol: string) => Promise<SymbolProbe>;
  */
 export async function probeSymbol(
   symbol: string,
-  client: typeof yahooClient = yahooClient,
+  // The quote half only, so a stub stays one async arrow returning one method.
+  client: () => Promise<QuoteClient> = yahooClient,
 ): Promise<SymbolProbe> {
   try {
     const provider = await client();
@@ -368,18 +646,18 @@ export async function probeSymbol(
  * `ProviderQuote` has nowhere to carry it, on purpose (§6.1 stores no
  * currency column).
  */
-export function yahooPriceProvider(): PriceProvider {
+export function yahooPriceProvider(client: typeof yahooClient = yahooClient): PriceProvider {
   return {
     async getQuotes(symbols: string[]): Promise<ProviderQuote[]> {
       if (symbols.length === 0) return [];
 
-      const client = await yahooClient();
+      const provider = await client();
       const fetchedAt = new Date();
 
       // `unknown[]` because `yahooClient` is typed loosely. Nothing is lost:
       // `yahooQuote` validates every field read — the correct posture towards
       // an unofficial client for an unpublished endpoint (§6.1).
-      const raw = (await client.quote(symbols)) as unknown[];
+      const raw = (await provider.quote(symbols)) as unknown[];
 
       const quotes: ProviderQuote[] = [];
       for (const entry of raw) {
@@ -397,5 +675,58 @@ export function yahooPriceProvider(): PriceProvider {
 
       return quotes;
     },
+
+    async getDailyCloses(
+      symbol: string,
+      range: HistoryRange,
+      marketTimeZone: string,
+    ): Promise<ProviderHistory> {
+      try {
+        const provider = await client();
+
+        // One symbol per call. `matchKey` because that is the form the quote
+        // path sends and the endpoint answers in; the stored symbol is
+        // untouched, and nothing here matches one back — one call is one
+        // instrument.
+        //
+        // `period2` is deliberately absent: the library defaults it to the
+        // instant of the call, and the range's real end is enforced on each
+        // bar's market date in `toProviderHistory`.
+        const raw = await provider.chart(matchKey(symbol), {
+          period1: range.from,
+          interval: "1d",
+          events: "split",
+        });
+
+        return toProviderHistory(raw, range, marketTimeZone);
+      } catch (error) {
+        if (isMissingHistory(error)) return { status: "no-history" };
+
+        // Everything else propagates: the caller's ledger wants the text.
+        throw error;
+      }
+    },
   };
 }
+
+/**
+ * The two things Yahoo says when it has no history to give: an unknown or
+ * delisted ticker ("No data found, symbol may be delisted") and a `period1`
+ * before the listing ("Data doesn't exist for startDate = …").
+ *
+ * Matched on the message of *any* thrown error, never on its class — the class
+ * is chosen from Yahoo's own error `code` with the spaces removed, and only
+ * `"Bad Request"` resolves to one the library defines, so the `"Not Found"`
+ * these answer arrives as a plain `Error` (module header). The library's own
+ * documented example matches the same way (`chart.d.ts:112`).
+ *
+ * A stem that stops matching degrades gracefully rather than lying: the ledger
+ * records `provider_failed` with the text, and the instrument is retried daily.
+ */
+function isMissingHistory(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return NO_HISTORY_STEMS.some((stem) => message.includes(stem));
+}
+
+/** Stems, not sentences: Yahoo's text carries the symbol and the dates. */
+const NO_HISTORY_STEMS = ["No data found", "Data doesn't exist"];
