@@ -18,6 +18,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   BACKFILL_OUTCOMES,
   backfillCloses,
+  backfillGaps,
   refreshPrices,
   selectBackfillCandidates,
   type BackfillOutcome,
@@ -1168,5 +1169,202 @@ describe("a refresh, which is quotes and then one batch", () => {
       // next time's candidate.
       expect(await db.selectFrom("price_backfill").selectAll().execute()).toEqual([]);
     }),
+  );
+});
+
+describe("the whole list of gaps, for the person reading Settings", () => {
+  it(
+    "lists an instrument the batch will never try, and says it will not",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      const account = await seedAccount();
+      const trust = await seedInstrument({
+        symbol: "CIT2045",
+        name: "Target 2045 Trust II",
+        priceSource: "manual",
+      });
+      const unnamed = await seedInstrument({ symbol: null, name: "Unknown", priceSource: "feed" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [
+          { instrument: trust, quantity: "1.00000000" },
+          { instrument: unnamed, quantity: "1.00000000" },
+        ],
+      });
+
+      const gaps = await backfillGaps(db);
+
+      // Their gaps are just as real; the screen is where a person learns that
+      // Settings → Instruments is the only answer for them.
+      expect(gaps.map((gap) => ({ id: gap.id, willTry: gap.willTry }))).toEqual([
+        { id: trust.id, willTry: false },
+        { id: unnamed.id, willTry: false },
+      ]);
+    }),
+  );
+
+  it(
+    "never lists the fixed instrument, whose close covers everything",
+    withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
+      const account = await seedAccount();
+      const usd = await usdInstrument();
+
+      await seedPositionSet({
+        account,
+        // Long before the seeded 1970 close would be a gap; it is not, because
+        // `fixed` is excluded outright.
+        asOf: "2024-03-29",
+        holdings: [{ instrument: usd, quantity: "1000.00000000" }],
+      });
+
+      expect(await backfillGaps(db)).toEqual([]);
+    }),
+  );
+
+  it(
+    "reports the latest attempt, not the first",
+    withDatabase(
+      async ({ db, seedAccount, seedInstrument, seedPositionSet, seedBackfillAttempt }) => {
+        const account = await seedAccount();
+        const instrument = await seedInstrument({ symbol: "GONE", priceSource: "feed" });
+        await seedPositionSet({
+          account,
+          asOf: "2024-03-29",
+          holdings: [{ instrument, quantity: "1.00000000" }],
+        });
+
+        await seedBackfillAttempt({
+          instrument,
+          startedAt: new Date("2026-06-01T12:00:00Z"),
+          outcome: "provider_failed",
+          error: "429 Too Many Requests",
+        });
+        await seedBackfillAttempt({
+          instrument,
+          startedAt: new Date("2026-06-03T12:00:00Z"),
+          outcome: "no_history",
+        });
+
+        const [gap] = await backfillGaps(db);
+
+        expect(gap?.lastAttempt).toEqual({
+          at: new Date("2026-06-03T12:00:00Z"),
+          outcome: "no_history",
+          error: null,
+        });
+      },
+    ),
+  );
+
+  it(
+    "reports no attempt at all where the batch has never tried",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      const account = await seedAccount();
+      const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument, quantity: "1.00000000" }],
+      });
+
+      const [gap] = await backfillGaps(db);
+
+      expect(gap?.lastAttempt).toBeNull();
+      expect(gap?.willTry).toBe(true);
+    }),
+  );
+
+  it(
+    "says where the spine does start, and where there is none at all",
+    withDatabase(
+      async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose }) => {
+        const account = await seedAccount();
+        const late = await seedInstrument({ symbol: "LATE", priceSource: "feed" });
+        const never = await seedInstrument({ symbol: "NEVER", priceSource: "feed" });
+
+        await seedPositionSet({
+          account,
+          asOf: "2024-03-29",
+          holdings: [
+            { instrument: late, quantity: "1.00000000" },
+            { instrument: never, quantity: "1.00000000" },
+          ],
+        });
+        await seedDailyClose({ instrument: late, date: "2025-04-01", close: "250.0000" });
+
+        const gaps = await backfillGaps(db);
+
+        expect(
+          gaps.map((gap) => ({ id: gap.id, firstHeld: gap.firstHeld, firstClose: gap.firstClose })),
+        ).toEqual([
+          { id: late.id, firstHeld: "2024-03-29", firstClose: "2025-04-01" },
+          { id: never.id, firstHeld: "2024-03-29", firstClose: null },
+        ]);
+      },
+    ),
+  );
+
+  it(
+    "is ordered as the batch works, so the top of it is what the next refresh takes",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      const account = await seedAccount();
+      const shallow = await seedInstrument({ symbol: "AAPL", priceSource: "feed" });
+      const deep = await seedInstrument({ symbol: "ZM", priceSource: "feed" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2025-01-31",
+        holdings: [{ instrument: shallow, quantity: "1.00000000" }],
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2019-06-28",
+        holdings: [{ instrument: deep, quantity: "1.00000000" }],
+      });
+
+      expect((await backfillGaps(db)).map((gap) => gap.symbol)).toEqual(["ZM", "AAPL"]);
+    }),
+  );
+
+  it(
+    "shares its gap predicate with the batch, so a person and a tick see one answer",
+    withDatabase(
+      async ({
+        db,
+        seedAccount,
+        seedInstrument,
+        seedPositionSet,
+        seedDailyClose,
+        seedBackfillAttempt,
+      }) => {
+        const account = await seedAccount();
+        const covered = await seedInstrument({ symbol: "COVERED", priceSource: "feed" });
+        const open = await seedInstrument({ symbol: "OPEN", priceSource: "feed" });
+        const attempted = await seedInstrument({ symbol: "ATTEMPTED", priceSource: "feed" });
+
+        await seedPositionSet({
+          account,
+          asOf: "2024-03-29",
+          holdings: [
+            { instrument: covered, quantity: "1.00000000" },
+            { instrument: open, quantity: "1.00000000" },
+            { instrument: attempted, quantity: "1.00000000" },
+          ],
+        });
+        await seedDailyClose({ instrument: covered, date: "2024-03-28", close: "10.0000" });
+        await seedBackfillAttempt({
+          instrument: attempted,
+          startedAt: new Date(),
+          outcome: "no_history",
+        });
+
+        // The screen is the whole list; the batch is the next few. The one they
+        // must agree on is which instruments have a gap at all — the retry skip
+        // and the bound are the batch's alone.
+        expect((await backfillGaps(db)).map((gap) => gap.symbol)).toEqual(["OPEN", "ATTEMPTED"]);
+        expect((await selectBackfillCandidates(db)).map((row) => row.symbol)).toEqual(["OPEN"]);
+      },
+    ),
   );
 });

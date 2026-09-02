@@ -224,6 +224,33 @@ export const BACKFILL_OUTCOMES = {
 
 export type BackfillOutcome = (typeof BACKFILL_OUTCOMES)[keyof typeof BACKFILL_OUTCOMES];
 
+/**
+ * **The coverage gap itself**, stated once for the two reads that ask it: the
+ * batch's {@link selectBackfillCandidates} and the screen's
+ * {@link backfillGaps}. A household seeing one list and the batch working from
+ * another is the drift worth spending a shared fragment on.
+ *
+ * Stated the way `holding_valued_at` asks the question — is there a close at or
+ * before the day this was first held? `docs/importing-history.md`'s recipe says
+ * the same thing as `min(price_daily.date) is null or > min(as_of_date)` over a
+ * left join, which is equivalent and ruinous here: that join pairs every
+ * holding row with every close of its instrument before the aggregate, which at
+ * a hundred instruments over seven years is ~35M inner rows and about 1.4s
+ * against ~4ms for this probe — and it grows without bound as the spine this
+ * slice exists to fill grows. ARCHITECTURE §10 records the same shape as a bug
+ * this repository has fixed once already. The recipe runs by hand; this runs on
+ * every tick.
+ *
+ * It reads `instrument` and `position_set` from whichever query it is dropped
+ * into, so both must join those under those names.
+ */
+const NO_CLOSE_BY_FIRST_HELD = sql<boolean>`not exists (
+  select 1
+  from price_daily
+  where price_daily.instrument_id = instrument.id
+    and price_daily.date <= min(position_set.as_of_date)
+)`;
+
 /** One instrument a batch should try, and where its range starts. */
 export type BackfillCandidate = {
   id: string;
@@ -284,24 +311,7 @@ export async function selectBackfillCandidates(
       ),
     )
     .groupBy(["instrument.id", "instrument.symbol"])
-    // The gap, stated the way `holding_valued_at` asks it: is there a close at
-    // or before the day this was first held? `docs/importing-history.md`'s
-    // recipe says the same thing as `min(price_daily.date) is null or >
-    // min(as_of_date)` over a left join — equivalent, and ruinous here. That
-    // join pairs every holding row with every close of its instrument before
-    // the aggregate: at a hundred instruments over seven years it is ~30M inner
-    // rows and about 1.8s, against ~5ms for the probe below, and it grows
-    // without bound as the spine this slice exists to fill grows. ARCHITECTURE
-    // §10 records the same shape as a bug this repository has fixed once
-    // already. The recipe runs by hand; this runs on every tick.
-    .having(
-      sql<boolean>`not exists (
-        select 1
-        from price_daily
-        where price_daily.instrument_id = instrument.id
-          and price_daily.date <= min(position_set.as_of_date)
-      )`,
-    )
+    .having(NO_CLOSE_BY_FIRST_HELD)
     .select([
       "instrument.id",
       "instrument.symbol",
@@ -325,6 +335,122 @@ export async function selectBackfillCandidates(
     // see through a `where` — `refreshQuotes`'s narrowing, same reason.
     symbol: row.symbol as string,
     rangeFrom: row.range_from,
+  }));
+}
+
+/** One instrument whose spine does not reach as far back as it is held. */
+export type BackfillGap = {
+  id: string;
+  /** Null is itself a reason: a feed instrument nobody has given a ticker. */
+  symbol: string | null;
+  name: string;
+  /** `YYYY-MM-DD`, the earliest position set holding it. */
+  firstHeld: IsoDate;
+  /** `YYYY-MM-DD`, or null where there is no spine at all yet. */
+  firstClose: IsoDate | null;
+  /** The most recent attempt, or null where the batch has never tried. */
+  lastAttempt: { at: Date; outcome: string; error: string | null } | null;
+  /**
+   * `feed` or `manual`. Carried because {@link willTry} says *that* the batch
+   * will never try a row and this says *why* — a hand-priced trust and a feed
+   * instrument nobody has given a ticker are two different things to do about.
+   */
+  priceSource: string;
+  /**
+   * Will a batch ever try it? `feed` with a symbol. False for a hand-priced
+   * trust and for a feed instrument with no ticker — whose gaps are just as
+   * real, which is why they are on the list at all.
+   */
+  willTry: boolean;
+};
+
+/**
+ * Every instrument still carrying a coverage gap, for Settings → Prices.
+ *
+ * The same predicate as {@link selectBackfillCandidates} — shared, not
+ * restated — over a wider set: every instrument whose `price_source` is not
+ * `fixed`, which is the recipe's own predicate
+ * (`docs/importing-history.md:235`). A `manual` instrument and a symbol-less
+ * `feed` one have a gap just as real, and this screen is where a person learns
+ * the batch will never fill it; the Settings → Instruments form is the answer
+ * for those. `fixed` is the seeded USD row, whose 1970 close covers everything.
+ *
+ * **This answers "why is this date unpriced", not "what will the batch try
+ * next".** So no retry skip and no bound: it is the whole list. Ordered as the
+ * batch works, so the top of it is what the next refresh picks up.
+ *
+ * The outcome crosses as the string the ledger stores. The words a person reads
+ * for it are the component's business — rendering, not a rule.
+ */
+export async function backfillGaps(db: Kysely<Database> = getDb()): Promise<BackfillGap[]> {
+  const rows = await db
+    .selectFrom("instrument")
+    .innerJoin("holding", "holding.instrument_id", "instrument.id")
+    .innerJoin("position_set", "position_set.id", "holding.position_set_id")
+    // One probe of the `(instrument_id, started_at)` index per instrument for
+    // the latest attempt, rather than three correlated subqueries for its three
+    // columns.
+    .leftJoinLateral(
+      (eb) =>
+        eb
+          .selectFrom("price_backfill")
+          .select(["price_backfill.started_at", "price_backfill.outcome", "price_backfill.error"])
+          .whereRef("price_backfill.instrument_id", "=", "instrument.id")
+          .orderBy("price_backfill.started_at", "desc")
+          .limit(1)
+          .as("attempt"),
+      (join) => join.onTrue(),
+    )
+    .where("instrument.price_source", "!=", "fixed")
+    .groupBy([
+      "instrument.id",
+      "instrument.symbol",
+      "instrument.name",
+      "instrument.price_source",
+      "attempt.started_at",
+      "attempt.outcome",
+      "attempt.error",
+    ])
+    .having(NO_CLOSE_BY_FIRST_HELD)
+    .select([
+      "instrument.id",
+      "instrument.symbol",
+      "instrument.name",
+      sql<IsoDate>`min(position_set.as_of_date)`.as("first_held"),
+      // Where the spine does start, which is the other half of what a person
+      // needs to read a distorted stretch of the chart.
+      sql<
+        IsoDate | null
+      >`(select min(date) from price_daily where price_daily.instrument_id = instrument.id)`.as(
+        "first_close",
+      ),
+      "instrument.price_source",
+      "attempt.started_at",
+      "attempt.outcome",
+      "attempt.error",
+      sql<boolean>`instrument.price_source = 'feed' and instrument.symbol is not null`.as(
+        "will_try",
+      ),
+    ])
+    .orderBy(sql`min(position_set.as_of_date)`)
+    .orderBy("instrument.id")
+    .execute();
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    symbol: row.symbol,
+    name: row.name,
+    firstHeld: row.first_held,
+    firstClose: row.first_close,
+    // Both columns come from one row of the lateral, so either is the test for
+    // "there was an attempt"; TypeScript cannot see that, and reading the one
+    // the component needs is the honest narrowing.
+    lastAttempt:
+      row.started_at === null || row.outcome === null
+        ? null
+        : { at: row.started_at, outcome: row.outcome, error: row.error },
+    priceSource: row.price_source,
+    willTry: row.will_try,
   }));
 }
 
