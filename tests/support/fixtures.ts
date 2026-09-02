@@ -11,8 +11,8 @@
 import type { Kysely } from "kysely";
 
 import type { Database } from "~/lib/db.server";
-import type { AccountKind, AssetClass, TaxTreatment } from "~/lib/valuation.server";
 import type { BackfillOutcome } from "~/lib/prices.server";
+import type { AccountKind, AssetClass, TaxTreatment } from "~/lib/valuation.server";
 
 export type SeededPerson = { id: string; name: string };
 export type SeededAccount = { id: string; name: string; ownerId: string };

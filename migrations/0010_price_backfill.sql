@@ -74,7 +74,9 @@ create table price_backfill (
   constraint price_backfill_filled_wrote
   check ((outcome = 'filled') = (written > 0)),
 
-  -- The text is there exactly when there is something to read.
+  -- A failure carries text and nothing else does. It does not police the text
+  -- itself: an empty string passes, because a provider that failed with nothing
+  -- to say is a fact about the provider, not a row to refuse.
   constraint price_backfill_error_reported
   check ((outcome = 'provider_failed') = (error is not null)),
 

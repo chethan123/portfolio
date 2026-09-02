@@ -15,7 +15,11 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 
-import { selectBackfillCandidates, type BackfillOutcome } from "~/lib/prices.server";
+import {
+  BACKFILL_OUTCOMES,
+  selectBackfillCandidates,
+  type BackfillOutcome,
+} from "~/lib/prices.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
@@ -211,21 +215,28 @@ describe("the order a batch works in", () => {
     "breaks a tie on id, so two ticks agree on what next means",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
       const account = await seedAccount();
-      const first = await seedInstrument({ symbol: "ZM", priceSource: "feed" });
-      const second = await seedInstrument({ symbol: "AAPL", priceSource: "feed" });
+
+      // Enough instruments sharing one date that the grouping's own output
+      // order is a hash order rather than the scan order: with two, Postgres
+      // happens to emit them by id and the tie-break asserts nothing.
+      const instruments = [];
+      for (let index = 0; index < 12; index += 1) {
+        instruments.push(await seedInstrument({ symbol: `TIE${index}`, priceSource: "feed" }));
+      }
 
       await seedPositionSet({
         account,
         asOf: "2024-03-29",
-        holdings: [
-          { instrument: first, quantity: "1.00000000" },
-          { instrument: second, quantity: "1.00000000" },
-        ],
+        holdings: instruments.map((instrument) => ({
+          instrument,
+          quantity: "1.00000000",
+        })),
       });
 
       const candidates = await selectBackfillCandidates(db);
+      const ids = instruments.map((instrument) => instrument.id);
 
-      expect(candidates.map((candidate) => candidate.id)).toEqual([first.id, second.id]);
+      expect(candidates.map((candidate) => candidate.id)).toEqual(ids.slice(0, candidates.length));
     }),
   );
 
@@ -264,23 +275,72 @@ describe("the order a batch works in", () => {
 
 describe("the daily retry clock", () => {
   it(
-    "drops an instrument attempted within the last day",
+    "drops the instrument that was attempted and keeps the one that was not",
     withDatabase(
       async ({ db, seedAccount, seedInstrument, seedPositionSet, seedBackfillAttempt }) => {
         const account = await seedAccount();
-        const instrument = await seedInstrument({ symbol: "DELISTED", priceSource: "feed" });
+        const attempted = await seedInstrument({ symbol: "DELISTED", priceSource: "feed" });
+        // The second instrument is the assertion: an attempt is a fact about
+        // one instrument, and a skip that did not correlate would suppress the
+        // whole batch on one delisted ticker.
+        const untouched = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
         await seedPositionSet({
           account,
           asOf: "2024-03-29",
-          holdings: [{ instrument, quantity: "10.00000000" }],
+          holdings: [
+            { instrument: attempted, quantity: "10.00000000" },
+            { instrument: untouched, quantity: "10.00000000" },
+          ],
         });
         await seedBackfillAttempt({
-          instrument,
+          instrument: attempted,
           startedAt: new Date(),
           outcome: "no_history",
         });
 
-        expect(await selectBackfillCandidates(db)).toEqual([]);
+        const candidates = await selectBackfillCandidates(db);
+
+        expect(candidates.map((candidate) => candidate.id)).toEqual([untouched.id]);
+      },
+    ),
+  );
+
+  it(
+    "measures the interval in days, so an unfillable gap costs one request a day",
+    withDatabase(
+      async ({ db, seedAccount, seedInstrument, seedPositionSet, seedBackfillAttempt }) => {
+        const account = await seedAccount();
+        const justInside = await seedInstrument({ symbol: "INSIDE", priceSource: "feed" });
+        const justOutside = await seedInstrument({ symbol: "OUTSIDE", priceSource: "feed" });
+
+        await seedPositionSet({
+          account,
+          asOf: "2024-03-29",
+          holdings: [
+            { instrument: justInside, quantity: "1.00000000" },
+            { instrument: justOutside, quantity: "1.00000000" },
+          ],
+        });
+
+        // An hour either side of the day, which is what pins the interval to a
+        // day rather than to any value that merely separates "now" from "long
+        // ago" — ADR-0011 promises one request a day for a gap that cannot be
+        // filled, and nothing else here asserts the number.
+        await seedBackfillAttempt({
+          instrument: justInside,
+          startedAt: new Date(Date.now() - 23 * 60 * 60 * 1000),
+          outcome: "no_history",
+        });
+        await seedBackfillAttempt({
+          instrument: justOutside,
+          startedAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+          outcome: "no_history",
+        });
+
+        const candidates = await selectBackfillCandidates(db);
+
+        expect(candidates.map((candidate) => candidate.id)).toEqual([justOutside.id]);
       },
     ),
   );
@@ -316,32 +376,24 @@ describe("what the ledger will and will not record", () => {
     withDatabase(async ({ db, seedInstrument, seedBackfillAttempt }) => {
       const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      // Written out rather than iterated over the exported object, so that a
-      // literal added to one and not the other fails here.
-      await seedBackfillAttempt({
-        instrument,
-        startedAt: LONG_AGO,
-        outcome: "filled",
-        written: 3,
-      });
-      await seedBackfillAttempt({
-        instrument,
-        startedAt: LONG_AGO,
-        outcome: "nothing_to_write",
-      });
-      await seedBackfillAttempt({ instrument, startedAt: LONG_AGO, outcome: "no_history" });
-      await seedBackfillAttempt({ instrument, startedAt: LONG_AGO, outcome: "non_usd" });
-      await seedBackfillAttempt({
-        instrument,
-        startedAt: LONG_AGO,
-        outcome: "split_unresolved",
-      });
-      await seedBackfillAttempt({
-        instrument,
-        startedAt: LONG_AGO,
-        outcome: "provider_failed",
-        error: "429 Too Many Requests",
-      });
+      // Iterated over the exported object rather than written out, which is
+      // what makes this catch drift in the direction that actually happens: a
+      // literal added to `BACKFILL_OUTCOMES` and not to the migration's
+      // `check`. The two are kept in step by hand, and this is what notices.
+      const outcomes = Object.values(BACKFILL_OUTCOMES);
+
+      for (const outcome of outcomes) {
+        await seedBackfillAttempt({
+          instrument,
+          startedAt: LONG_AGO,
+          outcome,
+          // The two constraints that tie a row's counts to its outcome; a new
+          // literal writing neither is the ordinary case.
+          written: outcome === BACKFILL_OUTCOMES.filled ? 3 : 0,
+          error:
+            outcome === BACKFILL_OUTCOMES.providerFailed ? "429 Too Many Requests" : undefined,
+        });
+      }
 
       const rows = await db
         .selectFrom("price_backfill")
@@ -349,7 +401,7 @@ describe("what the ledger will and will not record", () => {
         .where("instrument_id", "=", instrument.id)
         .execute();
 
-      expect(rows).toHaveLength(6);
+      expect(rows.map((row) => row.outcome).sort()).toEqual([...outcomes].sort());
     }),
   );
 

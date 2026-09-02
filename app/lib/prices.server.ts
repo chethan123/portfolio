@@ -220,7 +220,8 @@ export type BackfillCandidate = {
 /**
  * Which instruments a batch should try next: the coverage gap of
  * `docs/importing-history.md` §5 made a domain read, narrowed to what a feed
- * can fill, and bounded.
+ * can fill, bounded, and re-shaped for a query that runs on every tick rather
+ * than by hand (see the `having` below).
  *
  * **The gap is a property of the positions, not of the instrument.** An
  * instrument is a candidate when its spine starts later than the earliest
@@ -249,7 +250,6 @@ export async function selectBackfillCandidates(
     .selectFrom("instrument")
     .innerJoin("holding", "holding.instrument_id", "instrument.id")
     .innerJoin("position_set", "position_set.id", "holding.position_set_id")
-    .leftJoin("price_daily", "price_daily.instrument_id", "instrument.id")
     .where("instrument.price_source", "=", "feed")
     .where("instrument.symbol", "is not", null)
     // The retry clock. Before the grouping on purpose: an instrument attempted
@@ -268,8 +268,23 @@ export async function selectBackfillCandidates(
       ),
     )
     .groupBy(["instrument.id", "instrument.symbol"])
+    // The gap, stated the way `holding_valued_at` asks it: is there a close at
+    // or before the day this was first held? `docs/importing-history.md`'s
+    // recipe says the same thing as `min(price_daily.date) is null or >
+    // min(as_of_date)` over a left join — equivalent, and ruinous here. That
+    // join pairs every holding row with every close of its instrument before
+    // the aggregate: at a hundred instruments over seven years it is ~30M inner
+    // rows and about 1.8s, against ~5ms for the probe below, and it grows
+    // without bound as the spine this slice exists to fill grows. ARCHITECTURE
+    // §10 records the same shape as a bug this repository has fixed once
+    // already. The recipe runs by hand; this runs on every tick.
     .having(
-      sql<boolean>`min(price_daily.date) is null or min(price_daily.date) > min(position_set.as_of_date)`,
+      sql<boolean>`not exists (
+        select 1
+        from price_daily
+        where price_daily.instrument_id = instrument.id
+          and price_daily.date <= min(position_set.as_of_date)
+      )`,
     )
     .select([
       "instrument.id",
