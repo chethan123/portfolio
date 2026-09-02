@@ -7,6 +7,14 @@
  *   price_daily        one row per instrument per trading day — the immutable spine
  *   price_observation  one row per instrument per provider instant — append-only
  *   price_poll         one row per refresh attempt, whether or not it wrote
+ *   price_backfill     one row per backfill attempt per instrument (ADR-0011)
+ *
+ * **Two writers share the spine, and only one of them may rewrite a row.** The
+ * quotes' write upserts, deliberately (see below). The backfill's write inserts
+ * where absent and never updates: a close the poller recorded live is the
+ * record, and the feed's later restatement of it is a revision nobody asked
+ * for. That rule is the only thing that lets both write `price_daily` without
+ * one silently owning the other's rows.
  *
  * What keeps `price_daily` honest is which date it writes under: **the date
  * inside the quote's own timestamp, in the market's zone — never today's.**
@@ -21,8 +29,8 @@
  * decides whether to spend a request, never what to store. Today's row is
  * provisional and converges on the close as the session runs.
  *
- * The log and the poll record share the same transaction, so a committed
- * fetch lands in all four tables or none — what makes the 1D chart's last
+ * The log and the poll record share the quotes' transaction, so a committed
+ * fetch lands in all four of those tables or none — what makes the 1D chart's last
  * point and the headline agree on the normal path. Three divergences remain,
  * narrow and deliberate, named so nobody looks for a fourth: a provider
  * re-stating an instant at a different price (`quote` upserts; the deduped
@@ -30,8 +38,10 @@
  * price, once the form exists (a quote with no observation, so the headline
  * moves and the 1D line does not); a provider returning one symbol twice
  * (both become observations; `quote` keeps whichever came last). A refresh
- * whose writes fail commits nothing, poll row included — an attempt that dies
- * leaves no trace of having been made.
+ * whose *quote* writes fail commits nothing, poll row included — an attempt
+ * that dies leaves no trace of having been made. The batch that follows is one
+ * transaction per instrument rather than one for the batch, so a batch that
+ * dies keeps everything its earlier attempts committed.
  *
  * A past date's row *can* be rewritten, deliberately — only ever with the
  * provider's own price for the day the provider says it belongs to, so a
@@ -44,8 +54,14 @@
 import { sql } from "kysely";
 
 import { getDb, getPool, type Database } from "./db.server.ts";
-import { marketDateOf, marketStampOf } from "./market-hours.ts";
-import type { PriceProvider, ProviderQuote } from "./price-provider.server.ts";
+import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
+import type {
+  HistoryRange,
+  PriceProvider,
+  ProviderDailyClose,
+  ProviderHistory,
+  ProviderQuote,
+} from "./price-provider.server.ts";
 
 import type { Kysely } from "kysely";
 import type pg from "pg";
@@ -56,6 +72,38 @@ import type pg from "pg";
  * a poll and a migration blocking each other for no reason.
  */
 const ADVISORY_LOCK_KEY = "7295380114023642";
+
+/**
+ * How many instruments one refresh may attempt to backfill. Small on purpose:
+ * the batch is the whole of the pacing — nothing queues against the unofficial
+ * endpoint, and a batch that cannot finish before the next tick is simply
+ * resumed by it, because the candidate read is re-asked every time and answers
+ * with whatever is still open (ADR-0011). A household loading a decade of
+ * statements is filled over a handful of refreshes.
+ *
+ * A module constant rather than a setting: the household has no reason to turn
+ * it, and a wrong value is a request-rate problem rather than a preference.
+ */
+const BACKFILL_BATCH_SIZE = 5;
+
+/**
+ * How recently an attempt must have been made for an instrument to be skipped.
+ * An unfillable gap — a delisted ticker whose history the feed has dropped —
+ * then costs one request a day rather than one every tick, which is the price
+ * of not asking a person to mark it.
+ *
+ * A string handed to the query as a parameter and cast there, never spliced
+ * into the statement's text.
+ */
+const BACKFILL_RETRY_INTERVAL = "1 day";
+
+/**
+ * How far before an instrument's earliest position set the range starts. A
+ * statement dated on a weekend or a market holiday has no close of its own, so
+ * the range has to reach back past it far enough to find one to carry forward;
+ * a week clears the longest run of non-trading days a US market has.
+ */
+const BACKFILL_RANGE_LEAD_DAYS = 7;
 
 /**
  * Run a refresh, or decline because one is already running. Beside the
@@ -148,6 +196,513 @@ const selectFeedInstruments = (db: Kysely<Database>) =>
     .orderBy("symbol");
 
 /**
+ * What one backfill attempt can have come to. A `const` object rather than an
+ * enum — `tsconfig` sets `erasableSyntaxOnly`, and `server/*.ts` runs under
+ * Node's type stripping. Kept in step with `price_backfill_outcome_valid` in
+ * `0010_price_backfill.sql` by hand, the arrangement `account-options.ts` has
+ * with the schema's other vocabularies: the migration is the authority and this
+ * is the spelling the code uses.
+ *
+ * Deliberately a second vocabulary rather than the provider's: the adapter
+ * answers in the closed set `SymbolProbe` uses, and these are a `check`
+ * constraint's literals. The mapping between them is one object in the batch.
+ */
+export const BACKFILL_OUTCOMES = {
+  /** Closes were written. The only outcome with `written > 0`. */
+  filled: "filled",
+  /** The feed answered and the spine already held every day it returned. */
+  nothingToWrite: "nothing_to_write",
+  /** The feed has no history for the symbol — unknown, delisted or renamed. */
+  noHistory: "no_history",
+  /** The history is quoted in a currency this instance cannot hold. */
+  nonUsd: "non_usd",
+  /** A split event in the response could not be applied; nothing written. */
+  splitUnresolved: "split_unresolved",
+  /** The call itself failed; the ledger's `error` carries the text. */
+  providerFailed: "provider_failed",
+} as const;
+
+export type BackfillOutcome = (typeof BACKFILL_OUTCOMES)[keyof typeof BACKFILL_OUTCOMES];
+
+/**
+ * **The coverage gap itself**, stated once for the two reads that ask it: the
+ * batch's {@link selectBackfillCandidates} and the screen's
+ * {@link backfillGaps}. A household seeing one list and the batch working from
+ * another is the drift worth spending a shared fragment on.
+ *
+ * Stated the way `holding_valued_at` asks the question — is there a close at or
+ * before the day this was first held? `docs/importing-history.md`'s recipe says
+ * the same thing as `min(price_daily.date) is null or > min(as_of_date)` over a
+ * left join, which is equivalent and ruinous here: that join pairs every
+ * holding row with every close of its instrument before the aggregate. Measured
+ * against a hundred instruments, ten years of monthly position sets and seven
+ * years of daily closes, that is 35M inner rows and 1.4s where this probe is
+ * 4ms — and the gap widens without bound as the spine this slice exists to fill
+ * grows. (The figures are that shape's; a shallower household is cheaper both
+ * ways and the ratio holds.) ARCHITECTURE §10 records the same shape as a bug
+ * this repository has fixed once already. The recipe runs by hand; this runs on
+ * every tick.
+ *
+ * **It is a `having` predicate, not a `where` one.** It reads `instrument` and
+ * `position_set` from whichever query it is dropped into — so both must join
+ * those under those names — and it reads `min(position_set.as_of_date)`, so the
+ * grouping must be one row per instrument for that to mean the instrument's
+ * first-held date. A grouping that split an instrument across two rows would
+ * change what this asks without touching a character of it.
+ */
+const NO_CLOSE_BY_FIRST_HELD = sql<boolean>`not exists (
+  select 1
+  from price_daily
+  where price_daily.instrument_id = instrument.id
+    and price_daily.date <= min(position_set.as_of_date)
+)`;
+
+/** One instrument a batch should try, and where its range starts. */
+export type BackfillCandidate = {
+  id: string;
+  /** As stored. The adapter upper-cases it to send; nothing here rewrites it. */
+  symbol: string;
+  /** `YYYY-MM-DD`, computed in SQL — no date arithmetic happens in JavaScript. */
+  rangeFrom: IsoDate;
+};
+
+/**
+ * Which instruments a batch should try next: the coverage gap of
+ * `docs/importing-history.md` §5 made a domain read, narrowed to what a feed
+ * can fill, bounded, and re-shaped for a query that runs on every tick rather
+ * than by hand (see the `having` below).
+ *
+ * **The gap is a property of the positions, not of the instrument.** An
+ * instrument is a candidate when its spine starts later than the earliest
+ * `position_set.as_of_date` of any holding referencing it, or has no row at
+ * all — not because it is new (instruments are created at resolution, before
+ * any position set exists) and not because a person asked (history already
+ * uploaded is already a gap).
+ *
+ * `fixed` and `manual` are excluded for the reasons {@link selectFeedInstruments}
+ * gives, and a null symbol separately because `feed` allows one. Those three
+ * have gaps just as real; Settings → Prices is where a person learns the batch
+ * will never fill them.
+ *
+ * One inherited caveat, stated rather than resolved: every set ever recorded
+ * counts, superseded same-date corrections included, so an instrument held only
+ * in a superseded set keeps a gap no valuation reads
+ * (`docs/importing-history.md:243-246`).
+ *
+ * The range's end is the caller's, because it is today's market date and this
+ * read has no clock.
+ */
+export async function selectBackfillCandidates(
+  db: Kysely<Database> = getDb(),
+): Promise<BackfillCandidate[]> {
+  const rows = await db
+    .selectFrom("instrument")
+    .innerJoin("holding", "holding.instrument_id", "instrument.id")
+    .innerJoin("position_set", "position_set.id", "holding.position_set_id")
+    .where("instrument.price_source", "=", "feed")
+    .where("instrument.symbol", "is not", null)
+    // The retry clock. Before the grouping on purpose: an instrument attempted
+    // in the last day is not a candidate whatever its positions say.
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("price_backfill")
+            .select("price_backfill.id")
+            .whereRef("price_backfill.instrument_id", "=", "instrument.id")
+            .where(
+              sql<boolean>`price_backfill.started_at > now() - cast(${BACKFILL_RETRY_INTERVAL} as interval)`,
+            ),
+        ),
+      ),
+    )
+    .groupBy(["instrument.id", "instrument.symbol"])
+    .having(NO_CLOSE_BY_FIRST_HELD)
+    .select([
+      "instrument.id",
+      "instrument.symbol",
+      // In SQL, so no date arithmetic happens in JavaScript and the driver
+      // hands the result back as the `YYYY-MM-DD` string a `date` crosses as.
+      sql<IsoDate>`min(position_set.as_of_date) - cast(${BACKFILL_RANGE_LEAD_DAYS} as integer)`.as(
+        "range_from",
+      ),
+    ])
+    // The deepest gap first, so a household loading a decade is worked from the
+    // oldest statement forward; then the id, so two ticks agree on what "next"
+    // means rather than racing a tie.
+    .orderBy(sql`min(position_set.as_of_date)`)
+    .orderBy("instrument.id")
+    .limit(BACKFILL_BATCH_SIZE)
+    .execute();
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    // Narrowing only: the query refuses null symbols, which TypeScript cannot
+    // see through a `where` — `refreshQuotes`'s narrowing, same reason.
+    symbol: row.symbol as string,
+    rangeFrom: row.range_from,
+  }));
+}
+
+/** One instrument whose spine does not reach as far back as it is held. */
+export type BackfillGap = {
+  id: string;
+  /** Null is itself a reason: a feed instrument nobody has given a ticker. */
+  symbol: string | null;
+  name: string;
+  /** `YYYY-MM-DD`, the earliest position set holding it. */
+  firstHeld: IsoDate;
+  /** `YYYY-MM-DD`, or null where there is no spine at all yet. */
+  firstClose: IsoDate | null;
+  /** The most recent attempt, or null where the batch has never tried. */
+  lastAttempt: { at: Date; outcome: string; error: string | null } | null;
+  /**
+   * As stored. `fixed` is filtered out, so in practice `feed` or `manual` —
+   * carried because {@link willTry} says *that* the batch will never try a row
+   * and this is half of *why*: a hand-priced trust and a feed instrument nobody
+   * has given a ticker are two different things for a person to do about.
+   */
+  priceSource: string;
+  /**
+   * Will a batch ever try it? `feed` with a symbol. False for a hand-priced
+   * trust and for a feed instrument with no ticker — whose gaps are just as
+   * real, which is why they are on the list at all.
+   */
+  willTry: boolean;
+};
+
+/**
+ * Every instrument still carrying a coverage gap, for Settings → Prices.
+ *
+ * The same predicate as {@link selectBackfillCandidates} — shared, not
+ * restated — over a wider set: every instrument whose `price_source` is not
+ * `fixed`, which is the recipe's own predicate
+ * (`docs/importing-history.md:235`). A `manual` instrument and a symbol-less
+ * `feed` one have a gap just as real, and this screen is where a person learns
+ * the batch will never fill it; the Settings → Instruments form is the answer
+ * for those. `fixed` is the seeded USD row, whose 1970 close covers everything.
+ *
+ * **This answers "why is this date unpriced", not "what will the batch try
+ * next".** So no retry skip and no bound: it is the whole list. Ordered as the
+ * batch works, so the top of it is what the next refresh picks up.
+ *
+ * The outcome crosses as the string the ledger stores. The words a person reads
+ * for it are the component's business — rendering, not a rule.
+ */
+export async function backfillGaps(db: Kysely<Database> = getDb()): Promise<BackfillGap[]> {
+  const rows = await db
+    .selectFrom("instrument")
+    .innerJoin("holding", "holding.instrument_id", "instrument.id")
+    .innerJoin("position_set", "position_set.id", "holding.position_set_id")
+    // One probe of the `(instrument_id, started_at)` index per instrument for
+    // the latest attempt, rather than three correlated subqueries for its three
+    // columns.
+    .leftJoinLateral(
+      (eb) =>
+        eb
+          .selectFrom("price_backfill")
+          .select(["price_backfill.started_at", "price_backfill.outcome", "price_backfill.error"])
+          .whereRef("price_backfill.instrument_id", "=", "instrument.id")
+          .orderBy("price_backfill.started_at", "desc")
+          .limit(1)
+          .as("attempt"),
+      (join) => join.onTrue(),
+    )
+    .where("instrument.price_source", "!=", "fixed")
+    .groupBy([
+      "instrument.id",
+      "instrument.symbol",
+      "instrument.name",
+      "instrument.price_source",
+      "attempt.started_at",
+      "attempt.outcome",
+      "attempt.error",
+    ])
+    .having(NO_CLOSE_BY_FIRST_HELD)
+    .select([
+      "instrument.id",
+      "instrument.symbol",
+      "instrument.name",
+      sql<IsoDate>`min(position_set.as_of_date)`.as("first_held"),
+      // Where the spine does start, which is the other half of what a person
+      // needs to read a distorted stretch of the chart.
+      sql<
+        IsoDate | null
+      >`(select min(date) from price_daily where price_daily.instrument_id = instrument.id)`.as(
+        "first_close",
+      ),
+      "instrument.price_source",
+      "attempt.started_at",
+      "attempt.outcome",
+      "attempt.error",
+      sql<boolean>`instrument.price_source = 'feed' and instrument.symbol is not null`.as(
+        "will_try",
+      ),
+    ])
+    .orderBy(sql`min(position_set.as_of_date)`)
+    .orderBy("instrument.id")
+    .execute();
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    symbol: row.symbol,
+    name: row.name,
+    firstHeld: row.first_held,
+    firstClose: row.first_close,
+    // Both columns come from one row of the lateral, so in the database either
+    // alone answers "was there an attempt". TypeScript cannot see that, so both
+    // are checked — which is the narrowing, not a second condition.
+    lastAttempt:
+      row.started_at === null || row.outcome === null
+        ? null
+        : { at: row.started_at, outcome: row.outcome, error: row.error },
+    priceSource: row.price_source,
+    willTry: row.will_try,
+  }));
+}
+
+/** What one backfill batch did, for the log line and for the tests. */
+export type BackfillReport = {
+  /** Instruments a history was asked for. */
+  attempted: number;
+  /** Closes the spine did not already hold, across the batch. */
+  written: number;
+  /** How many attempts ended each way. */
+  outcomes: Record<BackfillOutcome, number>;
+  /**
+   * Did the batch itself fail — a database error partway through? Always false
+   * out of {@link backfillCloses}, which does not catch one; set by
+   * {@link refreshPrices}, which does.
+   */
+  batchFailed: boolean;
+};
+
+/**
+ * The provider's three refusals, as the ledger spells them. The duplication is
+ * deliberate and named where each vocabulary is declared: one is the adapter's
+ * answer in the shape `SymbolProbe` uses, the other a `check` constraint's
+ * literals. This object is the whole of the mapping.
+ */
+const LEDGER_OUTCOME: Record<Exclude<ProviderHistory["status"], "ok">, BackfillOutcome> = {
+  "no-history": BACKFILL_OUTCOMES.noHistory,
+  "non-usd": BACKFILL_OUTCOMES.nonUsd,
+  "split-unresolved": BACKFILL_OUTCOMES.splitUnresolved,
+};
+
+/**
+ * A batch that stopped partway, carrying what it did before it stopped.
+ *
+ * The counts have to survive the throw, because the batch's log line is the
+ * only surface it has: a batch that filled three instruments and then met an
+ * unreachable database must not report having done nothing. Thrown rather than
+ * returned, so the composition still decides what a caller is told — which is
+ * the whole reason the batch does not catch this itself.
+ */
+class BackfillBatchFailed extends Error {
+  override readonly name = "BackfillBatchFailed";
+  readonly report: BackfillReport;
+
+  constructor(cause: unknown, report: BackfillReport) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.report = report;
+  }
+}
+
+/** A batch that has done nothing yet. */
+const emptyBackfillReport = (): BackfillReport => ({
+  attempted: 0,
+  written: 0,
+  outcomes: {
+    [BACKFILL_OUTCOMES.filled]: 0,
+    [BACKFILL_OUTCOMES.nothingToWrite]: 0,
+    [BACKFILL_OUTCOMES.noHistory]: 0,
+    [BACKFILL_OUTCOMES.nonUsd]: 0,
+    [BACKFILL_OUTCOMES.splitUnresolved]: 0,
+    [BACKFILL_OUTCOMES.providerFailed]: 0,
+  },
+  batchFailed: false,
+});
+
+/**
+ * Fill the spine backwards for a bounded batch of instruments whose position
+ * history reaches back behind it (ADR-0011).
+ *
+ * Sequential, one instrument at a time, awaiting each call before the next:
+ * nothing is issued in parallel and nothing is queued, because a queue of
+ * pending fetches against an unofficial endpoint is how an instance gets rate
+ * limited. The batch bound is the whole of the pacing, and a batch that cannot
+ * finish before the next tick is simply resumed by it — the candidate read is
+ * re-asked every time and answers with whatever is still open.
+ *
+ * **A provider failure for one instrument is not a failure of the batch**: it
+ * is ledgered with its text and the next symbol is tried, because the next
+ * symbol may be fine. **A database failure is**, and is deliberately not caught
+ * here — the instrument being written is what would fail again, and the
+ * composition above catches it so the batch cannot falsify what the quotes
+ * already committed.
+ *
+ * The range's end is today's market date and is exclusive — the adapter drops
+ * every bar filed on or after it, so today's row stays the poller's
+ * provisional one. This writer stores what it is handed and checks no date.
+ */
+export async function backfillCloses(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  db: Kysely<Database> = getDb(),
+): Promise<BackfillReport> {
+  const until = marketDateOf(new Date(), marketTimeZone);
+  const candidates = await selectBackfillCandidates(db);
+
+  const report = emptyBackfillReport();
+
+  try {
+    for (const candidate of candidates) {
+      const range: HistoryRange = { from: candidate.rangeFrom, until };
+
+      // Before the fetch, `refreshQuotes`'s reasoning: the span to the commit is
+      // how long the provider took, and an attempt that never commits leaves no
+      // row at all.
+      const startedAt = new Date();
+
+      let history: ProviderHistory;
+      try {
+        history = await provider.getDailyCloses(candidate.symbol, range, marketTimeZone);
+      } catch (error) {
+        const outcome = BACKFILL_OUTCOMES.providerFailed;
+
+        await inTransaction(db, (trx) =>
+          writeBackfillAttempt(trx, {
+            instrumentId: candidate.id,
+            startedAt,
+            range,
+            written: 0,
+            outcome,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+
+        report.attempted += 1;
+        report.outcomes[outcome] += 1;
+        continue;
+      }
+
+      if (history.status !== "ok") {
+        const outcome = LEDGER_OUTCOME[history.status];
+
+        await inTransaction(db, (trx) =>
+          writeBackfillAttempt(trx, {
+            instrumentId: candidate.id,
+            startedAt,
+            range,
+            written: 0,
+            outcome,
+            error: null,
+          }),
+        );
+
+        report.attempted += 1;
+        report.outcomes[outcome] += 1;
+        continue;
+      }
+
+      // The closes and the row describing them, in one transaction: the ledger
+      // must not claim a fill that rolled back.
+      const written = await inTransaction(db, async (trx) => {
+        const count = await writeBackfilledCloses(trx, candidate.id, history.closes);
+
+        await writeBackfillAttempt(trx, {
+          instrumentId: candidate.id,
+          startedAt,
+          range,
+          written: count,
+          outcome: count > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite,
+          error: null,
+        });
+
+        return count;
+      });
+
+      report.attempted += 1;
+      report.written += written;
+      report.outcomes[written > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite] +=
+        1;
+    }
+  } catch (error) {
+    // Re-thrown rather than swallowed: the composition decides what a caller is
+    // told. Wrapped only so the counts reach its log line.
+    throw new BackfillBatchFailed(error, report);
+  }
+
+  return report;
+}
+
+/** Both halves of a refresh, the quotes' half null when it was not asked for. */
+export type RefreshPricesReport = {
+  quotes: RefreshReport | null;
+  backfill: BackfillReport;
+};
+
+/**
+ * One refresh: quotes, then one bounded backfill batch — the composition every
+ * caller shares (the poller's tick, **Refresh now**, and the request an upload
+ * fires once it has committed).
+ *
+ * It does not take the lock: every caller wraps it in {@link withRefreshLock}
+ * exactly as they wrapped `refreshQuotes`, so the test seam stays a transaction
+ * and the lock stays the caller's decision.
+ *
+ * **The batch cannot falsify what the quotes did.** A database failure inside
+ * the batch is caught and logged here rather than propagated, because
+ * `app/routes/refresh.ts` turns anything thrown out of the lock into an error
+ * outcome, which the control renders as "Refresh failed. The figures above are
+ * unchanged." — false the moment `refreshQuotes` has committed its closes. So a
+ * press reports its quotes, a tick logs its quotes' line, and the batch's
+ * trouble is the batch's own line. The counts are lost with the throw; the
+ * ledger holds what each completed attempt did.
+ *
+ * A call that asks for no quotes writes no `price_poll` row, by construction:
+ * that row is `refreshQuotes`'s, and a poll is an attempt at quotes.
+ */
+export async function refreshPrices(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  options: { quotes: true },
+  db?: Kysely<Database>,
+): Promise<{ quotes: RefreshReport; backfill: BackfillReport }>;
+export async function refreshPrices(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  options: { quotes: boolean },
+  db?: Kysely<Database>,
+): Promise<RefreshPricesReport>;
+export async function refreshPrices(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  { quotes }: { quotes: boolean },
+  db: Kysely<Database> = getDb(),
+): Promise<RefreshPricesReport> {
+  const quotesReport = quotes ? await refreshQuotes(provider, marketTimeZone, db) : null;
+
+  try {
+    return { quotes: quotesReport, backfill: await backfillCloses(provider, marketTimeZone, db) };
+  } catch (error) {
+    const stopped = error instanceof BackfillBatchFailed;
+
+    console.error(
+      "Price backfill batch failed; the quotes it ran beside are unaffected:",
+      stopped ? error.cause : error,
+    );
+
+    // The counts of whatever committed before it stopped, so the batch's log
+    // line describes what happened rather than reporting a batch that did
+    // nothing. Only the attempt it was in the middle of is lost.
+    const report = stopped ? error.report : emptyBackfillReport();
+
+    return { quotes: quotesReport, backfill: { ...report, batchFailed: true } };
+  }
+}
+
+/**
  * Every instrument the provider will be asked about, by symbol — a map to a
  * *list*, not one instrument: `instrument.symbol` has no unique constraint
  * (§4.1), so two rows can share a ticker, one quote must update all of them,
@@ -170,8 +725,12 @@ function bySymbol(instruments: FeedInstrument[]): Map<string, FeedInstrument[]> 
  * with nothing in the log naming it. Matching is the *only* thing normalised:
  * the stored symbol stays exactly as typed (§4.3 makes it a mutable attribute
  * a person edits, not a key the app owns).
+ *
+ * Exported rather than moved: the backfill's history call sends the same form
+ * (`price-provider.server.ts`), and the rule belongs beside the matcher that
+ * states it.
  */
-const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
+export const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
 
 /**
  * Run `body` in a transaction unless one is already open: Kysely refuses
@@ -390,6 +949,49 @@ async function writeDailyClose(
     .execute();
 }
 
+/**
+ * The spine's second write path: every trading day the feed returned that the
+ * spine does not already hold.
+ *
+ * `do nothing`, never `do update`, and the invariant is
+ * `docs/importing-history.md:283`'s: **a backfill must never overwrite what the
+ * running system recorded live.** A separate statement from
+ * {@link writeDailyClose}, which must go on upserting for the poller's own
+ * writes — the two rules are opposite and both are right.
+ *
+ * One insert for the whole series, counted from `returning`, so the ledger
+ * records how many rows were *new* rather than how many were offered —
+ * {@link writeObservations} is the pattern and the reasoning.
+ *
+ * Nothing is fabricated: only days the provider returned are written, so a
+ * weekend or a holiday stays the absence carry-forward already answers
+ * honestly. The close is the string the adapter handed over, cast to `numeric`
+ * and nothing more — the un-adjust for splits happened there, on `money.ts`'s
+ * units, and this multiplies nothing.
+ */
+async function writeBackfilledCloses(
+  db: Kysely<Database>,
+  instrumentId: string,
+  closes: readonly ProviderDailyClose[],
+): Promise<number> {
+  if (closes.length === 0) return 0;
+
+  const inserted = await db
+    .insertInto("price_daily")
+    .values(
+      closes.map((close) => ({
+        instrument_id: instrumentId,
+        date: close.date,
+        close: close.close,
+      })),
+    )
+    .onConflict((conflict) => conflict.columns(["instrument_id", "date"]).doNothing())
+    .returning("instrument_id")
+    .execute();
+
+  return inserted.length;
+}
+
 /** One row bound for the observation log. */
 type ObservationRow = {
   instrument_id: string;
@@ -495,6 +1097,41 @@ async function writePoll(
       requested: report.requested,
       priced: report.priced,
       stale: report.stale,
+    })
+    .execute();
+}
+
+/** One row bound for the backfill ledger. */
+type BackfillAttempt = {
+  instrumentId: string;
+  startedAt: Date;
+  range: HistoryRange;
+  written: number;
+  outcome: BackfillOutcome;
+  error: string | null;
+};
+
+/**
+ * The attempt itself, recorded whether or not it wrote — {@link writePoll}'s
+ * reasoning, with one difference worth naming: **a provider failure here *is* a
+ * committed row.** The attempt happened, the next reader needs the text, and
+ * the retry clock is this table. Only a database failure leaves nothing, and
+ * that attempt is simply next time's candidate.
+ */
+async function writeBackfillAttempt(
+  db: Kysely<Database>,
+  attempt: BackfillAttempt,
+): Promise<void> {
+  await db
+    .insertInto("price_backfill")
+    .values({
+      instrument_id: attempt.instrumentId,
+      started_at: attempt.startedAt,
+      range_from: attempt.range.from,
+      range_until: attempt.range.until,
+      written: attempt.written,
+      outcome: attempt.outcome,
+      error: attempt.error,
     })
     .execute();
 }

@@ -9,6 +9,7 @@ import {
   formFields,
   latestRecordableDate,
 } from "~/lib/input.server";
+import { requestRefresh } from "~/lib/price-poller.server";
 import { DraftNotReadyError, commitUpload, diffForDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
@@ -69,6 +70,25 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   try {
     const written = await commitUpload(params.draftId, values);
+
+    // The statement has committed by now, so the instruments it created and
+    // the dates it reaches back to are visible to a refresh — which is why the
+    // request is here and not inside `commitUpload`, where a domain function
+    // called from a test transaction has committed nothing and would need a
+    // provider the tests cannot inject. Not awaited: the person goes to the
+    // account page while the batch runs, and the next render prices what it
+    // can. Best-effort by design — a request that could not be made is the
+    // poller module's log line, never a refused upload.
+    try {
+      requestRefresh();
+    } catch (error) {
+      // Structural rather than trusting: `requestRefresh` returns rather than
+      // throwing, and this keeps that a property of *this* action rather than
+      // of a distant module's internals. Without it a future throw would
+      // replace the success redirect with an error boundary, after the
+      // statement had already committed.
+      console.error("An upload could not request a refresh; the next tick will price it:", error);
+    }
 
     // Success lands on the account the upload just changed, with the set id
     // for the receipt — which is read back from the database there, never

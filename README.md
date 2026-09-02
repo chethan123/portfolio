@@ -455,14 +455,14 @@ graph LR
     end
 
     google["Google sign-in"]
-    yahoo["Yahoo Finance quotes"]
+    yahoo["Yahoo Finance quotes and history"]
 
     browser --> house --> caddy
     caddy -->|"every request:<br/>vouched for?"| gate
     caddy --> app
     gate -.-> google
     app --> db
-    app -.->|market hours,<br/>or Refresh now| yahoo
+    app -.->|quotes in market hours,<br/>history while a gap is open,<br/>or Refresh now| yahoo
 ```
 
 ### Who gets in, and where that is decided
@@ -591,12 +591,17 @@ first upload (DESIGN.md §7).
 
 ## Where prices come from
 
-Quotes are fetched by an in-process loop on the refresh cadence set at Settings → Prices (seeded to
-every 15 minutes), and only while the market is open — there is no worker container, which
-DESIGN.md §10 chose deliberately for the single deployment target. [`app/lib/price-provider.server.ts`](app/lib/price-provider.server.ts) is the only
-module that imports `yahoo-finance2`, behind the one-method interface §6.1 mandates, so swapping
-providers touches one file. [`app/lib/prices.server.ts`](app/lib/prices.server.ts) is the only module
-that writes a price.
+Prices are fetched by an in-process loop on the refresh cadence set at Settings → Prices (seeded to
+every 15 minutes) — there is no worker container, which DESIGN.md §10 chose deliberately for the
+single deployment target. *Quotes* are asked for only while the market is open. Riding the same
+refresh at any hour is a bounded **backfill** batch: whenever a holding's history reaches further
+back than its prices do, the feed's own daily history fills the missing days in — inserted where
+absent, never over a close the instance recorded itself, and un-adjusted for splits because a
+statement records the shares as held on the day.
+[`app/lib/price-provider.server.ts`](app/lib/price-provider.server.ts) is the only module that
+imports `yahoo-finance2`, behind the two-method interface §6.1 mandates, so swapping providers
+touches one file. [`app/lib/prices.server.ts`](app/lib/prices.server.ts) is the only module that
+writes a price.
 
 Three decisions in there are worth knowing before reading a number on a screen:
 

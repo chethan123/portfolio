@@ -51,18 +51,23 @@ What each thing Empower holds can become here:
 
 ## Before you upload anything backdated: the price spine
 
-For every instrument the poller quotes, the computed line's second ingredient begins late:
-`price_daily` holds no close for them from before the day the instance's poller first ran. Nothing
-backfills it today —
-[issue #83](https://github.com/chethan123/portfolio/issues/83) tracks both the consequence and the
-fix — and the consequence is worth understanding before any backdated statement lands:
+**The application fills the price spine in for itself**
+([ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)). Whenever an instrument's
+position history reaches back behind its price history, the refreshes after your statement lands
+fetch that instrument's daily closes from the feed and store every trading day the spine does not
+already hold — a handful of instruments per refresh, nobody asked, nothing to run.
 
-**A statement dated before the spine begins is valued without its securities.** Positions exist for
-those dates, closes do not, so every security on them is unpriced — excluded from the total and
-counted in the coverage figures — while cash and loans still price at 1.00. Until issue #83 lands,
-the chart draws those partial points on the ordinary solid line with nothing beside them saying so:
-a line that runs at cash-minus-loans level and then cliffs up to the real total on the day the
-poller first ran.
+That leaves one window worth knowing about before a backdated statement lands:
+
+**A statement dated before the spine reaches is valued without its securities until its closes
+arrive.** Positions exist for those dates, closes do not yet, so every security on them is
+unpriced — excluded from the total and counted in the coverage figures — while cash and loans still
+price at 1.00. The chart draws those partial points on the ordinary solid line with nothing beside
+them saying so, which is the half of issue #83 the backfill does not answer and
+[issue #216](https://github.com/chethan123/portfolio/issues/216) carries. A
+household loading a decade over forty instruments is filled over a handful of refreshes; at the
+seeded fifteen-minute cadence that is an hour or two, and every distorted point repairs itself as the
+rows land.
 
 So the order of work is chosen to keep the era each line claims truthful at every step:
 
@@ -71,15 +76,14 @@ So the order of work is chosen to keep the era each line claims truthful at ever
    disagree.
 3. Record bank and loan balance history. Cash prices on every date through the seeded `USD` close,
    so these are immune to the spine problem.
-4. For investment accounts, upload the **most recent** statement first. That creates the instrument
-   rows and starts the computed line in the present, where the spine is sound.
-5. Fill the spine backward for those instruments, over the range your older statements will need.
-6. Only then upload the older statements — they value correctly the moment they land.
-7. Verify, then delete the captured files.
+4. For investment accounts, upload the **most recent** statement first — that creates the instrument
+   rows and classifies them — and then the older ones. The older ones may read short for a refresh
+   or two while their closes arrive.
+5. Check the spine at Settings → Prices, and act on anything the feed cannot fill.
+6. Verify, then delete the captured files.
 
-If you skip step 5, nothing is lost — the underlying data stays correct and every distorted point
-repairs itself the moment closes for it exist — but the chart misstates the backfilled era in the
-meantime, and nothing on screen warns you.
+Most recent first is the right order because it is where the instruments get created and classified,
+which is what gives the backfill something to work on.
 
 ## Step 1 — capture from Empower
 
@@ -177,8 +181,9 @@ form owns the sign.
 
 **Decide whether the per-account depth is worth the typing before you start.** The household total
 over those years is already covered by the manual series from step 2, and the computed total wins
-on any date it covers — so a backfilled checking account makes the *computed* line start earlier,
-carrying only that account until the investment statements catch up. What per-account balance
+on any date it covers — so a checking account loaded back through those years makes the *computed*
+line start earlier, carrying only that account until the investment statements reach that far.
+ What per-account balance
 history actually buys is that account's own page reaching back, and an honest cash line through the
 years before the app. For a household that mostly wants the total, step 2 alone is a perfectly good
 answer, and this step can cover just the recent past — or nothing.
@@ -188,12 +193,11 @@ answer, and this step can cover just the recent past — or nothing.
 Empower cannot help here — it has balances, not holdings — but your brokerages can: every
 custodian's website offers past statements or position exports, usually years back. This is the
 same upload flow as any other statement ([`guide/upload.md`](guide/upload.md),
-[`guide/first-statement.md`](guide/first-statement.md)); the only thing backfill changes is how
-much of it you do, so the notes here are only what matters at volume:
+[`guide/first-statement.md`](guide/first-statement.md)); the only thing loading history changes is
+how much of it you do, so the notes here are only what matters at volume:
 
-- **Most recent statement first**, per the ordering above: it creates the instrument rows the price
-  backfill in step 5 needs, and the first upload is where each new instrument gets its
-  classification.
+- **Most recent statement first**, per the ordering above: it creates the instrument rows the
+  backfill works from, and the first upload is where each new instrument gets its classification.
 - **The as-of date is the statement's date**, not the day you upload it. The upload flow reads it
   from the file where the file carries one, and asks otherwise.
 - **Each upload is a complete photograph** of the account on that date. A partial file records
@@ -211,66 +215,69 @@ much of it you do, so the notes here are only what matters at volume:
 
 When the most recent statements are in, open Holdings beside the captured `getHoldings` response
 and check the two agree account by account — that is what the capture is for. Then upload the rest,
-oldest or newest first as you like, ideally after step 5 has run once.
+oldest or newest first as you like.
 
-## Step 5 — fill the price spine
+## Step 5 — check the price spine
 
 For every date a backdated statement covers, each of its instruments needs some close at or before
-that date in `price_daily`; the carry-forward does the rest. There is no built-in way to load
-historical closes yet (issue #83 again), so this is a `psql` job. This table is the computed line's
-pricing authority — work slowly here.
+that date in `price_daily`; the carry-forward does the rest. **The application fills that in on its
+own now** ([ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)), so this step is a
+check rather than a job: give the refreshes a little time after your uploads, then look at what is
+left.
 
-**Find the gaps first.** This query names every instrument whose spine starts later than its
-history needs, and the date range each one is missing:
+**Settings → Prices is the list.** It shows every holding whose price history does not reach as far
+back as it is held, when it was first held, where its prices actually start, and what the last
+attempt came to. An empty list means the spine covers everything held and this step is done. A row
+that says "Never" is one the feed can never fill, and the only two kinds are below.
+
+The same question in the terminal, for a reader who would rather ask the database — the screen shows
+these same rows:
 
 ```sh
 docker compose exec db psql -U portfolio -d portfolio -c "
   select i.id, i.symbol, i.name,
          min(ps.as_of_date) as first_held,
-         min(pd.date)       as first_close
+         (select min(date) from price_daily pd where pd.instrument_id = i.id) as first_close
   from holding h
   join position_set ps on ps.id = h.position_set_id
   join instrument i    on i.id  = h.instrument_id
-  left join price_daily pd on pd.instrument_id = i.id
   where i.price_source <> 'fixed'
   group by i.id, i.symbol, i.name
-  having min(pd.date) is null or min(pd.date) > min(ps.as_of_date)
+  having not exists (
+    select 1 from price_daily pd
+    where pd.instrument_id = i.id and pd.date <= min(ps.as_of_date))
   order by i.symbol nulls last;"
 ```
 
-An empty result means the spine already covers everything held, and this step is done.
+And the record of what was tried, which is where an outcome's reason lives:
 
-One kind of row it can show needs no closes at all: the query reads every set ever uploaded,
-including ones a same-date correction has superseded, so an instrument held only in a superseded
-set keeps a row here that no valuation reads. Delete that set (step 4's last note) or ignore its
-row.
+```sh
+docker compose exec db psql -U portfolio -d portfolio -c "
+  select instrument_id, started_at, range_from, range_until, written, outcome, error
+  from price_backfill order by started_at desc limit 20;"
+```
 
-**Sourcing closes for quoted instruments.** Historical daily closes for anything with a public
-ticker are available from the usual providers — the same unofficial Yahoo API the app's own poller
-quotes from serves history through a different endpoint, and a custodian's own download is even
-better where offered. Two traps, both silent:
+One kind of row the list can show needs no closes at all: it reads every set ever uploaded,
+including ones a same-date correction has superseded, so an instrument held only in a superseded set
+keeps a row here that no valuation reads. Delete that set (step 4's last note) or ignore its row.
 
-- **Split adjustment.** Most providers restate history through later stock splits, while your
-  statements record shares as held on the day. For any symbol that split after a statement date,
-  adjusted closes misvalue those positions by exactly the split factor — use unadjusted closes, or
-  un-adjust using the provider's own split records. Mutual funds, which is most of a retirement
-  account, essentially never split.
-- **Ticker reuse.** A symbol's history on a provider belongs to whatever holds the ticker *now*.
-  For an instrument that changed symbols, fetch under the symbol of the era, and spot-check a
-  couple of figures against a statement.
+**Two traps to know about, now that the machine takes them rather than you.**
 
-Only USD closes, ever — the application stores no currency and refuses foreign-listed instruments
-at resolution for exactly this reason.
+- **Split adjustment.** The feed restates history through later stock splits, while your statements
+  record shares as held on the day. The application un-adjusts each close by the ratio of every split
+  after it, so a pre-split position is valued at what it was actually worth. If it ever cannot read a
+  split, it refuses that instrument's whole history rather than storing some rows right and some
+  wrong, and the row says `split_unresolved`.
+- **Ticker reuse.** A symbol's history at the feed belongs to whatever holds the ticker *now*, and
+  the application has no way to know an instrument changed symbols. It will fill in the current
+  ticker's past. **For any instrument whose symbol has changed, spot-check a couple of figures
+  against a statement of the era.** This is the one thing on this page that still needs your eyes.
 
-**Sourcing closes for manually priced instruments.** A collective investment trust has no feed
-history anywhere, but the statements holding it print its unit price — that column is the source.
-One close per statement date is enough; the carry-forward holds it between statements — hand-set
-prices carrying forward is how the design prices these instruments generally, though the screen
-for setting one is among the tabs Settings lists as not built yet.
-
-**Loading.** However you assemble the closes, they land as rows of `(instrument_id, date, close)`,
-with the instrument id taken from the gap query above. For a handful of statement-dated CIT prices,
-plain inserts:
+**What the feed cannot fill.** A collective investment trust has no history anywhere, and neither
+does a feed instrument nobody has given a ticker. Both appear on the list with the reason. For a
+CIT, the statements holding it print its unit price — that column is the source. One close per
+statement date is enough; the carry-forward holds it between statements. The screen for setting one
+by hand is among the tabs Settings lists as not built yet, so until it lands these are `psql`:
 
 ```sql
 insert into price_daily (instrument_id, date, close)
@@ -278,15 +285,10 @@ values (17, date '2024-03-29', 41.2300)
 on conflict (instrument_id, date) do nothing;
 ```
 
-For a fetched series, shape it into a TSV of `instrument_id`, `date`, `close` and `\copy` it in as
-in step 2. Either way, `do nothing` on conflict — or for `\copy`, loading only dates before each
-instrument's `first_close` — keeps the poller's own rows authoritative: a backfill must never
-overwrite what the running system recorded live. Trading days only; a row for a weekend or holiday
-would state a close that never happened, where the carry-forward already answers those dates
-honestly.
-
-Re-run the gap query until it comes back empty, or until only rows you have decided to ignore
-remain.
+`do nothing` on conflict, always. That is the rule the application's own backfill obeys and the
+reason two writers can share this table: **a backfill must never overwrite what the running system
+recorded live.** Trading days only; a row for a weekend or holiday would state a close that never
+happened, where the carry-forward already answers those dates honestly.
 
 ## Step 6 — verify
 
@@ -299,13 +301,16 @@ docker compose exec db psql -U portfolio -d portfolio -c "
   from holding_valued_at(date '2025-06-30');"
 ```
 
-Ask it at a few dates spread across the backfilled era. `unpriced` should be zero everywhere,
-except holdings you knowingly left without closes. This terminal check is the only one that
-counts: until issue #83 lands, no screen distinguishes a past date priced worse than today from
-one priced fully — the Overview's coverage sentence counts what is unpriced *now*, not then.
+Ask it at a few dates spread across the era your backdated statements cover. `unpriced` should be zero everywhere,
+except holdings you knowingly left without closes, and anything the backfill has not reached yet.
+This terminal check is the only one that counts while a gap is open: no screen yet distinguishes a
+past date priced worse than today from one priced fully — the Overview's coverage sentence counts
+what is unpriced *now*, not then, and the chart-side warning that would say otherwise is
+[issue #216](https://github.com/chethan123/portfolio/issues/216). Settings → Prices answers the other question, which is whether anything is
+still missing at all.
 
 **On the screens.** The Overview at the All range should now read as one story: dashed manual
-years, then a solid line from your earliest backfilled statement onward, with no cliff at the date
+years, then a solid line from your earliest backdated statement onward, with no cliff at the date
 the instance was installed. Point along the line and read the values; open an account's page and
 check its line starts where its own history starts.
 

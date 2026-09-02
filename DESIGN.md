@@ -414,7 +414,8 @@ rest of the screen is built from.
 
 ```ts
 interface PriceProvider {
-  getQuotes(symbols: string[]): Promise<Quote[]>   // price, currency, yield, annual dividend
+  getQuotes(symbols: string[]): Promise<Quote[]>                  // price, currency, yield, annual dividend
+  getDailyCloses(symbol: string, range, tz: string): Promise<History>  // one symbol's finished days, un-adjusted for splits
 }
 ```
 
@@ -475,8 +476,20 @@ gigabyte a year at a hundred instruments and the seeded fifteen-minute cadence �
 Settings → Prices, where the dial is.
 
 An intraday refresh can never corrupt history, and a missed day is a visible gap rather than a wrong
-close. `holding_valued_at` reads `price_daily` alone, so an observation can never move a line that
-has already been drawn.
+close — a gap the next backfill of that instrument fills as a side effect, since a hole is never a
+trigger on its own. `holding_valued_at` reads `price_daily` alone, so an observation can never move a
+line that has already been drawn.
+
+**The spine is backfilled from the feed's own history**
+([ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)). It used to begin the
+first time the poller quoted an instrument, which made every statement dated before that day value
+without its securities. Now, whenever an instrument's position history reaches back behind its
+spine, a refresh fetches that instrument's daily history and inserts every trading day the spine does
+not already hold — gap-triggered rather than asked for, a bounded few instruments per refresh,
+`on conflict do nothing` so a close the poller recorded live is never overwritten, un-adjusted for
+splits because a statement records shares as held on the day, and ledgered in `price_backfill` so an
+unfillable gap is retried daily rather than every tick and has a reason a person can read at
+Settings → Prices. Nothing is fabricated for a day the market did not trade.
 
 **Failure handling:** a failed fetch keeps the last known price and marks the instrument stale,
 surfaced in the UI. Never zero, never null into a sum.
@@ -492,8 +505,11 @@ value carrying forward until changed. The form belongs to the unbuilt Settings �
 
 ## 7. History
 
-**History starts at day zero.** The first upload creates the first position set; there is no
-position backfill.
+**History starts at day zero — for positions.** The first upload creates the first position set, and
+nothing loads position history the household did not upload. The *price* spine is no longer bound by
+that rule: it is filled backwards from the feed as far as the positions reach
+([ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md), §6.2), because a
+statement dated before the spine began would otherwise be valued without its securities.
 
 **A manual net worth series prefixes the chart.** Hand-typed `(date, amount)` points cover the
 period before the app existed. The series is read and drawn today; the Settings → History screen
@@ -718,7 +734,7 @@ mutation. Everything else that writes lives behind Settings.
 | Instruments | Edit symbol, price source, classification. View aliases. **Set manual prices for CITs** |
 | History | Hand-typed net worth points for the pre-day-zero series (§7) |
 | Tax | The household's capital gains rate, which the Analysis panel (§8.1) estimates with |
-| Prices | The refresh cadence — how often the poller (§6.2) asks the feed for quotes while the market is open |
+| Prices | The refresh cadence — how often the poller (§6.2) asks the feed, quotes only while the market is open — and the list of holdings the price spine does not reach back to, with the last backfill attempt's outcome for each (§6.2) |
 | Display | How the screens look before anyone touches them: the masking policy (spec 0007), and the theme choice when §12's toggle lands |
 
 Classifications, Instruments and History are not built yet: the strip today is People, Accounts,
@@ -1442,3 +1458,12 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     and no corporate-action adjustment — so it must not be mistaken for a backtest-grade series. And
     the 1D line is drawn once, when the page loads: nothing updates in place, because a live tick
     pipeline was rejected in §6 for a reason that has not changed.
+14. **A backfilled instrument gets the current ticker's history.** A symbol's history at the feed
+    belongs to whatever holds the ticker *now*, so an instrument that changed symbols is filled with
+    the wrong company's closes, and the only guard is a person spot-checking a figure against a
+    statement (§6.2, [ADR-0011](docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)).
+    Detecting it would need a source of symbol history this instance does not have. Riding along
+    with it: while a gap is still open, the chart draws a partially-priced past date on the ordinary
+    solid line and says nothing — the half of
+    [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer,
+    filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.

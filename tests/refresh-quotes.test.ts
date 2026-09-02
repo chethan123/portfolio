@@ -38,6 +38,12 @@ function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[
       asked.push([...symbols]);
       return quotes;
     },
+    // Nothing in this file backfills; the method exists because the interface
+    // requires it, and a provider that cannot answer history is not this
+    // application's provider.
+    async getDailyCloses() {
+      return { status: "no-history" };
+    },
   };
 }
 
@@ -45,6 +51,9 @@ function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[
 function brokenProvider(message = "429 Too Many Requests"): PriceProvider {
   return {
     async getQuotes() {
+      throw new Error(message);
+    },
+    async getDailyCloses(): Promise<never> {
       throw new Error(message);
     },
   };

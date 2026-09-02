@@ -72,7 +72,7 @@ graph LR
     end
 
     google["Google<br/>OIDC provider"]
-    yahoo["Yahoo Finance<br/>unofficial quote endpoint"]
+    yahoo["Yahoo Finance<br/>unofficial quote and chart endpoints"]
 
     browser -->|HTTPS| house
     house -->|"HTTP, X-Forwarded-*"| caddy
@@ -83,7 +83,7 @@ graph LR
     browser -.->|"sign-in redirect"| google
     csv -.->|"uploaded through the browser"| browser
     app -->|SQL over the compose network| db
-    app -->|"batched quote fetch, per the refresh cadence (seeded 15 min), market hours only<br/>+ a one-symbol probe at instrument creation, in the request path"| yahoo
+    app -->|"batched quote fetch, market hours only, per the refresh cadence (seeded 15 min)<br/>+ a per-symbol history fetch on the same refresh, at any hour, while a spine has a gap<br/>+ a one-symbol probe at instrument creation, in the request path"| yahoo
 
     classDef ext fill:#f5f0e8,stroke:#8a7a5c,color:#3b3222
     class yahoo,csv,google,house ext
@@ -91,11 +91,12 @@ graph LR
 
 **External dependencies, in full.** Two, and they belong to different components. **Yahoo Finance**
 is the application's, and its only one: no email, no object store, no queue, no cache tier, no
-analytics. It is reached two ways — the poller's batched refresh, which is off the request path
-entirely, and `probeSymbol`, a single-symbol currency check that runs *inside* a form submission when
-someone creates a feed-priced instrument (§6.1). The second is the only place a third party can make
-a person wait. Both go through the one interface in §7.5, precisely because the endpoint is
-unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
+analytics. It is reached three ways, over two endpoints — the poller's batched *quote* fetch and
+the per-symbol *chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the
+request path entirely, and `probeSymbol`, a single-symbol currency check that runs *inside* a form
+submission when someone creates a feed-priced instrument (§6.1). The last is the only place a
+third party can make a person wait. All three go through the one interface in §7.5, precisely
+because the endpoint is unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
 the browser is redirected there to sign in and the sidecar exchanges the code for a token, both
 outside the app process entirely. That seam is what keeps "an identity provider" out of the
 application's dependency list while the instance still has one.
@@ -108,7 +109,7 @@ application's dependency list while the instance still has one.
 | House proxy → Caddy | `X-Forwarded-*` | Believed, bounded by `trusted_proxies static private_ranges` in the `Caddyfile`. The honest reading: **any LAN peer can forge these headers**, because this repository cannot know the operator's proxy address. See below for why that is affordable. |
 | Caddy → gate | `X-Forwarded-*`, `X-Real-IP`, `X-Forwarded-Uri` | **Yes, unconditionally.** The sidecar runs in reverse-proxy mode and builds its sign-in redirects from them, which is why `gate` publishes no port. |
 | Caddy → app | `X-Forwarded-*` and `X-Auth-Request-Email` | **Yes, unconditionally** — which is why `app` publishes no port. The trust costs nothing today: the app reads none of these (§7.6), and `copy_headers` replaces any client-sent email header with the gate's own, so a browser cannot assert an identity. |
-| app → Yahoo | JSON quote payload | No. Parsed through Zod, currency-guarded, floats converted at the boundary. |
+| app → Yahoo | JSON quote and chart payloads | No. Both parsed through Zod, currency-guarded, floats converted at the boundary. A split the chart payload cannot be read through refuses that instrument's whole history rather than filling some rows right and some wrong. |
 
 **Why a forgeable forwarded header is affordable.** Nothing downstream *authorises* on one. The
 gate's verdict comes from a session cookie it decrypts itself, and the origin it sends people back
@@ -334,8 +335,8 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:388` | The provider swap stops being a day's work. The interface is also the test seam. |
-| Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:619` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 
 **Owned by a module, upheld by its callers.**
 
@@ -357,9 +358,17 @@ grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:511` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
-  to scope the "as of" line to instruments held in an open account, filtered to `price_source =
+- `prices.server.ts:1148` (`priceFreshness`) selects from `holding_valued` — not to value anything,
+  but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
+- `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
+  `holding` and `position_set` that §11.1 warns about, to find the earliest date an instrument was
+  held — the batch's next few and the whole list Settings → Prices renders, sharing one predicate
+  so a household and a tick cannot disagree about what has a gap. Both read dates and count nothing;
+  neither touches a money column. Neither takes an `OwnerFilter` and neither should: a coverage gap
+  is a fact about the instance's price history rather than about anyone's net worth, and Settings is
+  household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
+  are not).
 - `uploads.server.ts:584` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
@@ -445,8 +454,10 @@ Three properties of this path are deliberate:
 
 ### 4.5 Write paths
 
-Five operations produce **history** — the position sets every figure is computed from, and the
-vocabulary that makes them readable. All five append; none rewrites a past fact.
+Every operation that produces **history** — the position sets every figure is computed from, the
+price spine they are valued against, and the vocabulary that makes them readable — appends. None
+rewrites a past fact. They are listed in full rather than counted, so adding one is a row here
+rather than a number to notice.
 
 | Operation | Module | Writes | Append-only? |
 |---|---|---|---|
@@ -455,6 +466,7 @@ vocabulary that makes them readable. All five append; none rewrites a past fact.
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes — a new set |
 | Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:663`) |
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
+| Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes — it fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
 
 **This is not every write in the application.** The management surface updates rows in place, as
 CRUD should: `accounts.server.ts:246` edits an account and `:376` closes one, `people.server.ts:213`
@@ -523,6 +535,7 @@ erDiagram
     INSTRUMENT ||--o{ INSTRUMENT_ALIAS : "is known by"
     INSTRUMENT ||--o| QUOTE : "priced now"
     INSTRUMENT ||--o{ PRICE_DAILY : "priced historically"
+    INSTRUMENT ||--o{ PRICE_BACKFILL : "history fetched for"
     INSTRUMENT ||--o{ PRICE_OBSERVATION : "was quoted at"
     CLASSIFICATION ||--o{ INSTRUMENT : "labels"
 
@@ -586,6 +599,16 @@ erDiagram
         date date PK
         numeric close "numeric(20,4)"
     }
+    PRICE_BACKFILL {
+        bigint id PK
+        bigint instrument_id FK "the instrument attempted"
+        timestamptz started_at "when the fetch began, not when the row committed"
+        date range_from "the range asked for"
+        date range_until "exclusive"
+        integer written "closes the spine did not already hold"
+        text outcome "filled | nothing_to_write | no_history | non_usd | split_unresolved | provider_failed"
+        text error "the provider's text, present exactly for provider_failed"
+    }
     PRICE_OBSERVATION {
         bigint instrument_id PK "composite with as_of"
         timestamptz as_of PK "the provider's own instant, never the poll time"
@@ -629,7 +652,7 @@ split is exact and each side is a decision:
 | `instrument.classification_id` → `classification` | `RESTRICT` | Not-null, so a row would be orphaned. |
 | `holding.position_set_id` → `position_set` | `CASCADE` | Holdings have no meaning apart from their set. |
 | `instrument_alias.instrument_id` → `instrument` | `CASCADE` | An alias is vocabulary about a row that no longer exists. |
-| `quote` / `price_daily` / `price_observation` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. The observation log is append-only and never pruned, but it is not history in the sense a position set is: it describes an instrument, and an instrument that never existed was never quoted. |
+| `quote` / `price_daily` / `price_observation` / `price_backfill` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. The observation log is append-only and never pruned, but it is not history in the sense a position set is: it describes an instrument, and an instrument that never existed was never quoted — nor was its history ever fetched, which is why the backfill ledger cascades with the rest rather than standing outside the graph as `price_poll` does. |
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
 
 **Only two of those deletes are reachable from the application at all:** a person who owns no
@@ -670,7 +693,7 @@ DESIGN.md §8.2 names as the weakest point in the whole design.
 
 **`latest_position_set(p_account_id, p_as_of)`** — `stable`, `cost 1000`, one function, one
 ordering. The cost is a planner hint rather than a property of the answer, argued in
-`0010_latest_position_set_cost.sql`. "Latest" is `max(as_of_date)` per account, tie-broken by
+`0011_latest_position_set_cost.sql`. "Latest" is `max(as_of_date)` per account, tie-broken by
 `created_at desc` then `id desc`. Re-uploading a correction for an as-of date that already has a set
 is a real occurrence; without the tie-break the answer is a coin flip. Surrogate keys are `bigint
 generated always as identity` precisely so that "tie-break by id descending" means "the later insert
@@ -720,7 +743,7 @@ anywhere.
 | Index | Definition | Serves |
 |---|---|---|
 | `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set` — matched exactly, so the tie-break is an index scan stopping at row one. The index every valuation read goes through. |
-| `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). Also the `Index Cond` every valuation read resolves `latest_position_set` into, since `0010_latest_position_set_cost.sql` priced the call out of a hash join. |
+| `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). Also the `Index Cond` every valuation read resolves `latest_position_set` into, since `0011_latest_position_set_cost.sql` priced the call out of a hash join. |
 | `holding_instrument_id_idx` | `(instrument_id)` | The instrument → holdings direction: which accounts hold this fund. |
 | `instrument_symbol_idx` | `(symbol)` | Resolving which row is cash (`current-statement.server.ts:80-86`) — on every `setBalance` write, and on every kind change into a kind that holds one balance. The lookup conjoins `price_source = 'fixed'`, which no index covers; `symbol` is the selective half. Also the refresh loop's `order by symbol`, which never looks a symbol up by value — it selects all feed instruments and matches in memory. |
 | `instrument_alias_instrument_id_idx` | `(instrument_id)` | Which raw strings point at this instrument. |
@@ -1090,9 +1113,43 @@ sequenceDiagram
     T->>PG: COMMIT
 ```
 
-A refresh writes five tables: the three tiers below, plus `price_poll` and `instrument.quote_type`
-when the provider names one — the latter is what keeps the Analysis screen's stocks-versus-funds
-split correct for instruments created before that column was filled in.
+Then, on the same tick and under the same lock, the backfill batch (ADR-0011). It runs whether or
+not quotes were asked for, which is why a weekend tick is no longer free:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as the same tick
+    participant PG as Postgres
+    participant P as PriceProvider
+    participant D as price_daily
+    participant B as price_backfill
+
+    T->>PG: which instruments' spines start later than their positions do?
+    Note right of T: Feed-priced, with a symbol, not attempted<br/>in the last day. Bounded, deepest gap first.
+    loop each candidate, one at a time
+        T->>P: getDailyCloses(symbol, range, tz) — one symbol per call
+        alt the call throws
+            P-->>T: error
+            T->>B: ledger provider_failed with the text, and carry on
+        else the feed refuses
+            P-->>T: no-history | non-usd | split-unresolved
+            T->>B: ledger the reason, written = 0
+        else closes
+            P-->>T: ProviderDailyClose[] — already un-adjusted for splits
+            T->>PG: BEGIN
+            T->>D: ONE insert, on conflict (instrument, date) DO NOTHING
+            Note right of D: The other write path upserts. This one<br/>never rewrites a close recorded live.
+            T->>B: ledger filled / nothing_to_write with the count from RETURNING
+            T->>PG: COMMIT
+        end
+    end
+```
+
+A refresh writes the three tiers below, plus `price_poll`, plus `instrument.quote_type` when the
+provider names one — the latter is what keeps the Analysis screen's stocks-versus-funds split correct
+for instruments created before that column was filled in — plus `price_backfill` and a second pass
+over `price_daily` for the batch that follows the quotes.
 
 **The three tiers, and why the split exists** (ADR-0006 fixes the vocabulary: an observation is not
 history and a quote is not a fact):
@@ -1101,16 +1158,29 @@ history and a quote is not a fact):
 |---|---|---|---|
 | `price_observation` | one row per instrument per provider instant | append-only, deduped, never pruned | `netWorthSessionSeries` / `accountSessionSeries` — the 1D line, and nothing else |
 | `quote` | one row per instrument | overwritten in place | `holding_valued` — today's figures |
-| `price_daily` | **at most** one row per instrument per trading day | the immutable spine | `holding_valued_at(d)` — every historical figure |
+| `price_daily` | **at most** one row per instrument per trading day | the immutable spine, written by two paths: the quotes' upsert, and the backfill's insert-where-absent, which never rewrites a row the quotes wrote | `holding_valued_at(d)` — every historical figure |
 
 `quote` is deliberately **not** a projection of the log and is not derivable from it: the seeded
 `USD` row that prices every bank balance and liability will never generate an observation, and
 `is_stale` asserts the *absence* of one — something an append-only log cannot represent.
 
-The whole write is one transaction, so a committed fetch is recorded in all of them or in none. The
-one thing that does not follow from it: a refresh whose writes fail leaves no `price_poll` row
-either, so the table separates a quiet market from a server that was not running, but not from a
+The whole *quote* write is one transaction, so a committed fetch is recorded in all of them or in
+none. The one thing that does not follow from it: a refresh whose writes fail leaves no `price_poll`
+row either, so the table separates a quiet market from a server that was not running, but not from a
 refresh that ran and could not commit.
+
+The batch that follows is **one transaction per instrument**, not one for the batch: an attempt's
+closes and the `price_backfill` row describing them commit together or not at all, and nothing spans
+two attempts. That is deliberate — a batch is a bounded sequence of independent fetches, and one
+unreachable instrument must not undo the four that already landed.
+
+`price_backfill` is `price_poll`'s sibling and shares its argument — an attempt recorded whether or
+not it produced anything, so a silence can be read. Two
+things are its own: it references the instrument, because an attempt is about one, and it stores a
+named `outcome` and the provider's `error` text where `price_poll` stores only counts. That is what
+makes it the retry clock — an instrument attempted in the last day is not a candidate, so an
+unfillable gap costs one request a day rather than one every tick — and what lets Settings → Prices
+give a reason rather than a silence.
 
 **`price_observation.payload` is an archive, never an operand.** The provider's raw entry is kept on
 the same precedent that keeps every uploaded CSV in `position_set.raw_file` — an audit artifact that
@@ -1409,7 +1479,7 @@ still-shutting-down container, and a determined operator can run two.
 | Race | Guard | Where |
 |---|---|---|
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
-| Two poller ticks in different processes | Advisory lock per tick, distinct key | `prices.server.ts` (`withRefreshLock`) |
+| Two refreshes anywhere — a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
 | Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
@@ -1456,6 +1526,7 @@ one household's instance and the operator reads `docker compose logs`.
 | `GET /healthz` | Database reachability **and** migration currency. 200 or 503, `Cache-Control: no-store`, never authenticated |
 | Startup | The migration runner logs `applied` / `skip` per file |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
+| Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
 | Provider failure | `console.error`, then every selected instrument marked stale |
 | Refused sign-in | Not the app's. The gate logs it; `docker compose logs gate` is where a refusal is read, and the runbook is what indexes it by symptom |
 | Freshness, in the UI | The "as of" line, driven by the *oldest* `quote.as_of` among held feed instruments |
@@ -1468,24 +1539,28 @@ the exemption survives only as long as that file says so.
 ### 7.5 The provider seam
 
 ```
-        ┌───────────────────────────────────────────────────────────┐
-        │  PriceProvider                                            │
-        │    getQuotes(symbols: string[]): Promise<ProviderQuote[]> │
-        └───────────────────────┬───────────────────────────────────┘
+        ┌────────────────────────────────────────────────────────────────────────────┐
+        │  PriceProvider                                                             │
+        │    getQuotes(symbols: string[]): Promise<ProviderQuote[]>                  │
+        │    getDailyCloses(symbol: string, range, tz: string): Promise<History>     │
+        └───────────────────────┬────────────────────────────────────────────────────┘
                     ┌───────────┴────────────┐
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
-        the only importer in app/     implements this and nothing else;
-        (price-provider.server:494)   the refresh tests reach no network
+        the only importer in app/     implements both and nothing else;
+        (price-provider.server:705)   no test reaches the network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
 makes that tolerable is that swapping it is a day's work — which is only true while this interface is
-the sole thing the write path imports. One test imports the library directly
-(`tests/price-provider.test.ts:393`), deliberately, to pin the static-versus-instance shape the
-adapter depends on.
+the sole thing the write path imports. Both methods are required, not optional: a provider that
+cannot answer history is not this application's provider, and an optional method would let a batch be
+skipped with nothing saying so. One test imports the library directly
+(`tests/price-provider.test.ts:812`), deliberately, to pin the static-versus-instance shape the
+adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
+client hands back.
 
-Three conversions happen at this boundary and nowhere else:
+These conversions happen at this boundary and nowhere else:
 
 - **Floats become decimal strings.** The provider hands back JavaScript numbers, which is exactly what
   a money column must never see. The conversion happens once, here — not in the write path, where it
@@ -1495,7 +1570,13 @@ Three conversions happen at this boundary and nowhere else:
   because a refresh must not lose ninety-nine prices over one foreign listing. `probeSymbol`, used at
   instrument creation, returns it *named* — because there the caller is a person creating one
   instrument, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
-  the one distinction they can act on.
+  the one distinction they can act on. `getDailyCloses` refuses a non-USD history the same way,
+  before a figure is read.
+- **The split un-adjust**, on history only. The feed restates closes through later splits while a
+  statement records shares as held on the day, so each close is multiplied back by the ratio of every
+  split later than it. It happens *here*, at the seam, on `money.ts`'s `BigInt` units with one
+  rounding at the end — never as a float, and never in the writer, which inserts what it is handed
+  and multiplies nothing (§5.6, ADR-0011).
 
 ### 7.6 Security posture
 
@@ -1807,7 +1888,7 @@ both were measured on one household — the 21 accounts, 97 holdings and 98 feed
 `docs/research/2026-09-01-overview-1d-latency/harness/scale-shape.sql` builds, which is still the
 single reproduction path: the 1D read, in
 [`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md),
-and `latest_position_set`'s planner cost, in `migrations/0010_latest_position_set_cost.sql`.
+and `latest_position_set`'s planner cost, in `migrations/0011_latest_position_set_cost.sql`.
 
 | Choice | Right here because | Would break at |
 |---|---|---|
@@ -1821,7 +1902,7 @@ and `latest_position_set`'s planner cost, in `migrations/0010_latest_position_se
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
 
 **Four indexes carry the read path**, and each is matched exactly by what reads it, so no lookup
-here becomes a scan of the table and a sort. Because `0010_latest_position_set_cost.sql` prices it
+here becomes a scan of the table and a sort. Because `0011_latest_position_set_cost.sql` prices it
 at 1000, `latest_position_set` runs once per account for a plain read, and once per (account, date)
 across a plotted series: before that the planner hash-joined on the call and re-evaluated it per
 bucket candidate — 7,415 calls on the harness shape against the 3,780 the work needs — and the cost
@@ -1940,9 +2021,9 @@ still live in the current code:
 | `uploads.server.ts` | Drafts, multipart reading, the diff, and `commitUpload` — the ingest flow's one write |
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
-| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, and the freshness read |
-| `price-provider.server.ts` | **The only importer of `yahoo-finance2`.** The provider interface — including the raw entry it hands on for the archive, attached past every refusal — and the symbol probe |
-| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards |
+| `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill — its candidate query, its batch, its ledger, and the composition every refresh runs |
+| `price-provider.server.ts` | **The only importer of `yahoo-finance2`.** The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe |
+| `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
 | `balances.server.ts` | Setting a single-position balance: the sign is derived, never typed, and the write is refused when the account's current statement lists anything one figure would replace |
 | `accounts.server.ts` | Accounts. Nothing is ever deleted — `closeAccount` is the only retirement. The kind is the one field an edit can refuse, because every screen reads it as a claim about what the rows mean |
@@ -2004,10 +2085,10 @@ there.
 | `settings/accounts.tsx` | The account list and the add form. Editing and closing are their own screen, not row affordances |
 | `settings/account.tsx` | One account: correct it, or close it — a separate submission with its own acknowledgement, refused by the domain when the tick is missing. Nothing here deletes anything |
 | `settings/tax.tsx` | The capital gains rate — a stored setting, not an environment variable, because it is the household's number (`0005_app_setting.sql`) |
-| `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls |
+| `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls — and the list of holdings whose price history does not reach as far back as they are held, with the last attempt's outcome in words |
 | `settings/display.tsx` | The masking policy a browser opens in. **Not the masking control** — ADR-0002 records why that lives in the chrome |
 | `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
-| `refresh.ts` | The one way a person spends a provider request on demand — a resource route, like `masking.ts`, so a press works with JavaScript off. Owns `RefreshOutcome`, which keeps a held lock, a database failure and a provider failure that still counts as done from collapsing into one answer |
+| `refresh.ts` | The one way a person spends a provider request on demand — a resource route, like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. Owns `RefreshOutcome`, which keeps a held lock, a database failure and a provider failure that still counts as done from collapsing into one answer |
 | `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Never checks the provider, never requires authentication (§7.4) |
 
 ### `app/components/`
@@ -2048,7 +2129,8 @@ functions rather than only a component, so this tree is not purely presentationa
 | `0007_masking_policy.sql` | The `masking_policy` column on `app_setting` |
 | `0008_refresh_cadence.sql` | The `refresh_cadence_minutes` column on `app_setting` |
 | `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
-| `0010_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
+| `0010_price_backfill.sql` | `price_backfill` — one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
+| `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
 
 ### `public/`
 
@@ -2101,9 +2183,10 @@ where each piece lives.
 | **Coverage** | `{ known, total }` beside every figure, so a partial answer is labelled partial rather than understated |
 | **Stale** | A price that exists and failed to refresh. Distinct from **unpriced**, which is a price that has never existed |
 | **Carry-forward** | Resolving a date to the last `price_daily` close at or before it. Why Saturday is worth Friday's close, and why USD prices at 1.00 on any date |
-| **The spine** | `price_daily` — at most one row per instrument per trading day. Non-trading days get no row at all, and a missed poll is a visible gap the carry-forward closes |
+| **The spine** | `price_daily` — at most one row per instrument per trading day. Non-trading days get no row at all; a missed poll is a visible gap the carry-forward closes, and one the next backfill of that instrument fills as a side effect |
 | **Observation** | One price the feed reported for one instrument, filed under the instant the provider says it was struck. Kept forever, never edited, one row per distinct instant. Not history — history is finished days |
 | **The log** | `price_observation` — every observation, append-only. Read by the 1D chart and by nothing else, and invisible to every valuation of a past date |
 | **Poll** | One refresh attempt, recorded whether or not any observation resulted. What tells a quiet market apart from a server that was not running |
+| **Backfill** | Filling an instrument's daily closes for the finished days its position history reaches back to but its spine does not, from the feed's own history. Fills what is absent and never replaces a close the running system recorded itself; a day the market did not trade stays absent |
 | **Session** | One trading day as 1D plots it: the instants the log holds for the latest `market_date` in it. Derived from what was observed, never from a calendar |
 | **Draft** | An in-progress upload. Scaffolding, not history: swept at 24 hours, deleted by its own commit, and unreachable the moment its account closes. The FK cascades on account delete, which nothing in the application does |

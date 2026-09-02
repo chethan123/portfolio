@@ -259,8 +259,9 @@ happens to need it.
 **One variable this table used to carry is gone.** How often quotes are refreshed is the
 household's dial rather than the deployment's, so it moved into the application: set it at
 Settings → Prices (whole minutes, 1–1440, default 15; the automatic poll still runs in the app
-process and only while the market is open — the **Refresh now** control on any figure screen spends
-a request at any hour). An environment that still sets the old
+process; its *quotes* are asked for only while the market is open, while the backfill batch beside
+them rides a tick at any hour and only while some spine still has a gap. The **Refresh now** control
+on any figure screen spends a request at any hour either way). An environment that still sets the old
 `PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
 once on that screen after upgrading.
 
@@ -727,6 +728,13 @@ and may drift — the code owns the wording:
   everything priced, a warning when anything came back stale. A tick that runs no refresh writes no
   line at all — [below](#there-is-no-price-line-in-the-log-has-four-causes) lists which silences
   are ordinary.
+- **One line per backfill batch a tick ran that attempted or failed something** — stem
+  `Price backfill`: instruments attempted, closes written, and how many calls failed. Informational
+  when nothing failed, a warning otherwise, and preceded by `Price backfill batch failed` at error
+  level when the batch itself could not go on. **Absent when there was nothing to fill**, which is
+  the ordinary case on an instance whose spine covers everything held — so, like the line above, a
+  silence here is usually not a fault. What each attempt came to is a `price_backfill` row and a
+  sentence at Settings → Prices.
 - **A provider outage** at error level — stem `Price provider failed` — every selected instrument
   is marked stale and the last known prices are kept. Other refresh failures (the pool, the
   advisory lock, the transaction) log `Price refresh failed`; the same failure on a **Refresh now**
@@ -759,15 +767,18 @@ Only the last is a fault:
    entry file to hook it to. A booted instance nobody has visited does zero refreshes, forever. The
    container healthcheck does not count — `/healthz` is a resource route and does not run the root
    loader.
-2. **The market is closed.** A tick outside market hours returns without spending a request and
-   without logging anything.
+2. **The market is closed.** A tick outside market hours asks for no quotes, so it writes no
+   `Price refresh` line and no `price_poll` row. It no longer returns before doing anything: it
+   still reads the cadence, still asks which spines have a gap, and may write a `Price backfill`
+   line and spend a request on one (ADR-0011).
 3. **Another refresh was already running or held the lock.** A tick that lands while one is still
    going, or while another process holds the advisory lock, is dropped silently — never queued.
 4. **The poller failed to start.** That one *does* log, once, at error level.
 
 A *successful* **Refresh now** press writes no `Price refresh` line: its outcome is reported on the
-screen that pressed it. The attempt still lands a `price_poll` row, and a currency refusal along
-the way still logs `Price refused`.
+screen that pressed it. It writes no `Price backfill` line either, though it runs a batch — that
+line belongs to the tick. The attempt still lands a `price_poll` row and the batch still lands its
+`price_backfill` rows, and a currency refusal along the way still logs `Price refused`.
 
 There is also a quiet period by design: the first tick is one full interval after the first page
 view, with no immediate poll, so a freshly recreated container is silent for up to the refresh
@@ -1064,7 +1075,9 @@ it does not measure the term below that actually grows.
 Nothing is ever pruned: no code deletes a price, anywhere. Two tables grow, at very different rates.
 
 **The daily spine grows slowly and is not worth thinking about.** `price_daily` gains one row per
-priced instrument per trading day, so roughly 250 rows per instrument per year. At the design target
+priced instrument per trading day, so roughly 250 rows per instrument per year — plus, once, however
+many years of history each instrument is held back through, which the backfill fills in at the same
+250 rows a year. At the design target
 of about a hundred instruments that is on the order of 25,000 rows a year, and low single-digit
 megabytes.
 
@@ -1084,7 +1097,10 @@ Two things make those upper bounds rather than forecasts. A price that has not m
 the log is keyed on the instant the provider stamped, so a mutual fund, which strikes one NAV a day,
 contributes one row a day whatever the cadence says. And the payload is the bulk of each row; it is
 stored out of line, so a query that reads only prices does not pay for it. A sibling `price_poll`
-table adds one row per refresh attempt — about twenty-six a day, which is nothing.
+table adds one row per refresh attempt — about twenty-six a day, which is nothing. `price_backfill`
+adds one row per instrument per backfill attempt, at most a handful per refresh and none once every
+spine reaches as far back as its holdings do; an instrument the feed can never fill costs one row a
+day forever, which is also nothing.
 
 **So: there is still deliberately no retention policy, but it is now a priced choice rather than a
 free one.** The premise this section used to rest on — that a household instance grows by a few
@@ -1100,7 +1116,7 @@ docker compose exec -T db psql -U portfolio -d portfolio -c \
   "select pg_size_pretty(pg_total_relation_size('price_observation'))"
 ```
 
-Two more terms are unbounded, and only one of them is data.
+Two more terms used to be unbounded; one still is, and it is the one that is data.
 
 **Retained statement originals.** Every upload keeps its complete CSV in the database, forever, on
 purpose — it is what makes an old import auditable. A brokerage CSV is tens of kilobytes and the
@@ -1108,21 +1124,12 @@ design target is a handful of uploads a quarter. Abandoned upload drafts are swe
 day old, but only when the *next* upload starts: there is no scheduler, so an instance nobody uploads
 to keeps its last abandoned draft indefinitely.
 
-**Container logs, which is the one likely to matter first.** `compose.yaml` has no `logging:` block,
-so every service uses Docker's default `json-file` driver with no size limit and no rotation. An idle
-instance still writes a request line every ten seconds from its own healthcheck, and a second from
-Caddy's. Cap it per service:
-
-```yaml
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
-
-or set the same options once as the daemon default in `/etc/docker/daemon.json`, which covers
-everything on the host rather than only this.
+**Container logs, which is now the one least likely to matter first.** An idle instance still writes
+a request line every ten seconds from its own healthcheck, and a second from Caddy's. `compose.yaml`
+caps this by explicitly configuring the `json-file` driver for every service with `max-size: "10m"`
+and `max-file: "3"`, meaning the logs for each container will not exceed roughly 30 MB on disk.
+A per-service `logging` block overrides whatever the operator sets as the daemon default (such as
+journald or `local`).
 
 **No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. On a
 machine that runs only this, that is the right default. On a shared host it means one runaway query

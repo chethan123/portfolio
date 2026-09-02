@@ -4,8 +4,9 @@ Prices mostly look after themselves, so this page is three short answers.
 
 ## "My total is the same as yesterday"
 
-Prices refresh on their own, in the background, while the market is open. Every screen with a
-figure carries the same **As of** line in its header — the age of the oldest fetched price on
+Prices refresh on their own, in the background: fresh quotes while the market is open, and past
+closes for anything held further back than the price history reaches, at any hour. Every screen with
+a figure carries the same **As of** line in its header — the age of the oldest fetched price on
 anything the household owns, whichever screen or owner you are looking at — and a **Refresh now**
 button beside it. One press spends one request for fresh quotes and says underneath
 what it did: how many prices it fetched, or that nothing was new since the stamp. That answer is
@@ -14,10 +15,12 @@ press that worked.
 
 So a total that has not moved usually means the market has not moved it:
 
-- **Outside trading hours, nothing refreshes on its own.** Evenings, weekends and market holidays
-  hold the last close. This is working correctly. Refresh now still works then — it usually finds
-  nothing new, but it is how a holding recorded on a weekend gets its first price without waiting
-  for Monday's open.
+- **Outside trading hours, no new quote arrives on its own.** Evenings, weekends and market
+  holidays hold the last close. This is working correctly. What does still happen at those hours is
+  filling in *past* closes for a holding recorded further back than the price history reaches — so a
+  statement uploaded on a Saturday is valued properly by Monday rather than after it. Refresh now
+  still works then too: it usually finds no new quote, but it is how a holding recorded on a weekend
+  gets its first price without waiting for Monday's open.
 - **Quantities only change when you record them.** A price moving is automatic; you holding more of
   something is not. That comes from [an uploaded statement](upload.md) or
   [a correction](holdings.md).
@@ -54,6 +57,10 @@ What follows from it:
 Setting such a price by hand is not possible yet — Settings lists Instruments as a tab that is not
 built. Until it exists, that holding stays outside the totals and the coverage sentence keeps saying
 so.
+
+A dash on a *past* date is the same honesty about a different thing: the prices for that date have
+not arrived yet, rather than never existing. **Settings → Prices** says which it is — whether the
+history is still being filled in, or why it never can be.
 
 ## Everything is in dollars
 

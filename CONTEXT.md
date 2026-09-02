@@ -93,9 +93,10 @@ _Avoid_: current value, latest value, ending balance, final value.
 ### How prices stay fresh
 
 **Refresh cadence**:
-How often the app asks the price feed for fresh quotes while the market is open — the household's
-dial, in whole minutes. Outside market hours no cadence spends anything, so the term speaks of
-refreshes rather than of the timer that drives them.
+How often the app refreshes prices — the household's dial, in whole minutes. Quotes are asked for
+only while the market is open; a backfill may ride a refresh at any hour, and only while some
+instrument's closes are still missing. The term speaks of refreshes rather than of the timer that
+drives them.
 _Avoid_: poll interval, polling frequency, update speed, refresh rate.
 
 **Observation**:
@@ -111,6 +112,12 @@ both are the same attempt at the same instruments. What tells a quiet market apa
 that was not running: a gap during market hours is the deployment's silence, and a row outside them
 is somebody asking.
 _Avoid_: refresh run, fetch, sync.
+
+**Backfill**:
+Filling an instrument's daily closes for the finished days its position history reaches back to
+but its spine does not, from the feed's own history. Fills what is absent and never replaces a
+close the running system recorded itself; a day the market did not trade stays absent.
+_Avoid_: historical import, catch-up, re-pricing, price sync.
 
 ### Who gets in
 
