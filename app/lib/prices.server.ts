@@ -7,6 +7,14 @@
  *   price_daily        one row per instrument per trading day — the immutable spine
  *   price_observation  one row per instrument per provider instant — append-only
  *   price_poll         one row per refresh attempt, whether or not it wrote
+ *   price_backfill     one row per backfill attempt per instrument (ADR-0011)
+ *
+ * **Two writers share the spine, and only one of them may rewrite a row.** The
+ * quotes' write upserts, deliberately (see below). The backfill's write inserts
+ * where absent and never updates: a close the poller recorded live is the
+ * record, and the feed's later restatement of it is a revision nobody asked
+ * for. That rule is the only thing that lets both write `price_daily` without
+ * one silently owning the other's rows.
  *
  * What keeps `price_daily` honest is which date it writes under: **the date
  * inside the quote's own timestamp, in the market's zone — never today's.**
@@ -45,7 +53,13 @@ import { sql } from "kysely";
 
 import { getDb, getPool, type Database } from "./db.server.ts";
 import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
-import type { PriceProvider, ProviderQuote } from "./price-provider.server.ts";
+import type {
+  HistoryRange,
+  PriceProvider,
+  ProviderDailyClose,
+  ProviderHistory,
+  ProviderQuote,
+} from "./price-provider.server.ts";
 
 import type { Kysely } from "kysely";
 import type pg from "pg";
@@ -310,6 +324,288 @@ export async function selectBackfillCandidates(
     symbol: row.symbol as string,
     rangeFrom: row.range_from,
   }));
+}
+
+/** What one backfill batch did, for the log line and for the tests. */
+export type BackfillReport = {
+  /** Instruments a history was asked for. */
+  attempted: number;
+  /** Closes the spine did not already hold, across the batch. */
+  written: number;
+  /** How many attempts ended each way. */
+  outcomes: Record<BackfillOutcome, number>;
+  /**
+   * Did the batch itself fail — a database error partway through? Always false
+   * out of {@link backfillCloses}, which does not catch one; set by
+   * {@link refreshPrices}, which does.
+   */
+  batchFailed: boolean;
+};
+
+/**
+ * The provider's three refusals, as the ledger spells them. The duplication is
+ * deliberate and named where each vocabulary is declared: one is the adapter's
+ * answer in the shape `SymbolProbe` uses, the other a `check` constraint's
+ * literals. This object is the whole of the mapping.
+ */
+const LEDGER_OUTCOME: Record<Exclude<ProviderHistory["status"], "ok">, BackfillOutcome> = {
+  "no-history": BACKFILL_OUTCOMES.noHistory,
+  "non-usd": BACKFILL_OUTCOMES.nonUsd,
+  "split-unresolved": BACKFILL_OUTCOMES.splitUnresolved,
+};
+
+/** A batch that has done nothing yet, or one whose counts were lost to a failure. */
+const emptyBackfillReport = (): BackfillReport => ({
+  attempted: 0,
+  written: 0,
+  outcomes: {
+    [BACKFILL_OUTCOMES.filled]: 0,
+    [BACKFILL_OUTCOMES.nothingToWrite]: 0,
+    [BACKFILL_OUTCOMES.noHistory]: 0,
+    [BACKFILL_OUTCOMES.nonUsd]: 0,
+    [BACKFILL_OUTCOMES.splitUnresolved]: 0,
+    [BACKFILL_OUTCOMES.providerFailed]: 0,
+  },
+  batchFailed: false,
+});
+
+/**
+ * Fill the spine backwards for a bounded batch of instruments whose position
+ * history reaches back behind it (ADR-0011).
+ *
+ * Sequential, one instrument at a time, awaiting each call before the next:
+ * nothing is issued in parallel and nothing is queued, because a queue of
+ * pending fetches against an unofficial endpoint is how an instance gets rate
+ * limited. The batch bound is the whole of the pacing, and a batch that cannot
+ * finish before the next tick is simply resumed by it — the candidate read is
+ * re-asked every time and answers with whatever is still open.
+ *
+ * **A provider failure for one instrument is not a failure of the batch**: it
+ * is ledgered with its text and the next symbol is tried, because the next
+ * symbol may be fine. **A database failure is**, and is deliberately not caught
+ * here — the instrument being written is what would fail again, and the
+ * composition above catches it so the batch cannot falsify what the quotes
+ * already committed.
+ *
+ * The range's end is today's market date, exclusive, so the last day written is
+ * the previous trading day and today's row stays the poller's provisional one.
+ */
+export async function backfillCloses(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  db: Kysely<Database> = getDb(),
+): Promise<BackfillReport> {
+  const until = marketDateOf(new Date(), marketTimeZone);
+  const candidates = await selectBackfillCandidates(db);
+
+  const report = emptyBackfillReport();
+
+  for (const candidate of candidates) {
+    const range: HistoryRange = { from: candidate.rangeFrom, until };
+
+    // Before the fetch, `refreshQuotes`'s reasoning: the span to the commit is
+    // how long the provider took, and an attempt that never commits leaves no
+    // row at all.
+    const startedAt = new Date();
+
+    let history: ProviderHistory;
+    try {
+      history = await provider.getDailyCloses(candidate.symbol, range, marketTimeZone);
+    } catch (error) {
+      const outcome = BACKFILL_OUTCOMES.providerFailed;
+
+      await inTransaction(db, (trx) =>
+        writeBackfillAttempt(trx, {
+          instrumentId: candidate.id,
+          startedAt,
+          range,
+          written: 0,
+          outcome,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+
+      report.attempted += 1;
+      report.outcomes[outcome] += 1;
+      continue;
+    }
+
+    if (history.status !== "ok") {
+      const outcome = LEDGER_OUTCOME[history.status];
+
+      await inTransaction(db, (trx) =>
+        writeBackfillAttempt(trx, {
+          instrumentId: candidate.id,
+          startedAt,
+          range,
+          written: 0,
+          outcome,
+          error: null,
+        }),
+      );
+
+      report.attempted += 1;
+      report.outcomes[outcome] += 1;
+      continue;
+    }
+
+    // The closes and the row describing them, in one transaction: the ledger
+    // must not claim a fill that rolled back.
+    const written = await inTransaction(db, async (trx) => {
+      const count = await writeBackfilledCloses(trx, candidate.id, history.closes);
+
+      await writeBackfillAttempt(trx, {
+        instrumentId: candidate.id,
+        startedAt,
+        range,
+        written: count,
+        outcome: count > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite,
+        error: null,
+      });
+
+      return count;
+    });
+
+    report.attempted += 1;
+    report.written += written;
+    report.outcomes[written > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite] += 1;
+  }
+
+  return report;
+}
+
+/**
+ * The spine's second write path: every trading day the feed returned that the
+ * spine does not already hold.
+ *
+ * `do nothing`, never `do update`, and the invariant is
+ * `docs/importing-history.md:283`'s: **a backfill must never overwrite what the
+ * running system recorded live.** A separate statement from
+ * {@link writeDailyClose}, which must go on upserting for the poller's own
+ * writes — the two rules are opposite and both are right.
+ *
+ * One insert for the whole series, counted from `returning`, so the ledger
+ * records how many rows were *new* rather than how many were offered —
+ * {@link writeObservations} is the pattern and the reasoning.
+ *
+ * Nothing is fabricated: only days the provider returned are written, so a
+ * weekend or a holiday stays the absence carry-forward already answers
+ * honestly. The close is the string the adapter handed over, cast to `numeric`
+ * and nothing more — the un-adjust for splits happened there, on `money.ts`'s
+ * units, and this multiplies nothing.
+ */
+async function writeBackfilledCloses(
+  db: Kysely<Database>,
+  instrumentId: string,
+  closes: readonly ProviderDailyClose[],
+): Promise<number> {
+  if (closes.length === 0) return 0;
+
+  const inserted = await db
+    .insertInto("price_daily")
+    .values(
+      closes.map((close) => ({
+        instrument_id: instrumentId,
+        date: close.date,
+        close: close.close,
+      })),
+    )
+    .onConflict((conflict) => conflict.columns(["instrument_id", "date"]).doNothing())
+    .returning("instrument_id")
+    .execute();
+
+  return inserted.length;
+}
+
+/** One row bound for the backfill ledger. */
+type BackfillAttempt = {
+  instrumentId: string;
+  startedAt: Date;
+  range: HistoryRange;
+  written: number;
+  outcome: BackfillOutcome;
+  error: string | null;
+};
+
+/**
+ * The attempt itself, recorded whether or not it wrote — {@link writePoll}'s
+ * reasoning, with one difference worth naming: **a provider failure here *is* a
+ * committed row.** The attempt happened, the next reader needs the text, and
+ * the retry clock is this table. Only a database failure leaves nothing, and
+ * that attempt is simply next time's candidate.
+ */
+async function writeBackfillAttempt(
+  db: Kysely<Database>,
+  attempt: BackfillAttempt,
+): Promise<void> {
+  await db
+    .insertInto("price_backfill")
+    .values({
+      instrument_id: attempt.instrumentId,
+      started_at: attempt.startedAt,
+      range_from: attempt.range.from,
+      range_until: attempt.range.until,
+      written: attempt.written,
+      outcome: attempt.outcome,
+      error: attempt.error,
+    })
+    .execute();
+}
+
+/** Both halves of a refresh, the quotes' half null when it was not asked for. */
+export type RefreshPricesReport = {
+  quotes: RefreshReport | null;
+  backfill: BackfillReport;
+};
+
+/**
+ * One refresh: quotes, then one bounded backfill batch — the composition every
+ * caller shares (the poller's tick, **Refresh now**, and the request an upload
+ * fires once it has committed).
+ *
+ * It does not take the lock: every caller wraps it in {@link withRefreshLock}
+ * exactly as they wrapped `refreshQuotes`, so the test seam stays a transaction
+ * and the lock stays the caller's decision.
+ *
+ * **The batch cannot falsify what the quotes did.** A database failure inside
+ * the batch is caught and logged here rather than propagated, because
+ * `app/routes/refresh.ts` turns anything thrown out of the lock into an error
+ * outcome, which the control renders as "Refresh failed. The figures above are
+ * unchanged." — false the moment `refreshQuotes` has committed its closes. So a
+ * press reports its quotes, a tick logs its quotes' line, and the batch's
+ * trouble is the batch's own line. The counts are lost with the throw; the
+ * ledger holds what each completed attempt did.
+ *
+ * A call that asks for no quotes writes no `price_poll` row, by construction:
+ * that row is `refreshQuotes`'s, and a poll is an attempt at quotes.
+ */
+export async function refreshPrices(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  options: { quotes: true },
+  db?: Kysely<Database>,
+): Promise<{ quotes: RefreshReport; backfill: BackfillReport }>;
+export async function refreshPrices(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  options: { quotes: boolean },
+  db?: Kysely<Database>,
+): Promise<RefreshPricesReport>;
+export async function refreshPrices(
+  provider: PriceProvider,
+  marketTimeZone: string,
+  { quotes }: { quotes: boolean },
+  db: Kysely<Database> = getDb(),
+): Promise<RefreshPricesReport> {
+  const quotesReport = quotes ? await refreshQuotes(provider, marketTimeZone, db) : null;
+
+  try {
+    return { quotes: quotesReport, backfill: await backfillCloses(provider, marketTimeZone, db) };
+  } catch (error) {
+    console.error("Price backfill batch failed; the quotes it ran beside are unaffected:", error);
+
+    return { quotes: quotesReport, backfill: { ...emptyBackfillReport(), batchFailed: true } };
+  }
 }
 
 /**

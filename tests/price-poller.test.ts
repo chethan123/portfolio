@@ -21,7 +21,7 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createDatabase, withDb } from "~/lib/db.server";
-import { startPricePoller, stopPricePoller } from "~/lib/price-poller.server";
+import { requestRefresh, startPricePoller, stopPricePoller } from "~/lib/price-poller.server";
 import { createPool } from "../server/db.ts";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -52,16 +52,18 @@ const WEEKEND = new Date("2026-06-07T15:00:00Z");
 afterAll(closeTestDatabase);
 
 /** A provider that answers nothing and records having been asked. */
-function fakeProvider(): PriceProvider & { asked: string[][] } {
+function fakeProvider(): PriceProvider & { asked: string[][]; askedHistory: string[] } {
   const asked: string[][] = [];
+  const askedHistory: string[] = [];
   return {
     asked,
+    askedHistory,
     async getQuotes(symbols) {
       asked.push([...symbols]);
       return [];
     },
-    // Required by the interface; no tick in this file has a gap to fill.
-    async getDailyCloses() {
+    async getDailyCloses(symbol) {
+      askedHistory.push(symbol);
       return { status: "no-history" };
     },
   };
@@ -141,7 +143,10 @@ function watchedPool(): WatchedPool {
  * drives is a real one, and `pg` times its connect attempts with `setTimeout`.
  * Everything up to the tick's first `await` — including the market-hours check,
  * which is why `Date` is faked at all — runs inside `advanceTimersByTime`, so
- * this returns with the ticks *started* and the caller waits on the pool.
+ * this returns with the ticks *started* and the caller waits on the pool. A
+ * tick outside market hours no longer stops there: it asks for no quotes and
+ * goes on to spend a connection on the backfill batch, so every case here waits
+ * on the pool rather than assuming a weekend tick returns first.
  *
  * The poller is stopped before the real timers come back, so the handle being
  * cleared is the handle that was created and no test can leave a timer behind.
@@ -216,19 +221,33 @@ describe("the connection a tick borrows", () => {
   );
 
   it(
-    "is not spent at all outside market hours",
-    withDatabase(async ({ db }) => {
+    "is spent outside market hours on the backfill, but no quote is asked for and no poll recorded",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const watched = watchedPool();
       const provider = fakeProvider();
 
       try {
-        // The calendar decides only whether to spend a request; getting it
-        // wrong cannot corrupt anything. What it must not do is reach the
-        // database and the network every quarter of an hour all weekend.
-        await withDb(db, async () => runTicks(provider, { at: WEEKEND }), watched.pool);
+        // The calendar used to keep the tick off the database all weekend. It
+        // no longer can: a refresh is quotes and then one backfill batch
+        // (ADR-0011), and a statement uploaded on a Saturday should be valued
+        // by Monday's open rather than after it. So the calendar now decides
+        // only whether *quotes* are asked for, and a weekend tick spends a
+        // connection on the cadence read and the gap query.
+        await withDb(
+          db,
+          async () => {
+            runTicks(provider, { at: WEEKEND });
+            await watched.handedBack(1);
+          },
+          watched.pool,
+        );
 
         expect(provider.asked).toEqual([]);
-        expect(watched.pool.totalCount).toBe(0);
+        expect(watched.destroyed).toEqual([false]);
+
+        // A poll is an attempt at quotes, and this tick attempted none.
+        expect(await db.selectFrom("price_poll").selectAll().execute()).toEqual([]);
       } finally {
         await watched.close();
       }
@@ -314,6 +333,114 @@ describe("a tick that arrives while one is still running", () => {
         expect(provider.asked).toHaveLength(1);
         expect(watched.destroyed).toEqual([false]);
       } finally {
+        await watched.close();
+      }
+    }),
+  );
+});
+
+describe("a refresh an upload asks for", () => {
+  it(
+    "runs quotes regardless of the calendar, unlike the tick's own schedule",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const watched = watchedPool();
+      const provider = fakeProvider();
+
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: WEEKEND });
+      try {
+        await withDb(
+          db,
+          async () => {
+            startPricePoller(provider);
+
+            // The person who just uploaded is present, and a quote is what
+            // they are implicitly asking for — a Saturday upload should not
+            // have to wait until Monday for its first price.
+            requestRefresh();
+            await watched.handedBack(1);
+          },
+          watched.pool,
+        );
+
+        expect(provider.asked).toEqual([["VTI"]]);
+        expect(watched.destroyed).toEqual([false]);
+      } finally {
+        stopPricePoller();
+        vi.useRealTimers();
+        await watched.close();
+      }
+    }),
+  );
+
+  it(
+    "is dropped while a tick is running, rather than queued behind it",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const watched = watchedPool();
+      const provider = fakeProvider();
+
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: TRADING_HOUR });
+      try {
+        await withDb(
+          db,
+          async () => {
+            startPricePoller(provider);
+
+            // The tick is started and has not finished; the request lands on
+            // the same `running` flag an overlapping tick lands on. A queue of
+            // pending fetches against an unofficial API is how an instance
+            // gets rate-limited.
+            vi.advanceTimersByTime(INTERVAL_MS);
+            requestRefresh();
+
+            await watched.handedBack(1);
+          },
+          watched.pool,
+        );
+
+        expect(provider.asked).toHaveLength(1);
+      } finally {
+        stopPricePoller();
+        vi.useRealTimers();
+        await watched.close();
+      }
+    }),
+  );
+
+  it(
+    "reaches no provider when the poller was never started, and is not replayed when it is",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const watched = watchedPool();
+      const provider = fakeProvider();
+
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: TRADING_HOUR });
+      try {
+        await withDb(
+          db,
+          async () => {
+            // What an action sees in a process whose first loader has not run
+            // yet: `app/root.tsx` starts the poller from a loader, and an
+            // action runs before its own request's loaders. Dropped, not
+            // queued — so starting the poller afterwards does not replay it,
+            // and the uploaded instruments wait for the next tick.
+            requestRefresh();
+
+            startPricePoller(provider);
+
+            // Long enough for a replayed request to have shown up.
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          },
+          watched.pool,
+        );
+
+        expect(provider.asked).toEqual([]);
+        expect(provider.askedHistory).toEqual([]);
+        expect(watched.pool.totalCount).toBe(0);
+      } finally {
+        stopPricePoller();
+        vi.useRealTimers();
         await watched.close();
       }
     }),

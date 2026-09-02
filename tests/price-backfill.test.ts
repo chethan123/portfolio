@@ -13,15 +13,26 @@
  * reason: they are the only thing that stops a count and an outcome disagreeing
  * years later, and TypeScript cannot enforce a rule Postgres holds.
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import {
   BACKFILL_OUTCOMES,
+  backfillCloses,
+  refreshPrices,
   selectBackfillCandidates,
   type BackfillOutcome,
 } from "~/lib/prices.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
+
+import type { Kysely, KyselyPlugin } from "kysely";
+import type { Database } from "~/lib/db.server";
+import type {
+  HistoryRange,
+  PriceProvider,
+  ProviderHistory,
+  ProviderQuote,
+} from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
 
@@ -477,6 +488,477 @@ describe("what the ledger will and will not record", () => {
           error: "nothing failed",
         }),
       ).rejects.toThrow(/price_backfill_error_reported/);
+    }),
+  );
+});
+
+const NEW_YORK = "America/New_York";
+
+/** What one call to the fake was asked. */
+type Asked = { symbol: string; range: HistoryRange };
+
+/**
+ * A provider whose history answer each test states, and which records what it
+ * was asked.
+ *
+ * It answers verbatim and corrects nothing — `refresh-quotes.test.ts:25-31`'s
+ * reasoning, which holds for history as it does for quotes: a fake that tidies
+ * up the test's fixture cannot test what the caller does with a bad one. In
+ * particular it returns closes outside the range if a test states them.
+ */
+function fakeProvider(
+  answer: (symbol: string) => ProviderHistory,
+  quotes: ProviderQuote[] = [],
+): PriceProvider & { asked: Asked[] } {
+  const asked: Asked[] = [];
+
+  return {
+    asked,
+    async getQuotes() {
+      return quotes;
+    },
+    async getDailyCloses(symbol, range) {
+      asked.push({ symbol, range });
+      return answer(symbol);
+    },
+  };
+}
+
+/** A history of closes, in the shape the adapter hands one over. */
+const history = (closes: Array<[string, string]>): ProviderHistory => ({
+  status: "ok",
+  closes: closes.map(([date, close]) => ({ date, close })),
+});
+
+/**
+ * A handle whose insert into one table throws before it reaches SQL.
+ *
+ * A Kysely plugin rather than a Proxy over the instance, which breaks on its
+ * private fields; and a JavaScript throw rather than a row the constraint
+ * refuses, because under `withDatabase` the test body is one transaction that
+ * `inTransaction` joins — a Postgres refusal would abort it and nothing after
+ * could be observed (`refresh-quotes.test.ts:765-769` is the precedent).
+ *
+ * `price_backfill` is the intercept point because only the batch inserts one:
+ * `refreshQuotes` writes `price_daily` through the same handle, so a wrapper
+ * failing that would fail the quotes step first and the test would never reach
+ * the rule it states.
+ */
+function refusingInsertInto(db: Kysely<Database>, table: string): Kysely<Database> {
+  const plugin: KyselyPlugin = {
+    transformQuery({ node }) {
+      if (
+        node.kind === "InsertQueryNode" &&
+        "into" in node &&
+        node.into?.table.identifier.name === table
+      ) {
+        throw new Error(`the database refused an insert into ${table}`);
+      }
+      return node;
+    },
+    async transformResult({ result }) {
+      return result;
+    },
+  };
+
+  return db.withPlugin(plugin);
+}
+
+/** One instrument, held from `asOf`, priced from the feed. */
+async function heldFrom(
+  { seedAccount, seedInstrument, seedPositionSet }: Parameters<Parameters<typeof withDatabase>[0]>[0],
+  { symbol, asOf }: { symbol: string; asOf: string },
+) {
+  const account = await seedAccount();
+  const instrument = await seedInstrument({ symbol, priceSource: "feed" });
+  await seedPositionSet({
+    account,
+    asOf,
+    holdings: [{ instrument, quantity: "10.00000000" }],
+  });
+  return instrument;
+}
+
+describe("what a batch writes to the spine", () => {
+  it(
+    "writes every trading day the feed returned, at exactly the figure it gave",
+    withDatabase(async (context) => {
+      const { db } = context;
+      const instrument = await heldFrom(context, { symbol: "NVDA", asOf: "2024-06-14" });
+
+      // The un-adjust is the adapter's and is not repeated here: what this
+      // asserts is that the writer stores what it was handed, unmultiplied.
+      const provider = fakeProvider(() =>
+        history([
+          ["2024-06-07", "1200.0000"],
+          ["2024-06-10", "120.0000"],
+        ]),
+      );
+
+      const report = await backfillCloses(provider, NEW_YORK, db);
+
+      const rows = await db
+        .selectFrom("price_daily")
+        .select(["date", "close"])
+        .where("instrument_id", "=", instrument.id)
+        .orderBy("date")
+        .execute();
+
+      expect(rows).toEqual([
+        { date: "2024-06-07", close: "1200.0000" },
+        { date: "2024-06-10", close: "120.0000" },
+      ]);
+      expect(report.written).toBe(2);
+      expect(report.outcomes.filled).toBe(1);
+    }),
+  );
+
+  it(
+    "leaves a close the running system recorded exactly as it was",
+    withDatabase(async (context) => {
+      const { db, seedDailyClose } = context;
+      const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+
+      // The poller's own row for a finished day. A backfill must never
+      // overwrite what the running system recorded live — the feed's later
+      // restatement of a close is a revision nobody asked for.
+      await seedDailyClose({ instrument, date: "2024-06-10", close: "250.0000" });
+
+      const provider = fakeProvider(() =>
+        history([
+          ["2024-06-07", "248.0000"],
+          ["2024-06-10", "999.9999"],
+        ]),
+      );
+
+      const report = await backfillCloses(provider, NEW_YORK, db);
+
+      const rows = await db
+        .selectFrom("price_daily")
+        .select(["date", "close"])
+        .where("instrument_id", "=", instrument.id)
+        .orderBy("date")
+        .execute();
+
+      expect(rows).toEqual([
+        { date: "2024-06-07", close: "248.0000" },
+        { date: "2024-06-10", close: "250.0000" },
+      ]);
+
+      // Counted from the insert's own `returning`: how many rows were new, not
+      // how many were offered.
+      expect(report.written).toBe(1);
+
+      const ledger = await db
+        .selectFrom("price_backfill")
+        .select(["written", "outcome"])
+        .where("instrument_id", "=", instrument.id)
+        .execute();
+
+      expect(ledger).toEqual([{ written: 1, outcome: "filled" }]);
+    }),
+  );
+
+  it(
+    "fills a hole inside an existing series and fabricates nothing around it",
+    withDatabase(async (context) => {
+      const { db, seedDailyClose } = context;
+      const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-03" });
+
+      // An outage cost the 11th. A hole is never a trigger on its own — it is
+      // filled as a side effect of the instrument being fetched for its head
+      // gap, which is the half of 0002's reasoning that survives.
+      await seedDailyClose({ instrument, date: "2024-06-10", close: "250.0000" });
+      await seedDailyClose({ instrument, date: "2024-06-12", close: "252.0000" });
+
+      const provider = fakeProvider(() =>
+        history([
+          ["2024-06-10", "250.0000"],
+          ["2024-06-11", "251.0000"],
+          ["2024-06-12", "252.0000"],
+        ]),
+      );
+
+      await backfillCloses(provider, NEW_YORK, db);
+
+      const rows = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", instrument.id)
+        .orderBy("date")
+        .execute();
+
+      // The 8th and 9th are a weekend the fake did not return: a row for one
+      // would state a close that never happened, where carry-forward already
+      // answers those dates honestly.
+      expect(rows.map((row) => row.date)).toEqual(["2024-06-10", "2024-06-11", "2024-06-12"]);
+    }),
+  );
+});
+
+describe("what a batch records", () => {
+  const REFUSALS = [
+    ["no-history", "no_history"],
+    ["non-usd", "non_usd"],
+    ["split-unresolved", "split_unresolved"],
+  ] as const;
+
+  for (const [status, outcome] of REFUSALS) {
+    it(
+      `records ${outcome} for a provider that answered ${status}, and writes no close`,
+      withDatabase(async (context) => {
+        const { db } = context;
+        const instrument = await heldFrom(context, { symbol: "GONE", asOf: "2024-06-01" });
+
+        const provider = fakeProvider(() =>
+          status === "non-usd" ? { status, currency: "GBP" } : { status },
+        );
+
+        const report = await backfillCloses(provider, NEW_YORK, db);
+
+        const ledger = await db
+          .selectFrom("price_backfill")
+          .select(["written", "outcome", "error"])
+          .where("instrument_id", "=", instrument.id)
+          .execute();
+
+        expect(ledger).toEqual([{ written: 0, outcome, error: null }]);
+        expect(report.outcomes[outcome]).toBe(1);
+
+        const closes = await db
+          .selectFrom("price_daily")
+          .select("date")
+          .where("instrument_id", "=", instrument.id)
+          .execute();
+        expect(closes).toEqual([]);
+      }),
+    );
+  }
+
+  it(
+    "records a provider failure with its text, and carries on to the next instrument",
+    withDatabase(async (context) => {
+      const { db, seedAccount, seedInstrument, seedPositionSet } = context;
+      const account = await seedAccount();
+      const first = await seedInstrument({ symbol: "BROKEN", priceSource: "feed" });
+      const second = await seedInstrument({ symbol: "FINE", priceSource: "feed" });
+
+      // Deeper gap first, so the failure is worked before the one that answers.
+      await seedPositionSet({
+        account,
+        asOf: "2024-01-31",
+        holdings: [{ instrument: first, quantity: "1.00000000" }],
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument: second, quantity: "1.00000000" }],
+      });
+
+      const provider = fakeProvider((symbol) => {
+        if (symbol === "BROKEN") throw new Error("429 Too Many Requests");
+        return history([["2024-03-25", "10.0000"]]);
+      });
+
+      const report = await backfillCloses(provider, NEW_YORK, db);
+
+      const ledger = await db
+        .selectFrom("price_backfill")
+        .select(["instrument_id", "outcome", "written", "error"])
+        .orderBy("id")
+        .execute();
+
+      expect(ledger).toEqual([
+        {
+          instrument_id: first.id,
+          outcome: "provider_failed",
+          written: 0,
+          error: "429 Too Many Requests",
+        },
+        { instrument_id: second.id, outcome: "filled", written: 1, error: null },
+      ]);
+
+      // The batch is bounded and the next symbol may be fine.
+      expect(report.attempted).toBe(2);
+      expect(report.outcomes.provider_failed).toBe(1);
+      expect(report.outcomes.filled).toBe(1);
+    }),
+  );
+
+  it(
+    "records nothing_to_write when the spine already held every day the feed returned",
+    withDatabase(async (context) => {
+      const { db, seedDailyClose } = context;
+      const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+      await seedDailyClose({ instrument, date: "2024-06-10", close: "250.0000" });
+
+      const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]));
+
+      const report = await backfillCloses(provider, NEW_YORK, db);
+
+      const ledger = await db
+        .selectFrom("price_backfill")
+        .select(["written", "outcome"])
+        .where("instrument_id", "=", instrument.id)
+        .execute();
+
+      expect(ledger).toEqual([{ written: 0, outcome: "nothing_to_write" }]);
+      expect(report.written).toBe(0);
+    }),
+  );
+
+  it(
+    "does not offer the instruments it just attempted to the next batch",
+    withDatabase(async (context) => {
+      const { db } = context;
+      await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+
+      const provider = fakeProvider(() => ({ status: "no-history" }));
+      await backfillCloses(provider, NEW_YORK, db);
+
+      // The ledger is the retry clock: an unfillable gap costs one request a
+      // day rather than one every tick.
+      expect(await selectBackfillCandidates(db)).toEqual([]);
+    }),
+  );
+});
+
+describe("what a batch asks for", () => {
+  it(
+    "asks one symbol per call, deepest gap first, over a range ending today",
+    withDatabase(async (context) => {
+      const { db, seedAccount, seedInstrument, seedPositionSet } = context;
+      const account = await seedAccount();
+      const deep = await seedInstrument({ symbol: "ZM", priceSource: "feed" });
+      const shallow = await seedInstrument({ symbol: "AAPL", priceSource: "feed" });
+
+      await seedPositionSet({
+        account,
+        asOf: "2019-06-28",
+        holdings: [{ instrument: deep, quantity: "1.00000000" }],
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument: shallow, quantity: "1.00000000" }],
+      });
+
+      const provider = fakeProvider(() => ({ status: "no-history" }));
+
+      // The batch takes no clock of its own; the range's end is today's market
+      // date, so the test states what today is. 02:00 UTC is still the previous
+      // evening in New York — the case a UTC truncation would get wrong, and
+      // the reason the end goes through `marketDateOf` rather than `toISOString`.
+      vi.useFakeTimers({ now: new Date("2026-06-05T02:00:00Z") });
+      try {
+        await backfillCloses(provider, NEW_YORK, db);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(provider.asked).toEqual([
+        { symbol: "ZM", range: { from: "2019-06-21", until: "2026-06-04" } },
+        { symbol: "AAPL", range: { from: "2024-03-22", until: "2026-06-04" } },
+      ]);
+    }),
+  );
+});
+
+describe("a refresh, which is quotes and then one batch", () => {
+  const quote = (symbol: string): ProviderQuote => ({
+    symbol,
+    price: "100.0000",
+    quoteType: "ETF",
+    yieldPct: null,
+    annualDividendPerShare: null,
+    asOf: new Date("2026-06-05T20:00:00Z"),
+    fetchedAt: new Date("2026-06-05T20:00:05Z"),
+  });
+
+  it(
+    "writes no poll row when no quotes were asked for, and still runs the batch",
+    withDatabase(async (context) => {
+      const { db } = context;
+      const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+
+      const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]));
+
+      const report = await refreshPrices(provider, NEW_YORK, { quotes: false }, db);
+
+      // A poll is an attempt at quotes, and this attempted none.
+      expect(await db.selectFrom("price_poll").selectAll().execute()).toEqual([]);
+      expect(report.quotes).toBeNull();
+      expect(report.backfill.written).toBe(1);
+
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", instrument.id)
+        .execute();
+      expect(closes).toEqual([{ date: "2024-06-10" }]);
+    }),
+  );
+
+  it(
+    "writes a poll row when quotes were asked for, and runs the batch beside them",
+    withDatabase(async (context) => {
+      const { db } = context;
+      await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+
+      const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]), [quote("VTI")]);
+
+      const report = await refreshPrices(provider, NEW_YORK, { quotes: true }, db);
+
+      expect(await db.selectFrom("price_poll").selectAll().execute()).toHaveLength(1);
+      expect(report.quotes.priced).toBe(1);
+      expect(report.backfill.written).toBe(1);
+    }),
+  );
+
+  it(
+    "reports the quotes it committed when the batch fails against the database",
+    withDatabase(async (context) => {
+      const { db } = context;
+      const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
+
+      const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]), [quote("VTI")]);
+
+      const report = await refreshPrices(
+        provider,
+        NEW_YORK,
+        { quotes: true },
+        refusingInsertInto(db, "price_backfill"),
+      );
+
+      // The quotes committed before the batch ran, and the button renders an
+      // error as "the figures above are unchanged" — which would be false.
+      expect(report.quotes.priced).toBe(1);
+      expect(report.backfill.batchFailed).toBe(true);
+
+      const quoted = await db
+        .selectFrom("quote")
+        .select("price")
+        .where("instrument_id", "=", instrument.id)
+        .executeTakeFirst();
+      expect(quoted?.price).toBe("100.0000");
+
+      // The quote's own close for today, written by the step that committed
+      // before the batch ran. The batch's own partial write is visible here
+      // too, and only here: `withDatabase` hands the body one transaction and
+      // `inTransaction` joins it rather than nesting, so there is no rollback
+      // boundary inside the batch to observe. In production the handle is not a
+      // transaction, `inTransaction` opens a real one, and the attempt's closes
+      // and its ledger row commit together or not at all.
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", instrument.id)
+        .execute();
+      expect(closes.map((row) => row.date)).toContain("2026-06-05");
+
+      // The attempt that was interrupted leaves no ledger row and is simply
+      // next time's candidate.
+      expect(await db.selectFrom("price_backfill").selectAll().execute()).toEqual([]);
     }),
   );
 });

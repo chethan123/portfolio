@@ -1,5 +1,6 @@
 /**
- * "Refresh now": the one way a person can spend a provider request. A
+ * "Refresh now": the one way a person can spend a provider request on
+ * demand — quotes, and the backfill batch every refresh runs. A
  * resource route because five screens carry the control — an action per
  * screen would be the same twenty lines five times. Follows `masking.ts`: no
  * component, a real form target, so the control works with JavaScript off.
@@ -11,7 +12,7 @@ import { redirect } from "react-router";
 import { getConfig } from "../../server/config.ts";
 import { getDb } from "../lib/db.server.ts";
 import { yahooPriceProvider } from "../lib/price-provider.server.ts";
-import { refreshQuotes, withRefreshLock } from "../lib/prices.server.ts";
+import { refreshPrices, withRefreshLock } from "../lib/prices.server.ts";
 import { safeReturn } from "../lib/return-path.ts";
 
 import type { Route } from "./+types/refresh";
@@ -56,8 +57,14 @@ export async function action({ request }: Route.ActionArgs): Promise<RefreshOutc
  */
 async function run(): Promise<RefreshOutcome> {
   try {
+    // A press runs the backfill batch too (ADR-0011), and reports the quotes
+    // as it always has: what it promises the person is prices, and the batch is
+    // a side effect they will see on the chart. A batch that failed is the
+    // composition's own log line and never this outcome — the control renders
+    // an error as "the figures above are unchanged", which is false the moment
+    // the quotes have committed.
     const report = await withRefreshLock(() =>
-      refreshQuotes(yahooPriceProvider(), getConfig().MARKET_TIMEZONE, getDb()),
+      refreshPrices(yahooPriceProvider(), getConfig().MARKET_TIMEZONE, { quotes: true }, getDb()),
     );
 
     // `null` is the lock held elsewhere — not a failure: whoever holds it is
@@ -66,11 +73,11 @@ async function run(): Promise<RefreshOutcome> {
 
     return {
       status: "done",
-      requested: report.requested,
-      priced: report.priced,
-      stale: report.stale,
-      observed: report.observed,
-      providerFailed: report.providerFailed,
+      requested: report.quotes.requested,
+      priced: report.quotes.priced,
+      stale: report.quotes.stale,
+      observed: report.quotes.observed,
+      providerFailed: report.quotes.providerFailed,
     };
   } catch (error) {
     console.error("Manual price refresh failed; last known prices are kept:", error);
