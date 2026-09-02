@@ -672,6 +672,14 @@ export async function latestObservedSession(
  * `holding_valued_at` still counts it that day — 1D and 1W may disagree about
  * it, the price of valuing today's positions rather than the day's.
  *
+ * The line is a **running total**, not a valuation repeated per instant: a
+ * holding's price is a step function that moves only when its instrument is
+ * observed, so the value at an instant is the opening value plus, over every
+ * observation at or before it, that holding's new rounded value less its
+ * previous rounded value. The differences telescope exactly in `numeric` and
+ * the rounding stays per holding, which is what makes this the same sum to
+ * the character rather than merely close to it.
+ *
  * Arithmetic is `numeric` throughout and never leaves SQL (§5.6).
  *
  * @param session `YYYY-MM-DD`, from {@link latestObservedSession}.
@@ -681,65 +689,133 @@ async function readSessionSeries(
   session: IsoDate,
   where?: RawBuilder<SqlBool>,
 ): Promise<SessionPoint[]> {
-  // Narrowed inside the lateral, never the outer WHERE — `readSeries`'s
-  // reason: a filter out there rejects the manufactured all-null row and
-  // takes the instant down with it.
+  // The narrowing sits in the holdings CTE, never the outer WHERE: the
+  // instants are the log's and are unioned onto the same timeline as the
+  // price changes, so an instant at which this surface holds nothing — or
+  // holds nothing that was observed — is still a point on the line.
   const narrowing = where === undefined ? sql`true` : where;
 
   const rows = await sql<{ at: Date; amount: string; known: string; total: string }>`
-    select
-      instants.as_of as at,
-      cast(coalesce(sum(valued.value), 0) as numeric(20, 4)) as amount,
-      count(*) filter (where valued.price is not null) as known,
-      count(valued.instrument_id) as total
-
-    from (
+    with instants as (
       select distinct as_of
       from price_observation
       where market_date = ${session}::date
-    ) instants
+    ),
 
-    left join lateral (
-      select
-        held.instrument_id                                   as instrument_id,
-        resolved.price                                       as price,
-        cast(held.quantity * resolved.price
-             as numeric(20, 4))                              as value
-
+    -- The positions held now, one row per holding. The grain is the point:
+    -- rounding happens per holding here as it does everywhere else, which is
+    -- what keeps this total equal to the one the other readers report.
+    held as (
+      select h.id, h.instrument_id, h.quantity
       from account a
-      join holding held
-        on held.position_set_id = latest_position_set(a.id)
-
-      -- The price the feed had told us by this instant, if any.
-      left join lateral (
-        select o.price
-        from price_observation o
-        where o.instrument_id = held.instrument_id
-          and o.as_of <= instants.as_of
-        order by o.as_of desc
-        limit 1
-      ) observed on true
-
-      -- Otherwise the last close strictly before the session (see docstring).
-      left join lateral (
-        select pd.close
-        from price_daily pd
-        where pd.instrument_id = held.instrument_id
-          and pd.date < ${session}::date
-        order by pd.date desc
-        limit 1
-      ) carried on true
-
-      cross join lateral (
-        select coalesce(observed.price, carried.close) as price
-      ) resolved
-
+      join holding h on h.position_set_id = latest_position_set(a.id)
       where a.closed_at is null
         and ${narrowing}
-    ) valued on true
+    ),
 
-    group by instants.as_of
-    order by instants.as_of
+    -- The price in force as the session opens — the same three-way rule every
+    -- point applies: the latest observation before the first instant, from
+    -- any date; else the last close strictly before the session (see the
+    -- docstring for why strictly); else null, and the holding is unpriced.
+    opening as (
+      select
+        h.id, h.instrument_id, h.quantity,
+        coalesce(
+          (select o.price from price_observation o
+            where o.instrument_id = h.instrument_id
+              and o.as_of < (select min(as_of) from instants)
+            order by o.as_of desc limit 1),
+          (select pd.close from price_daily pd
+            where pd.instrument_id = h.instrument_id and pd.date < ${session}::date
+            order by pd.date desc limit 1)
+        ) as price
+      from held h
+    ),
+
+    -- Every observation of a held instrument inside the session's span, with
+    -- the price it replaces: that holding's previous observation in the span,
+    -- else its opening price. previous is null only for a holding priced for
+    -- the first time ever, which is the one case known moves.
+    --
+    -- Bounded by the span and not by market_date, so "same answer" holds on
+    -- any rows the table can hold rather than only on those stamped under
+    -- today's MARKET_TIMEZONE. The bounds are scalar subqueries and not a
+    -- one-row CTE because a CTE read twice is materialised, which hides the
+    -- values from the planner and seq-scans the whole log; inline they are
+    -- init-plan parameters it can put into an index condition on
+    -- price_observation_pkey — one scan per holding, and the log's growth
+    -- stops mattering.
+    changes as (
+      select
+        o.as_of,
+        op.quantity,
+        o.price,
+        coalesce(lag(o.price) over (partition by op.id order by o.as_of), op.price) as previous
+      from opening op
+      join price_observation o
+        on o.instrument_id = op.instrument_id
+       and o.as_of >= (select min(as_of) from instants)
+       and o.as_of <= (select max(as_of) from instants)
+    ),
+
+    -- What the observations at one instant add to the total and to the priced
+    -- count, rounded per holding exactly as the total is.
+    deltas as (
+      select
+        as_of,
+        sum(cast(quantity * price as numeric(20, 4))
+            - coalesce(cast(quantity * previous as numeric(20, 4)), 0)) as value_delta,
+        count(*) filter (where previous is null) as known_delta
+      from changes
+      group by as_of
+    ),
+
+    opening_total as (
+      select
+        coalesce(sum(cast(quantity * price as numeric(20, 4))), 0) as amount,
+        count(price) as known,
+        count(*) as total
+      from opening
+    ),
+
+    -- Instants and deltas on one timeline. A plotted instant has to take
+    -- every delta at or before it, ties included, and the default RANGE frame
+    -- of sum(...) over (order by as_of) includes the current row's peers —
+    -- which is o.as_of <= instants.as_of restated, with no ordering needed
+    -- between the two kinds of row.
+    timeline as (
+      select
+        as_of, true as plotted,
+        cast(0 as numeric) as value_delta, cast(0 as bigint) as known_delta
+      from instants
+      union all
+      select as_of, false, value_delta, known_delta
+      from deltas
+    ),
+
+    running as (
+      select
+        as_of, plotted,
+        sum(value_delta) over (order by as_of) as value_delta,
+        sum(known_delta) over (order by as_of) as known_delta
+      from timeline
+    )
+
+    -- The plotted filter sits out here, one step after the window rather than
+    -- inside running: a WHERE is evaluated before window functions and would
+    -- drop the delta rows before they were summed. known is cast back to
+    -- bigint because bigint + sum(bigint) is numeric in Postgres, and a
+    -- coverage count that changed type between two readers of one row shape
+    -- is the drift the row contract exists to refuse.
+    select
+      r.as_of                                              as at,
+      cast(ot.amount + r.value_delta as numeric(20, 4))    as amount,
+      cast(ot.known + r.known_delta as bigint)             as known,
+      ot.total                                             as total
+    from running r
+    cross join opening_total ot
+    where r.plotted
+    order by r.as_of
   `.execute(db);
 
   return rows.rows.map((row) => ({
@@ -762,7 +838,7 @@ export async function netWorthSessionSeries(
   session: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<SessionPoint[]> {
-  // `a` is the account alias inside the lateral, where this has to go.
+  // `a` is the account alias in the `held` CTE, where the narrowing goes.
   return readSessionSeries(db, session, ownedBy("a.owner_id", filter));
 }
 
