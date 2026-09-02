@@ -328,29 +328,23 @@ attempt to fill it came to. An empty list means this is not your problem.
 - **Nothing yet, or a recent `filled`.** Wait. A refresh fills a few instruments at a time, so a
   household that has just loaded years of statements works through them over a handful of refreshes.
   Pressing **Refresh now** spends one immediately.
-- **`no_history`.** The feed has nothing for that ticker — usually delisted or renamed. Note that a
-  delisted symbol loses *all* its history at the feed, including the years it traded, so this will
-  answer the same way forever at the cost of one request a day. There is nothing to do but enter
-  prices by hand once Settings → Instruments lands, or accept the gap.
-- **`non_usd`.** The instrument is a foreign listing. This instance stores no currency and will not
-  guess an exchange rate, so it stores nothing. The instrument should not have been created against
-  that ticker.
-- **`split_unresolved`.** A share split in the range could not be applied, so nothing was stored
-  rather than some rows right and some wrong. This is the one outcome that suggests a code or
-  library problem: check `docs/developing.md`'s split-convention recipe after any `yahoo-finance2`
-  upgrade.
-- **`provider_failed`.** The row carries the provider's own text. A rate limit or an outage clears
-  itself; it is retried once a day.
-- **"Never".** The instrument is priced by hand, or has no ticker recorded. The feed can never fill
-  it and the list says so; `importing-history.md` step 5 has the `psql` for entering closes by hand.
+- **`no_history`.** Nothing to do. The feed has no history for that ticker and will keep answering
+  so, at one request a day.
+- **`non_usd`.** Nothing to do here; the instrument should not have been created against that
+  ticker.
+- **`split_unresolved`.** The one outcome that suggests a code or library problem. Run
+  [`developing.md`](developing.md)'s split-convention check.
+- **`provider_failed`.** The row carries the provider's own text. Retried once a day; a rate limit
+  or an outage clears itself.
+- **"Never".** Nothing can fetch it. [`importing-history.md`](importing-history.md) step 5 has the
+  `psql` for entering closes by hand.
 
-One thing this screen cannot tell you: whether an instrument has *changed symbols*. The feed's
-history for a ticker belongs to whatever holds it now, so a renamed instrument is filled with the
-wrong company's closes and everything looks plausible. Spot-check a figure against a statement of
-the era for anything you know has changed.
+One thing this screen cannot tell you: whether an instrument has *changed symbols*, in which case it
+is filled with the wrong company's closes and every figure looks plausible. Spot-check a figure
+against a statement of the era for anything you know has changed.
 
-Why: [Growth and limits](operating.md#growth-and-limits), and
-[ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md).
+Why: [ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md), and
+[DESIGN.md §14](../DESIGN.md) limitation 14 for the symbol change.
 
 ---
 

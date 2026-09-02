@@ -169,8 +169,10 @@ export const refreshCadenceInput = z.object({
 export type RefreshCadenceInput = z.infer<typeof refreshCadenceInput>;
 
 /**
- * Minutes the poller waits between refreshes while the market is open
- * (DESIGN.md §6.2), read with the same `executeTakeFirstOrThrow` for the
+ * Minutes the poller waits between refreshes (DESIGN.md §6.2) — every tick,
+ * not only the in-session ones: quotes are asked for while the market is open
+ * and the backfill batch rides a tick at any hour (ADR-0011). Read with the
+ * same `executeTakeFirstOrThrow` for the
  * header's reason. The poller reads this before scheduling every tick rather
  * than once at start-up — the whole of how a save takes effect: no restart,
  * no signal. The cost is one single-row read per cycle; the honest

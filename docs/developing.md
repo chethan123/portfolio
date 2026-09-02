@@ -390,26 +390,29 @@ route never imports Zod and never states a domain rule
 
 ### Exercise a backfill locally
 
-The batch only runs when something has a gap, and a freshly seeded demo household has none — its
-closes reach back past its first statement. So make one, then watch a refresh close it.
+The batch only runs when something has a gap. The demo household has exactly one out of the box —
+the collective investment trust nobody can quote, which is a *permanent* gap and so never shows the
+batch doing anything. So make a fillable one, then watch a refresh close it.
 
-1. Seed the demo database as in the screenshot recipe below, then take an instrument's early closes
-   away, which is exactly the state a statement dated before the poller first ran leaves:
+Seed and serve the demo database as in the screenshot recipe below, then:
+
+1. Take an instrument's early closes away, which is the state a statement dated before the poller
+   first ran leaves. VTI is held for the whole demo history, so a year is plenty:
 
    ```sh
-   docker compose exec db psql -U portfolio -d portfolio -c "
+   psql postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo -c "
      delete from price_daily
      where instrument_id = (select id from instrument where symbol = 'VTI')
-       and date < date '2025-01-01';"
+       and date < current_date - interval '1 year';"
    ```
 
-2. Open **Settings → Prices**. The instrument is on the list now, with where it is held from, where
-   its prices start, and no attempt yet.
+2. Open **Settings → Prices**. VTI is on the list beside the trust now, with where it is held from,
+   where its prices start, and no attempt yet.
 3. Press **Refresh now** on any figure screen. The batch runs under the same lock as the quotes.
 4. Read what happened:
 
    ```sh
-   docker compose exec db psql -U portfolio -d portfolio -c "
+   psql postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo -c "
      select instrument_id, started_at, range_from, range_until, written, outcome, error
      from price_backfill order by started_at desc limit 5;"
    ```
@@ -423,16 +426,22 @@ closes reach back past its first statement. So make one, then watch a refresh cl
    wrong. `provider_failed` carries the provider's own text.
 
 An instrument is skipped for a day after any attempt, so a second press changes nothing — that is the
-retry clock, not a fault. To try again immediately, delete its ledger rows.
+retry clock, not a fault. To try again immediately, delete its ledger rows. Note that the trust never
+leaves the list whatever you press: nothing can fetch a price for it, which is the case the list
+exists to name.
 
 ---
 
-### Re-verify the split convention after upgrading `yahoo-finance2`
+### Verify the split convention, and re-verify it after upgrading `yahoo-finance2`
 
 The un-adjust in `app/lib/price-provider.server.ts` stands on one fact about the feed that the
-library does not document: that `close` is restated through later splits. Its module header says so,
-says when it was last checked, and says what to do if the answer changes. **Re-run this after any
-`yahoo-finance2` upgrade**, and record the result there.
+library does not document: that `close` is restated through later splits.
+
+**That fact has never been checked against the endpoint.** The slice was built where every Yahoo
+host is refused at the network, so the arithmetic ships on the convention the library implies rather
+than on a figure anyone read, and the adapter's module header says so in those words. **Running this
+once is outstanding work**, and running it again after any `yahoo-finance2` upgrade is the standing
+job. Record the answer in that header either way.
 
 One call, outside the suite — a REPL or a throwaway script — for a symbol with a large, recent,
 unambiguous split. NVDA's 10:1 on 2024-06-10 is the worked example:

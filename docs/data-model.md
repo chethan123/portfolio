@@ -154,7 +154,7 @@ The remaining tables stand alone, referencing nothing:
 | `manual_networth` | hand-typed pre-app net worth points, one per date |
 | `column_mapping` | saved CSV column mappings, keyed by institution + header fingerprint |
 | `app_setting` | the household's settings — a single row, enforced by the schema |
-| `price_poll` | one row per quote-refresh attempt, whatever it produced. `price_backfill` is *not* here: it references an instrument and cascades with it |
+| `price_poll` | one row per quote-refresh attempt, whatever it produced. Its backfill sibling `price_backfill` is in the graph above instead, since it names the instrument attempted |
 | `schema_migrations` | the migration ledger, created by the runner |
 
 ## 3. Conventions the whole schema follows
@@ -374,12 +374,12 @@ stopped server look identical — and this table is what tells them apart later.
 | `stale` | `integer` | no | instruments left stale (≥ 0) |
 
 **`price_backfill`** — one row per instrument per backfill attempt, recorded whether or not it wrote.
-`price_poll`'s sibling and its reasoning, with two differences: it references an instrument, because
-an attempt is about one; and a *provider* failure here is a committed row, because the attempt
-happened and the next reader needs its text. Only a database failure leaves nothing. It is also the
-retry clock — an instrument attempted within the last day is not a candidate — so an unfillable gap
-costs one request a day rather than one every tick, and Settings → Prices reads the latest row per
-instrument through the index below.
+`price_poll`'s sibling and its reasoning, with two things of its own: it references an instrument,
+because an attempt is about one; and it stores a named `outcome` and the provider's `error` text
+where `price_poll` stores only counts. Those are what make it useful twice over — as the retry clock,
+since an instrument attempted within the last day is not a candidate, so an unfillable gap costs one
+request a day rather than one every tick; and as what lets Settings → Prices give a reason rather
+than a silence, reading the latest row per instrument through the index below.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -456,7 +456,7 @@ numbers, not deployment configuration — deployment settings are environment va
 | `id` | `boolean` | no | primary key, CHECK `(id)` — always `true`, exactly one row |
 | `capital_gains_rate` | `numeric(9,6)` | no | default `23.8`; a *percentage stored as the percentage* (`23.800000`, not `0.238`), CHECK 0–100; applied by the Analysis screen to unrealized gains in taxable accounts |
 | `masking_policy` | `text` | no | default `'masked'`; `masked` \| `unmasked` \| `as_last_left` (CHECK) — what a browser nobody has toggled yet opens in ([ADR-0002](adr/0002-masking-is-a-display-state.md)) |
-| `refresh_cadence_minutes` | `integer` | no | default `15`, CHECK 1–1440; how often quotes refresh while the market is open |
+| `refresh_cadence_minutes` | `integer` | no | default `15`, CHECK 1–1440; how often prices refresh — quotes while the market is open, and a backfill batch beside them at any hour while some spine still has a gap |
 
 **`schema_migrations`** — the ledger, created by the runner
 ([`server/migrations.ts`](../server/migrations.ts)) rather than by a migration, since it must exist
@@ -576,9 +576,9 @@ flowchart LR
     subgraph pricing [Pricing — app/lib/prices.server.ts]
         P[price provider] --> Q[quote: overwrite]
         P --> PO[price_observation: append]
-        P --> PD[price_daily: latest price per market day]
+        P --> PD["price_daily: latest price per market day (quotes)<br/>+ insert where absent (backfill)"]
         P --> PL[price_poll: one row per attempt]
-        P --> BD[price_daily: backfill, insert where absent]
+        P --> PD
         P --> BF[price_backfill: one row per instrument attempted]
     end
 ```

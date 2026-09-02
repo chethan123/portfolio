@@ -17,7 +17,7 @@ So a total that has not moved usually means the market has not moved it:
 
 - **Outside trading hours, no new quote arrives on its own.** Evenings, weekends and market
   holidays hold the last close. This is working correctly. What does still happen at those hours is
-  filling in *past* closes for a holding recorded further back than the price history reached — so a
+  filling in *past* closes for a holding recorded further back than the price history reaches — so a
   statement uploaded on a Saturday is valued properly by Monday rather than after it. Refresh now
   still works then too: it usually finds no new quote, but it is how a holding recorded on a weekend
   gets its first price without waiting for Monday's open.

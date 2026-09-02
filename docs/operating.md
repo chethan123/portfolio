@@ -728,12 +728,13 @@ and may drift — the code owns the wording:
   everything priced, a warning when anything came back stale. A tick that runs no refresh writes no
   line at all — [below](#there-is-no-price-line-in-the-log-has-four-causes) lists which silences
   are ordinary.
-- **One line per backfill batch that attempted or failed something** — stem `Price backfill`:
-  instruments attempted, closes written, and how many calls failed. Informational when nothing
-  failed, a warning otherwise. **Absent when there was nothing to fill**, which is the ordinary case
-  on an instance whose spine covers everything held — so, like the line above, a silence here is
-  usually not a fault. What each attempt came to is a `price_backfill` row and a sentence at
-  Settings → Prices.
+- **One line per backfill batch a tick ran that attempted or failed something** — stem
+  `Price backfill`: instruments attempted, closes written, and how many calls failed. Informational
+  when nothing failed, a warning otherwise, and preceded by `Price backfill batch failed` at error
+  level when the batch itself could not go on. **Absent when there was nothing to fill**, which is
+  the ordinary case on an instance whose spine covers everything held — so, like the line above, a
+  silence here is usually not a fault. What each attempt came to is a `price_backfill` row and a
+  sentence at Settings → Prices.
 - **A provider outage** at error level — stem `Price provider failed` — every selected instrument
   is marked stale and the last known prices are kept. Other refresh failures (the pool, the
   advisory lock, the transaction) log `Price refresh failed`; the same failure on a **Refresh now**
@@ -775,8 +776,9 @@ Only the last is a fault:
 4. **The poller failed to start.** That one *does* log, once, at error level.
 
 A *successful* **Refresh now** press writes no `Price refresh` line: its outcome is reported on the
-screen that pressed it. The attempt still lands a `price_poll` row, and a currency refusal along
-the way still logs `Price refused`.
+screen that pressed it. It writes no `Price backfill` line either, though it runs a batch — that
+line belongs to the tick. The attempt still lands a `price_poll` row and the batch still lands its
+`price_backfill` rows, and a currency refusal along the way still logs `Price refused`.
 
 There is also a quiet period by design: the first tick is one full interval after the first page
 view, with no immediate poll, so a freshly recreated container is silent for up to the refresh

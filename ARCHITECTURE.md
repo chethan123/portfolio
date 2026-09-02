@@ -91,12 +91,12 @@ graph LR
 
 **External dependencies, in full.** Two, and they belong to different components. **Yahoo Finance**
 is the application's, and its only one: no email, no object store, no queue, no cache tier, no
-analytics. It is reached three ways, over two endpoints — the poller's batched *quote* fetch and the
-per-symbol *chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the
+analytics. It is reached three ways, over two endpoints — the poller's batched *quote* fetch and
+the per-symbol *chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the
 request path entirely, and `probeSymbol`, a single-symbol currency check that runs *inside* a form
-submission when someone creates a feed-priced instrument (§6.1). The last is the only place a third
-party can make a person wait. Both go through the one interface in §7.5, precisely because the endpoint is
-unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
+submission when someone creates a feed-priced instrument (§6.1). The last is the only place a
+third party can make a person wait. All three go through the one interface in §7.5, precisely
+because the endpoint is unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
 the browser is redirected there to sign in and the sidecar exchanges the code for a token, both
 outside the app process entirely. That seam is what keeps "an identity provider" out of the
 application's dependency list while the instance still has one.
@@ -358,13 +358,13 @@ grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:1141` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
-  to scope the "as of" line to instruments held in an open account, filtered to `price_source =
+- `prices.server.ts:1148` (`priceFreshness`) selects from `holding_valued` — not to value anything,
+  but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
   `holding` and `position_set` that §11.1 warns about, to find the earliest date an instrument was
-  held — the batch's next few and the whole list Settings → Prices renders, sharing one predicate so
-  a household and a tick cannot disagree about what has a gap. Both read dates and count nothing;
+  held — the batch's next few and the whole list Settings → Prices renders, sharing one predicate
+  so a household and a tick cannot disagree about what has a gap. Both read dates and count nothing;
   neither touches a money column. Neither takes an `OwnerFilter` and neither should: a coverage gap
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
@@ -456,8 +456,8 @@ Three properties of this path are deliberate:
 
 Every operation that produces **history** — the position sets every figure is computed from, the
 price spine they are valued against, and the vocabulary that makes them readable — appends. None
-rewrites a past fact. They are listed in full rather than counted, so adding one is a row here rather
-than a number to notice.
+rewrites a past fact. They are listed in full rather than counted, so adding one is a row here
+rather than a number to notice.
 
 | Operation | Module | Writes | Append-only? |
 |---|---|---|---|
@@ -1148,8 +1148,7 @@ sequenceDiagram
 A refresh writes the three tiers below, plus `price_poll`, plus `instrument.quote_type` when the
 provider names one — the latter is what keeps the Analysis screen's stocks-versus-funds split correct
 for instruments created before that column was filled in — plus `price_backfill` and a second pass
-over `price_daily` for the batch that follows the quotes. Listed rather than counted, because the
-list is what a reader needs and a count is a thing to keep correct.
+over `price_daily` for the batch that follows the quotes.
 
 **The three tiers, and why the split exists** (ADR-0006 fixes the vocabulary: an observation is not
 history and a quote is not a fact):
@@ -1172,11 +1171,15 @@ refresh that ran and could not commit.
 The batch that follows is **one transaction per instrument**, not one for the batch: an attempt's
 closes and the `price_backfill` row describing them commit together or not at all, and nothing spans
 two attempts. That is deliberate — a batch is a bounded sequence of independent fetches, and one
-unreachable instrument must not undo the four that already landed. `price_backfill` is `price_poll`'s
-sibling with one difference worth naming: a *provider* failure there is a committed row, because the
-attempt happened and the next reader needs its text, and only a database failure leaves nothing. It
-is also the retry clock — an instrument attempted in the last day is not a candidate — so an
-unfillable gap costs one request a day rather than one every tick.
+unreachable instrument must not undo the four that already landed.
+
+`price_backfill` is `price_poll`'s sibling and shares its argument — an attempt recorded whether or
+not it produced anything, so a silence can be read. Two
+things are its own: it references the instrument, because an attempt is about one, and it stores a
+named `outcome` and the provider's `error` text where `price_poll` stores only counts. That is what
+makes it the retry clock — an instrument attempted in the last day is not a candidate, so an
+unfillable gap costs one request a day rather than one every tick — and what lets Settings → Prices
+give a reason rather than a silence.
 
 **`price_observation.payload` is an archive, never an operand.** The provider's raw entry is kept on
 the same precedent that keeps every uploaded CSV in `position_set.raw_file` — an audit artifact that
@@ -1522,7 +1525,7 @@ one household's instance and the operator reads `docker compose logs`.
 | `GET /healthz` | Database reachability **and** migration currency. 200 or 503, `Cache-Control: no-store`, never authenticated |
 | Startup | The migration runner logs `applied` / `skip` per file |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
-| Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill`, written only when the batch attempted or failed something, so a tick that found no gap stays silent. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
+| Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
 | Provider failure | `console.error`, then every selected instrument marked stale |
 | Refused sign-in | Not the app's. The gate logs it; `docker compose logs gate` is where a refusal is read, and the runbook is what indexes it by symptom |
 | Freshness, in the UI | The "as of" line, driven by the *oldest* `quote.as_of` among held feed instruments |
@@ -1535,12 +1538,12 @@ the exemption survives only as long as that file says so.
 ### 7.5 The provider seam
 
 ```
-        ┌───────────────────────────────────────────────────────────────────────┐
-        │  PriceProvider                                                        │
-        │    getQuotes(symbols): Promise<ProviderQuote[]>                       │
-        │    getDailyCloses(symbol, range, tz): Promise<ProviderHistory>        │
-        └───────────────────────────────┬───────────────────────────────────────┘
-                    ┌──────────────────┴─────┐
+        ┌────────────────────────────────────────────────────────────────────────────┐
+        │  PriceProvider                                                             │
+        │    getQuotes(symbols: string[]): Promise<ProviderQuote[]>                  │
+        │    getDailyCloses(symbol: string, range, tz: string): Promise<History>     │
+        └───────────────────────┬────────────────────────────────────────────────────┘
+                    ┌───────────┴────────────┐
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
         the only importer in app/     implements both and nothing else;
@@ -1553,9 +1556,10 @@ the sole thing the write path imports. Both methods are required, not optional: 
 cannot answer history is not this application's provider, and an optional method would let a batch be
 skipped with nothing saying so. One test imports the library directly
 (`tests/price-provider.test.ts:812`), deliberately, to pin the static-versus-instance shape the
-adapter depends on — for `chart` as well as `quote`, since both are statics on the class that throw.
+adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
+client hands back.
 
-Three conversions happen at this boundary and nowhere else:
+These conversions happen at this boundary and nowhere else:
 
 - **Floats become decimal strings.** The provider hands back JavaScript numbers, which is exactly what
   a money column must never see. The conversion happens once, here — not in the write path, where it

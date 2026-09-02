@@ -414,8 +414,8 @@ rest of the screen is built from.
 
 ```ts
 interface PriceProvider {
-  getQuotes(symbols: string[]): Promise<Quote[]>   // price, currency, yield, annual dividend
-  getDailyCloses(symbol, range, tz): Promise<History>  // one symbol's finished days, un-adjusted for splits
+  getQuotes(symbols: string[]): Promise<Quote[]>                  // price, currency, yield, annual dividend
+  getDailyCloses(symbol: string, range, tz: string): Promise<History>  // one symbol's finished days, un-adjusted for splits
 }
 ```
 

@@ -51,18 +51,16 @@ What each thing Empower holds can become here:
 
 ## Before you upload anything backdated: the price spine
 
-For every instrument the poller quotes, the computed line's second ingredient used to begin late:
-`price_daily` held no close for them from before the day the instance's poller first ran. **The
-application now fills that in by itself**
+**The application fills the price spine in for itself**
 ([ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)). Whenever an instrument's
 position history reaches back behind its price history, the refreshes after your statement lands
 fetch that instrument's daily closes from the feed and store every trading day the spine does not
 already hold — a handful of instruments per refresh, nobody asked, nothing to run.
 
-What is left of the old problem is a window rather than a permanent state:
+That leaves one window worth knowing about before a backdated statement lands:
 
-**A statement dated before the spine reaches is valued without its securities until the backfill
-catches up.** Positions exist for those dates, closes do not yet, so every security on them is
+**A statement dated before the spine reaches is valued without its securities until its closes
+arrive.** Positions exist for those dates, closes do not yet, so every security on them is
 unpriced — excluded from the total and counted in the coverage figures — while cash and loans still
 price at 1.00. The chart draws those partial points on the ordinary solid line with nothing beside
 them saying so, which is the half of issue #83 the backfill does not answer and
@@ -78,14 +76,14 @@ So the order of work is chosen to keep the era each line claims truthful at ever
    disagree.
 3. Record bank and loan balance history. Cash prices on every date through the seeded `USD` close,
    so these are immune to the spine problem.
-4. For investment accounts, upload the **most recent** statement first. That creates the instrument
-   rows and classifies them, which is what gives the backfill something to work on.
-5. Upload the older statements. They may read short for a refresh or two while their closes arrive.
-6. Check the spine at Settings → Prices, and act on anything the feed cannot fill.
-7. Verify, then delete the captured files.
+4. For investment accounts, upload the **most recent** statement first — that creates the instrument
+   rows and classifies them — and then the older ones. The older ones may read short for a refresh
+   or two while their closes arrive.
+5. Check the spine at Settings → Prices, and act on anything the feed cannot fill.
+6. Verify, then delete the captured files.
 
-Most recent first is still the right order, but for a smaller reason than before: it is where the
-instruments get created and classified, not where you have to fill anything in by hand.
+Most recent first is the right order because it is where the instruments get created and classified,
+which is what gives the backfill something to work on.
 
 ## Step 1 — capture from Empower
 
@@ -184,7 +182,8 @@ form owns the sign.
 **Decide whether the per-account depth is worth the typing before you start.** The household total
 over those years is already covered by the manual series from step 2, and the computed total wins
 on any date it covers — so a checking account loaded back through those years makes the *computed*
-line start earlier, carrying only that account until the investment statements reach that far. What per-account balance
+line start earlier, carrying only that account until the investment statements reach that far.
+ What per-account balance
 history actually buys is that account's own page reaching back, and an honest cash line through the
 years before the app. For a household that mostly wants the total, step 2 alone is a perfectly good
 answer, and this step can cover just the recent past — or nothing.
