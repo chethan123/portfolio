@@ -39,6 +39,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0014](0014-scheduled-dump.md) | The scheduled dump sidecar and the dump/backup split (ADR-0009) |
 | [0015](0015-chart-series-assembly.md) | One series assembly behind both chart surfaces, and the coverage rule off the routes |
 | [0016](0016-session-series-running-total.md) | The 1D line as a running total over the session's observations, same rows in tens of milliseconds |
+| [0017](0017-price-backfill.md) | The price spine backfilled from the feed's own history — gap-triggered, on every refresh, inserted where absent, never over a live close (ADR-0011) |
 
 ## The ticket directories
 
@@ -46,7 +47,8 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 (0002 — [`05`](pricing/05-pricing-ui.md)'s stale summary and Settings → Instruments are the part of
 the slice still unbuilt), [`holdings/`](holdings/) (0003), [`auth-gate/`](auth-gate/) (0011),
 [`dynamic-chart-resolution/`](dynamic-chart-resolution/) (0009),
-[`owner-filter/`](owner-filter/) (0013), and [`dump/`](dump/) (0014).
+[`owner-filter/`](owner-filter/) (0013), [`dump/`](dump/) (0014), and
+[`price-backfill/`](price-backfill/) (0017).
 
 A `screenshots/` directory under a slice holds before/after proof for one ticket's pull request and
 is deleted once that pull request merges — a lasting image belongs to the README's or the guide's
