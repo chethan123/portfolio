@@ -38,6 +38,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0013](0013-owner-filter.md) | The household-wide owner filter (ADR-0008) |
 | [0014](0014-scheduled-dump.md) | The scheduled dump sidecar and the dump/backup split (ADR-0009) |
 | [0015](0015-chart-series-assembly.md) | One series assembly behind both chart surfaces, and the coverage rule off the routes |
+| [0016](0016-session-series-running-total.md) | The 1D line as a running total over the session's observations, same rows in tens of milliseconds |
 
 ## The ticket directories
 

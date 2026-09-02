@@ -85,8 +85,10 @@ never a trailing twenty-four hours.
 Three things read differently on it:
 
 - **The axis and the readouts name the time of day**, on the market's clock, rather than a date.
-- **The line has one point per price refresh**, unsampled — so it is exactly as detailed as the
-  refresh cadence you set at Settings → Prices, and no more.
+- **The line has one point per observed moment**, unsampled. A refresh asks about all your
+  instruments at once, and each price comes back stamped with the moment it was struck rather than
+  the moment you asked — so one refresh usually adds several points, not one. The cadence you set at
+  Settings → Prices decides how often the asking happens.
 - **The change beside the headline is measured from yesterday's close**, which is what "today's
   change" means at a brokerage.
 

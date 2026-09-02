@@ -5,6 +5,50 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
+
+One document: [The Overview's 1D latency](./2026-09-01-overview-1d-latency.md) — the diagnosis of a
+reported eleven-second Overview, measured against `46d65df` on a local PostgreSQL 16.13 with the
+demo household scaled to 21 accounts, 97 holdings and 98 feed instruments. The fix it argues for is
+approved as [spec 0016](../specs/0016-session-series-running-total.md).
+
+### The three things worth knowing without reading further
+
+1. **An instant is per instrument, not per poll — and that is the term the cost model missed.**
+   `as_of` is the moment the provider says a price was struck (ADR-0006), so one poll of ninety-eight
+   instruments records up to ninety-eight of them. At the seeded fifteen-minute cadence a session
+   holds 1,620 instants where `ARCHITECTURE.md` §10 costed 27, and the 1D query pairs every one of
+   them with every holding: 157,140 inner rows and about 1.47 million buffer hits for one render.
+   The demo seed hid it by giving every instrument the same grid of instants.
+
+2. **The whole of the time is one statement, and nothing else on the page is slow.** Timing the
+   Overview loader's own reads puts every other query at or under about 45 ms and the 1Y line at
+   about 120 ms, against 3.5 s for the session series at fifteen minutes, 10.1 s at five and 48 s at
+   one. Indexes, memory settings and a cache were each measured or argued and rejected — covering
+   indexes made it slower (4.5 s against 3.5 s), the plan reports zero disk reads, and a cache is
+   invalidated by every poll.
+
+3. **The same line as a running total is 20 ms, and the one trap is where the span's bounds go.**
+   Written as a `bounds` CTE they are materialised, which hides the span from the planner and
+   sequentially scans the whole log — 89 ms on a year of sessions and growing with it. Written as
+   scalar subqueries they become an index condition: 16 ms on the same log. `except` both ways
+   returns zero rows on four datasets.
+
+### Evidence
+
+[`2026-09-01-overview-1d-latency/harness/`](./2026-09-01-overview-1d-latency/harness/) holds the
+scaling scripts, both statements, the equivalence check and the loader timer, with the command
+sequence that reproduces every number from an empty database. The two scripts that write refuse any
+database whose name does not mark it throwaway. The report carries a second run of the whole
+sequence, from scratch, beside the first run's figures.
+
+### Status
+
+The rewrite is approved work ([spec 0016](../specs/0016-session-series-running-total.md)). What the
+report deliberately leaves open is the point count: 1D draws one point per observed instant, which
+is 1,620 points and 97,201 bytes of loader data at the seeded cadence and about 1.4 MB at a
+one-minute cadence. Making the points cheap to compute does not decide how many there should be.
+
 ## 2026-08-30 — Account picker conventions
 
 One document: [Account picker conventions](./2026-08-30-account-picker-conventions.md) — how
@@ -171,23 +215,17 @@ annotated in place.
 
 ### Status
 
-<<<<<<< HEAD
 Eight of these findings, over five sequenced pull requests, became approved work after the report
 landed:
 [`../specs/0005-report-remediation.md`](../specs/0005-report-remediation.md) sequences the date
 floor (`SET-2`/`SET-3`), pool resilience (`LEAD-8`/`LEAD-6`), the sign-in return path
 (`SEC-1`/`SEC-3`), the nameless-quantity refusal (`ING-4`) and the filed-behind statement
 (`ING-1`). Fixed on the tree so far, each annotated in place: `SET-1` — the critical one — with
-`SET-5` beside it, the date floor (`earliestRecordableDate` in `app/lib/input.server.ts`), and the
-return-path guard, rebuilt post-gate as `app/lib/return-path.ts`. The report opens with the seven
-worth doing first and a duplicate table, so the same bug is not filed four times. The whole suite,
-`npm run typecheck` and `npm audit` were clean throughout — these are things the automated gates
-=======
-Nothing here is approved work, and only `SET-1` — the critical one — `SET-5` beside it, and
-`SET-11` (the account-number field's wrong note) have been fixed since. The report opens with the seven worth doing
-first and a duplicate table, so the same bug is not filed four times. The suite (746 tests),
-`npm run typecheck` and `npm audit` were all clean throughout — these are things the automated gates
->>>>>>> origin/main
+`SET-5` beside it, `SET-11` (the account-number field's wrong note), the date floor
+(`earliestRecordableDate` in `app/lib/input.server.ts`), and the return-path guard, rebuilt
+post-gate as `app/lib/return-path.ts`. The report opens with the seven worth doing first and a
+duplicate table, so the same bug is not filed four times. The whole suite, `npm run typecheck` and
+`npm audit` were clean throughout — these are things the automated gates
 structurally cannot see.
 
 ## 2026-08-23 — Dependency audit
