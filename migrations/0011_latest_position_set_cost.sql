@@ -1,0 +1,37 @@
+-- `latest_position_set` priced high on purpose, so the read path stops
+-- hash-joining on the call.
+--
+-- **Why the call is not free.** Postgres inlines a scalar SQL function only
+-- when its body is a single SELECT with no FROM clause; this one has a FROM
+-- (`0002_holding_valued.sql`), so it stays an opaque expression the executor
+-- calls. Three readers join `holding` on it: `holding_valued` and
+-- `holding_valued_at(d)` (`0006_annual_dividend.sql`), and the `held` CTE of
+-- the 1D session series (`valuation.server.ts:711`), which #189 times
+-- separately. On the harness shape the planner hashed on that call, and a hash
+-- join evaluates the outer key per bucket candidate rather than once per outer
+-- row: 7,415 calls across a 180-date series where 3,780, one per account per
+-- date, is the whole job — the excess is join-qual rechecks.
+--
+-- **What the cost buys.** The call becomes an `Index Cond` on
+-- `holding_one_row_per_instrument`, evaluated once per (account, date). On the
+-- shape `docs/research/2026-09-01-overview-1d-latency/harness/` builds — 21
+-- accounts, 97 holdings, 98 feed instruments, 77,989 `price_daily` rows — that
+-- series runs 150 ms → 82 ms on 25,732 → 22,104 buffers, `select * from
+-- holding_valued` 2.1 ms → 0.7 ms on 245 → 112, the two series `except`-ed
+-- each way agreeing exactly.
+--
+-- **Not noise; do not delete it.** One statement with no schema effect reads
+-- like a stray, but it is the read path's plan: reverting it puts every chart
+-- back on the hash join at about twice the time.
+--
+-- **A hint, not a guarantee.** The *estimate* rises (38,785 → 47,982) while
+-- real time halves — deliberate over-pricing, not a corrected model. #189
+-- measured it twice, on two machines, on the `postgres:17-alpine` that
+-- `compose.yaml` pins (17.11); every figure above is a 16.13 reproduction of
+-- that. If a later Postgres unpicks the choice, the structural answer is an
+-- inlinable set-returning sibling (`returns setof bigint`, `cross join
+-- lateral`) — its own ticket, and one that must re-apply this cost: `create or
+-- replace` resets `procost` to the default 100, which the pin in
+-- `tests/migrations.test.ts` catches. Also `stable` but not `parallel safe`
+-- (`proparallel = 'u'`) — pre-existing, not changed here.
+alter function latest_position_set(bigint, date) cost 1000;

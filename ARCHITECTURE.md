@@ -691,13 +691,14 @@ DESIGN.md §8.2 names as the weakest point in the whole design.
                     ── ONE row type, not two ──
 ```
 
-**`latest_position_set(p_account_id, p_as_of)`** — `stable`, one function, one ordering. "Latest" is
-`max(as_of_date)` per account, tie-broken by `created_at desc` then `id desc`. Re-uploading a
-correction for an as-of date that already has a set is a real occurrence; without the tie-break the
-answer is a coin flip. Surrogate keys are `bigint generated always as identity` precisely so that
-"tie-break by id descending" means "the later insert wins" — a random UUID would make it arbitrary.
-The ordering matches `position_set_account_as_of_idx` exactly, so this is an index scan stopping at
-the first row.
+**`latest_position_set(p_account_id, p_as_of)`** — `stable`, `cost 1000`, one function, one
+ordering. The cost is a planner hint rather than a property of the answer, argued in
+`0011_latest_position_set_cost.sql`. "Latest" is `max(as_of_date)` per account, tie-broken by
+`created_at desc` then `id desc`. Re-uploading a correction for an as-of date that already has a set
+is a real occurrence; without the tie-break the answer is a coin flip. Surrogate keys are `bigint
+generated always as identity` precisely so that "tie-break by id descending" means "the later insert
+wins" — a random UUID would make it arbitrary. The ordering matches `position_set_account_as_of_idx`
+exactly, so this is an index scan stopping at the first row.
 
 One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1180`) needs the
 *predecessor* of a given set — "what did this account hold before this upload landed" — which the
@@ -742,7 +743,7 @@ anywhere.
 | Index | Definition | Serves |
 |---|---|---|
 | `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set` — matched exactly, so the tie-break is an index scan stopping at row one. The index every valuation read goes through. |
-| `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). |
+| `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). Also the `Index Cond` every valuation read resolves `latest_position_set` into, since `0011_latest_position_set_cost.sql` priced the call out of a hash join. |
 | `holding_instrument_id_idx` | `(instrument_id)` | The instrument → holdings direction: which accounts hold this fund. |
 | `instrument_symbol_idx` | `(symbol)` | Resolving which row is cash (`current-statement.server.ts:80-86`) — on every `setBalance` write, and on every kind change into a kind that holds one balance. The lookup conjoins `price_source = 'fixed'`, which no index covers; `symbol` is the selective half. Also the refresh loop's `order by symbol`, which never looks a symbol up by value — it selects all feed instruments and matches in memory. |
 | `instrument_alias_instrument_id_idx` | `(instrument_id)` | Which raw strings point at this instrument. |
@@ -1882,10 +1883,12 @@ that, and each would be wrong at a hundred times the scale.
 
 Most of the figures below describe the design target rather than a measurement: the demo household
 in `scripts/seed-demo.ts` — two people, six accounts, three years of statements — is what almost
-everything here has actually been run against. The 1D read is the exception, and the one place a
-benchmark, an `EXPLAIN` and a harness exist:
-[`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md)
-measures it on a household scaled to 21 accounts, 97 holdings and 98 feed instruments.
+everything here has actually been run against. Two things are measured rather than targeted, and
+both were measured on one household — the 21 accounts, 97 holdings and 98 feed instruments that
+`docs/research/2026-09-01-overview-1d-latency/harness/scale-shape.sql` builds, which is still the
+single reproduction path: the 1D read, in
+[`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md),
+and `latest_position_set`'s planner cost, in `migrations/0011_latest_position_set_cost.sql`.
 
 | Choice | Right here because | Would break at |
 |---|---|---|
@@ -1898,17 +1901,21 @@ measures it on a household scaled to 21 accounts, 97 holdings and 98 feed instru
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
 
-**Three indexes carry the read path**, and each is matched exactly by what reads it, so no lookup
-here becomes a scan of the table and a sort. `latest_position_set` runs once per account per read,
-and `position_set_account_as_of_idx` matches its ordering exactly — stopping at the first row;
-adding a column to that ordering without adding it to the index would turn every dashboard read
-into a sort. The carry-forward lateral inside `holding_valued_at` runs far
-more often — once per holding per plotted date — and rides `price_daily`'s primary key the same way.
-And the 1D reader rides `price_observation`'s primary key, `(instrument_id, as_of)`, twice per
-holding: once stopping at the price in force when the session opened, and once as a range scan over
-that holding's observations inside the session; that key is also the dedup that keeps the log a
-record of distinct instants rather than of polls, which is the one place in the schema where an
-index and a rule are the same object.
+**Four indexes carry the read path**, and each is matched exactly by what reads it, so no lookup
+here becomes a scan of the table and a sort. Because `0011_latest_position_set_cost.sql` prices it
+at 1000, `latest_position_set` runs once per account for a plain read, and once per (account, date)
+across a plotted series: before that the planner hash-joined on the call and re-evaluated it per
+bucket candidate — 7,415 calls on the harness shape against the 3,780 the work needs — and the cost
+is what put `holding_one_row_per_instrument` on this path at all, as the `Index Cond` the call
+becomes. `position_set_account_as_of_idx` matches its ordering exactly — stopping at the first row;
+adding a column to that ordering without adding it to the index would turn every dashboard read into
+a sort. The carry-forward lateral inside `holding_valued_at` runs far more often — once per holding
+per plotted date — and rides `price_daily`'s primary key the same way. And the 1D reader rides
+`price_observation`'s primary key, `(instrument_id, as_of)`, twice per holding: once stopping at the
+price in force when the session opened, and once as a range scan over that holding's observations
+inside the session; that key is also the dedup that keeps the log a record of distinct instants
+rather than of polls, which is the one place in the schema where an index and a rule are the same
+object.
 
 **The 1D line is one round trip too, and it is a running total rather than a re-valuation.** The
 price in force at the open is looked up once per holding, and each held instrument's observations
@@ -2123,6 +2130,7 @@ functions rather than only a component, so this tree is not purely presentationa
 | `0008_refresh_cadence.sql` | The `refresh_cadence_minutes` column on `app_setting` |
 | `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
 | `0010_price_backfill.sql` | `price_backfill` — one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
+| `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
 
 ### `public/`
 

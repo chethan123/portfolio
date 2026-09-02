@@ -483,7 +483,9 @@ needs "the current set" calls it, which is exactly what keeps the tie-break defi
 `as_of_date` (bounded by `p_as_of` when given), tie-broken by `created_at` descending then `id`
 descending — so a correction re-uploaded for a day that already has a set wins deterministically,
 not by coin flip. The ordering matches `position_set_account_as_of_idx` exactly. `STABLE`,
-`LANGUAGE sql`, returns the set's `id` or null.
+`LANGUAGE sql`, returns the set's `id` or null, and `COST 1000` — a planner hint rather than a
+property of the answer, argued in
+[`migrations/0011_latest_position_set_cost.sql`](../migrations/0011_latest_position_set_cost.sql).
 
 ### 5.2 `holding_valued` (view)
 
