@@ -357,10 +357,10 @@ grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:633` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
+- `prices.server.ts:511` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
   to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
-- `uploads.server.ts:640` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:584` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
@@ -1232,8 +1232,8 @@ before editing any of these. Four shapes, and they are not interchangeable:
   `WHERE`. An outer predicate is evaluated after the LEFT join and rejects the all-null row the
   join manufactures for a date the selected owners hold nothing on, which takes that date off the
   line instead of reporting it as uncovered. The chart silently starts later than it should. The
-  session readers narrow on `a.owner_id` in their holdings CTE, which is the same rule in a
-  different shape: the instants come from the log and are joined to nothing, so an instant whose
+  session readers narrow on the account alias in their holdings CTE — `a.owner_id` for the
+  household, `a.id` for one account — which is the same rule in a different shape: the instants come from the log and are joined to nothing, so an instant whose
   selected owners hold nothing is still a point rather than a missing one.
 - `accountTotals` narrows on `account.owner_id`, because it selects from `account` and LEFT-joins the
   view so an account holding nothing still reports `0.0000`. An outer `WHERE` *is* right there:

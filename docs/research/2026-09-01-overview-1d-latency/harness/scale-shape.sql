@@ -15,7 +15,16 @@ select current_database() ~ '_(test|demo|bench)$' as throwaway \gset
 \if :throwaway
 \else
 \echo 'Refusing: run this only against a database whose name ends in _test, _demo or _bench.'
-\quit
+do $$ begin raise exception 'not a throwaway database'; end $$;
+\endif
+
+-- Once per seed: a second run would clone the clones — fifteen more accounts
+-- and seven times the feed instruments. The suffix the clones carry is the
+-- evidence that it has already run.
+select exists (select 1 from instrument where symbol ~ '_[1-6]$') as scaled \gset
+\if :scaled
+\echo 'Refusing: this database is already scaled; reseed it before running this again.'
+do $$ begin raise exception 'already scaled'; end $$;
 \endif
 
 begin;

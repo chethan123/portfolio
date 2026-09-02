@@ -38,10 +38,10 @@ opening as (
   from held h
 ),
 changes as (
-  -- The bounds are scalar subqueries, not a `bounds` CTE: as init-plan
-  -- parameters the planner can put them into an index condition, which is the
-  -- difference between a bitmap index scan per holding and a sequential scan
-  -- of the whole log.
+  -- The bounds are scalar subqueries, not a joined one-row CTE: as init-plan
+  -- parameters the planner puts them into an index condition, where a join
+  -- condition seq-scans the whole log — materialised or not. The difference
+  -- is a bitmap index scan per holding against a scan of every row ever kept.
   select
     o.as_of,
     op.quantity,

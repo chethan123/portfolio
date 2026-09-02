@@ -23,7 +23,7 @@ select current_database() ~ '_(test|demo|bench)$' as throwaway \gset
 \if :throwaway
 \else
 \echo 'Refusing: run this only against a database whose name ends in _test, _demo or _bench.'
-\quit
+do $$ begin raise exception 'not a throwaway database'; end $$;
 \endif
 
 begin;

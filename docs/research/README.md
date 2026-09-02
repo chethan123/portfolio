@@ -29,9 +29,10 @@ approved as [spec 0016](../specs/0016-session-series-running-total.md).
    invalidated by every poll.
 
 3. **The same line as a running total is 20 ms, and the one trap is where the span's bounds go.**
-   Written as a `bounds` CTE they are materialised, which hides the span from the planner and
-   sequentially scans the whole log — 89 ms on a year of sessions and growing with it. Written as
-   scalar subqueries they become an index condition: 16 ms on the same log. `except` both ways
+   Joined in from a `bounds` CTE they reach the scan as a join condition, which the planner does
+   not turn into an index condition, and the whole log is scanned — materialised or not: 89 ms on a
+   year of sessions and growing with it. Written as scalar subqueries they are init-plan
+   parameters, which do become an index condition: 16 ms on the same log. `except` both ways
    returns zero rows on four datasets.
 
 ### Evidence

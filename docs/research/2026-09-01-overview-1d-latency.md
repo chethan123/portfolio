@@ -1,7 +1,8 @@
 # Why the Overview takes eleven seconds with 1D selected — 1 September 2026
 
 *Diagnosed against `46d65df`, on a local PostgreSQL 16.13 (Ubuntu 24.04) with the demo household
-scaled to the reported shape. Every number below was produced by the scripts in
+scaled to the reported shape. Every number below — except the covering-index measurement, whose two index definitions are given
+where it is reported — was produced by the scripts in
 [`2026-09-01-overview-1d-latency/harness/`](2026-09-01-overview-1d-latency/harness), and that
 directory's README is the command sequence that reproduces them from an empty database.*
 
@@ -167,7 +168,8 @@ distinct instants — and the numbers within run-to-run scatter:
 | `bounds` CTE against scalar subqueries | 89 ms / 16 ms at 661,500 rows | 91.7 ms / 17.9 ms at 470,988 rows |
 
 Three differences worth naming rather than smoothing over. The second run's log at `-v days=250` is
-250 calendar days, which is 178 trading sessions and 470,988 rows, not the first run's 661,500. Its
+250 calendar days, which is 178 trading sessions and 470,988 rows, not the first run's 661,500;
+`-v days=350`, fifty weeks, reproduces those. Its
 current-query plan put the daily-close lateral behind a `Memoize` node (157,140 loops, 50 misses),
 so only the observation lateral probed the index 157,140 times, and the buffer count is
 correspondingly lower — the shape of the cost is unchanged. And JIT accounted for 294 ms of the
@@ -200,6 +202,7 @@ response compression — the Caddyfile has no `encode` directive — becomes wor
 ## Reproducing this
 
 ```sh
+psql postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test -c 'create database portfolio_bench'
 printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_bench\n' > .env.bench
 node --env-file=.env.bench ./server/migrate.ts
 node --env-file=.env.bench ./scripts/seed-demo.ts
