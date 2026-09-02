@@ -422,8 +422,9 @@ describe("reading a day of history", () => {
   it("returns a close as a decimal string at scale 4, never a number", () => {
     const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 271.5)] }));
 
+    // `toEqual` is strict about the type, so the exact string is the whole
+    // assertion: a number 271.5 would not match it.
     expect(closes).toEqual([{ date: "2024-06-07", close: "271.5000" }]);
-    expect(typeof closes[0]?.close).toBe("string");
   });
 
   it("files a bar under the trading day inside its own timestamp, not its UTC one", () => {
@@ -469,6 +470,40 @@ describe("reading a day of history", () => {
     expect(historyOf({ quotes: [bar("2024-06-07", null), bar("2024-06-10", null)] })).toEqual({
       status: "no-history",
     });
+  });
+
+  it("skips a close too small to render as anything but zero", () => {
+    // `> 0` is not enough: `toFixed(4)` turns anything under half a
+    // ten-thousandth into "0.0000", which would value the holding at nothing —
+    // permanently, because the backfill's write is insert-where-absent on a
+    // finished day and nothing in the application rewrites it.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-06-07", 0.000049), bar("2024-06-10", 12)] }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
+  });
+
+  it("skips a close too large for the column it is bound for", () => {
+    // The guard `inRange` exists for on the sibling columns: a figure this big
+    // is not a price, and a `numeric` overflow would abort the transaction the
+    // whole batch of closes commits in.
+    const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 1e21), bar("2024-06-10", 12)] }));
+
+    expect(closes).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
+  });
+
+  it("refuses a currency it cannot read rather than taking it for an absent one", () => {
+    // The quote path refuses the whole payload for a non-string currency, and
+    // this is the guard where guessing is worst: a foreign listing summed into
+    // a USD net worth, with no error anywhere.
+    expect(
+      toProviderHistory(
+        { meta: { currency: 123 }, quotes: [bar("2024-06-07", 10)] },
+        RANGE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "no-history" });
   });
 
   it("answers no-history for a valid range with nothing in it", () => {
@@ -605,6 +640,55 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
         NEW_YORK,
       ),
     ).toEqual({ status: "split-unresolved" });
+  });
+
+  it("refuses an events block it cannot read, rather than reporting no history", () => {
+    // The raw endpoint keys splits by epoch second, and `return: "object"`
+    // mode hands them back that way. An events block we cannot read may be
+    // hiding a split, and a close un-adjusted by a split nobody saw is the
+    // silent wrong figure — where `no-history` would have the ledger say the
+    // ticker is unknown or delisted, which it is not.
+    expect(
+      toProviderHistory(
+        {
+          meta: { currency: "USD" },
+          events: { splits: { "1718022600": { date: 1718022600, numerator: 10, denominator: 1 } } },
+          quotes: [bar("2024-06-07", 200)],
+        },
+        RANGE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "split-unresolved" });
+  });
+
+  it("carries a close whose un-adjusted value does not land on a whole cent", () => {
+    // One rounding, at the end, half away from zero: rounding per split would
+    // answer "0.0002" for the second case below.
+    expect(
+      closesOf(historyOf({ splits: [split("2024-06-10", 1, 3)], quotes: [bar("2024-06-07", 200)] })),
+    ).toEqual([{ date: "2024-06-07", close: "66.6667" }]);
+
+    expect(
+      closesOf(
+        historyOf({
+          splits: [split("2024-06-10", 1, 2), split("2024-09-10", 1, 2)],
+          quotes: [bar("2024-06-07", 0.0005)],
+        }),
+      ),
+    ).toEqual([{ date: "2024-06-07", close: "0.0001" }]);
+  });
+
+  it("drops a row whose un-adjusted product outgrows the column, keeping the rest", () => {
+    // The figure that arrived fits; the product does not. An overflow inside
+    // the batch's transaction would cost every other close committing with it.
+    const closes = closesOf(
+      historyOf({
+        splits: [split("2024-06-10", 1000, 1)],
+        quotes: [bar("2024-06-07", 1e15), bar("2024-06-11", 12)],
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-11", close: "12.0000" }]);
   });
 
   it("refuses a split whose ratio is not a whole number of shares", () => {

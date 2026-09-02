@@ -29,13 +29,27 @@
  * ADR-0011 requires it be observed once against a real split, and **that check
  * has not been run**: the environment this landed in refuses every
  * `*.finance.yahoo.com` host at CONNECT, so no figure here was read from Yahoo.
- * `docs/developing.md` carries the recipe; it is one call — `NVDA` over a range
- * spanning 2024-06-10 with `events: "split"` — and two things to confirm:
- * `events.splits` carries a 10:1 dated that day, and the closes for the week
- * before sit near $120 (adjusted) rather than near $1,200 (as struck). **If they
- * are near $1,200 the arithmetic below is wrong** and the fallback ADR-0011
- * fixes applies: answer `split-unresolved` for any response carrying a split
- * inside the range, emit the rest as received, and say so here.
+ * It ships unverified as a signed-off decision rather than an oversight; the
+ * recipe ticket 05 adds to `docs/developing.md` is where the next person runs
+ * it. It is one call — `NVDA` over a range spanning 2024-06-10 with
+ * `events: "split"` — and **three** things to record:
+ *
+ *  1. `events.splits` carries a 10:1 dated 2024-06-10. If it does not, the
+ *     symbol or the range is wrong and nothing below was tested.
+ *  2. The closes for the week before sit near $120 (adjusted) rather than near
+ *     $1,200 (as struck). **Near $1,200 means the arithmetic below is wrong**,
+ *     and the fallback ADR-0011 fixes applies: answer `split-unresolved` for
+ *     any response carrying a split inside the range, emit the rest as
+ *     received, and say so here.
+ *  3. The raw instant on that split event — `events.splits[0].date` before any
+ *     formatting. {@link toProviderHistory} files a split under
+ *     `marketDateOf(split.date, zone)` on the assumption that Yahoo stamps it
+ *     at the session open, as it stamps a daily bar. A split stamped at UTC
+ *     midnight instead resolves to the *previous* New York date, and the bar
+ *     genuinely on the split's own day would then be multiplied when it should
+ *     not be — some rows right and some wrong, which is the outcome this
+ *     module otherwise refuses outright. Nothing here detects that; only the
+ *     recorded instant can settle it.
  *
  * The error class an unknown symbol throws was read out of the installed
  * package rather than observed, for the same reason. `yahooFinanceFetch.js:131-133`
@@ -48,7 +62,7 @@
 import { z } from "zod";
 
 import { marketDateOf, type IsoDate } from "./market-hours.ts";
-import { divide, render, toUnits } from "./money.ts";
+import { MONEY_SCALE, divide, render, toUnits } from "./money.ts";
 import { matchKey } from "./prices.server.ts";
 
 /**
@@ -192,6 +206,17 @@ const YIELD_CEILING = 10000;
  * cannot abort a refresh — not to express a view about dividends.
  */
 const RATE_CEILING = 10 ** 16;
+
+/**
+ * The widest close `price_daily.close` holds — `numeric(20, 4)`, the same
+ * sixteen integer digits, and the same reasoning as {@link RATE_CEILING}: a
+ * figure this big is not a price, and an overflow would abort the transaction a
+ * whole batch of backfilled closes is committing in. It bounds the un-adjusted
+ * *product* as well as the figure that arrived, because the product is what
+ * reaches the column — and because `toFixed` switches to exponential notation
+ * at 1e21, which `money.ts`'s digit parser cannot read.
+ */
+const CLOSE_CEILING = 10 ** 16;
 
 /**
  * A figure the bound `numeric` column can actually store, or null. A
@@ -357,9 +382,6 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
   };
 }
 
-/** The scale every close is stored and computed at — `price_daily.close`. */
-const CLOSE_SCALE = 4;
-
 /**
  * The subset of Yahoo's chart payload this application reads, validated for
  * *shape*: `quotes` is an array of things, `events.splits` is an array of
@@ -376,13 +398,26 @@ const CLOSE_SCALE = 4;
  * require, in a shape the library's own types are not a promise about.
  */
 const yahooChart = z.object({
-  // `.optional()` is load-bearing on every `unknown` below: Zod 4 requires the
-  // *key* to be present even where the value may be anything (Zod 3 treated
-  // `unknown` as implicitly optional), and Yahoo omits fields per instrument
-  // type. Without it a payload with no `currency` refuses whole.
-  meta: z.object({ currency: z.unknown().optional() }).nullish(),
-  events: z.object({ splits: z.array(z.object({}).passthrough()).nullish() }).nullish(),
+  // `.nullish()` is load-bearing: Zod 4 requires the *key* to be present even
+  // where the value may be anything (Zod 3 treated `unknown` as implicitly
+  // optional), and Yahoo omits fields per instrument type. `string` rather than
+  // `unknown` so a currency we cannot read refuses the payload rather than
+  // being taken for an absent one — the quote path's `z.string().optional()`
+  // has exactly that effect, and this is the guard where guessing is worst.
+  meta: z.object({ currency: z.string().nullish() }).nullish(),
+  events: z.unknown().optional(),
   quotes: z.array(z.object({}).passthrough()),
+});
+
+/**
+ * The events block, read separately from the payload around it. Its own parse
+ * because the two failures mean different things: a chart we cannot read at all
+ * has no closes to offer, while an *events* block we cannot read may be hiding
+ * a split — and a close un-adjusted by a split nobody saw is the wrong figure
+ * this module exists to prevent.
+ */
+const yahooEvents = z.object({
+  splits: z.array(z.object({}).passthrough()).nullish(),
 });
 
 /** One split, reduced to what the arithmetic needs. */
@@ -426,7 +461,7 @@ function unadjusted(close: string, date: IsoDate, splits: readonly Split[]): str
 
   if (numerator === 1n && denominator === 1n) return close;
 
-  return render(divide(toUnits(close, CLOSE_SCALE) * numerator, denominator, 0), CLOSE_SCALE);
+  return render(divide(toUnits(close, MONEY_SCALE) * numerator, denominator, 0), MONEY_SCALE);
 }
 
 /**
@@ -463,10 +498,21 @@ export function toProviderHistory(
     return { status: "non-usd", currency: currency.toUpperCase() };
   }
 
+  // An events block that is present and unreadable is not "no splits": it may
+  // carry one, and a close un-adjusted by a split nobody saw is the silent
+  // wrong figure. `no-history` would also be a lie the ledger repeats — its
+  // meaning there is an unknown or delisted ticker.
+  const events =
+    chart.events === undefined || chart.events === null
+      ? { splits: null }
+      : yahooEvents.safeParse(chart.events).data;
+
+  if (events === undefined) return { status: "split-unresolved" };
+
   // All or nothing: some rows right and some wrong is the outcome worth
   // refusing, because every figure would look plausible.
   const splits: Split[] = [];
-  for (const split of chart.events?.splits ?? []) {
+  for (const split of events.splits ?? []) {
     const instant = parseInstant(split.date);
     const numerator = positiveInteger(split.numerator);
     const denominator = positiveInteger(split.denominator);
@@ -489,18 +535,23 @@ export function toProviderHistory(
 
     const date = marketDateOf(instant, marketTimeZone);
 
-    // `until` is exclusive, and the cut is on the market date rather than on
-    // the `period2` the library defaults: today's row is the poller's
-    // provisional one, and the library's bound is a cost optimisation where
-    // this is the rule.
+    // `until` is exclusive, and the cut is here rather than on `period2` for
+    // the reason the adapter gives for leaving `period2` absent: the request
+    // deliberately fetches past the range, and this is the rule.
     if (date >= range.until) continue;
 
     // A non-positive close is not a close, for the reason `toProviderQuote`
     // refuses one: zero is what the endpoint returns for a symbol it half
     // knows, and storing it would value the holding at nothing.
     const quoted = typeof bar.close === "number" && bar.close > 0 ? bar.close : undefined;
-    const close = decimal(quoted, CLOSE_SCALE);
-    if (close === null) continue;
+    const close = inRange(decimal(quoted, MONEY_SCALE), CLOSE_CEILING);
+
+    // `> 0` is not enough on its own: anything under half a ten-thousandth
+    // renders as `"0.0000"` and passes the guard above as a string. On the
+    // quote path that row is rewritten by the next tick; here the write is
+    // insert-where-absent on a finished day, so a zero close would be
+    // permanent and nothing in the application could correct it.
+    if (close === null || toUnits(close, MONEY_SCALE) === 0n) continue;
 
     const held = byDate.get(date);
     if (held !== undefined && held.instant.getTime() > instant.getTime()) continue;
@@ -510,6 +561,11 @@ export function toProviderHistory(
 
   const closes: ProviderDailyClose[] = [...byDate.entries()]
     .map(([date, bar]) => ({ date, close: unadjusted(bar.close, date, splits) }))
+    // The product can exceed what the column holds where the figure that
+    // arrived did not — a penny stock through a century of reverse splits —
+    // and an overflow inside the batch's transaction would cost every other
+    // close in it.
+    .filter((close): close is ProviderDailyClose => inRange(close.close, CLOSE_CEILING) !== null)
     // Ascending, so the insert reads in the order the days happened rather than
     // in whatever order the response listed them.
     .sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0));
@@ -689,9 +745,14 @@ export function yahooPriceProvider(client: typeof yahooClient = yahooClient): Pr
         // untouched, and nothing here matches one back — one call is one
         // instrument.
         //
-        // `period2` is deliberately absent: the library defaults it to the
-        // instant of the call, and the range's real end is enforced on each
-        // bar's market date in `toProviderHistory`.
+        // **`period2` is absent on purpose, and must stay absent.** The
+        // library defaults it to the instant of the call, which fetches more
+        // than the range needs — and that surplus is what makes the un-adjust
+        // complete. Yahoo restates closes through *every* split up to today, so
+        // bounding the request at `range.until` would drop the splits between
+        // `until` and now out of `events.splits` while leaving every close in
+        // the range adjusted for them: silently wrong by the whole factor. The
+        // range's real end is enforced on each bar's market date instead.
         const raw = await provider.chart(matchKey(symbol), {
           period1: range.from,
           interval: "1d",
