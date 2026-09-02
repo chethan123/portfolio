@@ -450,6 +450,22 @@ describe("the schema's numeric scales", () => {
   });
 });
 
+// Pins the attribute, not a plan: at fixture scale the planner never
+// reproduces the envelope shape, so an EXPLAIN-asserting test would pass
+// trivially today and break on an unrelated Postgres upgrade. The cost is
+// what the read path depends on; the plan is what it buys.
+describe("the schema's planner costs", () => {
+  it("prices latest_position_set at 1000, the cost the read path's plan depends on", async () => {
+    const result = await sql<{ procost: number }>`
+      select procost from pg_proc where proname = 'latest_position_set'
+    `.execute(db);
+
+    // The whole array, deliberately: an overload added later fails here rather
+    // than passing on whichever row came back first.
+    expect(result.rows).toEqual([{ procost: 1000 }]);
+  });
+});
+
 describe("instrument aliases", () => {
   it("matches the raw string case-sensitively, exactly as the brokerage wrote it", async () => {
     // 'CASH' and 'Cash' are two different strings, so they may point at
