@@ -232,13 +232,15 @@ one more CTE. The timeline also carries the tie rule for free: a delta at the sa
 plotted point lands in that point's sum because RANGE framing includes peers, without an explicit
 ordering between the two kinds of row.
 
-**The span's bounds are scalar subqueries in the join predicate, not a one-row CTE.** A
-`bounds` CTE holding `min(as_of)` and `max(as_of)` reads well and, referenced twice, is
-materialised — which hides its values from the planner. With one session in the log the planner
-seq-scans 2,646 rows and nobody notices; with a year of sessions (661,500 rows) it seq-scans all
-of them and hash-joins, 89 ms and growing with the log from then on, which at a one-minute cadence
-is seconds again inside a year. Written as `o.as_of >= (select min(as_of) from instants)` the
-bound is an init-plan parameter the planner can put into an index condition: a bitmap index scan on
+**The span's bounds are scalar subqueries in the join predicate, not a joined one-row CTE.** A
+`bounds` CTE holding `min(as_of)` and `max(as_of)` reads well, but through a join the span reaches
+the scan as a join condition, which the planner does not turn into an index condition on
+`price_observation`: with one session in the log it seq-scans 2,646 rows and nobody notices; with a
+year of sessions (661,500 rows) it seq-scans all of them and hash-joins, 89 ms and growing with the
+log from then on, which at a one-minute cadence is seconds again inside a year. Materialisation is
+not the cause — the review measured the CTE inlined, materialised and `not materialized` at
+114–118 ms alike. Written as `o.as_of >= (select min(as_of) from instants)` the bound is an
+init-plan parameter, and those do go into an index condition: a bitmap index scan on
 `price_observation_pkey` per holding, 16 ms with the same year of history, and the log's growth
 stops mattering. The same form bounds the opening lookup. Checked on Postgres 16; the first thing
 to re-check on the 17 image the deployment runs is that this plan survives.
@@ -357,13 +359,22 @@ that state the rule:
   observation. The line prices it at the observation at every instant, never at the close: the
   observation is the later of the two, and the rule is "latest observation at or before the
   instant, from any date".
-- **Rounding is per holding** — two accounts each holding `0.00005000` of one instrument observed
-  at `1.0000`. Rounded per holding each is `0.0001`, so the point is `0.0002`; rounded once over
-  the summed quantity it would be `0.0001`. The current query rounds per holding; this pins that the
-  rewrite still does.
+- **Rounding is per holding** — two accounts each holding `0.00005000` of one instrument with a
+  close of `1.0000`, observed at `3.0000`. Rounded per holding each is `0.0002`, so the point is
+  `0.0004`; rounded once over the summed quantity, or carried as one price step per instrument
+  rather than per holding, it would be `0.0003`. The current query rounds per holding; this pins
+  that the rewrite still does, and that its `lag` partitions by holding. Observed at the close's
+  own price every delta would be zero and the case would pin only the opening — the review's
+  finding.
 - **Two instruments observed at exactly the same instant** — once, at one shared `as_of`. One
   point, priced with both, not two points and not one that misses a delta. This is the peers rule
   the timeline relies on.
+- **An observation inside the session's span filed under another market date** — one instrument
+  observed at 13:30 under the session's date and at 13:45 under the next day's, a second observed
+  at 14:00 under the session's. Two points, not three, and the 14:00 point prices the first
+  instrument at its 13:45 observation. This is the case the span bound exists for, and the one a
+  `market_date`-bounded rewrite gets wrong: it would leave 14:00 at 13:30's price, and the review
+  showed such a rewrite passing every other test.
 
 The owner-filter narrowing and the account surface are already asserted at their seams and are not
 restated. No test asserts timing: a wall-clock assertion is the flake the house style refuses, and
@@ -442,7 +453,11 @@ case); two sentences missing from the documents list; the section numbers. Rejec
 reviewer itself, with a counter-example: the charge that the timeline union is more shape than
 the problem needs. A second round found nothing material: the narrowing's fourth form, two more
 sentences for the documents list, the quotations made verbatim, the year-of-history figure, and
-`deltas` named as a reading aid rather than a necessity.
+`deltas` named as a reading aid rather than a necessity. The review of the diff itself found the
+query right and the tests loose: a `market_date`-bounded variant and a per-instrument `lag`
+partition both passed, so the rounding case now observes away from the close and a sixth case
+files an in-span observation under another market date; and it showed materialisation is not why a
+joined bounds CTE seq-scans, which the comments and this paragraph now say correctly.
 
 **Why not a migration-defined function.** §6.3 already answers it for the current query, and the
 answer does not change: a third valuation object would be bound by ADR-0001's row-type contract
@@ -469,7 +484,7 @@ shape; its holdings CTE is one account's rows, so it was cheaper before and is c
 - [ ] `netWorthSessionSeries` and `accountSessionSeries` keep their signatures; `chartSeries` and
       both routes are untouched
 - [ ] Every existing test passes with zero diff to any existing test file
-- [ ] The five new cases above exist, each an `it` sentence stating its rule, and pass
+- [ ] The six new cases above exist, each an `it` sentence stating its rule, and pass
 - [ ] The `ARCHITECTURE.md` passages listed are amended so that each sentence is true of the new
       shape, the `valuation.server.ts` docstring describes the identity rather than the lateral,
       and the two "one point per price refresh" sentences say one point per observed instant

@@ -1837,8 +1837,8 @@ instants — not instants × holdings, which is what it was and what made a 1,62
 157,140 inner rows. The session itself resolves from `price_observation_market_date_idx` in one
 backward index scan. What grows here is the table, not the query — but only because the session's
 span is passed to that per-holding scan as scalar subqueries, which the planner can put into an
-index condition; written as a CTE the span is materialised, hidden from the planner, and the whole
-log is scanned instead.
+index condition; joined in from a one-row CTE instead, the span reaches the scan as a join
+condition, and the whole log is scanned — materialised or not.
 
 **`netWorthSeries` is one round trip, not one per point.** The dates are joined laterally against
 `holding_valued_at(d.date)`, with the narrowing pushed *inside* the lateral — a `WHERE` in the outer

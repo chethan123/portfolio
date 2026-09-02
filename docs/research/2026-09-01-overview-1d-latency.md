@@ -129,9 +129,11 @@ Zero rows in both directions on all four. `compare.sql` is that check.
 
 ### The planner trap the review caught
 
-Written the obvious way, the span's bounds are a `bounds` CTE holding `min(as_of)` and `max(as_of)`.
-Referenced twice it is materialised, which hides its values from the planner: the `changes` join
-then sequentially scans the whole observation log. On one session's log nobody notices; on a year of
+Written the obvious way, the span's bounds are a `bounds` CTE holding `min(as_of)` and `max(as_of)`,
+joined in. Through a join the span reaches the `changes` scan as a join condition, which the planner
+does not turn into an index condition, so it sequentially scans the whole observation log —
+materialised or not: the diff review measured the CTE inlined, materialised and `not materialized`
+at 114–118 ms alike. On one session's log nobody notices; on a year of
 sessions (661,500 rows) it is **89 ms and growing with the log from then on** — seconds again inside
 a year at a one-minute cadence.
 

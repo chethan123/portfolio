@@ -722,15 +722,15 @@ describe("the 1D series", () => {
         holdings: [{ instrument: vti, quantity: "0.00005000" }],
       });
 
-      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "1.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "3.0000" });
 
       expect(await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).toEqual([
         {
           at: "2026-06-05T14:00:00.000Z",
-          // cast(0.00005 × 1.0000 as numeric(20, 4)) is 0.0001 per holding,
-          // twice. Summing the quantities first would give 0.0001 once, and
-          // lose a holding's worth of the line.
-          amount: "0.0002",
+          // cast(0.00005 × 3.0000 as numeric(20, 4)) is 0.0002 per holding,
+          // twice. Summing the quantities first — or carrying one price step
+          // per instrument instead of per holding — would give 0.0003.
+          amount: "0.0004",
           coverage: { known: 2, total: 2 },
         },
       ]);
@@ -767,6 +767,47 @@ describe("the 1D series", () => {
           amount: "2300.0000",
           coverage: { known: 2, total: 2 },
         },
+      ]);
+    }),
+  );
+
+  it(
+    "moves the line at an observation inside the session's span even when it was filed under another market date",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const account = await seedAccount();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const bnd = await seedInstrument({ symbol: "BND", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [
+          { instrument: vti, quantity: "1.00000000" },
+          { instrument: bnd, quantity: "1.00000000" },
+        ],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "30.0000" });
+      await seedDailyClose({ instrument: bnd, date: "2026-06-04", close: "1.0000" });
+
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "31.0000" });
+      // Filed under the next market date: not a row the application writes
+      // under one MARKET_TIMEZONE, but one the table can hold. It is not an
+      // instant of this session, so it draws no point of its own — and it is
+      // still the latest observation at or before 14:00, so it prices VTI
+      // there. The rule is the latest observation at or before the instant,
+      // and it says nothing about market dates.
+      await seedObservation({
+        instrument: vti,
+        asOf: "2026-06-05T13:45:00Z",
+        price: "33.0000",
+        marketDate: "2026-06-06",
+      });
+      await seedObservation({ instrument: bnd, asOf: "2026-06-05T14:00:00Z", price: "1.0000" });
+
+      expect((await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).map((point) => [point.at, point.amount])).toEqual([
+        // 1 × 31 + 1 × 1
+        ["2026-06-05T13:30:00.000Z", "32.0000"],
+        // 1 × 33 + 1 × 1 — the 13:45 observation counted, with no point of its own.
+        ["2026-06-05T14:00:00.000Z", "34.0000"],
       ]);
     }),
   );

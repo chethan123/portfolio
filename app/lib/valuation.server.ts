@@ -703,8 +703,8 @@ async function readSessionSeries(
     ),
 
     -- The positions held now, one row per holding. The grain is the point:
-    -- rounding happens per holding here as it does everywhere else, which is
-    -- what keeps this total equal to the one the other readers report.
+    -- deltas and opening_total below round per holding, as every other reader
+    -- does, which is what keeps this total equal to the ones they report.
     held as (
       select h.id, h.instrument_id, h.quantity
       from account a
@@ -740,11 +740,12 @@ async function readSessionSeries(
     -- Bounded by the span and not by market_date, so "same answer" holds on
     -- any rows the table can hold rather than only on those stamped under
     -- today's MARKET_TIMEZONE. The bounds are scalar subqueries and not a
-    -- one-row CTE because a CTE read twice is materialised, which hides the
-    -- values from the planner and seq-scans the whole log; inline they are
-    -- init-plan parameters it can put into an index condition on
-    -- price_observation_pkey — one scan per holding, and the log's growth
-    -- stops mattering.
+    -- joined one-row CTE: through a join the span reaches this scan as a
+    -- join condition, which the planner does not turn into an index
+    -- condition, and it seq-scans the whole log — materialised or not. As
+    -- scalar subqueries they are init-plan parameters, which do go into the
+    -- index condition on price_observation_pkey: one scan per holding, and
+    -- the log's growth stops mattering.
     changes as (
       select
         o.as_of,
