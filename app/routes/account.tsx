@@ -98,8 +98,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     timeZone: getConfig().MARKET_TIMEZONE,
   });
 
-  // Start fetching `lastRecorded` here so we can reuse it for both `uploadReceipt`
-  // and the final `Promise.all` resolution.
+  // Starts here, not in the first wave, so a 404 from the gate never strands
+  // this promise with no handler — Node 24 still drops the process on an
+  // unhandled rejection, so a 404 racing a database error would take the app down.
   const recordedPromise = lastRecorded(params.accountId);
 
   // The upload flow's landing receipt (`?uploaded=<setId>`, brief §6.5).
@@ -107,9 +108,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // parameter names *which* set was written, so an invalid or stale value
   // yields null and no sentence — the `?recorded=` receipt's contract too.
   const uploadedParam = new URL(request.url).searchParams.get("uploaded");
-  const receiptPromise = uploadedParam === null
-    ? Promise.resolve(null)
-    : recordedPromise.then(recorded => uploadReceipt(params.accountId, uploadedParam, recorded));
+  const receiptPromise =
+    uploadedParam === null
+      ? null
+      : recordedPromise.then((recorded) => uploadReceipt(params.accountId, uploadedParam, recorded));
 
   // Created here and dropped into the `Promise.all` below, for the same
   // reason as the Overview's loader — see its own comment there.
