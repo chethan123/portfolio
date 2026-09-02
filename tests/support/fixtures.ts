@@ -11,6 +11,7 @@
 import type { Kysely } from "kysely";
 
 import type { Database } from "~/lib/db.server";
+import type { BackfillOutcome } from "~/lib/prices.server";
 import type { AccountKind, AssetClass, TaxTreatment } from "~/lib/valuation.server";
 
 export type SeededPerson = { id: string; name: string };
@@ -163,6 +164,29 @@ export type Fixtures = {
     requested?: number;
     priced?: number;
     stale?: number;
+  }): Promise<void>;
+
+  /**
+   * One recorded backfill attempt (ADR-0011) — what keeps an unfillable gap to
+   * one request a day, and what Settings → Prices reads a reason out of.
+   *
+   * Nothing is defaulted from `outcome`: the ledger's `check` constraints tie
+   * the count and the error text to it, and a builder that filled them in would
+   * make the tests about those constraints unwritable.
+   */
+  seedBackfillAttempt(options: {
+    instrument: SeededInstrument;
+    /** When the fetch began, not when the row committed. The retry clock reads this. */
+    startedAt: Date | string;
+    outcome: BackfillOutcome;
+    /** `YYYY-MM-DD`. Defaults to a range most tests are not about. */
+    rangeFrom?: string;
+    /** `YYYY-MM-DD`, exclusive. Must be later than `rangeFrom`. */
+    rangeUntil?: string;
+    /** Closes the spine did not already hold. Positive exactly for `filled`. */
+    written?: number;
+    /** The provider's text. Present exactly for `provider_failed`. */
+    error?: string;
   }): Promise<void>;
 
   /**
@@ -422,6 +446,32 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .execute();
   };
 
+  const seedBackfillAttempt: Fixtures["seedBackfillAttempt"] = async ({
+    instrument,
+    startedAt,
+    outcome,
+    // Fixed dates rather than dates derived from the clock: the range is not
+    // what most of these tests are about, and a moving default would make the
+    // ones that do assert on it depend on when they ran.
+    rangeFrom = "2024-01-01",
+    rangeUntil = "2024-02-01",
+    written = 0,
+    error,
+  }) => {
+    await db
+      .insertInto("price_backfill")
+      .values({
+        instrument_id: instrument.id,
+        started_at: startedAt,
+        range_from: rangeFrom,
+        range_until: rangeUntil,
+        written,
+        outcome,
+        error: error ?? null,
+      })
+      .execute();
+  };
+
   const seedManualNetWorth: Fixtures["seedManualNetWorth"] = async ({ date, amount }) => {
     const values = { date, amount };
 
@@ -457,6 +507,7 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedDailyClose,
     seedObservation,
     seedPoll,
+    seedBackfillAttempt,
     seedManualNetWorth,
     usdInstrument,
   };
