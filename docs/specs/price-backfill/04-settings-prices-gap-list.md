@@ -71,5 +71,7 @@ no rule the batch enforces.
       first's; one with none reports null; the order matches the batch's
 - [ ] The component, through `tests/support/render.tsx` and `toContain` fragments as
       `tests/routes/masked-screens.test.tsx` renders a screen: a row renders its instrument and
-      outcome; the empty sentence renders when the list is empty. The route tests under
-      `tests/routes/` call the loader and action only and assert no markup
+      outcome; the empty sentence renders when the list is empty.
+      _Corrected on landing: the claim that route tests under `tests/routes/` assert no markup is
+      wrong — seven of them render, and `settings-accounts.test.ts` does both. The new file sits
+      there with them._

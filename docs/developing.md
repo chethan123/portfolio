@@ -388,6 +388,82 @@ Keep the route thin: read the form, hand raw fields to a domain function, render
 route never imports Zod and never states a domain rule
 ([§4.1](../ARCHITECTURE.md#41-one-process-four-layers)).
 
+### Exercise a backfill locally
+
+The batch only runs when something has a gap, and a freshly seeded demo household has none — its
+closes reach back past its first statement. So make one, then watch a refresh close it.
+
+1. Seed the demo database as in the screenshot recipe below, then take an instrument's early closes
+   away, which is exactly the state a statement dated before the poller first ran leaves:
+
+   ```sh
+   docker compose exec db psql -U portfolio -d portfolio -c "
+     delete from price_daily
+     where instrument_id = (select id from instrument where symbol = 'VTI')
+       and date < date '2025-01-01';"
+   ```
+
+2. Open **Settings → Prices**. The instrument is on the list now, with where it is held from, where
+   its prices start, and no attempt yet.
+3. Press **Refresh now** on any figure screen. The batch runs under the same lock as the quotes.
+4. Read what happened:
+
+   ```sh
+   docker compose exec db psql -U portfolio -d portfolio -c "
+     select instrument_id, started_at, range_from, range_until, written, outcome, error
+     from price_backfill order by started_at desc limit 5;"
+   ```
+
+   `filled` with a count is the ordinary answer, and the row leaves the Settings list once its spine
+   reaches its first-held date. `nothing_to_write` means the feed answered and every day it returned
+   was already stored. `no_history` is an unknown, delisted or renamed ticker — a delisted symbol
+   loses *all* its history at the feed, including the years it traded, so that one answers the same
+   way forever at one request a day. `non_usd` is a foreign listing. `split_unresolved` means a split
+   in the range could not be applied, so nothing was stored rather than some rows right and some
+   wrong. `provider_failed` carries the provider's own text.
+
+An instrument is skipped for a day after any attempt, so a second press changes nothing — that is the
+retry clock, not a fault. To try again immediately, delete its ledger rows.
+
+---
+
+### Re-verify the split convention after upgrading `yahoo-finance2`
+
+The un-adjust in `app/lib/price-provider.server.ts` stands on one fact about the feed that the
+library does not document: that `close` is restated through later splits. Its module header says so,
+says when it was last checked, and says what to do if the answer changes. **Re-run this after any
+`yahoo-finance2` upgrade**, and record the result there.
+
+One call, outside the suite — a REPL or a throwaway script — for a symbol with a large, recent,
+unambiguous split. NVDA's 10:1 on 2024-06-10 is the worked example:
+
+```js
+const { default: YahooFinance } = await import("yahoo-finance2");
+const chart = await new YahooFinance().chart("NVDA", {
+  period1: "2024-06-01",
+  interval: "1d",
+  events: "split",
+});
+console.log(chart.events?.splits, chart.quotes.slice(0, 5));
+```
+
+Three things to record, all from that one response:
+
+1. **`events.splits` carries a 10:1 dated 2024-06-10.** If not, the symbol or the range is wrong and
+   nothing below was tested.
+2. **The closes for the week before it sit near $120, not near $1,200.** Near $120 means they are
+   split-adjusted and the un-adjust is right. **Near $1,200 means the arithmetic is wrong**, and the
+   fallback [ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md) fixes applies:
+   answer `split-unresolved` for any response carrying a split inside the range, emit the rest as
+   received, and say so in the header.
+3. **The raw instant on that split event** — `events.splits[0].date` before any formatting. The code
+   files a split under its market date assuming the feed stamps it at the session open, as it stamps
+   a daily bar. Stamped at UTC midnight instead it would resolve a day early, and the bar on the
+   split's own day would be multiplied when it should not be. Nothing detects that; only the
+   recorded instant settles it.
+
+---
+
 ### Retake screenshots after changing a screen
 
 The committed images are the real application against the demo household, and they are the one thing

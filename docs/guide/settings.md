@@ -121,18 +121,26 @@ Type a new rate and save. The box then shows what is stored, which is the confir
 
 ## Prices
 
-![The refresh cadence, in minutes](images/settings-prices.png)
+![The refresh cadence, and the holdings whose price history does not reach back far enough](images/settings-prices.png)
 
-One field: the **refresh cadence** — how often prices are fetched, in whole minutes from 1 to 1440.
-It starts at **15**.
+Two things: the **refresh cadence**, and a list of what the price history does not cover yet.
 
-The refresh only runs while the market is open, so a lower number costs more requests against the
-price feed during trading hours and nothing at all on evenings, weekends and market holidays.
+The cadence is how often prices are fetched, in whole minutes from 1 to 1440. It starts at **15**.
+Fresh *quotes* are only asked for while the market is open, so a lower number costs more requests
+during trading hours and none on evenings, weekends and market holidays.
 
 Type a new cadence and save. The box then shows what is stored, which is the confirmation — and the
 change is picked up when the next refresh runs, so it can take up to one old cadence to apply. No
 restart is needed. See [Why a number did not change](prices.md) for what a cadence can and cannot
 make fresher.
+
+**Missing price history** lists every holding you hold from a date the prices do not reach back to,
+which is what makes a total for an old date leave that holding out. A refresh fills a few of them in
+at a time, at any hour, so the usual answer is to wait — the list empties itself. A row that says
+"Never" is one nothing can fetch: a fund with no public ticker, or an instrument nobody has given a
+symbol. If a row shows a reason instead of a date, the reason is the whole story; the
+[runbook](../runbook.md) says what each one means. An empty list, which is the ordinary state, says
+so in a sentence.
 
 ## Display
 

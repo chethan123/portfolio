@@ -11,10 +11,13 @@ A spec records what was agreed at approval time, and is mostly not edited after 
 the tree and `git log` are the record of what shipped, so a `ready-for-agent` label on an old spec
 is a fact about its filing, not about today. Two deliberate exceptions:
 
-- **A claim that turned out wrong is corrected in place** — the `Superseded` banners on
-  [`foundation/01`](foundation/01-runnable-skeleton.md),
+- **A claim that turned out wrong is corrected in place, by banner rather than by rewrite** — the
+  `Superseded` banners on [`foundation/01`](foundation/01-runnable-skeleton.md),
   [`foundation/08`](foundation/08-optional-password-gate.md) and
-  [`foundation/09`](foundation/09-proxy-trust-and-operator-docs.md) are the pattern.
+  [`foundation/09`](foundation/09-proxy-trust-and-operator-docs.md) are the pattern, and
+  [`0002`](0002-pricing.md)'s struck-through out-of-scope line carries a `Reversed` banner in the
+  same form. The argument that was made is left where it was made; what changed is stated beside
+  it.
 - **[`pricing/06`](pricing/06-refresh-now-control.md) is marked `built` with its acceptance list
   ticked** — the one spec whose builder flipped it on landing. Earlier specs were not revisited to
   match.

@@ -442,9 +442,19 @@ rather than in a test file, because the dashboards and ingest slices will want t
 - **Any change to `holding_valued` or `holding_valued_at`** (§8.2). They already handle unpriced and
   stale rows correctly, and this slice is partly a proof of that. If a pricing rule seems to need a
   view change, the rule is wrong.
-- **Backfilling `price_daily`.** History starts at day zero (§7); the spine starts the first time the
+- ~~**Backfilling `price_daily`.** History starts at day zero (§7); the spine starts the first time the
   poller runs. A provider outage leaves a gap that carry-forward covers, and no job goes back to fill
-  it in.
+  it in.~~
+  **Reversed** by [0017](0017-price-backfill.md) and
+  [ADR-0011](../adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md): whenever an instrument's
+  position history reaches back behind its spine, every refresh fills what is absent from the feed's
+  own history. Struck through rather than deleted, because half of it survives and the half that
+  does is the reason the other half was wrong. **A provider-outage hole is still not a trigger** —
+  it is one date inside a series carry-forward already answers honestly, and a trigger on any absent
+  trading day would need a calendar no write path may consult. What the line missed is that the
+  *head* of a series is not a hole: it is the whole era before the instance was installed, and
+  carry-forward has nothing to carry. Holes are filled as a side effect when an instrument is
+  fetched for its head gap, and only then.
 - **Alerting on staleness.** Staleness is surfaced in the UI and in logs. No email, no push, no
   threshold configuration.
 

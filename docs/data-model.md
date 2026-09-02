@@ -54,6 +54,7 @@ erDiagram
     instrument ||--o{ instrument_alias : "recognised by (CASCADE)"
     instrument ||--o| quote : "currently priced by (CASCADE)"
     instrument ||--o{ price_daily : "closed at (CASCADE)"
+    instrument ||--o{ price_backfill : "history fetched for (CASCADE)"
     instrument ||--o{ price_observation : "observed at (CASCADE)"
 
     person {
@@ -116,6 +117,16 @@ erDiagram
         date date PK
         numeric close
     }
+    price_backfill {
+        bigint id PK
+        bigint instrument_id FK
+        timestamptz started_at
+        date range_from
+        date range_until "exclusive"
+        integer written
+        text outcome
+        text error "nullable"
+    }
     price_observation {
         bigint instrument_id PK
         timestamptz as_of PK
@@ -143,7 +154,7 @@ The remaining tables stand alone, referencing nothing:
 | `manual_networth` | hand-typed pre-app net worth points, one per date |
 | `column_mapping` | saved CSV column mappings, keyed by institution + header fingerprint |
 | `app_setting` | the household's settings — a single row, enforced by the schema |
-| `price_poll` | one row per quote-refresh attempt, whatever it produced |
+| `price_poll` | one row per quote-refresh attempt, whatever it produced. `price_backfill` is *not* here: it references an instrument and cascades with it |
 | `schema_migrations` | the migration ledger, created by the runner |
 
 ## 3. Conventions the whole schema follows
@@ -285,9 +296,10 @@ Constraint: `holding_one_row_per_instrument` — unique `(position_set_id, instr
 listing one instrument across several lots is combined by the parser on the way in.
 Index: `holding_instrument_id_idx`.
 
-### 4.4 Prices, three tiers: `quote`, `price_daily`, `price_observation`, `price_poll`
+### 4.4 Prices: `quote`, `price_daily`, `price_observation`, and the two ledgers
 
-Three tiers with one-line contracts, stated as `COMMENT ON TABLE` in
+Three price tiers, and two tables that record attempts rather than prices. The tiers carry one-line
+contracts, stated as `COMMENT ON TABLE` in
 [`migrations/0009_price_observation.sql`](../migrations/0009_price_observation.sql) and argued in
 [ADR-0006](adr/0006-intraday-quotes-are-an-observation-log.md):
 
@@ -317,6 +329,13 @@ close — a correction, not corruption ([`app/lib/prices.server.ts`](../app/lib/
 argues this in its header). Non-trading days get **no row**; every historical query carries
 forward the last close at or before the asked date, so Saturday equals Friday and a market holiday
 equals the trading day before it, with no calendar table anywhere.
+
+**Two paths write this table and only one may rewrite a row.** The refresh above upserts, because an
+intraday poll converges on the close through the session. The backfill inserts where absent and never
+updates: a close the instance recorded live is the record, and the feed's later restatement of it is a
+revision nobody asked for
+([ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md)). That asymmetry is the whole
+of how two writers share one table without one silently owning the other's rows.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
@@ -353,6 +372,31 @@ stopped server look identical — and this table is what tells them apart later.
 | `requested` | `integer` | no | instruments asked about (≥ 0, CHECK) |
 | `priced` | `integer` | no | instruments that answered (≥ 0) |
 | `stale` | `integer` | no | instruments left stale (≥ 0) |
+
+**`price_backfill`** — one row per instrument per backfill attempt, recorded whether or not it wrote.
+`price_poll`'s sibling and its reasoning, with two differences: it references an instrument, because
+an attempt is about one; and a *provider* failure here is a committed row, because the attempt
+happened and the next reader needs its text. Only a database failure leaves nothing. It is also the
+retry clock — an instrument attempted within the last day is not a candidate — so an unfillable gap
+costs one request a day rather than one every tick, and Settings → Prices reads the latest row per
+instrument through the index below.
+
+| Column | Type | Nullable | Meaning |
+|---|---|---|---|
+| `id` | `bigint` identity | no | primary key |
+| `instrument_id` | `bigint` → `instrument` | no | the instrument attempted; `ON DELETE CASCADE` |
+| `started_at` | `timestamptz` | no | when the fetch began, not when the row committed |
+| `range_from` | `date` | no | the range asked for (CHECK `range_from < range_until`) |
+| `range_until` | `date` | no | exclusive — today's market date, so today's row stays the poller's |
+| `written` | `integer` | no | closes the spine did not already hold, counted from the insert's `RETURNING` (≥ 0, CHECK) |
+| `outcome` | `text` | no | `filled` / `nothing_to_write` / `no_history` / `non_usd` / `split_unresolved` / `provider_failed` (CHECK) |
+| `error` | `text` | yes | the provider's text, present **exactly** when the outcome is `provider_failed` (CHECK) |
+
+Two more CHECKs tie the row together: `(outcome = 'filled') = (written > 0)`, so a count and an
+outcome cannot disagree; and `(outcome = 'provider_failed') = (error is not null)`, so the text is
+there exactly when there is something to read. Index: `price_backfill_instrument_started_idx` on
+`(instrument_id, started_at)` — both the retry clock and the Settings list walk it, in opposite
+directions, which a b-tree serves either way.
 
 ### 4.5 Pre-app history: `manual_networth`
 
@@ -534,6 +578,8 @@ flowchart LR
         P --> PO[price_observation: append]
         P --> PD[price_daily: latest price per market day]
         P --> PL[price_poll: one row per attempt]
+        P --> BD[price_daily: backfill, insert where absent]
+        P --> BF[price_backfill: one row per instrument attempted]
     end
 ```
 
@@ -551,7 +597,9 @@ flowchart LR
   only importer of the provider library) overwrites `quote`, appends new `price_observation`
   instants, keeps each market day's `price_daily` row at the provider's latest price for that day,
   and records the attempt in `price_poll`. It also refreshes `instrument.quote_type` from the
-  provider.
+  provider. The **backfill batch** runs on the same refresh and writes the other two: `price_daily`
+  again, inserting only days the spine does not already hold, and one `price_backfill` row per
+  instrument attempted.
 - **Deletes are rare and enumerable.** From the application: a `person` owning no accounts, an
   `instrument` that lost an alias race, and swept or consumed `upload_draft` rows. From a `psql`
   session only: a bad upload's `position_set` — the design's undo, holdings cascading — which no
