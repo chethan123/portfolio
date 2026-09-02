@@ -29,8 +29,8 @@
  * decides whether to spend a request, never what to store. Today's row is
  * provisional and converges on the close as the session runs.
  *
- * The log and the poll record share the same transaction, so a committed
- * fetch lands in all four tables or none — what makes the 1D chart's last
+ * The log and the poll record share the quotes' transaction, so a committed
+ * fetch lands in all four of those tables or none — what makes the 1D chart's last
  * point and the headline agree on the normal path. Three divergences remain,
  * narrow and deliberate, named so nobody looks for a fourth: a provider
  * re-stating an instant at a different price (`quote` upserts; the deduped
@@ -38,8 +38,10 @@
  * price, once the form exists (a quote with no observation, so the headline
  * moves and the 1D line does not); a provider returning one symbol twice
  * (both become observations; `quote` keeps whichever came last). A refresh
- * whose writes fail commits nothing, poll row included — an attempt that dies
- * leaves no trace of having been made.
+ * whose *quote* writes fail commits nothing, poll row included — an attempt
+ * that dies leaves no trace of having been made. The batch that follows is one
+ * transaction per instrument rather than one for the batch, so a batch that
+ * dies keeps everything its earlier attempts committed.
  *
  * A past date's row *can* be rewritten, deliberately — only ever with the
  * provider's own price for the day the provider says it belongs to, so a
@@ -354,7 +356,26 @@ const LEDGER_OUTCOME: Record<Exclude<ProviderHistory["status"], "ok">, BackfillO
   "split-unresolved": BACKFILL_OUTCOMES.splitUnresolved,
 };
 
-/** A batch that has done nothing yet, or one whose counts were lost to a failure. */
+/**
+ * A batch that stopped partway, carrying what it did before it stopped.
+ *
+ * The counts have to survive the throw, because the batch's log line is the
+ * only surface it has: a batch that filled three instruments and then met an
+ * unreachable database must not report having done nothing. Thrown rather than
+ * returned, so the composition still decides what a caller is told — which is
+ * the whole reason the batch does not catch this itself.
+ */
+class BackfillBatchFailed extends Error {
+  override readonly name = "BackfillBatchFailed";
+  readonly report: BackfillReport;
+
+  constructor(cause: unknown, report: BackfillReport) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.report = report;
+  }
+}
+
+/** A batch that has done nothing yet. */
 const emptyBackfillReport = (): BackfillReport => ({
   attempted: 0,
   written: 0,
@@ -387,8 +408,9 @@ const emptyBackfillReport = (): BackfillReport => ({
  * composition above catches it so the batch cannot falsify what the quotes
  * already committed.
  *
- * The range's end is today's market date, exclusive, so the last day written is
- * the previous trading day and today's row stays the poller's provisional one.
+ * The range's end is today's market date and is exclusive — the adapter drops
+ * every bar filed on or after it, so today's row stays the poller's
+ * provisional one. This writer stores what it is handed and checks no date.
  */
 export async function backfillCloses(
   provider: PriceProvider,
@@ -400,156 +422,85 @@ export async function backfillCloses(
 
   const report = emptyBackfillReport();
 
-  for (const candidate of candidates) {
-    const range: HistoryRange = { from: candidate.rangeFrom, until };
+  try {
+    for (const candidate of candidates) {
+      const range: HistoryRange = { from: candidate.rangeFrom, until };
 
-    // Before the fetch, `refreshQuotes`'s reasoning: the span to the commit is
-    // how long the provider took, and an attempt that never commits leaves no
-    // row at all.
-    const startedAt = new Date();
+      // Before the fetch, `refreshQuotes`'s reasoning: the span to the commit is
+      // how long the provider took, and an attempt that never commits leaves no
+      // row at all.
+      const startedAt = new Date();
 
-    let history: ProviderHistory;
-    try {
-      history = await provider.getDailyCloses(candidate.symbol, range, marketTimeZone);
-    } catch (error) {
-      const outcome = BACKFILL_OUTCOMES.providerFailed;
+      let history: ProviderHistory;
+      try {
+        history = await provider.getDailyCloses(candidate.symbol, range, marketTimeZone);
+      } catch (error) {
+        const outcome = BACKFILL_OUTCOMES.providerFailed;
 
-      await inTransaction(db, (trx) =>
-        writeBackfillAttempt(trx, {
+        await inTransaction(db, (trx) =>
+          writeBackfillAttempt(trx, {
+            instrumentId: candidate.id,
+            startedAt,
+            range,
+            written: 0,
+            outcome,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+
+        report.attempted += 1;
+        report.outcomes[outcome] += 1;
+        continue;
+      }
+
+      if (history.status !== "ok") {
+        const outcome = LEDGER_OUTCOME[history.status];
+
+        await inTransaction(db, (trx) =>
+          writeBackfillAttempt(trx, {
+            instrumentId: candidate.id,
+            startedAt,
+            range,
+            written: 0,
+            outcome,
+            error: null,
+          }),
+        );
+
+        report.attempted += 1;
+        report.outcomes[outcome] += 1;
+        continue;
+      }
+
+      // The closes and the row describing them, in one transaction: the ledger
+      // must not claim a fill that rolled back.
+      const written = await inTransaction(db, async (trx) => {
+        const count = await writeBackfilledCloses(trx, candidate.id, history.closes);
+
+        await writeBackfillAttempt(trx, {
           instrumentId: candidate.id,
           startedAt,
           range,
-          written: 0,
-          outcome,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-
-      report.attempted += 1;
-      report.outcomes[outcome] += 1;
-      continue;
-    }
-
-    if (history.status !== "ok") {
-      const outcome = LEDGER_OUTCOME[history.status];
-
-      await inTransaction(db, (trx) =>
-        writeBackfillAttempt(trx, {
-          instrumentId: candidate.id,
-          startedAt,
-          range,
-          written: 0,
-          outcome,
+          written: count,
+          outcome: count > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite,
           error: null,
-        }),
-      );
+        });
 
-      report.attempted += 1;
-      report.outcomes[outcome] += 1;
-      continue;
-    }
-
-    // The closes and the row describing them, in one transaction: the ledger
-    // must not claim a fill that rolled back.
-    const written = await inTransaction(db, async (trx) => {
-      const count = await writeBackfilledCloses(trx, candidate.id, history.closes);
-
-      await writeBackfillAttempt(trx, {
-        instrumentId: candidate.id,
-        startedAt,
-        range,
-        written: count,
-        outcome: count > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite,
-        error: null,
+        return count;
       });
 
-      return count;
-    });
-
-    report.attempted += 1;
-    report.written += written;
-    report.outcomes[written > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite] += 1;
+      report.attempted += 1;
+      report.written += written;
+      report.outcomes[written > 0 ? BACKFILL_OUTCOMES.filled : BACKFILL_OUTCOMES.nothingToWrite] +=
+        1;
+    }
+  } catch (error) {
+    // Re-thrown rather than swallowed: the composition decides what a caller is
+    // told. Wrapped only so the counts reach its log line.
+    throw new BackfillBatchFailed(error, report);
   }
 
   return report;
-}
-
-/**
- * The spine's second write path: every trading day the feed returned that the
- * spine does not already hold.
- *
- * `do nothing`, never `do update`, and the invariant is
- * `docs/importing-history.md:283`'s: **a backfill must never overwrite what the
- * running system recorded live.** A separate statement from
- * {@link writeDailyClose}, which must go on upserting for the poller's own
- * writes — the two rules are opposite and both are right.
- *
- * One insert for the whole series, counted from `returning`, so the ledger
- * records how many rows were *new* rather than how many were offered —
- * {@link writeObservations} is the pattern and the reasoning.
- *
- * Nothing is fabricated: only days the provider returned are written, so a
- * weekend or a holiday stays the absence carry-forward already answers
- * honestly. The close is the string the adapter handed over, cast to `numeric`
- * and nothing more — the un-adjust for splits happened there, on `money.ts`'s
- * units, and this multiplies nothing.
- */
-async function writeBackfilledCloses(
-  db: Kysely<Database>,
-  instrumentId: string,
-  closes: readonly ProviderDailyClose[],
-): Promise<number> {
-  if (closes.length === 0) return 0;
-
-  const inserted = await db
-    .insertInto("price_daily")
-    .values(
-      closes.map((close) => ({
-        instrument_id: instrumentId,
-        date: close.date,
-        close: close.close,
-      })),
-    )
-    .onConflict((conflict) => conflict.columns(["instrument_id", "date"]).doNothing())
-    .returning("instrument_id")
-    .execute();
-
-  return inserted.length;
-}
-
-/** One row bound for the backfill ledger. */
-type BackfillAttempt = {
-  instrumentId: string;
-  startedAt: Date;
-  range: HistoryRange;
-  written: number;
-  outcome: BackfillOutcome;
-  error: string | null;
-};
-
-/**
- * The attempt itself, recorded whether or not it wrote — {@link writePoll}'s
- * reasoning, with one difference worth naming: **a provider failure here *is* a
- * committed row.** The attempt happened, the next reader needs the text, and
- * the retry clock is this table. Only a database failure leaves nothing, and
- * that attempt is simply next time's candidate.
- */
-async function writeBackfillAttempt(
-  db: Kysely<Database>,
-  attempt: BackfillAttempt,
-): Promise<void> {
-  await db
-    .insertInto("price_backfill")
-    .values({
-      instrument_id: attempt.instrumentId,
-      started_at: attempt.startedAt,
-      range_from: attempt.range.from,
-      range_until: attempt.range.until,
-      written: attempt.written,
-      outcome: attempt.outcome,
-      error: attempt.error,
-    })
-    .execute();
 }
 
 /** Both halves of a refresh, the quotes' half null when it was not asked for. */
@@ -602,9 +553,19 @@ export async function refreshPrices(
   try {
     return { quotes: quotesReport, backfill: await backfillCloses(provider, marketTimeZone, db) };
   } catch (error) {
-    console.error("Price backfill batch failed; the quotes it ran beside are unaffected:", error);
+    const stopped = error instanceof BackfillBatchFailed;
 
-    return { quotes: quotesReport, backfill: { ...emptyBackfillReport(), batchFailed: true } };
+    console.error(
+      "Price backfill batch failed; the quotes it ran beside are unaffected:",
+      stopped ? error.cause : error,
+    );
+
+    // The counts of whatever committed before it stopped, so the batch's log
+    // line describes what happened rather than reporting a batch that did
+    // nothing. Only the attempt it was in the middle of is lost.
+    const report = stopped ? error.report : emptyBackfillReport();
+
+    return { quotes: quotesReport, backfill: { ...report, batchFailed: true } };
   }
 }
 
@@ -855,6 +816,49 @@ async function writeDailyClose(
     .execute();
 }
 
+/**
+ * The spine's second write path: every trading day the feed returned that the
+ * spine does not already hold.
+ *
+ * `do nothing`, never `do update`, and the invariant is
+ * `docs/importing-history.md:283`'s: **a backfill must never overwrite what the
+ * running system recorded live.** A separate statement from
+ * {@link writeDailyClose}, which must go on upserting for the poller's own
+ * writes — the two rules are opposite and both are right.
+ *
+ * One insert for the whole series, counted from `returning`, so the ledger
+ * records how many rows were *new* rather than how many were offered —
+ * {@link writeObservations} is the pattern and the reasoning.
+ *
+ * Nothing is fabricated: only days the provider returned are written, so a
+ * weekend or a holiday stays the absence carry-forward already answers
+ * honestly. The close is the string the adapter handed over, cast to `numeric`
+ * and nothing more — the un-adjust for splits happened there, on `money.ts`'s
+ * units, and this multiplies nothing.
+ */
+async function writeBackfilledCloses(
+  db: Kysely<Database>,
+  instrumentId: string,
+  closes: readonly ProviderDailyClose[],
+): Promise<number> {
+  if (closes.length === 0) return 0;
+
+  const inserted = await db
+    .insertInto("price_daily")
+    .values(
+      closes.map((close) => ({
+        instrument_id: instrumentId,
+        date: close.date,
+        close: close.close,
+      })),
+    )
+    .onConflict((conflict) => conflict.columns(["instrument_id", "date"]).doNothing())
+    .returning("instrument_id")
+    .execute();
+
+  return inserted.length;
+}
+
 /** One row bound for the observation log. */
 type ObservationRow = {
   instrument_id: string;
@@ -960,6 +964,41 @@ async function writePoll(
       requested: report.requested,
       priced: report.priced,
       stale: report.stale,
+    })
+    .execute();
+}
+
+/** One row bound for the backfill ledger. */
+type BackfillAttempt = {
+  instrumentId: string;
+  startedAt: Date;
+  range: HistoryRange;
+  written: number;
+  outcome: BackfillOutcome;
+  error: string | null;
+};
+
+/**
+ * The attempt itself, recorded whether or not it wrote — {@link writePoll}'s
+ * reasoning, with one difference worth naming: **a provider failure here *is* a
+ * committed row.** The attempt happened, the next reader needs the text, and
+ * the retry clock is this table. Only a database failure leaves nothing, and
+ * that attempt is simply next time's candidate.
+ */
+async function writeBackfillAttempt(
+  db: Kysely<Database>,
+  attempt: BackfillAttempt,
+): Promise<void> {
+  await db
+    .insertInto("price_backfill")
+    .values({
+      instrument_id: attempt.instrumentId,
+      started_at: attempt.startedAt,
+      range_from: attempt.range.from,
+      range_until: attempt.range.until,
+      written: attempt.written,
+      outcome: attempt.outcome,
+      error: attempt.error,
     })
     .execute();
 }

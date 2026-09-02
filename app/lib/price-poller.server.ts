@@ -159,8 +159,13 @@ async function tick(state: PollerState, quotesRegardless: boolean): Promise<void
  * Narrower than the quotes' line above, which speaks on every attempt: a tick
  * at any hour whose gap query found nothing would otherwise write a line, and
  * "no price line in the log" would stop meaning what `docs/operating.md` says
- * it means. A failure of any kind is a warning — the line an operator is
- * looking for.
+ * it means.
+ *
+ * "Failed" is the count of attempts whose *call* failed, and not of the three
+ * refusals — a delisted ticker, a foreign listing and an unapplied split are
+ * answers rather than failures, and the ledger names each one for the person
+ * reading Settings → Prices. A failure of either kind is a warning, which is
+ * the line an operator greps for.
  */
 function logBackfill(report: BackfillReport): void {
   const failed = report.outcomes.provider_failed;
@@ -226,19 +231,27 @@ export function startPricePoller(provider: PriceProvider = yahooPriceProvider())
  *
  * **Returns nothing and never rejects.** Nothing registers an
  * `unhandledRejection` handler and Node 24 exits the process on one, so a
- * request that cannot be honoured is a log line and a return. Two ways it is
+ * request that cannot be honoured returns rather than throwing. Two ways it is
  * not honoured, both of which cost at most one more tick: a tick or another
- * request is already running, which is dropped rather than queued — the rule an
- * overlapping tick obeys; and the poller has not been started in this process,
- * which is what a fresh process sees when an action runs before any loader has
- * started it (`app/root.tsx` starts it from one), and what every test that
- * never starts it sees — so no test reaches a provider through this.
+ * request is already running, which is dropped **silently**, exactly as an
+ * overlapping tick is — a line per dropped request would make a busy instance
+ * noisier without telling anyone anything they can act on; and the poller has
+ * not been started in this process, which does log, because
+ * it is the one an operator might otherwise wonder about: a fresh process sees
+ * it when an action runs before any loader has started the poller
+ * (`app/root.tsx` starts it from one), and so does every test that never starts
+ * it — which is what keeps a test from reaching a provider through this.
  */
 export function requestRefresh(): void {
   const state = (globalThis as PollerHost)[SLOT];
 
   if (state === undefined) {
-    console.info("Price refresh requested before the poller started; the next tick will do it.");
+    // Deliberately not the `Price refresh` stem `docs/operating.md` reserves
+    // for a refresh the poller actually ran; nothing ran here.
+    console.info(
+      "A refresh was requested before the price poller started in this process; " +
+        "it was dropped, and a later tick will do the work.",
+    );
     return;
   }
 

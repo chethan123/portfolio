@@ -222,8 +222,19 @@ describe("the connection a tick borrows", () => {
 
   it(
     "is spent outside market hours on the backfill, but no quote is asked for and no poll recorded",
-    withDatabase(async ({ db, seedInstrument }) => {
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      // Held from a date the spine does not reach, which is what makes this a
+      // backfill candidate — an instrument nobody holds has no gap, and a
+      // weekend tick would then be indistinguishable from one that skipped the
+      // batch entirely.
+      const account = await seedAccount();
+      const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument, quantity: "1.00000000" }],
+      });
+
       const watched = watchedPool();
       const provider = fakeProvider();
 
@@ -243,7 +254,10 @@ describe("the connection a tick borrows", () => {
           watched.pool,
         );
 
+        // No quotes, and the batch ran anyway: a statement uploaded on a
+        // Saturday should be valued by Monday's open rather than after it.
         expect(provider.asked).toEqual([]);
+        expect(provider.askedHistory).toEqual(["VTI"]);
         expect(watched.destroyed).toEqual([false]);
 
         // A poll is an attempt at quotes, and this tick attempted none.
@@ -443,6 +457,89 @@ describe("a refresh an upload asks for", () => {
         vi.useRealTimers();
         await watched.close();
       }
+    }),
+  );
+});
+
+describe("what the batch writes to the log", () => {
+  /** Every line the tick wrote, whatever level it chose. */
+  function capturedConsole() {
+    const lines: string[] = [];
+    const restore = (["info", "warn"] as const).map((level) => {
+      const was = console[level];
+      console[level] = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+      return () => {
+        console[level] = was;
+      };
+    });
+
+    return { lines, restore: () => restore.forEach((undo) => undo()) };
+  }
+
+  it(
+    "says nothing when the gap query found nothing to fill",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // An instrument nobody holds has no gap. "No price line in the log"
+      // has to keep meaning what `docs/operating.md` says it means, so a tick
+      // at any hour that found no candidates must write no backfill line.
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const watched = watchedPool();
+      const provider = fakeProvider();
+      const console = capturedConsole();
+
+      try {
+        await withDb(
+          db,
+          async () => {
+            runTicks(provider, { at: WEEKEND });
+            await watched.handedBack(1);
+          },
+          watched.pool,
+        );
+      } finally {
+        console.restore();
+        await watched.close();
+      }
+
+      expect(console.lines.filter((line) => line.startsWith("Price backfill"))).toEqual([]);
+    }),
+  );
+
+  it(
+    "counts what it attempted when there was something to fill",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      const account = await seedAccount();
+      const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument, quantity: "1.00000000" }],
+      });
+
+      const watched = watchedPool();
+      const provider = fakeProvider();
+      const console = capturedConsole();
+
+      try {
+        await withDb(
+          db,
+          async () => {
+            runTicks(provider, { at: WEEKEND });
+            await watched.handedBack(1);
+          },
+          watched.pool,
+        );
+      } finally {
+        console.restore();
+        await watched.close();
+      }
+
+      expect(console.lines.filter((line) => line.startsWith("Price backfill"))).toEqual([
+        // The fake answers `no-history`, so nothing was written and nothing
+        // failed: an answer is not a failure, and the ledger names the reason.
+        "Price backfill: 1 attempted, 0 closes written, 0 failed.",
+      ]);
     }),
   );
 });

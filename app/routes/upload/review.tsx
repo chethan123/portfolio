@@ -79,7 +79,16 @@ export async function action({ params, request }: Route.ActionArgs) {
     // account page while the batch runs, and the next render prices what it
     // can. Best-effort by design — a request that could not be made is the
     // poller module's log line, never a refused upload.
-    requestRefresh();
+    try {
+      requestRefresh();
+    } catch (error) {
+      // Structural rather than trusting: `requestRefresh` returns rather than
+      // throwing, and this keeps that a property of *this* action rather than
+      // of a distant module's internals. Without it a future throw would
+      // replace the success redirect with an error boundary, after the
+      // statement had already committed.
+      console.error("An upload could not request a refresh; the next tick will price it:", error);
+    }
 
     // Success lands on the account the upload just changed, with the set id
     // for the receipt — which is read back from the database there, never
