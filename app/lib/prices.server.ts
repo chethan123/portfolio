@@ -44,7 +44,7 @@
 import { sql } from "kysely";
 
 import { getDb, getPool, type Database } from "./db.server.ts";
-import { marketDateOf, marketStampOf } from "./market-hours.ts";
+import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
 import type { PriceProvider, ProviderQuote } from "./price-provider.server.ts";
 
 import type { Kysely } from "kysely";
@@ -56,6 +56,38 @@ import type pg from "pg";
  * a poll and a migration blocking each other for no reason.
  */
 const ADVISORY_LOCK_KEY = "7295380114023642";
+
+/**
+ * How many instruments one refresh may attempt to backfill. Small on purpose:
+ * the batch is the whole of the pacing — nothing queues against the unofficial
+ * endpoint, and a batch that cannot finish before the next tick is simply
+ * resumed by it, because the candidate read is re-asked every time and answers
+ * with whatever is still open (ADR-0011). A household loading a decade of
+ * statements is filled over a handful of refreshes.
+ *
+ * A module constant rather than a setting: the household has no reason to turn
+ * it, and a wrong value is a request-rate problem rather than a preference.
+ */
+const BACKFILL_BATCH_SIZE = 5;
+
+/**
+ * How recently an attempt must have been made for an instrument to be skipped.
+ * An unfillable gap — a delisted ticker whose history the feed has dropped —
+ * then costs one request a day rather than one every tick, which is the price
+ * of not asking a person to mark it.
+ *
+ * A string handed to the query as a parameter and cast there, never spliced
+ * into the statement's text.
+ */
+const BACKFILL_RETRY_INTERVAL = "1 day";
+
+/**
+ * How far before an instrument's earliest position set the range starts. A
+ * statement dated on a weekend or a market holiday has no close of its own, so
+ * the range has to reach back past it far enough to find one to carry forward;
+ * a week clears the longest run of non-trading days a US market has.
+ */
+const BACKFILL_RANGE_LEAD_DAYS = 7;
 
 /**
  * Run a refresh, or decline because one is already running. Beside the
@@ -146,6 +178,124 @@ const selectFeedInstruments = (db: Kysely<Database>) =>
     .where("price_source", "=", "feed")
     .where("symbol", "is not", null)
     .orderBy("symbol");
+
+/**
+ * What one backfill attempt can have come to. A `const` object rather than an
+ * enum — `tsconfig` sets `erasableSyntaxOnly`, and `server/*.ts` runs under
+ * Node's type stripping. Kept in step with `price_backfill_outcome_valid` in
+ * `0010_price_backfill.sql` by hand, the arrangement `account-options.ts` has
+ * with the schema's other vocabularies: the migration is the authority and this
+ * is the spelling the code uses.
+ *
+ * Deliberately a second vocabulary rather than the provider's: the adapter
+ * answers in the closed set `SymbolProbe` uses, and these are a `check`
+ * constraint's literals. The mapping between them is one object in the batch.
+ */
+export const BACKFILL_OUTCOMES = {
+  /** Closes were written. The only outcome with `written > 0`. */
+  filled: "filled",
+  /** The feed answered and the spine already held every day it returned. */
+  nothingToWrite: "nothing_to_write",
+  /** The feed has no history for the symbol — unknown, delisted or renamed. */
+  noHistory: "no_history",
+  /** The history is quoted in a currency this instance cannot hold. */
+  nonUsd: "non_usd",
+  /** A split event in the response could not be applied; nothing written. */
+  splitUnresolved: "split_unresolved",
+  /** The call itself failed; the ledger's `error` carries the text. */
+  providerFailed: "provider_failed",
+} as const;
+
+export type BackfillOutcome = (typeof BACKFILL_OUTCOMES)[keyof typeof BACKFILL_OUTCOMES];
+
+/** One instrument a batch should try, and where its range starts. */
+export type BackfillCandidate = {
+  id: string;
+  /** As stored. The adapter upper-cases it to send; nothing here rewrites it. */
+  symbol: string;
+  /** `YYYY-MM-DD`, computed in SQL — no date arithmetic happens in JavaScript. */
+  rangeFrom: IsoDate;
+};
+
+/**
+ * Which instruments a batch should try next: the coverage gap of
+ * `docs/importing-history.md` §5 made a domain read, narrowed to what a feed
+ * can fill, and bounded.
+ *
+ * **The gap is a property of the positions, not of the instrument.** An
+ * instrument is a candidate when its spine starts later than the earliest
+ * `position_set.as_of_date` of any holding referencing it, or has no row at
+ * all — not because it is new (instruments are created at resolution, before
+ * any position set exists) and not because a person asked (history already
+ * uploaded is already a gap).
+ *
+ * `fixed` and `manual` are excluded for the reasons {@link selectFeedInstruments}
+ * gives, and a null symbol separately because `feed` allows one. Those three
+ * have gaps just as real; Settings → Prices is where a person learns the batch
+ * will never fill them.
+ *
+ * One inherited caveat, stated rather than resolved: every set ever recorded
+ * counts, superseded same-date corrections included, so an instrument held only
+ * in a superseded set keeps a gap no valuation reads
+ * (`docs/importing-history.md:243-246`).
+ *
+ * The range's end is the caller's, because it is today's market date and this
+ * read has no clock.
+ */
+export async function selectBackfillCandidates(
+  db: Kysely<Database> = getDb(),
+): Promise<BackfillCandidate[]> {
+  const rows = await db
+    .selectFrom("instrument")
+    .innerJoin("holding", "holding.instrument_id", "instrument.id")
+    .innerJoin("position_set", "position_set.id", "holding.position_set_id")
+    .leftJoin("price_daily", "price_daily.instrument_id", "instrument.id")
+    .where("instrument.price_source", "=", "feed")
+    .where("instrument.symbol", "is not", null)
+    // The retry clock. Before the grouping on purpose: an instrument attempted
+    // in the last day is not a candidate whatever its positions say.
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("price_backfill")
+            .select("price_backfill.id")
+            .whereRef("price_backfill.instrument_id", "=", "instrument.id")
+            .where(
+              sql<boolean>`price_backfill.started_at > now() - cast(${BACKFILL_RETRY_INTERVAL} as interval)`,
+            ),
+        ),
+      ),
+    )
+    .groupBy(["instrument.id", "instrument.symbol"])
+    .having(
+      sql<boolean>`min(price_daily.date) is null or min(price_daily.date) > min(position_set.as_of_date)`,
+    )
+    .select([
+      "instrument.id",
+      "instrument.symbol",
+      // In SQL, so no date arithmetic happens in JavaScript and the driver
+      // hands the result back as the `YYYY-MM-DD` string a `date` crosses as.
+      sql<IsoDate>`min(position_set.as_of_date) - cast(${BACKFILL_RANGE_LEAD_DAYS} as integer)`.as(
+        "range_from",
+      ),
+    ])
+    // The deepest gap first, so a household loading a decade is worked from the
+    // oldest statement forward; then the id, so two ticks agree on what "next"
+    // means rather than racing a tie.
+    .orderBy(sql`min(position_set.as_of_date)`)
+    .orderBy("instrument.id")
+    .limit(BACKFILL_BATCH_SIZE)
+    .execute();
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    // Narrowing only: the query refuses null symbols, which TypeScript cannot
+    // see through a `where` — `refreshQuotes`'s narrowing, same reason.
+    symbol: row.symbol as string,
+    rangeFrom: row.range_from,
+  }));
+}
 
 /**
  * Every instrument the provider will be asked about, by symbol — a map to a

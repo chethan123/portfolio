@@ -126,6 +126,17 @@ export interface PositionSet {
   source_filename: string | null;
 }
 
+export interface PriceBackfill {
+  error: string | null;
+  id: Generated<Int8>;
+  instrument_id: Int8;
+  outcome: string;
+  range_from: string;
+  range_until: string;
+  started_at: Timestamp;
+  written: number;
+}
+
 export interface PriceDaily {
   close: Numeric;
   date: string;
@@ -186,6 +197,7 @@ export interface DB {
   manual_networth: ManualNetworth;
   person: Person;
   position_set: PositionSet;
+  price_backfill: PriceBackfill;
   price_daily: PriceDaily;
   price_observation: PriceObservation;
   price_poll: PricePoll;
