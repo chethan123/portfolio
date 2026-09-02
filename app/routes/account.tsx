@@ -71,23 +71,22 @@ export function meta({ data }: Route.MetaArgs) {
 export const middleware: Route.MiddlewareFunction[] = [chartRangeMiddleware()];
 
 export async function loader({ params, request }: Route.LoaderArgs) {
-  // First and alone, because it is the gate: `accountTotal` answers null for
-  // no such account, a non-id, and a closed account alike — all three are a
-  // 404 rather than a page of blanks. A closed account is excluded from
-  // `holding_valued` (§8.2), so rendering it would give a header of empty
-  // figures with no explanation.
-  const total = await accountTotal(params.accountId);
-  if (total === null) throw new Response("Not found", { status: 404 });
-
   const today = isoDate(Date.now());
   const scope: ChartScope = { surface: "account", accountId: params.accountId };
 
-  // The account's own reach — its own earliest statement (spec 0008), never
-  // the household's, and the observation log's latest session; see
-  // `chartReach`'s own docstring for why. Nothing else to batch this call
-  // with: unlike the Overview, this page has no manual series to await
-  // beside it.
-  const reach = await chartReach(scope);
+  const [total, reach] = await Promise.all([
+    // The gate: `accountTotal` answers null for no such account, a non-id,
+    // and a closed account alike — all three are a 404 rather than a page of
+    // blanks. A closed account is excluded from `holding_valued` (§8.2), so
+    // rendering it would give a header of empty figures with no explanation.
+    accountTotal(params.accountId),
+    // The account's own reach — its own earliest statement (spec 0008), never
+    // the household's, and the observation log's latest session; see
+    // `chartReach`'s own docstring for why.
+    chartReach(scope),
+  ]);
+
+  if (total === null) throw new Response("Not found", { status: 404 });
 
   const earliest = { positionSet: reach.positionSet };
 
@@ -99,19 +98,24 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     timeZone: getConfig().MARKET_TIMEZONE,
   });
 
+  // Start fetching `lastRecorded` here so we can reuse it for both `uploadReceipt`
+  // and the final `Promise.all` resolution.
+  const recordedPromise = lastRecorded(params.accountId);
+
   // The upload flow's landing receipt (`?uploaded=<setId>`, brief §6.5).
   // Every figure is read back from the database, never the URL: the
   // parameter names *which* set was written, so an invalid or stale value
   // yields null and no sentence — the `?recorded=` receipt's contract too.
   const uploadedParam = new URL(request.url).searchParams.get("uploaded");
-  const receipt =
-    uploadedParam === null ? null : await uploadReceipt(params.accountId, uploadedParam);
+  const receiptPromise = uploadedParam === null
+    ? Promise.resolve(null)
+    : recordedPromise.then(recorded => uploadReceipt(params.accountId, uploadedParam, recorded));
 
   // Created here and dropped into the `Promise.all` below, for the same
   // reason as the Overview's loader — see its own comment there.
   const points = chartSeries(scope, resolved);
 
-  const [account, holdings, computed, recorded, freshness] = await Promise.all([
+  const [account, holdings, computed, recorded, freshness, receipt] = await Promise.all([
     // Read for one field, the tax treatment: `AccountTotal` carries what a
     // figure is computed from and no more (§4.5). Safe after the gate —
     // nothing in this application deletes an account.
@@ -120,8 +124,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     points,
     // What the current figure was read from, so the set-balance panel can say
     // which day it is superseding rather than asking for a correction blind.
-    lastRecorded(params.accountId),
+    recordedPromise,
     asOfView(getConfig().MARKET_TIMEZONE),
+    receiptPromise,
   ]);
 
   return {

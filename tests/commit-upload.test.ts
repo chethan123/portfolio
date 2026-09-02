@@ -1231,7 +1231,8 @@ describe("uploadReceipt", () => {
       // same tie-break — read back from the database, never from the URL. The
       // holding count feeds the receipt's closing "now holds N positions"
       // (brief §6.5), and it is the set's own rows, not a URL claim.
-      const receipt = await uploadReceipt(account.id, written.setId, db);
+      const latest1 = await lastRecorded(account.id, db);
+      const receipt = await uploadReceipt(account.id, written.setId, latest1, db);
       expect(receipt).toMatchObject({
         setId: written.setId,
         asOf: "2026-06-30",
@@ -1242,11 +1243,14 @@ describe("uploadReceipt", () => {
       });
 
       // A set that is not the account's latest yields no receipt...
-      expect(await uploadReceipt(account.id, prior.id, db)).toBeNull();
+      const latest2 = await lastRecorded(account.id, db);
+      expect(await uploadReceipt(account.id, prior.id, latest2, db)).toBeNull();
       // ...nor does a set that is not the account's at all...
-      expect(await uploadReceipt(other.id, written.setId, db)).toBeNull();
+      const latest3 = await lastRecorded(other.id, db);
+      expect(await uploadReceipt(other.id, written.setId, latest3, db)).toBeNull();
       // ...nor a parameter that is not an id.
-      expect(await uploadReceipt(account.id, "abc", db)).toBeNull();
+      const latest4 = await lastRecorded(account.id, db);
+      expect(await uploadReceipt(account.id, "abc", latest4, db)).toBeNull();
     }),
   );
 
@@ -1265,7 +1269,8 @@ describe("uploadReceipt", () => {
         db,
       );
 
-      const receipt = await uploadReceipt(account.id, written.setId, db);
+      const latest5 = await lastRecorded(account.id, db);
+      const receipt = await uploadReceipt(account.id, written.setId, latest5, db);
       expect(receipt).toMatchObject({
         firstStatement: true,
         counts: { added: 1, updated: 0, unchanged: 0, removed: 0 },

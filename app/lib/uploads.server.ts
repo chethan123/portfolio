@@ -32,7 +32,7 @@ import { sql } from "kysely";
 import { getConfig } from "../../server/config.ts";
 import { numberTail } from "./account-label.ts";
 import { getAccount } from "./accounts.server.ts";
-import { lastRecorded } from "./balances.server.ts";
+import { lastRecorded, type LastRecorded } from "./balances.server.ts";
 import { headerFingerprint, upsertMapping } from "./column-mapping.server.ts";
 import { readCsv } from "./csv.ts";
 import { getDb, type Database } from "./db.server.ts";
@@ -1097,6 +1097,7 @@ export type UploadReceipt = {
 export async function uploadReceipt(
   accountId: string,
   setId: string,
+  latest: LastRecorded | null,
   db: Kysely<Database> = getDb(),
 ): Promise<UploadReceipt | null> {
   if (!/^\d+$/.test(accountId) || !/^\d+$/.test(setId)) return null;
@@ -1104,26 +1105,30 @@ export async function uploadReceipt(
   // "Latest" through the shared read, so the receipt and every figure on the
   // page resolve the same set. A set the account is no longer reading gets no
   // sentence — the receipt describes the holdings on screen or nothing.
-  const latest = await lastRecorded(accountId, db);
-  if (latest === null || latest.id !== setId) return null;
+  if (latest === null || latest.id !== setId) {
+    return null;
+  }
 
-  const set = await db
-    .selectFrom("position_set")
-    .select(["id", "as_of_date", "created_at", "source_filename"])
-    .where("id", "=", setId)
-    .where("account_id", "=", accountId)
-    .executeTakeFirst();
+  const [set, predecessor] = await Promise.all([
+    db
+      .selectFrom("position_set")
+      .select(["id", "as_of_date", "created_at", "source_filename"])
+      .where("id", "=", setId)
+      .where("account_id", "=", accountId)
+      .executeTakeFirst(),
+    sql<{ id: string }>`
+      select ps.id
+      from position_set ps
+      where ps.account_id = ${accountId}::bigint
+        and (ps.as_of_date, ps.created_at, ps.id) < (
+          select as_of_date, created_at, id from position_set where id = ${setId}::bigint limit 1
+        )
+      order by ps.as_of_date desc, ps.created_at desc, ps.id desc
+      limit 1
+    `.execute(db),
+  ]);
+
   if (set === undefined) return null;
-
-  const predecessor = await sql<{ id: string }>`
-    select ps.id
-    from position_set ps
-    where ps.account_id = ${accountId}::bigint
-      and (ps.as_of_date, ps.created_at, ps.id)
-        < (${set.as_of_date}::date, ${set.created_at}::timestamptz, ${setId}::bigint)
-    order by ps.as_of_date desc, ps.created_at desc, ps.id desc
-    limit 1
-  `.execute(db);
   const predecessorId = predecessor.rows[0]?.id ?? null;
 
   const holdingRows = await db
