@@ -583,4 +583,191 @@ describe("the 1D series", () => {
       expect(await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).toEqual([]);
     }),
   );
+
+  it(
+    "takes each instrument's latest observation, so a second quote replaces the first even with other instruments' quotes between them",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const account = await seedAccount();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const bnd = await seedInstrument({ symbol: "BND", priceSource: "feed" });
+      const gld = await seedInstrument({ symbol: "GLD", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [
+          { instrument: vti, quantity: "10.00000000" },
+          { instrument: bnd, quantity: "10.00000000" },
+          { instrument: gld, quantity: "10.00000000" },
+        ],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "100.0000" });
+      await seedDailyClose({ instrument: bnd, date: "2026-06-04", close: "50.0000" });
+      await seedDailyClose({ instrument: gld, date: "2026-06-04", close: "30.0000" });
+
+      // A feed stamps each instrument's own instant, so a session interleaves
+      // them: VTI, BND, VTI again, GLD, BND again — five instants, none shared.
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "110.0000" });
+      await seedObservation({ instrument: bnd, asOf: "2026-06-05T13:45:00Z", price: "60.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "130.0000" });
+      await seedObservation({ instrument: gld, asOf: "2026-06-05T14:15:00Z", price: "45.0000" });
+      await seedObservation({ instrument: bnd, asOf: "2026-06-05T14:30:00Z", price: "70.0000" });
+
+      expect((await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).map((point) => [point.at, point.amount])).toEqual([
+        // 10 × 110 + 10 × 50 + 10 × 30, only VTI having spoken.
+        ["2026-06-05T13:30:00.000Z", "1900.0000"],
+        // 10 × 110 + 10 × 60 + 10 × 30
+        ["2026-06-05T13:45:00.000Z", "2000.0000"],
+        // 10 × 130 + 10 × 60 + 10 × 30 — VTI's second quote displaces its own
+        // first, with BND's sitting between them, and leaves BND's alone.
+        ["2026-06-05T14:00:00.000Z", "2200.0000"],
+        // 10 × 130 + 10 × 60 + 10 × 45
+        ["2026-06-05T14:15:00.000Z", "2350.0000"],
+        // 10 × 130 + 10 × 70 + 10 × 45
+        ["2026-06-05T14:30:00.000Z", "2450.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "leaves a holding with no price of any kind out of the amount, and counts it in from the instant it is first observed",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const account = await seedAccount();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      // Bought this morning, or first priced today: no close before the session
+      // and no earlier observation, so until its first quote there is genuinely
+      // no price to carry forward.
+      const fresh = await seedInstrument({ symbol: "IPO", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [
+          { instrument: vti, quantity: "10.00000000" },
+          { instrument: fresh, quantity: "5.00000000" },
+        ],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "100.0000" });
+
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "120.0000" });
+      await seedObservation({ instrument: fresh, asOf: "2026-06-05T14:00:00Z", price: "40.0000" });
+
+      expect(await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).toEqual([
+        {
+          at: "2026-06-05T13:30:00.000Z",
+          // 10 × 120, and nothing at all for the unpriced holding — a step in
+          // the line, reported through `coverage` rather than guessed at.
+          amount: "1200.0000",
+          coverage: { known: 1, total: 2 },
+        },
+        {
+          at: "2026-06-05T14:00:00.000Z",
+          // 10 × 120 + 5 × 40, once the second instrument had a price at all.
+          amount: "1400.0000",
+          coverage: { known: 2, total: 2 },
+        },
+      ]);
+    }),
+  );
+
+  it(
+    "opens an unobserved instrument at an earlier session's observation rather than at the close, the observation being the later of the two",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const account = await seedAccount();
+      const quiet = await seedInstrument({ symbol: "VBTLX", priceSource: "feed" });
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [
+          { instrument: quiet, quantity: "10.00000000" },
+          { instrument: vti, quantity: "10.00000000" },
+        ],
+      });
+      await seedDailyClose({ instrument: quiet, date: "2026-06-04", close: "200.0000" });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "100.0000" });
+
+      // Yesterday evening's NAV: on yesterday's market date, so not an instant
+      // of this session — but later than yesterday's close, and the rule is the
+      // latest observation at or before the instant, from any date.
+      await seedObservation({ instrument: quiet, asOf: "2026-06-04T20:30:00Z", price: "210.0000" });
+
+      // Only VTI is quoted today, so the session's instants are its.
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "130.0000" });
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "140.0000" });
+
+      expect((await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).map((point) => [point.at, point.amount])).toEqual([
+        // 10 × 210 + 10 × 130 — the evening observation, never the 200.0000 close.
+        ["2026-06-05T13:30:00.000Z", "3400.0000"],
+        // 10 × 210 + 10 × 140
+        ["2026-06-05T14:00:00.000Z", "3500.0000"],
+      ]);
+    }),
+  );
+
+  it(
+    "rounds each holding on its own before summing, so two dust positions of one instrument round up separately",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "1.0000" });
+
+      // Quantity is `numeric(20, 8)`, so 0.00005 is exact — the half that
+      // decides the rounding is really there, in two accounts at once.
+      await seedPositionSet({
+        account: await seedAccount({ name: "Fidelity Taxable" }),
+        asOf: "2026-06-04",
+        holdings: [{ instrument: vti, quantity: "0.00005000" }],
+      });
+      await seedPositionSet({
+        account: await seedAccount({ name: "Vanguard IRA" }),
+        asOf: "2026-06-04",
+        holdings: [{ instrument: vti, quantity: "0.00005000" }],
+      });
+
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "1.0000" });
+
+      expect(await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).toEqual([
+        {
+          at: "2026-06-05T14:00:00.000Z",
+          // cast(0.00005 × 1.0000 as numeric(20, 4)) is 0.0001 per holding,
+          // twice. Summing the quantities first would give 0.0001 once, and
+          // lose a holding's worth of the line.
+          amount: "0.0002",
+          coverage: { known: 2, total: 2 },
+        },
+      ]);
+    }),
+  );
+
+  it(
+    "draws a single point for two instruments observed at exactly the same instant, priced with both",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, seedObservation }) => {
+      const account = await seedAccount();
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const bnd = await seedInstrument({ symbol: "BND", priceSource: "feed" });
+      await seedPositionSet({
+        account,
+        asOf: "2026-06-04",
+        holdings: [
+          { instrument: vti, quantity: "10.00000000" },
+          { instrument: bnd, quantity: "10.00000000" },
+        ],
+      });
+      await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "100.0000" });
+      await seedDailyClose({ instrument: bnd, date: "2026-06-04", close: "50.0000" });
+
+      // One `as_of` shared by two instruments, which a provider stamping a
+      // batch with a single instant produces. The instants are the distinct
+      // values, so this is one moment on the line and not two.
+      await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "150.0000" });
+      await seedObservation({ instrument: bnd, asOf: "2026-06-05T14:00:00Z", price: "80.0000" });
+
+      expect(await netWorthSessionSeries(ALL_OWNERS, "2026-06-05", db)).toEqual([
+        {
+          at: "2026-06-05T14:00:00.000Z",
+          // 10 × 150 + 10 × 80, both quotes landing in the one point.
+          amount: "2300.0000",
+          coverage: { known: 2, total: 2 },
+        },
+      ]);
+    }),
+  );
 });
