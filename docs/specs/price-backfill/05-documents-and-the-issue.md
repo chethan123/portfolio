@@ -50,16 +50,16 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       in the same shape — `selectBackfillCandidates` (ticket 02) and `backfillGaps` (ticket 04)
       each hand-write the join over `holding` that `:372-376` warns about, to find an instrument's
       first-held date, and each computes no money
+- [ ] §4.5: a new row in the write-paths table — backfill closes, `prices.server.ts` →
+      `backfillCloses`, `price_daily` (insert where absent) and `price_backfill`, append-only yes —
+      and the sentence "Five operations produce history" becomes a rule rather than a count,
+      `docs/README.md`'s first rule
 - [ ] §5.2: `price_backfill` references `instrument … on delete cascade`, so it enters the graph,
       not the list beneath it: the ER diagram gains `INSTRUMENT ||--o{ PRICE_BACKFILL` beside
       `PRICE_DAILY`'s edge (`:525`) and an entity block beside `PRICE_DAILY`'s (`:584`); §5.3's
       cascade row for `quote` / `price_daily` / `price_observation` → `instrument` (`:632`) gains
       it, with the same reasoning — an attempt to price an instrument that never existed. The
       "reference nothing" table (`:609`) is where `price_poll` sits and is not where the ledger goes
-- [ ] §4.5: a new row in the write-paths table — backfill closes, `prices.server.ts` →
-      `backfillCloses`, `price_daily` (insert where absent) and `price_backfill`, append-only yes —
-      and the sentence "Five operations produce history" becomes a rule rather than a count,
-      `docs/README.md`'s first rule
 - [ ] §6.2: the sequence diagram or a paragraph after it shows the batch following the quotes
       under the same lock, the tiers table's `price_daily` row says the spine is written by two
       paths, and the `price_backfill` ledger is described beside `price_poll`. Two sentences there
@@ -85,9 +85,9 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 - [ ] "Before you upload anything backdated: the price spine" (`:52-83`): the claim that nothing
       backfills it (`:55-58`) and the "Until issue #83 lands" sentence (`:62-65`) are replaced by
       what now happens — the spine is filled on the refreshes after a statement lands, a handful of
-      instruments per refresh — and the ordering (`:67-78`) loses its manual step 5: most recent
-      statement first is still right, because it creates the instruments and classifies them, but
-      the fill is no longer the operator's. Step 4's first bullet (`:194-196`), "it creates the
+      instruments per refresh — and the ordering's step 5 (`:67-78`) becomes the check rather than
+      the fill: most recent statement first is still right, because it creates the instruments and
+      classifies them, but the fill is no longer the operator's. Step 4's first bullet (`:194-196`), "it creates the
       instrument rows the price backfill in step 5 needs", points at that manual step and is
       re-pointed at the check step 5 becomes
 - [ ] §5 "Fill the price spine" (`:216-290`) is rewritten as **check** the spine: Settings → Prices
@@ -169,11 +169,11 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       Every use of "backfill", "historical import" or "catch-up" for this concept across the files
       above is brought to the glossary's word; `tests/refresh-quotes.test.ts:528` uses "backfills"
       for `quote_type` and may keep it — that is not this concept. The sweep runs the other way
-      too: `docs/importing-history.md:81, :180, :191, :195, :302, :308` and `DESIGN.md:496` say
+      too: `docs/importing-history.md:81, :180, :191, :302, :308` and `DESIGN.md:496` say
       "backfill" or "backfilled era" for loading position history from backdated statements,
       which the glossary's entry now reserves for filling closes. Each becomes "backdated
-      statements" or "loading history", whichever the sentence reads with — `:195`'s "price
-      backfill" is the one use there that already means the glossary's concept and stays
+      statements" or "loading history", whichever the sentence reads with; `:195`'s "price backfill"
+      already means the glossary's concept and stays
 
 **The issue**
 

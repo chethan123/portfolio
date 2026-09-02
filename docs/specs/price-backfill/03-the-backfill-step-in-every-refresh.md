@@ -9,7 +9,7 @@ caller shares — quotes, then one batch — and the three callers moved onto it
 which outside market hours now skips the quotes and still runs the batch; **Refresh now**, whose
 behaviour for the person pressing it does not change; and a new request fired once an upload's
 transaction has committed, which the response does not wait for. One log line per batch that
-attempted anything.
+attempted anything or failed.
 
 Its own ticket because it is the one place the two pieces built beside each other meet, and
 because the rules it carries — never overwrite, one transaction per attempt, no `price_poll` row
@@ -99,7 +99,7 @@ for a tick that asked for no quotes — are rules about rows and are proved agai
       false and is rewritten: a weekend tick costs the cadence read and the gap query, and a
       request to the feed only when there is a gap. The test that states the old promise is
       rewritten with it: `tests/price-poller.test.ts:211-229` ("is not spent at all outside market
-      hours") asserts `pool.totalCount` is 0 on a weekend, its own comment (`:212-221`) says the
+      hours") asserts `pool.totalCount` is 0 on a weekend, its own comment (`:218-220`) says the
       calendar must keep the tick off the database all weekend, and the tick-shape comment at
       `:135` puts the market-hours check before the tick's first `await`; all three now say a
       weekend tick spends a connection and no provider request. The file header (`:1-19`) is about
@@ -187,7 +187,7 @@ for a tick that asked for no quotes — are rules about rows and are proved agai
       pool's hand-back before the database closes:
   - [ ] "is not spent at all outside market hours" (`:211-229`) is rewritten: a tick outside market
         hours spends a connection, runs the batch, writes no `price_poll` row, and asks the fake for
-        no quotes; the test's comment (`:212-221`) and the tick-shape comment (`:135`) say the same
+        no quotes; the test's comment (`:218-220`) and the tick-shape comment (`:135`) say the same
   - [ ] `requestRefresh` runs quotes regardless of market hours and is dropped while a tick is
         running
   - [ ] `requestRefresh` before `startPricePoller` reaches no provider

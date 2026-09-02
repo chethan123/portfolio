@@ -234,7 +234,7 @@ statement. Instruments the batch will never try — no symbol, or hand-priced �
 and no attempt, because their gap is just as real and Settings → Instruments (`pricing/05`) is
 still the answer for them. An empty list is a sentence saying the spine covers everything held.
 
-One log line per batch that attempted anything, in the poller's own form (`price-poller.server.ts:118`)
+One log line per batch that attempted anything or failed, in the poller's own form (`price-poller.server.ts:118`)
 and with its own grep-able stem: instruments attempted, closes written, failures. A tick whose gap
 query found nothing writes nothing, which keeps "no price line in the log" meaning what
 `docs/operating.md` says it means.
