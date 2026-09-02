@@ -1108,21 +1108,10 @@ design target is a handful of uploads a quarter. Abandoned upload drafts are swe
 day old, but only when the *next* upload starts: there is no scheduler, so an instance nobody uploads
 to keeps its last abandoned draft indefinitely.
 
-**Container logs, which is the one likely to matter first.** `compose.yaml` has no `logging:` block,
-so every service uses Docker's default `json-file` driver with no size limit and no rotation. An idle
-instance still writes a request line every ten seconds from its own healthcheck, and a second from
-Caddy's. Cap it per service:
-
-```yaml
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
-
-or set the same options once as the daemon default in `/etc/docker/daemon.json`, which covers
-everything on the host rather than only this.
+**Container logs.** An idle instance still writes a request line every ten seconds from its own
+healthcheck, and a second from Caddy's. `compose.yaml` caps this by explicitly configuring
+the `json-file` driver for every service with `max-size: "10m"` and `max-file: "3"`, meaning
+the logs for each container will not exceed roughly 30 MB on disk.
 
 **No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. On a
 machine that runs only this, that is the right default. On a shared host it means one runaway query

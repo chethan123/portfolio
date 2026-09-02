@@ -36,6 +36,11 @@ services:
   db:
     image: *postgres-image
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # The image's postgres account (70:70 in postgres:17-alpine), pinned so no
     # root process ever exists — skips the entrypoint's root-then-gosu drop.
     # Fresh volumes initdb fine (image data dir already postgres-owned), and a
@@ -93,6 +98,11 @@ services:
     # The database's own image: pg_dump must match the server it dumps, which is
     # a fact about `db` rather than about this service — hence the shared tag.
     image: *postgres-image
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # `on-failure`, not `unless-stopped` like everything else here: a crash or a
     # bad knob must come back, but DUMP_ENABLED=false exits 0 and has to STAY
     # exited, so that turning dumps off reads as `Exited (0)` under
@@ -179,6 +189,11 @@ services:
     # deploy that cannot reach the registry must fail loudly, not quietly build
     # a multi-minute image on some NAS. Building is `compose.dev.yaml`'s job.
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # What makes `up -d` an upgrade: under the default `missing` policy a
     # floating tag is fetched once and never again — a new release would land
     # only on machines that never ran the old one, silently.
@@ -226,6 +241,11 @@ services:
     # healthcheck (a healthcheck runs inside the container it checks).
     # Stateless — the session is an encrypted browser cookie — hence no volume.
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     environment:
       OAUTH2_PROXY_PROVIDER: google
@@ -307,6 +327,11 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Own uid, not the app's 1000: shared uids share bind-mount rights, and the
     # one LAN-reachable service is the worst to join. 65532 = the distroless
     # "nonroot" convention; nothing in this image owns it.
