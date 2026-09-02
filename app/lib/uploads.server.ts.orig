@@ -1121,9 +1121,7 @@ export async function uploadReceipt(
       from position_set ps
       where ps.account_id = ${accountId}::bigint
         and (ps.as_of_date, ps.created_at, ps.id) < (
-          select as_of_date, created_at, id from position_set
-          where id = ${setId}::bigint and account_id = ${accountId}::bigint
-          limit 1
+          select as_of_date, created_at, id from position_set where id = ${setId}::bigint limit 1
         )
       order by ps.as_of_date desc, ps.created_at desc, ps.id desc
       limit 1
