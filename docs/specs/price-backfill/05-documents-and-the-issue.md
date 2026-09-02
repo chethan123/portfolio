@@ -50,13 +50,24 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       in the same shape — `selectBackfillCandidates` (ticket 02) and `backfillGaps` (ticket 04)
       each hand-write the join over `holding` that `:372-376` warns about, to find an instrument's
       first-held date, and each computes no money
+- [ ] §5.2: `price_backfill` references `instrument … on delete cascade`, so it enters the graph,
+      not the list beneath it: the ER diagram gains `INSTRUMENT ||--o{ PRICE_BACKFILL` beside
+      `PRICE_DAILY`'s edge (`:525`) and an entity block beside `PRICE_DAILY`'s (`:584`); §5.3's
+      cascade row for `quote` / `price_daily` / `price_observation` → `instrument` (`:632`) gains
+      it, with the same reasoning — an attempt to price an instrument that never existed. The
+      "reference nothing" table (`:609`) is where `price_poll` sits and is not where the ledger goes
 - [ ] §4.5: a new row in the write-paths table — backfill closes, `prices.server.ts` →
       `backfillCloses`, `price_daily` (insert where absent) and `price_backfill`, append-only yes —
       and the sentence "Five operations produce history" becomes a rule rather than a count,
       `docs/README.md`'s first rule
 - [ ] §6.2: the sequence diagram or a paragraph after it shows the batch following the quotes
       under the same lock, the tiers table's `price_daily` row says the spine is written by two
-      paths, and the `price_backfill` ledger is described beside `price_poll`
+      paths, and the `price_backfill` ledger is described beside `price_poll`. Two sentences there
+      are corrected, not only added to: "A refresh writes five tables" (`:1092`) is a count and
+      becomes a rule that names the ledger among what a refresh writes; and "The whole write is
+      one transaction … all of them or in none" (`:1109`) stays true of the quotes' write and is
+      qualified for the batch, which commits one transaction per attempt — that attempt's closes
+      and its ledger row together, and nothing across attempts
 - [ ] §7.2: the "Two poller ticks in different processes" row becomes any two refreshes — tick,
       press, or post-commit request — under one lock
 - [ ] §7.4: a row for the backfill outcome — the `Price backfill` stem and the ledger
@@ -76,7 +87,9 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       what now happens — the spine is filled on the refreshes after a statement lands, a handful of
       instruments per refresh — and the ordering (`:67-78`) loses its manual step 5: most recent
       statement first is still right, because it creates the instruments and classifies them, but
-      the fill is no longer the operator's
+      the fill is no longer the operator's. Step 4's first bullet (`:194-196`), "it creates the
+      instrument rows the price backfill in step 5 needs", points at that manual step and is
+      re-pointed at the check step 5 becomes
 - [ ] §5 "Fill the price spine" (`:216-290`) is rewritten as **check** the spine: Settings → Prices
       is the list, the gap query is kept for the terminal reader with the sentence that the screen
       shows the same rows, the split and ticker-reuse traps stay as things to know about what the
@@ -121,8 +134,11 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       is false once a weekend tick runs the batch — the tick asks for no quotes and writes no
       `Price refresh` line, and may write a `Price backfill` line
 - [ ] `data-model.md` §4.4 (`:288-357`): `price_backfill` described beside `price_poll`, every
-      column and constraint; the table list near `:146`; and the pricing dataflow sentence near
-      `:553` that says what a refresh writes
+      column and constraint; the ER diagram gains `instrument ||--o{ price_backfill` beside
+      `price_daily`'s edge (`:56`) and an entity block beside `price_daily`'s (`:114`) — not the
+      "referencing nothing" list at `:139`, where `price_poll` sits (`:146`), because the ledger
+      references `instrument` and cascades with it; and the pricing dataflow sentence near `:553`
+      that says what a refresh writes
 
 **The guide and the README** (`docs/guide/`, `README.md`)
 
@@ -152,7 +168,12 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 - [ ] The **Backfill** entry landed in `CONTEXT.md` with the decision, as **Dump** did for 0014.
       Every use of "backfill", "historical import" or "catch-up" for this concept across the files
       above is brought to the glossary's word; `tests/refresh-quotes.test.ts:528` uses "backfills"
-      for `quote_type` and may keep it — that is not this concept
+      for `quote_type` and may keep it — that is not this concept. The sweep runs the other way
+      too: `docs/importing-history.md:81, :180, :191, :195, :302, :308` and `DESIGN.md:496` say
+      "backfill" or "backfilled era" for loading position history from backdated statements,
+      which the glossary's entry now reserves for filling closes. Each becomes "backdated
+      statements" or "loading history", whichever the sentence reads with — `:195`'s "price
+      backfill" is the one use there that already means the glossary's concept and stays
 
 **The issue**
 

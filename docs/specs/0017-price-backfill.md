@@ -350,9 +350,14 @@ agree on what "next" means; the gap list on Settings → Prices includes instrum
 never try, with the reason, rather than only the feed's; an instrument created after the close has
 its creation day excluded by the range's end while the poller's next in-session quotes carry the
 following day, so that day is a permanent hole — carry-forward covers it and holes are not
-triggers; and the commit trigger is a request to the
+triggers; the commit trigger is a request to the
 poller module rather than a third copy of the button's three lines, so that it inherits the
-injected provider and is a no-op in any test that never started the poller.
+injected provider and is a no-op in any test that never started the poller; and the batch's log
+line is written only when the batch attempted or failed something, which narrows the decisions
+record's "one log line per batch, like the poller's" — the poller logs every attempt
+(`app/lib/price-poller.server.ts:114-115`), quiet or not — because a tick at any hour that found no
+candidates would otherwise write a line, and "no price line in the log" would stop meaning what
+`docs/operating.md` says it means.
 
 **Numbering.** The migration is `0010`, the next free number in `migrations/`; spec 0015's tickets
 also plan a `0010`, and whichever lands first takes it. The ADR is `0011` because `0010` is reserved

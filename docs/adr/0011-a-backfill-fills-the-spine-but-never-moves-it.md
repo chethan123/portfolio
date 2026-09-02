@@ -109,8 +109,8 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   including the years it traded, so the outcome is a daily retry that answers no-history forever —
   one request a day per such instrument, accepted as the cost of not asking a person to mark it.
 - **A weekend costs a query.** The poller's tick used to return before touching the database
-  outside market hours. It now asks the gap query every tick, and spends a request only when the
-  answer is not empty.
+  outside market hours. It now spends a cadence read and the gap query every tick, and a request
+  only when the gap query's answer is not empty.
 - **The outbound surface grows by one endpoint on the same host.** ARCHITECTURE.md §2's "batched
   quote fetch" is now a quote fetch and a history fetch, still from one module, still with no
   credential. Spec 0015, if built, inherits a second call to move.

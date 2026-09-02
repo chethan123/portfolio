@@ -99,9 +99,11 @@ for a tick that asked for no quotes — are rules about rows and are proved agai
       false and is rewritten: a weekend tick costs the cadence read and the gap query, and a
       request to the feed only when there is a gap. The test that states the old promise is
       rewritten with it: `tests/price-poller.test.ts:211-229` ("is not spent at all outside market
-      hours") asserts `pool.totalCount` is 0 on a weekend, and the file header (`:1-19`) describes
-      a tick as returning outside hours; both now say a weekend tick spends a connection and no
-      provider request
+      hours") asserts `pool.totalCount` is 0 on a weekend, its own comment (`:212-221`) says the
+      calendar must keep the tick off the database all weekend, and the tick-shape comment at
+      `:135` puts the market-hours check before the tick's first `await`; all three now say a
+      weekend tick spends a connection and no provider request. The file header (`:1-19`) is about
+      the borrowed connection and the lock, states no market-hours rule, and is left alone
 - [ ] The quotes' log line (`:118-120`) is unchanged and written only when quotes were asked
       for. A second line, stem `Price backfill`, is written when the batch attempted anything or
       failed: instruments attempted, closes written, failures, and that the batch itself failed
@@ -163,9 +165,14 @@ for a tick that asked for no quotes — are rules about rows and are proved agai
   - [ ] Each provider status becomes its ledger outcome, with `written = 0` and, for a throw, the
         message in `error`; the batch continues past a throw to the next candidate
   - [ ] A batch that fails against the database leaves `refreshPrices` returning the quotes'
-        report with `batchFailed` set, and the quotes' own rows visible in the test transaction.
-        The failure is a wrapped `db` whose `price_daily` insert throws before reaching SQL — not
-        a ledger row the constraint refuses: under `withDatabase` the test body is one transaction
+        report with `batchFailed` set, and the quotes' own rows — `quote` and `price_daily` —
+        visible in the test transaction. The failure is a wrapped `db` whose `price_backfill`
+        insert throws before reaching SQL. The intercept point is the ledger insert because only
+        the batch issues one: `refreshQuotes` writes `price_daily` too (`writeDailyClose`,
+        `prices.server.ts:378-379`) through the same handle and catches provider errors alone
+        (`:234-240`), so a wrapper that throws on any `price_daily` insert fails the quotes step
+        first and the test never reaches the rule it states. Not a ledger row the constraint
+        refuses, either: under `withDatabase` the test body is one transaction
         (`tests/support/database.ts:99-109`) and `inTransaction` joins it (`:182-186`), so a
         Postgres refusal aborts the shared transaction and nothing after it can be observed;
         `tests/refresh-quotes.test.ts:765-769` is the suite's precedent for that trap
@@ -180,7 +187,7 @@ for a tick that asked for no quotes — are rules about rows and are proved agai
       pool's hand-back before the database closes:
   - [ ] "is not spent at all outside market hours" (`:211-229`) is rewritten: a tick outside market
         hours spends a connection, runs the batch, writes no `price_poll` row, and asks the fake for
-        no quotes; the header (`:1-19`) says the same
+        no quotes; the test's comment (`:212-221`) and the tick-shape comment (`:135`) say the same
   - [ ] `requestRefresh` runs quotes regardless of market hours and is dropped while a tick is
         running
   - [ ] `requestRefresh` before `startPricePoller` reaches no provider
