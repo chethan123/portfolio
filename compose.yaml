@@ -32,15 +32,20 @@ name: portfolio
 # night with nothing tying it to the tag that moved.
 x-postgres-image: &postgres-image postgres:17-alpine
 
+# One request line every ten seconds from the app's healthcheck and another
+# from Caddy's — ~17k lines a day, ~0.5 GB/year under json-file with no cap.
+# 10m x 3 files bounds every container at ~30 MB. Issue #192.
+x-logging: &container-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: *postgres-image
     restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *container-logging
     # The image's postgres account (70:70 in postgres:17-alpine), pinned so no
     # root process ever exists — skips the entrypoint's root-then-gosu drop.
     # Fresh volumes initdb fine (image data dir already postgres-owned), and a
@@ -98,16 +103,12 @@ services:
     # The database's own image: pg_dump must match the server it dumps, which is
     # a fact about `db` rather than about this service — hence the shared tag.
     image: *postgres-image
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     # `on-failure`, not `unless-stopped` like everything else here: a crash or a
     # bad knob must come back, but DUMP_ENABLED=false exits 0 and has to STAY
     # exited, so that turning dumps off reads as `Exited (0)` under
     # `docker compose ps -a` rather than as another healthy-looking row.
     restart: on-failure
+    logging: *container-logging
     depends_on:
       db:
         # A cold boot must not race initdb. This is also what ties the service
@@ -189,16 +190,12 @@ services:
     # deploy that cannot reach the registry must fail loudly, not quietly build
     # a multi-minute image on some NAS. Building is `compose.dev.yaml`'s job.
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     # What makes `up -d` an upgrade: under the default `missing` policy a
     # floating tag is fetched once and never again — a new release would land
     # only on machines that never ran the old one, silently.
     pull_policy: always
     restart: unless-stopped
+    logging: *container-logging
     depends_on:
       db:
         # A cold boot must not fail on a startup race.
@@ -241,12 +238,8 @@ services:
     # healthcheck (a healthcheck runs inside the container it checks).
     # Stateless — the session is an encrypted browser cookie — hence no volume.
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     restart: unless-stopped
+    logging: *container-logging
     environment:
       OAUTH2_PROXY_PROVIDER: google
       # Fail-closed: `:?` is evaluated before any container starts, so a
@@ -327,11 +320,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *container-logging
     # Own uid, not the app's 1000: shared uids share bind-mount rights, and the
     # one LAN-reachable service is the worst to join. 65532 = the distroless
     # "nonroot" convention; nothing in this image owns it.

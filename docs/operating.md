@@ -1100,7 +1100,7 @@ docker compose exec -T db psql -U portfolio -d portfolio -c \
   "select pg_size_pretty(pg_total_relation_size('price_observation'))"
 ```
 
-Two more terms are unbounded, and only one of them is data.
+Two more terms used to be unbounded; one still is, and it is the one that is data.
 
 **Retained statement originals.** Every upload keeps its complete CSV in the database, forever, on
 purpose — it is what makes an old import auditable. A brokerage CSV is tens of kilobytes and the
@@ -1108,10 +1108,12 @@ design target is a handful of uploads a quarter. Abandoned upload drafts are swe
 day old, but only when the *next* upload starts: there is no scheduler, so an instance nobody uploads
 to keeps its last abandoned draft indefinitely.
 
-**Container logs.** An idle instance still writes a request line every ten seconds from its own
-healthcheck, and a second from Caddy's. `compose.yaml` caps this by explicitly configuring
-the `json-file` driver for every service with `max-size: "10m"` and `max-file: "3"`, meaning
-the logs for each container will not exceed roughly 30 MB on disk.
+**Container logs, which is now the one least likely to matter first.** An idle instance still writes
+a request line every ten seconds from its own healthcheck, and a second from Caddy's. `compose.yaml`
+caps this by explicitly configuring the `json-file` driver for every service with `max-size: "10m"`
+and `max-file: "3"`, meaning the logs for each container will not exceed roughly 30 MB on disk.
+A per-service `logging` block overrides whatever the operator sets as the daemon default (such as
+journald or `local`).
 
 **No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. On a
 machine that runs only this, that is the right default. On a shared host it means one runaway query
