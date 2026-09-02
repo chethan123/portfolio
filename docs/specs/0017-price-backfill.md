@@ -19,7 +19,8 @@ date, not the day it was uploaded (DESIGN.md §5), so the first upload of any in
 system routinely predates that instrument's first `price_daily` row by days, and a household loading
 its history predates it by years. On every date in between, `holding_valued_at(d)` finds no close at
 or before `d` for the security, keeps the holding with `is_priced = false` and a null value
-(`migrations/0003_holding_valued_at.sql`), and the point on the chart is cash minus loans drawn on
+(the carry-forward lateral in `migrations/0006_annual_dividend.sql:236-243`, which replaced 0003's
+definition), and the point on the chart is cash minus loans drawn on
 the ordinary solid line. Nothing stored is wrong. The line is.
 
 [`docs/importing-history.md`](../importing-history.md) §5 is the workaround: a `psql` job that
@@ -86,8 +87,10 @@ rather than after it.
 The commit of an upload triggers one refresh once its transaction has committed
 (`commitUpload`, `app/lib/uploads.server.ts:901`; the route action at
 `app/routes/upload/review.tsx:67-76`). The response does not wait for it. The trigger goes through
-the poller module, which already holds the injected provider, the in-process serialising flag, the
-lock and the log line, so a commit landing mid-tick is dropped rather than queued — the same rule an
+the poller module, which already holds the in-process serialising flag, the lock and the log line,
+and holds the injected provider — today only in the `setInterval` closure
+(`app/lib/price-poller.server.ts:153`), so `PollerState` (`:51-58`) gains it for the request to
+reach — so a commit landing mid-tick is dropped rather than queued — the same rule an
 overlapping tick obeys. The refresh after a commit is therefore best-effort: a dropped request means
 the uploaded instruments wait for the next tick. The same drop covers a process that has just
 restarted, where the action runs before any loader has started the poller. A test that never starts
@@ -280,9 +283,11 @@ and its result is recorded in the adapter's header with the library version it w
 Ticket [05](price-backfill/05-documents-and-the-issue.md) carries the list; the summary here is the
 promise:
 
-- `DESIGN.md` §6.2 (the spine is backfilled; a missed day may be filled as a side effect), §7 (day
-  zero remains the rule for positions, not for prices), §8.4 (the Prices tab's row), §14 (ticker
-  reuse as an accepted limitation, and the chart warning still owed).
+- `DESIGN.md` §6.1 (the printed `PriceProvider` interface gains its second method), §6.2 (the
+  spine is backfilled; a missed day may be filled as a side effect), §7 (day zero remains the rule
+  for positions, not for prices), §8.4 (the Prices tab's row: the gap list, and "while the market
+  is open" true of quotes only), §14 (ticker reuse as an accepted limitation, and the chart
+  warning still owed).
 - `ARCHITECTURE.md` §2 (a second Yahoo endpoint on the one outbound dependency), §4.2 (the
   writer's row, and the two hand-written `holding` joins added to the stated valuation exceptions),
   §4.5 (the backfill's write path), §6.2 (the batch beside the quotes), §7.2, §7.4, §7.5
@@ -342,7 +347,10 @@ by the composition rather than propagated, so the quotes already committed are r
 happened and no caller's outcome is changed by the batch; the batch's
 order is by earliest position-set date and then id, so the deepest gap is worked first and two ticks
 agree on what "next" means; the gap list on Settings → Prices includes instruments the batch will
-never try, with the reason, rather than only the feed's; and the commit trigger is a request to the
+never try, with the reason, rather than only the feed's; an instrument created after the close has
+its creation day excluded by the range's end while the poller's next in-session quotes carry the
+following day, so that day is a permanent hole — carry-forward covers it and holes are not
+triggers; and the commit trigger is a request to the
 poller module rather than a third copy of the button's three lines, so that it inherits the
 injected provider and is a no-op in any test that never started the poller.
 

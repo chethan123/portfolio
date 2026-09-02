@@ -20,6 +20,8 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 
 **The design record** (`DESIGN.md`)
 
+- [ ] §6.1: the `interface PriceProvider { getQuotes(...) }` block (`:413-419`) is printed as the
+      whole interface and gains the second method, with its one-line comment in the same form
 - [ ] §6.2: the spine paragraph gains the backfill — gap-triggered, on every refresh, insert where
       absent, un-adjusted for splits, ledgered — and "a missed day is a visible gap rather than a
       wrong close" gains its qualification: a hole is filled as a side effect when the instrument is
@@ -27,7 +29,9 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       links ADR-0006
 - [ ] §7: "History starts at day zero" stays the rule for positions and says so; the price spine
       is no longer bound by it
-- [ ] §8.4: the Prices row of the Settings table names the gap list beside the cadence
+- [ ] §8.4: the Prices row of the Settings table (`:721`) names the gap list beside the cadence,
+      and its "while the market is open" becomes true of quotes only — the market-hours
+      correction, not only the list
 - [ ] §14: a new accepted limitation for ticker reuse — an instrument that changed symbols gets the
       current ticker's history, spot-checked against a statement — and a sentence under it that the
       chart still draws a partially-priced past date on the ordinary line, tracked by the follow-up
@@ -107,11 +111,15 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       absent when there was nothing to fill; "There is no price line in the log has four causes"
       (`:753-779`): cause 2 now says a tick outside market hours asks for no quotes and may still
       write a backfill line; the loop's "only while the market is open" (`:262`) becomes true of
-      quotes only, a backfill batch riding a tick at any hour; "Growth and limits" (`:1080-1095`):
-      a ledger row per attempt, at most a handful per refresh, is nothing
+      quotes only, a backfill batch riding a tick at any hour; "Growth and limits" (`:1056`, the
+      `price_poll` sentence at `:1086`): a ledger row per attempt, at most a handful per refresh,
+      is nothing
 - [ ] `runbook.md`: a new symptom, "a holding is unpriced on a past date" — confirm at Settings →
       Prices, read the outcome, and what each one means for what to do; "Prices have stopped
-      updating" (`:270-310`) gains nothing but a cross-reference
+      updating" (`:270-310`) is corrected, not only cross-referenced: its first bullet
+      (`:285-286`), "The tick returns before it logs anything outside market hours. Expected.",
+      is false once a weekend tick runs the batch — the tick asks for no quotes and writes no
+      `Price refresh` line, and may write a `Price backfill` line
 - [ ] `data-model.md` §4.4 (`:288-357`): `price_backfill` described beside `price_poll`, every
       column and constraint; the table list near `:146`; and the pricing dataflow sentence near
       `:553` that says what a refresh writes
@@ -120,16 +128,21 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 
 - [ ] `guide/settings.md` Prices (`:122-135`): the gap list, and the sentence that the refresh only
       runs while the market is open becomes true of quotes only
-- [ ] `guide/prices.md`: the falsified sentence is `:7` — prices refresh "while the market is
-      open" — which becomes true of quotes only; "This holding shows a dash" (`:35-56`) carries no
+- [ ] `guide/prices.md`: two passages are falsified — `:7`, prices refresh "while the market is
+      open", and the first bullet (`:17-20`), "Outside trading hours, nothing refreshes on its
+      own" — and each becomes true of quotes only, the bullet adding that a holding recorded on a
+      weekend now gets its past closes filled by the next tick rather than only its first price
+      from a press; "This holding shows a dash" (`:35-56`) carries no
       false claim and gains one sentence: a dash on a past date is the same honesty, and Settings →
       Prices says whether the spine is still being filled or why it cannot be
 - [ ] `README.md` "Where prices come from" (`:594-597`): two sentences are rewritten — quotes are
       asked for "only while the market is open" becomes true of quotes only, with the backfill
       batch riding any refresh, and "the one-method interface §6.1 mandates" names the second
-      method. Not a further numbered decision: the backfill is described in the paragraph's own
-      words — history is backfilled from the feed's own history, inserted where absent and never
-      over a close the instance recorded itself
+      method. The deployment diagram's edge to Yahoo (`:465`, "market hours, or Refresh now") is
+      relabelled beside them, since a batch may cross it at any hour. Not a further numbered
+      decision: the backfill is described in the paragraph's own words — history is backfilled
+      from the feed's own history, inserted where absent and never over a close the instance
+      recorded itself
 
 **Vocabulary**
 

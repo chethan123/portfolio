@@ -87,9 +87,10 @@ Its own ticket because it is the whole of the boundary between an unofficial end
       `{ error: { code, description } }` into a throw whose message is Yahoo's `description` passed
       through verbatim, and whose class is chosen from the `code` — `code` with its spaces removed
       plus `Error`, looked up among the library's own error classes and falling back to a plain
-      `Error` (`lib/yahooFinanceFetch.js:137-141` in yahoo-finance2 4.0.2). Only `"Bad Request"`
-      maps to `BadRequestError`; an unknown symbol on the chart endpoint answers `"Not Found"`,
-      which is a plain `Error`. So the class is not consulted: an unknown or delisted symbol ("No
+      `Error` (`esm/src/lib/yahooFinanceFetch.js:131-133` in yahoo-finance2 4.0.2 — the ESM build
+      the app imports at `price-provider.server.ts:285`). Only `"Bad Request"` maps to
+      `BadRequestError`; an unknown symbol on the chart endpoint answers `"Not Found"`, which is a
+      plain `Error`. So the class is not consulted: an unknown or delisted symbol ("No
       data found, symbol may be delisted") and a `period1` before the listing ("Data doesn't exist
       for startDate = …") both become `no-history` by matching the two stems on the message of
       *any* thrown error, never the sentence verbatim — the library's own example does the same
@@ -141,9 +142,9 @@ Its own ticket because it is the whole of the boundary between an unofficial end
 **Fakes**
 
 - [ ] Every fake `PriceProvider` in the suite gains the method or the suite stops typechecking —
-      `tests/refresh-quotes.test.ts:33-64` and `tests/price-poller.test.ts:54` are the ones today.
-      Here they may answer `no-history`, since nothing calls the method yet; ticket 03 makes them
-      answer what a test states
+      both fakes in each file: `tests/refresh-quotes.test.ts:33` and `:45`,
+      `tests/price-poller.test.ts:55` and `:67`. Here they may answer `no-history`, since nothing
+      calls the method yet; ticket 03 makes them answer what a test states
 - [ ] A fake returns what the test says and does not correct it — the reasoning at
       `tests/refresh-quotes.test.ts:25-31` holds for history as it does for quotes
 

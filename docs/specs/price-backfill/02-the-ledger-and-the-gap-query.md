@@ -35,9 +35,10 @@ also contains a provider adapter is two reviews in one. It touches no provider a
       `provider_failed`; `(outcome = 'filled') = (written > 0)`, so a count and an outcome cannot
       disagree; `(outcome = 'provider_failed') = (error is not null)`, so the text is there exactly
       when there is something to read; `range_from < range_until` — which cannot fire in
-      practice, because a position set dated in the future is refused at input
-      (`app/lib/input.server.ts:253-254`) and `range_until` is today's market date; it stays as
-      the statement of the shape
+      practice: a position set can be dated at most one day ahead, `latestRecordableDate()` being
+      tomorrow UTC (`app/lib/input.server.ts:195-197`), and `range_from` sits a week before the
+      earliest set while `range_until` is today's market date, so the week's margin covers the
+      day; it stays as the statement of the shape
 - [ ] An index on `(instrument_id, started_at)` — the retry skip asks "any attempt in the last day
       for this instrument" and the Settings list asks "the latest attempt for each", and both walk
       it; a b-tree is read in either direction, so no `desc`
@@ -116,4 +117,8 @@ builders; `afterAll(closeTestDatabase)`)
 - [ ] Every outcome in the vocabulary can be written through the fixture; a value outside it
       cannot
 - [ ] The count-and-outcome constraint refuses `filled` with zero written and `nothing_to_write`
-      with one, and the error constraint refuses a provider failure without text
+      with one, and the error constraint refuses a provider failure without text — one
+      `withDatabase` body per refusal, because a constraint refusal aborts the transaction the
+      body runs in and a second refusal in the same body would fail on that rather than on the
+      rule (the savepoint at `tests/refresh-quotes.test.ts:765-769` is the alternative, and one
+      body each is simpler)

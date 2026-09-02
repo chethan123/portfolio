@@ -110,7 +110,10 @@ for a tick that asked for no quotes — are rules about rows and are proved agai
       keeps the meaning `docs/operating.md` gives it
 - [ ] `requestRefresh(): void` is exported: the tick with quotes forced — one body, one
       parameter saying whether quotes are asked for regardless of the calendar, not a second body
-      — through the same `running` flag, the same lock and the same log lines. The promise it
+      — through the same `running` flag, the same lock and the same log lines. `PollerState`
+      (`:51-58`, today `timer`, `minutes`, `running`) gains the provider, because the module holds
+      it only in the `setInterval` closure (`:153`) and the request has to reach it from the slot
+      rather than from a tick already armed. The promise it
       starts never rejects: nothing registers an `unhandledRejection` handler and Node 24 exits
       on one, so a request that cannot be honoured is a log line and a return. A request landing
       while a tick or another request is running is dropped, not queued, the rule an overlapping
@@ -159,9 +162,13 @@ for a tick that asked for no quotes — are rules about rows and are proved agai
   - [ ] A hole inside an existing series is filled; a day the fake did not return gets no row
   - [ ] Each provider status becomes its ledger outcome, with `written = 0` and, for a throw, the
         message in `error`; the batch continues past a throw to the next candidate
-  - [ ] A batch that fails against the database — a fake `db` whose insert throws, or a ledger row
-        the constraint refuses — leaves `refreshPrices` returning the quotes' report with
-        `batchFailed` set, and the quotes' own rows committed
+  - [ ] A batch that fails against the database leaves `refreshPrices` returning the quotes'
+        report with `batchFailed` set, and the quotes' own rows visible in the test transaction.
+        The failure is a wrapped `db` whose `price_daily` insert throws before reaching SQL — not
+        a ledger row the constraint refuses: under `withDatabase` the test body is one transaction
+        (`tests/support/database.ts:99-109`) and `inTransaction` joins it (`:182-186`), so a
+        Postgres refusal aborts the shared transaction and nothing after it can be observed;
+        `tests/refresh-quotes.test.ts:765-769` is the suite's precedent for that trap
   - [ ] The fake was asked one symbol per call, in ticket 02's order, with `range.from` seven days
         before the first-held date and `range.until` today's market date — `backfillCloses` takes
         no clock, so the test fakes `Date` through `vi.useFakeTimers` as
