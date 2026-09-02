@@ -1131,5 +1131,6 @@ can take the box; `deploy.resources.limits` is where you would add them.
 **The design target is a target, not a measurement.**
 [`ARCHITECTURE.md` §10](../ARCHITECTURE.md#10-performance-and-scale-envelope) states it — one
 household, two to four people, a dozen accounts, of the order of a hundred instruments, three or four
-statement uploads a quarter — and says plainly that there is no benchmark behind it. If your instance
-is meaningfully larger than that, §10 is also the list of which choices break first, in what order.
+statement uploads a quarter — and says plainly that almost nothing behind it is benchmarked, the 1D
+read being the one exception. If your instance is meaningfully larger than that, §10 is also the
+list of which choices break first, in what order.

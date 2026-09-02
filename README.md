@@ -68,8 +68,10 @@ so a chosen range survives a reload and can be bookmarked.
   identical text would quietly undo.
 - **1D draws the trading session, not a day of it.** The one range measured in moments: it plots
   the most recent session — open to now while it is running, Friday's on a weekend — with one point
-  per price refresh and no sampling, so the line is exactly as detailed as the cadence the household
-  chose and no more. The axis and the readout name the time of day on the market's clock, and the
+  per observed instant and no sampling. A refresh quotes every instrument at once and each comes
+  back stamped with its own instant, so one refresh can add many points: the line is exactly as
+  detailed as the prices the household was told about, and the cadence it chose is what decides how
+  often it is told. The axis and the readout name the time of day on the market's clock, and the
   change beside the headline is measured from yesterday's close.
 
 <picture>

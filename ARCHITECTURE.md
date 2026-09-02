@@ -357,15 +357,15 @@ grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:633` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
+- `prices.server.ts:511` (`priceFreshness`) selects from `holding_valued` — not to value anything, but
   to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
-- `uploads.server.ts:640` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:584` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
   the view, and it is worth watching.
-- `valuation.server.ts:793` (`readSessionSeries`) values holdings from `price_observation` rather
+- `valuation.server.ts:687` (`readSessionSeries`) values holdings from `price_observation` rather
   than through `holding_valued` — the 1D chart's line, and the only valuation anywhere that reads the
   observation log. Not an escape from the invariant but an extension of it: the same module owns
   both, so the rule stays "one module values holdings" rather than becoming "one view does". It
@@ -728,7 +728,7 @@ anywhere.
 | `upload_draft_created_at_idx` | `(created_at)` | The 24-hour draft sweep. |
 | `column_mapping_one_per_fingerprint` | unique `(institution, header_fingerprint)` | One saved mapping per exact header, per institution. |
 | `price_daily_pkey` | `(instrument_id, date)` | The carry-forward lateral in `holding_valued_at` — an index scan stopping at the first row, executed once per holding per plotted date. |
-| `price_observation_pkey` | `(instrument_id, as_of)` | Two jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. And it is matched exactly by the 1D reader's "latest observation at or before this instant" lateral, once per holding per plotted instant. |
+| `price_observation_pkey` | `(instrument_id, as_of)` | Two jobs. It is the dedup: an unchanged quote conflicts and writes nothing, which is what keeps the log a record of distinct instants rather than of polls. And it is what the 1D reader matches twice per holding: the opening lookup, which stops at the last observation before the session's first instant, and the scan of that holding's observations inside the session's span. |
 | `price_observation_market_date_idx` | `(market_date, as_of)` | Session resolution, both halves: `max(market_date)` finds the most recent session observed at all (a backward index scan stopping at row one), and the leading-column range scan then walks that session's distinct instants in order. |
 
 ### 5.6 The numeric boundary
@@ -1228,10 +1228,13 @@ before editing any of these. Four shapes, and they are not interchangeable:
 
 - The `ValuedSource` reads narrow on `holding_valued.owner_id`, in an ordinary `WHERE`. Safe there
   because the source *is* the view.
-- **The series readers narrow inside the lateral**, on `v.owner_id` and `a.owner_id` — never in the
-  outer `WHERE`. An outer predicate is evaluated after the LEFT join and rejects the all-null row the
+- **The dated series reader narrows inside the lateral**, on `v.owner_id` — never in the outer
+  `WHERE`. An outer predicate is evaluated after the LEFT join and rejects the all-null row the
   join manufactures for a date the selected owners hold nothing on, which takes that date off the
-  line instead of reporting it as uncovered. The chart silently starts later than it should.
+  line instead of reporting it as uncovered. The chart silently starts later than it should. The
+  session readers narrow on the account alias in their holdings CTE — `a.owner_id` for the
+  household, `a.id` for one account — which is the same rule in a different shape: the instants come from the log and are joined to nothing, so an instant whose
+  selected owners hold nothing is still a point rather than a missing one.
 - `accountTotals` narrows on `account.owner_id`, because it selects from `account` and LEFT-joins the
   view so an account holding nothing still reports `0.0000`. An outer `WHERE` *is* right there:
   `account` is the preserved side, so narrowing it drops whole accounts rather than nulling coverage.
@@ -1269,7 +1272,11 @@ That strictness is the load-bearing word: the session's own `price_daily` row is
 converges on the last observation of the day, so including it would price the open at the price of
 the close. Their query is inline here for the same reason `readSeries`'s is, and deliberately did
 *not* become a migration-defined object: a third one would be bound by ADR-0001's row-type contract
-for no gain. They mirror `readSeries`'s lateral shape, narrowing and all, and for the same reason.
+for no gain. The shape is not `readSeries`'s, though. Valuing every holding at every instant is
+instants × holdings, and an instant is per *instrument* rather than per poll, so the session is
+carried instead as a running total: the holdings priced at the open, moved by each observation's
+new value less the one it replaced (spec 0016, measured in
+[`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md)).
 
 ```
    Screen                Reads                            Shape it groups by
@@ -1792,9 +1799,12 @@ The design target is one household: two to four people, a dozen accounts, of the
 instruments, and three or four statement uploads a quarter. Every structural choice below is sized to
 that, and each would be wrong at a hundred times the scale.
 
-The figures below describe the design target, not a measurement: there is no benchmark and no
-`EXPLAIN` output in the repo. The demo household in `scripts/seed-demo.ts` — two people, six accounts,
-three years of statements — is the largest dataset anything here has actually been run against.
+Most of the figures below describe the design target rather than a measurement: the demo household
+in `scripts/seed-demo.ts` — two people, six accounts, three years of statements — is what almost
+everything here has actually been run against. The 1D read is the exception, and the one place a
+benchmark, an `EXPLAIN` and a harness exist:
+[`docs/research/2026-09-01-overview-1d-latency.md`](docs/research/2026-09-01-overview-1d-latency.md)
+measures it on a household scaled to 21 accounts, 97 holdings and 98 feed instruments.
 
 | Choice | Right here because | Would break at |
 |---|---|---|
@@ -1802,27 +1812,33 @@ three years of statements — is the largest dataset anything here has actually 
 | Filtering and grouping in JavaScript over the full array | Seven dimensions over a few hundred rows; agreement between a row and its subtotal is structural | A table that cannot be sent to the browser whole |
 | One batched provider call per refresh cadence (seeded 15 minutes) | ~100 symbols; the endpoint is unofficial and a queue of pending fetches is how an instance gets rate-limited | Thousands of symbols, or a real-time requirement |
 | Every distinct quote retained forever, payload and all | The owner would rather spend the disk than discard data whose future use is unknown (ADR-0006). At ~100 feed instruments and the seeded cadence it is roughly half a gigabyte a year, stated at Settings → Prices where the dial is | A faster cadence on a much larger instrument set — 1 minute is ~15× — or a host where the database is not the largest thing on the disk |
-| The 1D line unsampled, one point per observation | The whole point of it: the line is as granular as the cadence the household chose, and no sampler decides otherwise. At the seeded cadence a session is ~27 instants, against `SAMPLE_BUDGET`'s 180 dates for a long range | A much faster cadence. The refresh cadence is therefore a *latency* dial as well as a storage one, and linearly: ~390 instants at 1 minute puts the query in the hundreds of milliseconds on a full household, paid on every Overview load with 1D selected |
+| The 1D line unsampled, one point per observation | The whole point of it: the line is as granular as the cadence the household chose, and no sampler decides otherwise. An instant is per instrument, so a session holds of the order of polls × feed instruments — 1,620 measured at the seeded cadence on ~100 instruments, against `SAMPLE_BUDGET`'s 180 dates for a long range | The payload before the query, now that the line is a running total over the session's observations: 1,620 points is ~97 KB of loader data and ~20 ms of query, and a 1-minute cadence is 23,460 points, ~1.4 MB and ~200 ms — paid on every Overview load with 1D selected |
 | In-process scheduler | One process to deploy, one place to read logs | Horizontal scaling — two app containers would both poll, and only the advisory lock keeps that correct rather than efficient |
 | Drafts swept inline at the next upload, not by cron | The table holds at most a handful of rows | Concurrent uploaders |
 | Whole CSV buffered in memory, capped at `MAX_UPLOAD_MB` | A brokerage CSV is tens of kilobytes | Multi-megabyte statements, which would want streaming |
 
-**Three indexes carry the read path**, and every one of them is a stop-at-the-first-row scan rather
-than a sort. `latest_position_set` runs once per account per read, and
-`position_set_account_as_of_idx` matches its ordering exactly; adding a column to that ordering
-without adding it to the index would turn every dashboard read into a sort. The carry-forward lateral
-inside `holding_valued_at` runs far more often — once per holding per plotted date — and rides
-`price_daily`'s primary key. And the 1D reader's per-instant price lookup rides
-`price_observation`'s primary key, `(instrument_id, as_of)`, which it matches exactly; that key is
-also the dedup that keeps the log a record of distinct instants rather than of polls, which is the
-one place in the schema where an index and a rule are the same object.
+**Three indexes carry the read path**, and each is matched exactly by what reads it, so no lookup
+here becomes a scan of the table and a sort. `latest_position_set` runs once per account per read,
+and `position_set_account_as_of_idx` matches its ordering exactly — stopping at the first row;
+adding a column to that ordering without adding it to the index would turn every dashboard read
+into a sort. The carry-forward lateral inside `holding_valued_at` runs far
+more often — once per holding per plotted date — and rides `price_daily`'s primary key the same way.
+And the 1D reader rides `price_observation`'s primary key, `(instrument_id, as_of)`, twice per
+holding: once stopping at the price in force when the session opened, and once as a range scan over
+that holding's observations inside the session; that key is also the dedup that keeps the log a
+record of distinct instants rather than of polls, which is the one place in the schema where an
+index and a rule are the same object.
 
-**The 1D line is one round trip too, and its cost is per instant rather than per date.** Its inner
-laterals ride `price_observation`'s primary key and `price_daily`'s, both stopping at the first row,
-executed once per holding per plotted instant — about twenty-seven instants a session at the seeded
-cadence, against `SAMPLE_BUDGET`'s 180 dates for a long range. The session itself resolves from
-`price_observation_market_date_idx` in one backward index scan. What grows here is the table, not the
-query: the log gains rows forever, and the index is what keeps a session lookup from caring.
+**The 1D line is one round trip too, and it is a running total rather than a re-valuation.** The
+price in force at the open is looked up once per holding, and each held instrument's observations
+inside the session are read once per holding; the total then moves by each observation's new value
+less the one it replaced. So its cost is the observations of held instruments plus one pass over the
+instants — not instants × holdings, which is what it was and what made a 1,620-instant session
+157,140 inner rows. The session itself resolves from `price_observation_market_date_idx` in one
+backward index scan. What grows here is the table, not the query — but only because the session's
+span is passed to that per-holding scan as scalar subqueries, which the planner can put into an
+index condition; joined in from a one-row CTE instead, the span reaches the scan as a join
+condition, and the whole log is scanned — materialised or not.
 
 **`netWorthSeries` is one round trip, not one per point.** The dates are joined laterally against
 `holding_valued_at(d.date)`, with the narrowing pushed *inside* the lateral — a `WHERE` in the outer
