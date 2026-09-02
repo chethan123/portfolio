@@ -17,7 +17,7 @@ review produced are folded in, with two findings the review added.
 1. **No backdoor, no hidden exfiltration, one small defect.** Runtime egress in application code is
    the Yahoo pricing client and nothing else; no dynamic execution, no XSS, every SQL value bound.
    The defect is a dot-segment bypass in `safeReturn` that yields a protocol-relative redirect,
-   low behind the gate and a two-line fix (S12).
+   reachable only same-origin and a two-line fix (S12).
 
 2. **Most of the risk is deployment posture that is already a recorded decision.** No
    authorisation in the app (ADR-0005), plaintext dumps (ADR-0009), a floating image tag, symbols

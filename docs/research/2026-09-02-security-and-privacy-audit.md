@@ -15,7 +15,7 @@ balances, names, account numbers, statement files and database credentials nowhe
    export.** Runtime egress in application code resolves to the Yahoo pricing client; there is no
    dynamic execution, no child process, no XSS, and every SQL value is bound (§"Controls verified").
    The one code defect found is a dot-segment bypass in `safeReturn` that yields a protocol-relative
-   redirect (S12): low impact behind the gate, a two-line fix.
+   redirect (S12): reachable only from a same-origin request, and a two-line fix.
 
 2. **Most of the risk is deployment posture, and most of that is already a recorded decision.** No
    authorisation inside the app (ADR-0005), plaintext dumps (ADR-0009), a floating image tag
@@ -91,12 +91,14 @@ evidence about the current image; automatic uptake is what makes the blast radiu
 bound it: `publish` runs only on a tag and only after every other CI job passes
 (`ci.yml:150-156`), and the pin is one variable away.
 
-**Avoidance.** Set `APP_VERSION` to a reviewed full version. A digest works with no compose change:
-`compose.yaml:192` interpolates after the colon, so `APP_VERSION=1.0.3@sha256:<digest>` is a valid
-reference. Nothing documents that; one line in `operating.md` is the whole fix. The dump sidecar
-already records `APP_VERSION` beside every dump (`compose.yaml:127-129`,
-`scripts/dump-loop.sh:129-131`), which is the tag half of "record the running image"; the digest
-half is `docker image inspect`.
+**Avoidance.** Pin by digest. A full version such as `1.0.3` stops automatic uptake of later
+releases, but it is still a tag the publisher can move, and with `pull_policy: always` every `up`
+fetches whatever it references (`docs/operating.md:959-961`); against the compromised-publisher
+threat above only the digest form holds. It works with no compose change: `compose.yaml:192`
+interpolates after the colon, so `APP_VERSION=1.0.3@sha256:<digest>` is a valid reference. Nothing
+documents that; one line in `operating.md` is the whole fix. The dump sidecar already records
+`APP_VERSION` beside every dump (`compose.yaml:127-129`, `scripts/dump-loop.sh:129-131`), which is
+the tag half of "record the running image"; the digest half is `docker image inspect`.
 
 Rated Medium, not High as first drafted: a documented default with a documented pin sits one rung
 below S3, where the credential is known and no pin exists.
@@ -216,11 +218,14 @@ path is the app's alone.
 plaintext or to an active intermediary. The default same-host bridge is unaffected.
 
 **Avoidance.** Keep Postgres local unless there is a reason not to. The fix for the remote case is
-one documented line, not code: with the pinned `pg` 8.23 and `pg-connection-string` 2.14,
-`?sslmode=verify-full` (plus `sslrootcert=/path` for a private CA) verifies chain and hostname
-against the system store, and `config.ts` passes query parameters through.
-`uselibpqcompat=true&sslmode=require` does not verify; say so in the same line. Firewall the server
-to this host and confirm the connection is encrypted after configuring it.
+documentation, not code: with the pinned `pg` 8.23 and `pg-connection-string` 2.14,
+`?sslmode=verify-full` verifies chain and hostname against Node's bundled root store, and
+`config.ts` passes query parameters through. A server signed by a private CA needs
+`sslrootcert=/path` as well, and `app` mounts nothing (`compose.yaml:186-220` has `read_only` and a
+`tmpfs`, no `volumes:`), so the certificate has to be bind-mounted read-only into the container
+before the URL can name it. `uselibpqcompat=true&sslmode=require` does not verify; say so in the
+same place. Firewall the server to this host and confirm the connection is encrypted after
+configuring it.
 
 ### S7 — Privacy decision: symbols, timing and source address go to Yahoo, and on a bad day to npm
 
@@ -252,8 +257,9 @@ Symbols also reach the logs. On any non-2xx the library prints the full request 
 (`price-provider.server.ts:177,725`). `react-router-serve` logs every request line with its query
 string (`morgan("tiny")`). `docs/operating.md:727-743` lists the log stems without saying so.
 
-**Risk.** Yahoo, npm on a validation failure, and any on-path observer see the instance's address,
-timing and ticker set; tickers alone reveal interests and uncommon holdings. The path carries no
+**Risk.** Yahoo and any on-path observer see the instance's address, timing and ticker set; npm, on
+a validation failure, sees the address and the timing of that failure and never a symbol, because
+the registry URL is fixed. Tickers alone reveal interests and uncommon holdings. The path carries no
 quantities, values, people, account names or numbers, CSV content or credentials. `yahoo-finance2`
 uses an unofficial endpoint and is itself a trust boundary. The disclosure is recorded as accepted
 residual risk in spec 0015 (`docs/specs/0015-price-worker.md:615-618`) and stated to the operator at
@@ -285,10 +291,11 @@ on purpose (`DESIGN.md:298-306`; "still deliberately no retention policy",
 **Risk.** Brokerage exports carry more than the columns parsed, and the account number is parsed as
 well, into `account.external_account_number` (`uploads.server.ts:272,279`). Disk theft, a host
 account in the dump group, an over-broad backup agent, or a leaked archive discloses parsed
-finances, original files, and every raw Yahoo response, which `price_observation.payload` archives
-without pruning (`migrations/0009_price_observation.sql:29-41`,
-`app/lib/prices.server.ts:1015-1024`). An operator who mistakes `./volumes/dumps` for history loses
-anything older than a week.
+finances, original files, and the raw entry of every quote that parsed, which
+`price_observation.payload` archives without pruning (`migrations/0009_price_observation.sql:29-41`,
+`app/lib/prices.server.ts:1015-1024`; a payload is stored only for a quote that parsed,
+`app/lib/price-provider.server.ts:380-381`, and chart responses are reduced to daily closes and not
+archived). An operator who mistakes `./volumes/dumps` for history loses anything older than a week.
 
 **Avoidance.** Encrypted host storage; encrypted, access-controlled off-host collection; a narrow
 dump group; a tested restore. Inspect an export before uploading it. `operating.md` tells the
@@ -304,8 +311,9 @@ responses; the only `no-store` is on `/healthz` (`app/routes/healthz.ts:26`). Re
 `docs/operating.md:547-555` and measured in the exploratory report (`:2514-2521`). HSTS belongs at
 the TLS terminator, deliberately outside this stack. Frame protection and a CSP would bound
 clickjacking and a future injection; an outer proxy that omits `frame-ancestors` lets an
-authenticated screen be framed. `Cache-Control: no-store` matters only if something between Caddy
-and the browser caches, which the documented topology has none of.
+authenticated screen be framed. `Cache-Control: no-store` is what keeps an authenticated page out of
+the browser's own HTTP cache and back-forward cache, which matters on a shared device or profile;
+between Caddy and the browser the documented topology has nothing that caches.
 
 Add and test headers at the proxy that owns each boundary. A CSP must allow the fixed inline
 service-worker registration (`app/root.tsx:253-260`; `docs/specs/0012-installable-pwa.md:133`)
@@ -361,9 +369,13 @@ Reached from `app/routes/masking.ts:38` and `app/routes/refresh.ts:46` (with
 (`tests/refresh-control.test.ts:45-51`), not dot segments. `ARCHITECTURE.md` §7.6's "Redirect
 targets" row and the helper's own header describe the origin check as the whole check.
 
-**Risk.** Behind the bundled gate the POST must carry the Lax cookie and a matching `Origin` (S5),
-so it needs a same-site page: low. With the gate absent or replaced it is an open redirect from an
-auto-submitted cross-site form.
+**Risk.** Low. Both callers are React Router actions, so the framework's `Origin` check (S5) refuses
+a cross-origin browser POST with 400 before the action runs, gate or no gate; an auto-submitted
+cross-site form sends the foreign origin, or `null` from a sandboxed frame, and both are refused.
+Reaching the bypass needs a same-origin request — script already running on the site, and none was
+found — or a non-browser client that omits `Origin`, which has no victim to redirect. What is broken
+is the helper's contract: its header calls the origin check the whole check, and the tests would not
+catch this.
 
 **Avoidance.** After the origin check, re-parse the returned string against the base and demand the
 origin again, or refuse a pathname that starts with `//`; add the five cases above to the test. Its
@@ -398,9 +410,11 @@ was not re-tested; "Error disclosure" was measured in the exploratory report
   sent to the daemon on a local or remote build and stays out of the image only because no `COPY`
   names it. `docs/operating.md:851-852` says otherwise and is wrong on that half. No committed
   credential was found.
-- `dump` refuses any `DATABASE_URL` whose host is not `db`, or that carries `host=` or `hostaddr=`
-  (`scripts/dump-loop.sh:91-105`), so the bundled credential cannot be pointed at a stranger through
-  the dump path.
+- `dump` refuses any `DATABASE_URL` whose authority is not `db` and any literal `host=` or
+  `hostaddr=` parameter (`scripts/dump-loop.sh:91-105`). The check is textual: libpq percent-decodes
+  parameter keys, so `?host%61ddr=203.0.113.1` passes the `case` patterns and dials the stranger. A
+  guard against a mistaken `.env`, then, not a hostile one; decoding the query before matching would
+  close it.
 - The service worker uses no Cache Storage or IndexedDB and passes every fetch through
   (`public/sw.js:1-71`); it serves one compiled offline page for a failed navigation (ADR-0007).
 - One `dangerouslySetInnerHTML` in the app, a fixed service-worker registration string
@@ -422,8 +436,11 @@ was not re-tested; "Error disclosure" was measured in the exploratory report
   `sendBeacon` and `XMLHttpRequest` site across `app/`, `server/`, `public/` and `scripts/` is the
   service worker's pass-through, the fixed `import("yahoo-finance2")`, or a loopback health probe.
   The conditional npm-registry call lives inside the library (S7).
-- **No dynamic execution.** No `eval`, `new Function`, `vm` or child process in runtime code; shell
-  runs only in the entrypoint and in scripts the image does not carry (`Dockerfile:67`).
+- **No dynamic execution in first-party code.** No `eval`, `new Function`, `vm` or child process in
+  `app/`, `server/` or `public/`; shell runs only in the entrypoint and in scripts the image does not
+  carry (`Dockerfile:67`). The dependency tree has one known site: Zod 4 compiles object validators
+  with `new Function` unless `jitless` is set (`node_modules/zod/v4/core/schemas.js:970-987`, probe
+  at `util.js:146-148`), from schema shapes the code owns, never from input.
 - **No secret logging.** Every `console.*` site prints fixed wording plus an error or a path;
   `ConfigError` names variables, never values (`server/config.ts:133-139`); the demo seed redacts
   URL passwords. Symbols and query strings do reach the logs (S7), and the dump credential reaches
@@ -450,16 +467,20 @@ was not re-tested; "Error disclosure" was measured in the exploratory report
 `docs/operating.md:625-639` is the operator's checklist and stays the record. The items below are
 only what this audit adds to it.
 
-- [ ] Pin `APP_VERSION` to a reviewed full version or a `tag@sha256:…` digest, and note the digest
-      from `docker image inspect` (S1).
-- [ ] Generate a unique Postgres password. Fresh instance: set it before the first `up`. Existing
-      instance: `alter role` first, then `DATABASE_URL` (S3).
+- [ ] Pin `APP_VERSION` by digest (`tag@sha256:…`); a full version alone only stops automatic
+      uptake of later releases (S1).
+- [ ] Generate a unique Postgres password. Fresh instance: set `POSTGRES_PASSWORD` and the password
+      inside `DATABASE_URL` together before the first `up`, since `.env.example:23` ships the URL
+      with the default. Existing instance: `alter role` first, then `DATABASE_URL` (S3).
 - [ ] Put the host, the database volume and the dump destination on encrypted storage; collect
       dumps off-host, encrypted; know that the local directory holds seven days (S8).
 - [ ] Verify an allowed sign-in, a refused sign-in, and that the `app` and `db` ports are
       unreachable from the LAN (S2).
 - [ ] Decide whether Yahoo may receive the ticker set and Google the household's sign-in identity.
-      If not, block egress after testing, because manual pricing is not yet a workflow (S7, S13).
+      Refusing Yahoo means blocking the `app` container's egress after testing, because manual
+      pricing is not yet a workflow; the gate must still reach Google for every sign-in, so a
+      stack-wide block breaks the deployment, and refusing Google means a different identity
+      provider (S7, S13).
 - [ ] Remote Postgres only with `sslmode=verify-full` and a firewall (S6).
 - [ ] Request-size limits and hardening headers at the proxy (S4, S9).
 - [ ] Land the code fixes: `safeReturn` (S12); `versionCheck: false` (S7); `*.orig` in
