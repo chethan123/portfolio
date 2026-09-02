@@ -34,20 +34,24 @@ also contains a provider adapter is two reviews in one. It touches no provider a
       exactly `filled`, `nothing_to_write`, `no_history`, `non_usd`, `split_unresolved`,
       `provider_failed`; `(outcome = 'filled') = (written > 0)`, so a count and an outcome cannot
       disagree; `(outcome = 'provider_failed') = (error is not null)`, so the text is there exactly
-      when there is something to read; `range_from < range_until`
-- [ ] An index on `(instrument_id, started_at desc)` — the retry skip asks "any attempt in the last
-      day for this instrument" and the Settings list asks "the latest attempt for each", and both
-      walk it
+      when there is something to read; `range_from < range_until` — which cannot fire in
+      practice, because a position set dated in the future is refused at input
+      (`app/lib/input.server.ts:253-254`) and `range_until` is today's market date; it stays as
+      the statement of the shape
+- [ ] An index on `(instrument_id, started_at)` — the retry skip asks "any attempt in the last day
+      for this instrument" and the Settings list asks "the latest attempt for each", and both walk
+      it; a b-tree is read in either direction, so no `desc`
 - [ ] `comment on table price_backfill` stating the one-line contract, as `0009:132-143` does for
       the price tiers: one row per attempt per instrument, written with the closes it describes or
       alone, never edited
 - [ ] Applied against the throwaway Postgres, then `npm run db:types`, and the regenerated file
-      committed — `PriceBackfill` appears beside `PricePoll` (`database.generated.ts:144-150`) and
-      CI's `db:types -- --verify` is what rejects a skipped regeneration
+      committed — `PriceBackfill` lands before `PriceDaily` (`database.generated.ts:129`), where
+      kysely-codegen's alphabetical order puts it, and CI's `db:types -- --verify` is what rejects
+      a skipped regeneration
 
 **The outcome vocabulary in code** (`app/lib/prices.server.ts`)
 
-- [ ] A `const` object of the six outcome literals and a `BackfillOutcome` type derived from it —
+- [ ] A `const` object of the outcome literals and a `BackfillOutcome` type derived from it —
       no enum; `tsconfig` sets `erasableSyntaxOnly`. Kept in step with the migration's `check` by
       hand, the arrangement `app/lib/account-options.ts` has with the schema's other vocabularies,
       and stated as such in a comment
@@ -61,8 +65,9 @@ also contains a provider adapter is two reviews in one. It touches no provider a
       not a setting: the household has no reason to turn it and a wrong value is a request-rate
       problem, not a preference
 - [ ] `BACKFILL_RETRY_INTERVAL` — how recently an attempt must have been made for an instrument to
-      be skipped: one day, as a Postgres interval literal the query interpolates, so an unfillable
-      gap costs one request a day and not one a tick
+      be skipped: one day, handed to the query as a `sql` template parameter the way
+      `prices.server.ts:361` passes a value, never spliced into the statement's text, so an
+      unfillable gap costs one request a day and not one a tick
 
 **The candidate read** (`selectBackfillCandidates`, `app/lib/prices.server.ts`)
 
@@ -108,6 +113,7 @@ builders; `afterAll(closeTestDatabase)`)
       way by symbol
 - [ ] More candidates than the bound returns the bound, and the ones returned are the first in that
       order — asserted without naming the bound's value
-- [ ] Each of the six outcomes can be written through the fixture; a seventh cannot
+- [ ] Every outcome in the vocabulary can be written through the fixture; a value outside it
+      cannot
 - [ ] The count-and-outcome constraint refuses `filled` with zero written and `nothing_to_write`
       with one, and the error constraint refuses a provider failure without text

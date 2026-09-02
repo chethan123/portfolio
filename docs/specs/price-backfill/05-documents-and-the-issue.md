@@ -39,10 +39,14 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 
 - [ ] §2: the outbound dependency on Yahoo is two endpoints now — quotes and the chart history — on
       the context diagram's edge label and in "External dependencies, in full"; the trust row
-      (`:59`) covers the second payload the same way
+      (`:111`) covers the second payload the same way
 - [ ] §4.2: the "Writing a price" row names the backfill's insert-where-absent as the second write
-      path in the one module; the "Importing `yahoo-finance2`" row's line reference is re-checked
-- [ ] §4.5: a sixth row in the write-paths table — backfill closes, `prices.server.ts` →
+      path in the one module; the "Importing `yahoo-finance2`" row's line reference is re-checked;
+      and the stated valuation exceptions (`:358-362`) gain two entries beside `priceFreshness`,
+      in the same shape — `selectBackfillCandidates` (ticket 02) and `backfillGaps` (ticket 04)
+      each hand-write the join over `holding` that `:372-376` warns about, to find an instrument's
+      first-held date, and each computes no money
+- [ ] §4.5: a new row in the write-paths table — backfill closes, `prices.server.ts` →
       `backfillCloses`, `price_daily` (insert where absent) and `price_backfill`, append-only yes —
       and the sentence "Five operations produce history" becomes a rule rather than a count,
       `docs/README.md`'s first rule
@@ -52,8 +56,9 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 - [ ] §7.2: the "Two poller ticks in different processes" row becomes any two refreshes — tick,
       press, or post-commit request — under one lock
 - [ ] §7.4: a row for the backfill outcome — the `Price backfill` stem and the ledger
-- [ ] §7.5: the seam diagram gains the second method, and the three conversions become four with
-      the split un-adjust, stated as a factor computed here and applied in SQL
+- [ ] §7.5: the seam diagram gains the second method, and the conversions gain the split
+      un-adjust, stated as done at the seam on `money.ts`'s units so the writer inserts what it is
+      handed
 - [ ] Appendix A: `prices.server.ts`, `price-provider.server.ts` and `price-poller.server.ts` rows
       updated; `0010_price_backfill.sql` in the migrations table; the `settings/prices.tsx` row
       (`:2000`) gains the gap list and the `refresh.ts` row (`:2003`) the batch a press now runs
@@ -82,11 +87,11 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 
 **The reversed line** (`docs/specs/0002-pricing.md:445-447`)
 
-- [ ] The bullet is struck through in the form `docs/design/pricing-ui-brief.md:400-401` uses for
-      its reversed rule, followed by a bold **Reversed** banner in the form `foundation/09` uses for
-      its superseded clause, pointing at 0017 and ADR-0011, and saying which half survives: a
-      provider-outage hole is still not a trigger. `docs/specs/README.md` says a landed spec is
-      corrected by banner, not rewritten
+- [ ] The bullet is struck through and followed by a bold **Reversed** banner, in the one form
+      `docs/design/pricing-ui-brief.md:400-403` uses for its reversed rule, pointing at 0017 and
+      ADR-0011, and saying which half survives: a provider-outage hole is still not a trigger.
+      `docs/specs/README.md` says a landed spec is corrected by banner, not rewritten, and its
+      list of specs corrected in place (`:14-17`) gains 0002
 
 **The developer's recipe** (`docs/developing.md`, under Recipes)
 
@@ -100,9 +105,10 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 
 - [ ] `operating.md` Logs (`:716-751`): the `Price backfill` stem, what it counts, and that it is
       absent when there was nothing to fill; "There is no price line in the log has four causes"
-      (`:753-779`): cause 2 now says a tick outside market hours fetches no quotes and may still
-      write a backfill line; "Growth and limits" (`:1080-1095`): a ledger row per attempt, at most a
-      handful per refresh, is nothing
+      (`:753-779`): cause 2 now says a tick outside market hours asks for no quotes and may still
+      write a backfill line; the loop's "only while the market is open" (`:262`) becomes true of
+      quotes only, a backfill batch riding a tick at any hour; "Growth and limits" (`:1080-1095`):
+      a ledger row per attempt, at most a handful per refresh, is nothing
 - [ ] `runbook.md`: a new symptom, "a holding is unpriced on a past date" — confirm at Settings →
       Prices, read the outcome, and what each one means for what to do; "Prices have stopped
       updating" (`:270-310`) gains nothing but a cross-reference
@@ -114,15 +120,22 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 
 - [ ] `guide/settings.md` Prices (`:122-135`): the gap list, and the sentence that the refresh only
       runs while the market is open becomes true of quotes only
-- [ ] `guide/prices.md` "This holding shows a dash" (`:35-56`): a dash on a past date is the same
-      honesty, and Settings → Prices says whether the spine is still being filled or why it cannot
-      be
-- [ ] `README.md` "Where prices come from" (`:592-615`): a fourth decision worth knowing — history
-      is backfilled from the feed's own history, inserted where absent and never over a close the
-      instance recorded itself
+- [ ] `guide/prices.md`: the falsified sentence is `:7` — prices refresh "while the market is
+      open" — which becomes true of quotes only; "This holding shows a dash" (`:35-56`) carries no
+      false claim and gains one sentence: a dash on a past date is the same honesty, and Settings →
+      Prices says whether the spine is still being filled or why it cannot be
+- [ ] `README.md` "Where prices come from" (`:594-597`): two sentences are rewritten — quotes are
+      asked for "only while the market is open" becomes true of quotes only, with the backfill
+      batch riding any refresh, and "the one-method interface §6.1 mandates" names the second
+      method. Not a further numbered decision: the backfill is described in the paragraph's own
+      words — history is backfilled from the feed's own history, inserted where absent and never
+      over a close the instance recorded itself
 
 **Vocabulary**
 
+- [ ] `CONTEXT.md`'s **Refresh cadence** entry (`:96-98`): "Outside market hours no cadence spends
+      anything" is falsified. The entry says quotes are asked for only while the market is open and
+      that a backfill batch may ride a tick at any hour — glossary wording, no implementation detail
 - [ ] The **Backfill** entry landed in `CONTEXT.md` with the decision, as **Dump** did for 0014.
       Every use of "backfill", "historical import" or "catch-up" for this concept across the files
       above is brought to the glossary's word; `tests/refresh-quotes.test.ts:528` uses "backfills"
@@ -131,8 +144,10 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
 **The issue**
 
 - [ ] Issue #83 is closed by this ticket's pull request, with a comment naming what landed (the root
-      cause, item 4 of its fix list) and the follow-up issue for items 1 to 3 — per-point coverage in
-      the readout, a truthful note, coverage on the change figure — filed before it is closed, so
-      the half this slice does not do stays tracked with its evidence linked rather than lost
+      cause, item 4 of its fix list) and the follow-up issue carrying every chart-side item the
+      issue holds — per-point coverage in the readout, a truthful note, coverage on the change
+      figure, and "partial computed suppresses accurate manual points" (DESIGN.md §7 rule 2) —
+      filed before it is closed, so the half this slice does not do stays tracked with its evidence
+      linked rather than lost
 - [ ] `docs/specs/README.md` already carries 0017 and `price-backfill/` — landed with the spec, not
       here; this ticket re-checks that the row's sentence still describes what shipped

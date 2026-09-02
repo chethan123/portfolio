@@ -47,7 +47,7 @@ still open.
 
 Nothing is asked of the household. There is no "backfill N years" screen, no re-upload, and no
 change to the chart: every distorted point repairs itself the moment closes for it exist, which is
-the payoff of computing history on read (spec 0009's refusal of snapshots).
+the payoff of computing history on read (spec 0009).
 
 ## Implementation Decisions
 
@@ -77,8 +77,8 @@ today. The lock guards the decision to spend a request; two refreshes cannot bac
 instrument twice, and one refresh holding the lock while it works through a batch is the point.
 
 Outside market hours the poller's tick still runs the batch. `isMarketOpen` stops deciding whether
-the tick returns and starts deciding whether quotes are fetched
-(`app/lib/price-poller.server.ts:95`); a tick that fetched no quotes writes no `price_poll` row,
+the tick returns and starts deciding whether quotes are asked for
+(`app/lib/price-poller.server.ts:95`); a tick that asked for no quotes writes no `price_poll` row,
 because a poll is an attempt at quotes and a backfill-only tick attempted none. The market-hours
 gate does not apply to the batch: a statement uploaded on a Saturday is valued by Monday's open
 rather than after it.
@@ -88,7 +88,10 @@ The commit of an upload triggers one refresh once its transaction has committed
 `app/routes/upload/review.tsx:67-76`). The response does not wait for it. The trigger goes through
 the poller module, which already holds the injected provider, the in-process serialising flag, the
 lock and the log line, so a commit landing mid-tick is dropped rather than queued — the same rule an
-overlapping tick obeys. A test that never starts the poller therefore never reaches a provider.
+overlapping tick obeys. The refresh after a commit is therefore best-effort: a dropped request means
+the uploaded instruments wait for the next tick. The same drop covers a process that has just
+restarted, where the action runs before any loader has started the poller. A test that never starts
+the poller therefore never reaches a provider.
 
 ### The whole range is fetched; only the head gap triggers
 
@@ -142,7 +145,7 @@ outcome vocabulary:
 | `started_at` | when the attempt began — the fetch, not the commit |
 | `range_from`, `range_until` | the dates asked for, `until` exclusive |
 | `written` | closes the spine did not already hold, counted from the insert's own `returning` |
-| `outcome` | one of the six below, `check`-constrained like `price_poll`'s counts |
+| `outcome` | one of the values below, `check`-constrained like `price_poll`'s counts |
 | `error` | the provider's error text; present exactly when the outcome is a provider failure |
 
 The outcomes, each a fact the next reader can act on:
@@ -168,9 +171,11 @@ pre-split close taken as stored would value a position held before the split at 
 worth — by exactly the split factor, with every figure looking plausible. The closes are therefore
 **un-adjusted**: for each split event in the response, every close dated before the split's trading
 day is multiplied by `numerator / denominator`, cumulatively where the range holds more than one
-split, to four decimals. The provider adapter computes each row's cumulative factor as a pair of
-integers; the multiplication of the money is done in SQL, in the insert, never as a float in
-JavaScript.
+split, to four decimals. The un-adjust happens inside the provider adapter's pure conversion, on
+`money.ts`'s units: the close through `toUnits` at scale four, multiplied by the cumulative
+numerator, `divide`d by the cumulative denominator — half away from zero, `money.ts:70` — and
+`render`ed at scale four; never as a float in JavaScript. The history leaves the provider as plain
+scale-4 close strings, and the writer is a plain insert-where-absent that multiplies nothing.
 
 The convention is unverified by the library's own documentation. Ticket
 [01](price-backfill/01-the-provider-history-method.md) therefore includes a one-off verification
@@ -196,14 +201,17 @@ so the fallback costs little and misvalues nothing.
   the only importer of `yahoo-finance2`.
 - **`app/lib/prices.server.ts`** — stays the only price writer and gains its second write path: the
   gap read, the sequential batch, the insert-where-absent, the ledger row, and the composition that
-  runs quotes then the batch. Its header, which names the tables a refresh writes, names the sixth.
+  runs quotes then the batch. The composition catches and logs a database failure inside the batch
+  and still returns the quotes' report, with a batch-failed flag on the backfill report for the log
+  line: the quotes have already committed by then, and no caller's outcome is changed by the batch.
+  Its header, which names the tables a refresh writes, adds `price_backfill` to the list.
 - **`app/lib/price-poller.server.ts`** — the tick runs the composition; outside market hours it
-  fetches no quotes and still runs the batch. A weekend tick now costs the gap query, which the
+  asks for no quotes and still runs the batch. A weekend tick now costs the gap query, which the
   module header currently promises it does not; the header changes with it. The module also exports
   the request the commit trigger calls.
 - **`app/routes/refresh.ts`** — the button's behaviour is unchanged for the person pressing it; the
   press now also runs a batch, and the outcome it renders is the quotes' outcome as today
-  (`:57-79`).
+  (`:57-79`); a batch that failed never turns a committed refresh into the error outcome.
 - **`app/routes/upload/review.tsx`** — after `commitUpload` returns and before the redirect, one
   refresh is requested and not awaited.
 - **`migrations/0010_price_backfill.sql`** and `app/lib/database.generated.ts` — the ledger, with a
@@ -251,8 +259,8 @@ answer history is not this application's provider. No test reaches the network, 
 
 **One hand-written chart response spanning a split** exercises the un-adjust arithmetic in
 `tests/price-provider.test.ts` beside `toProviderQuote`'s cases — bars before and after one split
-with figures chosen so the factor is checkable by eye, and a second case with two splits in range
-for the cumulative product. Hand-written, not captured: the point is the arithmetic, and a captured
+with figures chosen so the un-adjusted close is checkable by eye, asserted as the resulting close
+and never as a factor, and a second case with two splits in range for the cumulative product. Hand-written, not captured: the point is the arithmetic, and a captured
 payload would make the test depend on what Yahoo said one afternoon.
 
 **Real Postgres, through `withDatabase`,** for everything that is a rule about rows: the gap query
@@ -276,7 +284,8 @@ promise:
   zero remains the rule for positions, not for prices), §8.4 (the Prices tab's row), §14 (ticker
   reuse as an accepted limitation, and the chart warning still owed).
 - `ARCHITECTURE.md` §2 (a second Yahoo endpoint on the one outbound dependency), §4.2 (the
-  writer's row), §4.5 (a sixth write path), §6.2 (the batch beside the quotes), §7.2, §7.4, §7.5
+  writer's row, and the two hand-written `holding` joins added to the stated valuation exceptions),
+  §4.5 (the backfill's write path), §6.2 (the batch beside the quotes), §7.2, §7.4, §7.5
   (the seam's second method), Appendix A (three modules, the migration) and Appendix B (**Backfill**,
   and the spine's entry).
 - `docs/importing-history.md` — §5 becomes what to check rather than what to load, and the ordering
@@ -287,8 +296,8 @@ promise:
 - `docs/developing.md` — a recipe for exercising a backfill locally and re-running the split
   verification after a library upgrade.
 - `docs/operating.md`, `docs/runbook.md`, `docs/data-model.md`, `docs/guide/settings.md`,
-  `docs/guide/prices.md`, `README.md` — each where it states a claim this slice falsifies; ticket 05
-  names the lines.
+  `docs/guide/prices.md`, `README.md`, and the glossary's **Refresh cadence** entry in `CONTEXT.md` —
+  each where it states a claim this slice falsifies; ticket 05 names the lines.
 - `docs/specs/README.md` — the slice row and the ticket directory, landed with this spec.
 - Issue #83 closed by ticket 05, with the chart-side warning filed as its own issue so the half this
   slice does not do stays tracked.
@@ -317,16 +326,20 @@ bar is derived in `MARKET_TIMEZONE` from the bar's own timestamp through `market
 truncating UTC — bars are stamped at the session open, 13:30Z for NYSE, and a UTC truncation would
 be right by accident. A non-USD `meta.currency` writes nothing and records the outcome, matching the
 guard at resolution and at refresh. Floats become four-decimal strings at the boundary the way
-quotes do, and the split multiplication is arithmetic and therefore happens in SQL. Symbols are sent
-as stored, as `refreshQuotes` sends them; nothing here matches a symbol back, because one call is
-one instrument.
+quotes do, and the split multiplication is arithmetic and therefore happens on `money.ts`'s units,
+never as a float. The history call sends `matchKey(symbol)` — trim and upper-case,
+`app/lib/prices.server.ts:174`, exported from there — which is what `refreshQuotes` sends as its
+keys (`:235`); the stored value is untouched, and nothing here matches a symbol back, because one
+call is one instrument.
 
 **Choices this spec makes where the decisions record is silent**, each the smallest thing that fits
 the repository and each open to the reviewer: the range's end is today's market date treated as
 exclusive, and the adapter drops any bar filed on or after it by market date rather than trusting
 `period2` alone; two instruments sharing a symbol are two candidates and two calls, bounded by the
 batch; a provider failure for one instrument is ledgered and the batch continues, while a database
-failure stops it and propagates, since the next instrument would fail the same way; the batch's
+failure stops the batch, since the next instrument would fail the same way, and is caught and logged
+by the composition rather than propagated, so the quotes already committed are reported as they
+happened and no caller's outcome is changed by the batch; the batch's
 order is by earliest position-set date and then id, so the deepest gap is worked first and two ticks
 agree on what "next" means; the gap list on Settings → Prices includes instruments the batch will
 never try, with the reason, rather than only the feed's; and the commit trigger is a request to the

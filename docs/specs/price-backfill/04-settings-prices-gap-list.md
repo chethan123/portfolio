@@ -21,13 +21,17 @@ no rule the batch enforces.
 
 - [ ] The same gap predicate as `selectBackfillCandidates` — a spine that starts later than the
       instrument's first-held date, or none — over every instrument whose `price_source` is not
-      `fixed`: `manual` instruments and symbol-less `feed` instruments have a gap just as real, and
-      the screen is where a person learns the batch will never fill it. The two reads share the
-      predicate in one place rather than restating it
+      `fixed`, which is the recipe's own predicate (`docs/importing-history.md:235`, `price_source
+      <> 'fixed'`): `manual` instruments and symbol-less `feed` instruments have a gap just as real,
+      and the screen is where a person learns the batch will never fill it. This is a stated
+      choice: the list answers "why is this date unpriced", not "what will the batch try", so a
+      held collective investment trust sits on it, with the reason, until the Settings →
+      Instruments form (`pricing/05`) prices it. The two reads share the predicate in one place
+      rather than restating it
 - [ ] No retry skip and no bound: this is the whole list, not the next batch
 - [ ] Per row: the instrument's id, symbol and name; the first-held date; the first close, null
       when there is none; the latest `price_backfill` row's `started_at`, `outcome` and `error`,
-      null when none — read through the `(instrument_id, started_at desc)` index; and whether the
+      null when none — read through the `(instrument_id, started_at)` index; and whether the
       batch will try it, which is `feed` with a symbol
 - [ ] Ordered as the batch is — first-held date, then id — so the top of the list is what the next
       refresh works on
@@ -38,11 +42,12 @@ no rule the batch enforces.
 - [ ] The loader (`:19-21`) adds the list beside the cadence; the action is unchanged
 - [ ] A second panel below the cadence form, in the page's existing panel form, one row per gap:
       the instrument by name and symbol, first held, first close or that there is none, and the
-      last attempt's date with its outcome in words — the six outcomes mapped to short sentences in
+      last attempt's date with its outcome in words — each outcome mapped to a short sentence in
       the component, rendering and not a rule; the provider's error text shown for a failure. A
       row the batch will never try says why instead of an attempt
-- [ ] An empty list is one sentence saying the spine covers everything held, in the page's own
-      empty-state form
+- [ ] An empty list is one sentence saying the spine covers everything held, as a
+      `<p className="empty-note">` — the settings empty state `settings/accounts.tsx:70` and
+      `settings/people.tsx:100` use; `prices.tsx` has none of its own today
 - [ ] The subtitle (`:54-58`) and the cost note (`:103-107`) stop claiming that nights, weekends and
       holidays cost nothing whatever the cadence says: quotes cost nothing outside market hours, and
       a backfill batch runs whenever there is a gap to fill, at most a handful of requests per
@@ -64,6 +69,7 @@ no rule the batch enforces.
       instrument with a gap is listed and marked as one the batch will not try; a `fixed` instrument
       never is; an instrument with attempts reports the latest one's date and outcome, not the
       first's; one with none reports null; the order matches the batch's
-- [ ] The component, through `renderToStaticMarkup` and `toContain` fragments as the other settings
-      pages are tested: a row renders its instrument and outcome; the empty sentence renders when
-      the list is empty
+- [ ] The component, through `tests/support/render.tsx` and `toContain` fragments as
+      `tests/routes/masked-screens.test.tsx` renders a screen: a row renders its instrument and
+      outcome; the empty sentence renders when the list is empty. The route tests under
+      `tests/routes/` call the loader and action only and assert no markup

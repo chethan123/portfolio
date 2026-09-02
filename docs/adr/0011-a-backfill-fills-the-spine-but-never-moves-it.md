@@ -38,7 +38,7 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   is new, and not because a person asked. History already uploaded is already a gap.
 - **Coupled to the refresh.** A refresh is quotes, then one bounded batch of backfills, under the
   one advisory lock, whoever started it: the poller's tick, a press of Refresh now, or the request
-  fired when an upload commits. Outside market hours the tick fetches no quotes and still runs the
+  fired when an upload commits. Outside market hours the tick asks for no quotes and still runs the
   batch, and writes no `price_poll` row for it, because a poll is an attempt at quotes.
 - **Insert where absent.** `on conflict (instrument_id, date) do nothing`, never `do update`. A
   close the poller wrote live is the record; the feed's later restatement of it is not. Only
@@ -46,9 +46,9 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   did not trade.
 - **Un-adjusted.** The feed returns closes restated through later splits; statements record shares
   as held on the day. Every close before a split is multiplied back by the split's ratio,
-  cumulatively, to four decimals, in SQL. The convention this rests on is verified once against a
-  real split and recorded where the adapter states it; if it does not hold, the fallback is to
-  refuse any instrument with a split in range and fill the rest.
+  cumulatively, to four decimals, on `money.ts`'s units. The convention this rests on is verified
+  once against a real split and recorded where the adapter states it; if it does not hold, the
+  fallback is to refuse any instrument with a split in range and fill the rest.
 - **Ledgered.** One `price_backfill` row per attempt per instrument — when, the range asked for,
   how many closes were new, and a closed outcome — so an unfillable gap is retried daily rather
   than every tick, and "why is this still unpriced in March" is a query rather than a memory.
@@ -80,8 +80,9 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   make every statement disagree with the file it came from. The price is the side that has to give.
 - **Holes as a trigger.** Rejected: an outage hole is one date carry-forward already answers, the
   original reasoning stands, and a trigger on any absent trading day would need a calendar to say
-  which absences are holes — the calendar §6.2 refuses to let a write path consult. Holes are filled
-  as a side effect whenever the instrument is fetched for its head gap, and only then.
+  which absences are holes — the calendar no write path may consult
+  (`app/lib/market-hours.ts:1-13`, DESIGN.md §10). Holes are filled as a side effect whenever the
+  instrument is fetched for its head gap, and only then.
 
 ## Consequences
 
