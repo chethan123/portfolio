@@ -112,6 +112,12 @@ that was not running: a gap during market hours is the deployment's silence, and
 is somebody asking.
 _Avoid_: refresh run, fetch, sync.
 
+**Backfill**:
+Filling an instrument's daily closes for the finished days its position history reaches back to
+but its spine does not, from the feed's own history. Fills what is absent and never replaces a
+close the running system recorded itself; a day the market did not trade stays absent.
+_Avoid_: historical import, catch-up, re-pricing, price sync.
+
 ### Who gets in
 
 **Gate**:
