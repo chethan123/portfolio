@@ -28,7 +28,10 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       backfilled for its head gap, and is never a trigger. Links ADR-0011 as the observation log
       links ADR-0006
 - [ ] §7: "History starts at day zero" stays the rule for positions and says so; the price spine
-      is no longer bound by it
+      is no longer bound by it.
+      _Corrected on landing: that rule is unnumbered, at `:495-496`. §7's numbered list is three
+      rules about the manual-versus-computed series and is untouched — which is also what issue #83
+      means by "§7 rule 2"._
 - [ ] §8.4: the Prices row of the Settings table (`:721`) names the gap list beside the cadence,
       and its "while the market is open" becomes true of quotes only — the market-hours
       correction, not only the list
@@ -78,7 +81,10 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       updated; `0010_price_backfill.sql` in the migrations table; the `settings/prices.tsx` row
       (`:2000`) gains the gap list and the `refresh.ts` row (`:2003`) the batch a press now runs
 - [ ] Appendix B: a **Backfill** entry in `CONTEXT.md`'s words, and "The spine" entry's "a missed
-      poll is a visible gap the carry-forward closes" qualified as §6.2's is
+      poll is a visible gap the carry-forward closes" qualified as §6.2's is.
+      _Corrected on landing: Appendix B is ordered by concept, not alphabetically, so the entry goes
+      in the pricing cluster beside **The spine** and **Poll** rather than between **Alias** and
+      **Carry-forward**, where it would read as a mistake._
 
 **The operator's recipe** (`docs/importing-history.md`)
 
@@ -108,7 +114,9 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       `docs/design/pricing-ui-brief.md:400-403` uses for its reversed rule, pointing at 0017 and
       ADR-0011, and saying which half survives: a provider-outage hole is still not a trigger.
       `docs/specs/README.md` says a landed spec is corrected by banner, not rewritten, and its
-      list of specs corrected in place (`:14-17`) gains 0002
+      list of specs corrected in place (`:14-17`) gains 0002.
+      _Corrected on landing: that sentence names `Superseded` banners specifically, so it is widened
+      to "by banner rather than by rewrite" before 0002's `Reversed` one is added to it._
 
 **The developer's recipe** (`docs/developing.md`, under Recipes)
 
@@ -173,7 +181,10 @@ and because until [03](03-the-backfill-step-in-every-refresh.md) and
       "backfill" or "backfilled era" for loading position history from backdated statements,
       which the glossary's entry now reserves for filling closes. Each becomes "backdated
       statements" or "loading history", whichever the sentence reads with; `:195`'s "price backfill"
-      already means the glossary's concept and stays
+      already means the glossary's concept and stays.
+      _Corrected on landing: the list is one short — `:181`'s "catch up" is the same concept and is
+      swept with them. `:56` and `:283` also use it for closes and are rewritten wholesale by the
+      bullets above._
 
 **The issue**
 

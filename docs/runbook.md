@@ -282,8 +282,9 @@ priced and what was left stale. A tick that runs nothing writes nothing: the mar
 landing while one still runs, or the advisory lock held by another process are all silent and all
 ordinary. So:
 
-- **No lines at all, and the market is closed.** The tick returns before it logs anything outside
-  market hours. Expected.
+- **No lines at all, and the market is closed.** A tick outside market hours asks for no quotes, so
+  it writes no `Price refresh` line. Expected. It is not idle, though: it still runs the backfill
+  batch, so a `Price backfill` line at three in the morning is also expected (ADR-0011).
 - **No lines at all since the last restart, and the market is open.** The poller starts from a page
   render, not from boot — `/healthz` does not start it. Load any page in a browser, then wait one
   full refresh cadence (Settings → Prices; seeded to 15 minutes); there is deliberately no
@@ -309,6 +310,41 @@ warranted here: `docker compose restart app` is the remaining action, and it nee
 afterwards to start the loop again.
 
 Why: [Monitoring](operating.md#monitoring).
+
+---
+
+## A holding is unpriced on a past date
+
+The chart runs low through a stretch and then steps up, or a past date's coverage sentence counts
+fewer holdings than today's. The data is not wrong; the price history does not reach back that far
+yet.
+
+**Confirm.** Open **Settings → Prices**. Every holding whose price history starts later than it is
+held appears there, with the date it is held from, the date its prices start, and what the last
+attempt to fill it came to. An empty list means this is not your problem.
+
+**Do.** It depends on what the row says.
+
+- **Nothing yet, or a recent `filled`.** Wait. A refresh fills a few instruments at a time, so a
+  household that has just loaded years of statements works through them over a handful of refreshes.
+  Pressing **Refresh now** spends one immediately.
+- **`no_history`.** Nothing to do. The feed has no history for that ticker and will keep answering
+  so, at one request a day.
+- **`non_usd`.** Nothing to do here; the instrument should not have been created against that
+  ticker.
+- **`split_unresolved`.** The one outcome that suggests a code or library problem. Run
+  [`developing.md`](developing.md)'s split-convention check.
+- **`provider_failed`.** The row carries the provider's own text. Retried once a day; a rate limit
+  or an outage clears itself.
+- **"Never".** Nothing can fetch it. [`importing-history.md`](importing-history.md) step 5 has the
+  `psql` for entering closes by hand.
+
+One thing this screen cannot tell you: whether an instrument has *changed symbols*, in which case it
+is filled with the wrong company's closes and every figure looks plausible. Spot-check a figure
+against a statement of the era for anything you know has changed.
+
+Why: [ADR-0011](adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md), and
+[DESIGN.md §14](../DESIGN.md) limitation 14 for the symbol change.
 
 ---
 

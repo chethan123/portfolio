@@ -93,9 +93,10 @@ _Avoid_: current value, latest value, ending balance, final value.
 ### How prices stay fresh
 
 **Refresh cadence**:
-How often the app asks the price feed for fresh quotes while the market is open — the household's
-dial, in whole minutes. Outside market hours no cadence spends anything, so the term speaks of
-refreshes rather than of the timer that drives them.
+How often the app refreshes prices — the household's dial, in whole minutes. Quotes are asked for
+only while the market is open; a backfill may ride a refresh at any hour, and only while some
+instrument's closes are still missing. The term speaks of refreshes rather than of the timer that
+drives them.
 _Avoid_: poll interval, polling frequency, update speed, refresh rate.
 
 **Observation**:
