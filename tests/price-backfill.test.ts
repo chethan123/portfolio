@@ -1205,20 +1205,72 @@ describe("the whole list of gaps, for the person reading Settings", () => {
   );
 
   it(
-    "never lists the fixed instrument, whose close covers everything",
-    withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
+    "never lists a fixed instrument, even one that would otherwise be a gap",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, usdInstrument }) => {
       const account = await seedAccount();
+
+      // The seeded USD row is the wrong test on its own: its 1970 close covers
+      // every date, so it has no gap and would be absent whatever the filter
+      // said. This one has no close at all, so only the filter keeps it off.
+      const fixed = await seedInstrument({ symbol: "CASHLIKE", priceSource: "fixed" });
       const usd = await usdInstrument();
 
       await seedPositionSet({
         account,
-        // Long before the seeded 1970 close would be a gap; it is not, because
-        // `fixed` is excluded outright.
         asOf: "2024-03-29",
-        holdings: [{ instrument: usd, quantity: "1000.00000000" }],
+        holdings: [
+          { instrument: fixed, quantity: "1000.00000000" },
+          { instrument: usd, quantity: "1000.00000000" },
+        ],
       });
 
       expect(await backfillGaps(db)).toEqual([]);
+    }),
+  );
+
+  it(
+    "has no bound, because it is the whole list rather than the next batch",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      const account = await seedAccount();
+
+      // Comfortably more than the batch bound. A person asking why a date is
+      // unpriced must not be shown a page of it.
+      const wanted = 12;
+      for (let index = 0; index < wanted; index += 1) {
+        const instrument = await seedInstrument({ symbol: `SYM${index}`, priceSource: "feed" });
+        await seedPositionSet({
+          account,
+          asOf: "2024-03-29",
+          holdings: [{ instrument, quantity: "1.00000000" }],
+        });
+      }
+
+      expect(await backfillGaps(db)).toHaveLength(wanted);
+    }),
+  );
+
+  it(
+    "reports the earliest date an instrument was held, not the latest",
+    withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
+      const account = await seedAccount();
+      const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      // Held in several sets, which is the ordinary case after a few uploads
+      // and the one that tells `min` from `max`.
+      await seedPositionSet({
+        account,
+        asOf: "2024-06-28",
+        holdings: [{ instrument, quantity: "2.00000000" }],
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument, quantity: "1.00000000" }],
+      });
+
+      const [gap] = await backfillGaps(db);
+
+      expect(gap?.firstHeld).toBe("2024-03-29");
     }),
   );
 

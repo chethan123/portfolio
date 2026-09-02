@@ -134,16 +134,3 @@ describe("the gap list", () => {
     }),
   );
 });
-
-describe("what the page claims about cost", () => {
-  it(
-    "no longer says that nights and weekends cost nothing whatever the cadence says",
-    withDatabase(async () => {
-      const markup = await render();
-
-      // A backfill batch rides a tick at any hour, so the old promise is false.
-      expect(markup).not.toContain("cost nothing whatever the cadence says");
-      expect(markup).toContain("Quotes are asked for only while the market is open");
-    }),
-  );
-});

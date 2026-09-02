@@ -4,7 +4,7 @@ import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
 import { backfillGaps } from "~/lib/prices.server";
 import { readRefreshCadence, saveRefreshCadence } from "~/lib/settings.server";
 
-import type { BackfillGap } from "~/lib/prices.server";
+import type { BackfillGap, BackfillOutcome } from "~/lib/prices.server";
 import type { Route } from "./+types/prices";
 
 /**
@@ -26,7 +26,9 @@ export function meta() {
 }
 
 export async function loader() {
-  return { refreshCadenceMinutes: await readRefreshCadence(), gaps: await backfillGaps() };
+  const [refreshCadenceMinutes, gaps] = await Promise.all([readRefreshCadence(), backfillGaps()]);
+
+  return { refreshCadenceMinutes, gaps };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -112,8 +114,8 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
             <p id="refresh-cadence-note" className="field-note">
               A whole number from 1 to 1440 — the default is 15. A lower number costs more
               requests against the feed during market hours. Outside them a refresh asks for no
-              quotes, and spends a request only while something below is still missing closes —
-              at most a handful per refresh, and none once that list is empty. A saved change is
+              quotes, and spends a request only on the rows below that a feed can still fill — at
+              most a handful per refresh, and none at all once there are none. A saved change is
               picked up when the next refresh runs, so it can take up to one old cadence to
               apply.
             </p>
@@ -150,7 +152,7 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
         ) : (
           <>
             <div className="panel-body">
-              <p className="empty-note">
+              <p className="field-note">
                 These are held from a date the price history does not reach, so totals before the
                 date in the third column leave them out. A refresh fills a few of them in at a
                 time; a row that says why instead is one nothing can fetch.
@@ -197,27 +199,52 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
  * sentence here falls back to the stored value rather than to nothing, so a
  * literal added to the schema and not to this map is legible rather than blank.
  */
-function attemptWords(gap: BackfillGap): string {
+function attemptWords(gap: BackfillGap): React.ReactNode {
   // Why, not just that: a hand-priced trust and a feed instrument nobody has
-  // given a ticker are two different things for a person to do about.
+  // given a ticker are two different things for a person to do about. Each
+  // branch reads a fact on the row rather than re-deriving the domain's rule for
+  // `willTry`, so a fourth price source would fall to the last sentence rather
+  // than be told its ticker is missing.
   if (!gap.willTry) {
-    return gap.priceSource === "manual"
-      ? "Never — priced by hand, so there is no feed history to fetch."
-      : "Never — no ticker recorded, so there is nothing to fetch under.";
+    if (gap.priceSource === "manual") {
+      return "Never — priced by hand, so there is no feed history to fetch.";
+    }
+    if (gap.symbol === null) {
+      return "Never — no ticker recorded, so there is nothing to fetch under.";
+    }
+    return "Never — this instrument is not priced from the feed.";
   }
 
   if (gap.lastAttempt === null) return "Not tried yet — the next refresh will.";
 
+  // The UTC day, formatted on the server for `settings/accounts.tsx`'s reason:
+  // these pages must work with JavaScript off, so there is no browser clock to
+  // ask at render time and a locale-formatted date would disagree with itself
+  // between the server render and hydration.
   const on = new Date(gap.lastAttempt.at).toISOString().slice(0, 10);
-  const said = OUTCOME_WORDS[gap.lastAttempt.outcome] ?? gap.lastAttempt.outcome;
+  const said = wordsFor(gap.lastAttempt.outcome);
 
-  return gap.lastAttempt.error === null
-    ? `${on} — ${said}`
-    : `${on} — ${said} ${gap.lastAttempt.error}`;
+  // An empty error is a row the ledger allows — a provider that failed with
+  // nothing to say — and appending it would leave a dangling colon.
+  const because = gap.lastAttempt.error?.trim();
+
+  return (
+    <>
+      <span className="u-data">{on}</span> — {because ? `${said} ${because}` : said}
+    </>
+  );
 }
 
-/** The ledger's closed vocabulary, as a person reads it. */
-const OUTCOME_WORDS: Record<string, string> = {
+/**
+ * The ledger's closed vocabulary, as a person reads it.
+ *
+ * Keyed by {@link BackfillOutcome} rather than by `string`, which is what makes
+ * this the *checked* copy: a literal added to `BACKFILL_OUTCOMES` and forgotten
+ * here fails the typecheck, where a `Record<string, string>` would ship a blank
+ * cell. The migration's `check` constraint and the const object are kept in step
+ * by hand; this is the one of the three the compiler can hold.
+ */
+const OUTCOME_WORDS: Record<BackfillOutcome, string> = {
   filled: "closes were written, and more are still missing.",
   nothing_to_write: "the feed answered, and every day it returned was already stored.",
   no_history: "the feed has no history for this ticker — it may be delisted or renamed.",
@@ -225,3 +252,15 @@ const OUTCOME_WORDS: Record<string, string> = {
   split_unresolved: "a share split in the range could not be applied, so nothing was stored.",
   provider_failed: "the request failed:",
 };
+
+/**
+ * The sentence for one stored outcome, or the stored value itself.
+ *
+ * The value crosses the driver as a `string`, so the lookup has to tolerate one
+ * the map has never heard of — which the `check` constraint makes impossible
+ * and a person reading a blank cell could not diagnose. Written as a search
+ * rather than an index so no assertion is needed to narrow the key.
+ */
+function wordsFor(outcome: string): string {
+  return Object.entries(OUTCOME_WORDS).find(([stored]) => stored === outcome)?.[1] ?? outcome;
+}

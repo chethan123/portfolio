@@ -234,15 +234,21 @@ export type BackfillOutcome = (typeof BACKFILL_OUTCOMES)[keyof typeof BACKFILL_O
  * before the day this was first held? `docs/importing-history.md`'s recipe says
  * the same thing as `min(price_daily.date) is null or > min(as_of_date)` over a
  * left join, which is equivalent and ruinous here: that join pairs every
- * holding row with every close of its instrument before the aggregate, which at
- * a hundred instruments over seven years is ~35M inner rows and about 1.4s
- * against ~4ms for this probe — and it grows without bound as the spine this
- * slice exists to fill grows. ARCHITECTURE §10 records the same shape as a bug
+ * holding row with every close of its instrument before the aggregate. Measured
+ * against a hundred instruments, ten years of monthly position sets and seven
+ * years of daily closes, that is 35M inner rows and 1.4s where this probe is
+ * 4ms — and the gap widens without bound as the spine this slice exists to fill
+ * grows. (The figures are that shape's; a shallower household is cheaper both
+ * ways and the ratio holds.) ARCHITECTURE §10 records the same shape as a bug
  * this repository has fixed once already. The recipe runs by hand; this runs on
  * every tick.
  *
- * It reads `instrument` and `position_set` from whichever query it is dropped
- * into, so both must join those under those names.
+ * **It is a `having` predicate, not a `where` one.** It reads `instrument` and
+ * `position_set` from whichever query it is dropped into — so both must join
+ * those under those names — and it reads `min(position_set.as_of_date)`, so the
+ * grouping must be one row per instrument for that to mean the instrument's
+ * first-held date. A grouping that split an instrument across two rows would
+ * change what this asks without touching a character of it.
  */
 const NO_CLOSE_BY_FIRST_HELD = sql<boolean>`not exists (
   select 1
@@ -351,9 +357,10 @@ export type BackfillGap = {
   /** The most recent attempt, or null where the batch has never tried. */
   lastAttempt: { at: Date; outcome: string; error: string | null } | null;
   /**
-   * `feed` or `manual`. Carried because {@link willTry} says *that* the batch
-   * will never try a row and this says *why* — a hand-priced trust and a feed
-   * instrument nobody has given a ticker are two different things to do about.
+   * As stored. `fixed` is filtered out, so in practice `feed` or `manual` —
+   * carried because {@link willTry} says *that* the batch will never try a row
+   * and this is half of *why*: a hand-priced trust and a feed instrument nobody
+   * has given a ticker are two different things for a person to do about.
    */
   priceSource: string;
   /**
@@ -442,9 +449,9 @@ export async function backfillGaps(db: Kysely<Database> = getDb()): Promise<Back
     name: row.name,
     firstHeld: row.first_held,
     firstClose: row.first_close,
-    // Both columns come from one row of the lateral, so either is the test for
-    // "there was an attempt"; TypeScript cannot see that, and reading the one
-    // the component needs is the honest narrowing.
+    // Both columns come from one row of the lateral, so in the database either
+    // alone answers "was there an attempt". TypeScript cannot see that, so both
+    // are checked — which is the narrowing, not a second condition.
     lastAttempt:
       row.started_at === null || row.outcome === null
         ? null
