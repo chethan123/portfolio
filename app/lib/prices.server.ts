@@ -335,8 +335,12 @@ function bySymbol(instruments: FeedInstrument[]): Map<string, FeedInstrument[]> 
  * with nothing in the log naming it. Matching is the *only* thing normalised:
  * the stored symbol stays exactly as typed (§4.3 makes it a mutable attribute
  * a person edits, not a key the app owns).
+ *
+ * Exported rather than moved: the backfill's history call sends the same form
+ * (`price-provider.server.ts`), and the rule belongs beside the matcher that
+ * states it.
  */
-const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
+export const matchKey = (symbol: string): string => symbol.trim().toUpperCase();
 
 /**
  * Run `body` in a transaction unless one is already open: Kysely refuses

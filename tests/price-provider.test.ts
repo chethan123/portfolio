@@ -16,8 +16,12 @@ import { describe, expect, it } from "vitest";
 import {
   CurrencyRefused,
   probeSymbol,
+  toProviderHistory,
   toProviderQuote,
   yahooClient,
+  yahooPriceProvider,
+  type ChartRequest,
+  type HistoryRange,
 } from "~/lib/price-provider.server";
 
 /** The fetch time, for the fallback path. Fixed so assertions can name it. */
@@ -370,6 +374,417 @@ describe("probing a symbol at creation time", () => {
   });
 });
 
+const NEW_YORK = "America/New_York";
+
+/** A range wide enough that nothing in these payloads falls outside it. */
+const RANGE: HistoryRange = { from: "2024-06-01", until: "2024-12-31" };
+
+/**
+ * A daily bar, stamped at the session open — 13:30Z for a June NYSE session,
+ * which is 09:30 in New York. Spelled out rather than defaulted because the
+ * whole meaning of a bar is which day it is.
+ */
+const bar = (date: string, close: number | null) => ({
+  date: new Date(`${date}T13:30:00Z`),
+  close,
+});
+
+/** A split as the library hands it back in `return: "array"` mode. */
+const split = (date: string, numerator: number, denominator: number) => ({
+  date: new Date(`${date}T13:30:00Z`),
+  numerator,
+  denominator,
+  splitRatio: `${numerator}:${denominator}`,
+});
+
+const chartOf = (payload: {
+  currency?: string;
+  splits?: ReturnType<typeof split>[];
+  quotes: ReturnType<typeof bar>[];
+}) => ({
+  meta: { currency: payload.currency ?? "USD" },
+  ...(payload.splits === undefined ? {} : { events: { splits: payload.splits } }),
+  quotes: payload.quotes,
+});
+
+const historyOf = (
+  payload: Parameters<typeof chartOf>[0],
+  range: HistoryRange = RANGE,
+) => toProviderHistory(chartOf(payload), range, NEW_YORK);
+
+/** The closes of an `ok` answer, or a failure naming what came back instead. */
+function closesOf(history: ReturnType<typeof toProviderHistory>) {
+  if (history.status !== "ok") throw new Error(`expected closes, got ${history.status}`);
+  return history.closes;
+}
+
+describe("reading a day of history", () => {
+  it("returns a close as a decimal string at scale 4, never a number", () => {
+    const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 271.5)] }));
+
+    // `toEqual` is strict about the type, so the exact string is the whole
+    // assertion: a number 271.5 would not match it.
+    expect(closes).toEqual([{ date: "2024-06-07", close: "271.5000" }]);
+  });
+
+  it("files a bar under the trading day inside its own timestamp, not its UTC one", () => {
+    // 02:00Z is the previous evening in New York. A UTC truncation would file
+    // this under the 8th; the spine would then carry a close for a day whose
+    // real close overwrites it, losing the earlier one entirely.
+    const history = toProviderHistory(
+      { meta: { currency: "USD" }, quotes: [{ date: new Date("2024-06-08T02:00:00Z"), close: 10 }] },
+      RANGE,
+      NEW_YORK,
+    );
+
+    expect(closesOf(history)).toEqual([{ date: "2024-06-07", close: "10.0000" }]);
+  });
+
+  it("drops a bar on the range's end and keeps the day before it", () => {
+    // The end is exclusive: today's row stays the poller's provisional one.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-06-11", 10), bar("2024-06-12", 11)] }, {
+        from: "2024-06-01",
+        until: "2024-06-12",
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-11", close: "10.0000" }]);
+  });
+
+  it("skips a bar with no close rather than writing a row for it", () => {
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-06-07", null), bar("2024-06-10", 12)] }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
+  });
+
+  it("skips a non-positive close, which is what a half-known symbol returns", () => {
+    const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 0), bar("2024-06-10", 12)] }));
+
+    expect(closes).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
+  });
+
+  it("answers no-history for a response whose every close was skipped", () => {
+    expect(historyOf({ quotes: [bar("2024-06-07", null), bar("2024-06-10", null)] })).toEqual({
+      status: "no-history",
+    });
+  });
+
+  it("skips a close too small to render as anything but zero", () => {
+    // `> 0` is not enough: `toFixed(4)` turns anything under half a
+    // ten-thousandth into "0.0000", which would value the holding at nothing —
+    // permanently, because the backfill's write is insert-where-absent on a
+    // finished day and nothing in the application rewrites it.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-06-07", 0.000049), bar("2024-06-10", 12)] }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
+  });
+
+  it("skips a close too large for the column it is bound for", () => {
+    // The guard `inRange` exists for on the sibling columns: a figure this big
+    // is not a price, and a `numeric` overflow would abort the transaction the
+    // whole batch of closes commits in.
+    const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 1e21), bar("2024-06-10", 12)] }));
+
+    expect(closes).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
+  });
+
+  it("refuses a currency it cannot read rather than taking it for an absent one", () => {
+    // The quote path refuses the whole payload for a non-string currency, and
+    // this is the guard where guessing is worst: a foreign listing summed into
+    // a USD net worth, with no error anywhere.
+    expect(
+      toProviderHistory(
+        { meta: { currency: 123 }, quotes: [bar("2024-06-07", 10)] },
+        RANGE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "no-history" });
+  });
+
+  it("answers no-history for a valid range with nothing in it", () => {
+    expect(historyOf({ quotes: [] })).toEqual({ status: "no-history" });
+  });
+
+  it("answers no-history for a payload whose shape is not the one required", () => {
+    expect(toProviderHistory({ nothing: "useful" }, RANGE, NEW_YORK)).toEqual({
+      status: "no-history",
+    });
+  });
+
+  it("refuses a history quoted in a currency this instance cannot hold", () => {
+    // Before any figure is read: the failure this prevents is the worst
+    // available — GBP quietly summed into a USD net worth, with no error.
+    expect(historyOf({ currency: "GBP", quotes: [bar("2024-06-07", 271.5)] })).toEqual({
+      status: "non-usd",
+      currency: "GBP",
+    });
+  });
+
+  it("proceeds when the payload states no currency at all, as the quote path does", () => {
+    const history = toProviderHistory(
+      { meta: {}, quotes: [bar("2024-06-07", 10)] },
+      RANGE,
+      NEW_YORK,
+    );
+
+    expect(closesOf(history)).toEqual([{ date: "2024-06-07", close: "10.0000" }]);
+  });
+
+  it("keeps the later instant when two bars file under one trading day", () => {
+    // Yahoo inserts extra bars at event times; two bars under one day are one
+    // day, and the later instant is the nearer thing to a close.
+    const history = toProviderHistory(
+      {
+        meta: { currency: "USD" },
+        quotes: [
+          { date: new Date("2024-06-07T13:30:00Z"), close: 10 },
+          { date: new Date("2024-06-07T20:00:00Z"), close: 11 },
+        ],
+      },
+      RANGE,
+      NEW_YORK,
+    );
+
+    expect(closesOf(history)).toEqual([{ date: "2024-06-07", close: "11.0000" }]);
+  });
+
+  it("skips a bar whose timestamp cannot be read, rather than filing it under today", () => {
+    // Unlike a quote, whose fallback to fetch time is the lesser error: a
+    // bar's whole meaning is its day.
+    const history = toProviderHistory(
+      {
+        meta: { currency: "USD" },
+        quotes: [{ date: "not a date", close: 10 }, bar("2024-06-10", 12)],
+      },
+      RANGE,
+      NEW_YORK,
+    );
+
+    expect(closesOf(history)).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
+  });
+});
+
+describe("un-adjusting the closes Yahoo restates through splits", () => {
+  // The figures are chosen so the un-adjusted close is checkable by eye, and
+  // asserted as the resulting close rather than as a factor: a factor asserted
+  // against itself would pass whichever direction the arithmetic went.
+
+  it("multiplies a pre-split close back by the split's ratio", () => {
+    const closes = closesOf(
+      historyOf({
+        splits: [split("2024-06-10", 4, 1)],
+        quotes: [bar("2024-06-07", 200), bar("2024-06-10", 50), bar("2024-06-11", 52)],
+      }),
+    );
+
+    expect(closes).toEqual([
+      // Held at 200 a share the Friday before; Yahoo restates it as 50.
+      { date: "2024-06-07", close: "800.0000" },
+      // The split's own day already trades at the new price.
+      { date: "2024-06-10", close: "50.0000" },
+      { date: "2024-06-11", close: "52.0000" },
+    ]);
+  });
+
+  it("carries both ratios on a row that precedes two splits, and the later one between them", () => {
+    const closes = closesOf(
+      historyOf({
+        splits: [split("2024-06-10", 4, 1), split("2024-09-10", 2, 1)],
+        quotes: [bar("2024-06-07", 100), bar("2024-07-15", 125), bar("2024-09-11", 60)],
+      }),
+    );
+
+    expect(closes).toEqual([
+      { date: "2024-06-07", close: "800.0000" },
+      { date: "2024-07-15", close: "250.0000" },
+      { date: "2024-09-11", close: "60.0000" },
+    ]);
+  });
+
+  it("takes a reverse split the other way round, with no case of its own", () => {
+    const closes = closesOf(
+      historyOf({
+        splits: [split("2024-06-10", 1, 10)],
+        quotes: [bar("2024-06-07", 10)],
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-07", close: "1.0000" }]);
+  });
+
+  it("refuses the whole response when a split's ratio cannot be applied", () => {
+    // Some rows right and some wrong is the outcome worth refusing: every
+    // figure would look plausible.
+    expect(
+      historyOf({
+        splits: [split("2024-06-10", 4, 0)],
+        quotes: [bar("2024-06-07", 200)],
+      }),
+    ).toEqual({ status: "split-unresolved" });
+  });
+
+  it("refuses the whole response when a split's date cannot be read", () => {
+    expect(
+      toProviderHistory(
+        {
+          meta: { currency: "USD" },
+          events: { splits: [{ date: "not a date", numerator: 4, denominator: 1 }] },
+          quotes: [bar("2024-06-07", 200)],
+        },
+        RANGE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "split-unresolved" });
+  });
+
+  it("refuses an events block it cannot read, rather than reporting no history", () => {
+    // The raw endpoint keys splits by epoch second, and `return: "object"`
+    // mode hands them back that way. An events block we cannot read may be
+    // hiding a split, and a close un-adjusted by a split nobody saw is the
+    // silent wrong figure — where `no-history` would have the ledger say the
+    // ticker is unknown or delisted, which it is not.
+    expect(
+      toProviderHistory(
+        {
+          meta: { currency: "USD" },
+          events: { splits: { "1718022600": { date: 1718022600, numerator: 10, denominator: 1 } } },
+          quotes: [bar("2024-06-07", 200)],
+        },
+        RANGE,
+        NEW_YORK,
+      ),
+    ).toEqual({ status: "split-unresolved" });
+  });
+
+  it("carries a close whose un-adjusted value does not land on a whole cent", () => {
+    // One rounding, at the end, half away from zero: rounding per split would
+    // answer "0.0002" for the second case below.
+    expect(
+      closesOf(historyOf({ splits: [split("2024-06-10", 1, 3)], quotes: [bar("2024-06-07", 200)] })),
+    ).toEqual([{ date: "2024-06-07", close: "66.6667" }]);
+
+    expect(
+      closesOf(
+        historyOf({
+          splits: [split("2024-06-10", 1, 2), split("2024-09-10", 1, 2)],
+          quotes: [bar("2024-06-07", 0.0005)],
+        }),
+      ),
+    ).toEqual([{ date: "2024-06-07", close: "0.0001" }]);
+  });
+
+  it("drops a row whose un-adjusted product outgrows the column, keeping the rest", () => {
+    // The figure that arrived fits; the product does not. An overflow inside
+    // the batch's transaction would cost every other close committing with it.
+    const closes = closesOf(
+      historyOf({
+        splits: [split("2024-06-10", 1000, 1)],
+        quotes: [bar("2024-06-07", 1e15), bar("2024-06-11", 12)],
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-11", close: "12.0000" }]);
+  });
+
+  it("refuses a split whose ratio is not a whole number of shares", () => {
+    expect(
+      historyOf({
+        splits: [split("2024-06-10", 1.5, 1)],
+        quotes: [bar("2024-06-07", 200)],
+      }),
+    ).toEqual({ status: "split-unresolved" });
+  });
+});
+
+describe("asking the client for one symbol's history", () => {
+  /** A client with both halves, so the provider's type is satisfied honestly. */
+  const clientCharting = (chart: (symbol: string, options: ChartRequest) => Promise<unknown>) =>
+    async () => ({ quote: async () => [], chart });
+
+  it("sends one symbol per call, upper-cased, over the range's start", async () => {
+    const seen: Array<{ symbol: string; options: ChartRequest }> = [];
+
+    const provider = yahooPriceProvider(
+      clientCharting(async (symbol, options) => {
+        seen.push({ symbol, options });
+        return chartOf({ quotes: [bar("2024-06-07", 10)] });
+      }),
+    );
+
+    await provider.getDailyCloses(" vti ", RANGE, NEW_YORK);
+
+    expect(seen).toEqual([
+      {
+        symbol: "VTI",
+        // No `period2`: the library defaults it to the instant of the call, and
+        // the range's real end is enforced on each bar's market date.
+        options: { period1: "2024-06-01", interval: "1d", events: "split" },
+      },
+    ]);
+  });
+
+  it("answers no-history for the error an unknown or delisted symbol throws", async () => {
+    const provider = yahooPriceProvider(
+      clientCharting(async () => {
+        throw new Error("No data found, symbol may be delisted");
+      }),
+    );
+
+    expect(await provider.getDailyCloses("GONE", RANGE, NEW_YORK)).toEqual({
+      status: "no-history",
+    });
+  });
+
+  it("answers no-history for a period1 before the symbol was listed", async () => {
+    const provider = yahooPriceProvider(
+      clientCharting(async () => {
+        throw new Error("Data doesn't exist for startDate = 1717718400, endDate = 1719878400");
+      }),
+    );
+
+    expect(await provider.getDailyCloses("NEW", RANGE, NEW_YORK)).toEqual({
+      status: "no-history",
+    });
+  });
+
+  it("reads the stem off any thrown error, never off its class", async () => {
+    // The library picks the class from Yahoo's own error `code` with the spaces
+    // removed, and only "Bad Request" resolves to one it defines — so the "Not
+    // Found" a delisted symbol answers arrives as a plain `Error`. This stands
+    // in for the library's class, which its `exports` map does not expose.
+    class BadRequestError extends Error {
+      override readonly name = "BadRequestError";
+    }
+
+    const provider = yahooPriceProvider(
+      clientCharting(async () => {
+        throw new BadRequestError("No data found, symbol may be delisted");
+      }),
+    );
+
+    expect(await provider.getDailyCloses("GONE", RANGE, NEW_YORK)).toEqual({
+      status: "no-history",
+    });
+  });
+
+  it("propagates any other failure, because the caller's ledger wants the text", async () => {
+    const provider = yahooPriceProvider(
+      clientCharting(async () => {
+        throw new Error("429 Too Many Requests");
+      }),
+    );
+
+    await expect(provider.getDailyCloses("VTI", RANGE, NEW_YORK)).rejects.toThrow(
+      "429 Too Many Requests",
+    );
+  });
+});
+
 describe("the shape of the library we depend on", () => {
   it("hands back a client whose quote method is callable", async () => {
     // The regression test for a bug that shipped. `yahoo-finance2`'s default
@@ -385,6 +800,10 @@ describe("the shape of the library we depend on", () => {
     const client = await yahooClient();
 
     expect(typeof client.quote).toBe("function");
+    // The same trap, and the same regression: `chart` is a static on the class
+    // too, and calling it there throws on every backfill with the batch's catch
+    // swallowing it.
+    expect(typeof client.chart).toBe("function");
   });
 
   it("refuses to be used as a bare static, which is the trap", async () => {

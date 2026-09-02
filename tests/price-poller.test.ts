@@ -60,6 +60,10 @@ function fakeProvider(): PriceProvider & { asked: string[][] } {
       asked.push([...symbols]);
       return [];
     },
+    // Required by the interface; no tick in this file has a gap to fill.
+    async getDailyCloses() {
+      return { status: "no-history" };
+    },
   };
 }
 
@@ -67,6 +71,9 @@ function fakeProvider(): PriceProvider & { asked: string[][] } {
 function brokenProvider(): PriceProvider {
   return {
     async getQuotes() {
+      throw new Error("429 Too Many Requests");
+    },
+    async getDailyCloses(): Promise<never> {
       throw new Error("429 Too Many Requests");
     },
   };
