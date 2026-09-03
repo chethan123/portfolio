@@ -41,28 +41,72 @@ const PHONE = { width: 390, height: 900 } as const;
  * show. `content` is what the vertical budget is measured *to*: everything
  * above it is preamble, however necessary.
  */
-const SCREENS: ReadonlyArray<{ name: string; path: string; content: string }> = [
-  { name: "overview", path: "/", content: ".panel .chart, .panel .empty-note" },
-  { name: "holdings", path: "/holdings", content: ".data-table--holdings tbody tr" },
-  { name: "holdings-grouped", path: "/holdings?group=assetClass", content: ".data-table--holdings tbody tr" },
-  { name: "analysis", path: "/analysis", content: ".panel .data-table tbody tr, .panel .chart" },
-  { name: "income", path: "/income", content: ".panel .data-table tbody tr, .panel .chart" },
-  // Resolved at run time: account ids climb on every re-seed, so this
-  // follows the first account link on Overview rather than hardcoding one —
-  // the same rule `scripts/capture-screenshots.ts` states for its own shots.
-  { name: "account-detail", path: "@first-account", content: ".panel .chart, .panel .empty-note" },
-  // The write screens are the control group, so their selector has to mean
-  // the same thing as the read screens': the first content INSIDE a panel,
-  // past its header — not the panel's own top edge, which would flatter them
-  // by a panel header and exaggerate the very gap this report is about.
-  { name: "settings", path: "/settings", content: ".panel .panel-body > *, .panel .data-table tbody tr" },
-  { name: "settings-accounts", path: "/settings/accounts", content: ".panel .data-table tbody tr, .panel .panel-body > *" },
-  { name: "upload", path: "/upload", content: ".panel .panel-body > *, .panel .panel-form > *" },
+/**
+ * Each screen with the landmark its distance is measured to, and the words
+ * for that landmark — because the landmarks are NOT the same kind of thing
+ * and the report has to say so rather than rank them as if they were.
+ *
+ * Two earlier drafts tried to make one definition span every screen. Asking
+ * each screen for "the thing it exists to show" silently counted Analysis's
+ * ring as preamble while counting Overview's chart as content; a structural
+ * landmark (the first panel's content box) put Account detail at 8%, because
+ * that screen's first panel IS its header block. The screens are shaped
+ * differently and the honest move is to name the landmark, not to average
+ * over it.
+ */
+const SCREENS: ReadonlyArray<{ name: string; path: string; content: string; landmark: string }> = [
+  { name: "overview", path: "/", content: ".panel .chart", landmark: "the trend line" },
+  {
+    name: "holdings",
+    path: "/holdings",
+    content: ".data-table--holdings tbody tr",
+    landmark: "the first holding",
+  },
+  {
+    name: "holdings-grouped",
+    path: "/holdings?group=assetClass",
+    content: ".data-table--holdings tbody tr",
+    landmark: "the first holding",
+  },
+  // The ring, not the table under it: it is the first thing in the panel, and
+  // measuring past it would count 249px of chart as preamble. What the ring
+  // does NOT carry is figures — `app/routes/analysis.tsx` says so — which the
+  // report states separately rather than folding into this number.
+  { name: "analysis", path: "/analysis", content: ".breakdown-chart", landmark: "the first ring" },
+  { name: "income", path: "/income", content: ".breakdown-chart", landmark: "the first ring" },
+  // Resolved at run time: account ids climb on every re-seed, so this follows
+  // the first account link on Overview rather than hardcoding one.
+  {
+    name: "account-detail",
+    path: "@first-account",
+    content: ".panel .chart",
+    landmark: "the performance chart",
+  },
+  {
+    name: "settings",
+    path: "/settings",
+    content: ".panel .panel-body > *, .panel .data-table tbody tr",
+    landmark: "the first setting",
+  },
+  {
+    name: "settings-accounts",
+    path: "/settings/accounts",
+    content: ".panel .data-table tbody tr, .panel .panel-body > *",
+    landmark: "the first account row",
+  },
+  {
+    name: "upload",
+    path: "/upload",
+    content: ".panel .panel-body > *, .panel .panel-form > *",
+    landmark: "the first field",
+  },
 ];
 
 type Block = { tag: string; cls: string; top: number; height: number; text: string };
 type Measurement = {
   screen: string;
+  /** First table row, where figures start below the landmark. */
+  figuresTop: number | null;
   /** Height of the ungated-demo banner, discounted from every figure below. */
   bannerCost: number;
   path: string;
@@ -79,7 +123,8 @@ type Measurement = {
   leading: number;
   /** Sum of the gaps between sibling blocks — space carrying nothing. */
   gaps: number;
-  /** Last block to the content: a panel header and its padding, not blank. */
+  /** Last block down to the first panel's content box — chiefly that panel's
+   * own header, plus the page gap before it. Not blank space. */
   trailing: number;
 };
 
@@ -118,7 +163,14 @@ async function measure(page: Page, screen: (typeof SCREENS)[number]): Promise<Me
       const bannerCost = banner === null ? 0 : Math.round(rect(banner).height * 10) / 10;
 
       const content = document.querySelector(contentSel);
-      const contentTop = content ? rect(content).top + window.scrollY : null;
+      const contentTop = content === null ? null : rect(content).top + window.scrollY;
+
+      // Where the screen's own figures begin, where that is further down than
+      // the landmark: on the two breakdown screens the ring comes first and
+      // carries none. Null where the landmark already is the figures.
+      const firstRow = document.querySelector(".panel .data-table tbody tr");
+      const figuresTop =
+        firstRow === null ? null : Math.round((rect(firstRow).top + window.scrollY) * 10) / 10;
 
       // The stacked blocks a reader scrolls past, taken from ONE container so
       // that a parent and its own children are never both counted: `.page`
@@ -164,8 +216,8 @@ async function measure(page: Page, screen: (typeof SCREENS)[number]): Promise<Me
       // Three different spaces, kept apart because they mean different
       // things: `leading` is chrome-to-first-block, `gaps` is the rhythm
       // between sibling blocks (the only one that is purely empty), and
-      // `trailing` is the last block down to the content — which is not
-      // blank at all on a panelled screen, it is the panel's own header.
+      // `trailing` is the last block down to the first panel's content box —
+      // the page gap, the panel's border and its header. Not blank.
       const first = blocks.at(0);
       const last = blocks.at(-1);
       const leading = first === undefined ? 0 : Math.round((first.top - chromeBottom) * 10) / 10;
@@ -178,6 +230,7 @@ async function measure(page: Page, screen: (typeof SCREENS)[number]): Promise<Me
       return {
         screen: name,
         bannerCost,
+        figuresTop,
         path,
         viewport: window.innerHeight,
         chromeBottom: Math.round(chromeBottom * 10) / 10,
@@ -228,7 +281,7 @@ async function main(): Promise<void> {
     const spent = preamble === null ? "n/a" : `${preamble}px`;
     const share = preamble === null ? "" : ` (${Math.round((preamble / m.usable) * 100)}% of ${m.usable}px)`;
     console.log(
-      `${screen.name.padEnd(18)} preamble ${spent.padStart(7)}${share}  lead ${String(m.leading).padStart(5)}  gaps ${String(m.gaps).padStart(5)}  to-content ${String(m.trailing).padStart(5)}`,
+      `${screen.name.padEnd(18)} preamble ${spent.padStart(7)}${share}  lead ${String(m.leading).padStart(5)}  gaps ${String(m.gaps).padStart(5)}  to-content ${String(m.trailing).padStart(5)}  ${screen.landmark}`,
     );
   }
 

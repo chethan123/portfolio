@@ -7,48 +7,51 @@ option is not rediscovered later.
 
 ## 2026-09-03 — Phone layout against DESIGN.md §11
 
-One document: [Phone layout: what §11 decides, and what the stylesheet actually does](./2026-09-03-phone-layout.md)
-— what every screen costs on a phone, measured against `a405806` on the demo household at 390×900,
-and how that compares with what §11 says the phone is for. Nothing in it is approved; it exists so
-the arrangement question can be argued from figures rather than from a screenshot.
+One document: [Phone layout: what §11 decides, and where the phone work actually went](./2026-09-03-phone-layout.md)
+— what the screens cost on a phone, measured against `a405806` on the demo household at 390×900,
+and how that sits against what §11 says the phone is for. Nothing in it is approved. It has been
+through two adversarial grounding rounds, both of which found it wrong in the same direction —
+toward a more dramatic finding than the evidence carried — so it carries its retractions rather
+than quietly dropping them.
 
 ### The three things worth knowing without reading further
 
-1. **§11 names the read pages as what the phone is for, and they are the screens that do not fit.**
-   Holdings spends more than the whole first screenful before its first holding row, Income exactly
-   all of it, Account detail and Analysis more than four fifths. The three write screens §11
-   declines to invest in are the cheapest, none past two fifths. The "no mobile-specific layout
-   investment" clause belongs to §11's third bullet, the desktop-shaped write flows; it was never a
-   decision about the read pages. What does **not** follow — and the report says so — is that
-   read-screen work is thereby mandated: §11's bullets are a scope list, and the case rests on the
-   measurements.
+1. **§11's "no mobile-specific layout investment" clause does not reach the read pages.** It sits
+   in the third bullet, whose subject (`DESIGN.md:1000`) is every mutation except the two §11
+   funds — so it covers the settings forms as well as the upload flow, and it is a statement about
+   investment rather than scope. Nothing in §11 says the read screens should be sparse. What does
+   **not** follow is that read-screen work is mandated: §11 funds nothing, and the case for doing
+   any rests on the measurements.
 
-2. **The phone mostly is not designed; it receives what the desktop rule was overriding.** Of the
-   23 arrangement declarations written for the phone, 18 sit in the one block holding the Holdings
-   card reflow and seven of the twelve blocks hold none. Meanwhile four `min-width: 768px` blocks
-   put the desktop arrangement in the override, so the phone keeps the base — which is why
-   Analysis draws its ring above the table the route doc says carries every figure.
+2. **Two screens do not fit, and the wider ranking does not hold.** Holdings draws no holding at
+   all in a phone's first screenful and Account detail's first figure lands at 143% of one; those
+   need no cross-screen comparison. An earlier draft ranked every screen and claimed the read
+   screens all cost more than the write screens — an artifact of measuring a different landmark on
+   each. Measured with the landmark named, Analysis sits at 45%, among the write screens.
 
-3. **The cost is arrangement, not spacing.** Gaps between blocks are 24–48px of Holdings' 838px,
-   while its filter bar alone is 314px and Account detail's header is 461px. Tightening the spacing
-   scale is recorded as rejected, with the arithmetic.
+3. **Phone work concentrates and then thins out.** Of the 23 arrangement declarations in the twelve
+   `max-width: 767px` blocks, 15 are the Holdings card reflow and 3 the owner filter; seven blocks
+   hold none. A separate 1023px block holds ten more, which are the phone's chrome. The Holdings
+   brief's method transfers to every read screen unchanged and never has been.
 
 ### Evidence
 
 [`2026-09-03-phone-layout/harness/`](./2026-09-03-phone-layout/harness/) holds the measurement
-script, which walks each screen's box tree at 390×900 rather than counting pixels off a capture,
-and writes both the figures and `measurements.json`. Two corrections it makes are load-bearing: it
-discounts the open-instance banner the ungated demo draws (its height only — the banner brings no
-flex gap), and it sets the unmasked cookie, without which every screen measures as rows of dots.
+script, which walks each screen's box tree rather than counting pixels off a capture. Three
+corrections in it are load-bearing and each moved the numbers: the open-instance banner is
+discounted by its height and no gap; the unmasked cookie is set, without which every screen
+measures as rows of dots; and the per-screen landmarks are declared in one table with the reason
+each was chosen, after two attempts at a single cross-screen definition both produced artifacts.
 
 ### Status
 
-Open. The report grades its ideas by what they cost in documents: a phone arrangement for
-`.panel-header`, the donut-above-its-table inversion and six defect classes are unconstrained;
-moving the refresh control contradicts the pricing brief's placement table, and pairing the owner
-filter with the range strip contradicts spec 0013; only re-shaping the four-screen upload flow
-needs an ADR. What it deliberately leaves open is the question under all of them — what pair each
-screen is opened to read — which is not a CSS question.
+Open. Unconstrained: a phone arrangement for `.panel-header`, ordering the breakdown ring after its
+table, and six defect classes. Constrained: moving the refresh control contradicts the pricing
+brief's placement table, and pairing the owner filter with the range strip contradicts spec 0013 —
+whose reason is stronger than an earlier draft of this report allowed, having quoted only half of
+it. Phone investment on the write screens is what §11's third bullet declines, though
+`app/app.css:2616` shows the line in practice falls between restoring function and adding polish.
+The question under all of it — what pair each screen is opened to read — is not a CSS question.
 
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
 

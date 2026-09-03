@@ -2,6 +2,7 @@
   {
     "screen": "overview",
     "bannerCost": 105,
+    "figuresTop": null,
     "path": "/",
     "viewport": 900,
     "chromeBottom": 64,
@@ -32,6 +33,7 @@
   {
     "screen": "holdings",
     "bannerCost": 105,
+    "figuresTop": 1007,
     "path": "/holdings",
     "viewport": 900,
     "chromeBottom": 64,
@@ -70,6 +72,7 @@
   {
     "screen": "holdings-grouped",
     "bannerCost": 105,
+    "figuresTop": 1007,
     "path": "/holdings?group=assetClass",
     "viewport": 900,
     "chromeBottom": 64,
@@ -108,10 +111,11 @@
   {
     "screen": "analysis",
     "bannerCost": 105,
+    "figuresTop": 821.5,
     "path": "/analysis",
     "viewport": 900,
     "chromeBottom": 64,
-    "contentTop": 821.5,
+    "contentTop": 516,
     "usable": 771,
     "blocks": [
       {
@@ -133,15 +137,16 @@
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 411.5
+    "trailing": 106
   },
   {
     "screen": "income",
     "bannerCost": 105,
+    "figuresTop": 937.5,
     "path": "/income",
     "viewport": 900,
     "chromeBottom": 64,
-    "contentTop": 937.5,
+    "contentTop": 632,
     "usable": 771,
     "blocks": [
       {
@@ -163,11 +168,12 @@
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 411.5
+    "trailing": 106
   },
   {
     "screen": "account-detail",
     "bannerCost": 105,
+    "figuresTop": 1269.5,
     "path": "/accounts/2",
     "viewport": 900,
     "chromeBottom": 64,
@@ -198,6 +204,7 @@
   {
     "screen": "settings",
     "bannerCost": 105,
+    "figuresTop": null,
     "path": "/settings",
     "viewport": 900,
     "chromeBottom": 64,
@@ -228,6 +235,7 @@
   {
     "screen": "settings-accounts",
     "bannerCost": 105,
+    "figuresTop": 488.5,
     "path": "/settings/accounts",
     "viewport": 900,
     "chromeBottom": 64,
@@ -258,6 +266,7 @@
   {
     "screen": "upload",
     "bannerCost": 105,
+    "figuresTop": null,
     "path": "/upload",
     "viewport": 900,
     "chromeBottom": 64,
