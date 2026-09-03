@@ -4,9 +4,10 @@
 for this spec by `docs/adr/0011-a-backfill-fills-the-spine-but-never-moves-it.md:11`)
 
 > **Renumbered and re-grounded.** This spec was drafted as `0015` before specs 0015-0017 took that
-> number, and before ADR-0011's backfill landed. It is now `0018`, and §2.2, §3.2, §3.3, §3.5 and §4
-> are rewritten against the tree as it stands. §2.4 records what the re-grounding changed and why one
-> ticket disappeared. Line references below were re-verified file by file.
+> number, and before ADR-0011's backfill landed. It is now `0018`, and the design is rewritten
+> against the tree as it stands. §2.4 records what changed and why the slice got smaller twice.
+> Line references were re-verified file by file; the grant list, the constraints and the restore
+> failure were executed against a live PostgreSQL cluster rather than reasoned about.
 
 ---
 
@@ -19,17 +20,27 @@ dedicated sidecar container (`worker`) that:
 
 - has **no listening port and no API** — the app never addresses it; all coordination goes
   through Postgres rows,
-- connects to Postgres as a **new minimal-privilege role** that can read ticker symbols and
-  write prices, and cannot read an account, a person, a holding, an upload, or any amount of
-  money,
+- connects to Postgres as a **new minimal-privilege role** whose entire world is one mailbox
+  table — it cannot read or write an instrument, a price, an account, a person, a holding, an
+  upload, or any amount of money,
 - is the **only** container on an egress-capable network besides the auth gate (which must
   reach Google) and Caddy (which owns the published port).
 
+Each of those is narrower than the stack has today and none of them is absolute; §2.5 and §8 say
+where each one stops.
+
 The inversion this buys: today the internet-facing code (`yahoo-finance2`, the app's riskiest
 dependency — the Dockerfile already amputates part of it, `Dockerfile:78`) runs inside the process
-that holds full database access. After this slice, the internet-facing code sees ticker symbols and
-prices — public market data — and the process that sees the family's money cannot open a socket to
-anywhere.
+that holds full database access. After this slice, the internet-facing code is handed a list of
+ticker symbols and hands back quotes — public market data, in and out — and the process that sees
+the family's money cannot open a socket to anywhere.
+
+**The worker fetches and does not write.** It runs the existing provider module against Yahoo and
+returns that module's own typed answer through a mailbox row; every price that reaches the database
+is still written by `app/lib/prices.server.ts`, in the app, under the rules and tests it has today.
+That is what keeps this slice small: `refreshPrices`, `refreshQuotes`, `backfillCloses`,
+`selectBackfillCandidates`, `withRefreshLock`, the poller and the refresh route are **unchanged**.
+The one app-side substitution is which `PriceProvider` they are handed (§3.4).
 
 ## 2. Background and context
 
@@ -128,53 +139,89 @@ production caller invokes `refreshQuotes` any more — only tests do.
 - The three-tier single-site invariants (ARCHITECTURE.md §4.2) are *preserved*: the provider import
   site, the price-writer site, and the pool-construction site do not move.
 
-### 2.4 What the re-grounding changed
+### 2.4 What the re-grounding changed, twice
 
 The first draft assumed a refresh was one function (`refreshQuotes`) over public market data. It is
-not. Three consequences, and the design answer this spec now takes:
+not. Three consequences:
 
-1. **The backfill's candidate query reads `holding` and `position_set`** — two tables §3.5's first
-   draft listed as *invisible to the worker*. A worker that ran `refreshPrices` under the drafted
-   grants would fail with a permission error on its first tick.
+1. **The backfill's candidate query reads `holding` and `position_set`** — two tables the draft
+   listed as invisible to the worker. A worker running `refreshPrices` under the drafted grants
+   would have failed with a permission error on its first tick.
 2. **`price_backfill` did not exist** when the grants were written, so nothing was granted on it.
 3. **`PriceProvider` grew a second method**, so the outcome columns, the deadline watchdog and the
    validating wrapper all had to account for two calls rather than one.
 
-The answer taken here is **the app supplies the work; the worker only fetches** (§3.2, alternatives
-in §3.7). The app already holds the cadence timer and the database access to decide *what* needs
-fetching; the worker holds the socket. Splitting on that line keeps the security claim in §1 literally
-true — the worker reads no household table — and it collapses a large part of the original design:
+The first repair was to have the app compute the backfill's candidates and hand them to the worker,
+leaving the worker to run `refreshPrices`. Adversarial review took that apart, and the objections
+all had one root: **a worker that runs the domain's composition has to re-implement it.** Six
+separate findings were the same finding — `refreshPrices` would need its signature changed and its
+call sites with it; `BackfillBatchFailed` is module-private (`prices.server.ts:501-509`) so a worker
+composing the halves itself cannot recover the partial counts the ledger line is built from;
+`BackfillReport.outcomes` (six counters, `:465-478`) had no mailbox column, so `logBackfill`
+(`price-poller.server.ts:171`) could not be written; the candidate table lacked `symbol`
+(`BackfillCandidate` is `{ id, symbol, rangeFrom }`, `:261-267`) and carried a dead `range_until`,
+since `backfillCloses` computes one shared `until` for the whole batch (`:553`); the poller's five
+`startPricePoller(provider)` test sites and its log-line suite would need rewriting rather than
+re-wiring; and two claimed rows disagreeing about `quotes` had no defined behaviour.
 
-- The worker no longer needs a cadence loop, the market-hours calendar, or `app_setting`, so
-  **`app/lib/settings.server.ts` leaves its import closure** — and with it `masking.ts` and the
-  `react-router` edge. **The original ticket 01 (extract `masking-policy.ts`) is deleted**: it
-  existed only to cut that edge, and there is no longer an edge to cut. Its removal is the clearest
-  evidence the split is on the right line; the extraction remains a reasonable tidy-up on its own
-  merits, and is not this slice's business.
-- The worker is no longer two independent submitters racing for one advisory lock, so the
-  "serialised executor" and its `withRefreshLock`-bouncing hazard disappear. The worker drains,
-  fetches, writes, reports.
-- `app/root.tsx:67` **keeps** `startPricePoller()`. What changes inside the poller is the call it
-  makes: the mailbox instead of the provider. The app's module graph still ends up value-importing
-  nothing from `price-provider.server.ts`, which is the property that matters.
+**So the worker stops running the composition.** It runs the *provider* — the one module the seam
+was built around — and the app keeps everything else:
+
+- `PriceProvider` (`price-provider.server.ts:155-162`) is already a two-method async interface, and
+  the app already injects it everywhere. A mailbox-backed implementation substitutes with **no
+  change to `prices.server.ts` at all**: no signature change, no re-composition, no report columns,
+  no candidate table.
+- `backfillCloses`'s documented pacing — "Sequential, one instrument at a time, awaiting each call
+  before the next: nothing is issued in parallel and nothing is queued" (`:527-533`) — survives
+  unchanged, because each await simply becomes an await on a mailbox row.
+- Its failure rule — "A provider failure for one instrument is not a failure of the batch"
+  (`:537-540`) — is exactly what a dead worker should look like. A mailbox call that times out
+  throws, and the existing per-instrument `providerFailed` path ledgers it and moves on. There is
+  nothing new to specify.
+- The poller and the route change by one expression each: `yahooPriceProvider()` becomes
+  `mailboxPriceProvider(...)`. `app/root.tsx:67` is untouched. The poller's tests, which already
+  drive it through a fake provider, are untouched.
+
+The security property improves at the same time. The worker no longer needs `instrument`, `quote`,
+`price_daily`, `price_observation`, `price_poll`, `price_backfill`, `holding`, `position_set` or
+`app_setting`. **Its whole grant is one mailbox table** (§3.5), which is the strongest form of §1's
+claim rather than a restatement of it.
+
+Two tickets dissolved on the way. The original ticket 01 extracted `masking-policy.ts` to keep
+`react-router` out of the worker's import closure; the worker no longer imports
+`settings.server.ts`, so there is no edge to cut and the extraction is out of scope (§7). The
+candidate-passing refactor of `backfillCloses` is likewise gone. What replaced them is smaller: one
+pure function, `matchKey`, moves to a leaf so the worker's closure stops at the provider (§3.2).
 
 ### 2.5 What "no API on the worker" really means
 
 A mailbox in Postgres is still a channel — but a constrained one. Honest statement of the property:
-a compromised app can no longer open a socket to anywhere; the most it can do is name instruments
-that already exist and date ranges to fetch them over, and an honest worker fetches only Yahoo's two
-endpoints — a code-level property; the `egress-worker` network itself is unrestricted (§8).
-Exfiltration shrinks from "arbitrary HTTPS to anywhere" to "a low-bandwidth covert channel via Yahoo
-query strings, readable only by Yahoo or an on-path observer." The worker validates every symbol
-against a strict pattern before it touches a URL (§3.4), the `probe_request` table carries that
-pattern as a CHECK constraint, and `backfill_candidate` carries date bounds as CHECK constraints, to
-narrow even that. The residual channels — including the auth gate's OAuth callback, which relays
-attacker-chosen bytes to Google's token endpoint from the shared `frontend` network — are listed in
-§8.
+a compromised app can no longer open a socket to anywhere; the most it can do is put ticker-shaped
+strings and a date range into a row, and an honest worker turns those into Yahoo requests and
+nothing else. Exfiltration shrinks from "arbitrary HTTPS to anywhere" to "symbols and dates in Yahoo
+query strings, readable only by Yahoo or an on-path observer."
+
+**The CHECK constraint does not bind a compromised app, and an earlier draft of this spec was wrong
+to say it did.** The app connects as `portfolio`, which owns the table; `alter table fetch_request
+drop constraint fetch_request_symbols_fetchable` followed by an arbitrary insert was executed as the
+app's own role and both statements succeeded. Moving the app off the superuser role is what would
+fix that, and §7 defers it. What the constraint actually buys is worth keeping and worth naming
+correctly: it stops an *honest* app's bug from reaching a URL — a `BRK/B` or a 16-character ticker
+becomes a clean refusal rather than a malformed request — and it binds the compromised-app case only
+so long as the attacker does not think to drop it.
+
+Be precise about the bandwidth too, because the first draft was out by an order of magnitude. The
+alphabet is 66 characters, so 15 characters is ~91 bits — **about 11 bytes per symbol** — and a
+`quotes` row carries up to 500 of them, so **~5.6 KB per row**, with nothing capping rows. A history
+row adds two dates; bounding `range_until` (§3.3) holds those to a few bits each instead of the ~31
+bits an unbounded date range gives. So the honest sentence is: exfiltration through the mailbox is
+throttled by Yahoo's own rate limiting and the drain interval, not by a constraint, and what the
+constraint enforces is *shape* — no URLs, no hostnames, no newlines, no base64 with `/` or `+`, and
+no way to name a host. That is a real narrowing and it is not secrecy. §8 has the rest.
 
 ## 3. Design
 
-### 3.1 Topology: six networks, one new service
+### 3.1 Topology: seven networks, one new service
 
 Who gets internet access, decided per service:
 
@@ -194,7 +241,9 @@ networks:
     internal: true
   worker-db:          # The worker's ONLY path to Postgres. No route out.
     internal: true
-  frontend:           # Caddy to app and gate. No route out.
+  caddy-app:          # Caddy to app. No route out, and no gate on it.
+    internal: true
+  caddy-gate:         # Caddy to gate. No route out, and no app on it.
     internal: true
   egress-worker: {}   # The worker's internet path — shared with nothing.
   egress-gate: {}     # The gate's internet path — shared with nothing.
@@ -203,46 +252,99 @@ networks:
 services:
   db:     { networks: [backend, worker-db] }
   dump:   { networks: [backend] }
-  app:    { networks: [backend, frontend] }        # ← no internet route
+  app:    { networks: [backend, caddy-app] }       # ← no internet route, no gate peer
   worker: { networks: [worker-db, egress-worker] } # ← cannot reach app:3000 or gate
-  gate:   { networks: [frontend, egress-gate] }
-  caddy:  { networks: [frontend, ingress] }
+  gate:   { networks: [caddy-gate, egress-gate] }
+  caddy:  { networks: [caddy-app, caddy-gate, ingress] }
 ```
 
-- `internal: true` removes external routing; declaring per-service `networks:` also detaches the
-  implicit default bridge (compose spec) — `app`, `db`, and `dump` end with no path to the internet,
-  enforced by Docker networking, not code review.
+Verified against the Compose specification rather than assumed: declaring any per-service
+`networks:` key detaches that service from the implicit `default` network (`06-networks.md:62-82`,
+whose own worked example has to re-list `default` to keep it); `internal: true` "allows you to
+create an externally isolated network" (`:215-218`); and `depends_on` conditions are startup
+ordering evaluated by the daemon, so `worker` may depend on `app` being healthy while sharing no
+network with it (`05-services.md:367-421`).
+
 - **The worker and the app share no network.** The app serves every screen and action
   **unauthenticated** on `:3000` — the gate lives at Caddy, and `AUTH_GATE=external` only controls
   a banner (`app/root.tsx:37-46`, decided at `:92`) — so an egress-capable worker that could reach
   `app:3000` would read the family's money over HTTP and no database role would matter. Hence the
-  dedicated `worker-db` network: the worker sees Postgres and the internet, nothing else, and the
-  smoke test asserts `app:3000` is unreachable from it (§5). The same logic splits the egress side:
-  `egress-worker` and `egress-gate` are separate bridges, or the worker could reach `gate:4180` —
-  the sidecar holding the Google client secret — and "Postgres and the internet, nothing else"
-  would be false. The smoke test asserts the gate is unreachable from the worker too.
-- **Docker Engine floor:** CVE-2024-29018 (the embedded DNS forwarding external lookups even on
-  internal networks — an exfiltration channel a TCP-only test never sees) was patched in 23.0.11,
-  25.0.5, and 26.0. `docs/operating.md:84-92` currently states only "any v2 is new enough" for
-  Compose and no Engine floor at all; ticket 05 adds **26.0 as a conservative floor, not as the
-  vulnerability boundary**, and the smoke test asserts external *name resolution* fails from `app`,
-  not just that `fetch` does (§5).
-- Reachability walk (all verified against `Caddyfile`): browser→caddy (`ingress`), caddy→app and
-  caddy→gate including `/oauth2/*` (`frontend`), app→db and dump→db (`backend`), worker→db
+  dedicated `worker-db` network. The same logic splits the egress side: `egress-worker` and
+  `egress-gate` are separate bridges, or the worker could reach `gate:4180`, the sidecar holding the
+  Google client secret. The smoke test asserts both.
+- **`app` and `gate` do not share one either, and an earlier draft had them both on one `frontend`.**
+  That was the plan handing the container it exists to contain the exact path it refuses the worker:
+  from a shared network the app can POST `/oauth2/callback?code=<bytes>` straight to `gate:4180`,
+  and the gate relays those bytes to Google's token endpoint over `egress-gate` — an
+  application-layer egress proxy with a kilobyte-scale budget, not the same class of channel as an
+  11-byte ticker. Caddy is the only service that needs either as a peer, and both connections are
+  inbound to them, so splitting into `caddy-app` and `caddy-gate` costs one network and removes the
+  relay. Having paid for six on this argument, the seventh is not optional.
+- **What the worker can still reach, stated because "the internet, nothing else" is not true.**
+  `egress-worker` is an ordinary bridge, so the worker has a default route through the Docker host.
+  That reaches every port published on the host — including Caddy on `:80`, and through it the
+  gate's ungated `/oauth2/*` handler (`Caddyfile:39-46`) — and the operator's LAN, because the host
+  forwards and masquerades. Note also `Caddyfile:19` trusts `X-Forwarded-*` from `private_ranges`,
+  and the worker's address on the host bridge is one. The gate's forward-auth still refuses `/`, so
+  this is "the worker reaches the auth surface and the LAN", not "the worker reads the money" — but
+  the honest sentence is **Postgres, the internet, the Docker host, and the LAN**. Constraining that
+  further is `DOCKER-USER` work, out of scope here for the same reason it is out of scope for Caddy
+  (§8). Ticket 04 asserts the `gate:4180` and `app:3000` paths are gone *and* records the
+  host-gateway path that is not.
+- **`internal: true` is enforced by iptables, not by config validation.** For an internal network
+  the daemon installs `DROP` rules in a `DOCKER-INTERNAL` filter chain for traffic whose source or
+  destination is outside the network's subnet. Nothing rejects a published port on an internal
+  network at parse time; the packets are simply dropped. That chain hangs off `FORWARD` only, so it
+  does not cover host-local (`OUTPUT`-path) traffic — which is why `caddy` sits on a non-internal
+  `ingress` rather than relying on the drop.
+- **Docker Engine floor: ≥ 29.5.1, and the isolation this slice draws depends on it.** The floor is
+  not about one CVE:
+  - CVE-2024-29018 — the embedded DNS server forwarding external lookups *from internal networks*,
+    an exfiltration channel a TCP-only test never sees. Fixed in 23.0.11 / 25.0.5 / 26.0.0-rc3.
+    This is the illustration of why internal networks need a patched engine; it is not the floor.
+  - **CVE-2025-54410 — a firewalld reload removes bridge network isolation**, after which
+    "containers have access to any port, on any container, in any non-internal bridge network,"
+    until the daemon restarts. Fixed in 28.0.0 (backported to 25.0.13). `egress-worker`,
+    `egress-gate` and `ingress` are all non-internal, so on an affected engine this is precisely
+    the worker→`gate:4180` path §3.1 exists to forbid. `internal` networks are unaffected, so
+    `backend`, `worker-db`, `caddy-app` and `caddy-gate` hold regardless.
+  - CVE-2024-41110 (AuthZ bypass, CVSS 9.9) affects ≤ 26.1.4, so the earlier draft's "26.0 floor"
+    sat inside a critical range.
+  - CVE-2026-41567 and CVE-2026-42306 (container-to-host escapes) are fixed in 29.5.1.
+
+  `docs/operating.md:84-92` states no Engine floor today, only "any v2 is new enough" about Compose.
+  Ticket 05 adds the floor there and says which property depends on it, and the smoke test asserts
+  external *name resolution* fails from `app`, not just that `fetch` does (§5).
+
+  **The DNS assertion can be vacuously green, so say what it proves.** CVE-2024-29018 leaks only
+  when the host's `resolv.conf` names a *loopback* forwarding resolver (systemd-resolved on
+  127.0.0.53, dnsmasq on 127.0.0.1); dockerd then resolves from the host namespace and bypasses the
+  internal network. On a host whose resolver is a normal address, external DNS from an internal
+  network fails on every engine version — so a green assertion on a CI runner says nothing about an
+  operator's systemd-resolved box on an old engine. The advisory's own workaround is worth carrying
+  in the runbook rather than relying on the floor alone: give the internal-only services an explicit
+  upstream `dns:` address, which forces resolution from the container's own namespace. It also gives
+  operators on distro-packaged engines something to do besides upgrade.
+- Reachability walk (all verified against `Caddyfile`): browser→caddy (`ingress`), caddy→app
+  (`caddy-app`) and
+  caddy→gate including `/oauth2/*` (`caddy-gate`), app→db and dump→db (`backend`), worker→db
   (`worker-db`), worker→Yahoo (`egress-worker`), gate→Google (`egress-gate`). The worker is
   reachable from nothing: no port, no shared network except with `db` and the internet.
+- **Yahoo is four hosts, not one.** `yahoo-finance2` 4.0.2 reaches `query2.finance.yahoo.com` for
+  quotes and charts, `finance.yahoo.com` and a hardcoded `query1.finance.yahoo.com` for the
+  cookie/crumb bootstrap, and `guce.yahoo.com`/`consent.yahoo.com` for the EU consent redirect
+  chain. `egress-worker` is unrestricted so nothing breaks today, but any future egress allowlist —
+  and any smoke assertion phrased as "Yahoo resolves" — must name all four or it fails on the first
+  fetch.
 - All existing hardening (`cap_drop: ALL`, `no-new-privileges`, `read_only`, tmpfs, non-root) is
   copied onto `worker` unchanged, plus `restart: unless-stopped` and `logging: *container-logging`
-  — every service in `compose.yaml` carries the logging anchor (`:38-42`, added under issue #192),
-  and a worker left stopped after a daemon restart is the sole price-fetch process silently gone.
-- **External-Postgres installs** (`docs/operating.md:184-197`, "Running against your own Postgres")
-  keep the worker split, the minimal role, and the mailbox — but not the internal-network guarantee
-  as drawn: a container that must reach a database outside Docker cannot sit on an `internal`
-  network. Ticket 05's operating.md section defines that mode's override (worker `DATABASE_URL`
-  pointing at the external host, `worker-db`/`backend` made routable), states exactly which
-  guarantees remain, and says that the operator must create and grant `portfolio_worker` by hand —
-  that section's only privilege sentence today is `:193`'s "the role needs to be able to create
-  tables". The bundled-db topology is the one this spec's assertions certify.
+  — every service in `compose.yaml` carries the logging anchor (`:38-42`), and a worker left stopped
+  after a daemon restart is the sole price-fetch process silently gone.
+- **External-Postgres installs** (`docs/operating.md:184-197`) keep the worker split, the minimal
+  role, and the mailbox — but not the internal-network guarantee as drawn: a container that must
+  reach a database outside Docker cannot sit on an `internal` network. Ticket 05's operating.md
+  section defines that mode's override and states exactly which guarantees remain. See §3.5 for the
+  migration's behaviour there, which is a hard failure unless it is written for it.
 
 ### 3.2 The worker process
 
@@ -266,8 +368,9 @@ entrypoint (the standard one would run migrations as a role that cannot):
                      # have Compose restart a healthy worker
 ```
 
-The worker is a **pure fetcher**. It holds no timer, no calendar, and no opinion about what should
-be fetched. Its whole loop:
+The worker's whole job is **one unclaimed row at a time: read it, make the provider call it names,
+write the answer back.** It holds no timer, no calendar, no lock, no domain rule, and no opinion
+about what should be fetched.
 
 1. **Validate config** by reusing `loadConfig` (`server/config.ts` — every var it doesn't set has a
    default, so the existing schema serves as-is; no second config module).
@@ -275,340 +378,341 @@ be fetched. Its whole loop:
    present in `schema_migrations` (read via the SELECT-only `pendingMigrations`,
    `server/migrations.ts:65-75`; belt on top of `depends_on`). It waits; it does not migrate,
    because its role cannot.
-3. **Drain the mailbox by polling, every ~1-2 seconds, off the pool.** No LISTEN/NOTIFY: a
-   dedicated LISTEN client has no auto-reconnect in `pg` v8, its `error` event is a process-crash
-   hazard, and notifications are not queued for absent listeners — a doorbell that needs its own
-   reconnect machinery plus a fallback poll is three mechanisms where one suffices. Three small
-   indexed tables polled at 1-2s on an otherwise idle household database is negligible load and sits
-   comfortably under both app-side deadlines (§3.4).
-4. **One refresh run at a time.** A run claims every `pending` refresh row (`status = 'running'`,
-   `claimed_at = now()`), executes one refresh, and writes the same report to every claimed row — N
-   pending requests are one Yahoo fetch, never N (the poller's own rationale: a queue of fetches
-   against an unofficial API is how an instance gets rate-limited,
-   `price-poller.server.ts:29-31`). A request row arriving mid-run is claimed by the next run —
-   worst case one run duration plus one drain interval, comfortably inside the 8s deadline.
-   `withRefreshLock` (`prices.server.ts:120-150`) stays as the cross-process belt (a second replica,
-   an operator running the worker by hand); a lock refusal reverts claimed rows to `pending` for the
-   next drain. Because the app no longer fetches, the worker is the only taker in normal operation —
-   the lock is a guard, not a coordination mechanism.
-5. **The work it runs.** For a claimed request the worker calls `refreshQuotes` when the row says
-   `quotes` (the app decided that from the market calendar), and `backfillCloses` **with the
-   candidate rows the app supplied**, read from `backfill_candidate` (§3.3). This needs one small,
-   honest change to `prices.server.ts`: `backfillCloses` currently calls `selectBackfillCandidates`
-   itself (`:554`); the candidate list becomes a parameter, and `selectBackfillCandidates` stays
-   app-side where it can see `holding`. Nothing else about either function moves, so the price
-   rules and their tests stay exactly where ARCHITECTURE.md §4.2 says they live.
-6. **Probe fulfilment,** independent of any refresh and of the lock: validate the symbol, probe,
-   write the verdict columns.
-7. **A bounded provider, and recovery from its failures.** Every provider call runs under a deadline
-   (`AbortSignal.timeout`-style watchdog, ~30s) — both methods, since `getDailyCloses` is a separate
-   per-symbol call: `yahooClient` awaits the library with no abort of its own
-   (`price-provider.server.ts:617-624`), and a stalled Yahoo call would otherwise hold the run and
-   the advisory lock forever while the DB-only healthcheck kept reporting healthy. Expiry counts as
-   `providerFailed` for quotes and as the batch's own failure for backfill. Claims carry a lease:
-   claimed rows record `claimed_at`, and a drain treats `running` rows whose lease has expired as
-   claimable again, so a worker crash between claim and report strands nothing. Verdict and report
-   writes are guarded (`… where status = 'running'` / `status is null`), so an overlapping second
-   worker cannot overwrite a landed verdict — first write wins, and a rare duplicate Yahoo call is
-   the accepted cost.
-8. **Provider hygiene:** the Yahoo client is constructed with `versionCheck: false`.
-   `price-provider.server.ts:620` passes **no options object at all** today, and `yahoo-finance2`
-   4.0.2 defaults `versionCheck` to true, then fetches `registry.npmjs.org/yahoo-finance2/latest`
-   when response validation fails — which would make "an honest worker contacts only Yahoo" false.
-   Pinned by a worker test.
+3. **Drain by polling.** No LISTEN/NOTIFY, and all three of the reasons were checked against the
+   installed `pg` 8.23.0 rather than recalled: there is no reconnect logic anywhere in `pg/lib`
+   (the docs make re-connection the caller's problem); `Client` emits `'error'` unconditionally on a
+   dead socket (`lib/client.js:416-422`) and an unhandled `'error'` on an `EventEmitter` takes the
+   process down; and a notification is delivered only to sessions *currently* listening, which is
+   PostgreSQL's rule, not `pg`'s. A doorbell needing its own reconnect machinery plus a fallback
+   poll is three mechanisms where one suffices.
+4. **Fulfil, then answer.** Claim one row (`claimed_at = now()` guarded on `claimed_at is null`),
+   dispatch on `kind` to `getQuotes` / `getDailyCloses` / `probeSymbol`, and write either `payload`
+   or `error` with `answered_at`. Writes are guarded on the claim, so an overlapping second worker
+   cannot overwrite a landed answer — first write wins, and a rare duplicate Yahoo call is the
+   accepted cost. Claims carry a lease: a claimed row whose lease expired is claimable again, so a
+   crash between claim and answer strands nothing.
+5. **No advisory lock.** `withRefreshLock` (`prices.server.ts:120-150`) stays exactly where it is,
+   in the app, taken by the app's callers as it is today. The worker serves calls; it does not
+   decide that a refresh is happening, so it has nothing to serialise. This also keeps a connection
+   out of the role's budget.
+6. **The provider call is bounded.** Every call gets a deadline, and the mechanism has to be named
+   rather than gestured at: `yahooClient` awaits the library with no signal of its own
+   (`price-provider.server.ts:617-624`), so a deadline here is `Promise.race`, which **abandons
+   rather than cancels**. Two consequences the implementation must handle, or the cure is worse
+   than the disease. The losing promise rejecting after the race has settled is an unhandled
+   rejection, and `price-poller.server.ts:232-236` already records that Node exits the process on
+   one — so the loser gets a `.catch(() => {})`. And the abandoned fetch is still in flight, so the
+   worker takes no new row until it settles or the process restarts; without that guard, "nothing
+   is issued in parallel and nothing is queued" (`prices.server.ts:527-533`) stops being true at
+   exactly the moment Yahoo is unhappy. If `yahoo-finance2` 4.x accepts a real `AbortSignal` through
+   its fetch options, thread it and delete this paragraph's second half; ticket 02 checks and says
+   which.
+7. **Provider hygiene:** the Yahoo client is constructed `new YahooFinance({ versionCheck: false })`.
+   Verified against the published 4.0.2 tarball: `versionCheck` is a top-level constructor option
+   (`esm/src/lib/options/options.d.ts:44`) defaulting to `true` (`defaults.js:25`), and on a result
+   validation failure the library fetches `https://registry.npmjs.org/yahoo-finance2/latest`
+   (`esm/src/lib/versions.js:6`) — the one non-Yahoo call it makes, and the one thing that would
+   falsify "an honest worker contacts only Yahoo." `price-provider.server.ts:620` passes no options
+   at all today. Pinned by a worker test.
 
-Connection budget: the drain loop's pooled reads, `withRefreshLock`'s dedicated lock client, the
-Kysely connection doing the refresh work (`prices.server.ts:116-118` runs them on different
-connections by design), pool clients idling out their 10s `idleTimeoutMillis`, **and the container
-healthcheck's own session** all count against the role concurrently — and `server/db.ts:45` pins no
-pool `max`, so the `pg` default of 10 applies. Note also that `backfillCloses` opens **one
-transaction per instrument** (`prices.server.ts:573`, `:592`, `:610`) rather than one for the batch.
-Ticket 02 sets the worker pool's `max` explicitly, and the role carries `connection limit 10`
-(§3.5): the limit is defence-in-depth against a runaway, not the security boundary, and must never
-be what fails a healthy refresh or flips the healthcheck.
+**What crosses the mailbox is the provider's own answer, not Yahoo's.** The worker runs
+`yahooPriceProvider`, so Yahoo's payload is Zod-validated and converted next to the call, where
+`price-provider.server.ts`'s header argues it belongs, and ARCHITECTURE.md §4.2's "one importer of
+`yahoo-finance2`" stays literally one module. The types that cross are `ProviderQuote[]`,
+`ProviderHistory` and `SymbolProbe`, in which **money is already a decimal string** at scale 4
+(`ProviderDailyClose = { date, close: string }`, `:110-120`) — so the JSON round trip carries
+strings, never numbers, and CLAUDE.md's rule survives. A test pins that: a payload whose money
+arrived as a JSON number must be refused, not coerced.
 
-**The worker's import closure** (enumerated by a `module.register` load hook, not by reading):
-`server/price-worker.ts` → `prices.server.ts`, `price-provider.server.ts`, `db.server.ts`,
-`market-hours.ts`, `money.ts`, `server/config.ts`, `server/db.ts`, `server/migrations.ts`. That is
-kysely/pg/zod/node with relative `.ts` specifiers throughout — compatible with Node 24 type
-stripping (`tsconfig.json:28` `erasableSyntaxOnly`), with no `enum`, `namespace` or parameter
-property anywhere in it, and no Vite-only construct. **`settings.server.ts` is not in it**, which is
-why the `react-router` edge (`settings.server.ts:27` → `masking.ts:14`) never arises (§2.4).
+**The app does not trust the payload.** It re-parses every answer with a Zod schema for those three
+types before handing it to `prices.server.ts`. A compromised worker is then exactly as trusted as
+Yahoo is today — which is the honest bar, since the schemas exist because Yahoo is not trusted
+either.
+
+**The worker's import closure** is `server/price-worker.ts` → `price-provider.server.ts` → `zod`,
+`market-hours.ts`, `money.ts`, plus a pool for the mailbox. One edge spoils it:
+`price-provider.server.ts:66` value-imports `matchKey` from `prices.server.ts`, which drags
+`prices.server.ts` and `db.server.ts` — the price-writing module — into a process that must not
+write prices. `matchKey` (`prices.server.ts:733`) is a pure string function; ticket 02 moves it to a
+leaf module that both sides import. That is the whole of the app-source refactor this slice needs.
 
 **The published image must learn to carry the worker.** The runtime stage ships no `app/` source at
 all — `Dockerfile:104-110` copies exactly five `server/` files plus `build/`, `node_modules`, and
-`migrations/` — so as the Dockerfile stands, the worker entrypoint would die on its first import in
-production and only run from a checkout. Ticket 01 adds `server/provision-worker-role.ts` to the
-copied set (its entrypoint step runs in-image); ticket 02 adds `server/price-worker.ts` plus **every
-module of** the closure above, preserving `/app/app/lib/` and `/app/server/` as siblings because
-`db.server.ts:16-18` reaches `../../server/*.ts`. `money.ts` is the easy one to miss. The worker
-entrypoint must not live under `scripts/` — `.dockerignore:13` excludes that directory from the
-build context. Only ticket 03's smoke test would catch an incomplete copy set, because ticket 02's
-vitest runs from the checkout; hence ticket 03 asserts the worker container reaches its polling loop
-*in the built image*, not merely that a process started.
+`migrations/`. Ticket 01 adds `server/provision-worker-role.ts`; ticket 02 adds
+`server/price-worker.ts` and the closure above, preserving `/app/app/lib/` and `/app/server/` as
+siblings because `db.server.ts:16-18` reaches `../../server/*.ts`. The worker entrypoint must live
+under `server/`: `.dockerignore:13` excludes `scripts/` from the build context (re-including only
+`prune-unreachable-deps.mjs` at `:14-15`), so a `COPY scripts/…` would fail. Node 24 requires the
+explicit `.ts` extensions the closure already uses — mandatory, not optional — and type stripping is
+stable and needs no flag.
 
-**The image is shared in this slice, and that is a recorded trade, not an oversight.** One artifact
-to build, scan, and version (the dump precedent); `yahoo-finance2` remains on the app container's
-disk but is unreachable from app code after ticket 04, and the app container has no egress
-regardless — the guarantee is the network, not the file's absence. The residual this accepts: app
-and worker share one npm dependency tree, so a single poisoned package can own both ends of the
-mailbox at once (§8, "correlated compromise"). The remedy is a **named follow-up slice — worker
-supply-chain decorrelation**: the worker gets its own `package.json` and image stage with a
-~2-package tree (`pg`, `zod`), and the `yahoo-finance2` client (~40 transitive packages, most of the
-worker's surface) is replaced by a hand-rolled fetch of the two Yahoo endpoints the provider actually
-uses, parsed by the same Zod schemas that guard it today. That keeps one language, one implementation
-of the price-writing rules, and one test suite. A Go (or other-language) worker was considered for
-full ecosystem disjointness and rejected: it duplicates the price-writing rules and their tests in a
-second language and adds a second toolchain to CI — cost out of proportion to what the tiny-tree
-variant already removes. ADR-0010 records both alternatives.
+**The image is shared in this slice, and that is a recorded trade.** One artifact to build, scan,
+and version (the dump precedent); the app container has no egress after ticket 04 regardless — the
+guarantee is the network and the grant, not the file's absence. The residual: app and worker share
+one npm dependency tree, so a single poisoned package can own both ends of the mailbox (§8). The
+remedy is a **named follow-up slice — worker supply-chain decorrelation**: the worker gets its own
+`package.json` and image stage with a ~2-package tree (`pg`, `zod`), and `yahoo-finance2` (~40
+transitive packages) is replaced by a hand-rolled fetch of the endpoints the provider uses, behind
+the same Zod schemas. A Go worker was considered for full ecosystem disjointness and rejected: it
+duplicates the provider's parsing and its tests in a second language and adds a second toolchain to
+CI. ADR-0010 records both.
 
-### 3.3 The mailbox: three tables, no deletes by the worker
+### 3.3 The mailbox: one table
 
 Migration `0012_price_mailbox.sql`. (Not `0010`: `migrations/0010_price_backfill.sql` and
 `0011_latest_position_set_cost.sql` have landed. The **ADR** number 0010 is unaffected and still
 free.)
 
+One table serves all three calls, because all three are the same transaction — *here are symbols,
+give me what the feed says*:
+
 ```sql
-create table refresh_request (
-  id            bigint generated always as identity primary key,
-  requested_at  timestamptz not null default now(),
-  -- what the app decided from the market calendar; the worker does not re-decide:
-  quotes        boolean not null,
-  status        text not null default 'pending'
-                check (status in ('pending', 'running', 'done', 'error')),
-  claimed_at    timestamptz,   -- the lease (§3.2 step 7)
-  -- outcome, written by the worker from RefreshPricesReport (prices.server.ts:640-643):
-  requested     integer,
-  priced        integer,
-  stale         integer,
-  closes        integer,
-  observed      integer,
-  provider_failed boolean,
-  backfill_attempted   integer,
-  backfill_written     integer,
-  backfill_batch_failed boolean,
-  completed_at  timestamptz
+-- Every element must look like a ticker. Written as an immutable function because a CHECK
+-- may not contain a subquery, and `unnest` needs one.
+create function symbols_fetchable(symbols text[]) returns boolean
+  language sql immutable parallel safe strict as $$
+    -- `bool_and` ignores NULL rows, so a NULL element would otherwise pass.
+    select coalesce(bool_and(s is not null and s ~ '^[A-Za-z0-9.^=-]{1,15}$'), false)
+    from unnest(symbols) s
+  $$;
+
+create table fetch_request (
+  id           bigint generated always as identity primary key,
+  kind         text not null check (kind in ('quotes', 'history', 'probe')),
+  symbols      text[] not null,
+  range_from   date,
+  range_until  date,
+  requested_at timestamptz not null default now(),
+  claimed_at   timestamptz,                        -- the lease (§3.2 step 4)
+  payload      jsonb,                              -- ProviderQuote[] | ProviderHistory | SymbolProbe
+  error        text,
+  answered_at  timestamptz,
+
+  -- `array_length` is NULL for an empty array and a NULL CHECK passes; `cardinality` is 0.
+  constraint fetch_request_symbols_bounded  check (cardinality(symbols) between 1 and 500),
+  constraint fetch_request_symbols_fetchable check (symbols_fetchable(symbols)),
+  constraint fetch_request_one_symbol       check (kind = 'quotes' or cardinality(symbols) = 1),
+  constraint fetch_request_range            check (
+    (kind = 'history') = (range_from is not null and range_until is not null)),
+  constraint fetch_request_range_order      check (range_until is null or range_until > range_from),
+  constraint fetch_request_range_floor      check (range_from is null or range_from >= date '1970-01-01'),
+  -- Bounded at both ends: an unbounded `range_until` is ~31 bits of attacker-chosen data
+  -- handed straight to Yahoo's `period2`. PostgreSQL accepts dates to year 5874897.
+  constraint fetch_request_range_ceiling    check (range_until is null or range_until <= current_date + 1),
+  constraint fetch_request_answer           check (
+    answered_at is null or (payload is not null) <> (error is not null))
 );
 
--- The work the app supplies with a refresh: which instruments need history, over what span.
--- Written by the app from selectBackfillCandidates (prices.server.ts:295-345); read-only to
--- the worker. This is why the worker needs no grant on `holding` or `position_set`.
-create table backfill_candidate (
-  refresh_request_id bigint not null references refresh_request(id) on delete cascade,
-  instrument_id      bigint not null references instrument(id),
-  range_from         date not null,
-  range_until        date not null,
-  primary key (refresh_request_id, instrument_id),
-  check (range_until > range_from),
-  check (range_from >= date '1970-01-01')
-);
-
-create table probe_request (
-  id            bigint generated always as identity primary key,
-  -- the covert-channel cap enforced where the app cannot bypass it (§2.5):
-  symbol        text not null check (symbol ~ '^[A-Za-z0-9.^=-]{1,15}$'),
-  requested_at  timestamptz not null default now(),
-  claimed_at    timestamptz,   -- the lease (§3.2 step 7)
-  -- verdict, written by the worker (SymbolProbe shape, price-provider.server.ts:631-643):
-  status        text check (status in ('ok', 'non-usd', 'unavailable')),
-  quote_type    text,
-  currency      text,
-  answered_at   timestamptz
-);
+create index fetch_request_unclaimed_idx on fetch_request (id) where claimed_at is null;
+create index fetch_request_sweep_idx     on fetch_request (requested_at);
 ```
 
-- **App side:** compute candidates, INSERT a request row and its candidate rows in one transaction,
-  then poll its own row (`completed_at` / `answered_at`) with a short deadline. The app sweeps old
-  rows opportunistically before inserting (the `upload_draft` precedent — scaffolding, not history,
-  so deletes are allowed and belong to the app); `on delete cascade` takes the candidate rows with
-  the request.
-- **Worker side:** claim atomically (`update … set claimed_at = now() where … and status is null`-
-  shaped, or `status = 'pending'` for refreshes), read the candidate rows for the claimed request,
-  UPDATE the outcome/verdict columns guarded on the claim. Never INSERTs requests, never DELETEs
-  anything.
-- **The candidate rows are also the retry pacing.** `selectBackfillCandidates` excludes instruments
-  with a `price_backfill` row younger than `BACKFILL_RETRY_INTERVAL` (`prices.server.ts:98`,
-  `:306-318`), and the worker writes those ledger rows. Between enqueue and completion the ledger
-  has not moved, so a second enqueue would re-pick the same instruments — which is exactly what
-  §3.4's dedupe rule prevents: while an open request exists the app does not enqueue another. The
-  bound (`BACKFILL_BATCH_SIZE`, `:87`) is applied app-side, where the query already applies it.
-- These are scaffolding tables like `upload_draft`, not history: the append-only rule
-  (`position_set`, prices) is untouched; `price_observation`, `price_poll` and `price_backfill`
-  remain the durable record of what was fetched.
+`current_date` is stable rather than immutable, so the ceiling has to be a CHECK the writer
+evaluates at insert (which is what it is) and not an index predicate; ticket 01 confirms the
+migration accepts it on the target version, and falls back to a fixed far-future ceiling if not.
 
-### 3.4 Route and ingest changes
+The whole constraint set was executed against PostgreSQL and each case checked: a multi-symbol
+`quotes` row and a single-symbol `history` row with a range are accepted; a `history` row without a
+range, a `quotes` row *with* one, a two-symbol `probe`, a backwards range, an empty array, a NULL
+element, a 16-character ticker, an embedded newline, a URL, and an unknown `kind` are all rejected
+by name. What they do **not** do is bind a compromised app, which owns the table and can drop them
+(§2.5) — they are the honest-app guard rail and the shape of the channel, not a lock. The two indexes are the ones the drain and the sweep use; the first is partial, so it stays
+the size of the backlog rather than the table.
 
-- **A domain module owns the mailbox, routes stay thin.** New `app/lib/refresh-mailbox.server.ts`
-  owns sweep, candidate selection, dedupe, insert, and the poll-to-deadline;
-  `app/routes/refresh.ts` keeps its current shape — one call, render the outcome (`run()`,
-  `refresh.ts:58`) — because a route that grows SQL and a "busy" rule has taken what the domain
-  owns (CLAUDE.md). Dedupe: an open `pending`/`running` row younger than the deadline means
-  `{ status: "busy" }` — the same meaning the held lock has today (`refresh.ts:72`). A row the
-  worker marked `running` keeps the caller polling to the deadline and typically resolves within it
-  (one run satisfies all open rows, §3.2). On deadline: a new outcome variant
-  `{ status: "worker-unresponsive" }`, rendered distinctly from `providerFailed` (Yahoo down, worker
-  fine) and `error` (database down). The route's `done` variant keeps reporting the quotes half only
-  (`refresh.ts:74-81`, by design at `:61-65`); the backfill counts land in the request row and the
-  log line, as they do today.
-- **The poller stays in the app and stops fetching.** `price-poller.server.ts` keeps its cadence
-  re-read and re-arm (`:8-11` — a Settings save still takes effect within one old cadence, no
-  restart), its market-hours decision about `quotes` (`:108-114`), and its `logBackfill` line
-  (`:146`). What changes is one call: `withRefreshLock(() => refreshPrices(provider, …))` becomes an
-  enqueue-and-await through the mailbox module, and the imports of `yahooPriceProvider`
-  (`:41`) and `withRefreshLock` go with it. `app/root.tsx:67` is untouched.
-- **The JS-off path waits the same way.** Today's document POST runs the refresh *before*
-  redirecting (`refresh.ts:38`, `:45-47`) — the reloaded page shows fresh prices because the POST
-  blocked on them. Under the mailbox it blocks the same ≤8s then redirects; on a worker-unresponsive
-  deadline the reload's unchanged as-of line is the honest signal, and that behaviour is stated in
-  the control's copy, not left to be discovered.
-- **The probe becomes a factory with one shared deadline.** New `app/lib/probe-mailbox.server.ts`
-  exports a factory returning a `ProbeSymbol`-shaped function (`price-provider.server.ts:649`) whose
-  deadline is shared across one `resolveAll` invocation: the resolution loop probes sequentially
-  (`instrument-resolution.server.ts:502-511`), so per-call deadlines would stack — six new symbols
-  against a dead worker must cost one ~5s wait, not six. After the shared deadline expires,
-  remaining calls return `{ status: "unavailable" }` immediately, preserving the never-throws
-  contract (`price-provider.server.ts:688-693`). Note the existing `unavailable` contract: it does
-  *not* block — the instrument is created anyway and the next refresh marks it stale
-  (`instrument-resolution.server.ts:513-515`); only `non-usd` refuses. The factory also
-  **pre-validates each symbol against the §3.3 pattern before inserting** and returns `unavailable`
-  for offenders without touching the mailbox: app-side symbol validation is trim-and-length-only
-  (`instrument-resolution.server.ts:308-312`), so "BRK/B" or a 16-character ticker would otherwise
-  turn the INSERT into a CHECK-constraint error where today's probe returns a clean `unavailable`
-  (create-anyway).
+- **App side:** insert a row, poll it to a deadline, read `payload` or raise on `error`. Rows are
+  swept opportunistically before inserting, on the `upload_draft` precedent — scaffolding, not
+  history (`uploads.server.ts:206-209` is the 24h shape to copy, and it comes with an index for the
+  same reason). The sweep removes answered rows older than 24h **and unanswered ones**, so a dead
+  worker cannot make the table grow without bound.
+- **Worker side:** claim, fulfil, answer. It never inserts and never deletes.
+- **Why not three tables:** the three kinds differ by two nullable date columns and a cardinality
+  rule, all expressible as CHECKs. Three tables would be three drains, three claim paths and three
+  grants for one transaction shape.
+- **Why not zero tables for the probe:** dropping the creation-time USD probe and letting the next
+  refresh refuse a non-USD quote is a real option, and it would delete the only place ingest waits
+  on a third party. It changes a product rule ("a non-USD refusal must leave nothing behind",
+  DESIGN.md §6.1) and is out of scope here — but it is worth asking once, because this slice makes
+  that wait longer, and §7 records it.
+
+### 3.4 What changes in the app
+
+Very little, which is the point.
+
+- **New module `app/lib/price-mailbox.server.ts`.** It exports `mailboxPriceProvider(budget)`
+  returning a `PriceProvider`, and `mailboxProbeSymbol(budget)` returning a `ProbeSymbol`
+  (`price-provider.server.ts:649`). Each call inserts a row, polls it, and returns the parsed
+  payload — or throws, for `getQuotes`/`getDailyCloses`, and returns `{ status: "unavailable" }`
+  for the probe, whose contract is never to throw (`:688-693`).
+- **One shared deadline budget per invocation, not per call.** A refresh makes up to six provider
+  calls (one `getQuotes`, up to `BACKFILL_BATCH_SIZE` = 5 `getDailyCloses`, `prices.server.ts:87`)
+  and ingest probes sequentially (`instrument-resolution.server.ts:502-511`). Per-call deadlines
+  would stack: against a dead worker one press would cost six timeouts and six new symbols would
+  cost six more. The budget is created once per `refreshPrices` invocation and once per `resolveAll`
+  invocation; when it is spent, later calls fail immediately. This is one helper serving both, not
+  two poll loops.
+- **A dead worker needs no new outcome.** `backfillCloses` already ledgers a per-instrument provider
+  throw as `providerFailed` and continues (`:537-540`); `refreshQuotes` already maps a provider
+  throw to `RefreshReport.providerFailed`. So the route's existing outcome union
+  (`refresh.ts:21-33`) and its renderer (`app/components/price-freshness.tsx:71`) are **unchanged**,
+  and the household sees "the feed could not be reached", which is true. Distinguishing "worker
+  down" from "Yahoo down" is an operator question, not a household one: it goes in the log line and
+  in a `docs/runbook.md` entry (ticket 05), and a distinct outcome variant remains additive later if
+  it is ever wanted.
+- **Two call sites swap a provider.** `price-poller.server.ts:41`/`:193` and `refresh.ts:14`/`:67`
+  stop importing `yahooPriceProvider` and construct the mailbox provider instead. `app/root.tsx:67`
+  is untouched. `requestRefresh` (`price-poller.server.ts:245-258`) and its upload caller
+  (`app/routes/upload/review.tsx:83`) are untouched.
 - **The in-process probe default goes away.** Ticket 04 makes `ResolutionDeps.probe` **required**
   and deletes the `probeSymbol` import and `?? probeSymbol` fallback from
   `instrument-resolution.server.ts:20,499` — otherwise the in-process Yahoo path stays in the app's
   module graph as a silent default for any future caller, exactly the off switch §3.6 refuses. The
-  one production call site passes the mailbox probe (`app/routes/upload/instruments.tsx:104`); tests
-  already inject fakes, except `tests/routes/upload-instruments.test.ts:84,162`, which call
+  one production call site passes the mailbox probe
+  (`app/routes/upload/instruments.tsx:104`); `tests/routes/upload-instruments.test.ts:84,162` call
   `resolveAll` with no deps and need a stub.
-- After ticket 04 the app's module graph value-imports nothing from `price-provider.server.ts`
-  (types cross freely) and the refresh path in the app is mailbox-only.
-- **Symbol validation, enforced at three sites:** the probe factory returns `unavailable` for
-  pattern-violating symbols before they reach the mailbox (above); the worker checks every symbol
-  against `^[A-Za-z0-9.^=-]{1,15}$` before it reaches a URL — for probes directly, and for the
-  refresh path via a validating wrapper around the two-method `PriceProvider` (since `refreshQuotes`
-  and `backfillCloses` stay untouched), where an excluded `instrument.symbol` is simply not fetched
-  and surfaces as `stale` in the quotes report or an unwritten candidate in the batch; and the
-  `probe_request` table carries the same pattern as a CHECK constraint (§3.3), so even a compromised
-  app cannot place an arbitrary payload in the mailbox. (Yahoo's own symbol alphabet: dots, carets,
-  dashes, `=X` currency pairs. The pattern was exercised against real and hostile inputs on
-  PostgreSQL: `BRK-B`, `^GSPC`, `EURUSD=X` and `0P0000XYZ1.TO` pass; `BRK/B`, a 16-character
-  ticker, an embedded newline, a URL and a quoted string all fail. `$` in a POSIX regex anchors at
-  end-of-string, not before a trailing newline.)
+- After ticket 04 nothing in the app's module graph value-imports `price-provider.server.ts` (types
+  cross freely).
+- **Symbol validation sits in two places, and only one of them is a security control.** The mailbox
+  module rejects a pattern-violating symbol before insert and returns `unavailable` for a probe —
+  app-side validation is trim-and-length-only (`instrument-resolution.server.ts:308-312`), so
+  "BRK/B" or a 16-character ticker would otherwise turn the insert into a constraint error where
+  today's probe returns a clean create-anyway verdict. That is ergonomics. The CHECK constraint is
+  the control, because it binds when the app is the attacker.
+- **Latency, stated rather than discovered.** Each provider call is now a round trip: app insert →
+  worker notices (≤ drain interval) → Yahoo → app notices (≤ poll interval). At a 250 ms drain and
+  a 100 ms poll that is ~0.35 s of overhead per call, so a full refresh with a five-instrument
+  batch adds ~2 s to a press that already spends seconds in Yahoo. Those intervals, not one second,
+  are what the arithmetic requires; four polls a second against one partial index on an otherwise
+  idle household database is not a load, and ticket 02 measures rather than assumes it.
 
 ### 3.5 The `portfolio_worker` role
 
 Postgres is default-deny: a fresh role can connect and see the catalog, and nothing else (PG15+ even
-revoked `CREATE` on `public`). So the role is defined by what it is *granted*, which is exactly
-this. **Every statement below was executed under `SET ROLE portfolio_worker` against a live cluster
-carrying this repository's full migration set**, and every table in the "invisible" list was
-confirmed to raise `permission denied`:
+revoked `CREATE` on `public`). The role's entire world is the mailbox:
 
 ```sql
--- 0012_price_mailbox.sql (same migration; idempotent DO block around CREATE ROLE)
+-- 0012_price_mailbox.sql, guarded per §3.5's external-Postgres note below
 create role portfolio_worker nologin
-  nosuperuser nocreatedb nocreaterole connection limit 10;
+  nosuperuser nocreatedb nocreaterole connection limit 5;
 
--- select(quote_type): writeQuoteType's WHERE reads it (prices.server.ts:916-921);
--- UPDATE requires SELECT on columns the condition reads.
-grant select (id, symbol, price_source, quote_type), update (quote_type)
-  on instrument to portfolio_worker;
-grant select, insert, update on quote              to portfolio_worker;  -- upsert (:871-891)
-grant select, insert, update on price_daily        to portfolio_worker;  -- upsert (:937-949)
-                                                                         -- + backfill (:979-990)
-grant select, insert on price_observation          to portfolio_worker;  -- arbiter + RETURNING
-grant insert on price_poll                         to portfolio_worker;
-grant insert on price_backfill                     to portfolio_worker;  -- the attempt ledger
-grant select on schema_migrations                  to portfolio_worker;
-grant select, update (status, claimed_at, requested, priced, stale, closes, observed,
-                      provider_failed, backfill_attempted, backfill_written,
-                      backfill_batch_failed, completed_at)
-  on refresh_request to portfolio_worker;
-grant select on backfill_candidate                 to portfolio_worker;
-grant select, update (status, claimed_at, quote_type, currency, answered_at)
-  on probe_request to portfolio_worker;
+grant select on schema_migrations to portfolio_worker;
+grant select, update (claimed_at, payload, error, answered_at)
+  on fetch_request to portfolio_worker;
+
+-- Not grants: PUBLIC defaults the role inherits whether or not anyone grants it anything.
+revoke connect on database postgres, template1 from public;
 ```
 
-- **Column grants where a table mixes public and private:** `instrument` only. The worker sees
-  id/symbol/source/quote-type, not `name` or `classification_id`. Everywhere else the whole table is
-  public market data or a mailbox row, and a whole-table grant is the honest shape.
-- **The three SELECT subtleties**, each of which a first draft missed and a live run caught. An
-  `UPDATE … WHERE` requires SELECT on the columns the condition reads (`instrument.quote_type`); an
-  `ON CONFLICT DO UPDATE` requires SELECT on every column its expressions read via `excluded.*`
-  (`quote`'s five, `price_daily.close`); a `RETURNING` clause requires SELECT on what it returns
-  (`price_observation.instrument_id`, `price_daily.instrument_id`).
-- **No DELETE anywhere.** A compromised worker can poison prices (it is the price writer; §8) but
-  cannot erase the append-only `price_observation` / `price_backfill` forensics or touch position
-  history.
-- **`price_backfill` is INSERT-only for the worker.** The ledger's *reader* is the app —
-  `selectBackfillCandidates`'s retry clock and the Settings gap list (`backfillGaps`,
-  `prices.server.ts:392-462`, read at `app/routes/settings/prices.tsx:29`). The worker records
-  attempts and never consults them.
-- **Invisible entirely, verified by a permission error on each:** `account`, `person`, `holding`,
-  `position_set`, `holding_valued`, `manual_networth`, `upload_draft`, `column_mapping`,
-  `classification`, `instrument_alias`, `app_setting`, and `instrument.name` /
-  `instrument.classification_id`. `holding_valued_at(d)` and `latest_position_set(…)` are both
-  `SECURITY INVOKER` (the default), so calling them raises `permission denied for table
-  position_set` rather than leaking through — checked, not assumed.
+That is the whole grant list. Not `instrument`, not `quote`, not `price_daily`, not
+`price_observation`, not `price_poll`, not `price_backfill`, not `app_setting`, and — the two the
+first repair could not avoid — not `holding` and not `position_set`.
+
+- **No INSERT and no DELETE anywhere.** The worker cannot create work for itself, cannot erase the
+  mailbox, and cannot touch a price or a position.
+- **Verified, not reasoned.** An earlier and much wider grant list was executed statement by
+  statement under `SET ROLE portfolio_worker` against a cluster carrying this repository's whole
+  migration set; every table on the invisible list raised `permission denied`, including through
+  `holding_valued_at(d)` and `latest_position_set(…)`, which are plain `language sql` functions with
+  no `SECURITY DEFINER` (`migrations/0002_holding_valued.sql:46-49`,
+  `0006_annual_dividend.sql:178-182`) and so fail on their base tables rather than leaking. This
+  design strictly narrows that list, and ticket 01 re-runs the check against what actually ships.
 - `schema_migrations` is created by the migration *runner* (`server/migrations.ts:14`), not by a
   migration file, so it already exists by the time 0012 runs and the grant lands.
-- Identity-column sequences need no separate grant — verified empirically (every id in this schema
-  is `generated always as identity`; inserts into `price_poll`, `price_backfill` and
-  `price_observation` succeeded under these exact grants with no sequence privileges).
-  `LISTEN`-free design needs no notification grants; advisory locks require none;
-  `withRefreshLock`'s session-lock discipline (`prices.server.ts:120-150`) works unchanged.
-- `connection limit 10` matches the worker's real budget (§3.2, with the pool's `max` pinned in
-  ticket 02) — defence-in-depth against a runaway, never the boundary.
+- Identity-column sequences need no separate grant — verified empirically, and it is a property of
+  this schema rather than a general rule: every surrogate key in `migrations/` is `generated always
+  as identity`, and the same insert against a `serial` column fails with `permission denied for
+  sequence`.
+- `connection limit 5` is generous for a process holding one small pool and answering a healthcheck.
+  It is defence-in-depth against a runaway, never the boundary, and must never be what fails a
+  healthy refresh.
+- **"Defined by what it is granted" is not quite true, and the gap is where the attacks are.** A
+  role also carries every PUBLIC default, and three of them were confirmed live against this schema
+  under exactly the grants above. `CONNECT` on the `postgres` and `template1` databases is PUBLIC
+  (revoked above; nothing of the household's is there, but the role should not have reach it never
+  needs). `EXECUTE` on functions is PUBLIC, so
+  `has_function_privilege('portfolio_worker','holding_valued_at(date)','EXECUTE')` is true — harmless
+  only because the function is `SECURITY INVOKER` and fails on its base tables, which is a property
+  worth a test rather than an assumption. And **large-object creation is gated by nothing at all**:
+  `select lo_from_bytea(0, …)` as the worker wrote 98 kB into `pg_largeobject` with no table grant
+  involved. No `REVOKE` closes that one — it is a residual (§8), not a fix, and the same is true of
+  `CREATE TEMP TABLE`, which PUBLIC also holds.
+- **The worker pool's `max` must be pinned, and there is only one place to do it.** `createPool`
+  (`server/db.ts:45-53`) takes a connection string and no options, and it is the enforced single
+  construction site — the one that registers the `numeric`/`int8`/`date` parsers
+  (ARCHITECTURE.md:337). Ticket 02 widens *that* signature. A second `new pg.Pool` in
+  `price-worker.ts` would be the exact failure the invariant exists to prevent.
+
+**Migration 0012 must not hard-fail on an external Postgres.** `docs/operating.md:193` states the
+only privilege requirement for that mode — "the role needs to be able to create tables" — and
+migrations run at every container start against whatever `DATABASE_URL` names. `CREATE ROLE` needs
+`CREATEROLE` or superuser, so an operator following the documented external-Postgres instructions
+would have the entrypoint fail (`docker-entrypoint.sh:9` is `set -eu`) and the container never
+start. The role creation and its grants therefore sit in a DO block that catches
+`insufficient_privilege`, raises a notice naming the manual step, and lets the migration succeed;
+ticket 05 documents the manual step in the external-Postgres section, whose only privilege sentence
+today is `:193`. Related and also unstated today: **roles are cluster-global while this app's
+databases are not.** Two instances on one cluster — a staging database beside production, which the
+external-Postgres mode invites — share one `portfolio_worker`, and each instance's provision step
+silently rotates the other's credential on every boot. Ticket 05 says so; making the role name
+instance-specific is a larger change than this slice needs.
 
 **The role means nothing while the superuser password is a default.** `compose.yaml:59` falls back
-to `POSTGRES_PASSWORD:-portfolio` — written when every container on the network was trusted. This
-slice puts the low-trust, egress-capable container on the same network as `db`; a compromised worker
-would simply reconnect as `portfolio`/`portfolio` and read everything. Ticket 04 makes
-`POSTGRES_PASSWORD` required (`:?`) — which also forces re-deriving the two `DATABASE_URL` defaults
-that embed `portfolio:portfolio` today (`compose.yaml:126`, `:204`; the coupling `compose.yaml:56-57`
-warns about) to `postgres://portfolio:${POSTGRES_PASSWORD}@db:5432/portfolio`, or app and dump
-crash-loop on first start with a non-default password — and the **checked-in `.env.example:23`**,
-whose explicit `DATABASE_URL=postgres://portfolio:portfolio@…` would override the re-derived default
-for anyone following the documented `cp .env.example .env` flow, is updated in the same ticket, along
-with the commented `#POSTGRES_PASSWORD=portfolio` at `:104`.
+to `POSTGRES_PASSWORD:-portfolio`. This slice puts a low-trust, egress-capable container on the same
+Postgres as the household's data; a compromised worker would simply reconnect as
+`portfolio`/`portfolio` and read everything. **That fix is ticket 00, and it lands first** — it is
+independent of everything else here, it is worth doing whether or not the rest is ever built, and
+the alternative is a window (from ticket 03's deploy to ticket 04's cutover) in which the new
+container is attached to `db` while the guessable password still works.
 
-Two traps ticket 04 must not walk into:
+Ticket 00 makes `POSTGRES_PASSWORD` required (`:?`), which forces re-deriving the two `DATABASE_URL`
+defaults that embed `portfolio:portfolio` (`compose.yaml:126`, `:204`; the coupling `:56-57` warns
+about) to `postgres://portfolio:${POSTGRES_PASSWORD}@db:5432/portfolio`, and updating
+`.env.example:23` and its commented `#POSTGRES_PASSWORD=portfolio` at `:104`, or the documented
+`cp .env.example .env` flow overrides the re-derived default. Two traps it must not walk into:
 
-- **`smoke-test.sh:108-116` asserts that a bare `up` names one of the four gate variables.** It runs
-  with `--env-file /dev/null` and no `POSTGRES_PASSWORD` exported, and `compose.yaml:59` sits in the
-  *first* service in the file, ahead of the gate's `:?`s at `:248-254`. If Compose reports only the
-  first missing variable, that assertion inverts. It must be updated deliberately, not discovered.
-- **Interpolating a raw password into a URL breaks on URL delimiters** (`/`, `?`, `#` — and
-  percent-encoding the shared variable breaks provisioning, which would store the encoded text
-  literally), so the documented password alphabet is restricted to URL-safe characters and the
-  provision step validates it.
+- **`smoke-test.sh:109-116` will invert.** It runs `docker compose --env-file /dev/null config` with
+  only the four gate variables unset and asserts the refusal names one of them. `db`
+  (`compose.yaml:45`) precedes `gate` (`:233`), so a newly required `POSTGRES_PASSWORD` at `:59` is
+  what Compose reports first.
+- **Interpolating a raw password into a URL breaks on URL delimiters** (`/`, `?`, `#`), and
+  percent-encoding the shared variable breaks the `ALTER ROLE`, which would store the encoded text
+  literally. Hence a documented URL-safe alphabet, validated where the password is used.
 
-The runbook (ticket 05) states the upgrade steps for existing installs: the initdb-time password is
-baked into the cluster, so operators must also `ALTER ROLE portfolio PASSWORD …`, not just edit
-`.env`.
-
-**Credential provisioning.** The grants and the `NOLOGIN` role are schema history and live in the
-migration. The *login credential* is operator config: a new entrypoint step
-(`server/provision-worker-role.ts`, running as `portfolio` after `migrate.ts` in
-`docker-entrypoint.sh:12`) executes `ALTER ROLE portfolio_worker LOGIN PASSWORD $WORKER_DB_PASSWORD`
-when the variable is present — and **creates the role first if it is missing**, because a restore is
-exactly where it will be: the dump is per-database (`scripts/dump-loop.sh:262` runs
+**Credential provisioning.** The role and its grants are schema history and live in the migration.
+The *login credential* is operator config: `server/provision-worker-role.ts`, running as `portfolio`
+after `migrate.ts` in `docker-entrypoint.sh:12`, sets the password when `WORKER_DB_PASSWORD` is
+present — and **creates the role first if it is missing**, because a restore is exactly where it
+will be. The dump is per-database (`scripts/dump-loop.sh:262` runs
 `pg_dump -d "$DATABASE_URL" --format=custom`, no `--create`, no roles) while roles are
 cluster-global, so a dump restored onto a fresh cluster carries `schema_migrations` (migration 0012
 will never re-run) and ACL entries naming a role that does not exist. **Verified, not reasoned:**
 restoring such an archive onto a cluster without the role stops at the first ACL entry —
-`pg_restore: error: … role "portfolio_worker" does not exist / Command was: GRANT SELECT(id) ON
-TABLE public.instrument TO portfolio_worker` — and with `--single-transaction` the whole restore
-rolls back. The restore runbook (ticket 05) therefore bootstraps the role *before*
-`pg_restore --exit-on-error`. The app holding this credential grants it nothing — it already connects as the
-superuser that created the role. Config surface: `app` gains optional `WORKER_DB_PASSWORD`, **added
-to `configSchema`** (`server/config.ts:35-94`) so the provision step reads it through `loadConfig` —
-ARCHITECTURE.md §4.2's rule that `server/config.ts` is the only reader of `process.env`
-(`ARCHITECTURE.md:345`) survives intact; `worker` reuses the same schema with its own
-`DATABASE_URL`. DESIGN.md §10.1's env table (`:944-951`) gains the rows and the reasoning; the
-compose header's "every other setting has a working default" contract (`compose.yaml:20`) is
-amended, because after this slice two additional variables are deliberately without defaults.
+`pg_restore: error: … role "portfolio_worker" does not exist` — and with `--single-transaction` the
+whole restore rolls back, so the symptom is a restore that appears to do nothing. The restore
+runbook (ticket 05) therefore bootstraps the role *before* `pg_restore --exit-on-error`.
+
+**`ALTER ROLE … PASSWORD` takes no bind parameters, so do not send the password at all.** Compute
+the SCRAM verifier in Node — `SCRAM-SHA-256$4096:<salt>$<StoredKey>:<ServerKey>` — and pass *that*
+as the literal; PostgreSQL stores it verbatim and the original still authenticates. This was
+verified end to end: `alter role … password '<verifier>'` followed by a successful login with the
+cleartext. Three things fall out of it. The cleartext never crosses the wire. The literal is base64
+and `$`-delimited, so it is injection-proof by construction rather than by a regex. And it stays out
+of the database log — which matters, because `log_min_error_statement` defaults to `error`, so a
+statement that fails for *any* reason is logged in full, and the `db` container's log is 30 MB of
+json-file on the operator's disk (`compose.yaml:38-42`). Build the statement with
+`select format('alter role %I login password %L', $1, $2)` and execute the result; the validated
+alphabet is then a third line of defence, not the first.
+
+The alphabet restriction still earns its place on the URL side, and the runbook should say why per
+character rather than "URL-safe": `/`, `?` and `#` truncate or reparse the authority; `@` re-splits
+the userinfo; and `%` is percent-*decoded* by `pg-connection-string`, so `abc%41def` in `.env`
+provisions the literal text and connects as `abcAdef` — a silent mismatch that reads to an operator
+as a wrong password. Worth stating too: the value is visible in `docker inspect`,
+`docker compose config` and `/proc/1/environ`, and it sits in the **app's** environment as well as
+the worker's. That is harmless — the app is already the superuser — but an operator should read it
+here rather than discover it. Config surface: `app` gains optional
+`WORKER_DB_PASSWORD` in `configSchema` (`server/config.ts:35-94`) so the step reads it through
+`loadConfig` — ARCHITECTURE.md §4.2's rule that `server/config.ts` is the only reader of
+`process.env` (`:345`) survives intact.
 
 ### 3.6 Development and tests
 
@@ -617,64 +721,72 @@ amended, because after this slice two additional variables are deliberately with
   wanted — with its own env file, because `.env`'s `DATABASE_URL` is the `portfolio` superuser
   (`docs/developing.md:57`) and running the internet-facing worker with full database access in
   development would skip the very privilege boundary this slice exists for. `docs/developing.md`
-  gains the recipe: a one-time local provisioning command (the same `provision-worker-role.ts`) plus
-  an `.env.worker` whose `DATABASE_URL` names `portfolio_worker`. Without a worker running, screens
-  serve stored prices, "Refresh now" reports worker-unresponsive, and feed-symbol ingest probes come
-  back `unavailable` after one shared ~5s deadline — the instruments are **created anyway**, unpriced
-  until a worker runs (the existing `unavailable` contract; only `non-usd` refuses). The two
-  existing recipes that assume an in-process fetch — `docs/developing.md:391-434` ("Exercise a
-  backfill locally") and `:435-474` (the split convention) — are updated in the same ticket.
+  gains the recipe, and the two existing recipes that assume an in-process fetch (`:391-434`
+  "Exercise a backfill locally", `:435-474` the split convention) are updated with it. Without a
+  worker: screens serve stored prices, a refresh reports `providerFailed` after one shared budget,
+  and ingest probes come back `unavailable` — instruments **created anyway**, unpriced, which is the
+  existing contract (`instrument-resolution.server.ts:513-515`); only `non-usd` refuses.
   **Deliberately no `PRICE_FETCH=in-process` fallback mode:** a second code path would keep the
   yahoo import reachable from the app and give the security property an off switch. (Assumption to
   confirm with the owner; reversing it later is additive.)
-- **Tests keep running through the app-side fixtures.** `refreshQuotes`, `backfillCloses`,
-  `price-provider`, and poller tests are untouched in substance (the modules don't move; only who
-  calls them does, plus `backfillCloses`'s candidate parameter). New tests, all against real
-  Postgres per house style:
-  - the mailbox probe returns each `SymbolProbe` verdict, shares one deadline across a batch, and
-    maps expiry to `unavailable`;
-  - the refresh mailbox module writes candidate rows from `selectBackfillCandidates`, dedupes onto
-    an open request, and reports `worker-unresponsive` on deadline;
-  - worker drain: N pending refresh rows satisfied by one report; a request with candidate rows
-    backfills exactly those instruments; probe fulfilment writes the verdict columns;
-  - **the permission pin:** with `SET ROLE portfolio_worker`, a full `refreshPrices`-equivalent run
-    (quotes plus a candidate-driven batch) completes against seeded fixtures — and the role's
-    **complete ACL is snapshot-asserted**, not spot-checked. The test enumerates every table
-    privilege from `information_schema.role_table_grants` and every column privilege from
-    `information_schema.role_column_grants` *not already implied by a table grant*, and compares
-    both against the exact §3.5 allowlist, so a later migration that grants `person`, a private
-    `instrument` column, or any DELETE fails the suite by name. A single `select account throws`
-    assertion would stay green through exactly the widening it exists to catch.
+- **Almost every existing test is untouched**, which is the strongest evidence the seam is in the
+  right place. `refreshQuotes`, `backfillCloses`, `refreshPrices`, `price-provider` and the poller
+  suites all drive a fake `PriceProvider` already; none of them knows or cares that production now
+  passes a different implementation. The only existing tests that change are
+  `tests/routes/upload-instruments.test.ts:84,162`, which get a probe stub.
+- New tests, real Postgres per house style:
+  - the mailbox provider round-trips each of the three kinds, shares one budget across a
+    `refreshPrices` invocation, and surfaces a spent budget as a throw (and as `unavailable` for the
+    probe);
+  - a payload whose money arrived as a JSON number is refused rather than coerced;
+  - worker fulfilment: a claimed row is answered; an expired lease is reclaimed; a landed answer
+    survives a second write; a pattern-violating symbol never reaches the provider;
+  - **the permission pin, and it must not be a grant snapshot.** Enumerating
+    `information_schema.role_table_grants` is blind to the two most likely widenings, both confirmed
+    live: `grant pg_read_all_data to portfolio_worker` and `grant select on account to public` each
+    leave the grant rows byte-identical while the role gains `account`. The grant views exclude
+    PUBLIC by definition, and role membership lives in `pg_auth_members`. So the pin asks the
+    question that resolves both: **`has_table_privilege` and `has_column_privilege` for the role
+    over every table and column in `pg_class`/`pg_attribute`**, compared against §3.5's exact list —
+    `has_table_privilege('portfolio_worker','account','select')` is `f` today and flips to `t` under
+    either widening. Add an emptiness assertion on `pg_auth_members` for the role, and cover
+    `information_schema.routine_privileges` too, since `EXECUTE` also defaults to PUBLIC.
+  - the two SQL functions are asserted to *fail on their base tables* under `SET ROLE`, which is the
+    property that matters — the role holds `EXECUTE` on them either way, so a future
+    `SECURITY DEFINER` is the regression this catches.
+  - A permission error aborts the transaction `withDatabase` (`tests/support/database.ts:92`) gives
+    the test body, so each denial takes a savepoint — the pattern the house already uses, with its
+    reasoning, at `tests/refresh-quotes.test.ts:778-798`.
 
-  A permission error aborts the enclosing transaction, and `withDatabase`
-  (`tests/support/database.ts:92`) gives the whole test body one. Wrap each expected-denial
-  assertion in a **savepoint** rather than settling for one denial per test — verified on
-  PostgreSQL: `savepoint s; select … from holding; rollback to s;` leaves the transaction usable,
-  so one test can assert the whole invisible list and then keep going. Kysely 0.29.5 exposes
-  `trx.savepoint(name)`.
+### 3.7 Alternatives considered
 
-### 3.7 Alternatives considered for the backfill's private reads
-
-The backfill's candidate query is the only part of a refresh that needs household data (§2.4).
-Three ways to keep it away from the worker; the third is what §3.2 takes.
-
-- **Grant the worker `holding(instrument_id, position_set_id)` and
-  `position_set(id, as_of_date)`.** Smallest possible change — two column grants, no new table, the
-  worker keeps its own cadence loop. Rejected because it falsifies §1's claim in its own first
-  paragraph: the worker would read the household's holdings table. The disclosure is genuinely
-  small (which instruments appear in which position sets, and those sets' dates — no amounts, no
-  accounts, no people, and the set cannot be tied to an account) and it would have been defensible
-  with the claim restated. It was rejected on the principle that a security slice should not spend
-  its headline property to save a table.
-- **A view owned by `portfolio`, granted to the worker.** A `SECURITY INVOKER = false` view returns
-  candidates without exposing the base tables — Postgres's own mechanism, and consistent with this
-  repo putting valuation rules in SQL. Rejected because the rule would then exist a fourth time:
-  `selectBackfillCandidates`, `backfillGaps`, their pinned tests, and now SQL. Commit `dd68e49`
-  fought precisely that duplication. Consolidating all of them onto one view is a plausible future
-  refactor and is not this slice's business.
-- **The app supplies the work; the worker only fetches.** Taken. Costs one more mailbox table and
-  leaves the cadence timer in the app; buys the literal §1 claim, deletes a ticket, deletes the
-  serialised executor, and removes `app_setting` from the grant list.
+- **The worker runs `refreshPrices`; the app supplies the backfill's candidates.** The first repair
+  after the drift was found. Rejected on review: it makes the worker re-implement a composition
+  whose failure rule depends on a module-private class, needs `refreshPrices` and `backfillCloses`
+  re-signed, needs nine mailbox outcome columns mirroring a type that has already churned once,
+  needs a candidate table that turned out to lack `symbol` and carry a dead `range_until`, and
+  rewrites the poller's test suite. §2.4 has the full list. Every one of those costs is paid to move
+  code that did not need to move.
+- **The worker runs `refreshPrices` and reads `holding(instrument_id, position_set_id)` and
+  `position_set(id, as_of_date)` directly.** The smallest possible change to the first draft — two
+  column grants. What it actually discloses is narrow: which instruments appear in which position
+  sets and those sets' dates, with no amounts, no accounts and no people, and a position set cannot
+  be tied to an account. It was tempting to reject this as "spending the headline property", but
+  that reason is vanity — §8 already accepts that the worker learns which symbols the household
+  tracks. The real reason is the one above: it keeps the worker running the domain, and the
+  household read is the least of what that costs. There is a genuine difference in exposure, worth
+  stating: the mailbox discloses the symbols under fetch while a request is open; the grant
+  discloses the whole holdings graph, continuously.
+- **A view owned by `portfolio`, granted to the worker.** Would return candidates without exposing
+  the base tables: a plain `CREATE VIEW` already runs with the owner's privileges (`security_invoker`
+  is a view *reloption*, spelled with an underscore, and `false` is the default since PostgreSQL 15
+  — the earlier draft's `SECURITY INVOKER = false` is not valid syntax). Rejected for the same root
+  reason, and the count the earlier draft gave against it was wrong anyway: the predicate is one
+  shared `sql` fragment today, `NO_CLOSE_BY_FIRST_HELD` at `prices.server.ts:253-258`, used by both
+  `selectBackfillCandidates:320` and `backfillGaps:420`. Consolidating those onto one view is a
+  plausible future refactor and is not a security change.
+- **An HTTP API on the worker**, a **LISTEN/NOTIFY doorbell**, **separate images now**, and a
+  **Go worker** are recorded in ADR-0010 with their arguments.
 
 ## 4. Tickets
 
@@ -683,139 +795,176 @@ alone.
 
 | # | Ticket | Blocked by |
 |---|--------|------------|
-| 01 | Migration `0012_price_mailbox.sql`: the three mailbox tables (symbol and date-range CHECKs), `portfolio_worker` role + grants (as §3.5, including the three SELECT subtleties); `server/provision-worker-role.ts` + entrypoint step + its Dockerfile COPY; optional `WORKER_DB_PASSWORD` in `configSchema`; regenerate `database.generated.ts`; the ACL snapshot permission-pin test | Nothing |
-| 02 | `server/price-worker.ts`: config reuse, ledger check, 1-2s pool-based drain loop (one report satisfies all claimed rows), lease claims + guarded writes, provider deadline watchdog on both methods, `versionCheck: false`, symbol validation, pinned pool `max`; `backfillCloses` takes its candidates as a parameter; Dockerfile carries the worker entry + its closure; worker-side fulfilment tests | 01 |
-| 03 | **Deploy the worker alongside** (app untouched and still fetching): compose `worker` service (hardening, logging anchor, `restart: unless-stopped`, DB-connect healthcheck, `WORKER_DB_PASSWORD`), `worker-db` + `egress-worker` networks with `db` attached to `worker-db` (everything else stays on the default network for now); `compose.dev.yaml` worker override reusing the locally built `portfolio-app:dev` image so smoke certifies the checkout, not a GHCR release; `smoke-test.sh` service lists (`:71`, `:342-350`, `:365`, `:379-385`, `:401`), published-port assertion, and a seeded mailbox row the worker must fulfil in the built image | 02 |
-| 04 | **App cutover and lockdown**: `refresh-mailbox.server.ts` + thin `refresh.ts` + the poller's enqueue + `probe-mailbox.server.ts` factory (shared deadline, pattern pre-validation) + make `ResolutionDeps.probe` required (delete the `probeSymbol` default, `instrument-resolution.server.ts:20,499`; fix `tests/routes/upload-instruments.test.ts:84,162`) + `instruments.tsx:104` wiring; the full six-network topology (§3.1); `POSTGRES_PASSWORD` required with the app/dump `DATABASE_URL` defaults re-derived (`compose.yaml:126`, `:204`), `.env.example:23` and `:104` updated, and `smoke-test.sh:108-116`'s missing-variable assertion updated; compose header prose (`:1-26`); smoke: egress + DNS + app-unreachable-from-worker + gate-unreachable-from-worker, re-point the in-container yahoo-import check (`:265-268`) at `worker`; route tests | 03 |
-| 05 | Docs: DESIGN.md §6.2 (`:443-502`) + §10 row `:826` + §10.1 services block `:876-903` and env table `:944-951`; ARCHITECTURE.md §3.1 `:161-163`, §4.2 rows `:338`/`:345`, §11.2 `:1959`; ADR-0010; ADR-0011's banner and renumbered references; CONTEXT.md entries; `docs/operating.md`: engine floor at `:84-92`, the service table `:28-33`, upgrade runbook, restore `:870-904` and rehearsal `:906-929`, external Postgres `:184-197`; `docs/developing.md` dev-worker recipe and the two stale recipes; `docs/specs/README.md` index row and ticket-directory line | 04 |
+| 00 | **Require `POSTGRES_PASSWORD`**: `:?` at `compose.yaml:59`, the app/dump `DATABASE_URL` defaults re-derived (`:126`, `:204`), `.env.example:23` and `:104`, the compose header's "every other setting has a working default" (`:20`), the documented URL-safe alphabet, `smoke-test.sh:109-116` fixed and a new assertion that the variable is required by name | Nothing |
+| 01 | Migration `0012_price_mailbox.sql`: `symbols_fetchable`, `fetch_request` with its constraint set and two indexes, `portfolio_worker` + its two grants and the PUBLIC revokes, inside a privilege-guarded DO block; `server/provision-worker-role.ts` + entrypoint step + Dockerfile COPY; optional `WORKER_DB_PASSWORD` in `configSchema`; regenerate `database.generated.ts`; the `has_table_privilege`-based ACL pin and the denial list | 00 |
+| 02 | `matchKey` to a leaf module; `server/price-worker.ts` — config reuse, ledger check, claim/fulfil/answer drain, lease reclaim, guarded answers, the bounded provider with its abandoned-promise guard, `versionCheck: false`; `createPool` gains a pool-size option; Dockerfile carries the worker entry and its closure; fulfilment tests | 01 |
+| 03 | **Deploy the worker alongside** the still-fetching app: compose `worker` service, `worker-db` + `egress-worker` networks, `compose.dev.yaml` override, `smoke-test.sh` service lists, and a seeded `fetch_request` the worker must answer in the built image | 02 |
+| 04 | **App cutover and lockdown**: `app/lib/price-mailbox.server.ts` (provider + probe, one shared budget), the two provider swaps, `ResolutionDeps.probe` made required; the full seven-network topology (`app` and `gate` split apart); the total egress/DNS/`Internal` assertion set | 03 |
+| 05 | Docs: DESIGN.md, ARCHITECTURE.md, ADR-0010, ADR-0011's banner, CONTEXT.md, `docs/operating.md` (Engine floor, service table, restore and rehearsal, upgrade, external Postgres), `docs/runbook.md`, `docs/developing.md`, `docs/specs/README.md` | 04 |
 
-Everything is a chain (01 → 02 → 03 → 04 → 05). The original ticket 01 (masking-policy extraction)
-is deleted — see §2.4.
+A chain, 00 → 05. Ticket 00 is the one with standing value if the slice is never finished.
 
-**Deploy coupling: none — every ticket leaves a deployable main.** After 03 the worker runs alongside
-the still-fetching app, draining a mailbox the app does not yet write to; 04 is the single release
-where the app stops fetching and loses its internet route. There is no commit from which a deploy has
-no price refresh.
+**Deploy coupling: none — every ticket leaves a deployable main.** After 03 the worker runs beside
+the still-fetching app, draining a mailbox nothing writes to; 04 is the single release where the app
+stops fetching and loses its internet route. There is no commit from which a deploy has no price
+refresh.
 
 ## 5. Acceptance (slice level)
 
-- From `app` and `db`: outbound TCP fails (`fetch('https://example.com')` errors) **and external DNS
-  resolution fails** (the unpatched-engine exfil channel, asserted separately). From `worker`, Yahoo
-  resolves and the app's screens show fresh prices. These become smoke-test assertions in tickets
-  03-04.
-- From `worker`: `app:3000` and `gate:4180` are **unreachable** (the gate-bypass and the auth
-  sidecar's client secret a shared network would expose), and the worker container fulfils a seeded
-  mailbox row *in the built image*, not merely starts a process.
-- "Refresh now" round-trips through the mailbox within the deadline on all five screens; JS-off
-  behaviour unchanged (blocks ≤ deadline, then redirects).
-- A refresh still backfills: an instrument whose position history predates its spine gets its closes,
-  and its `price_backfill` ledger row, through the mailbox — with the worker holding no grant on
-  `holding` or `position_set`.
-- Feed-symbol ingest probes resolve through the mailbox; a non-USD symbol still refuses cleanly with
-  nothing written; a dead worker costs one shared deadline, not one per symbol.
-- The permission-pin test fails if anyone widens the worker's grants or reads a private table through
-  the worker role.
-- A fresh `docker compose up` with the two required env vars set (`WORKER_DB_PASSWORD` new,
-  `POSTGRES_PASSWORD` newly required), including via the documented `cp .env.example .env` flow,
-  comes up healthy end to end; the same command without them fails fast at interpolation with a
-  message pointing at the runbook.
+- **The egress assertion set is total, not partial.** Outbound TCP and external DNS resolution both
+  fail from `app`, `db` **and `dump`** — `dump` holds the whole household's finances in plaintext on
+  a bind mount and is the highest-value container to attach to an egress network by accident, and no
+  earlier draft asserted anything about it. `worker`, `gate` and `caddy` are asserted to *have* the
+  route, so the set says something about every service rather than about three of them.
+- `docker network inspect` reports `"Internal": true` for `backend`, `worker-db`, `caddy-app` and
+  `caddy-gate` — one line that names the property directly, rather than inferring it from a failed
+  `fetch`.
+- The positive control does not depend on Yahoo. Asserting "from `worker`, Yahoo resolves" couples
+  CI to a third party's uptime and rate limits, and the day it flakes someone relaxes it and the
+  negative assertions stop being falsifiable. Use any DNS name and a TCP connect.
+- From `worker`: `app:3000` and `gate:4180` are **unreachable**, and the worker answers a seeded
+  `fetch_request` *in the built image*, not merely starts a process. The seeded row is a `probe` for
+  a symbol that does not exist, and an unreachable feed still writes `error` and `answered_at` — so
+  the assertion proves the loop and the Dockerfile copy set, and deliberately proves nothing about
+  egress. Ticket 04's assertions do that.
+- "Refresh now" round-trips through the mailbox on all five screens; JS-off behaviour unchanged
+  (blocks, then redirects).
+- A refresh still backfills end to end, with the worker holding no grant on any table but
+  `fetch_request`.
+- Ingest probes resolve through the mailbox; a non-USD symbol still refuses cleanly with nothing
+  written; a dead worker costs one shared budget, not one wait per symbol.
+- The permission pin fails if anyone widens the worker's grants.
+- A fresh `docker compose up` with the two required env vars comes up healthy end to end, including
+  via the documented `cp .env.example .env` flow; without them it fails fast, naming the variable.
 - `npm run typecheck`, `npm test`, `npm run build`, and `scripts/smoke-test.sh` green.
 
 ## 6. Documentation deltas (detail for ticket 05)
 
-- **DESIGN.md**: §6.2 (`:443-502`) gains the mailbox paragraph and the backfill paragraph
-  (`:483-492`) gains its worker sentence; §10's Job scheduler row (`:826`) rewritten (worker
-  container, and *why the trade flipped*: egress isolation + role separation outweigh "one process to
-  deploy" now that the threat model includes dependency compromise); §10.1's services block
-  (`:876-903`) gains `worker` **and `dump`, which is still missing**, and the "one decision rather
-  than four" count at `:905` becomes a rule; env table (`:944-951`) gains `WORKER_DB_PASSWORD`,
-  `POSTGRES_PASSWORD` and the worker's vars — that table is already six `DUMP_*` variables behind.
-- **ADR-0010 "Price fetching is an egress-isolated worker"**: context (supply-chain), decision
-  (mailbox over API, polling over LISTEN/NOTIFY, role over trust, the app supplying the work),
-  consequences (worker-down UX state, covert-channel residuals, correlated compromise until the
-  follow-up slice, deploy coupling, two required env vars), alternatives rejected (the three in
-  §3.7, plus in-app fallback mode, an HTTP API on the worker, a LISTEN/NOTIFY doorbell, separate
-  images now, a Go/second-language worker), and the named follow-up (worker supply-chain
-  decorrelation). ADR-0009 `:32-46` is the template for the "this reverses 'no separate worker
-  service'" section.
-- **ADR-0011**: its spec-number references were already repointed to 0018 with the rename; what is
-  owed is `:55-56`'s "Nothing is shaped for spec 0018's worker", which gets a `Reversed` banner in
-  the form `docs/specs/README.md:14-20` describes.
-- **ARCHITECTURE.md**: §3.1's "**No worker container**" (`:161-163`) rewritten; §4.2's yahoo-import
-  row (`:338`) keeps its site and its `:619` reference — **both are correct today, contrary to what
-  the first draft claimed** — but its reachability note changes (imported only by the worker
-  process); the env-reader row (`:345`) gains the worker entrypoint and provision step; §11.2's
-  in-process-poller debt row (`:1959`) is discharged.
-- **CONTEXT.md**: *price worker*, *mailbox* — and the words to avoid: "queue", "job table" (three
-  request tables, not a general queue). They join the existing "How prices stay fresh" section
-  (`:93-120`), whose *Refresh cadence* (`:95`) and *Poll* (`:108`) entries both describe the app
-  refreshing and need one clause each.
-- **docs/operating.md**: the "What runs here" table (`:28-33`) gains `worker` and `dump`, and `:31`'s
-  claim that the refresh loop runs in `app` "in one process" is corrected; the Engine floor at
-  `:84-92`; the env table (`:250-257`); the restore procedure (`:870-904`) — `:893-895` names the
-  in-app refresh loop as the connection holder that would make `dropdb` fail, which becomes the
-  worker and the dump; the rehearsal (`:906-929`); `:978`'s service list; the external-Postgres
-  section (`:184-197`).
-- **docs/README.md's "state rules, not counts" rule** (`:9-12`) is what all of the above turns on.
-  ADR-0009 `:81-82` accepted the obligation to convert the "four services" counts to rules and it was
-  not discharged; a worker makes the count six. Ticket 05 clears it in the passages it is already
-  editing, rather than leaving a second slice's debt to a third.
+- **DESIGN.md**: §6.2 (`:443-502`) gains the mailbox paragraph; §10's "Job scheduler" row — `:826`,
+  in the §10 deployment table, not the §9 stack table — rewritten with *why the trade flipped*;
+  §10.1's "no separate worker service" (`:913-918`); the services block (`:876-903`) gains `worker`
+  **and `dump`, still missing since spec 0014**; the env table (`:944-951`) gains
+  `WORKER_DB_PASSWORD` and `POSTGRES_PASSWORD`, and the six `DUMP_*` variables it is already behind;
+  `:956-957`'s "the gate's are the only settings anywhere with no default" becomes false with ticket
+  00 and must move with it.
+- **ADR-0010** "Price fetching is an egress-isolated worker": context, decision (**a fetch proxy,
+  not a second writer**; mailbox over API; polling over LISTEN/NOTIFY; role over trust),
+  consequences, and the alternatives in §3.7 plus those recorded there. ADR-0009 `:32-46` is the
+  template for arguing a second container against the three documents that say there is none.
+- **ADR-0011**: its spec-number references were repointed to 0018 with the rename. What is owed is
+  `:55-56`'s "Nothing is shaped for spec 0018's worker", which gets a `Reversed` banner in the form
+  `docs/specs/README.md:14-20` describes. Note what is true: this slice does **not** reshape the
+  backfill as a request row in the sense ADR-0011 rejected — `backfillCloses` is not touched.
+- **ARCHITECTURE.md**: §3.1's "**No worker container**" (`:161-163`) and its mermaid `class` line
+  (`:156`); §4.2's yahoo-import row (`:338`) keeps its site and its `:619` reference — **both are
+  correct today, do not "fix" them** — and gains a reachability note; the env-reader row (`:345`)
+  gains the worker entrypoint and provision step; the pool row (`:337`) gains the pool-size option.
+  §11.2's in-process-poller row (`:1959`) is **not** discharged: the poller stays in-process and its
+  missed-poll limit stays true. Only its third column, which costs the fix at "two images, two
+  deployments, two log streams", becomes historical. Three genuinely stale refs nearby cost nothing
+  to fix while there: `:346` cites `upload.tsx:48` (actual `:57`), `:355` cites
+  `positions.server.ts:276` (actual `:211`), `:399-400` cites `statement.ts:32`/`:608` (actual
+  `:26`/`:561`).
+- **CONTEXT.md**: *price worker*, *mailbox* — words to avoid: "queue", "job table". They join "How
+  prices stay fresh" (`:93-120`), whose *Refresh cadence* (`:95`) and *Poll* (`:108`) entries still
+  read as though one process does everything.
+- **docs/operating.md**: the "What runs here" table (`:28-33`) gains `worker` and `dump`, and
+  `:31`'s "the price refresh loop, in one process" is corrected; the Engine floor at `:84-92`, which
+  states none today, with the property that depends on it; the env table (`:250-257`); the upgrade
+  runbook (`:978` enumerates services by name) and the `ALTER ROLE portfolio PASSWORD` step existing
+  clusters need; the restore procedure (`:870-904`), whose `:893-895` names the in-app refresh loop
+  as the connection holder that would make `dropdb` fail; the rehearsal (`:906-929`); rebuilding
+  from nothing (`:931-945`); the external-Postgres section (`:184-197`).
+- **docs/runbook.md**: a "prices are not refreshing" entry — the worker down, the mailbox backing
+  up, the log stem to grep.
+- **The counts.** ADR-0009 `:81-82` accepted the obligation to turn "all four containers…" into
+  rules per `docs/README.md:9-12` and it was not discharged when `dump` landed; a worker makes it
+  six. Clear it in the passages ticket 05 already edits: `docs/operating.md:56`, `:206`,
+  `DESIGN.md:905`, `ARCHITECTURE.md:156`, `:179`, `:186`.
 
 ## 7. Out of scope
 
 - gVisor/runsc runtime overlay (companion change, separate compose override file).
 - Pinned items from the earlier hardening list (`.npmrc` ignore-scripts, Dockerfile
   `--ignore-scripts`, SHA-pinned Actions, Renovate, digest-pinned images).
-- **Worker supply-chain decorrelation** — the named follow-up slice (§3.2): worker-own
-  `package.json`/image stage, ~2-package tree, hand-rolled Yahoo fetch + the existing Zod schemas
-  replacing `yahoo-finance2`. A Go worker was considered and rejected there.
-- **Consolidating `selectBackfillCandidates` and `backfillGaps` onto one SQL view** (§3.7's second
-  alternative) — a plausible refactor, not a security change.
-- Extracting `masking-policy.ts` from `masking.ts` — no longer needed by this slice (§2.4), still a
-  reasonable tidy-up on its own.
-- Moving the *app* off the `portfolio` superuser role — opened by this slice (and made meaningful by
-  the required-password change), not done in it.
+- **Worker supply-chain decorrelation** — the named follow-up slice (§3.2).
+- **Dropping the creation-time USD probe** (§3.3) — it would delete the mailbox's third kind and the
+  only place ingest waits on a third party, but it changes a product rule.
+- Consolidating `selectBackfillCandidates` and `backfillGaps` onto one SQL view (§3.7).
+- Extracting `masking-policy.ts` from `masking.ts` — no longer needed by this slice (§2.4).
+- Moving the *app* off the `portfolio` superuser role — opened by ticket 00, not done in it.
 - Any auth change (ADR-0005 stands).
 
 ## 8. Residual risks, stated plainly
 
-- **Price poisoning:** the worker is the price writer by design; a compromised worker can skew
-  valuations. Mitigations: no DELETE (forensics survive in `price_observation` and `price_backfill`),
-  Zod validation of provider payloads stays with the provider code, and the household sees the as-of
-  line. Not eliminable without removing the feature.
-- **Covert exfiltration channels that remain:** symbol strings to Yahoo (bounded by the validation
-  pattern; readable only by Yahoo or an on-path observer), the date ranges on candidate rows (bounded
-  by CHECK constraints, a few bits each), and the gate's OAuth callback
-  (`/oauth2/callback?code=…` relays attacker-chosen bytes to Google's token endpoint from
-  `frontend`). Same class, same observer constraint. Accepted.
+- **Price lying.** The worker cannot write a price, but it can answer a fetch with fabricated
+  figures, and the app will believe a well-formed payload exactly as it believes Yahoo. What the
+  role change buys is that the lie is confined to what a refresh would have written anyway. It is
+  worth being concrete about what that excludes, because an earlier draft granted the worker the
+  price tables and each of these was reachable with one `UPDATE`: it cannot set `quote.price` to
+  `'NaN'` (a valid `numeric(20,4)` that makes `money.ts:47` throw `Cannot convert NaN0000 to a
+  BigInt`, so every screen 500s and the as-of line never renders); it cannot rewrite the `USD`
+  instrument's `1.00` seed (`0001_initial_schema.sql:265-284`) and rescale every cash balance across
+  all of history; it cannot reclassify holdings through `instrument.quote_type`
+  (`allocation.ts:355-380`); and it cannot insert `price_backfill` rows, which are not a record but
+  the app's **retry clock** (`prices.server.ts:306-318`) — one forged row per instrument per interval
+  would have suppressed every future backfill while `backfillGaps` showed a recent, successful-looking
+  attempt. Under the design taken, all of those need a grant the worker does not have. What survives:
+  a lie in a payload, which the app's schema bounds to well-formed decimals — and that schema
+  rejecting non-finite values is a test, not an assumption.
+- **Covert exfiltration channels that remain:** ticker-shaped strings and bounded date ranges to
+  Yahoo, at roughly 11 bytes per symbol and up to ~5.6 KB per row with rows uncapped (§2.5),
+  throttled by Yahoo's rate limiting rather than by a constraint. Splitting `caddy-app` from
+  `caddy-gate` removes the app's direct path to the gate's token relay, which was the larger channel
+  and was not the same class. What remains of that one is the browser-mediated OAuth flow itself,
+  which is the gate working. Accepted.
+- **The worker's reach is wider than "Postgres and the internet."** `egress-worker` is a normal
+  bridge, so the host and the operator's LAN are reachable, including Caddy's published `:80` and
+  through it the gate's ungated `/oauth2/*` (§3.1). Constraining that needs `DOCKER-USER` rules,
+  out of scope for the same reason as Caddy's own unused route. Named rather than asserted away.
 - **Correlated compromise (until the follow-up slice):** app and worker share one npm tree, so one
-  poisoned package can sit on both ends of the mailbox and coordinate. Be precise about what survives
-  that case: the worker-side pattern check is then compromised code, the app (still the `portfolio`
-  superuser) can stage bytes in any worker-readable column (`instrument.symbol` is unconstrained
-  `text` in the schema — the 40-char cap is app code at
-  `instrument-resolution.server.ts:309`), and the `egress-worker` network is unrestricted internet —
-  nothing but code pins the worker to Yahoo. The surviving bound is the worker role's *read set* plus
-  arbitrary egress; the CHECK constraints bite only in the compromised-app/honest-worker case. The
-  decorrelation slice (§7) shrinks the worker's tree to ~2 packages and removes the shared provider
-  dependency entirely.
+  poisoned package can sit on both ends of the mailbox and coordinate. In that case the worker-side
+  pattern check is compromised code, the app can drop the CHECK constraints outright (§2.5), and the
+  `egress-worker` network is unrestricted internet — nothing but code pins the worker to Yahoo. The
+  surviving bound is the worker role's read set, which is one table of ticker symbols.
+- **This slice bounds exfiltration, not damage.** A compromised app still connects as the superuser,
+  and `COPY … FROM PROGRAM` as that role is arbitrary command execution inside the `db` container,
+  including its bind-mounted PGDATA. After lockdown `db` has no route out, so it is not an exfil
+  path — but nobody should read §1 as saying a compromised app is contained. Moving the app off the
+  superuser role is the fix, and §7 defers it.
+- **A compromised worker can stall refreshes, and the app should not hang.** `LOCK TABLE
+  fetch_request IN ACCESS EXCLUSIVE MODE` needs only the `UPDATE` the role holds, and the cluster
+  sets no `statement_timeout`, `lock_timeout` or `idle_in_transaction_session_timeout`
+  (`compose.yaml:64-69` sets only timezone). Under an earlier draft the same statement against
+  `quote` would have hung *every screen* indefinitely while the healthcheck stayed green; here the
+  blast radius is the mailbox, so a refresh stalls and the screens keep serving stored prices. Set
+  `lock_timeout` and `statement_timeout` on the **app's** pool anyway, so a stall is a visible error
+  rather than a hang. A role-level `ALTER ROLE … SET` does not bind — those GUCs are `USERSET` and
+  the worker can reset them.
+- **Large objects and temp tables are an unbounded disk-write channel no grant covers.** Confirmed
+  live under exactly §3.5's grants: `lo_from_bytea` wrote 98 kB into `pg_largeobject`, and
+  `CREATE TEMP TABLE` succeeded — both PUBLIC defaults with no `REVOKE` that closes them. A filled
+  disk also trips `scripts/dump-loop.sh:212`'s `room_for_dump` guard, so it takes the nightly dump
+  with it. Accepted, and named here because it is invisible to anything the grant list says.
 - **Symbol-length mismatch:** the app accepts stored symbols up to 40 characters
-  (`instrument-resolution.server.ts:309`); the worker fetches only pattern-conforming symbols
-  (≤15, no slashes), so an unusual-but-legitimate stored symbol would never refresh and would show as
-  permanently stale. Documented in ticket 05; tightening the app-side symbol rule to match is a small
-  follow-up decision.
-- **A refresh now needs two healthy processes.** The app decides and the worker fetches, so an app
-  outage stops price refresh as well as the screens that would show it — no loss in practice, since
-  prices are only read through the app. The missed-poll-on-restart limitation DESIGN.md §10 accepted
-  is *kept*, not fixed: it was never this slice's to fix.
-- **Ticker-list disclosure:** the worker (and Yahoo) necessarily learn which symbols the family
-  tracks, and — through candidate rows — roughly how far back it has held them. True of Yahoo today
-  as well. Accepted.
-- **Engine floor:** unpatched engines leak DNS from internal networks (CVE-2024-29018, fixed in
-  23.0.11 / 25.0.5 / 26.0). The docs state 26.0 as a conservative floor — not the vulnerability
-  boundary — and the smoke test catches the symptom.
-- **Worker outage = stale prices:** surfaced honestly (as-of line, worker-unresponsive outcome).
-  `price_poll.started_at` is a *coarse and incomplete* heartbeat: rows appear only on committed runs,
-  and since ADR-0011 a quotes-less weekend refresh writes none at all. Accepted at this household's
-  stakes.
+  (`instrument-resolution.server.ts:309`); the mailbox accepts ≤15 with no slashes, so an
+  unusual-but-legitimate stored symbol would never refresh and would show as permanently stale.
+  Documented in ticket 05; tightening the app-side rule to match is a small follow-up.
+- **Every fetch is now a round trip**, adding roughly two seconds to a full refresh (§3.4). A press
+  that already spends seconds in Yahoo absorbs it; a slower drain interval would not.
+- **A refresh needs two healthy processes.** The app decides and the worker fetches, so an app
+  outage stops price refresh as well as the screens that would show it — no loss in practice. The
+  missed-poll-on-restart limitation DESIGN.md §10 accepted is *kept*, not fixed: the poller stays
+  in-process, and ARCHITECTURE.md §11.2's row stays true.
+- **Ticker-list disclosure:** the worker and Yahoo necessarily learn which symbols the household
+  tracks, and from history ranges roughly how far back it has held them. True of Yahoo today.
+  Accepted.
+- **Engine floor:** the worker↔gate isolation depends on a Docker Engine that does not lose bridge
+  isolation on a firewalld reload (§3.1). Below 28.0 that property is not there to assert; the docs
+  state ≥ 29.5.1 and the smoke test catches the symptom, not the cause.
+- **Worker outage = stale prices:** surfaced honestly, as a provider failure and an ageing as-of
+  line. `price_poll.started_at` is a coarse and incomplete heartbeat — rows appear only on committed
+  runs, and since ADR-0011 a quotes-less weekend refresh writes none at all. The runbook entry
+  (ticket 05) is the operator's signal instead. Accepted at this household's stakes.
 - **Caddy retains an unused internet route** (published-port constraint). It makes no outbound calls
   and fronts everything anyway; constraining it further (DOCKER-USER rules) is out of scope.
