@@ -1,7 +1,7 @@
 [
   {
     "screen": "overview",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/",
     "viewport": 900,
     "chromeBottom": 64,
@@ -21,44 +21,17 @@
         "cls": "kpi",
         "top": 241,
         "height": 216,
-        "text": "Total net worth$••••••Amount hidden+40.4% / ",
+        "text": "Total net worth$702,015.29+40.4% / +$201,844",
         "gapAfter": 0
       }
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 174,
-    "overflowCount": 22,
-    "overflowing": [
-      {
-        "cls": "visually-hidden",
-        "width": 131
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 233
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 94
-      },
-      {
-        "cls": "segmented",
-        "width": 545
-      },
-      {
-        "cls": "chart",
-        "width": 329
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 119
-      }
-    ]
+    "trailing": 174
   },
   {
     "screen": "holdings",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/holdings",
     "viewport": 900,
     "chromeBottom": 64,
@@ -92,38 +65,11 @@
     ],
     "leading": 121,
     "gaps": 48,
-    "trailing": 219,
-    "overflowCount": 109,
-    "overflowing": [
-      {
-        "cls": "segmented",
-        "width": 872
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 62
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      }
-    ]
+    "trailing": 219
   },
   {
     "screen": "holdings-grouped",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/holdings?group=assetClass",
     "viewport": 900,
     "chromeBottom": 64,
@@ -157,38 +103,11 @@
     ],
     "leading": 121,
     "gaps": 48,
-    "trailing": 219,
-    "overflowCount": 123,
-    "overflowing": [
-      {
-        "cls": "segmented",
-        "width": 872
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 62
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      }
-    ]
+    "trailing": 219
   },
   {
     "screen": "analysis",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/analysis",
     "viewport": 900,
     "chromeBottom": 64,
@@ -214,38 +133,11 @@
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 411.5,
-    "overflowCount": 35,
-    "overflowing": [
-      {
-        "cls": "visually-hidden",
-        "width": 148
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 148
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      }
-    ]
+    "trailing": 411.5
   },
   {
     "screen": "income",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/income",
     "viewport": 900,
     "chromeBottom": 64,
@@ -265,44 +157,17 @@
         "cls": "kpi",
         "top": 398,
         "height": 128,
-        "text": "Total annual dividend$••••••Amount hidden1.9",
+        "text": "Total annual dividend$13,528.411.9% weighted",
         "gapAfter": 0
       }
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 411.5,
-    "overflowCount": 14,
-    "overflowing": [
-      {
-        "cls": "visually-hidden",
-        "width": 233
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 148
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 101
-      }
-    ]
+    "trailing": 411.5
   },
   {
     "screen": "account-detail",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/accounts/2",
     "viewport": 900,
     "chromeBottom": 64,
@@ -328,38 +193,11 @@
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 174,
-    "overflowCount": 13,
-    "overflowing": [
-      {
-        "cls": "visually-hidden",
-        "width": 233
-      },
-      {
-        "cls": "segmented",
-        "width": 545
-      },
-      {
-        "cls": "chart",
-        "width": 329
-      },
-      {
-        "cls": "data-table-scroll",
-        "width": 525
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 104
-      }
-    ]
+    "trailing": 174
   },
   {
     "screen": "settings",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/settings",
     "viewport": 900,
     "chromeBottom": 64,
@@ -385,13 +223,11 @@
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 41,
-    "overflowCount": 0,
-    "overflowing": []
+    "trailing": 41
   },
   {
     "screen": "settings-accounts",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/settings/accounts",
     "viewport": 900,
     "chromeBottom": 64,
@@ -417,30 +253,11 @@
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 65.5,
-    "overflowCount": 4,
-    "overflowing": [
-      {
-        "cls": "data-table-scroll",
-        "width": 617
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 94
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 97
-      },
-      {
-        "cls": "visually-hidden",
-        "width": 100
-      }
-    ]
+    "trailing": 65.5
   },
   {
     "screen": "upload",
-    "bannerCost": 129,
+    "bannerCost": 105,
     "path": "/upload",
     "viewport": 900,
     "chromeBottom": 64,
@@ -466,8 +283,6 @@
     ],
     "leading": 121,
     "gaps": 24,
-    "trailing": 55,
-    "overflowCount": 0,
-    "overflowing": []
+    "trailing": 55
   }
 ]

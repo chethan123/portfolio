@@ -15,38 +15,40 @@ the arrangement question can be argued from figures rather than from a screensho
 ### The three things worth knowing without reading further
 
 1. **§11 names the read pages as what the phone is for, and they are the screens that do not fit.**
-   Four of the five spend more than four fifths of the first screenful before their content starts,
-   and Holdings spends more than all of it — the first holding row is below the fold. The three
-   write screens §11 explicitly declines to invest in are the cheapest on a phone, none past two
-   fifths. The "no mobile-specific layout investment" clause belongs to §11's third bullet, the
-   desktop-shaped write flows; it was never a decision about the read screens.
+   Holdings spends more than the whole first screenful before its first holding row, Income exactly
+   all of it, Account detail and Analysis more than four fifths. The three write screens §11
+   declines to invest in are the cheapest, none past two fifths. The "no mobile-specific layout
+   investment" clause belongs to §11's third bullet, the desktop-shaped write flows; it was never a
+   decision about the read pages. What does **not** follow — and the report says so — is that
+   read-screen work is thereby mandated: §11's bullets are a scope list, and the case rests on the
+   measurements.
 
-2. **Phone arrangement exists in the stylesheet twice, and both times on Holdings.** Of the fifteen
-   declarations across the twelve `max-width: 767px` blocks that re-arrange the box tree, thirteen
-   are the Holdings card reflow; nine of the twelve blocks contain none and change only type size
-   and padding. The cost is in arrangement rather than in spacing: between-block gaps are 24–48px
-   of an 814px preamble, while a single panel header is 174–411px.
+2. **The phone mostly is not designed; it receives what the desktop rule was overriding.** Of the
+   23 arrangement declarations written for the phone, 18 sit in the one block holding the Holdings
+   card reflow and seven of the twelve blocks hold none. Meanwhile four `min-width: 768px` blocks
+   put the desktop arrangement in the override, so the phone keeps the base — which is why
+   Analysis draws its ring above the table the route doc says carries every figure.
 
-3. **The method is already written down, shipped, and never generalised.** The Holdings brief
-   argues one DOM rather than two, card reflow through `data-label`, leading with the pair the
-   phone is opened to read, hiding nothing, and controls two to a row. Every rule transfers
-   unchanged. The one question it answered that no other screen has been asked is which pair its
-   reader opens it for.
+3. **The cost is arrangement, not spacing.** Gaps between blocks are 24–48px of Holdings' 838px,
+   while its filter bar alone is 314px and Account detail's header is 461px. Tightening the spacing
+   scale is recorded as rejected, with the arithmetic.
 
 ### Evidence
 
 [`2026-09-03-phone-layout/harness/`](./2026-09-03-phone-layout/harness/) holds the measurement
 script, which walks each screen's box tree at 390×900 rather than counting pixels off a capture,
-and writes both the figures and `measurements.json`. It discounts the open-instance banner the
-ungated demo draws, so its figures are what a gated household's instance shows.
+and writes both the figures and `measurements.json`. Two corrections it makes are load-bearing: it
+discounts the open-instance banner the ungated demo draws (its height only — the banner brings no
+flex gap), and it sets the unmasked cookie, without which every screen measures as rows of dots.
 
 ### Status
 
-Open. The report grades its ideas by what they cost in documents: the panel header, the refresh
-control's placement, the donut-above-its-table inversion and seven defect classes are unconstrained;
-pairing the owner filter with the range strip contradicts spec 0013; phone layout for the upload and
-settings forms would reverse §11 and needs an ADR. What it deliberately leaves open is the question
-under all of them — what pair each screen is opened to read — which is not a CSS question.
+Open. The report grades its ideas by what they cost in documents: a phone arrangement for
+`.panel-header`, the donut-above-its-table inversion and six defect classes are unconstrained;
+moving the refresh control contradicts the pricing brief's placement table, and pairing the owner
+filter with the range strip contradicts spec 0013; only re-shaping the four-screen upload flow
+needs an ADR. What it deliberately leaves open is the question under all of them — what pair each
+screen is opened to read — which is not a CSS question.
 
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
 

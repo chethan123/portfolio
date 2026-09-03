@@ -9,8 +9,11 @@
  * Run from the repository root against a demo instance already serving
  * (`scripts/capture-screenshots.ts` documents standing one up):
  *
- *   node --env-file=.env.demo \
+ *   CHROMIUM_EXECUTABLE=… node \
  *     ./docs/research/2026-09-03-phone-layout/harness/measure-phone.ts
+ *
+ * It reads no database of its own — only `BASE_URL` and
+ * `CHROMIUM_EXECUTABLE` — so it needs no `--env-file`.
  *
  * Two deliberate choices, both copied from `scripts/capture-screenshots.ts`
  * because a second convention here would be a second thing to keep in step:
@@ -78,10 +81,6 @@ type Measurement = {
   gaps: number;
   /** Last block to the content: a panel header and its padding, not blank. */
   trailing: number;
-  /** How many elements scroll sideways. */
-  overflowCount: number;
-  /** Elements wider than the viewport, i.e. something scrolls or clips sideways. */
-  overflowing: ReadonlyArray<{ cls: string; width: number }>;
 };
 
 async function resolve(page: Page, path: string): Promise<string> {
@@ -106,12 +105,17 @@ async function measure(page: Page, screen: (typeof SCREENS)[number]): Promise<Me
       const navHeight = bottomnav ? rect(bottomnav).height : 0;
 
       // The demo instance runs ungated, so `root.tsx` draws the
-      // open-instance banner above every page. A real household's instance
-      // sits behind the forward-auth gate and never shows it, so its height
-      // (and the flex gap it brings) is discounted from every figure here —
+      // open-instance banner above every page. A gated household's instance
+      // never shows it, so its height is discounted from every figure here —
       // reported separately rather than silently folded in.
+      //
+      // Its height and nothing more: the banner is a sibling of `.app-main`
+      // inside `.app-canvas` (`root.tsx`), and `.app-canvas` is not a flex
+      // container, so it brings no gap with it. The arithmetic is the check —
+      // top bar 64 + banner 105 + `.app-main` padding 16 lands exactly on the
+      // first block.
       const banner = document.querySelector(".open-instance-banner");
-      const bannerCost = banner === null ? 0 : Math.round((rect(banner).height + 24) * 10) / 10;
+      const bannerCost = banner === null ? 0 : Math.round(rect(banner).height * 10) / 10;
 
       const content = document.querySelector(contentSel);
       const contentTop = content ? rect(content).top + window.scrollY : null;
@@ -162,27 +166,14 @@ async function measure(page: Page, screen: (typeof SCREENS)[number]): Promise<Me
       // between sibling blocks (the only one that is purely empty), and
       // `trailing` is the last block down to the content — which is not
       // blank at all on a panelled screen, it is the panel's own header.
-      const leading = blocks.length > 0 ? Math.round((blocks[0].top - chromeBottom) * 10) / 10 : 0;
-      const last = blocks[blocks.length - 1];
+      const first = blocks.at(0);
+      const last = blocks.at(-1);
+      const leading = first === undefined ? 0 : Math.round((first.top - chromeBottom) * 10) / 10;
       const trailing =
-        blocks.length > 0 && contentTop !== null
-          ? Math.round((contentTop - (last.top + last.height)) * 10) / 10
-          : 0;
+        last === undefined || contentTop === null
+          ? 0
+          : Math.round((contentTop - (last.top + last.height)) * 10) / 10;
       const gaps = Math.round(blocks.slice(0, -1).reduce((sum, b) => sum + b.gapAfter, 0) * 10) / 10;
-
-      // A box clamps its own rect inside a scroll container, so a wide table
-      // reads as exactly the container's width. What actually overflows is
-      // scrollWidth against clientWidth — that is the sideways scroll.
-      const overflowing: Array<{ cls: string; width: number }> = [];
-      for (const el of Array.from(document.querySelectorAll("*"))) {
-        const over = el.scrollWidth - el.clientWidth;
-        if (over > 4 && el.clientWidth > 0 && el.className.toString().length > 0) {
-          overflowing.push({
-            cls: el.className.toString().slice(0, 44),
-            width: Math.round(el.scrollWidth),
-          });
-        }
-      }
 
       return {
         screen: name,
@@ -196,8 +187,6 @@ async function measure(page: Page, screen: (typeof SCREENS)[number]): Promise<Me
         leading,
         gaps,
         trailing,
-        overflowCount: overflowing.length,
-        overflowing: overflowing.slice(0, 6),
       };
     },
     { contentSel: screen.content, name: screen.name, path },
@@ -215,6 +204,17 @@ async function main(): Promise<void> {
     isMobile: true,
     hasTouch: true,
   });
+
+  // Unmasked, for the reason `scripts/capture-screenshots.ts` states at
+  // length: the policy seeds *masked* and a fresh Playwright context has
+  // never been toggled, so without this every screen measures as dots. It
+  // changes heights and not just looks — `.kpi-figure` is a wrapping flex
+  // row, and a real figure beside its delta chip can take a second line
+  // where six bullets do not. A DELIBERATE DUPLICATION of that script's
+  // `UNMASKED_COOKIE` (named as `docs/README.md` asks): this harness shares
+  // no module with the served app either, and two characters are not worth
+  // an import.
+  await context.addCookies([{ name: "masked", value: "0", url: BASE_URL }]);
   const page = await context.newPage();
 
   const results: Measurement[] = [];
@@ -228,7 +228,7 @@ async function main(): Promise<void> {
     const spent = preamble === null ? "n/a" : `${preamble}px`;
     const share = preamble === null ? "" : ` (${Math.round((preamble / m.usable) * 100)}% of ${m.usable}px)`;
     console.log(
-      `${screen.name.padEnd(18)} preamble ${spent.padStart(7)}${share}  lead ${String(m.leading).padStart(5)}  gaps ${String(m.gaps).padStart(5)}  panel-hdr ${String(m.trailing).padStart(5)}  sideways ${m.overflowCount}`,
+      `${screen.name.padEnd(18)} preamble ${spent.padStart(7)}${share}  lead ${String(m.leading).padStart(5)}  gaps ${String(m.gaps).padStart(5)}  to-content ${String(m.trailing).padStart(5)}`,
     );
   }
 
