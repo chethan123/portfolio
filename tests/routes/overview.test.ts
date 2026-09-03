@@ -795,6 +795,24 @@ describe("a custom range", () => {
       expect(markup).not.toMatch(/>Custom</);
     }),
   );
+
+  it(
+    "names the form the Custom chip opens, so the chip cannot silently go dead",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      const markup = renderRoute(Overview, "/", await loader(args(get("/"))));
+
+      // The picker is a native popover: the chip is its invoker, and the form it
+      // names is what the browser lifts into the top layer — which is how the
+      // picker escapes the phone strip's overflow. React emits the prop's
+      // camelCase text on the server; HTML attribute names are case-insensitive.
+      const [, id] = markup.match(/<button[^>]*\bpopovertarget="([^"]+)"/i) ?? [];
+      expect(id).toBeDefined();
+      const [form] = markup.match(/<form[^>]*\bpopover="auto"[^>]*>/) ?? [];
+      expect(form).toContain(`id="${id}"`);
+    }),
+  );
 });
 
 describe("a preset before this household's earliest data", () => {
