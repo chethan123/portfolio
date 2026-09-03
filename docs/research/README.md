@@ -5,6 +5,49 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-03 — Would this app be better on Bun?
+
+One document: [Would this app be better on Bun?](./2026-09-03-bun-migration-feasibility.md) — the
+runtime question re-asked with the runtime actually installed, against `a405806` with Bun 1.4.0 and
+a local PostgreSQL. DESIGN.md §9 rejected Bun on judgement and has never been tested; this runs the
+build, the migrations, the server and the suite under both runtimes so the next person to wonder
+does not have to.
+
+### The three things worth knowing without reading further
+
+1. **The data layer, which was the part worth being frightened of, is identical.** The `numeric`,
+   `int8` and `date` string parsers, `numeric(19,4)` scale, `bytea` through a `Buffer`, session
+   advisory locks, the pool's `acquire`/`release` wiring and `AsyncLocalStorage` all behave the
+   same, and migrations apply over `scram-sha-256` unchanged. That holds only because nothing here
+   would go near `Bun.SQL`, which §9 was already right to refuse.
+
+2. **Two blockers, and only one of them is this repository's to fix.** React 19's `bun` export
+   condition resolves `react-dom/server` to a build with no `renderToPipeableStream`, so the server
+   bundle dies at import until `entry.server.tsx` is ejected and rewritten against Web streams —
+   verified, and verified neutral on Node. The second is an open upstream bug in Bun's Vite SSR
+   transform that makes every Zod-reachable test file fail to collect, which no configuration in
+   this repository works around and which `bun test` does not escape.
+
+3. **The "faster" in DESIGN.md §9 is not there for this workload.** Boot time and resident memory
+   improve; the full server-rendered Overview measured marginally *slower*. This would remain an
+   existing Node HTTP app behind `@react-router/serve` rather than a rewrite onto `Bun.serve`, and
+   its cost is Postgres round trips and React SSR either way.
+
+### Evidence
+
+[`2026-09-03-bun-migration-feasibility/harness/`](./2026-09-03-bun-migration-feasibility/harness/)
+holds the driver-semantics probe, the load generator and the rewritten server entry, with the
+command sequence that reproduces every number — including how to install Bun outside this
+repository, which is where it belongs.
+
+### Status
+
+Nothing is approved and nothing changed. The recommendation is to stay on Node, with a single named
+gate that would make the question worth re-asking rather than a general "not yet". The report is
+explicit about what it could not check: the cited issue numbers were read in an earlier pass and
+github.com was unreachable when it was reviewed, and the probe ran on PostgreSQL 16 where the
+deployment pins 17.
+
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
 
 One document: [The Overview's 1D latency](./2026-09-01-overview-1d-latency.md) — the diagnosis of a
