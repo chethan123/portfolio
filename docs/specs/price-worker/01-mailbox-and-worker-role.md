@@ -11,7 +11,7 @@ The value of doing it before any worker exists: the grants become an executable,
 the permission test fails the suite the day anyone widens them — and tickets 02/04 build against a
 schema already in `database.generated.ts`.
 
-**Blocked by:** 00.
+**Blocked by:** Nothing. (Parallel with 00; 00 must land before 03.)
 
 **Status:** ready-for-agent
 
@@ -30,9 +30,16 @@ schema already in `database.generated.ts`.
 - [ ] The `range_until <= current_date + 1` ceiling. Without it an unbounded date is ~31 bits handed
       to Yahoo's `period2`; PostgreSQL accepts dates to year 5874897. Confirm the target version
       accepts `current_date` in a CHECK; fall back to a fixed far-future ceiling if not.
-- [ ] Both indexes: the partial `where claimed_at is null` one the drain uses, and the
-      `requested_at` one the sweep uses (the `upload_draft` precedent comes with an index for the
-      same reason)
+- [ ] `expires_at timestamptz not null` — the app's own deadline, so the worker can skip a row
+      nobody is waiting for rather than spend a Yahoo request on it, and `attempts integer not null
+      default 0` so a request that kills the worker is not reclaimed for ever by the restarted one
+- [ ] **Three** indexes, because the drain and the reclaim have different predicates: partial on
+      `(expires_at, id) where claimed_at is null and answered_at is null`; partial on `(claimed_at)
+      where claimed_at is not null and answered_at is null`; and `(requested_at)` for the sweep (the
+      `upload_draft` precedent comes with an index for the same reason)
+- [ ] The lease duration is written down, not left to the implementer: the provider watchdog (~30 s)
+      plus one drain interval. Shorter and two workers double-fetch; longer than the app's budget and
+      every worker restart guarantees a timeout.
 - [ ] `create role portfolio_worker nologin nosuperuser nocreatedb nocreaterole connection limit 5`
       and its two grants, in a DO block that is **idempotent** (bare `CREATE ROLE` errors on re-run;
       roles are cluster-global while the migration ledger is per-database) **and privilege-guarded**

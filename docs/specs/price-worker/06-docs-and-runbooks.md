@@ -9,7 +9,7 @@ installs upgradable and restorable.
 Every line reference below was verified against the working tree when this ticket was written; check
 them again before editing, because these files move.
 
-**Blocked by:** 04.
+**Blocked by:** 05.
 
 **Status:** ready-for-agent
 
@@ -81,6 +81,10 @@ them again before editing, because these files move.
       third column, which prices the fix at "two images, two deployments, two log streams", becomes
       historical. Note `:1959` sits in §11.2 "Structural limits accepted on purpose", not the
       live-debt section, which starts at `:1961`.
+- [ ] The `server/` → `app/lib` import direction is new in this tree (nothing in `server/` imports
+      `app/` today; the edge runs the other way at `app/lib/db.server.ts:16-18`). Record it as a
+      rule: the worker entrypoint may import pure leaves and the provider, never a `.server` module
+      that writes.
 - [ ] Three genuinely stale refs are in the neighbourhood and cost nothing to fix while here:
       `:346` cites `upload.tsx:48` (actual `:57`), `:355` cites `positions.server.ts:276` (actual
       `:211`), `:399-400` cites `statement.ts:32`/`:608` (actual `:26`/`:561`)
@@ -100,6 +104,11 @@ them again before editing, because these files move.
       grep. This is where "worker down" is distinguished from "Yahoo down", because the app
       deliberately does not distinguish them for the household (spec §3.4).
 - [ ] A "restore did nothing" entry — the role bootstrap below, whose symptom is a silent rollback.
+- [ ] **Some log lines move containers.** `console.warn("Price refused: …")`
+      (`price-provider.server.ts:725`) and every provider-side message now write to the *worker's*
+      stream, not the app's. `docs/operating.md:761-791` ("There is no price line in the log" has
+      four causes) is written on the assumption there is one stream; it gains a fifth cause and a
+      second `docker compose logs` target.
 
 **docs/operating.md**
 
@@ -120,7 +129,8 @@ them again before editing, because these files move.
       and `guce.yahoo.com`/`consent.yahoo.com` for the EU consent chain. Anyone writing an egress
       allowlist from a one-host list gets a stack that fails on its first fetch.
 - [ ] The env table (`:250-257`) — the same six rows as DESIGN.md, same additions
-- [ ] Upgrade runbook: `WORKER_DB_PASSWORD` (ticket 00 already documented `POSTGRES_PASSWORD`); the
+- [ ] Upgrade runbook: tickets 00 and 03 documented their own variables where they landed; check
+      those sections read as one story rather than two. The
       password alphabet, with the reason per character rather than the label — `/`, `?` and `#`
       truncate or reparse the authority, `@` re-splits the userinfo, and `%` is percent-**decoded**
       by `pg-connection-string`, so `abc%41def` connects as `abcAdef`; existing clusters also need

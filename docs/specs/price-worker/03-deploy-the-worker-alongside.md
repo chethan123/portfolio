@@ -11,7 +11,7 @@ a coupled release.
 Because the worker fetches nothing until cutover, "it started" is no evidence. The smoke test seeds
 a `fetch_request` and asserts the worker answers it — that is what this ticket proves.
 
-**Blocked by:** 02.
+**Blocked by:** 00 (the required password, before an egress-capable container reaches `db`) and 02.
 
 **Status:** ready-for-agent
 
@@ -34,7 +34,7 @@ a `fetch_request` and asserts the worker answers it — that is what this ticket
 - [ ] `DATABASE_URL` from `WORKER_DB_PASSWORD` (`:?` required) naming `portfolio_worker`;
       `MARKET_TIMEZONE` and `TZ` follow the app's defaults
 
-**The networks (partial topology — the lockdown is ticket 04)**
+**The networks (partial topology — the lockdown is ticket 05)**
 
 - [ ] `worker-db` (internal) and `egress-worker` (bridge) declared; `worker` on both. There is no
       `networks:` key anywhere in `compose.yaml` today — this is the first.
@@ -57,8 +57,23 @@ a `fetch_request` and asserts the worker answers it — that is what this ticket
       claims it and writes `answered_at` within a bounded wait. Seed a `probe` for a symbol that
       does not exist, so an unreachable feed still writes `error` and `answered_at` — the assertion
       proves the drain loop and the Dockerfile copy set, and deliberately proves nothing about
-      egress. Say so in the test's comment; ticket 04 asserts egress.
+      egress. Say so in the test's comment; ticket 05 asserts egress.
 - [ ] `app:3000` and `gate:4180` are unreachable from the worker; `db:5432` connects
+
+**Docs — this ticket's, not the docs ticket's**
+
+- [ ] `WORKER_DB_PASSWORD:?` aborts interpolation for the **whole project**, not one service — that
+      is exactly what `smoke-test.sh:109-116` relies on. An operator who pulls this release without
+      reading ahead gets a stack that will not start at all. So the `docs/operating.md` upgrade line,
+      the alphabet note and the `.env.example` row land here, with the change that needs them —
+      ticket 00 set that precedent. (The alternative, if you would rather keep docs in one ticket:
+      put the `worker` service behind a compose `profiles:` key here and remove it in 04.)
+- [ ] **`.env.example` gains the row here.** Ticket 01 puts `WORKER_DB_PASSWORD` in `configSchema`
+      and ticket 06 documents it; nothing else assigns `.env.example`, which
+      `docs/developing.md:360-373` names as place 2 of the four a new variable must appear in.
+      Without it, the documented `cp .env.example .env` flow yields a stack that will not start from
+      this release until ticket 06 — and smoke would not catch it, because it exports its own
+      environment (`smoke-test.sh:39-40`).
 
 **Gates**
 

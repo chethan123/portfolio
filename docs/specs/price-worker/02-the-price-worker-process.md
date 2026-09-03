@@ -9,18 +9,28 @@ it.
 **What it is not.** It runs no domain rule. It does not compose a refresh, does not decide what to
 fetch, does not take the advisory lock, and cannot write a price if it wanted to. It reads one row,
 makes the provider call that row names, writes the answer back. Everything else stays in the app,
-unchanged — which is why this ticket touches `app/lib` exactly once, to move a pure function.
+unchanged — which is why this ticket touches `app/lib` only to lift two leaves out of it.
 
 **Blocked by:** 01 (the table and the role).
 
 **Status:** ready-for-agent
 
-**One pure function moves**
+**Two leaf extractions, and no more**
 
 - [ ] `matchKey` (`prices.server.ts:733`) moves to a leaf module both sides import.
       `price-provider.server.ts:66` value-imports it today, which would drag `prices.server.ts` and
-      `db.server.ts` — the price-*writing* module — into a process that must not write prices. This
-      is the whole of the app-source refactor this slice needs.
+      `db.server.ts` — the price-*writing* module — into a process that must not write prices.
+- [ ] **Its docstring moves with it and states the new reason.** `prices.server.ts:729-731` currently
+      argues the opposite — "*Exported rather than moved*… the rule belongs beside the matcher that
+      states it" — which was right while both callers were one process. Leaving that text behind
+      makes the file argue against its own shape.
+- [ ] `app/lib/provider-types.ts`: Zod schemas for `ProviderQuote`, `ProviderHistory` and
+      `SymbolProbe`, with the types derived by `z.infer` rather than hand-written twice.
+      `price-provider.server.ts` imports them; ticket 04's mailbox module needs them and may not
+      value-import `price-provider.server.ts`. Note `asOf` and `fetchedAt` are `Date` and need
+      `z.coerce.date()` — see ticket 04.
+- [ ] That is the whole of the app-source refactor this slice needs. A third extraction means the
+      seam is in the wrong place; stop and say so.
 
 **Startup**
 
@@ -38,9 +48,16 @@ unchanged — which is why this ticket touches `app/lib` exactly once, to move a
 
 **The drain**
 
-- [ ] Polls `fetch_request` for an unclaimed row (the partial index from ticket 01), claims it
-      (`claimed_at = now()` guarded on `claimed_at is null`), dispatches on `kind` to `getQuotes` /
-      `getDailyCloses` / `probeSymbol`, writes `payload` or `error` with `answered_at`
+- [ ] Polls `fetch_request` for a claimable row — **unclaimed, unexpired, and under the attempt
+      bound** (`claimed_at is null and expires_at > now()`), which is what stops an abandoned row
+      becoming a Yahoo request nobody is waiting for. Claims it, dispatches on `kind` to `getQuotes`
+      / `getDailyCloses` / `probeSymbol`, writes `payload` or `error` with `answered_at`.
+- [ ] Reclaim increments `attempts`; past a small bound the row is answered `error` rather than
+      retried, so a request that OOMs the worker cannot loop against `restart: unless-stopped`
+- [ ] **Say whether the worker talks to Postgres through Kysely or raw `pg`.** The copy set above
+      omits `db.server.ts` and `database.generated.ts`, which implies raw `pg` — in which case add
+      `database.generated.ts` as a type-only import and to the copy set, so the row types are derived
+      rather than hand-written (AGENTS.md).
 - [ ] No LISTEN/NOTIFY. Checked against the installed `pg` 8.23.0 rather than recalled: no reconnect
       logic anywhere in `pg/lib`; `Client` emits `'error'` unconditionally on a dead socket
       (`lib/client.js:416-422`) and an unhandled `'error'` takes the process down; and a
@@ -65,9 +82,15 @@ unchanged — which is why this ticket touches `app/lib` exactly once, to move a
       unhandled rejection, and `price-poller.server.ts:232-236` already records that Node exits the
       process on one — a stalled Yahoo call would kill the worker rather than time out.
 - [ ] A re-entrancy guard: no new row is claimed while an abandoned fetch is still in flight, or
-      "nothing is issued in parallel and nothing is queued" (`prices.server.ts:527-533`) stops being
+      "nothing is issued in parallel and nothing is queued" (`prices.server.ts:530-533`) stops being
       true exactly when Yahoo is unhappy.
-- [ ] `new YahooFinance({ versionCheck: false })`. Verified against the published 4.0.2 tarball:
+- [ ] `new YahooFinance({ versionCheck: false })` — **an edit to `price-provider.server.ts:620`
+      itself**, not an option the worker passes in. The client is memoized inside that module
+      (`:617-624`); `yahooPriceProvider` takes a client factory (`:705`), but a worker-supplied
+      factory would have to `import("yahoo-finance2")` itself, making a second importer and breaking
+      the ARCHITECTURE.md §4.2 invariant this slice claims to preserve. One line in the owning module
+      is the honest answer, and it means this ticket touches three `app/lib` files, not two.
+      Verified against the published 4.0.2 tarball:
       `versionCheck` is a top-level constructor option (`esm/src/lib/options/options.d.ts:44`)
       defaulting to `true` (`defaults.js:25`), and on a result-validation failure the library
       fetches `registry.npmjs.org/yahoo-finance2/latest` (`esm/src/lib/versions.js:6`) — the one
@@ -79,10 +102,15 @@ unchanged — which is why this ticket touches `app/lib` exactly once, to move a
 **The image**
 
 - [ ] The runtime stage copies `server/price-worker.ts` and its closure: `price-provider.server.ts`,
-      `market-hours.ts`, `money.ts` and the new `matchKey` module. `server/config.ts`, `server/db.ts`
+      `market-hours.ts`, `money.ts`, `provider-types.ts` and the new `matchKey` module. `server/config.ts`, `server/db.ts`
       and `server/migrations.ts` already ship.
-- [ ] The layout preserves `/app/app/lib/` and `/app/server/` as siblings — `db.server.ts:16-18`
-      reaches `../../server/*.ts`
+- [ ] The layout preserves `/app/app/lib/` and `/app/server/` as siblings, because the copied
+      `app/lib` modules resolve `../../server/*.ts` relatively
+- [ ] **`scripts/smoke-test.sh:219-221` will fail.** It asserts `test ! -e /app/app` under "source
+      tree leaked into the runtime image", and `ci.yml:138` runs it. Replace the blanket check with
+      an allowlist of exactly the worker's closure — a better assertion, because it then fails both
+      when a module is added to the image and when one is missing, which is the copy set's real
+      risk.
 - [ ] The entrypoint lives under `server/`, not `scripts/` — `.dockerignore:13` excludes `scripts/`
       from the build context, re-including only `prune-unreachable-deps.mjs` at `:14-15`
 - [ ] A `node --experimental-strip-types`-free plain `node -e "import('./server/price-worker.ts')"`
@@ -95,9 +123,15 @@ unchanged — which is why this ticket touches `app/lib` exactly once, to move a
       `error`
 - [ ] An expired lease is reclaimed; a landed answer survives a second write attempt
 - [ ] A pattern-violating symbol never reaches the provider
+- [ ] Note the test shape: `withDatabase` (`tests/support/database.ts:92`) gives one rolled-back
+      transaction and therefore no second session, so these tests interleave a fake worker's `UPDATE`
+      inside the same transaction rather than spawning a process. Workable, and worth saying so
+      before someone tries.
 - [ ] A provider deadline expiry writes `error` and does not leave the loop wedged
 - [ ] `versionCheck: false` is pinned
 
 **Gates**
 
-- [ ] `npm run typecheck`, `npm test`, `npm run build` green
+- [ ] `npm run typecheck`, `npm test`, `npm run build`, **`scripts/smoke-test.sh`** green — this
+      ticket changes what the runtime image contains, so smoke is a gate here even though it is not
+      for a pure `app/lib` change

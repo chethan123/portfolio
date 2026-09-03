@@ -55,7 +55,22 @@ deploy where two independent things can break, with a rollback that cannot separ
       baked into the cluster, so `ALTER ROLE portfolio PASSWORD …` is required and editing `.env`
       alone breaks authentication
 - [ ] `DESIGN.md:956-957` says the gate's variables "are the only settings anywhere with no default"
-      — false after this ticket
+      — false after this ticket. **`ARCHITECTURE.md:249-256` carries the identical sentence** plus
+      "`POSTGRES_PASSWORD` … must be kept in sync with the credentials inside `DATABASE_URL`". Fix
+      both copies or the contradiction just moves.
+- [ ] `docs/operating.md:174-182` — "every setting has a working default except `DATABASE_URL`… One
+      more is worth deciding before the first `up`: `POSTGRES_PASSWORD`". "Worth deciding" becomes
+      "required".
+- [ ] `docs/operating.md:283-290` — "Neither variable is validated at startup… a typo surfaces as a
+      failed pull, not as the message naming the variable." After `:?` an unset value *does* produce
+      a message naming the variable.
+- [ ] `docs/operating.md:308-314` — "`POSTGRES_PASSWORD` … configures `compose.yaml` rather than the
+      app, **which is why it is not in the table above**". That directly contradicts adding the row
+      to that table, whose header at `:246` says "All of them are validated once at startup" — which
+      this variable never will be. Decide where it goes and make the two passages agree.
+- [ ] `docs/runbook.md:525-547` ("I changed the database password and nothing connects") tells the
+      operator at `:540-542` to set `POSTGRES_PASSWORD` **and** an explicit `DATABASE_URL` in `.env`
+      — the very override trap this ticket removes from `.env.example`. Rewrite the recipe.
 - [ ] The env tables in `DESIGN.md:944-951` and `docs/operating.md:250-257` gain the row
 
 **Gates**
