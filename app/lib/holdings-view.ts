@@ -394,11 +394,11 @@ export function parseQuery(params: URLSearchParams): HoldingsQuery {
  * **The owner filter arrives as its own argument**, not in
  * {@link HoldingsQuery}: household-wide (ADR-0008) where the rest is this
  * screen's own — but it must be here, and first, or a column click would
- * clear it; `readOwnerFilter` is the other half of the seam. Emitted first,
- * with literal commas, because this is the single definition of a canonical
- * Holdings URL and the loader redirects anything spelled differently
- * (`URLSearchParams` would percent-encode the comma — a second spelling of
- * one view).
+ * clear it; `readOwnerFilter` is the other half of the seam. Emitted first
+ * because this is the single definition of a canonical Holdings URL and the
+ * loader redirects anything spelled differently — `toOwnerParam` is what
+ * makes that spelling survive react-router's own request rebuild rather than
+ * being respelled by it (see that function's doc).
  */
 export function toSearch(query: HoldingsQuery, owners: OwnerFilter): string {
   const params = new URLSearchParams();

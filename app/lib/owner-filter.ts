@@ -15,6 +15,10 @@
  * query runs; dropping one would silently widen the view toward the whole
  * portfolio. The syntactic guard lives in the predicate that runs the query,
  * never here.
+ *
+ * **The canonical spelling must survive react-router's rebuild of the
+ * request, not only URL parsing** — `toOwnerParam` says how, and
+ * `tests/owner-filter.test.ts` round-trips it through both serialisers.
  */
 
 /**
@@ -65,36 +69,32 @@ export function readOwnerFilter(params: URLSearchParams): OwnerFilter {
 }
 
 /**
- * The canonical spelling **without** a leading `?` — `owner=1,3`, or `""`
- * when the filter is off: the bare pair, for composing into a longer query
- * (`toSearch` in `holdings-view.ts` returns *with* `?`; concatenating two
- * such gives `?sort=value&?owner=1`, hence two functions). Canonicalises its
- * input rather than trusting it, so the name is true for any caller.
+ * The canonical spelling **without** a leading `?` — `owner=1&owner=3`, or
+ * `""` when off — for composing into a longer query (`toSearch` returns
+ * *with* `?`; two such would concatenate into `?sort=value&?owner=1`).
  *
- * **Append the pair as it stands** — never round-trip it through
- * `URLSearchParams.set`, which spells the separator `%2C`: a generator
- * disagreeing with this one about commas is a redirect firing on every click.
+ * **A repeated key, built by `URLSearchParams`, never joined.** A loader
+ * compares this against its request's `url.search` with `!==`, and
+ * `url.search` is react-router's own rebuild through the form-urlencoded
+ * serialiser, not the address sent (`callRouteHandler`) — so the spelling
+ * must be a fixed point of *that* serialiser, which a hand-joined `owner=1,3`
+ * was not, and looped forever. `URLSearchParams` output re-parses to itself
+ * and holds nothing the URL parser touches either, so it is a fixed point of
+ * both, by construction — until `future.v8_passThroughRequests` stops the
+ * rebuild altogether.
+ *
+ * Fixed only for a filter already through {@link readOwnerFilter}:
+ * `toOwnerParam([" x "])` reads back trimmed, so it is not its own fixed
+ * point. Every caller here passes read output.
  */
 export function toOwnerParam(filter: OwnerFilter): string {
   const canonical = canonicalise(filter);
+  if (!isFiltered(canonical)) return "";
 
-  return isFiltered(canonical) ? `owner=${canonical.map(spellId).join(",")}` : "";
-}
+  const params = new URLSearchParams();
+  for (const id of canonical) params.append("owner", id);
 
-/**
- * One id, spelled as the URL parser spells it. Loaders compare `url.search`
- * — already respelled by the WHATWG parser — to the canonical search with
- * `!==` and bounce on difference; that is loop-free only while the canonical
- * spelling is a **fixed point of URL parsing**, else the redirect fires
- * forever. `?owner=o'brien` — a hand-typed id deliberately kept — did
- * exactly that under bare `encodeURIComponent`, which leaves `'` where the
- * parser writes `%27`. The apostrophe is the one disagreement: everything
- * else `encodeURIComponent` leaves bare the parser's query serialiser also
- * leaves bare, this grammar's commas included. `tests/owner-filter.test.ts`
- * holds the fixed point with real `URL` round trips.
- */
-function spellId(id: string): string {
-  return encodeURIComponent(id).replaceAll("'", "%27");
+  return params.toString();
 }
 
 /**
@@ -114,13 +114,20 @@ export function ownerSearch(filter: OwnerFilter): string {
  * The address a request should be reading: its owner parameter spelled
  * canonically and first, everything else kept. What screens redirect on
  * before any database work — answered from the address alone, no roster.
+ * `owner-reading.server.ts` is the caller that matters: it compares this
+ * against a request's `url.search` — the react-router-rebuilt request a
+ * loader actually receives, per `toOwnerParam`'s doc — with `!==`, so this
+ * function's output has to carry that function's fixed-point property, and
+ * does, being built from it.
  *
  * The whole search rather than a yes/no: a boolean computed from *decoded*
- * values cannot tell `?owner=1%2C3` from `?owner=1,3`, so one view would
- * have two URLs; and leaving the loader to build the target as `pathname +
- * ownerSearch(...)` silently drops the `range` and `start`/`end` the same
- * address carries. `?owner=` present but empty is not canonical — the
- * unfiltered spelling is no parameter at all.
+ * values cannot tell `?owner=1%2C3` from `?owner=1,3` — both parse to the
+ * same two ids, since `readOwnerFilter` splits a decoded comma either way —
+ * so one view would have two URLs where only the raw text still disagrees;
+ * and leaving the loader to build the target as `pathname + ownerSearch(...)`
+ * silently drops the `range` and `start`/`end` the same address carries.
+ * `?owner=` present but empty is not canonical — the unfiltered spelling is
+ * no parameter at all.
  *
  * `owners` overrides the address, for the caller spelling a *different*
  * selection into the same address: bouncing an all-roster selection back to

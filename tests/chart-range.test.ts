@@ -561,10 +561,16 @@ describe("the address a range control points at", () => {
     // and React Router resolves it as one — so picking a range on the account
     // page dropped the `?uploaded=` receipt the reader was looking at.
     expect(rangeSearch(at("?uploaded=42"), "1m")).toBe("?uploaded=42&range=1m");
-    // Comma-spelled, not `%2C`: `?owner=1,3` is this application's canonical
-    // spelling for a multi-valued parameter (spec 0013), and a second spelling
-    // of one view is what that normalisation rule exists to prevent.
-    expect(rangeSearch(at("?owner=1,3&sort=value"), "1m")).toBe("?owner=1,3&sort=value&range=1m");
+    // A repeated key, not a comma: `?owner=1&owner=3` is this application's
+    // canonical spelling for a multi-valued parameter (spec 0013,
+    // `owner-filter.ts`'s `toOwnerParam`). `carriedParams` reads it as two
+    // `owner` entries and `URLSearchParams` reproduces a repeated key
+    // unchanged — there is no separator here for a second serialiser to
+    // spell differently, which a joined `owner=1,3` could not have said (see
+    // `toOwnerParam`'s doc for why that spelling looped instead).
+    expect(rangeSearch(at("?owner=1&owner=3&sort=value"), "1m")).toBe(
+      "?owner=1&owner=3&sort=value&range=1m",
+    );
   });
 
   it("rewrites its own three rather than carrying them, so no preset leaves a custom span behind", () => {

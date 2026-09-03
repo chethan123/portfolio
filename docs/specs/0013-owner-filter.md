@@ -70,6 +70,17 @@ because a bigint does not survive one.)
 `?owner=3` on Holdings keeps working and now means the same thing household-wide, so no bookmark
 breaks.
 
+**Superseded in part.** The comma above is not this application's canonical spelling for two or
+more ids — it never worked as one. `?owner=1,3` is not a fixed point of the form-urlencoded
+serialiser react-router's own request rebuild applies to every loader's request
+(`stripIndexParam`/`stripRoutesParam`), so the loader redirected to it forever and selecting two or
+more owners never actually applied on any screen; the
+[2026-09-01 audit](../research/2026-09-01-net-worth-aggregation-audit.md) is the finding, and
+`app/lib/owner-filter.ts`'s `toOwnerParam` doc has the fix. The canonical spelling for two or more
+ids is now the repeated key `?owner=1&owner=3`; a comma-spelled or percent-encoded address is still
+read as one on the way in, and bounces to the repeated key. The single-value case this paragraph
+also describes, `?owner=3`, was never affected.
+
 **Normalisation, so one view has one URL** — the rule `toSearch` and the Holdings canonical redirect
 (`app/routes/holdings.tsx:121-123`) already establish:
 
@@ -257,6 +268,10 @@ shipped screen and lands first, as ticket 00, rather than riding inside the larg
 select, so the control replaces one rather than appearing beside one — no step in the sequence
 leaves a person unable to narrow by owner, and no step lets the control emit `?owner=1,3` at a
 parser that understands only a single value.
+
+**Superseded in the same respect as the banner above:** `?owner=1,3` here is the same spelling that
+never worked as canonical, not what the control ends up emitting — the sequencing argument itself
+stands regardless.
 
 ## Testing
 

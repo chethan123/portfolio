@@ -17,7 +17,7 @@ import { isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
 import { isNarrowedToNothing, ownerReading, type ScreenAddress } from "~/lib/owner-reading.server";
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
-import { get, outcomeOf, redirectTo } from "./support/routes.ts";
+import { get, outcomeOf, ownerParam, redirectTo } from "./support/routes.ts";
 
 import type { TestContext } from "./support/database.ts";
 
@@ -90,8 +90,8 @@ describe("the settle chain", () => {
         // Every multi-owner URL, on any transport that has already round-tripped
         // the query through `URLSearchParams`.
         `?owner=${both.replace(",", "%2C")}`,
-        // An id naming nobody, which this application keeps on purpose — the
-        // one case where `encodeURIComponent` and the URL parser disagree.
+        // The same apostrophe id, encoded and literal — both must settle to
+        // the same address, matching nobody.
         "?owner=o%27brien",
         "?owner=o'brien",
         "?owner=a%20b",
@@ -112,27 +112,34 @@ describe("the settle chain", () => {
     "keeps the rest of the address and spells the owner parameter first",
     withDatabase(async (ctx) => {
       const { alice, bob } = await seedTwoOwners(ctx);
-      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
 
       const messy = get(`${PATH}?range=1m&owner=${bob.id},${alice.id}`);
-      expect(await redirectTo(() => ownerReading(messy))).toBe(`${PATH}?owner=${both}&range=1m`);
+      expect(await redirectTo(() => ownerReading(messy))).toBe(
+        `${PATH}?${ownerParam(alice.id, bob.id)}&range=1m`,
+      );
     }),
   );
 
   it(
-    "bounces the percent-encoded separator on its own, not only as part of the chain",
+    "bounces a comma-spelled selection — literal or percent-encoded — to the repeated-key address, on its own and not only as part of the chain",
     withDatabase(async () => {
       // Nothing seeded — the empty seed is itself the assertion: respelling a
       // separator is decided from the address alone, before any database
       // work, so a real roster must not be what makes this bounce happen.
       //
-      // A comparison blind to encoding would settle this address perfectly
-      // while quietly keeping two URLs for one view — `?owner=1%2C3` never
-      // itself appearing as a hop in a chain that starts elsewhere is not the
-      // same claim as it bouncing when it is where a reader actually lands.
-      expect(await redirectTo(() => ownerReading(get(`${PATH}?owner=1%2C3&range=1m`)))).toBe(
-        `${PATH}?owner=1,3&range=1m`,
-      );
+      // `?owner=1,3` was this application's *canonical* spelling before this
+      // fix, and arrived unchanged; it is now a legacy input `readOwnerFilter`
+      // still accepts (a hand-typed address, or one of this suite's own),
+      // never a target a loader redirects to. Both spellings of the separator
+      // — literal and percent-encoded — have to bounce to the one repeated-key
+      // address, or a reader who typed either would settle on a URL the other
+      // does not: a comparison blind to encoding would settle this pair
+      // perfectly while quietly keeping two URLs for one view.
+      for (const search of ["?owner=1,3&range=1m", "?owner=1%2C3&range=1m"]) {
+        expect(await redirectTo(() => ownerReading(get(`${PATH}${search}`)))).toBe(
+          `${PATH}?owner=1&owner=3&range=1m`,
+        );
+      }
     }),
   );
 });
@@ -145,7 +152,9 @@ describe("what `reading` resolves to", () => {
 
       // Already canonical: `999999999` sorts after any freshly seeded id, so
       // this exercises the resolution, not the bounce.
-      const { reading, owner } = await ownerReading(get(`${PATH}?owner=${alice.id},999999999`));
+      const { reading, owner } = await ownerReading(
+        get(`${PATH}?owner=${alice.id}&owner=999999999`),
+      );
 
       expect(reading).toEqual([alice.id]);
       // The raw selection is untouched — `reading` narrows what the readers
@@ -160,7 +169,7 @@ describe("what `reading` resolves to", () => {
     withDatabase(async (ctx) => {
       await seedTwoOwners(ctx);
 
-      const { reading } = await ownerReading(get(`${PATH}?owner=888888888,999999999`));
+      const { reading } = await ownerReading(get(`${PATH}?owner=888888888&owner=999999999`));
 
       // `[]` reads as the whole household (`owner-filter.ts`); keeping the raw,
       // unmatched ids is what makes a household-scoped reader narrow to
@@ -177,8 +186,8 @@ describe("what `reading` resolves to", () => {
       for (const search of [
         "",
         `?owner=${alice.id}`,
-        `?owner=${alice.id},999999999`,
-        "?owner=888888888,999999999",
+        `?owner=${alice.id}&owner=999999999`,
+        "?owner=888888888&owner=999999999",
       ]) {
         const { reading, owner } = await ownerReading(get(`${PATH}${search}`));
         expect(isFiltered(reading)).toBe(isFiltered(owner.owners));
@@ -192,13 +201,12 @@ describe("a screen's own request-only state", () => {
     "survives both bounces through `request`, and is gone from `link` and `showEveryone`",
     withDatabase(async (ctx) => {
       const { alice, bob } = await seedTwoOwners(ctx);
-      const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
       const spell = rowAddress("42");
 
       // Non-canonical order, the row present: the canonical bounce keeps it.
       const messy = get(`${PATH}?owner=${bob.id},${alice.id}&row=42`);
       const sorted = await redirectTo(() => ownerReading(messy, spell));
-      expect(sorted).toBe(`${PATH}?owner=${both}&row=42`);
+      expect(sorted).toBe(`${PATH}?${ownerParam(alice.id, bob.id)}&row=42`);
 
       // Alice and Bob are the whole household, so the sorted address collapses
       // next — the everyone bounce, built from the same `request`, keeps the
