@@ -1,0 +1,473 @@
+[
+  {
+    "screen": "overview",
+    "bannerCost": 129,
+    "path": "/",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 631,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "header",
+        "cls": "page-header page-header--bare",
+        "top": 185,
+        "height": 32,
+        "text": "OverviewOwnerEveryoneShowAlex RiveraJordan R",
+        "gapAfter": 24
+      },
+      {
+        "tag": "section",
+        "cls": "kpi",
+        "top": 241,
+        "height": 216,
+        "text": "Total net worth$••••••Amount hidden+40.4% / ",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 24,
+    "trailing": 174,
+    "overflowCount": 22,
+    "overflowing": [
+      {
+        "cls": "visually-hidden",
+        "width": 131
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 233
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 94
+      },
+      {
+        "cls": "segmented",
+        "width": 545
+      },
+      {
+        "cls": "chart",
+        "width": 329
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 119
+      }
+    ]
+  },
+  {
+    "screen": "holdings",
+    "bannerCost": 129,
+    "path": "/holdings",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 1007,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "header",
+        "cls": "page-header",
+        "top": 185,
+        "height": 189,
+        "text": "HoldingsEvery position the household holds, ",
+        "gapAfter": 24
+      },
+      {
+        "tag": "form",
+        "cls": "filter-bar",
+        "top": 398,
+        "height": 314,
+        "text": "AccountAllAlly Online Savings ····6311 · All",
+        "gapAfter": 24
+      },
+      {
+        "tag": "div",
+        "cls": "segmented-group",
+        "top": 736,
+        "height": 52,
+        "text": "Group byNo groupingOwnerAccountBrokerageAcco",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 48,
+    "trailing": 219,
+    "overflowCount": 109,
+    "overflowing": [
+      {
+        "cls": "segmented",
+        "width": 872
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 62
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      }
+    ]
+  },
+  {
+    "screen": "holdings-grouped",
+    "bannerCost": 129,
+    "path": "/holdings?group=assetClass",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 1007,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "header",
+        "cls": "page-header",
+        "top": 185,
+        "height": 189,
+        "text": "HoldingsEvery position the household holds, ",
+        "gapAfter": 24
+      },
+      {
+        "tag": "form",
+        "cls": "filter-bar",
+        "top": 398,
+        "height": 314,
+        "text": "AccountAllAlly Online Savings ····6311 · All",
+        "gapAfter": 24
+      },
+      {
+        "tag": "div",
+        "cls": "segmented-group",
+        "top": 736,
+        "height": 52,
+        "text": "Group byNo groupingOwnerAccountBrokerageAcco",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 48,
+    "trailing": 219,
+    "overflowCount": 123,
+    "overflowing": [
+      {
+        "cls": "segmented",
+        "width": 872
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 62
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      }
+    ]
+  },
+  {
+    "screen": "analysis",
+    "bannerCost": 129,
+    "path": "/analysis",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 821.5,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "header",
+        "cls": "page-header",
+        "top": 185,
+        "height": 169,
+        "text": "AnalysisPortfolio breakdown and allocation v",
+        "gapAfter": 24
+      },
+      {
+        "tag": "p",
+        "cls": "coverage-note",
+        "top": 378,
+        "height": 32,
+        "text": "Based on 17 of 18 holdings. The rest have ne",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 24,
+    "trailing": 411.5,
+    "overflowCount": 35,
+    "overflowing": [
+      {
+        "cls": "visually-hidden",
+        "width": 148
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 148
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      }
+    ]
+  },
+  {
+    "screen": "income",
+    "bannerCost": 129,
+    "path": "/income",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 937.5,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "header",
+        "cls": "page-header",
+        "top": 185,
+        "height": 189,
+        "text": "IncomeWhat the portfolio pays over the comin",
+        "gapAfter": 24
+      },
+      {
+        "tag": "section",
+        "cls": "kpi",
+        "top": 398,
+        "height": 128,
+        "text": "Total annual dividend$••••••Amount hidden1.9",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 24,
+    "trailing": 411.5,
+    "overflowCount": 14,
+    "overflowing": [
+      {
+        "cls": "visually-hidden",
+        "width": 233
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 148
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 101
+      }
+    ]
+  },
+  {
+    "screen": "account-detail",
+    "bannerCost": 129,
+    "path": "/accounts/2",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 866,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "nav",
+        "cls": "breadcrumb",
+        "top": 185,
+        "height": 20,
+        "text": "Overview/Empower 401(k)",
+        "gapAfter": 24
+      },
+      {
+        "tag": "section",
+        "cls": "panel",
+        "top": 229,
+        "height": 463,
+        "text": "Empower 401(k)Owner:Alex RiveraInstitution:E",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 24,
+    "trailing": 174,
+    "overflowCount": 13,
+    "overflowing": [
+      {
+        "cls": "visually-hidden",
+        "width": 233
+      },
+      {
+        "cls": "segmented",
+        "width": 545
+      },
+      {
+        "cls": "chart",
+        "width": 329
+      },
+      {
+        "cls": "data-table-scroll",
+        "width": 525
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 104
+      }
+    ]
+  },
+  {
+    "screen": "settings",
+    "bannerCost": 129,
+    "path": "/settings",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 444,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "nav",
+        "cls": "settings-tabs",
+        "top": 185,
+        "height": 93,
+        "text": "OverviewPeopleAccountsTaxPricesDisplay",
+        "gapAfter": 24
+      },
+      {
+        "tag": "header",
+        "cls": "page-header",
+        "top": 302,
+        "height": 101,
+        "text": "SettingsEverything that changes what the app",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 24,
+    "trailing": 41,
+    "overflowCount": 0,
+    "overflowing": []
+  },
+  {
+    "screen": "settings-accounts",
+    "bannerCost": 129,
+    "path": "/settings/accounts",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 488.5,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "nav",
+        "cls": "settings-tabs",
+        "top": 185,
+        "height": 93,
+        "text": "OverviewPeopleAccountsTaxPricesDisplay",
+        "gapAfter": 24
+      },
+      {
+        "tag": "header",
+        "cls": "page-header",
+        "top": 302,
+        "height": 121,
+        "text": "AccountsEvery account the household holds — ",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 24,
+    "trailing": 65.5,
+    "overflowCount": 4,
+    "overflowing": [
+      {
+        "cls": "data-table-scroll",
+        "width": 617
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 94
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 97
+      },
+      {
+        "cls": "visually-hidden",
+        "width": 100
+      }
+    ]
+  },
+  {
+    "screen": "upload",
+    "bannerCost": 129,
+    "path": "/upload",
+    "viewport": 900,
+    "chromeBottom": 64,
+    "contentTop": 413,
+    "usable": 771,
+    "blocks": [
+      {
+        "tag": "header",
+        "cls": "page-header",
+        "top": 185,
+        "height": 101,
+        "text": "Upload a statementA statement lands as one p",
+        "gapAfter": 24
+      },
+      {
+        "tag": "nav",
+        "cls": "upload-steps",
+        "top": 310,
+        "height": 48,
+        "text": "1 Account & file2 Columns3 New instruments4 ",
+        "gapAfter": 0
+      }
+    ],
+    "leading": 121,
+    "gaps": 24,
+    "trailing": 55,
+    "overflowCount": 0,
+    "overflowing": []
+  }
+]

@@ -5,6 +5,49 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-03 — Phone layout against DESIGN.md §11
+
+One document: [Phone layout: what §11 decides, and what the stylesheet actually does](./2026-09-03-phone-layout.md)
+— what every screen costs on a phone, measured against `a405806` on the demo household at 390×900,
+and how that compares with what §11 says the phone is for. Nothing in it is approved; it exists so
+the arrangement question can be argued from figures rather than from a screenshot.
+
+### The three things worth knowing without reading further
+
+1. **§11 names the read pages as what the phone is for, and they are the screens that do not fit.**
+   Four of the five spend more than four fifths of the first screenful before their content starts,
+   and Holdings spends more than all of it — the first holding row is below the fold. The three
+   write screens §11 explicitly declines to invest in are the cheapest on a phone, none past two
+   fifths. The "no mobile-specific layout investment" clause belongs to §11's third bullet, the
+   desktop-shaped write flows; it was never a decision about the read screens.
+
+2. **Phone arrangement exists in the stylesheet twice, and both times on Holdings.** Of the fifteen
+   declarations across the twelve `max-width: 767px` blocks that re-arrange the box tree, thirteen
+   are the Holdings card reflow; nine of the twelve blocks contain none and change only type size
+   and padding. The cost is in arrangement rather than in spacing: between-block gaps are 24–48px
+   of an 814px preamble, while a single panel header is 174–411px.
+
+3. **The method is already written down, shipped, and never generalised.** The Holdings brief
+   argues one DOM rather than two, card reflow through `data-label`, leading with the pair the
+   phone is opened to read, hiding nothing, and controls two to a row. Every rule transfers
+   unchanged. The one question it answered that no other screen has been asked is which pair its
+   reader opens it for.
+
+### Evidence
+
+[`2026-09-03-phone-layout/harness/`](./2026-09-03-phone-layout/harness/) holds the measurement
+script, which walks each screen's box tree at 390×900 rather than counting pixels off a capture,
+and writes both the figures and `measurements.json`. It discounts the open-instance banner the
+ungated demo draws, so its figures are what a gated household's instance shows.
+
+### Status
+
+Open. The report grades its ideas by what they cost in documents: the panel header, the refresh
+control's placement, the donut-above-its-table inversion and seven defect classes are unconstrained;
+pairing the owner filter with the range strip contradicts spec 0013; phone layout for the upload and
+settings forms would reverse §11 and needs an ADR. What it deliberately leaves open is the question
+under all of them — what pair each screen is opened to read — which is not a CSS question.
+
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
 
 One document: [The Overview's 1D latency](./2026-09-01-overview-1d-latency.md) — the diagnosis of a
