@@ -82,18 +82,18 @@ export function OwnerFilterControl({
         className="filter-bar owner-filter-menu"
         aria-label="Filter by owner"
       >
-        {Object.entries(hidden).map(([name, value]) => (
-          <input key={name} type="hidden" name={name} value={value} />
-        ))}
-
         <fieldset className="owner-filter-owners">
           <legend className="u-label">Show</legend>
           {owners.map((owner) => (
             <label key={owner.id} className="choice" htmlFor={`owner-${owner.id}`}>
               {/* Every box carries the same name, so a submission arrives as
-                  a repeated parameter and the canonical redirect rewrites it
-                  to the comma spelling — one bounce, like every GET form on
-                  these screens. */}
+                  a repeated parameter — `owner=1&owner=3` — which is exactly
+                  `toOwnerParam`'s own spelling of that selection. Placed
+                  before the hidden fields below for the same reason: a form
+                  submits in DOM order, and the canonical address spells the
+                  owner parameter first (`canonicalOwnerSearch`), so with both
+                  orderings matched Apply settles without a respelling
+                  bounce. */}
               <input
                 id={`owner-${owner.id}`}
                 type="checkbox"
@@ -105,6 +105,16 @@ export function OwnerFilterControl({
             </label>
           ))}
         </fieldset>
+
+        {/* After the fieldset, not before: a browser submits a form's fields
+            in DOM order, so this is what keeps a submission from arriving
+            `range=1y&owner=1&owner=3` — the owner parameter after the rest,
+            which is not this address's canonical order and would cost every
+            Apply a redirect it does not need to pay. Nothing on screen moves:
+            these are `type="hidden"`. */}
+        {Object.entries(hidden).map(([name, value]) => (
+          <input key={name} type="hidden" name={name} value={value} />
+        ))}
 
         <div className="filter-actions">
           <button type="submit" className="button">

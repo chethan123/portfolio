@@ -2,6 +2,12 @@
 
 _Part of [0013-owner-filter.md](../0013-owner-filter.md)._
 
+**Superseded in part:** every `?owner=1,3` below, including in the Tests checklist, was written as
+what the control emits for two or more ids; it never worked as that — [0013's
+banner](../0013-owner-filter.md) has the finding and the fix. Canonical for two or more is the
+repeated key `?owner=1&owner=3`; a comma-spelled address still redirects to it rather than being
+read directly. The sequencing argument below is unaffected either way.
+
 **What to build:** The shared owner control, the navigation change that carries the filter between
 screens, and Holdings honouring the household filter instead of its own Owner select.
 

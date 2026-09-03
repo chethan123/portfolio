@@ -182,12 +182,14 @@ describe("toSearch", () => {
     expect(toSearch(query(search), ALL_OWNERS)).toBe(`?${search}`);
   });
 
-  it("emits the owner filter first, with literal commas, so one view has one spelling", () => {
-    // First and comma-spelled because this function is the single definition of
-    // a canonical Holdings URL and the loader redirects anything else. Round
-    // -tripping the pair through `URLSearchParams` would spell the separator
-    // `%2C`, which is a second URL for one view.
-    expect(toSearch(query("group=kind"), ["1", "3"])).toBe("?owner=1,3&group=kind");
+  it("emits the owner filter first, as a repeated key, so one view has one spelling", () => {
+    // First, because this function is the single definition of a canonical
+    // Holdings URL and the loader redirects anything else. A repeated key —
+    // `toOwnerParam`'s own spelling — rather than a joined string: a
+    // hand-joined `owner=1,3` is respelled `owner=1%2C3` by react-router's
+    // own rebuild of the request (`toOwnerParam`'s doc has the mechanism),
+    // which would be a second URL for one view.
+    expect(toSearch(query("group=kind"), ["1", "3"])).toBe("?owner=1&owner=3&group=kind");
     expect(toSearch(query(), ["3"])).toBe("?owner=3");
   });
 

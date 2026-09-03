@@ -20,18 +20,11 @@ import { currentPosition } from "~/lib/positions.server";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, outcomeOf, post, redirectTo, responseOf } from "../support/routes.ts";
+import { args, get, outcomeOf, ownerParam, post, redirectTo, responseOf } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
 afterAll(closeTestDatabase);
-
-/** The canonical owner parameter for a selection, which is sorted numerically. */
-const ownerParam = (...people: { id: string }[]): string =>
-  people
-    .map((person) => person.id)
-    .sort((a, b) => Number(a) - Number(b))
-    .join(",");
 
 /** One priced position, which is the smallest thing this screen can draw. */
 async function seedOnePosition(
@@ -197,7 +190,7 @@ describe("reading the table as an owner", () => {
       // Two of three, so this is a narrowing and not the household spelled a
       // second way — and the two figures below have to differ, or the
       // assertion would pass against a screen ignoring the filter.
-      const two = await at(`?owner=${ownerParam(alice, bob)}`);
+      const two = await at(`?${ownerParam(alice.id, bob.id)}`);
       expect(two.rows).toHaveLength(2);
       expect(two.total.value).toBe("27800.0000");
 
@@ -289,8 +282,8 @@ describe("reading the table as an owner", () => {
     "still groups by owner, still drops the column, and does it under a filter naming two",
     withDatabase(async (ctx) => {
       const { alice, bob } = await seedTwoOwners(ctx);
-      const both = ownerParam(alice, bob);
-      const data = await loader(args(get(`/holdings?owner=${both}&group=owner`)));
+      const both = ownerParam(alice.id, bob.id);
+      const data = await loader(args(get(`/holdings?${both}&group=owner`)));
 
       // Two groups, not three: Carol is in the household and out of this view.
       expect(data.groups?.map((group) => group.label)).toEqual(["Alice", "Bob"]);
@@ -332,12 +325,12 @@ describe("reading the table as an owner", () => {
       // ticking all three arrives here and is bounced — one view, one URL.
       expect(
         await redirectTo(() =>
-          loader(args(get(`/holdings?owner=${ownerParam(alice, bob, carol)}&group=kind`))),
+          loader(args(get(`/holdings?${ownerParam(alice.id, bob.id, carol.id)}&group=kind`))),
         ),
       ).toBe("/holdings?group=kind");
 
       // Two of three is a real narrowing and stays.
-      const two = await loader(args(get(`/holdings?owner=${ownerParam(alice, bob)}`)));
+      const two = await loader(args(get(`/holdings?${ownerParam(alice.id, bob.id)}`)));
       expect(two.owners).toHaveLength(2);
     }),
   );
@@ -354,7 +347,7 @@ describe("reading the table as an owner", () => {
       // different bounce than the one the row's own edit already keeps
       // `saved` through — one speller for both closes that gap.
       const destination = await redirectTo(() =>
-        loader(args(get(`/holdings?owner=${ownerParam(alice, bob, carol)}&saved=${key}`))),
+        loader(args(get(`/holdings?${ownerParam(alice.id, bob.id, carol.id)}&saved=${key}`))),
       );
       expect(destination).toBe(`/holdings?saved=${key}`);
 
@@ -479,7 +472,7 @@ describe("the three empty states", () => {
       const two = renderRoute(
         Holdings,
         "/holdings",
-        await loader(args(get(`/holdings?owner=${[alice.id, bob.id].sort().join(",")}`))),
+        await loader(args(get(`/holdings?${ownerParam(alice.id, bob.id)}`))),
       );
       expect(two).toContain("Alice and Bob");
 
@@ -489,11 +482,10 @@ describe("the three empty states", () => {
       const dana = await ctx.seedPerson({ name: "Dana" });
       await ctx.seedAccount({ name: "Dana Bank", owner: dana, kind: "bank" });
 
-      const chosen = [alice.id, bob.id, carol.id].sort((a, b) => Number(a) - Number(b)).join(",");
       const three = renderRoute(
         Holdings,
         "/holdings",
-        await loader(args(get(`/holdings?owner=${chosen}`))),
+        await loader(args(get(`/holdings?${ownerParam(alice.id, bob.id, carol.id)}`))),
       );
       expect(three).toContain("3 of 4");
       expect(three).not.toContain("Alice and Bob and Carol");
@@ -569,11 +561,11 @@ describe("the canonical bounce, through a real URL", () => {
    * The invariant the loader depends on, asserted the way the loader meets
    * it: through `new Request`, so every re-encoding of URL parsing is in
    * the picture. `holdings-view.test.ts` checks `toSearch` is a fixed point
-   * of *itself* — weaker, and blind to exactly this: two serialisers are in
-   * play (`encodeURIComponent` leaves `'` where `URL` spells `%27`;
-   * `URLSearchParams` spells `,` as `%2C` where the canonical parameter is
-   * `owner=1,3`), so an address could differ from its canonical spelling
-   * forever and the busiest table would redirect until the browser gave up.
+   * of *itself* — weaker, and blind to exactly this: the URL parser and the
+   * form-urlencoded serialiser each respell characters the other leaves
+   * bare, and a request reaches a loader through both, so an address could
+   * differ from its canonical spelling forever and the busiest table would
+   * redirect until the browser gave up.
    */
   const settles = async (search: string): Promise<void> => {
     const first = await outcomeOf(() => loader(args(get(`/holdings${search}`))));
@@ -594,14 +586,15 @@ describe("the canonical bounce, through a real URL", () => {
       const { alice, bob } = await seedTwoOwners(ctx);
       const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
 
-      // Not only settling: the second spelling of the separator must actually
-      // bounce, or one view keeps two URLs — the address this application's
-      // links spell, and the one a query round-tripped through
-      // `URLSearchParams` arrives as. A comparison blind to encoding settles
-      // this list perfectly while quietly keeping both.
+      // Not only settling: the percent-encoded separator must actually bounce
+      // to this application's real canonical spelling — the repeated key,
+      // never the comma this test once expected back (`owner-filter.ts`'s
+      // `toOwnerParam` doc says why that spelling stopped being canonical). A
+      // comparison blind to encoding settles this pair perfectly while
+      // quietly keeping two URLs for one view.
       expect(
         await redirectTo(() => loader(args(get(`/holdings?owner=${both.replace(",", "%2C")}`)))),
-      ).toBe(`/holdings?owner=${both}`);
+      ).toBe(`/holdings?${ownerParam(alice.id, bob.id)}`);
 
       // The owner-only spellings — reversed ids, the encoded separator, the
       // apostrophe, a space either way, a repeated parameter, the bare
@@ -615,6 +608,15 @@ describe("the canonical bounce, through a real URL", () => {
         `?owner=${alice.id}&account=&institution=&kind=&tax=&classification=&assetClass=`,
         `?group=kind&owner=${alice.id}`,
         `?owner=${alice.id}&sort=quantity&dir=asc&edit=1.2`,
+        // Two owners, not one: every other case above stops at a single id,
+        // so this screen's own grammar — grouping and the row parameters
+        // alongside `owner` — had never actually had a multi-owner chain
+        // followed past its first hop. Comma-spelled on purpose: that is the
+        // legacy input `readOwnerFilter` still reads, and it is `get`'s own
+        // rebuild through the server runtime (`tests/support/routes.ts`),
+        // not a client, that respells it before this loader ever sees it.
+        `?owner=${both}`,
+        `?group=kind&owner=${both}`,
       ]) {
         await settles(search);
       }

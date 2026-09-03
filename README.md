@@ -166,7 +166,7 @@ the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way
   everything. It is never derived from who signed in — the app deliberately holds no mapping from a
   sign-in to an owner, and inventing one so that a screen could open on "you" is the short step to
   "and this is *your* data" that a household of shared money does not want taken.
-- **The URL is the whole of it.** `?owner=1,3` and nothing else: no cookie, no stored setting.
+- **The URL is the whole of it.** `?owner=1&owner=3` and nothing else: no cookie, no stored setting.
   Closing the tab forgets it because there is nothing left to remember it, and pasting the address
   to the other person in the household shows them the same reading — which a cookie could never do.
 - **A narrowed screen says so in words**, beside the figure it narrowed, because a filter that

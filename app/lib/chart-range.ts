@@ -609,15 +609,17 @@ export function carriedParams(params: URLSearchParams): [string, string][] {
  * relative resolution: a `to` beginning with `?` replaces the *entire* query,
  * which is what silently dropped the `?uploaded=` receipt when a range was
  * picked. `start`/`end` are dropped, not carried — a preset never reads them,
- * and an address advertising a span nothing draws is worse than none. The
- * comma un-encoding keeps `?owner=1,3` (spec 0013) spelled one way in the
- * address bar; both spellings parse the same.
+ * and an address advertising a span nothing draws is worse than none.
+ *
+ * `next` is plain `URLSearchParams` output, unedited: `toOwnerParam`
+ * (`owner-filter.ts`) now spells the owner parameter the same way
+ * `URLSearchParams` itself would, so nothing here needs un-encoding.
  */
 export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
   const next = new URLSearchParams(carriedParams(params));
   next.set("range", range);
 
-  return `?${next.toString().replaceAll("%2C", ",")}`;
+  return `?${next.toString()}`;
 }
 
 /**

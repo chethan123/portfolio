@@ -145,10 +145,12 @@ export async function ownerReading(
   const owners = readOwnerFilter(url.searchParams);
   const spell = address ?? defaultAddress(url.searchParams);
 
-  // `!==` is safe because the canonical spelling is a fixed point of URL
-  // parsing (`spellId` in `owner-filter.ts` says why, and what looped when it
-  // was not): `url.search` is the parser's own spelling, so a differing
-  // address really is non-canonical and the bounce target equals itself.
+  // `!==` gives one view one *form-normal* URL, not one URL: `url.search`
+  // here is react-router's own rebuild of the request through the
+  // form-urlencoded serialiser, not the address sent (`callRouteHandler`).
+  // A spelling that is not a fixed point of that serialiser loops on every
+  // request containing it, and `toOwnerParam` (`owner-filter.ts`) is built
+  // so that it is.
   //
   // No runtime guard beyond that, though one was considered: a guard could
   // only check that the bounce target survives parsing, not that a speller is
