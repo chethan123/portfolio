@@ -1116,9 +1116,9 @@ a {
  * Overview's range strip sits in a `.kpi` row where the figure supplies
  * context, but the group-by strip stands alone between two panels with
  * nothing saying what eight chips are for (holdings brief §4.1). The
- * default `align-items: stretch` is load-bearing — the strip carries its
- * own `overflow-x: auto` below 768px, and a shrink-wrapped nav has nothing
- * to scroll inside.
+ * default `align-items: stretch` stays, but is no longer what makes the
+ * strip scroll: the phone rule below bounds a strip to its parent whatever
+ * the parent's own alignment.
  */
 .segmented-group {
   display: flex;
@@ -1131,6 +1131,12 @@ a {
     flex-wrap: nowrap;
     overflow-x: auto;
     gap: var(--space-xs);
+    /* A strip whose parent shrink-wraps it (the account panel's header
+     * stacks and starts its items) is as wide as its chips, has nothing to
+     * scroll, and the panel's own overflow cuts it at 1Y. Bounded to the
+     * parent, it scrolls whatever the parent's alignment — the group-by
+     * strip only ever got this from `.segmented-group`'s default stretch. */
+    max-width: 100%;
   }
 
   .segmented a,
