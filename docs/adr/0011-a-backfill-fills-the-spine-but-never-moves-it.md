@@ -8,7 +8,7 @@ provider outage leaves a gap that carry-forward covers, and no job goes back to 
 the first and narrowing the second. Whenever an instrument's position history reaches back behind
 its spine, the running system fetches that instrument's daily history from the feed and inserts
 every trading day the spine does not already hold. It never replaces a row it recorded itself. This
-ADR is numbered 0011 because 0010 is reserved by spec 0015's header for an ADR not yet written.
+ADR is numbered 0011 because 0010 is reserved by spec 0018's header for an ADR not yet written.
 
 ## What changed the mind
 
@@ -53,7 +53,7 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   how many closes were new, and a closed outcome — so an unfillable gap is retried daily rather
   than every tick, and "why is this still unpriced in March" is a query rather than a memory.
 - **In-process.** A second method on the provider interface and a second write path in the one
-  module that writes prices. Nothing is shaped for spec 0015's worker.
+  module that writes prices. Nothing is shaped for spec 0018's worker.
 
 ## Considered options
 
@@ -71,10 +71,10 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   app being down. Neither holds here — this is the app's own provider and its own table, and a
   refresh already runs on a cadence under a lock. A second schedule would be a second thing to
   miss for no property gained.
-- **Mailbox-shaped, for the worker.** Spec 0015 would move every Yahoo call into an egress-isolated
+- **Mailbox-shaped, for the worker.** Spec 0018 would move every Yahoo call into an egress-isolated
   sidecar coordinated through rows. Rejected for now: that spec is not built, and shaping this as a
   request row a worker would consume means building half of a design that may not land, in the
-  process that does the work today. If 0015 is built, it moves this method with the other.
+  process that does the work today. If 0018 is built, it moves this method with the other.
 - **Adjusted closes, and adjust the quantities instead.** Rejected: a position set is a photograph
   of what was held, and the schema says so everywhere; restating share counts through splits would
   make every statement disagree with the file it came from. The price is the side that has to give.
@@ -113,6 +113,6 @@ procedure with three silent traps, done in a terminal, on a day nothing reminds 
   only when the gap query's answer is not empty.
 - **The outbound surface grows by one endpoint on the same host.** ARCHITECTURE.md §2's "batched
   quote fetch" is now a quote fetch and a history fetch, still from one module, still with no
-  credential. Spec 0015, if built, inherits a second call to move.
+  credential. Spec 0018, if built, inherits a second call to move.
 - The glossary's **Backfill** entry is the word for this, and "historical import", "catch-up",
   "re-pricing" and "price sync" are avoided because each implies something this does not do.
