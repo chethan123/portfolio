@@ -973,8 +973,9 @@ a {
 }
 
 /* --- Range control --------------------------------------------------------
- * Anchors, not buttons. The range is a URL, so the control works with no
- * JavaScript and a chosen range survives a reload and can be bookmarked.
+ * Anchors for the presets, so a range is a URL that works with no
+ * JavaScript, survives a reload and can be bookmarked. The one chip that
+ * is a button is Custom's, which invokes the popover below.
  */
 
 .segmented {
@@ -983,7 +984,8 @@ a {
   flex-wrap: wrap;
 }
 
-.segmented a {
+.segmented a,
+.segmented-custom {
   display: inline-flex;
   align-items: center;
   height: 32px;
@@ -1001,13 +1003,25 @@ a {
   transition: color 150ms, background-color 150ms, border-color 150ms;
 }
 
-.segmented a:hover {
+/* Custom's chip: a `<button>` because it invokes a popover, so the UA's
+ * button font, appearance and cursor are reset — the pill itself is
+ * `.segmented a`'s rule, widened to this selector, not a copy. */
+.segmented-custom {
+  appearance: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.segmented a:hover,
+.segmented-custom:hover {
   color: var(--on-surface);
   background: var(--panel-hover);
 }
 
 .segmented a[aria-current="true"],
-.segmented a[aria-current="true"]:hover {
+.segmented a[aria-current="true"]:hover,
+.segmented-custom[aria-current="true"],
+.segmented-custom[aria-current="true"]:hover {
   background: var(--primary-container);
   border-color: transparent;
   color: var(--on-primary-container);
@@ -1033,54 +1047,69 @@ a {
   cursor: not-allowed;
 }
 
-/* Custom's disclosure (spec 0008): a native `<details>` so the picker opens
- * with no script, positioned beside the strip rather than reflowing it. */
-.segmented-custom {
-  position: relative;
-}
-
-.segmented-custom summary {
-  display: inline-flex;
-  align-items: center;
-  height: 32px;
-  padding: 0 var(--space-md);
-  border: 1px solid var(--outline-variant);
-  border-radius: var(--radius-full);
-  background: var(--panel);
-  color: var(--on-surface-variant);
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  list-style: none;
-}
-
-.segmented-custom summary::-webkit-details-marker {
-  display: none;
-}
-
-.segmented-custom summary[aria-current="true"] {
-  background: var(--primary-container);
-  border-color: transparent;
-  color: var(--on-primary-container);
-}
-
+/* Custom's picker (spec 0008): a native popover, so it opens with no script
+ * and paints in the top layer — above the strip, the panel and the bottom
+ * nav, outside every ancestor's overflow. It was a `<details>` whose form
+ * hung `position: absolute` under the chip, and the phone strip's own
+ * `overflow-x: auto` (below) clipped it to the strip's 32px: the disclosure
+ * opened, and nothing could be seen or tapped.
+ *
+ * The UA sheet hides a closed popover with `display: none`; an unconditional
+ * `display: flex` here would win over it and show the form permanently, so
+ * flex is declared only on the open state. What the UA sets otherwise —
+ * `position: fixed; inset: 0; margin: auto; width/height: fit-content` — is
+ * kept: a card centred in the viewport, which is the phone's placement. */
 .segmented-custom-form {
-  position: absolute;
-  z-index: 1;
-  top: calc(100% + var(--space-xs));
-  right: 0;
-  display: flex;
   flex-direction: column;
   gap: var(--space-sm);
   width: max-content;
+  max-width: calc(100vw - 2 * var(--space-md));
   padding: var(--space-md);
   border: 1px solid var(--outline-variant);
   border-radius: var(--radius-lg);
   background: var(--panel);
+  color: var(--on-surface);
   box-shadow: var(--shadow-card);
+}
+
+.segmented-custom-form:popover-open {
+  display: flex;
+}
+
+/* Where `popover` is unknown (Safari 16, Firefox 124) the form is simply
+ * always open and the chip inert — a reachable form over a tidy strip. The
+ * rule above is dropped there with its unknown pseudo-class, so the card's
+ * column and gaps are restated for that case alone. */
+@supports not selector(:popover-open) {
+  .segmented-custom-form {
+    display: flex;
+  }
+}
+
+/* Beside the chip on a wide screen, as before, through anchor positioning.
+ * `inset: auto` first: the UA's `inset: 0; margin: auto` centres the card
+ * and must be reset before anchoring (csswg-drafts #10258); the 4px gap
+ * under the chip is the margin. The anchor name is page-wide and the form
+ * follows its chip in the tree, which is what `position-anchor` resolves
+ * by — the last one laid out before it — so two controls on one page would
+ * each find their own. Only `anchor-name`, `position-anchor` and `anchor()`
+ * are used (Chrome 125, Safari 26, Firefox 147), and the feature test names
+ * both ends of that; without them the centred card stands, and still
+ * works. */
+@media (min-width: 768px) {
+  @supports (anchor-name: --chart-range-custom) and (top: anchor(bottom)) {
+    .segmented-custom {
+      anchor-name: --chart-range-custom;
+    }
+
+    .segmented-custom-form {
+      position-anchor: --chart-range-custom;
+      inset: auto;
+      margin: var(--space-xs) 0 0;
+      top: anchor(bottom);
+      right: anchor(right);
+    }
+  }
 }
 
 /* A strip that must say what it does, over a `label`'s 4px caption gap:
@@ -1106,7 +1135,7 @@ a {
 
   .segmented a,
   .segmented span[aria-disabled="true"],
-  .segmented-custom summary {
+  .segmented-custom {
     flex: none;
   }
 }
@@ -2664,9 +2693,10 @@ code {
  * — the row grew with the household and reflowed the header differently per
  * screen and viewport, so the one control meant to look identical
  * everywhere was the one that did not. Closed, a fixed shape whatever the
- * household's size. The mechanics are `.segmented-custom`'s: `position:
- * relative` on the disclosure, the panel absolute under it, so opening
- * never reflows the row.
+ * household's size. `position: relative` on the disclosure and the panel
+ * `position: absolute` under it keep opening from reflowing the row — safe
+ * here because no ancestor of `.page-actions` clips overflow, which is
+ * what the range strip's Custom could not say (its picker is a popover).
  */
 .owner-filter {
   position: relative;
@@ -3332,10 +3362,10 @@ code {
     flex: 1;
   }
 
-  /* `.segmented-custom-form`'s geometry is right at the trailing edge,
-   * where a panel growing leftwards grows into the viewport; under a chip
-   * at the leading edge it grew the panel off the left of the phone.
-   * Spanning the now-full anchor box keeps every checkbox on screen. */
+  /* The menu's own `right: 0` already sits at the trailing edge, growing
+   * leftwards into the viewport; under a chip at the leading edge instead
+   * it grew off the left of the phone. Spanning the now-full anchor box
+   * keeps every checkbox on screen. */
   .owner-filter-menu {
     left: 0;
     width: auto;
