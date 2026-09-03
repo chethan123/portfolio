@@ -5,8 +5,11 @@
  * (`canonicalOwnerSearch` in `owner-filter.ts`) — so the checkboxes have to
  * render ahead of the hidden fields, or every Apply on a screen carrying
  * hidden state (a `range`, a `sort`) would submit `range=1y&owner=1&owner=3`
- * and pay a respelling bounce it does not need to. No test rendered this
- * component at all before this one.
+ * and pay a respelling bounce for the field order alone. It is only that
+ * bounce this order rules out: a roster whose names sort differently from
+ * their ids still submits its owners out of canonical order, which the
+ * component says more about. No test rendered this component at all before
+ * this one.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoutesStub } from "react-router";

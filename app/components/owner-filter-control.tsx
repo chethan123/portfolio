@@ -87,13 +87,21 @@ export function OwnerFilterControl({
           {owners.map((owner) => (
             <label key={owner.id} className="choice" htmlFor={`owner-${owner.id}`}>
               {/* Every box carries the same name, so a submission arrives as
-                  a repeated parameter — `owner=1&owner=3` — which is exactly
-                  `toOwnerParam`'s own spelling of that selection. Placed
-                  before the hidden fields below for the same reason: a form
-                  submits in DOM order, and the canonical address spells the
-                  owner parameter first (`canonicalOwnerSearch`), so with both
-                  orderings matched Apply settles without a respelling
-                  bounce. */}
+                  a repeated parameter — `owner=1&owner=3` — which is
+                  `toOwnerParam`'s own grammar for that selection. Placed
+                  before the hidden fields below because a form submits in DOM
+                  order and the canonical address spells the owner parameter
+                  first (`canonicalOwnerSearch`), so the pair arrives where the
+                  address wants it rather than behind a `range`.
+                  Not the same as arriving canonical: the boxes are drawn in
+                  the roster's order, which `listPeople` sorts by name, and
+                  `canonicalise` sorts by id — so a household whose names sort
+                  differently from their ids submits `owner=2&owner=1` and
+                  still pays one respelling bounce. Drawing them in id order to
+                  save it would trade a readable list for a redirect, and
+                  building the address in script would cost the control its
+                  no-JavaScript property; the bounce is the cheaper of the
+                  three. */}
               <input
                 id={`owner-${owner.id}`}
                 type="checkbox"
@@ -109,9 +117,9 @@ export function OwnerFilterControl({
         {/* After the fieldset, not before: a browser submits a form's fields
             in DOM order, so this is what keeps a submission from arriving
             `range=1y&owner=1&owner=3` — the owner parameter after the rest,
-            which is not this address's canonical order and would cost every
-            Apply a redirect it does not need to pay. Nothing on screen moves:
-            these are `type="hidden"`. */}
+            which is not this address's canonical order and costs a redirect
+            on every screen that carries state. Nothing on screen moves: these
+            are `type="hidden"`. */}
         {Object.entries(hidden).map(([name, value]) => (
           <input key={name} type="hidden" name={name} value={value} />
         ))}
