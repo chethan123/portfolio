@@ -806,6 +806,20 @@ describe("the shape of the library we depend on", () => {
     expect(typeof client.chart).toBe("function");
   });
 
+  it("never asks the npm registry whether it is out of date", async () => {
+    // The library's default, on any quote that fails its schema, is to fetch
+    // registry.npmjs.org and log whether a newer release exists — a second
+    // egress from the container, on a trigger the module header calls
+    // expected, and one the poller's catch would hide forever. Read off the
+    // library's own option bag, which it documents as private: if `_opts` is
+    // renamed this fails loudly, and the assertion moves with it.
+    type OptionBag = { _opts?: { versionCheck?: boolean; suppressNotices?: string[] } };
+    const { _opts } = (await yahooClient()) as unknown as OptionBag;
+
+    expect(_opts?.versionCheck).toBe(false);
+    expect(_opts?.suppressNotices).toContain("yahooSurvey");
+  });
+
   it("refuses to be used as a bare static, which is the trap", async () => {
     // Pinning the reason the test above exists. If a future version makes the
     // export directly callable this fails, and the indirection can go.

@@ -613,11 +613,22 @@ type YahooClient = QuoteClient & {
  * dependency stays out of the module graph of anything importing only the
  * `PriceProvider` type. Typed as "an object with a callable `quote`" because
  * the library's own overloads do not resolve on an array query.
+ *
+ * Two options, both about what leaves the container. `versionCheck` is on by
+ * default and, on any quote whose shape fails the library's schema, fetches
+ * `registry.npmjs.org` to say whether a newer release exists — a second
+ * destination that docs/operating.md promises does not exist, on exactly the
+ * trigger the header above calls expected. `suppressNotices` retires the
+ * survey banner the memoization above only rationed.
  */
 export async function yahooClient(): Promise<YahooClient> {
   if (client === undefined) {
     client = import("yahoo-finance2").then(
-      ({ default: YahooFinance }) => new YahooFinance() as unknown as YahooClient,
+      ({ default: YahooFinance }) =>
+        new YahooFinance({
+          versionCheck: false,
+          suppressNotices: ["yahooSurvey"],
+        }) as unknown as YahooClient,
     );
   }
   return client;

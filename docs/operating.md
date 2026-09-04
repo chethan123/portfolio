@@ -605,12 +605,23 @@ and these limits are the argument for it.
 
 ### One thing that leaves the house
 
-The app makes outbound requests to exactly one destination: the price provider. What goes out is the
-list of ticker symbols being priced, plus your public IP. Quantities, balances, account names, people
-and filenames do not. There is no analytics or error-reporting SDK anywhere in the image. It is still
-worth knowing that the symbol list reveals *what* is held, if not how much — an operator who objects
-can price instruments manually or block egress and accept permanently stale prices. The app degrades
-to the last known price, never to zeros.
+The app makes outbound requests to exactly one party: the price provider, Yahoo. What goes out is
+the list of ticker symbols being priced, plus your public IP. Quantities, balances, account names,
+people and filenames do not. There is no analytics or error-reporting SDK anywhere in the image, and
+the client library's own call home — it would otherwise ask the npm registry whether it is out of
+date when a quote fails its schema — is switched off. It is still worth knowing that the symbol list
+reveals *what* is held, if not how much — an operator who objects can price instruments manually or
+block egress and accept permanently stale prices. The app degrades to the last known price, never to
+zeros.
+
+"One party" is four hostnames, because the provider is an unofficial endpoint reached the way a
+browser reaches it. On the first refresh the library fetches a page from `finance.yahoo.com` to
+collect session cookies, follows Yahoo's consent redirect to `guce.yahoo.com` and **posts agreement
+to it** on your behalf, then takes a request token from `query1.finance.yahoo.com`; every quote after
+that goes to `query2.finance.yahoo.com` carrying those cookies. So Yahoo sees the household's IP with
+a session it can link across refreshes, for as long as the container runs. The cookie jar lives in
+the process's memory — nothing is written to disk, and a restart starts clean. Firewalling egress
+means allowing those four names.
 
 ### Can I put this on the internet?
 
@@ -721,9 +732,16 @@ log shipping. `docker compose logs -f gate` is the second half of it, and the on
 sign-in is recorded at all — the application no longer sees one. The stems below are for grepping
 and may drift — the code owns the wording:
 
-- **One line per HTTP request** from the server's built-in request logger: method, path, status,
-  duration. Note that the container healthchecks — the app's own and Caddy's — hit `/healthz` every
-  ten seconds, and on an idle instance that is essentially the whole log.
+- **One line per HTTP request** from the server's built-in request logger: method, path *with its
+  query string*, status, duration. No client address, no header — the gate's verified email never
+  reaches the log — and no body, so no amount, filename or statement. The query string is the one
+  thing worth knowing: it carries the owner filter and account ids, so the log is a record of which
+  family member's figures were looked at and when, on this machine's disk within the logging cap in
+  `compose.yaml`. The format is the server's, not configurable. Note that the container
+  healthchecks — the app's own and Caddy's — hit `/healthz` every ten seconds, and on an idle
+  instance that is essentially the whole log.
+- **A request for a path that does not exist** logs a framework stack trace above its 404 line —
+  several lines per probe, volume rather than a fault. Nothing from it reaches the response.
 - **One line per refresh the poller actually runs** — stem `Price refresh`. Informational when
   everything priced, a warning when anything came back stale. A tick that runs no refresh writes no
   line at all — [below](#there-is-no-price-line-in-the-log-has-four-causes) lists which silences
@@ -736,7 +754,10 @@ and may drift — the code owns the wording:
   silence here is usually not a fault. What each attempt came to is a `price_backfill` row and a
   sentence at Settings → Prices.
 - **A provider outage** at error level — stem `Price provider failed` — every selected instrument
-  is marked stale and the last known prices are kept. Other refresh failures (the pool, the
+  is marked stale and the last known prices are kept. When the provider answered with an HTTP
+  error, the client library also prints the request it made, in full: the URL names every symbol
+  in the batch and the session token of the moment. That is the one place the symbol list is
+  written to disk, so redact it before sharing a log. Other refresh failures (the pool, the
   advisory lock, the transaction) log `Price refresh failed`; the same failure on a **Refresh now**
   press logs `Manual price refresh failed`, so grep for `price refresh failed` case-insensitively
   to catch both. A single symbol refused over its currency logs `Price refused`. None of them
