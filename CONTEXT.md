@@ -137,6 +137,23 @@ acting. Attribution, never permission: it may say who did a thing, and it never 
 may do — every family member sees and can do everything.
 _Avoid_: user, account, login, principal, role.
 
+### What a browser must do before it shows anything
+
+**Locked**:
+The state in which a browser is refused every screen until a passkey is checked, whatever the gate
+has already admitted. A fact about one browser at one moment rather than about the household or the
+person: signing in again does not clear it, and unlocking one browser leaves the rest locked. The
+instance locks whenever the household holds a passkey and stops when it holds none, so removing the
+last passkey is the only way to turn it off.
+_Avoid_: signed out, timed out, app lock, screen lock, privacy mode.
+
+**Passkey**:
+A key the household has enrolled so that a browser can be unlocked, held by whichever provider the
+family member chose when creating it — the device's own, or a password manager. The instance keeps
+only its public half, and never sees the check that guards it. Not a device: one passkey may sync to
+every device in a vault, and one device may hold several.
+_Avoid_: biometric, fingerprint, face, device credential, enrolled device, key.
+
 ### Whose money a screen is showing
 
 **Person**:
@@ -191,9 +208,11 @@ _Avoid_: last 4 digits, masked number, account suffix.
 **Masked**:
 The display state in which every amount on a screen is replaced by a fixed run of dots. An amount is
 any absolute figure — a value, a balance, a cost basis, a gain, a share quantity; a ratio is never
-masked, and neither is a name, a symbol or a date. It is a state of the display and nothing more:
-the gate is the only thing that keeps anyone out.
-_Avoid_: private, privacy mode, hidden, secure, locked, redacted.
+masked, and neither is a name, a symbol or a date. It is a state of the display and nothing more,
+and it keeps nobody out: the gate decides which person reaches the instance, being locked decides
+whether a browser is shown anything, and masking only dots the figures on a screen its reader is
+already entitled to read.
+_Avoid_: private, privacy mode, hidden, secure, redacted.
 
 **Masking policy**:
 The household's standing choice of what a browser that has not been toggled yet opens in — masked,
