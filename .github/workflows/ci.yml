@@ -84,10 +84,16 @@ jobs:
       - name: Verify registry signatures
         run: npm audit signatures
 
-      # Production, high and critical only: stop a serious advisory in code
-      # the container runs, not redden the branch over a moderate in a build tool.
+      # Production advisories from moderate up — this is the tree that ships,
+      # not a build tool, and the moderates that arrive here land in Express 4,
+      # which parses every request. `high` let two reachable `qs` advisories
+      # publish green; the `overrides` entry in package.json is what cleared
+      # them, because Express 4 pins a `qs` range that cannot reach the fix.
+      # If a moderate ever has no fix reachable from here, the lever is a
+      # small `npm audit --json` filter naming that advisory in this step —
+      # npm has no allowlist flag — not a raised bar.
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --omit=dev --audit-level=moderate
 
       # The Dockerfile's cross-platform, cross-libc invariant, enforced where
       # a violation is cheapest to see: the build stages install on the
@@ -200,7 +206,13 @@ jobs:
           # its description from index annotations, not image labels.
           annotations: ${{ steps.meta.outputs.annotations }}
           # Default provenance (mode=max on public repos) adds manifest
-          # entries GHCR renders as `unknown/unknown` architectures.
+          # entries GHCR renders as `unknown/unknown` architectures — and,
+          # the stronger reason, embeds the build's arguments, environment
+          # and workflow identity in a publicly readable attestation. `mode=min`
+          # is not a middle ground: the attestation manifest, which is what
+          # GHCR renders, is added either way. If verifiability is ever wanted,
+          # `actions/attest-build-provenance` stores the statement in GitHub's
+          # attestation API without touching the manifest list.
           provenance: false
           sbom: false
           cache-from: type=gha

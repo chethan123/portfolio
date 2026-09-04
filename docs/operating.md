@@ -1019,6 +1019,13 @@ starts serving — so a request is never served against a half-migrated schema. 
 idempotent, so a restart is always safe, and `GET /healthz` returns a non-200 if the image ever
 carries a migration the database has not recorded.
 
+**A scanner run over the image will name the base image's OpenSSL a patch behind** for a while
+after each OpenSSL release: the runtime image floats on `node:24-alpine`, and the fix arrives with
+the next upstream rebuild, which the next release picks up — that floating tag, not a pin, is what
+delivers it. Nothing in the container terminates TLS, and the `node` binary links its own OpenSSL
+rather than Alpine's, so the gap is on a library nothing here calls. The same scanner reports
+nothing from `npm`, because the image does not carry it.
+
 ### There is no rollback
 
 Migrations are forward-only, and comprehensively so: there are no `down` files, there is no rollback
