@@ -5,6 +5,29 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-04 — Container hygiene audit
+
+One document: [Container hygiene audit](./2026-09-04-container-hygiene-audit.md) — the runtime
+image built from the repository's own Dockerfile against `5e21ab7`, extracted, booted and probed
+under five lenses (offensive security, privacy, packaging, supply chain, the running process), then
+re-grounded adversarially before the four commits that followed.
+
+### The three things worth knowing without reading further
+
+1. **Nothing sensitive was in the image.** Every layer and the flattened rootfs were searched for
+   secrets, the maintainer's identity, builder paths and sourcemaps: nothing that was not npm's own
+   documentation. The selective `COPY` list and the denylist hold.
+
+2. **The serving uid owned its own code.** With every file under `/app` chowned to the runtime user
+   and a migration runner that records filenames, a planted `.sql` file would have run as the
+   database role on the next start — under a plain `docker run`, which the image supports. Fixed by
+   ownership; the smoke test now asks the kernel.
+
+3. **The exposure was reach, not disclosure.** Package managers beside the price provider's egress,
+   a client default that fetches the npm registry, pages served without a cache directive while a
+   masked page still carries every figure, and two advisories on the ungated path that CI's gate
+   sat one level above. All four changed; the recommendations left for the owner are in §5.
+
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
 
 One document: [The Overview's 1D latency](./2026-09-01-overview-1d-latency.md) — the diagnosis of a
