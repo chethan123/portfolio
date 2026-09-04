@@ -67,7 +67,7 @@ review produced are folded in, with two findings the review added.
    authorisation in the app (ADR-0005), plaintext dumps (ADR-0009), a floating image tag, symbols
    to Yahoo. The audit cites each record rather than rediscovering it, and rates the known default
    database password on a flat network (S3) as the item worth doing first — the network split is
-   spec 0015's design already.
+   spec 0018's design already.
 
 3. **Two claims the first draft got wrong, corrected.** React Router already rejects a
    mismatched-`Origin` mutation with 400, so CSRF is informational, not Medium (S5); and the
@@ -78,7 +78,7 @@ review produced are folded in, with two findings the review added.
 
 Findings only; nothing applied. The code fixes it names — `safeReturn`, `versionCheck`, the
 `.gitignore` and `.dockerignore` rules, the tracked leftovers, the dump credential in argv — are
-each a small pull request of their own, and the network split and required password are spec 0015.
+each a small pull request of their own, and the network split and required password are spec 0018.
 
 
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected

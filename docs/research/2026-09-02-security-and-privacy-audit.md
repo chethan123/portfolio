@@ -24,7 +24,7 @@ balances, names, account numbers, statement files and database credentials nowhe
    control has to sit, and where it disagrees it cites the record it disagrees with.
 
 3. **Three things are cheap and not done.** A unique database password on a split network (designed
-   already in spec 0015, S3); `sslmode=verify-full` in the one documented remote-Postgres recipe
+   already in spec 0018, S3); `sslmode=verify-full` in the one documented remote-Postgres recipe
    (S6); and `versionCheck: false` on the pricing client, so a malformed Yahoo response cannot
    reach the npm registry (S7).
 
@@ -150,11 +150,11 @@ variable again: change the password inside the database first (`alter role portf
 `.env` where passwords are kept, not in the dump directory: it holds the only copy of this and of
 the gate's secrets, and `operating.md:849-863` is right that it must survive a rebuild. Split
 Compose into a frontend network for `caddy`, `gate` and `app` and a backend one for `app`, `dump`
-and `db`. That topology, and a required `POSTGRES_PASSWORD`, are already designed in spec 0015
-(`docs/specs/0015-price-worker.md` §3.1; ticket
-`docs/specs/price-worker/05-app-cutover-and-lockdown.md:47`), so this is a case for landing that
-slice, not a new proposal. Pass the dump credential through `PGPASSWORD` or the split `PG*`
-variables rather than argv.
+and `db`. That topology, and a required `POSTGRES_PASSWORD`, are already designed in spec 0018
+(`docs/specs/0018-price-worker.md` §3.7; ticket
+`docs/specs/price-worker/08-the-network-lockdown.md`, which also moves the credential out of the URL
+into `PGPASSWORD`), so this is a case for landing that slice, not a new proposal. Until it lands,
+pass the dump credential through `PGPASSWORD` or the split `PG*` variables rather than argv.
 
 ### S4 — Medium: request bodies are bounded only after they are buffered
 
@@ -248,8 +248,9 @@ library ships with `versionCheck: true` and `validation.logErrors: true`
 (`options/defaults.js:18-25`), the app constructs it with no options
 (`price-provider.server.ts:620`), and a response that fails schema validation triggers
 `fetch("https://registry.npmjs.org/yahoo-finance2/latest")` (`validateAndCoerceTypes.js:210-217`,
-`versions.js:6`). The `dump` service's "no egress" comment (`compose.yaml:162`) describes intent; no
-network isolates anything.
+`versions.js:6`; the same call is documented independently in
+`docs/research/2026-09-04-price-worker-platform-facts.md` §3.2). The `dump` service's "no egress"
+comment (`compose.yaml:162`) describes intent; no network isolates anything.
 
 Symbols also reach the logs. On any non-2xx the library prints the full request URL, the whole
 `symbols=` list (`yahooFinanceFetch.js:139`), and on a validation failure it dumps the entire result
@@ -261,8 +262,8 @@ string (`morgan("tiny")`). `docs/operating.md:727-743` lists the log stems witho
 a validation failure, sees the address and the timing of that failure and never a symbol, because
 the registry URL is fixed. Tickers alone reveal interests and uncommon holdings. The path carries no
 quantities, values, people, account names or numbers, CSV content or credentials. `yahoo-finance2`
-uses an unofficial endpoint and is itself a trust boundary. The disclosure is recorded as accepted
-residual risk in spec 0015 (`docs/specs/0015-price-worker.md:615-618`) and stated to the operator at
+uses an unofficial endpoint and is itself a trust boundary. The disclosure is recorded as a residual
+risk in spec 0018 (`docs/specs/0018-price-worker.md:858-863`) and stated to the operator at
 `docs/operating.md:606-613`.
 
 **Avoidance.** Pass `versionCheck: false` where the client is constructed: one line, and the npm
@@ -270,8 +271,8 @@ destination is gone. If disclosing symbols to Yahoo is unacceptable, the shipped
 `manual` pricing at import only records `price_source` and leaves the holding unpriced, and the
 instrument and manual-price screens are later slices (`app/routes/settings/index.tsx:64-67`,
 `DESIGN.md:740-741`); blocking egress at the network after testing is the effective control today,
-and spec 0015's egress-isolated worker is the designed one. Treat container logs as household data
-when choosing where they go.
+and spec 0018's egress-isolated worker (§3.7, with the allowlist in §3.8) is the designed one. Treat
+container logs as household data when choosing where they go.
 
 ### S8 — Privacy decision: original statements and dumps are sensitive plaintext at rest
 
@@ -334,9 +335,8 @@ them. `provenance` and `sbom` are off for a stated reason: GHCR renders the atte
 
 Common configuration, not malicious code; it lets upstream tag mutation change what builds or runs
 without a repository diff. Digest-pinned images, SHA-pinned Actions with version comments, and a
-workflow-level `permissions: contents: read` are the fixes. Spec 0015 lists the first two as
-deferred hardening (`:600-601`), and the dependency audit records why Renovate was not added
-(`2026-08-23-dependency-audit.md:254-255`).
+workflow-level `permissions: contents: read` are the fixes. The dependency audit records why
+Renovate was not added (`2026-08-23-dependency-audit.md:254-255`).
 
 ### S11 — Low hygiene: tracked conflict leftovers expand the review surface
 
