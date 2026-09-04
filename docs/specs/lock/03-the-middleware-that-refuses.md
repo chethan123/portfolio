@@ -28,10 +28,14 @@ rule repeated in every loader the way masking's is.
       the response, which would run every loader before refusing — the thing ADR-0012 forbids
 - [ ] With no passkey enrolled it calls `next()` unconditionally; the instance is not locked and this
       pull request changes nothing a family member can see
+- [ ] It fails closed. "No passkey" and "the query threw" are different answers and must not collapse
+      into the same branch: `app/root.tsx`'s loader catches and continues twice, which is right for a
+      first-run prompt and wrong here. A boundary that opens when Postgres hiccups is not a boundary
 - [ ] With a passkey enrolled and no live grant, the browser is sent to the unlock screen and no
       loader runs
 - [ ] A live grant is extended by the request that used it, which is what makes the window idle
-      rather than absolute
+      rather than absolute — but only once less than half the window remains, so the boundary is not
+      an unconditional write on every document and data request
 - [ ] The return path travels as one encoded parameter, not as the query it came from: the gate's own
       redirect truncates a target at the first ampersand, and an owner filter beside a chart range is
       exactly that target
@@ -54,6 +58,9 @@ rule repeated in every loader the way masking's is.
 - [ ] `Secure` and the prefix are where this parts company with the masking cookie, which omits both
       deliberately because it carries a preference and must survive an instance reached over plain
       http. This one carries a credential, and WebAuthn will not run outside a secure context anyway
+- [ ] The dev loop serves plain http on localhost, where a `Secure` cookie is a browser-by-browser
+      carve-out rather than a guarantee. Say in the module header whether the dev path works, having
+      actually tried it, rather than leaving the next person to find out
 - [ ] A test states why `Strict` is wrong: the gate's redirect through Google returns as a top-level
       cross-site navigation, and `Strict` would withhold the cookie and re-lock every browser every
       time the gate refreshed
@@ -66,8 +73,12 @@ rule repeated in every loader the way masking's is.
 
 - [ ] With no passkey, every screen renders — the no-op case, tested first because it is what the
       pull request ships
-- [ ] With a passkey and no grant, a screen's rendered markup contains no figure at all; asserting
-      only the redirect would pass even if a loader had run
+- [ ] With a passkey and no grant, the assertion that bites is that **`next()` was never invoked** —
+      `servedThrough` in `tests/support/routes.ts` hands the middleware a stand-in response, so a test
+      can prove the stand-in was never taken. Asserting "the markup contains no figure" against a
+      refusal that renders nothing passes unconditionally, which is the vacuous test this is trying to
+      forbid
+- [ ] A read failure refuses rather than continuing
 - [ ] With a live grant, the same screen renders as it does today
 - [ ] An expired grant refuses, and a grant extended by a request survives past its original expiry
 - [ ] Each exempt path is reachable while locked; a non-exempt one is not

@@ -14,8 +14,11 @@ turned away before `next()` is called, so no loader runs and the figures are not
 never fetched. This is deliberately not the shape of the chart-range middleware, the only other one
 here, which awaits `next()` and decorates the response it gets back.
 Unlocking is a WebAuthn assertion with `userVerification: "required"` against a passkey the
-household has enrolled; the grant it mints is a row in Postgres with a rolling idle expiry,
-addressed by an opaque id in a `SameSite=Lax` cookie. The lock is on whenever the household holds
+household has enrolled; the grant it mints is a row in Postgres with a rolling idle expiry, addressed
+by an unguessable random id in a `SameSite=Lax` cookie. Enrolling a passkey and removing one each
+require a *fresh* assertion rather than a live grant, because a grant is precisely what the adversary
+named above inherits — otherwise a borrowed phone turns minutes of access into a passkey of its own,
+and into deleting everybody else's. The lock is on whenever the household holds
 at least one passkey and off when it holds none — there is no switch to set, and removing the last
 passkey is how it is turned off.
 

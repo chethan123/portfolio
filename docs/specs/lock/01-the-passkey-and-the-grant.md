@@ -24,6 +24,16 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
       base64url form the library returns — never re-encoded on the way in or out, because a
       round-trip through another encoding is how a credential stops matching itself
 - [ ] The public key is stored as `bytea`; the signature counter as `bigint not null default 0`
+- [ ] The counter is the one value in this slice that crosses the driver boundary as a string and is
+      then turned into a number, because the library compares it as one. That is allowed and is named
+      in the module header where it happens: the rule it appears to break is about money, quantities,
+      ids and dates, and a signature counter is none of those — it is a 32-bit unsigned integer by
+      specification, so it is exactly representable and the conversion cannot lose anything
+- [ ] `transports`, as text, from what registration reports. It is the hint a browser uses to decide
+      which flows to offer, including the cross-device one the new-device story depends on — the one
+      optional field here with a reader
+- [ ] `user_handle`, the random id given to the authenticator at registration, stored so the assertion's
+      own handle can be checked against it
 - [ ] One backup flag, `backup_eligible`, and not the current-state flag beside it: eligibility is
       what "synced" means to a reader and is fixed when the passkey is created, while the current
       state would be a write on every unlock to keep one adjective fresh
@@ -32,8 +42,12 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
       noticing
 - [ ] A human-readable label, `not null`, so Settings has something to print that is not a hash
 - [ ] `enrolled_at` and `last_used_at` as `timestamptz`; `last_used_at` nullable until first use
-- [ ] `unlock_grant` holds an opaque id as its primary key, `passkey_id` referencing `passkey` with
-      `on delete cascade`, `granted_at` and `expires_at`
+- [ ] `unlock_grant` holds its id as a random token from a cryptographic source, text, not a sequence.
+      The initial migration's convention is `bigint generated always as identity`, and departing from
+      it is the point rather than an oversight: this id travels in a cookie and is the whole of the
+      cookie's security, so a sequential one would be a bearer token an attacker can count to. The
+      migration's comment says exactly that, because the convention it breaks is written down
+- [ ] `passkey_id` references `passkey` with `on delete cascade`, plus `granted_at` and `expires_at`
 - [ ] The cascade is what makes removing a passkey end its grants, which is how a family member who
       loses a phone revokes it from any other device they can still unlock
 - [ ] An index on `unlock_grant (expires_at)` so the sweep does not scan, matching

@@ -66,15 +66,21 @@ request that passes the middleware extends it, and a browser left alone past the
 again with no client involvement.
 
 The row is scaffolding, not history — the same category `upload_draft` occupies, and it is swept on
-the same principle. It records which passkey unlocked it and when, which is what makes the deferred
-revocation work a `delete` rather than a redesign.
+the same principle. It records which passkey unlocked it and when, which is what lets removing a
+passkey end its grants with it.
 
 ### Enrolling a passkey
 
-Enrolling is authorised by an unlock, never by the gate alone. A browser that is already unlocked
-may enrol a passkey for itself or approve one for another browser; a browser that reached an unlock
-through the cross-device flow is unlocked, so it may then enrol its own. Admission through the gate
-is not enough on its own, because the person holding your unlocked phone has that.
+Enrolling a passkey, and removing one, each require a **fresh assertion** — not merely a live grant.
+This is the difference between a lock and a lock that can be picked from inside: the adversary this
+slice names is somebody holding a phone that is already unlocked, and a grant is exactly what they
+inherit. If a grant were enough, a borrowed phone would convert a few minutes of access into a
+passkey of the adversary's own and, worse, into deleting the household's. So both of those two
+actions re-run the ceremony immediately before they are allowed, which is also what a bank app does
+when you add a device.
+
+Everything else an unlocked browser does needs only the grant. It is those two writes — the ones that
+change who may unlock in future — that are held to the higher bar.
 
 The first passkey needs no authorisation at all, because at that moment there is nothing to
 authorise: with no passkey enrolled the instance is not locked, and anyone the gate admitted already
@@ -92,10 +98,12 @@ unprotected-instance banner already uses. Removing the last passkey turns the lo
 
 ### What re-locks it
 
-The idle expiry on the grant is the guarantee, and it is the only thing enforced server-side. On
-top of it, a browser that has been hidden longer than a short grace navigates to the unlock screen
-when it comes back, which is a courtesy: a hidden page cannot be trusted to run timers, and
-`visibilitychange` cannot tell a locked screen from an app switch.
+The idle expiry on the grant is the guarantee, and it is the only thing enforced server-side:
+**fifteen minutes**, extended by the requests that use it. On top of it, a browser hidden longer than
+a **sixty second** grace navigates to the unlock screen when it comes back, which is a courtesy — a
+hidden page cannot be trusted to run timers, and `visibilitychange` cannot tell a locked screen from
+an app switch. Both numbers are stated here and named once in code; this repository names its
+constants rather than leaving them to be discovered.
 
 Separately, an explicit control locks the current browser immediately. For the threat this slice
 exists to answer — handing somebody your phone — that control is the most direct answer in the
@@ -159,14 +167,17 @@ WebAuthn packages directly.
 exists, but only as a Compose-level value the gate consumes for its redirect: `server/config.ts` has
 no such key and discards anything outside its schema, and DESIGN.md §10.1 states that split as a
 rule. So this slice adds the key to the config schema, the line to the `app` service's environment,
-the entry to `.env.example`, and the row to §10.1's table — one variable read by two services, named
-as the deliberate duplication it is. It is validated at startup by the existing `refine` shape, as a
-domain and never an IP address, because the failure otherwise is every family member enrolling a
-credential that cannot be used.
+the row to §10.1's table, and an amendment to `.env.example`'s existing entry, which sits today under
+the gate's heading saying the gate builds its redirect from it — one variable read by two services,
+named as the deliberate duplication it is rather than added twice. It is validated at startup by the
+existing `refine` shape, as a domain and never an IP address, because the failure otherwise is every
+family member enrolling a credential that cannot be used.
 
-**That validation, not the middleware, is this slice's one breaking deploy.** An `app` service with
-no `PUBLIC_ORIGIN` will refuse to start, so the config key and its Compose line land in the same pull
-request and the runbook says so.
+**That validation, not the middleware, is this slice's one breaking change — and it is not only a
+deploy.** `vitest.config.ts` sets exactly one variable on purpose, and `tests/config.test.ts` asserts
+that a minimal configuration is short; a second required key turns that test and every route test
+reaching `getConfig()` red inside the same pull request. So the ticket that adds the key also updates
+the test harness, the dev path and the Compose line, and lands them together.
 **Registration asks for a platform authenticator and user verification, and does not ask for
 attestation.** This is a single-tenant household instance with no policy about which authenticator
 models are acceptable and no metadata service to check one against.
