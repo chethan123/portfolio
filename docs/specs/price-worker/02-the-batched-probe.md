@@ -28,6 +28,12 @@ or [03](03-the-two-hardening-rules.md).
       `probe` once, then applies the verdicts in plan order: `non-usd` refuses with today's sentence
       (`:515-524`), `ok` and `unavailable` behave as today, `quoteTypeOf` (`:533-537`) reads the
       same map, and a symbol the map lacks is `unavailable`
+- [ ] When that collection is empty — a manual-only submission, the common case — the resolver
+      returns an empty verdict map and **does not call `probe` at all**. Today's serial loop makes
+      no provider call on that path (every plan fails the `create`/`feed` guard at `:502-505`), and
+      the batched form must keep making none: a call of zero symbols is a round trip per manual
+      upload, and under the mailbox it is not even insertable — `provider_call`'s CHECK is one to a
+      hundred symbols (spec §3.2), so the ask would refuse before any worker saw it
 
 **The probe** (`app/lib/price-provider.server.ts`)
 
@@ -50,9 +56,10 @@ or [03](03-the-two-hardening-rules.md).
       both fixtures are `manual` (`:91`, `:169`), so today they only *happen* not to reach the
       network
 - [ ] `tests/instrument-resolution.test.ts`'s `okProbe` (`:38`) and `forbiddenProbe` take the batch
-      shape at every `resolveAll` site from `:99` (fourteen); the USD-probe cases (`:360`) gain one:
-      three tickers, two strings each, cost one call carrying three symbols, and the verdicts land
-      on the right plans
+      shape at every `resolveAll` site from `:99` (fourteen); the USD-probe cases (`:360`) gain two:
+      three tickers, two strings each, cost one call carrying three symbols, with the verdicts on
+      the right plans; and a manual-only submission resolves with a probe stub that was **never
+      called** — the case that would otherwise become a mailbox row per upload
 - [ ] `tests/price-provider.test.ts`: `probeVerdicts` — `ok` keyed by the asked symbol across a case
       difference, `non-usd` naming the currency, absent → `unavailable`, non-array → all
       `unavailable`. The describe at `:291` re-targets `probeSymbols` through the same client stub

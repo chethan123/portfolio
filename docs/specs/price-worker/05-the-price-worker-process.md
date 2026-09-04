@@ -16,7 +16,7 @@ compose change exists; [06](06-deploy-the-worker-alongside.md) deploys what this
 
 **Blocked by:** [04](04-the-mailbox-and-the-worker-role.md).
 
-**Status:** ready-for-agent
+**Status:** needs-triage — becomes ready-for-agent when §2.5 of the spec is answered
 
 **The client** (`server/yahoo-client.ts`, new)
 
@@ -90,9 +90,16 @@ compose change exists; [06](06-deploy-the-worker-alongside.md) deploys what this
 - [ ] `export const statements` — `probe`, `claim`, `answer(...)` — as `{ text, values }`, which
       [04](04-the-mailbox-and-the-worker-role.md)'s role test now runs through `CompiledQuery.raw`.
       `export async function workRow(row, yahoo)` produces one row's answer without touching the
-      database; `export async function drainOnce(client, yahoo, { heartbeatPath })` claims one
-      round, works it and awaits the work; the loop sits behind `if (import.meta.main)` (Node ≥
-      24.2; `undefined` under vitest; research note §5.3)
+      database
+- [ ] **The claimer never awaits provider work, and neither does the heartbeat.** A claim poll
+      queues the rows it claimed to the two lanes and returns; the heartbeat is touched on the poll,
+      never on an answer. That is what makes both signals mean "the loop is alive" rather than "the
+      last call came back" (spec §3.5): the 250 ms cadence holds while a 30 s history call is in
+      flight, and a quotes row inserted meanwhile is claimed on the next poll rather than behind it.
+      `export async function drainOnce(client, yahoo, { heartbeatPath })` is the test seam over
+      those same pieces — **one claim poll, then both lanes drained to idle** — giving a test a
+      settled state the loop itself never waits for; the loop sits behind `if (import.meta.main)`
+      (Node ≥ 24.2; `undefined` under vitest; research note §5.3)
 - [ ] Logs: one line per failed drain, stem `Price worker`, naming the row ids and the cause; a
       startup line naming the host; nothing per successful poll.
 
@@ -120,6 +127,11 @@ compose change exists; [06](06-deploy-the-worker-alongside.md) deploys what this
 - [ ] First write wins: a second answer to an answered row updates zero rows and changes nothing;
       the heartbeat file's mtime moves on an empty poll and not on a failed one; the role test of
       [04](04-the-mailbox-and-the-worker-role.md) runs `statements` and passes
+- [ ] A lane in flight blocks neither the claimer nor the other lane: with the fake's `chart` left
+      pending, a first `drainOnce` over a seeded history row is left unawaited; a quotes row
+      inserted after it is claimed **and** answered by a second `drainOnce` while that history call
+      is still outstanding, and the heartbeat's mtime moved for the second poll; resolving `chart`
+      settles the first
 
 **Gates**
 

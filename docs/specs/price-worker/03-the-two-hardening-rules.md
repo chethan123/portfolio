@@ -39,6 +39,15 @@ hostile worker, both are pure domain rules with fixture-shaped tests, and neithe
       close, which ADR-0011's immutability covers only for the backfill writer, and a future date
       plants a close on a day to come that is permanent whenever that day is a weekend or holiday
       the poller never overwrites
+- [ ] The skip has to reach the caller, because `refreshQuotes` counts the write unconditionally:
+      `closes += 1` follows the `await writeDailyClose(…)` with nothing between them
+      (`prices.server.ts:824-826`). So `writeDailyClose` reports whether it wrote — the window guard
+      decides before the upsert runs, so a `Promise<boolean>` says it — and the loop increments
+      `closes` only when it did.
+      Acceptance: `RefreshReport.closes` (`:161`, "`price_daily` rows written or rewritten")
+      excludes every skipped write, and the log line built from the report with it, so a refresh
+      whose every close was out of window reports `closes: 0`; `priced`, `stale` and `observed` are
+      unaffected — the quote and the observation still land
 - [ ] The constant sits beside `BACKFILL_RANGE_LEAD_DAYS` (`:106`) with the reasoning: seven is the
       lag an honest NAV or a holiday quote can carry, and a week clears the longest run of
       non-trading days. The day arithmetic uses `addDays` on an `IsoDate`, exported from
@@ -52,9 +61,10 @@ hostile worker, both are pure domain rules with fixture-shaped tests, and neithe
       it a string
 - [ ] `tests/refresh-quotes.test.ts`: with `vi.useFakeTimers({ toFake: ["Date"] })`
       (`tests/price-backfill.test.ts:930-941` is the shape), a fake quote struck eight days before
-      today's market date writes `quote` and the observation but no `price_daily` row, and leaves a
-      seeded row for that day byte-identical; one struck eight days ahead writes no close either;
-      one struck seven days before writes the close
+      today's market date writes `quote` and the observation but no `price_daily` row, leaves a
+      seeded row for that day byte-identical, and comes back with `closes: 0` in the report; one
+      struck eight days ahead writes no close either; one struck seven days before writes the close
+      and reports `closes: 1`
 - [ ] The six existing cases that assert a written close (`tests/refresh-quotes.test.ts:125`, `:169`,
       `:203`, `:227`, `:247`, `:357`) carry June-2026 `asOf` fixtures against the real clock and need
       the same fake clock, or an `asOf` relative to now

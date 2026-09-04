@@ -15,7 +15,7 @@ the worker is provably running (or a deploy has no price refresh) and before the
 **Blocked by:** [01](01-one-refresh-and-the-batch-abort.md), [02](02-the-batched-probe.md),
 [03](03-the-two-hardening-rules.md), [06](06-deploy-the-worker-alongside.md).
 
-**Status:** ready-for-agent
+**Status:** needs-triage — becomes ready-for-agent when §2.5 of the spec is answered
 
 **The module** (`app/lib/provider-mailbox.server.ts`, new)
 

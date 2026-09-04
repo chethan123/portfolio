@@ -4,7 +4,8 @@ _Part of [0018-price-worker.md](../0018-price-worker.md) (§3.6, §3.7)._
 
 **What to build:** The release where `app`, `db` and `dump` lose their internet route and the
 superuser password stops having a default. The full topology of spec §3.7 with the Engine and
-Compose floors stated where they will be read; `POSTGRES_PASSWORD` required; `PGPASSWORD` on `app`
+Compose floors stated where they will be read, and `compose.external-db.yaml` for the installs that
+keep their Postgres outside it; `POSTGRES_PASSWORD` required; `PGPASSWORD` on `app`
 and `dump` with the three `DATABASE_URL` defaults carrying user and host only; the checked-in
 `.env.example` URL line removed; the numbered upgrade runbook in an order Compose will actually run;
 and the smoke assertions that prove the effect — or read the daemon's own record where the effect
@@ -28,6 +29,20 @@ database.
       explicit list and none on `default` any more — `db: [backend, worker-db]`, `dump: [backend]`,
       `app: [backend, caddy-app]`, `worker: [worker-db, egress-worker]`, `gate: [caddy-gate,
       egress-gate]`, `caddy: [caddy-app, caddy-gate, ingress]`
+- [ ] **`compose.external-db.yaml`**, shipped by this ticket, because this is the release that would
+      otherwise break every install whose `DATABASE_URL` names a LAN or remote Postgres: on internal
+      networks only, `app` and `worker` have no route to that host at all and both crash-loop on the
+      first connection. The override is one plain bridge, `external-db: { enable_ipv6: false }`,
+      attached to `app` and `worker` and to nothing else — `dump` stays off it, since on a
+      bring-your-own install backups are the operator's Postgres's problem
+      (`docs/operating.md:195-197`). It says plainly what that mode gives up, in the file's own
+      header and in the docs: **the no-egress guarantee for `app` is off**, because that bridge
+      carries a default route and requirement 1 is exactly what it relaxes; what remains is the role
+      and the mailbox — the worker still reads no household table, and still shares no network with
+      `app` or `gate`. The upgrade note for such installs is `docker compose -f compose.yaml -f
+      compose.external-db.yaml up -d`, and the `-f` pair belongs on every later compose command,
+      `ps`, `logs` and `down` included. [10](10-documents-and-runbooks.md) documents the mode; this
+      ticket defines it
 - [ ] The header repeats the Engine 28.0 floor [06](06-deploy-the-worker-alongside.md) introduced,
       with `docker version --format '{{.Server.Version}}'` and why: 26 ignores the gateway-mode
       option silently and keeps a host address on the bridge; 27 refuses it. Beside it the Compose
@@ -87,10 +102,13 @@ database.
       [06](06-deploy-the-worker-alongside.md)'s, and add the mirror refusal for it — `db` now comes
       first in file order, so without the export the check names the wrong variable
 - [ ] From `app` (`node -e fetch` under `AbortSignal.timeout(5_000)` — with no route the embedded
-      resolver answers `SERVFAIL` only after trying the host's upstreams) and `db` (busybox `wget -T
-      5`): a request to a public host fails; `timeout 5 nslookup example.com` exits non-zero;
-      `/proc/net/route` holds no `00000000` destination (busybox `ip route` is present too, but
-      `/proc` needs no applet)
+      resolver answers `SERVFAIL` only after trying the host's upstreams), `db` and **`dump`**
+      (busybox `wget -T 5`): a request to a public host fails; `timeout 5 nslookup example.com`
+      exits non-zero; `/proc/net/route` holds no `00000000` destination (busybox `ip route` is
+      present too, but `/proc` needs no applet). `dump` is not skippable: it holds the whole
+      household's history in every dump it writes, requirement 1 names it beside `app` and `db`, and
+      it runs the same `postgres:17-alpine` as `db` (`compose.yaml:33`, `:105`), so the three checks
+      are the same three commands against a third service
 - [ ] The isolation is read from the daemon's record, never provoked with a connect: for each of the
       four isolated networks `docker network inspect -f '{{if (index .IPAM.Config
       0).Gateway}}fail{{end}}'` prints nothing — under `isolated` no gateway address is allocated at

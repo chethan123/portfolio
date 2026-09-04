@@ -35,17 +35,26 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       refused host
 - [ ] The host in the `CONNECT` line is not enough: all five resolve to the same two addresses as
       `mail`, `login` and `www.yahoo.com` (research note §3.1), and the edge routes on the server
-      name the *client* sends. So before piping, the proxy parses the ClientHello and fails closed
-      on anything but one well-formed ClientHello carrying exactly one `server_name` equal to the
-      `CONNECT` host — logging both names. Two rules the builder must not guess: the bytes a client
-      pipelines after the `CONNECT` line (undici does) arrive in the `'connect'` event's `head`
-      buffer before any `'data'`, so the record buffer is **seeded from `head`** — a handler reading
-      `'data'` alone fails open; and the record is buffered to the length its 5-byte header
-      declares, capped at 16 KB, with end-of-stream or the cap a teardown. A hand-rolled parser over
-      the record and handshake headers, some forty lines; the tests feed synthetic ClientHellos —
+      name the *client* sends. So the hello is checked too — but **after** the `200`, never before
+      it: probed live on Node 24.20 with `NODE_USE_ENV_PROXY=1`, the client sent no bytes at all
+      ahead of the proxy's `200 Connection Established` — the `'connect'` event's `head` empty, zero
+      bytes on the socket — and the ClientHello's first byte (`0x16`) arrived only once the `200`
+      was written. A proxy that waits for a hello before answering deadlocks every honest tunnel.
+      The order is fixed, and it is the ticket's one hard sequence: (1) the `CONNECT` host against
+      the allowlist — a host not on it is answered `403` and logged, with nothing upstream touched;
+      (2) write the `200`; (3) read the ClientHello, the record buffer **seeded from `head`** for a
+      client that does pipeline and filled from the socket after — a handler reading `'data'` alone
+      fails open on such a client, one reading `head` alone never returns for the clients probed;
+      (4) fail closed on anything but one well-formed ClientHello carrying exactly one `server_name`
+      equal to the `CONNECT` host, logging both names; (5) only then resolve, open the upstream and
+      pipe. A refusal at (4) — mismatch, no SNI, two names, malformed, over the cap, end of
+      stream — **destroys the socket**, since the `200` is already written: the client sees a TLS
+      failure, not a `403`, and the smoke assertion below is written to that. The record is buffered
+      to the length its 5-byte header declares, capped at 16 KB. A hand-rolled parser over the
+      record and handshake headers, some forty lines; the tests feed synthetic ClientHellos —
       matching, mismatched, no SNI, two server names, truncated, over the cap, a non-TLS first
-      byte — at least one of them **pipelined in the same write as the `CONNECT` line**, and never
-      open a socket to the internet
+      byte — one of them **pipelined in the same write as the `CONNECT` line** and one arriving only
+      after the `200`, and never open a socket to the internet
 - [ ] The destination is resolved with `dns.lookup(host, { all: true, family: 4 })` (injectable for
       the tests; IPv4 because every bridge has `enable_ipv6: false`) and refused when any answer is
       loopback, link-local or private — the check written family-agnostic all the same, `::1`,
@@ -53,8 +62,18 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       LAN box (ADR-0005's adversary) must not make the proxy a pivot for a worker that skips
       certificate checks. The tunnel is a `net.connect` to the first address, the buffered record
       replayed into it, then piped both ways and torn down when either side ends; a tunnel silent
-      for 60 s is torn down, and at most eight tunnels run at once — the bound on a worker-driven
-      denial (spec §8)
+      for 60 s is torn down
+- [ ] The concurrency bound is on **accepted sockets, not tunnels** — a hostile worker that opens
+      sockets and never sends a valid hello never reaches a tunnel counter, so a cap counted there
+      bounds nothing. `server.maxConnections = 8` on the `node:http` server is the bound, and it
+      holds for a socket's whole lifecycle, from accept to close, the healthcheck's own connection
+      included. Beneath it, every stage that waits on the peer has an explicit deadline, each 5 s:
+      accept to a complete request line and headers; the `200` to a complete ClientHello; the
+      `dns.lookup`. A deadline destroys the socket and logs once, with the 60 s idle teardown
+      covering an established tunnel. This is the bound on a worker-driven denial (spec §8), and
+      what makes the proxy's own exhaustion a denial of price refresh and nothing else. Tests: a
+      ninth socket is not served while eight are held, and a socket that connects and says nothing
+      is gone at the first deadline
 - [ ] One log line per refusal naming the reason and the host(s), stem `Egress proxy`; none per
       allowed tunnel, and a connection that closes without a request line — the healthcheck's — is
       not a refusal and is not logged. `if (import.meta.main)` guard, as the worker has; `Dockerfile:104-110` gains
@@ -100,8 +119,9 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       timeout; `start` it again. The network is the property, not the flag
 - [ ] Through the proxy: `CONNECT mail.yahoo.com:443` is refused with `403`, and so is a plain
       `GET`; a `CONNECT finance.yahoo.com:443` followed by a ClientHello whose server name is
-      `mail.yahoo.com` (a few lines of `node:tls` with `servername`, from `worker`) is torn down
-      before any byte reaches the edge
+      `mail.yahoo.com` (a few lines of `node:tls` with `servername`, from `worker`) is answered
+      `200` and then torn down before any byte reaches the edge — the assertion is a TLS-level
+      failure on that socket, never a `403`, which is what the order above buys
 
 **Docs**
 

@@ -65,11 +65,13 @@ earlier tickets landed because they could not wait — 04's restore and bring-yo
 - [ ] Installing (`:84-92`): the Engine 28.0 and Compose floors with their checks, landed by
       [06](06-deploy-the-worker-alongside.md) and [08](08-the-network-lockdown.md). Running against
       your own Postgres (`:184-197`): [04](04-the-mailbox-and-the-worker-role.md)'s
-      `CREATEROLE`/`ADMIN OPTION` paragraph, the override that mode uses, and exactly which
-      guarantees remain: the worker, the role and the mailbox; **not** the internal-network
-      guarantee, and **not** the availability hardening, which needs a superuser and is logged as
-      skipped — a compromised worker there can freeze refreshes or fill temp; and without
-      `CREATEROLE` no worker login at all, the refusal logged while the app serves
+      `CREATEROLE`/`ADMIN OPTION` paragraph, and `compose.external-db.yaml` — defined and shipped by
+      [08](08-the-network-lockdown.md), written up here and not redefined: the `-f` pair on every
+      compose command, and exactly which guarantees remain in that mode: the role and the mailbox;
+      **not** `app`'s no-egress guarantee, that bridge carrying a default route; **not** the
+      availability hardening, which needs a superuser and is logged as skipped — a compromised
+      worker there can freeze refreshes or fill temp; and without `CREATEROLE` no worker login at
+      all, the refusal logged while the app serves
 - [ ] Environment variables (`:238`): `WORKER_DB_PASSWORD`; `POSTGRES_PASSWORD` required;
       `PGPASSWORD` and the URL rule; generated passwords mandated; `.env` before any compose
       command. Monitoring: the worker's healthcheck beside `:710`; Logs (`:717`): the `Price worker`

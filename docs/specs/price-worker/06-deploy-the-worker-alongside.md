@@ -16,7 +16,7 @@ own upgrade note.
 
 **Blocked by:** [05](05-the-price-worker-process.md).
 
-**Status:** ready-for-agent
+**Status:** needs-triage — becomes ready-for-agent when §2.5 of the spec is answered
 
 **The service** (`compose.yaml`)
 

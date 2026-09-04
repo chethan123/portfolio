@@ -67,8 +67,15 @@ line and each is reviewed alone.
       memoises, and `withRefreshLock` reaches the process-wide pool). `runRefresh` with a fake
       provider answers `done` with the quotes' counts; `busy` while a second `pg` client
       (`createPool(TEST_DATABASE_URL)`, the pattern `tests/price-poller.test.ts:104` builds on)
-      holds the advisory lock on its own session — `withDatabase`'s transaction is not one; `error`
-      when the provider throws. The route's own test comes with [07](07-the-app-cutover.md)
+      holds the advisory lock on its own session — `withDatabase`'s transaction is not one; and
+      `error` when the **database or the lock** fails — a closed pool, or `withRefreshLock` stubbed
+      to throw — since `runRefresh`'s catch only ever sees what escapes `refreshPrices`
+- [ ] A separate case pins what `error` is *not*: a fake whose `getQuotes` throws answers `done`
+      with `report.quotes.providerFailed` true, because `refreshQuotes` catches the throw and marks
+      every selected instrument stale (`prices.server.ts:795-798`); a backfill throw is ledgered per
+      candidate or arrives as `batchFailed`. No provider fault reaches `error`, which is why the
+      dead-worker path of [07](07-the-app-cutover.md) reports `providerFailed` and not a failure of
+      the run. The route's own test comes with [07](07-the-app-cutover.md)
 - [ ] `tests/price-backfill.test.ts`: a fake throwing `ProviderUnreachable` on the second of three
       candidates leaves the first's ledger row, none for the other two, and `refreshPrices`
       reporting `batchFailed: true` with one attempt counted; the log line is the single warning

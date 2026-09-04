@@ -228,7 +228,9 @@ lie. Two harden the app against a hostile provider, which the seam now has to as
   only the backfill writer. The quote and the observation still land, and the day is left to the
   backfill, which is ledgered and split-aware. Seven, because that is the window an honest NAV or a
   holiday quote can lag by, and because it is `BACKFILL_RANGE_LEAD_DAYS` (`:106`) — a week clears
-  the longest run of non-trading days.
+  the longest run of non-trading days. `refreshQuotes` counts a close unconditionally after the call
+  (`:824-826`), so `writeDailyClose` reports whether it wrote and the loop increments only then:
+  `RefreshReport.closes` (`:161`) and the log line built from it exclude a skipped write.
 
 One serves the ledger: **`backfillCloses` aborts the batch without ledgering when the provider was
 unreachable.** Today a throw from `getDailyCloses` is ledgered `provider_failed` and the loop
@@ -371,10 +373,13 @@ the client use". Three tickets, blocked by nothing, because the pieces share no 
   catch wraps it once (§3.1); the composition's log branches on it; the adapter never throws it.
 - **(02) `ResolutionDeps.probe` becomes required and batched:** `probe(symbols) →
   Promise<Map<string, SymbolProbe>>` over one library call — under the mailbox each serial probe
-  would be a round trip (issue #205's first item). The default import, the `?? probeSymbol`
-  fallback and `resolveAll`'s `deps = {}` default go — with a default kept, "required" would be a
-  type and not a fact; the verdict logic becomes a pure exported function the Yahoo batch probe
-  uses now and the mailbox probe later; the ingest route passes the Yahoo batch probe for now.
+  would be a round trip (issue #205's first item), and an empty collected list calls nothing at all,
+  as the serial loop does not today — a manual-only submission must stay a submission with no
+  provider call, and a zero-symbol ask is not even insertable against §3.2's CHECK. The default
+  import, the `?? probeSymbol` fallback and `resolveAll`'s `deps = {}` default go — with a default
+  kept, "required" would be a type and not a fact; the verdict logic becomes a pure exported
+  function the Yahoo batch probe uses now and the mailbox probe later; the ingest route passes the
+  Yahoo batch probe for now.
 - **(03)** The two hardening rules of §3.1. The seven-day arithmetic on an `IsoDate` uses `addDays`,
   today private in `app/lib/chart-range.ts:139` and exported rather than written a fourth time.
 
@@ -478,8 +483,12 @@ cluster, so a future `grant … to portfolio_worker` in a migration would fail t
 
 What it applies, in order, each statement idempotent: `create role portfolio_worker nologin
 nosuperuser nocreatedb nocreaterole connection limit 5` when `pg_roles` lacks it — the limit above
-the pinned pool `max` plus reconnect churn, defence in depth, never the boundary; the grants,
-complete —
+the pinned pool `max` plus reconnect churn, defence in depth, never the boundary; then, whether or
+not this boot created it, `alter role portfolio_worker nosuperuser nocreatedb nocreaterole
+nobypassrls connection limit 5`, because a role someone else pre-created — the restore runbook does,
+a bring-your-own operator may — would otherwise keep whatever attributes it was given, and a
+creation-time list normalises nothing (`nologin` stays off the list: the password step sets
+`login`); the grants, complete —
 
 ```sql
 grant select on provider_call to portfolio_worker;
@@ -509,7 +518,11 @@ large object — listed as expected). Superusers are unaffected; a future non-su
 would need `temporary` and the advisory functions granted back. Plus the two size CHECKs of §3.2,
 and one belt in `migrate.ts`: `begin; set local lock_timeout = '30s'; select pg_advisory_lock(…);
 commit` — the session lock survives the commit and the timeout does not, so nothing leaks into the
-shared pool, and a held migration key fails loudly, naming the key, instead of hanging.
+shared pool, and a held migration key fails loudly, naming the key, instead of hanging. The timeout
+aborts that transaction, and `applyPendingMigrations`' `finally` (`server/migrations.ts:141-143`)
+only unlocks and releases, so the failure path has to `rollback` — or release the client destroyed —
+before the release, or the client goes back to the pool `idle in transaction (aborted)` and poisons
+the next checkout.
 
 **Who may apply it.** Provisioning takes a checked-out `pg` `Client` (`pool.connect()` —
 `escapeLiteral` is `Client`-only) and reads `rolsuper` for its own session first. The superuser-only
@@ -517,15 +530,21 @@ statements — the `pg_catalog` revokes on the advisory and large-object familie
 from public`, `alter role … set temp_file_limit` — run only when it is one, and each one skipped is
 logged by name; nothing is inferred from the absence of an exception, because a non-superuser's
 `REVOKE` on an unowned function is a `WARNING` and success with nothing changed (exercised). A
-`42501` on any remaining statement — `create role`, the grants, the password — is logged with the
-statement and the role it ran as, never fatal: an app must not go down for a role nothing uses until
-ticket 07, where it surfaces as the runbook's "no worker claimed" cause. Provisioning is
-additive — it re-adds a missing grant and never revokes one it did not make — so only the ACL test
-catches a grant widened by hand, in CI (§8). Bring-your-own Postgres therefore keeps the role and
-the mailbox but not the availability hardening, and without `CREATEROLE`
-(`docs/operating.md:184-197` promises only "can create tables") the worker cannot log in at all;
-ticket 04 carries the `CREATEROLE` and PG 16 `ADMIN OPTION` detail, and the docs gain it with the
-role.
+`42501` on any remaining statement — `create role`, the normalisation, the grants, the password — is
+never fatal: an app must not go down for a role nothing uses until ticket 07, where it surfaces as
+the runbook's "no worker claimed" cause. It is logged as a fixed label per statement (`provision:
+alter role password`) with the SQLSTATE and the role it ran as, and never as the rendered SQL, which
+for the password statement carries the secret as a literal. A denied `create role` also means the
+role may not exist, and a `grant … to portfolio_worker` against a missing role is `42704`, not
+`42501`, so it would reach the fatal branch: provisioning re-reads `pg_roles` after a handled
+creation denial and skips every role-dependent statement — the normalisation, the grants, the
+password, `temp_file_limit` — when the role is absent, logging that the worker cannot be provisioned
+on this database. Provisioning is additive — it re-adds a missing grant and never revokes one it did
+not make — so only the ACL test catches a grant widened by hand, in CI (§8). Bring-your-own Postgres
+therefore keeps the role and the mailbox but not the availability hardening, and without
+`CREATEROLE` (`docs/operating.md:184-197` promises only "can create tables") the worker cannot log
+in at all; ticket 04 carries the `CREATEROLE` and PG 16 `ADMIN OPTION` detail, and the docs gain it
+with the role.
 
 **The ACL test** asserts the state provisioning produces — which is the state production has — by
 enumerating every relation and routine in `public` with the `has_*_privilege` functions against an
@@ -596,6 +615,16 @@ directly. `worker` shares no network with `app` or `gate` — requirement 5 by c
 by name *and by IP*: a name failure proves only DNS scoping, and Engine 28's block on direct routed
 access to unpublished ports is what the IP test proves.
 
+One install does not fit the lists: `DATABASE_URL` may name a LAN or remote Postgres, and `app` and
+`worker` on internal networks only have no route to it, so the release that lands the topology also
+lands `compose.external-db.yaml` (ticket 08) — a single plain bridge, `external-db`, attached to
+`app` and `worker` and to nothing else; `dump` stays off it, an outside Postgres being backed up by
+its own operator (`docs/operating.md:195-197`). That mode is a stated relaxation, not a variant of
+the same guarantee: requirement 1 is **off for `app`**, whose bridge now carries a default route,
+and what remains is requirement 3 — the role and the mailbox — and requirement 5, `worker` still
+sharing no network with `app` or `gate`. Its upgrade note is `-f compose.external-db.yaml` before
+`up -d`, on every compose command after it.
+
 What isolation does not give: any container with a route to the host reaches the host's *published*
 ports, so until ticket 09 the worker reaches Caddy's `:80` through its egress bridge — the app
 *through the gate*, never `app:3000` or `gate:4180` — and the gate's OAuth callback relays
@@ -616,24 +645,33 @@ exists to distrust. `server/egress-proxy.ts` is about a hundred and fifty lines 
 contacts — `query1.finance.yahoo.com`, `query2.finance.yahoo.com`, `finance.yahoo.com`,
 `guce.yahoo.com`, `consent.yahoo.com` — never `*.yahoo.com`, because a mail or login host inside a
 `CONNECT` tunnel is a full exfiltration channel, and never an IP literal. The host in the `CONNECT`
-line is not enough on its own: every one of those five resolves to the same two addresses as
-`mail`, `login` and `www.yahoo.com` (research §3.1), and the edge routes on the TLS server name the
-*client* sends, so a tunnel opened to `finance.yahoo.com` carrying a ClientHello for
-`login.yahoo.com` reaches the login property through an allowlisted tunnel. The proxy therefore
-parses the ClientHello before piping and fails closed on anything but one well-formed ClientHello
-carrying exactly one `server_name` equal to the `CONNECT` host, logging both names. Two facts decide
-whether honest tunnels flake: the bytes a client pipelines after the `CONNECT` line — undici does —
-arrive in the `'connect'` event's `head` buffer before any `'data'`, so the record buffer is seeded
-from `head` (a handler reading `'data'` alone fails open); and a hello can span segments, so the
-proxy buffers to the record header's declared length, capped at 16 KB, and tears down on
-end-of-stream or the cap. It refuses a destination that resolves to a loopback, link-local or
-private address, the guard written family-agnostic (`::1`, `fe80::/10`, `fc00::/7` too) although
-the lookup asks for IPv4 only, the bridges having IPv6 disabled — so a LAN resolver, ADR-0005's
-adversary, pointing `finance.yahoo.com` at a LAN box cannot make the proxy a pivot for a worker that
-skips certificate checks. A silent tunnel idles out at 60 s and at most eight run at once: a hostile
-worker's denial is of price refresh, and bounded (§8). The list is a module constant — a fact about
-the pinned library, not operator configuration, so the proxy reads no environment; when Yahoo moves
-a consent host the proxy log names the refused `CONNECT` and the fix is a release.
+line is not enough on its own: every one of those five resolves to the same two addresses as `mail`,
+`login` and `www.yahoo.com` (research §3.1), and the edge routes on the TLS server name the *client*
+sends, so a tunnel opened to `finance.yahoo.com` carrying a ClientHello for `login.yahoo.com`
+reaches the login property through an allowlisted tunnel. The proxy therefore checks the `CONNECT`
+host against the allowlist first and answers a host not on it `403`; otherwise it writes the `200`,
+*then* reads the ClientHello, and fails closed on anything but one well-formed hello carrying
+exactly one `server_name` equal to the `CONNECT` host, logging both names. The order is not a
+preference: probed on Node 24.20 under `NODE_USE_ENV_PROXY=1`, the client sends no bytes whatever
+before the `200` — the `'connect'` event's `head` is empty — and the hello's first byte (`0x16`)
+follows it, so a proxy that waits for a hello before answering deadlocks every honest tunnel. Two
+facts decide whether the rest flakes: a client that *does* pipeline after the `CONNECT` line leaves
+those bytes in `head`, so the record buffer is seeded from `head` and filled from the socket after
+(a handler reading either alone fails, open or shut); and a hello can span segments, so the proxy
+buffers to the record header's declared length, capped at 16 KB, and tears down on end-of-stream or
+the cap. A refusal on the hello destroys the socket rather than answering — the `200` is written by
+then — so the worker sees a TLS failure and never a `403`. It refuses a destination that resolves to
+a loopback, link-local or private address, the guard written family-agnostic (`::1`, `fe80::/10`,
+`fc00::/7` too) although the lookup asks for IPv4 only, the bridges having IPv6 disabled — so a LAN
+resolver, ADR-0005's adversary, pointing `finance.yahoo.com` at a LAN box cannot make the proxy a
+pivot for a worker that skips certificate checks. The concurrency bound is on **accepted sockets,
+not tunnels** — a socket that never sends a valid hello never becomes one — so it is
+`server.maxConnections = 8` for a socket's whole lifecycle, with a 5 s deadline on each stage that
+waits on the peer (request line and headers, the ClientHello read, the DNS lookup) and the 60 s idle
+teardown on an established tunnel: a hostile worker's denial is of price refresh, and bounded (§8).
+The list is a module constant — a fact about the pinned library, not operator configuration, so the
+proxy reads no environment; when Yahoo moves a consent host the proxy log names the refused
+`CONNECT` and the fix is a release.
 
 Same image, another entrypoint, node built-ins only: a payload that is never imported never runs, so
 the proxy is the one piece of the shared image the npm tree cannot reach. Compose: a **new**
@@ -685,6 +723,12 @@ leaves a deployable main: after 06 the worker runs beside the still-fetching app
 lock arbitrating the two, 07 is the single release where the app stops fetching, and 08 the one
 where it loses its route. There is no commit from which a deploy has no price refresh.
 
+The status each ticket carries follows one rule, in the vocabulary of `docs/agents/triage-labels.md`
+(`:7`, `:9`): 04, 05, 06 and 07 are `needs-triage` and become `ready-for-agent` when §2.5 is
+answered, because the socket alternative deletes the mailbox their content is built on; 01, 02 and
+03 — prefactors on the existing adapter, correct under either answer — and 08, 09 and 10, which 07
+blocks in any case, are `ready-for-agent` now.
+
 | # | Ticket | Blocked by |
 |---|---|---|
 | [01](price-worker/01-one-refresh-and-the-batch-abort.md) | `runRefresh` with three thin callers; `ProviderUnreachable` and the batch abort (§3.1, §3.4) | Nothing |
@@ -694,7 +738,7 @@ where it loses its route. There is no commit from which a deploy has no price re
 | [05](price-worker/05-the-price-worker-process.md) | `server/yahoo-client.ts` (the app's adapter uses it from here), `server/symbol-pattern.ts`, `server/price-worker.ts` and its tests; the Dockerfile copy set; ARCHITECTURE.md §4.2's import-site row (§3.5) | 04 |
 | [06](price-worker/06-deploy-the-worker-alongside.md) | Deploy alongside: the `worker` service, its two networks, `db` on `worker-db`, the Engine floor, the dev override, `.env.example` and the upgrade note, smoke (§3.7) | 05 |
 | [07](price-worker/07-the-app-cutover.md) | App cutover: `provider-mailbox.server.ts`; poller, route and ingest on the mailbox; the adapter loses its client; round-trip, route and probe tests; the developer's `.env.worker` recipe (§3.3, §3.9) | 01, 02, 03, 06 |
-| [08](price-worker/08-the-network-lockdown.md) | Lockdown: the full topology, `POSTGRES_PASSWORD` required, `PGPASSWORD` everywhere, the upgrade runbook, smoke egress, DNS and isolation assertions (§3.6, §3.7) | 07 |
+| [08](price-worker/08-the-network-lockdown.md) | Lockdown: the full topology and the `compose.external-db.yaml` override, `POSTGRES_PASSWORD` required, `PGPASSWORD` everywhere, the upgrade runbook, smoke egress, DNS and isolation assertions (§3.6, §3.7) | 07 |
 | [09](price-worker/09-the-egress-allowlist.md) | The egress allowlist proxy with the SNI check, on a new network (§3.8) | 08 |
 | [10](price-worker/10-documents-and-runbooks.md) | The record: DESIGN.md, ARCHITECTURE.md, ADR-0010, CONTEXT.md, the runbooks (§6) | 09 |
 
@@ -702,13 +746,13 @@ where it loses its route. There is no commit from which a deploy has no price re
 
 ## 5. Acceptance (slice level)
 
-- From `app` and `db`: a bounded outbound `fetch` to a public host fails; `timeout 5 nslookup
-  example.com` fails; `/proc/net/route` holds no default route; each isolated network shows an empty
-  IPAM `Gateway` in `docker network inspect` and no `inet` on its host bridge; the smoke script
-  refuses to run on an Engine below 28. From `worker`: `app:3000` and `gate:4180` are unreachable by
-  name and by IP; `db:5432` connects; a public host resolves until ticket 09, and after it the
-  worker's fetch fails with the proxy stopped, a non-allowlisted host is refused through it, and an
-  allowlisted tunnel whose ClientHello names another host is torn down.
+- From `app`, `db` and `dump`: a bounded outbound `fetch` to a public host fails; `timeout 5
+  nslookup example.com` fails; `/proc/net/route` holds no default route; each isolated network shows
+  an empty IPAM `Gateway` in `docker network inspect` and no `inet` on its host bridge; the smoke
+  script refuses to run on an Engine below 28. From `worker`: `app:3000` and `gate:4180` are
+  unreachable by name and by IP; `db:5432` connects; a public host resolves until ticket 09, and
+  after it the worker's fetch fails with the proxy stopped, a non-allowlisted host is refused
+  through it, and an allowlisted tunnel whose ClientHello names another host is torn down.
 - The worker container reaches its claimer loop *in the built image*: its heartbeat healthcheck
   reports healthy under `docker compose ps`.
 - **Refresh now** round-trips through the mailbox on every screen that carries it, JavaScript off
@@ -717,16 +761,17 @@ where it loses its route. There is no commit from which a deploy has no price re
   and the first history candidate's, which aborts the batch — and `price_backfill` gains no row.
 - At ingest a non-USD symbol still refuses with nothing written, an unavailable one is still created
   anyway, and a dead worker costs one 3 s grace per submission (at most the 10 s budget when the
-  worker is alive but slow), not one per symbol.
+  worker is alive but slow), not one per symbol — and nothing at all for a manual-only submission,
+  which asks no provider call.
 - The ACL snapshot fails the suite by name when any grant to `portfolio_worker` widens, when
   `holding_valued` is granted, when a `SECURITY DEFINER` function appears in `public`, when
   `pg_advisory_lock`, `pg_try_advisory_lock` or `pg_try_advisory_xact_lock` regains PUBLIC
   `EXECUTE`, or when the database's `temporary` privilege is back; the worker's real statements pass
   under `SET LOCAL ROLE portfolio_worker`.
 - A quoted price at the ceiling is dropped and the instrument goes stale; a quote whose market date
-  is eight days old, or eight days ahead, rewrites no close and inserts none, while one seven days
-  old does. A worker fed eleven quotes rows in a minute answers the eleventh `failed` / `rate
-  limited` without a call.
+  is eight days old, or eight days ahead, rewrites no close and inserts none — and is not counted in
+  the report's `closes` either — while one seven days old does both. A worker fed eleven quotes
+  rows in a minute answers the eleventh `failed` / `rate limited` without a call.
 - A fresh `docker compose up` with `POSTGRES_PASSWORD` and `WORKER_DB_PASSWORD` set — including via
   the documented `cp .env.example .env` — comes up healthy end to end; without either it fails at
   interpolation naming the variable and pointing at `operating.md`.
@@ -762,15 +807,15 @@ Ticket [10](price-worker/10-documents-and-runbooks.md) carries the line-level li
   else rewritten.
 - **`CONTEXT.md`** — **Price worker**, **Mailbox** and **Provider call**, with "queue", "job table"
   and "sidecar API" among the words to avoid.
-- **`docs/operating.md`** — the Engine and Compose floors with their checks; bring-your-own
-  Postgres (`CREATEROLE`, `ADMIN OPTION`, the override, and exactly what that mode loses — landed by
-  ticket 04); generated passwords mandated; `PGPASSWORD` and the URL rule; `.env` before any
-  compose command; the numbered upgrade runbook, the rollback note, and "replace `compose.yaml`
-  before `up -d`" with the symptom of forgetting; the restore path — stop the worker first; the
-  role before `pg_restore`; on a non-superuser destination `--no-owner` with both roles
-  pre-created, `--no-acl` only when a role is absent and provisioning re-run after it; the drill in
-  a throwaway container started as production's shape; the fifth and sixth causes of a missing
-  price line; the healthcheck's meaning.
+- **`docs/operating.md`** — the Engine and Compose floors with their checks; bring-your-own Postgres
+  (`CREATEROLE` and `ADMIN OPTION`, landed by ticket 04; `compose.external-db.yaml` and exactly what
+  that mode loses, landed by ticket 08); generated passwords mandated; `PGPASSWORD` and the URL
+  rule; `.env` before any compose command; the numbered upgrade runbook, the rollback note, and
+  "replace `compose.yaml` before `up -d`" with the symptom of forgetting; the restore path — stop
+  the worker first; the role before `pg_restore`; on a non-superuser destination `--no-owner` with
+  both roles pre-created, `--no-acl` only when a role is absent and provisioning re-run after it;
+  the drill in a throwaway container started as production's shape; the fifth and sixth causes of a
+  missing price line; the healthcheck's meaning.
 - **`docs/runbook.md`** and **`docs/developing.md`** — the `up` refusal covers `ps`, `logs` and
   `down`; "prices have stopped" starts with `docker compose ps` for both containers; the rotation
   recipe loses its URL half; the restore stops the worker first; the `.env.worker` recipe (landed by
@@ -833,8 +878,9 @@ Ticket [10](price-worker/10-documents-and-runbooks.md) carries the line-level li
   client that sends a startup packet and stalls holds a backend for `authentication_timeout` — a
   hostile worker can hold most of `max_connections` open with no credential at all, and the app
   survives on the three `superuser_reserved_connections` only because it *is* the superuser. The
-  egress proxy is the same class of target: a worker leaking tunnels degrades it up to the idle
-  timeout and the concurrent cap (§3.8) — a denial of price refresh, never of household data.
+  egress proxy is the same class of target, which is why its cap counts **accepted sockets, not
+  tunnels**: a worker leaking sockets degrades it up to the per-stage deadlines, the idle timeout
+  and that cap (§3.8) — a denial of price refresh, never of household data.
 - **A hostile worker can un-claim and un-answer rows** — column `UPDATE` is not row-scoped — so a
   healthy hostile worker can make the app log "no worker claimed" and send the operator chasing a
   dead one; no trigger guards it, because a worker that will not answer is the same outage by
