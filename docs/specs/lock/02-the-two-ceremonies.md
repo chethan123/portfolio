@@ -29,6 +29,10 @@ the way.
       variable when the origin is not `https` or its host is not a domain — the specification forbids
       an IP address as a relying-party id, and the failure otherwise is silent until somebody cannot
       enrol
+- [ ] It must be a bare origin: root path, and no credentials, query or fragment. Compose builds the
+      gate's callback as `PUBLIC_ORIGIN` + `/oauth2/callback`, so a value carrying a path produces a
+      redirect that does not match Google's registered URI, and it is not a valid expected WebAuthn
+      origin either
 - [ ] `http://localhost` is accepted for the dev loop. The carve-out is Secure Contexts', not
       WebAuthn's — WebAuthn asks only for a valid domain string, which `localhost` is
 - [ ] `.env.example` already carries `PUBLIC_ORIGIN` under the gate's heading, saying the gate builds
@@ -42,10 +46,13 @@ the way.
 
 **The dependency**
 
-- [ ] `@simplewebauthn/server` added to dependencies and `@simplewebauthn/browser` alongside it for
-      ticket 04; check the current major's own documentation rather than recalling its API
+- [ ] `@simplewebauthn/server` added to dependencies. **v14.0.0 is the version these documents were
+      grounded against** — its `requireUserVerification` default, its conditional counter check and
+      its returned fields are what the acceptance lists below assume. Check the installed version's
+      own documentation before relying on any of it
+- [ ] `@simplewebauthn/browser` is **not** added here. Ticket 04 is the first module that imports it,
+      and a ticket carrying an unused runtime dependency is not one reviewable logical unit
 - [ ] The server package is imported by this module and nowhere else
-- [ ] The browser package is imported by no `.server.ts` module and by nothing reachable from one
 
 **Registration**
 
@@ -55,8 +62,15 @@ the way.
       generates a fresh one per enrolment. A shared id would let an authenticator treat a second
       enrolment as replacing the first, and this household wants several passkeys to coexist. It is
       not stored — see ticket 01
-- [ ] Already-enrolled credential ids are excluded, so a device cannot silently enrol twice
-- [ ] The challenge is generated server-side, held in the module's map, single-use, and expires
+- [ ] Already-enrolled credential ids are excluded, so one authenticator cannot silently hold two
+      credentials for this instance. The consequence is worth stating rather than discovering: a
+      provider that recognises any of them refuses creation, so a second passkey *from the same
+      provider* is not supported. Several passkeys across different devices and providers is what
+      this household needs, and is what the per-enrolment user id serves
+- [ ] The module's challenge map lives here — the one Node process holds it, entries are spent on
+      read and expire on a timer, and the header says why it is not a table (ticket 01's migration
+      comment says the same)
+- [ ] The challenge is generated server-side, held in that map, single-use, and expires
 - [ ] Verification stores the credential id, public key, counter, backup eligibility and the label; a
       response that fails verification stores nothing
 
@@ -78,6 +92,9 @@ the way.
       platform authenticator reporting a constant zero is not treated as a clone
 - [ ] A counter regression refuses the assertion and says so, rather than being logged and ignored
 - [ ] The stored counter and `last_used_at` are updated on success; backup eligibility is not re-read
+- [ ] The counter update is conditional and monotonic — written only where the new value exceeds the
+      stored one — so two assertions verifying against the same value and completing out of order
+      cannot walk it backwards and weaken the next check
 - [ ] Success mints a grant whose window is the idle window named in one place with ticket 06's grace:
       fifteen minutes, and sixty seconds
 - [ ] Verifying a *registration* mints one only when the household held no passkey before it. That is
@@ -111,6 +128,10 @@ the way.
       passkey — and verification refuses one minted for anything else. "In the same request" is not
       the binding: without a scoped challenge, an assertion produced to unlock would authorise a
       removal, and one removal's assertion would authorise deleting any row the form named
+- [ ] An assertion verified *for enrolment* issues a single-use registration challenge scoped to
+      enrolling, and the registration that follows is accepted only against that. The two steps are
+      separate submissions, so without this the second has no authority — or falls back to the grant
+      the first one minted, which is exactly what this rule refuses
 - [ ] The honest limit, in the module header where somebody will act on it: a provider whose vault is
       already unlocked can return a verified assertion without prompting, so this raises the cost of a
       borrowed phone rather than closing it
@@ -124,6 +145,9 @@ the way.
 - [ ] Removal also requires its acknowledgement here rather than on the screen, the way `closeAccount`
       requires its confirmation — a destructive write a replayed POST can reach silently was never
       acknowledged at all
+- [ ] Enrolment when no passkey exists is one atomic act with ticket 01's constraint, not a read
+      followed by a write: the check and the insert cannot be separated, or two browsers both reading
+      zero both enrol and the second bypassed the assertion rule
 - [ ] Removing the household's last passkey is allowed to be authorised by that same passkey. It is the
       only credential that can, and it is how the lock is turned off; excluding the target from
       `allowCredentials` would strand a one-passkey household
@@ -140,6 +164,12 @@ the way.
       relying-party id, a spent or unknown or expired challenge, a bumped stored counter. Flipping a
       flag inside the signed authenticator data would break the signature and the test would then
       pass for the wrong reason
+- [ ] A response verified against the wrong public key is refused, and nothing is written: no grant,
+      no counter, no `last_used_at`. Without it the verifier's failure path is unpinned and an
+      implementation can mint on a bad signature while every other listed case still passes
+- [ ] Removal without its acknowledgement leaves the passkey and its grants in place
+- [ ] An assertion scoped to unlocking does not authorise an enrolment, and a registration presented
+      without its scoped challenge is refused
 - [ ] An admitted request with a live grant but no fresh assertion cannot enrol and cannot remove
 - [ ] An admitted request with no grant can enrol before any passkey exists, and cannot after
 - [ ] A read failure while answering "is the instance locked" propagates rather than

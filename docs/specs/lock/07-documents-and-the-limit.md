@@ -9,7 +9,9 @@ sentences were true when they were written and are the first thing a contributor
 Its own ticket because a slice that changes what the instance's boundary *is* leaves those statements
 standing, and fixing them inside a feature pull request buries the change nobody should miss.
 
-**Blocked by:** every other ticket in this slice.
+**Blocked by:** [01](01-the-passkey-and-the-grant.md), [02](02-the-two-ceremonies.md),
+[03](03-the-middleware-that-refuses.md), [04](04-the-unlock-screen.md),
+[05](05-enrolling-and-listing-passkeys.md), [06](06-lock-now-and-coming-back.md).
 
 **Status:** ready-for-agent
 
@@ -22,7 +24,10 @@ false the moment this slice lands. Grep for the quoted phrase rather than trusti
       slice adds both. It is the property most directly reversed and the sentence a reviewer will
       quote back
 - [ ] `ARCHITECTURE.md` — *"The app authenticates nobody: it carries no password, no login route and
-      no session of its own"*. Still true of passwords and logins, false about the third
+      no session of its own"*. Still true of passwords and logins, false about the third. Correct it
+      by saying what the grant is rather than by calling it a session: one browser, one moment, no
+      identity — the sense in which ADR-0012 says a grant is not a session is the sense this sentence
+      meant when it said the app has none
 - [ ] `ARCHITECTURE.md`, `compose.yaml` and `docs/operating.md` each say some version of *"with the
       app carrying no cookie of its own, the gate's `SameSite` **is** the CSRF posture"*. The
       app now issues one. The posture survives — the grant cookie is `Lax` too — but the reason given
@@ -71,14 +76,41 @@ false the moment this slice lands. Grep for the quoted phrase rather than trusti
       `Control | State` table — gains the grant cookie: not trusted, a random id, the row is the
       authority
 
-**The operator's runbook**
+**The schema authority**
 
-- [ ] `docs/operating.md` gains the first run: enrol the first passkey, and what happens to every
-      other browser the moment it lands
-- [ ] And the recovery: when every enrolled passkey is unreachable, the operator deletes them, which
-      returns the instance to unlocked and lets anyone the gate admits enrol again. There is
-      deliberately no token, no second path, and no way in through the front door
-- [ ] And the deploy note: the `app` service will not start without `PUBLIC_ORIGIN`
+- [ ] `docs/data-model.md` explains every table and column, its relationships and its invariants, for
+      somebody holding a dump. It gains `passkey` and `unlock_grant` in the same form as the rest: the
+      columns, the cascade, the expiry and its index, and that both are scaffolding which may be
+      deleted from where the other tables may not
+
+**The family guide**
+
+- [ ] `docs/guide/settings.md` hard-codes the tab strip and says, in bold, that nothing in this
+      application deletes anything. Both become false: there is a Passkeys tab, and it removes
+- [ ] `docs/guide/first-run.md` tells the reader that masking is not a lock and the sign-in is the
+      only thing that keeps anyone out. There is a lock now, and this is the family's own document
+- [ ] The guide gains the Passkeys screen and what unlocking is, in the family's words rather than
+      the specification's
+
+**The operator's documents, which are two and not one**
+
+- [ ] `docs/operating.md` gains the explanations: the first run and what enrolling the first passkey
+      does to every other browser, the recovery when every passkey is unreachable, and that the `app`
+      service will not start without `PUBLIC_ORIGIN`
+- [ ] `docs/runbook.md` gains the symptoms and the commands, because that is the document read at 2am
+      and where somebody locked out of every credential will look. It confirms, acts, and links to
+      `docs/operating.md` for the why — it explains nothing itself, which is the seam that keeps the
+      two from drifting
+- [ ] The recovery is that the operator deletes the passkeys, which returns the instance to unlocked
+      and lets anyone the gate admits enrol again. There is deliberately no token, no second path and
+      no way in through the front door
+
+**The pictures**
+
+- [ ] The committed screenshots are retaken with `scripts/capture-screenshots.ts`. Tickets 04, 05 and
+      06 each retake their own and this ticket checks the whole set — `docs/README.md` and
+      `docs/developing.md` both say a change to a screen is not finished until they are, and this
+      slice changes the chrome, adds a Settings tab and adds a screen
 
 **What is deliberately not written**
 

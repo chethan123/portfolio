@@ -61,7 +61,9 @@ a constant zero. Only then does it mint a grant.
 ### The grant
 
 A row, addressed by an opaque id in a cookie. The row is the authority; the cookie carries no
-claim, so a forged or copied cookie value names nothing. It carries a rolling idle expiry: each
+claim, so a *forged* value names nothing — a copied live one names the row it was copied from, which
+is what makes the row deletable and the honest limit of a bearer token. It carries a rolling idle
+expiry: each
 request that passes the middleware extends it, and a browser left alone past the window is locked
 again with no client involvement.
 
@@ -94,6 +96,13 @@ first needs an assertion and then a registration, which is two operating-system 
 be chained off one gesture — WebKit requires each call to sit inside its own user activation — so the
 screen asks for them in two steps and says what the second is for.
 
+**And the first step has to hand authority to the second.** A verified assertion mints a grant, and a
+grant is what this section just said is not enough to enrol; so an assertion offered for enrolment
+issues a single-use registration challenge scoped to enrolling, and the registration is accepted only
+against that. Without it the second submission has no authority at all, or takes the grant the first
+step happened to leave behind — which is the hole this rule exists to close, reopened one step
+later.
+
 The first passkey needs no authorisation at all, because at that moment there is nothing to
 authorise: with no passkey enrolled the instance is not locked, and anyone the gate admitted already
 sees every figure. So the rule for the first passkey is that no passkey exists yet — and there is no
@@ -112,10 +121,19 @@ unprotected-instance banner already uses. Removing the last passkey turns the lo
 
 The idle expiry on the grant is the guarantee, and it is the only thing enforced server-side:
 **fifteen minutes**, extended by the requests that use it. On top of it, a browser hidden longer than
-a **sixty second** grace navigates to the unlock screen when it comes back, which is a courtesy — a
-hidden page cannot be trusted to run timers, and `visibilitychange` cannot tell a locked screen from
-an app switch. Both numbers are stated here and named once in code; this repository names its
-constants rather than leaving them to be discovered.
+a **sixty second** grace **posts the lock action** when it comes back rather than merely navigating —
+navigating alone would leave the grant and its cookie live, so Back or a typed URL would still be
+admitted and nothing would have been locked. The trigger is still a courtesy, because a hidden page
+cannot be trusted to run timers and `visibilitychange` cannot tell a locked screen from an app
+switch; what it triggers is the same server-side deletion the explicit control performs. Both numbers
+are stated here and named once in code; this repository names its constants rather than leaving them
+to be discovered.
+
+**What locking cannot reach.** Deleting the grant stops the next request; it does not reach into pages
+already rendered. Another tab of the same browser keeps the figures on screen until it asks the
+server for something, and a back-forward cache restore can hand a page back without a request at all.
+Protected responses therefore carry `Cache-Control: no-store`, and the guarantee is stated as what it
+is: the lock ends the *reading*, not every pixel already drawn.
 
 Separately, an explicit control locks the current browser immediately. For the threat this slice
 exists to answer — handing somebody your phone — that control is the most direct answer in the
@@ -248,7 +266,8 @@ fixture builders, the route helpers, full-sentence `it` names.
 
 ## Further Notes
 
-**Three things need checking on real devices rather than arguing about.** Whether the ceremony
+**Three things need checking on real devices rather than arguing about, and ticket 04 owns them.**
+Whether the ceremony
 works inside an installed iOS home-screen web app, which no primary Apple source confirms or denies;
 whether a third-party password manager prompts or waves through after the app has been backgrounded,
 which decides how strong this actually is on the devices the household uses; and whether the
@@ -268,7 +287,7 @@ trip. That is correct and worth saying out loud rather than discovering.
 ## Tickets
 
 - [`lock/01-the-passkey-and-the-grant.md`](lock/01-the-passkey-and-the-grant.md) — the schema, the
-  generated types, and the sweep.
+  generated types, and the fixture builders.
 - [`lock/02-the-two-ceremonies.md`](lock/02-the-two-ceremonies.md) — the domain module: options,
   verification, grants, and what each refuses.
 - [`lock/03-the-middleware-that-refuses.md`](lock/03-the-middleware-that-refuses.md) — locked by

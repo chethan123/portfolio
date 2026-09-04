@@ -20,6 +20,9 @@ a thing you know you are about to do, and one tap beforehand beats any timer.
 - [ ] A control in the chrome, in both places `MaskingToggle` is rendered from `app/root.tsx`: the
       rail's foot, and the top bar drawn below the rail's breakpoint. Not the phone's bottom nav,
       which holds neither of them
+- [ ] Drawn only while the instance is locked at all. With no passkey enrolled it would clear a grant
+      that does not exist and send the reader to a screen no credential can satisfy, while every route
+      stays open behind it — a control that appears to do something and cannot
 - [ ] A real form posting to a resource route, the way the masking toggle does. This half *can* be
       progressive and should be, because locking has to work in a browser where unlocking cannot
 - [ ] The action deletes the grant, clears the cookie, and redirects to the unlock screen
@@ -32,19 +35,30 @@ a thing you know you are about to do, and one tap beforehand beats any timer.
 **Coming back**
 
 - [ ] On `visibilitychange` to hidden the client records the time; on return, if the gap exceeds the
-      grace, it navigates to the unlock screen
+      grace, it **posts the lock action** — the same route the control uses. Navigating to the unlock
+      screen alone would leave the grant row and its cookie live, so Back or a typed URL would be
+      admitted and nothing would have been locked
 - [ ] The grace uses the constant ticket 02 names beside the idle window — sixty seconds, and fifteen
       minutes — rather than declaring a second one here
 - [ ] It navigates rather than covering the page, so the server decides. A client that re-locked by
       drawing over the screen would leave the figures underneath it
-- [ ] The module header says this is courtesy and never enforcement, because the next person to read
-      it will otherwise assume the security lives here. A hidden page cannot be trusted to run timers,
-      and `visibilitychange` cannot tell a locked screen from an app switch
+- [ ] The module header says the *trigger* is courtesy and never enforcement, because the next person
+      to read it will otherwise assume the security lives here. A hidden page cannot be trusted to run
+      timers, and `visibilitychange` cannot tell a locked screen from an app switch — what it fires is
+      a server-side deletion, which is not a courtesy at all
+- [ ] What locking cannot reach is said here too: another tab of the same browser keeps its rendered
+      figures until it next asks the server for something, and ticket 03's `no-store` is what stops a
+      back-forward restore handing a page back without asking. The guarantee is that the lock ends the
+      reading, not that it wipes what is already drawn
 
 **Tests**
 
 - [ ] The action deletes the grant and clears the cookie; a subsequent request is refused
-- [ ] The control renders in both chrome positions and posts as a real form
+- [ ] The control renders in both chrome positions and posts as a real form, and does not render at
+      all while the household holds no passkey
+- [ ] After the action, a request carrying the old cookie is refused — the grant is gone, not merely
+      redirected past
+- [ ] The screenshots are retaken; this ticket changes both chrome layouts
 - [ ] The re-entry behaviour is not simulated: there is no browser in the suite, and spec 0007 made
       the same call for masking's client-side cookie write. The constant and ticket 02's server-side
       idle window are what the tests pin

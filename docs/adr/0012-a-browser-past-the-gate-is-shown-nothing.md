@@ -95,7 +95,10 @@ second, unlocked way in.
 ## Consequences
 
 - **The app holds per-request state again**, for the first time since the password gate was
-  deleted. It is not a session and carries no identity: a grant says one browser was unlocked and
+  deleted. It is a session cookie in the mechanical sense — the documents that say this app issues
+  none become false and ticket 07 corrects them — and it is not a session in the sense those
+  documents meant, which was an identity the app authenticates and carries. A grant says one browser
+  was unlocked and
   when, nothing else.
 - **The unlock screen is the first screen that requires JavaScript.** `navigator.credentials.get()`
   has no progressive-enhancement path, so with scripting off the instance is simply locked. This is

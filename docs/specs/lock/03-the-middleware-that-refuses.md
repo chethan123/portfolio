@@ -39,6 +39,9 @@ rule repeated in every loader the way masking's is.
 - [ ] The return path travels as one encoded parameter, not as the query it came from: the gate's own
       redirect truncates a target at the first ampersand, and an owner filter beside a chart range is
       exactly that target
+- [ ] Responses it lets through carry `Cache-Control: no-store`. Deleting a grant stops the next
+      request and reaches nothing already rendered — a back-forward cache restore can hand a page back
+      without asking the server at all, and the middleware never sees it
 
 **What sits outside**
 

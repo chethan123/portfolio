@@ -30,7 +30,10 @@ the screen that unlocks one must already exist. Runs in parallel with
 - [ ] Each row: the label, enrolled date, last used date or "never", and synced or device-bound read
       from the stored backup-eligibility flag
 - [ ] The empty state says the instance is not locked, and that enrolling a passkey locks it
-- [ ] Dates render through the existing formatter
+- [ ] There is no shared date formatter in this repository — `app/lib/format.ts` formats money,
+      percentages and numbers only, and the sole `Intl.DateTimeFormat` uses are private helpers inside
+      `market-hours.ts`. This ticket adds one to `format.ts`, beside the others, and it renders and
+      never computes like everything else there
 
 **Enrolling**
 
@@ -67,14 +70,16 @@ the screen that unlocks one must already exist. Runs in parallel with
       household has, cascade away everyone's grants, and leave the instance open to be re-enrolled
 - [ ] Removal deletes the passkey and its grants through ticket 01's cascade. That is how a lost device
       is revoked: unlock on another enrolled device and remove the lost one
-- [ ] Two warnings, and the passkey count decides which — never both, because for a household holding
-      one they describe the same action and only one of them is true
-- [ ] With others left: removing the passkey you just asserted with — retiring the phone in your hand —
-      deletes the grant that assertion minted, so this browser locks the moment it succeeds. Said
-      before, rather than appearing to have signed you out
-- [ ] With none left: the instance is unlocked, not locked. Nothing is enrolled, so the middleware
-      calls `next()` unconditionally and this browser keeps rendering — warning about a lockout here
-      would be a lie about the one action that turns the lock off
+- [ ] Which warning is shown depends on **whether the passkey being removed owns this browser's
+      grant**, not on how many exist. In the lost-device flow a surviving passkey authorises the
+      removal and mints the grant, so deleting the lost one cascades nothing this browser holds and it
+      stays unlocked — a count-based rule would promise a lockout that does not happen
+- [ ] Removing the passkey that owns this browser's grant — retiring the phone in your hand — locks
+      this browser the moment it succeeds, through ticket 01's cascade. Said before, rather than
+      appearing to have signed you out
+- [ ] Removing the household's last passkey unlocks the *instance*: nothing is enrolled, so the
+      middleware calls `next()` unconditionally and this browser keeps rendering. Warning about a
+      lockout there would be a lie about the one action that turns the lock off
 - [ ] The acknowledgement is ticket 02's, in the domain module rather than on the screen; this screen
       collects it
 - [ ] Removing the last passkey is what turns the lock off, authorised by that same passkey, and the
@@ -92,3 +97,7 @@ the screen that unlocks one must already exist. Runs in parallel with
 - [ ] Removing a passkey ends its grants; removing the last leaves every screen rendering again,
       which is the same assertion ticket 03's no-op case makes
 - [ ] A synced and a device-bound passkey render differently, from the stored flag
+- [ ] Removing a passkey that does not own this browser's grant leaves this browser unlocked, and the
+      warning shown matches
+- [ ] The screenshots are retaken. `docs/README.md` and `docs/developing.md` both say a change to a
+      screen is not finished until they are, and this ticket adds a Settings tab

@@ -45,6 +45,10 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
       noticing
 - [ ] A human-readable label, `not null`, so Settings has something to print that is not a hash
 - [ ] `enrolled_at` and `last_used_at` as `timestamptz`; `last_used_at` nullable until first use
+- [ ] Only one passkey may be the household's first. A partial unique index — or an insert conditional
+      on none existing — makes the eligibility check and the insert one atomic act, so two browsers
+      that both read zero cannot both enrol. Without it the second finishes after the first and gains
+      a passkey without the fresh assertion the rule requires
 - [ ] `unlock_grant` holds its id as a random token from a cryptographic source, text, not a sequence.
       The initial migration's convention is `bigint generated always as identity`, and departing from
       it is the point rather than an oversight: this id travels in a cookie and is the whole of the
@@ -59,12 +63,13 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
       rule is about history rather than about the database (ARCHITECTURE.md), and `upload_draft`,
       `person` and `instrument` are already deleted from
 
-**No table for challenges**
+**No table for challenges, and that is all this ticket says about them**
 
-- [ ] A ceremony's challenge lives in a module-level map in the one Node process this app runs, spent
-      on read and expiring on a timer — not a table, not a cookie
-- [ ] The reasoning goes in the module header rather than here: a challenge outlives one ceremony by
-      seconds, a lost one costs a retry, and a table for it would be schema nobody reads twice
+- [ ] The migration's comment records why there is no `challenge` table: a challenge outlives one
+      ceremony by seconds, a lost one costs a retry, and a table for it would be schema nobody reads
+      twice. It lives in a module-level map in the one Node process this app runs
+- [ ] Building that map is ticket 02's, in the module ticket 02 creates. This ticket cannot implement
+      behaviour in a file it does not author
 
 **The generated types**
 
@@ -81,3 +86,4 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
       actually verifies against rather than a placeholder
 - [ ] A test asserts the cascade: deleting a passkey deletes its grants
 - [ ] A test asserts a grant cannot reference a passkey that does not exist
+- [ ] A test asserts two concurrent first-passkey inserts cannot both land
