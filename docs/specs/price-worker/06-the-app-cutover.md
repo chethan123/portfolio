@@ -35,12 +35,13 @@ volume is already mounted in `app`.
       per call site, and the batch abort of [01](01-one-refresh-and-the-batch-abort.md) is what
       keeps a tick's cost at two of them (spec §3.3)
 - [ ] The outcomes, told apart in this order: a request `error` whose `syscall` is `"connect"` —
-      `ENOENT`, `ECONNREFUSED`, `EACCES`, `ENOTSOCK`, whatever the code (§8.8) — → `ProviderUnreachable`
-      with the message `no worker listening at <path> (<code>)`, keyed on the syscall and not on a
-      code list because a permission fault is persistent and is exactly "no worker reachable", and
+      `ENOENT`, `ECONNREFUSED`, `EACCES`, `ENOTDIR`, whatever the code (research §8.8) — →
+      `ProviderUnreachable` with the message `no worker listening at <path> (<code>)`, keyed on the
+      syscall and not on a code list because a permission fault is persistent and is exactly "no
+      worker reachable", and
       as a plain failure it would ledger five candidates a day; a request `error` named
       `AbortError` (`code: "ABORT_ERR"`, its `cause` the signal's `TimeoutError` — `http.request`
-      wraps the reason where `fetch` throws it, §8.9), or simply `signal.aborted` → an `Error`
+      wraps the reason where `fetch` throws it, research §8.9), or simply `signal.aborted` → an `Error`
       saying the worker did not answer within the budget; the body cap → an `Error` naming it; a
       status other than `200` → an `Error` carrying the body's `error` text, or the status when the
       body has none; `200` → the parsed body. Budgets as constants with their reasons: `quotes`
@@ -116,11 +117,12 @@ volume is already mounted in `app`.
       skips a `CurrencyRefused`; `getDailyCloses` sends the `matchKey`'d symbol and `range.from` and
       applies `until`; a `502` saying "No data found" is `no-history`; a `502` with other text
       throws it; no server on the path throws `ProviderUnreachable` naming the path and `ENOENT`,
-      and within a second — the assertion that it is a connect failure and not a grace; a
-      *directory* at the path throws `ProviderUnreachable` too — the case that pins the rule on the
-      syscall and not on a code list (a `0600` socket owned by another uid is not runnable in CI, so
-      `EACCES` rides the same branch untested); a fake whose `quote` never resolves under `budgetMs:
-      200` throws the budget error, the request's own error being an `AbortError` whose `cause` is
+      and within a second — the assertion that it is a connect failure and not a grace; a path whose
+      parent is a regular file throws `ProviderUnreachable` too, naming `ENOTDIR` — the case that
+      pins the rule on the syscall and not on a code list (a `0600` socket owned by another uid is
+      not runnable in CI, so `EACCES` rides the same branch untested); a fake whose `quote` never
+      resolves under `budgetMs: 200` throws the budget error, the request's own error being an
+      `AbortError` whose `cause` is
       named `TimeoutError`; a `429` throws; a `200` history body over 2 MiB throws, and a quotes
       body over 512 KB; a symbol with a slash is dropped and logged and the request carries the
       rest; 101 symbols are two requests

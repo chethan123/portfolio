@@ -100,23 +100,22 @@ across 02's rewrite of `probeSymbol`. Parallel with [01](01-one-refresh-and-the-
       listening `http.Server`: the test seam, and the entry's one call. Before `listen`: `unlink`
       the path when a file is there (`EADDRINUSE` otherwise, after any unclean exit — research note
       §8.8); then `server.listen(socketPath)`; then `chmod(socketPath, 0o660)` — `listen` creates
-      the file at `0777 & ~umask`, 0755 under the image's 022, and takes no mode (§8.6); the
-      volume's `uid`/`gid`/`mode` mount options are the other half of the fence
+      the file at `0777 & ~umask`, 0755 under the image's 022, and takes no mode (research §8.6);
+      the volume's `uid`/`gid`/`mode` mount options are the other half of the fence
       ([05](05-deploy-the-worker-alongside.md)). A failed unlink or listen — `EISDIR` and then
       `EADDRINUSE` on a directory squatting the path, `ENOSPC` with the volume's inodes spent — is
       logged with the path and the code and exits 1, not an unhandled `'error'` stack, so `docker
       compose logs worker` reads `listen EADDRINUSE /run/price-worker/worker.sock` and the crash
-      loop under `restart: unless-stopped` is visible. `process.on("SIGTERM", () =>
-      server.close(() => process.exit(0)))`: Node is PID 1 under the compose `entrypoint` and
-      ignores a signal it has no handler for, so without it every stop is Docker's 10 s plus
-      `SIGKILL` and a stale socket file; `close()` removes the file (§8.8), so the app sees `ENOENT`
-      at once
+      loop under `restart: unless-stopped` is visible. `process.on("SIGTERM", () => server.close(()
+      => process.exit(0)))`: Node is PID 1 under the compose `entrypoint` and ignores a signal it
+      has no handler for, so without it every stop is Docker's 10 s plus `SIGKILL` and a stale
+      socket file; `close()` removes the file (research §8.8), so the app sees `ENOENT` at once
 - [ ] The server's bounds, a set: `server.maxConnections = 8`; `server.maxRequestsPerSocket = 1`
       (Node then answers `Connection: close` — one request per connection from the worker's side
-      too); `headersTimeout` and `requestTimeout` 5 000 ms with `connectionsCheckingInterval`
-      1 000 ms — the default interval is 30 s, and the two deadlines expire only a connection that
-      has sent a byte (§8.9), so they are polled every second; `server.timeout` 35 000 ms for the
-      silent connection they never touch — past the 30 s watchdog, because a request waiting on
+      too); `headersTimeout` and `requestTimeout` 5 000 ms with `connectionsCheckingInterval` 1 000
+      ms — the default interval is 30 s, and the two deadlines expire only a connection that has
+      sent a byte (research §8.9), so they are polled every second; `server.timeout` 35 000 ms for
+      the silent connection they never touch — past the 30 s watchdog, because a request waiting on
       Yahoo is inactive on the socket; a body read to 16 KB and the socket destroyed past it, with
       no status. The loop sits behind `if (import.meta.main)` (Node ≥ 24.2; `undefined` under
       vitest; research note §5.3), reading `loadWorkerConfig(process.env)` and passing
@@ -159,9 +158,10 @@ across 02's rewrite of `probeSymbol`. Parallel with [01](01-one-refresh-and-the-
 
 - [ ] Each case starts `startWorker` on a socket path under `os.tmpdir()` — short on purpose: a unix
       socket path is 107 usable bytes on Linux and 103 on macOS (`sun_path` is 108 with its
-      terminator, research note §8.7) — with a fake client and `timeouts` in tens of milliseconds,
-      closes it in `afterEach`, and speaks to it with `http.request({ socketPath, agent: false, …
-      })`, so its own sockets are not kept alive into the next case. The app's provider module is
+      terminator, research note §8.7) — with a fake client and `timeouts` in tens of milliseconds
+      (`connectionsCheckingInterval` 50 ms, the interval research §8.9's probe used), closes it in
+      `afterEach`, and speaks to it with `http.request({ socketPath, agent: false, … })`, so its own
+      sockets are not kept alive into the next case. The app's provider module is
       [06](06-the-app-cutover.md)'s, so this file talks raw HTTP on purpose — it pins the protocol,
       not a client of it
 - [ ] `/healthz` answers `200 { ok: true }` with the fake untouched; `/quotes` with three symbols

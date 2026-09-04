@@ -27,22 +27,23 @@ the release that introduces a service and a volume deserves its own upgrade note
       traps: `size` belongs inside `o`, and `o` is a quoted scalar). The comment beside it, in
       `db-store`'s form (`:378-394`): a tmpfs because the socket file is the only content and must
       not outlive the host; `uid`/`gid` 1000 because `app` and `worker` both run as the image's
-      `node` user (§8.4), so the socket file the worker creates at `0660` in the `0770` directory is
-      connectable by uid 1000 or gid 1000 — and by root, which `CAP_DAC_OVERRIDE` admits regardless
-      (§8.5); the mode is not the fence, the app owning the directory and able to `chmod` it — the
-      fence is that only `app` and `worker` mount the volume, which smoke asserts below;
-      `driver_opts` are read once, when the volume is created, and a name-matched volume is reused
-      untouched (§8.2), so a release that changes this line changes the volume's *name*, as
-      [08](08-the-egress-allowlist.md) does for the network, and its upgrade note says so — never
-      `docker compose down -v`, which removes `db-store`'s record with it (`:392-394`); a megabyte
-      because a socket needs no blocks — a *data*-full volume does not stop `bind()`, while spent
-      inodes (`nr_inodes` defaults from RAM, not from `size`) or a directory squatting the path do
-      stop the worker's next start (`ENOSPC`; `EISDIR` then `EADDRINUSE` — §8.8), a refresh outage
-      recovered by recreating the volume ([09](09-documents-and-runbooks.md)'s runbook entry), never
-      a data loss
+      `node` user (research §8.4), so the socket file the worker creates at `0660` in the `0770`
+      directory is connectable by uid 1000 or gid 1000 — and by root, which `CAP_DAC_OVERRIDE`
+      admits regardless (research §8.5); the mode is not the fence, the app owning the directory and
+      able to `chmod` it — the fence is that only `app` and `worker` mount the volume, which smoke
+      asserts below; `driver_opts` are read once, when the volume is created, and a name-matched
+      volume is reused untouched (research §8.2), so a release that changes this line changes the
+      volume's *name*, as [08](08-the-egress-allowlist.md) does for the network, and its upgrade
+      note says so — never `docker compose down -v`, which removes `db-store`'s record with it
+      (`:392-394` guards the neighbouring hazard — a reused name that makes `up` offer to recreate
+      the volume); a megabyte because a socket needs no blocks — a *data*-full volume does not stop
+      `bind()`, while spent inodes (`nr_inodes` defaults from RAM, not from `size`) or a directory
+      squatting the path do stop the worker's next start (`ENOSPC`; `EISDIR` then `EADDRINUSE` —
+      research §8.8), a refresh outage recovered by recreating the volume
+      ([09](09-documents-and-runbooks.md)'s runbook entry), never a data loss
 - [ ] Mounted at `/run/price-worker` in `worker` and in `app` — `app` from this ticket, so the
       cutover changes no compose line. `read_only: true` stays on both: the volume is the one
-      writable path either needs for this (§8.3)
+      writable path either needs for this (research §8.3)
 
 **The service** (`compose.yaml`)
 
@@ -64,14 +65,14 @@ the release that introduces a service and a volume deserves its own upgrade note
       honours `mem_limit` or `deploy.resources.limits.memory` without swarm, and uses that one; and
       `tmpfs: ["/tmp:size=64m"]` in place of `app`'s unsized `/tmp`
 - [ ] Healthcheck: `["CMD", "node", "-e", "<script>"]` where the script does `http.request({
-      socketPath: '/run/price-worker/worker.sock', path: '/healthz', agent: false })` and exits 0
-      on a `200`, 1 on anything else, an error, or 5 s elapsed — `node -e` as `app`'s own check does
+      socketPath: '/run/price-worker/worker.sock', path: '/healthz', agent: false })` and exits 0 on
+      a `200`, 1 on anything else, an error, or 5 s elapsed — `node -e` as `app`'s own check does
       (`:223-227`): `CMD` is exec'd with no shell, `node` is on the image's PATH, and the probe runs
-      as the container's user, the right party to prove the socket's permissions (§8.10); interval
-      15s, timeout 5s, retries 3, start_period 10s. The comment beside it says what `dump`'s says
-      (`:174-178`): nothing restarts an unhealthy container, this is for `docker compose ps`, and
-      "unhealthy" means the worker is not accepting requests on its socket — never "Yahoo is
-      failing"
+      as the container's user, the right party to prove the socket's permissions (research §8.10);
+      interval 15s, timeout 5s, retries 3, start_period 10s. The comment beside it says what
+      `dump`'s says (`:174-178`): nothing restarts an unhealthy container, this is for `docker
+      compose ps`, and "unhealthy" means the worker is not accepting requests on its socket — never
+      "Yahoo is failing"
 - [ ] The header (`:1-2`, `:20`) is corrected: one worker on the same image, reached over a socket
       in a shared volume and holding no credential; "every other setting has a working default"
       still true, since the worker adds none; and the Engine 28.0 floor with its check, `docker
@@ -108,8 +109,9 @@ the release that introduces a service and a volume deserves its own upgrade note
       the release that changes it, never `down -v`. The environment table (`:238`) gains
       `PRICE_WORKER_SOCKET`, optional, and Monitoring gains the worker's healthcheck beside `:710`
       with its meaning. Installing (`:84-92`) gains one sentence for the hosts smoke never runs on —
-      SELinux-enforcing, `userns-remap`, rootless Docker (§8.5) — pointing at the from-`app` socket
-      check below as the one command to run by hand after `up -d`. The rest of the record is
+      SELinux-enforcing, `userns-remap`, rootless Docker (research §8.5) — pointing at the
+      from-`app` socket check below as the one command to run by hand after `up -d`. The rest of the
+      record is
       [09](09-documents-and-runbooks.md)'s
 
 **Smoke** (`scripts/smoke-test.sh`)

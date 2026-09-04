@@ -229,33 +229,34 @@ cause and the ledger holds nothing for that tick.
 `driver_opts: { type: tmpfs, device: tmpfs, o: "size=1m,uid=1000,gid=1000,mode=0770" }` (research
 note §8.1: the keys pass through to `mount -t tmpfs`, and the exact string was mounted and read
 back) — mounted at `/run/price-worker` in `app` and in `worker`, and nowhere else. Both run as uid
-1000, the image's `node` user (§8.4), so the socket file the worker creates at `0660` in the `0770`
-directory is connectable by uid 1000 or gid 1000 — and by root, which `CAP_DAC_OVERRIDE` admits
-regardless (§8.5). The mode is not the fence, the app owning the directory: the fence is the mount
-set — only `app` and `worker` mount the volume, `gate` mounts nothing, `dump` only
-`./volumes/dumps`, no container shares a network, PID or IPC namespace with the worker — and, on
-the host, a data root only root traverses (§8.5). `driver_opts` are read once, at creation, and a
-name-matched volume is reused untouched afterwards (§8.2): a release that changes the option string
-changes the volume's *name*, as ticket 08 does for the network, never asking for `down -v`, which
-removes `db-store`'s record with it. Each container's `read_only` root is untouched; a megabyte
-holds a socket file with room for nothing worth keeping.
+1000, the image's `node` user (research §8.4), so the socket file the worker creates at `0660` in
+the `0770` directory is connectable by uid 1000 or gid 1000 — and by root, which `CAP_DAC_OVERRIDE`
+admits regardless (research §8.5). The mode is not the fence, the app owning the directory: the
+fence is the mount set — only `app` and `worker` mount the volume, `gate` mounts nothing, `dump`
+only `./volumes/dumps`, no container shares a network, PID or IPC namespace with the worker — and,
+on the host, a data root only root traverses (research §8.5). `driver_opts` are read once, at
+creation, and a name-matched volume is reused untouched afterwards (research §8.2): a release that
+changes the option string changes the volume's *name*, as ticket 08 does for the network, never
+asking for `down -v`, which removes `db-store`'s record with it. Each container's `read_only` root
+is untouched; a megabyte holds a socket file with room for nothing worth keeping.
 
 **The socket.** `/run/price-worker/worker.sock`, created by the worker at start: a stale file
-unlinked first (`EADDRINUSE` otherwise, §8.8), then `listen(path)`, then `chmod 0660` — `listen`
-creates the file at `0777 & ~umask`, 0755 under the image's 022, and takes no mode (§8.6). A failed
-unlink or listen — `EISDIR` then `EADDRINUSE` on a directory squatting the path, `ENOSPC` with the
-volume's inodes spent — is logged with the path and the code and exits non-zero, so the crash loop
-under `restart: unless-stopped` is visible in `docker compose logs worker`; `SIGTERM` closes the
-server, which removes the file, so a stop is immediate and the app sees `ENOENT` rather than a
-stale file's `ECONNREFUSED`. The app never creates the socket, never reads the volume and never
-creates a socket of its own there: a missing file is what a dead worker looks like.
+unlinked first (`EADDRINUSE` otherwise, research §8.8), then `listen(path)`, then `chmod 0660` —
+`listen` creates the file at `0777 & ~umask`, 0755 under the image's 022, and takes no mode
+(research §8.6). A failed unlink or listen — `EISDIR` then `EADDRINUSE` on a directory squatting the
+path, `ENOSPC` with the volume's inodes spent — is logged with the path and the code and exits
+non-zero, so the crash loop under `restart: unless-stopped` is visible in `docker compose logs
+worker`; `SIGTERM` closes the server, which removes the file, so a stop is immediate and the app
+sees `ENOENT` rather than a stale file's `ECONNREFUSED`. The app never creates the socket, never
+reads the volume and never creates a socket of its own there: a missing file is what a dead worker
+looks like.
 
 **The protocol.** HTTP/1.1 over the socket, `node:http` on both sides — `server.listen(path)` in the
 worker, `http.request({ socketPath, method, path, agent: false })` in the app — with JSON bodies and
 one request per connection: `agent: false` because Node 24's global agent keeps sockets alive and
-would leave idle app sockets in the worker's eight slots (§8.9), and `maxRequestsPerSocket = 1` on
-the worker, which then answers `Connection: close` itself. Three endpoints, mirroring the seam
-exactly:
+would leave idle app sockets in the worker's eight slots (research §8.9), and `maxRequestsPerSocket
+= 1` on the worker, which then answers `Connection: close` itself. Three endpoints, mirroring the
+seam exactly:
 
 | Request | Body | Answer |
 |---|---|---|
@@ -273,8 +274,8 @@ with no status at all — the app sees `ECONNRESET`, a provider failure; the hon
 two kilobytes. To the app any status but `200` is a provider failure, Node's own `408`, `431` and
 `400` included, the thing Yahoo failing looks like today; a *connect* failure — any request error
 whose `syscall` is `connect`: `ENOENT`, no socket file; `ECONNREFUSED`, a file nobody listens on;
-`EACCES`, a uid or mode that does not line up; `ENOTSOCK` (§8.8) — is `ProviderUnreachable`, the
-batch-abort case of §3.1, and it is immediate.
+`EACCES`, a uid or mode that does not line up; `ENOTDIR` (research §8.8) — is `ProviderUnreachable`,
+the batch-abort case of §3.1, and it is immediate.
 
 The symbol pattern lives once, in `server/symbol-pattern.ts` (§3.5): the app checks it before a
 call and the worker before a URL. The worker's check is the one that binds (§2.1); the app's saves a
@@ -306,10 +307,11 @@ and JSON-parsed. Its outcomes, in the order they are told apart:
   candidates a day and charge the retry clock for a misconfiguration fixed in a minute.
 - The budget expiring throws a plain error saying the worker did not answer within it. Over
   `http.request` the abort arrives as an `AbortError` (`code: "ABORT_ERR"`) whose `cause` is the
-  signal's `TimeoutError` (§8.9), so the branch reads `error.name === "AbortError"` — or simply
-  `signal.aborted` — never a top-level `TimeoutError`, which `fetch` raises and `http.request` does
-  not. The worker is alive and the provider slow, which is what Yahoo timing out looks like today;
-  `refreshQuotes` turns any throw into `providerFailed` (`prices.server.ts:792-800`).
+  signal's `TimeoutError` (research §8.9), so the branch reads `error.name === "AbortError"` — or
+  simply `signal.aborted` — never a top-level `TimeoutError`, which `fetch` raises and
+  `http.request` does not. The worker is alive and the provider slow, which is what Yahoo timing out
+  looks like today; `refreshQuotes` turns any throw into `providerFailed`
+  (`prices.server.ts:792-800`).
 - The body cap throws a plain error naming it; any status but `200` throws a plain error carrying
   the answer's `error` text, so the ledger records what Yahoo said, or what the worker refused;
   `200` is the parsed body.
@@ -417,12 +419,12 @@ the `YahooClient` type the worker, the adapter and every fake share, imports not
 `file:line`s.
 
 **The server.** `node:http` on the socket, its bounds a set: unlink a stale file, `listen(path)`,
-`chmod 0660`; `maxConnections` 8; `maxRequestsPerSocket` 1; `headersTimeout` and `requestTimeout`
-5 s, checked every second — `connectionsCheckingInterval` 1 s, the default being 30 s, and the two
-deadlines expire only a connection that has sent a byte (§8.9); `server.timeout` 35 s for the silent
-connection those two never touch, past the 30 s watchdog because a request waiting on Yahoo is
-inactive on the socket; a body read to 16 KB and the socket destroyed past it; request bodies
-narrowed by Zod schemas in the module, `symbols` element by element against the pattern from
+`chmod 0660`; `maxConnections` 8; `maxRequestsPerSocket` 1; `headersTimeout` and `requestTimeout` 5
+s, checked every second — `connectionsCheckingInterval` 1 s, the default being 30 s, and the two
+deadlines expire only a connection that has sent a byte (research §8.9); `server.timeout` 35 s for
+the silent connection those two never touch, past the 30 s watchdog because a request waiting on
+Yahoo is inactive on the socket; a body read to 16 KB and the socket destroyed past it; request
+bodies narrowed by Zod schemas in the module, `symbols` element by element against the pattern from
 `server/symbol-pattern.ts` before any URL — no imports, the only copy, shared with the app from
 ticket 06: the binding check of §2.1 — and `from` against `^\d{4}-\d{2}-\d{2}$`, since `IsoDate`
 lives under `app/`. Per-endpoint rate caps — **quotes ten calls a minute, history twenty** — are
@@ -679,8 +681,9 @@ comment and the poller's header follow. `docs/data-model.md` is untouched: this 
   `instrument-resolution.server.ts:237`, `uploads.server.ts:571`) — this slice needs none of them
   and adds no fourth.
 - **Rejected, recorded for ADR-0010.** The **mailbox** of §2.5, on the cost §2.5 lists, and with it
-  what only made sense for it: `LISTEN/NOTIFY`, RLS, a per-operation unreachability handle,
-  `pg_dumpall --roles-only` in the dump service, and the heartbeat-file healthcheck — `GET /healthz`
+  what only made sense for it: `LISTEN/NOTIFY` (no reconnect in `pg`, unqueued, needs a poll anyway),
+  RLS for first-write-wins, a per-operation unreachability handle, `pg_dumpall --roles-only` in the
+  dump service, and the heartbeat-file healthcheck — `GET /healthz`
   over the socket asks a listener, which proves more than a timestamp. A **TCP listener on an
   internal network** in place of the socket file: reachability on a bridge is symmetric, so the
   worker would reach `app:3000`. A **start-up refusal** in the image against `up -d` under a stale

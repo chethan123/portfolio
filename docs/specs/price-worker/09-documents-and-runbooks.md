@@ -48,8 +48,10 @@ story, not rewritten.
 - [ ] Context: the supply chain and the three adversaries; spec §2.3's disqualification in one
       sentence. Decision: remote provider; a unix socket in a tmpfs volume the two containers
       share; HTTP/1.1 over it with the library's raw JSON as the whole contract; the worker holding
-      no database credential and no TCP listener; passwords out of URLs. Consequences: spec §6's
-      list
+      no database credential and no TCP listener; passwords out of URLs. Consequences: the batch
+      abort become a deploy-time event (§3.1); no new UI state (§7); one required variable,
+      `POSTGRES_PASSWORD` (§5); one image either side of which restarts independently, the socket
+      plus raw JSON being the whole contract (§8)
 - [ ] Alternatives rejected, each with its reason — spec §7's list, the mailbox first and at length:
       what it was, and the machinery it needed (spec §2.5's list) as the cost the decision was taken
       on; the heartbeat-file healthcheck it took with it; RLS, `LISTEN/NOTIFY` and the per-operation

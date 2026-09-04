@@ -386,17 +386,19 @@ ACME, neither default CA, and no OCSP — Caddy staples only for certificates it
 - **busybox applets were read from Alpine's build config**, not run (§1.7), and `getent` in
   `postgres:17-alpine` was not confirmed at all.
 - **§8 was executed only in part.** The tmpfs option string was mounted on the sandbox's own kernel
-  and every Node fact ran on 24.20.0, but no Compose file created a volume here, and
-  SELinux-enforcing hosts, `userns-remap` and rootless Docker were not exercised at all (§8.5).
+  and every `node:http` fact ran on 24.20.0 (§8.5's uid-1001 matrix is R6's, run under Node 22.22.2
+  — a kernel fact), but no Compose file created a volume here, and SELinux-enforcing hosts,
+  `userns-remap` and rootless Docker were not exercised at all (§8.5).
 
 ## 8. The socket and the volume
 
 Added 2026-09-04, after the channel changed: the facts under spec 0018 §3.2, §3.3 and §3.5 and
 tickets 04–06. Same sourcing as above, pinned at moby master `2280567`, compose-spec main `fee041b`,
-docker/docs main `034d469`, docker/cli master `d306b9d`, docker/compose main `5f94fb0` (`COMPOSE/x`),
-nodejs/node `v24.x` `14a1fee` (`NODE/x`), nodejs/docker-node main `b6ff152`, torvalds/linux master
-`654ae5d` and man-pages master `ae6b221`. **Live** here means the sandbox's Linux 6.18.44 kernel for
-the mount and Node **24.20.0** for every socket fact.
+docker/docs main `034d469`, docker/cli master `d306b9d`, docker/compose main `5f94fb0`
+(`COMPOSE/x`), nodejs/node `v24.x` `14a1fee` (`NODE/x`), nodejs/docker-node main `b6ff152`,
+torvalds/linux master `654ae5d` and man-pages master `ae6b221`. **Live** here means the sandbox's
+Linux 6.18.44 kernel for the mount and Node **24.20.0** for every `node:http` fact; §8.5's uid-1001
+matrix is R6's, run under Node 22.22.2 — a kernel fact.
 
 **8.1 A tmpfs named volume takes `uid`, `gid`, `mode` and `size` from `o:`.**
 `DOCS/reference/compose-file/volumes.md` §driver_opts: "The `type`, `o`, and `device` keys are passed
@@ -418,9 +420,10 @@ values `string | number` (`SPEC/schema/compose-spec.json`), so `o` is a quoted s
 `COMPOSE/pkg/compose/create.go` warns only when a name-matched volume belongs to another project
 (`warnUnmanagedVolumes`, `:235-256`, whose comment says such volumes are "matched by name and reused
 untouched"); nothing diffs `driver_opts`. An edited `o:` line therefore changes nothing on an
-installed instance until the volume is removed — which is why a changed option is a new volume
-name in this repo and never `docker compose down -v`, which removes `db-store`'s record with it
-(`compose.yaml:392-394` is the file keeping operators away from exactly that).
+installed instance until the volume is removed — which is why a changed option is a new volume name
+in this repo and never `docker compose down -v`, which removes `db-store`'s record with it
+(`compose.yaml:392-394` guards the neighbouring hazard — a reused name that makes `up` offer to
+recreate the volume).
 
 **8.3 One volume, two containers, `read_only` untouched.** "A given volume can be mounted into
 multiple containers simultaneously" (`DOCS/manuals/engine/storage/volumes.md`); a shared one is
@@ -482,11 +485,12 @@ persist until unlinked" after a crash; `server.listen`: "One of the most common 
 listening is `EADDRINUSE`". **Live**: a file left by a killed listener fails `listen()` with
 `EADDRINUSE`; unlink first and it succeeds; `server.close()` removes the file itself (a later unlink
 finds `ENOENT`). From the client: no file → `ENOENT`; a file nobody listens on, or a regular file at
-the path → `ECONNREFUSED`; a uid or mode that does not line up → `EACCES` — and each arrives with
-`syscall: "connect"` on the error, which is the property an app keys "no worker" on rather than a
-code list. A directory at the path fails the *worker's* unlink with `EISDIR` and its listen with
-`EADDRINUSE`; a volume whose inodes are spent fails listen with `ENOSPC` (`nr_inodes` defaults from
-RAM, not from `size=`); a volume whose *data* is full does not — `bind()` needs no blocks.
+the path → `ECONNREFUSED`; a regular file in the path → `ENOTDIR` (live); a uid or mode that does
+not line up → `EACCES` — and each arrives with `syscall: "connect"` on the error, which is the
+property an app keys "no worker" on rather than a code list. A directory at the path fails the
+*worker's* unlink with `EISDIR` and its listen with `EADDRINUSE`; a volume whose inodes are spent
+fails listen with `ENOSPC` (`nr_inodes` defaults from RAM, not from `size=`); a volume whose *data*
+is full does not — `bind()` needs no blocks.
 
 **8.9 `node:http` on the socket, and what its timeouts do not do.** `http.request({ socketPath })`
 (not combinable with `host`/`port`) and `signal` are documented options (`NODE/doc/api/http.md`);
