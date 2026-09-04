@@ -178,8 +178,16 @@ that first `GRANT`, while the rehearsal drill — restoring onto the *same* clus
 dump also carries `REVOKE … ON FUNCTION pg_catalog.… FROM PUBLIC` for the advisory functions once
 §2.7's revoke has run: `pg_dump` includes a `pg_catalog` function when `p.proacl IS DISTINCT FROM
 pip.initprivs` (`pg_dump.c` `getFuncs`, 17), and `pg_init_privs` holds no row for them — harmless
-replayed by the superuser, and a fatal first statement for a non-superuser restore under
-`--exit-on-error` (`pg_restore -L` drops the lines; `--no-acl` drops the worker's grants with them).
+replayed by the superuser, and on a non-superuser destination a `WARNING: no privileges could be
+revoked` that still reports `REVOKE`, which `--exit-on-error` does not trip on (live on 17.10 as a
+`CREATEROLE` database owner). What does abort a non-superuser restore, in dump order: `ALTER …
+OWNER TO portfolio` (needs `SET ROLE portfolio`; `--no-owner` skips it) and a `GRANT … TO
+portfolio_worker` when that role is absent. With `--no-owner` and both roles pre-created the restore
+exits 0 and re-creates the worker's grants; `--no-acl` also exits 0 but drops them, so provisioning
+has to re-run (restore ordering exercised on 16.13, whose ACL and owner semantics match 17). A
+throwaway `postgres:17-alpine` with only `POSTGRES_PASSWORD` set has superuser `postgres` and no
+`portfolio` role at all, so its first abort is the `OWNER TO` line — a drill starts it with
+`POSTGRES_USER=portfolio`, as the bundled `db` does.
 
 **2.7 What a role with no grants at all can still do — the availability facts.** Each executed with
 a bare `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE` role holding zero grants:

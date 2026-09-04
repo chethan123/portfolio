@@ -30,13 +30,13 @@ the worker is provably running (or a deploy has no price refresh) and before the
       `console.warn` naming them, on every refresh — no memo; more than 100 symbols split into
       consecutive asks with the answers concatenated; an empty list after dropping is an empty
       answer and no row
-- [ ] The sweep is its own statement, outside any transaction, first: `set local lock_timeout =
-      '2s'` then `delete from provider_call where (answered_at is not null and answered_at < now() -
-      interval '1 hour') or deadline_at < now() - interval '1 hour'`, inside a `try` whose catch
-      logs with the stem `Provider mailbox` and continues — a worker holding `FOR UPDATE` can make
-      the delete time out, and housekeeping must never fail an honest ask (`createDraft`'s sweep,
-      `app/lib/uploads.server.ts:184-210`, is the fire-and-forget precedent). Then the insert, which
-      never waits on a row lock, with `deadline_at` computed on the app's clock (`new
+- [ ] The sweep first, one plain statement with no transaction of its own and no `lock_timeout`:
+      `delete from provider_call where id in (select id from provider_call where (answered_at is
+      not null and answered_at < now() - interval '1 hour') or deadline_at < now() - interval '1
+      hour' for update skip locked)` — a row a hostile worker holds `FOR UPDATE` is skipped at once
+      and swept once its session ends; no `try`, a failure propagates as `createDraft`'s
+      sweep-before-staging does (`app/lib/uploads.server.ts:207-210`, an awaited delete). Then the
+      insert, which waits on no row lock, with `deadline_at` computed on the app's clock (`new
       Date(Date.now() + budgetMs)` — a `timestamptz` crosses as a `Date`, `server/db.ts:29-30`),
       `returning id`
 - [ ] Poll the row every 100 ms: `claimed_at` still null after the grace → throw
@@ -55,8 +55,8 @@ the worker is provably running (or a deploy has no price refresh) and before the
 - [ ] `mailboxProbe: ProbeSymbols` — one `ask("quotes", symbols)`, then `probeVerdicts`
       ([02](02-the-batched-probe.md)); any throw is `unavailable` for every symbol; never throws
 - [ ] The module header carries the argument: why polling and not `LISTEN/NOTIFY` (no reconnect in
-      `pg`, unqueued, needs the poll anyway); why the app sweeps, the worker never deletes, and the
-      sweep cannot fail an ask
+      `pg`, unqueued, needs the poll anyway); why the app sweeps and the worker never deletes; why
+      `skip locked` and not a timeout
 
 **The callers**
 
@@ -75,11 +75,17 @@ the worker is provably running (or a deploy has no price refresh) and before the
       over `/app/build/server/` in the image finds no `yahoo-finance2` — comments are stripped by
       the build, a string literal would trip it. The package stays on disk and the guarantee is the
       network; this proves the graph
-- [ ] `docs/operating.md:761`'s four causes gain the fifth — the worker is dead or unprovisioned:
-      the stem is still `Price provider failed`, the text says "no worker claimed", and `docker
-      compose ps` shows `worker` unhealthy or restarting. The upgrade note repeats
-      [06](06-deploy-the-worker-alongside.md)'s compose-file rule and its symptom. The full record
-      is [10](10-documents-and-runbooks.md)'s
+- [ ] `docs/operating.md:761`'s four causes gain the fifth — the worker is dead, unprovisioned or
+      refused a login (a bring-your-own install without `CREATEROLE`): the stem is still `Price
+      provider failed`, the text says "no worker claimed", and `docker compose ps` shows `worker`
+      unhealthy or restarting. The upgrade note repeats [06](06-deploy-the-worker-alongside.md)'s
+      compose-file rule and its symptom. The full record is [10](10-documents-and-runbooks.md)'s
+- [ ] The developer's recipe, under Recipes (`docs/developing.md:331`), because from this ticket
+      `npm run dev` has no refresh and every probe is `unavailable` without it: `.env.worker` with
+      `DATABASE_URL=postgres://portfolio_worker@127.0.0.1:55432/portfolio_dev` and `PGPASSWORD=…`;
+      the one-time provisioning run against the superuser's `.env` (`:56-60`) with
+      `WORKER_DB_PASSWORD` set; `node --env-file=.env.worker ./server/price-worker.ts` in a second
+      terminal; the without-a-worker behaviour (spec §3.9)
 
 **Tests**
 
@@ -93,8 +99,8 @@ the worker is provably running (or a deploy has no price refresh) and before the
       unclaimed row throws `ProviderUnreachable` after the grace; a claimed-but-unanswered row
       throws at the deadline; the sweep deletes an old answered row and an old expired one and keeps
       a fresh one — seeded with explicit `deadline_at` values, since `now()` is frozen at
-      transaction start — and a sweep that times out on a row another session holds `FOR UPDATE` is
-      logged and the ask still inserts; a symbol with a slash is dropped and logged and the row
+      transaction start — and a committed stale row a second client holds `FOR UPDATE` is skipped,
+      at once, and the ask still inserts; a symbol with a slash is dropped and logged and the row
       holds the rest; 101 symbols are two rows
 - [ ] The probe: `mailboxProbe` answers `ok`, `non-usd` with the currency, `unavailable` for an
       absent symbol, and `unavailable` for all after `ProviderUnreachable` — three symbols, one row

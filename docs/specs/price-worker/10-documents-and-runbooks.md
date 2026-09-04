@@ -9,10 +9,8 @@ gains three words; the runbooks gain what keeps an instance upgradable and resto
 
 Separate because a prose diff across this many files is reviewed by reading, and because until
 [09](09-the-egress-allowlist.md) lands these documents would describe an intention. The lines
-earlier tickets landed because they could not wait — [04](04-the-mailbox-and-the-worker-role.md)'s
-restore and bring-your-own-Postgres paragraphs, the upgrade notes of
-[06](06-deploy-the-worker-alongside.md), [08](08-the-network-lockdown.md) and
-[09](09-the-egress-allowlist.md) — are re-read here as one story, not rewritten.
+earlier tickets landed because they could not wait — 04's restore and bring-your-own paragraphs,
+07's recipe, the upgrade notes of 06, 08 and 09 — are re-read here as one story, not rewritten.
 
 **Blocked by:** [09](09-the-egress-allowlist.md).
 
@@ -47,7 +45,7 @@ restore and bring-your-own-Postgres paragraphs, the upgrade notes of
       passwords out of URLs. Consequences: spec §6's list
 - [ ] Alternatives rejected, each with its reason — spec §6's list, RLS carrying the un-claim
       consequence spec §8 names and the start-up refusal its reason from spec §7. The unix socket of
-      spec §2.6, stated neutrally with its ticket delta and its own residuals, as the alternative
+      spec §2.5, stated neutrally with its ticket delta and its own residuals, as the alternative
       rejected on requirement 4 alone
 - [ ] The named follow-ups: worker supply-chain decorrelation (spec §7), and the app off the
       superuser — which must budget `reserved_connections` for the app's role. ADR-0011 and spec
@@ -69,8 +67,9 @@ restore and bring-your-own-Postgres paragraphs, the upgrade notes of
       your own Postgres (`:184-197`): [04](04-the-mailbox-and-the-worker-role.md)'s
       `CREATEROLE`/`ADMIN OPTION` paragraph, the override that mode uses, and exactly which
       guarantees remain: the worker, the role and the mailbox; **not** the internal-network
-      guarantee, and **not** the availability hardening, which needs a superuser — a compromised
-      worker there can freeze refreshes or fill temp
+      guarantee, and **not** the availability hardening, which needs a superuser and is logged as
+      skipped — a compromised worker there can freeze refreshes or fill temp; and without
+      `CREATEROLE` no worker login at all, the refusal logged while the app serves
 - [ ] Environment variables (`:238`): `WORKER_DB_PASSWORD`; `POSTGRES_PASSWORD` required;
       `PGPASSWORD` and the URL rule; generated passwords mandated; `.env` before any compose
       command. Monitoring: the worker's healthcheck beside `:710`; Logs (`:717`): the `Price worker`
@@ -79,13 +78,19 @@ restore and bring-your-own-Postgres paragraphs, the upgrade notes of
 - [ ] Restoring (`:870`): **`docker compose stop app worker` is the first line**, not advice (its
       pool is never idle, so `dropdb` fails while it runs, and it reconnects the instant `createdb`
       returns); `stop worker` survives a reboot as `stop app` does (`:896-900`). The dump's new
-      contents — the catalog `REVOKE`s of research note §2.6 — and the non-superuser restore's
-      escape: `pg_restore -L` with those lines dropped, or `--no-acl`, which also drops the worker's
-      grants until the next boot's provisioning re-applies them
+      contents — the worker's grants and the catalog `REVOKE`s of research note §2.6 — and the
+      non-superuser restore: the `REVOKE`s warn and pass; what aborts under `--exit-on-error` is
+      `ALTER … OWNER TO portfolio` and a `GRANT` to a missing role, so the runbook is `--no-owner`
+      with both roles pre-created, which succeeds and keeps the worker's grants; `--no-acl` (only
+      when a role cannot be created) also exits 0 but drops those grants, so provisioning must
+      re-run — the next boot does
 - [ ] Rehearse it (`:906`): the same-cluster drill cannot exercise the missing-role case and no
-      variant drops the live role; the case is rehearsed in a throwaway `postgres:17-alpine`
-      container: `pg_restore` into it, expect the `role "portfolio_worker" does not exist` abort,
-      create the role, restore again. Rebuilding a machine (`:931`):
+      variant drops the live role; the case is rehearsed in a throwaway container started as
+      production's shape — `docker run --rm -d -e POSTGRES_USER=portfolio -e POSTGRES_PASSWORD=x
+      postgres:17-alpine`, since under the image's default `postgres` superuser the first abort is
+      `ALTER … OWNER TO portfolio`, not the worker role: `pg_restore` into it, expect the `role
+      "portfolio_worker" does not exist` abort on the first `GRANT`, `create role portfolio_worker
+      nologin`, restore again. Rebuilding a machine (`:931`):
       [04](04-the-mailbox-and-the-worker-role.md)'s line, re-read
 - [ ] Upgrading (`:949`): "replace `compose.yaml` with the release's copy before `up -d`" and its
       symptom (a new image under an old file runs with no worker: stale prices, health green, one
@@ -102,13 +107,10 @@ restore and bring-your-own-Postgres paragraphs, the upgrade notes of
       `.env` first, no URL to edit; "I need to restore" (`:553`): stop the worker first, then
       [04](04-the-mailbox-and-the-worker-role.md)'s role line; "`docker compose up` refuses to
       start" (`:49`): the two new variables, and that `ps`, `logs` and `down` refuse too
-- [ ] A recipe under Recipes (`developing.md:331`): `.env.worker` with
-      `DATABASE_URL=postgres://portfolio_worker@127.0.0.1:55432/portfolio_dev` and `PGPASSWORD=…`;
-      the one-time provisioning run against the superuser's `.env` (`:56-60`); `node
-      --env-file=.env.worker ./server/price-worker.ts` in a second terminal; the without-a-worker
-      behaviour (spec §3.9). "Verify the split convention" (`:435`): the call now runs from the
-      worker's environment. `:564-571`: `.env.worker` is read by nothing but the command that names
-      it
+- [ ] The `.env.worker` recipe [07](07-the-app-cutover.md) landed under Recipes
+      (`developing.md:331`), re-read. "Verify the split convention" (`:435`): the call now runs
+      from the worker's environment. `:564-571`: `.env.worker` is read by nothing but the command
+      that names it
 
 **`docs/data-model.md`, `README.md`, code comments, the index**
 

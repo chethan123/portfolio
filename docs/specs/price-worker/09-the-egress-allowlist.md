@@ -24,8 +24,8 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
 - [ ] Imports `node:http`, `node:net` and `node:dns` only — its closure is decorrelated from the npm
       tree, which is the reason to write it rather than pull an image. No `zod`, no
       `server/config.ts`, and no environment read at all
-- [ ] Listens on `8888`; handles `CONNECT host:443` and nothing else — any other method, port or an
-      absent host is answered `403` and logged
+- [ ] Listens on `8888`; handles `CONNECT host:443` and nothing else — any other method, port, an
+      absent host or an IP-literal host is answered `403` and logged
 - [ ] The allowlist is a module constant — `query1.finance.yahoo.com`, `query2.finance.yahoo.com`,
       `finance.yahoo.com`, `guce.yahoo.com`, `consent.yahoo.com` — compared exactly and
       case-insensitively, never as a suffix. `fc.yahoo.com`, which older plans named, is not in
@@ -35,17 +35,26 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       refused host
 - [ ] The host in the `CONNECT` line is not enough: all five resolve to the same two addresses as
       `mail`, `login` and `www.yahoo.com` (research note §3.1), and the edge routes on the server
-      name the *client* sends. So before piping, the proxy reads the first TLS record from the
-      client side, parses the ClientHello's `server_name` extension, and tears the tunnel down when
-      it is absent or differs from the `CONNECT` host — logging both names. A hand-rolled parser
-      over the record and handshake headers, some forty lines; the tests feed synthetic ClientHellos
-      (matching, mismatched, no SNI, truncated, a non-TLS first byte) and never open a socket to the
-      internet
-- [ ] The destination is resolved with `dns.lookup` (injectable for the tests) and refused when any
-      answer is loopback, link-local or RFC 1918 — a LAN resolver pointing `finance.yahoo.com` at a
+      name the *client* sends. So before piping, the proxy parses the ClientHello and fails closed
+      on anything but one well-formed ClientHello carrying exactly one `server_name` equal to the
+      `CONNECT` host — logging both names. Two rules the builder must not guess: the bytes a client
+      pipelines after the `CONNECT` line (undici does) arrive in the `'connect'` event's `head`
+      buffer before any `'data'`, so the record buffer is **seeded from `head`** — a handler reading
+      `'data'` alone fails open; and the record is buffered to the length its 5-byte header
+      declares, capped at 16 KB, with end-of-stream or the cap a teardown. A hand-rolled parser over
+      the record and handshake headers, some forty lines; the tests feed synthetic ClientHellos —
+      matching, mismatched, no SNI, two server names, truncated, over the cap, a non-TLS first
+      byte — at least one of them **pipelined in the same write as the `CONNECT` line**, and never
+      open a socket to the internet
+- [ ] The destination is resolved with `dns.lookup(host, { all: true, family: 4 })` (injectable for
+      the tests; IPv4 because every bridge has `enable_ipv6: false`) and refused when any answer is
+      loopback, link-local or private — the check written family-agnostic all the same, `::1`,
+      `fe80::/10` and `fc00::/7` included — since a LAN resolver pointing `finance.yahoo.com` at a
       LAN box (ADR-0005's adversary) must not make the proxy a pivot for a worker that skips
-      certificate checks. The tunnel is a `net.connect` to the resolved address, the first record
-      replayed into it, then piped both ways and torn down when either side ends
+      certificate checks. The tunnel is a `net.connect` to the first address, the buffered record
+      replayed into it, then piped both ways and torn down when either side ends; a tunnel silent
+      for 60 s is torn down, and at most eight tunnels run at once — the bound on a worker-driven
+      denial (spec §8)
 - [ ] One log line per refusal naming the reason and the host(s), stem `Egress proxy`; none per
       allowed tunnel. `if (import.meta.main)` guard, as the worker has; `Dockerfile:104-110` gains
       the file
@@ -81,7 +90,9 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
 - [ ] The service lists gain `egress-proxy` (`:71`, `:342-350`, `:365-367`, `:379-385`, `:401-403`);
       no published port
 - [ ] From `worker`: a `fetch` of `https://query2.finance.yahoo.com/` through the proxy gets an HTTP
-      answer of any status — the point is the tunnel; `timeout 5 nslookup example.com` now fails;
+      answer of any status — best-effort, skipped with a notice when the runner cannot reach Yahoo,
+      since the `403`, the SNI teardown and the stopped-proxy case below prove the control without
+      it; `timeout 5 nslookup example.com` now fails;
       `worker-proxy` shows an empty IPAM `Gateway` and no host `inet`, as
       [08](08-the-network-lockdown.md)'s isolated networks do
 - [ ] `docker compose stop egress-proxy`, then the same `fetch` from `worker` fails within its

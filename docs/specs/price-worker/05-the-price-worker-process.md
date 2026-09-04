@@ -37,7 +37,7 @@ compose change exists; [06](06-deploy-the-worker-alongside.md) deploys what this
       { period1, interval: "1d", events: "split" })`; `ChartRequest` (`:589-598`) moves here and the
       app imports the type. Imports nothing from `app/lib` (`matchKey` would pull Kysely in)
 - [ ] `app/lib/price-provider.server.ts` deletes its `import("yahoo-finance2")` (`:619`),
-      `yahooClient` and the `QuoteClient`/`YahooClient` types (`:601-604`) and takes the client from
+      `yahooClient` and the `QuoteClient`/`YahooClient` types (`:602-605`) and takes the client from
       this module; `probeSymbols` ([02](02-the-batched-probe.md)) takes it too. ARCHITECTURE.md
       §4.2's import-site row (`:338`) is re-pointed at `server/yahoo-client.ts` here
 - [ ] `tests/yahoo-client.test.ts` (new) takes the client's own surface: the library's shape
@@ -66,11 +66,14 @@ compose change exists; [06](06-deploy-the-worker-alongside.md) deploys what this
       attempt. A `28P01`, "not permitted to log in" and an unreachable host are all retryable — the
       worker can come up before the app has provisioned it; no ledger check, no migration.; the same
       backoff governs a claimer whose database has gone
-- [ ] The claimer is spec §3.5's `update … set claimed_at = now() where id in (select … order by
-      requested_at limit 50) returning …`, every 250 ms when idle and again at once after a round
-      that claimed something; after every successful poll — empty ones included, failed ones never —
-      touches the heartbeat file, whose path is a parameter of the loop and of `drainOnce` (default
-      `/tmp/price-worker-heartbeat`, the compose path)
+- [ ] The claimer is spec §3.5's `update … set claimed_at = now() where claimed_at is null and
+      answered_at is null and deadline_at > now() and id in (select … order by requested_at limit
+      50) returning …` — the guard in the outer `where` as well as the subquery, because read
+      committed re-checks only the outer `WHERE` on a row it re-fetches, and two claimers running
+      the subquery-only form both took the same rows (exercised) — every 250 ms when idle and again
+      at once after a round that claimed something; after every successful poll — empty ones
+      included, failed ones never — touches the heartbeat file, whose path is a parameter of the
+      loop and of `drainOnce` (default `/tmp/price-worker-heartbeat`, the compose path)
 - [ ] Two lanes, quotes and history, each a serial queue, a row routed by `kind`. Before a call, in
       order: `deadline_at` in the past answers `failed` / `expired` with no call; an element failing
       `isWellFormedSymbol` answers `failed` with no call; the lane's cap — ten quotes calls a

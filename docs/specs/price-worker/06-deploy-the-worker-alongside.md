@@ -95,7 +95,7 @@ own upgrade note.
       (`:342-350`), `expect_no_new_privileges` (`:365-367`), `expect_uid worker 1000` (`:379-385`),
       `expect_read_only_root` (`:401-403`); `published_ports worker` shows no `HostPort`
       (`:281-290`)
-- [ ] `wait_for_healthy` (`:82`) takes the service as `$1`, default `app` — it hard-codes `app`
+- [ ] `wait_for_healthy` (`:81`) takes the service as `$1`, default `app` — it hard-codes `app`
       today, in both the `ps -q` and the failure text — and `wait_for_healthy worker` asserts the
       worker reaches its claimer loop *in the built image*: an incomplete Dockerfile copy set dies
       on first import, and nothing else would catch it
