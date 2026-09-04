@@ -44,6 +44,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0016](0016-session-series-running-total.md) | The 1D line as a running total over the session's observations, same rows in tens of milliseconds |
 | [0017](0017-price-backfill.md) | The price spine backfilled from the feed's own history — gap-triggered, on every refresh, inserted where absent, never over a live close (ADR-0011) |
 | [0018](0018-price-worker.md) | The price worker: the fetch moved to an egress-isolated container reached over a unix socket, the app keeping every rule, every write and the scheduler (ADR-0010; proposed) |
+| [0019](0019-the-lock.md) | The lock: a browser past the gate is shown nothing until a passkey is checked, refused in one middleware and lifted by a grant that idles out (ADR-0012; proposed) |
 
 ## The ticket directories
 
@@ -52,7 +53,8 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 the slice still unbuilt), [`holdings/`](holdings/) (0003), [`auth-gate/`](auth-gate/) (0011),
 [`dynamic-chart-resolution/`](dynamic-chart-resolution/) (0009),
 [`owner-filter/`](owner-filter/) (0013), [`dump/`](dump/) (0014),
-[`price-backfill/`](price-backfill/) (0017), and [`price-worker/`](price-worker/) (0018).
+[`price-backfill/`](price-backfill/) (0017), [`price-worker/`](price-worker/) (0018), and
+[`lock/`](lock/) (0019).
 
 A `screenshots/` directory under a slice holds before/after proof for one ticket's pull request and
 is deleted once that pull request merges — a lasting image belongs to the README's or the guide's
