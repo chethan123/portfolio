@@ -212,8 +212,9 @@ fixture builders, the route helpers, full-sentence `it` names.
 
 - The middleware is the boundary, so it gets the boundary's tests: with no passkey enrolled every
   screen renders; with one enrolled and no grant every screen is refused; with a grant every screen
-  renders; with an expired grant every screen is refused again. The refusal is asserted on the
-  rendered markup containing no figure, not merely on a redirect.
+  renders; with an expired grant every screen is refused again. The refusal is asserted on `next()`
+  never being invoked — the middleware refuses by throwing, so there is no markup to grep, and
+  "contains no figure" against an empty body passes whatever the middleware did.
 - Assertion verification is tested for what it refuses: a replayed challenge, one that was never
   issued, one that has expired, a wrong origin, a wrong relying-party id, and a counter regression
   where the specification's condition applies. A fixture assertion is generated once and stored, and

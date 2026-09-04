@@ -67,13 +67,18 @@ the screen that unlocks one must already exist. Runs in parallel with
       household has, cascade away everyone's grants, and leave the instance open to be re-enrolled
 - [ ] Removal deletes the passkey and its grants through ticket 01's cascade. That is how a lost device
       is revoked: unlock on another enrolled device and remove the lost one
-- [ ] Removing the passkey you just asserted with — retiring the phone in your hand — deletes the grant
-      that assertion minted, so this browser is locked the moment it succeeds. The screen says so
+- [ ] Two warnings, and the passkey count decides which — never both, because for a household holding
+      one they describe the same action and only one of them is true
+- [ ] With others left: removing the passkey you just asserted with — retiring the phone in your hand —
+      deletes the grant that assertion minted, so this browser locks the moment it succeeds. Said
       before, rather than appearing to have signed you out
+- [ ] With none left: the instance is unlocked, not locked. Nothing is enrolled, so the middleware
+      calls `next()` unconditionally and this browser keeps rendering — warning about a lockout here
+      would be a lie about the one action that turns the lock off
 - [ ] The acknowledgement is ticket 02's, in the domain module rather than on the screen; this screen
       collects it
-- [ ] Removing the last passkey unlocks the instance, and the screen says that is what it is about to
-      do before it does it
+- [ ] Removing the last passkey is what turns the lock off, authorised by that same passkey, and the
+      screen says that is what it is about to do
 
 **Tests**
 
