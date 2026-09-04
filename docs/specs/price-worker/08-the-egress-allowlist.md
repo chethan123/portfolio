@@ -1,6 +1,6 @@
-# 09 — The egress allowlist
+# 08 — The egress allowlist
 
-_Part of [0018-price-worker.md](../0018-price-worker.md) (§3.8)._
+_Part of [0018-price-worker.md](../0018-price-worker.md) (§3.7)._
 
 **What to build:** `server/egress-proxy.ts`, a `CONNECT`-only forward proxy of about a hundred and
 fifty lines on `node:http`, `node:net` and `node:dns`, admitting exactly the five hosts
@@ -42,42 +42,54 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       was written. A proxy that waits for a hello before answering deadlocks every honest tunnel.
       The order is fixed, and it is the ticket's one hard sequence: (1) the `CONNECT` host against
       the allowlist — a host not on it is answered `403` and logged, with nothing upstream touched;
-      (2) write the `200`; (3) read the ClientHello, the record buffer **seeded from `head`** for a
-      client that does pipeline and filled from the socket after — a handler reading `'data'` alone
-      fails open on such a client, one reading `head` alone never returns for the clients probed;
-      (4) fail closed on anything but one well-formed ClientHello carrying exactly one `server_name`
-      equal to the `CONNECT` host, logging both names; (5) only then resolve, open the upstream and
-      pipe. A refusal at (4) — mismatch, no SNI, two names, malformed, over the cap, end of
-      stream — **destroys the socket**, since the `200` is already written: the client sees a TLS
-      failure, not a `403`, and the smoke assertion below is written to that. The record is buffered
-      to the length its 5-byte header declares, capped at 16 KB. A hand-rolled parser over the
-      record and handshake headers, some forty lines; the tests feed synthetic ClientHellos —
-      matching, mismatched, no SNI, two server names, truncated, over the cap, a non-TLS first
-      byte — one of them **pipelined in the same write as the `CONNECT` line** and one arriving only
-      after the `200`, and never open a socket to the internet
+      (2) `dns.lookup`, the private-address guard below, and `net.connect` to the upstream, each
+      under its 5 s deadline — a lookup failure or a refused connect is answered `502`, a deadline
+      `504`, a private answer `403`, each logged once with the host and the cause, and nothing is
+      *sent* upstream yet, so the server-name property is untouched; (3) write the `200`; (4) read
+      the ClientHello, the record buffer **seeded from `head`** for a client that does pipeline and
+      filled from the socket after — a handler reading `'data'` alone fails open on such a client,
+      one reading `head` alone never returns for the clients probed; (5) fail closed on anything but
+      one well-formed ClientHello carrying exactly one `server_name` equal to the `CONNECT` host,
+      logging both names, the upstream socket destroyed with nothing written to it; (6) only then
+      replay the record into the upstream and pipe. A refusal at (5) — mismatch, no SNI, two names,
+      malformed, over the cap, end of stream — **destroys the socket**, since the `200` is already
+      written: the client sees a TLS failure, not a `403`, and the smoke assertion below is written
+      to that. Resolving and connecting *before* the `200` is what gives "Yahoo is down" and "the
+      resolver is down" a signature: undici reports a non-`200` `CONNECT` answer as `Proxy response
+      (502) !== 200 when HTTP Tunneling` in the worker's `fetch failed` cause, distinct from the bare
+      socket close of an SNI teardown. The record is buffered to the length its 5-byte header
+      declares, capped at 16 KB. A hand-rolled parser over the record and handshake headers, some
+      forty lines; the tests feed synthetic ClientHellos — matching, mismatched, no SNI, two server
+      names, truncated, over the cap, a non-TLS first byte — one of them **pipelined in the same
+      write as the `CONNECT` line** and one arriving only after the `200`, and never open a socket
+      to the internet: the upstream `net.connect` is injectable beside `dns.lookup`, and the tests
+      point it at a local listener; a lookup that fails answers `502`, a connect that never
+      completes answers `504` at the deadline, each logged once
 - [ ] The destination is resolved with `dns.lookup(host, { all: true, family: 4 })` (injectable for
       the tests; IPv4 because every bridge has `enable_ipv6: false`) and refused when any answer is
       loopback, link-local or private — the check written family-agnostic all the same, `::1`,
       `fe80::/10` and `fc00::/7` included — since a LAN resolver pointing `finance.yahoo.com` at a
       LAN box (ADR-0005's adversary) must not make the proxy a pivot for a worker that skips
-      certificate checks. The tunnel is a `net.connect` to the first address, the buffered record
-      replayed into it, then piped both ways and torn down when either side ends; a tunnel silent
-      for 60 s is torn down
+      certificate checks. The tunnel is the `net.connect` of step (2) to the first address, the
+      buffered record replayed into it, then piped both ways and torn down when either side ends; a
+      tunnel silent for 60 s is torn down
 - [ ] The concurrency bound is on **accepted sockets, not tunnels** — a hostile worker that opens
       sockets and never sends a valid hello never reaches a tunnel counter, so a cap counted there
       bounds nothing. `server.maxConnections = 8` on the `node:http` server is the bound, and it
       holds for a socket's whole lifecycle, from accept to close, the healthcheck's own connection
       included. Beneath it, every stage that waits on the peer has an explicit deadline, each 5 s:
-      accept to a complete request line and headers; the `200` to a complete ClientHello; the
-      `dns.lookup`. A deadline destroys the socket and logs once, with the 60 s idle teardown
-      covering an established tunnel. This is the bound on a worker-driven denial (spec §8), and
-      what makes the proxy's own exhaustion a denial of price refresh and nothing else. Tests: a
-      ninth socket is not served while eight are held, and a socket that connects and says nothing
-      is gone at the first deadline
-- [ ] One log line per refusal naming the reason and the host(s), stem `Egress proxy`; none per
-      allowed tunnel, and a connection that closes without a request line — the healthcheck's — is
-      not a refusal and is not logged. `if (import.meta.main)` guard, as the worker has; `Dockerfile:104-110` gains
-      the file
+      accept to a complete request line and headers; the `dns.lookup` and the upstream connect; the
+      `200` to a complete ClientHello. A deadline destroys the socket and logs once, with the 60 s
+      idle teardown covering an established tunnel. This is the bound on a worker-driven denial
+      (spec §8), and what makes the proxy's own exhaustion a denial of price refresh and nothing
+      else. Tests: a ninth socket is not served while eight are held, and a socket that connects
+      and says nothing is gone at the first deadline
+- [ ] One log line per refusal naming the reason and the host(s), and one per upstream failure
+      naming the host and the cause, stem `Egress proxy`; none per allowed tunnel, and a connection
+      that closes without a request line — the healthcheck's — is not a refusal and is not logged.
+      `if (import.meta.main)` guard, as the worker has, and the worker's `SIGTERM` handler
+      (`server.close(() => process.exit(0))` — Node is PID 1 under the compose `entrypoint`, and a
+      stop is otherwise Docker's 10 s plus `SIGKILL`); `Dockerfile:104-110` gains the file
 
 **Compose**
 
@@ -91,8 +103,11 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       the worker with its route out, the env flag would route honest traffic through the proxy, and
       smoke — which starts from nothing — would stay green
 - [ ] The `egress-proxy` service on `[worker-proxy, egress-proxy]` with the app's image,
-      `entrypoint: ["node", "./server/egress-proxy.ts"]`, `restart: unless-stopped`, the full
-      hardening, uid 1000, no `ports:`, and a healthcheck that `net.connect`s to its own `:8888`
+      `entrypoint: ["node", "./server/egress-proxy.ts"]`, `restart: unless-stopped`, `logging:
+      *container-logging` (a compromised worker can flood the refusal log), the full hardening, uid
+      1000, no `ports:`, the worker's bounds from [05](05-deploy-the-worker-alongside.md) —
+      `pids_limit: 64`, the `256m` memory limit in the attribute 05 settled on, `tmpfs:
+      ["/tmp:size=64m"]` — and a healthcheck that `net.connect`s to its own `:8888`
 - [ ] `worker` on `[worker-proxy]` alone, the socket volume still mounted, with `NODE_USE_ENV_PROXY:
       "1"` and `HTTPS_PROXY: http://egress-proxy:8888` — Node 24's `fetch` honours the pair only
       under the flag (research note §5.2, exercised: without it the fetch goes direct), the library
@@ -102,13 +117,18 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       `CONNECT` and the proxy resolves them) and no route to the host's published `:80`
 - [ ] The upgrade note: replace `compose.yaml`, `up -d`, then `docker network rm
       portfolio_egress-worker` (Compose does not remove an unused network) and check `docker network
-      inspect -f '{{.Internal}}' portfolio_worker-proxy` prints `true`. The compose header and, in
-      [09](09-documents-and-runbooks.md), DESIGN.md's services block gain the service
+      inspect -f '{{.Internal}}' portfolio_worker-proxy` prints `true`. The rollback note, mirroring
+      [07](07-the-network-lockdown.md)'s: rolling `APP_VERSION` below this release under this
+      compose file crash-loops `egress-proxy` — the old image has no `server/egress-proxy.ts` — and
+      leaves the worker with no route out, `fetch failed` on every call and `Price provider failed`
+      every tick with health green; roll `compose.yaml` back with the image. The compose header
+      and, in [09](09-documents-and-runbooks.md), DESIGN.md's services block gain the service
 
 **Smoke** (`scripts/smoke-test.sh`)
 
 - [ ] The service lists gain `egress-proxy` (`:71`, `:342-350`, `:365-367`, `:379-385`, `:401-403`);
-      no published port
+      no published port; `docker inspect` shows its pids and memory limits as
+      [05](05-deploy-the-worker-alongside.md) asserts for `worker`
 - [ ] From `worker`: a `fetch` of `https://query2.finance.yahoo.com/` through the proxy gets an HTTP
       answer of any status — best-effort, skipped with a notice when the runner cannot reach Yahoo,
       since the `403`, the SNI teardown and the stopped-proxy case below prove the control without
@@ -127,11 +147,15 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
 
 - [ ] `docs/operating.md` Security (`:485`) gains the paragraph: what the proxy allows, the
       server-name rule, what a refused `CONNECT` in its log means, and the one operator action —
-      upgrade — when Yahoo moves a host. "There is no price line in the log" (`:761`) gains the
-      sixth cause, the proxy is down, with its signature: `docker compose ps egress-proxy` not
-      healthy, and every `Price worker` line of that minute carrying `fetch failed` with the same
-      cause, answered to the app as a `502` — the worker stays healthy, since its healthcheck asks
-      the socket and not Yahoo
+      upgrade — when Yahoo moves a host. The Logs bullet for the `Price provider failed` stem
+      (`:738`) — not `:761`'s "no price line" list, whose causes are a refresh that never ran —
+      gains two signatures beside [06](06-the-app-cutover.md)'s dead worker: **the proxy is down**
+      — `docker compose ps egress-proxy` not healthy, and every `Price worker` line of that minute
+      carrying `fetch failed` with the same `ECONNREFUSED`/`ENOTFOUND egress-proxy` cause, answered
+      to the app as a `502`; and **Yahoo or the resolver unreachable behind a healthy proxy** —
+      `fetch failed: Proxy response (502)` (or `504`) on every `Price worker` line and one `Egress
+      proxy` line per failed upstream naming the host and the cause. The worker stays healthy in
+      both, since its healthcheck asks the socket and not Yahoo
 - [ ] ARCHITECTURE.md §2 (`:92-100`): the worker reaches Yahoo through the proxy; the full sentence,
       and the env-reader row naming `NODE_USE_ENV_PROXY` and `HTTPS_PROXY` as the runtime's, are
       [09](09-documents-and-runbooks.md)'s

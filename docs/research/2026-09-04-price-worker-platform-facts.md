@@ -13,7 +13,8 @@ unix socket in a volume the app and the worker share ([spec 0018
 §2.5](../specs/0018-price-worker.md)); the worker now holds no database credential at all. Nothing
 below is deleted: §2 and §4.4 stay as the record of what a database credential for the
 internet-facing container would have cost, which is the ground the decision was taken on, and every
-other section supports the socket design as it supported the table.
+other section supports the socket design as it supported the table; §8, added the same day, carries
+the socket's and the volume's own facts.
 
 ## Sourcing, and what "live" means
 
@@ -350,7 +351,8 @@ under plain `node`. `import.meta.main` (added v24.2.0) is `true` for the entry f
 that file is imported, under type stripping too (live); it is typed at `@types/node/module.d.ts:661`
 and is `undefined` under vitest. `AbortSignal.timeout(-1)` throws `RangeError [ERR_OUT_OF_RANGE]`,
 and `timeout(0)` aborts on the next macrotask with a `DOMException` named **`TimeoutError`** — the
-name a test asserts, not `AbortError`. undici reports every network failure as `TypeError: fetch
+name a `fetch` rejection carries, since `fetch` rejects with the signal's reason; an `http.request`
+under the same signal wraps it in an `AbortError` instead (§8.9), so that rule is `fetch`-only. undici reports every network failure as `TypeError: fetch
 failed` with the detail in `error.cause` (`ECONNREFUSED`; `Request was cancelled` against a dead
 proxy port under `NODE_USE_ENV_PROXY=1`).
 
@@ -383,3 +385,138 @@ ACME, neither default CA, and no OCSP — Caddy staples only for certificates it
   and whether the consent redirect fires from a household's IP is unknown.
 - **busybox applets were read from Alpine's build config**, not run (§1.7), and `getent` in
   `postgres:17-alpine` was not confirmed at all.
+- **§8 was executed only in part.** The tmpfs option string was mounted on the sandbox's own kernel
+  and every Node fact ran on 24.20.0, but no Compose file created a volume here, and
+  SELinux-enforcing hosts, `userns-remap` and rootless Docker were not exercised at all (§8.5).
+
+## 8. The socket and the volume
+
+Added 2026-09-04, after the channel changed: the facts under spec 0018 §3.2, §3.3 and §3.5 and
+tickets 04–06. Same sourcing as above, pinned at moby master `2280567`, compose-spec main `fee041b`,
+docker/docs main `034d469`, docker/cli master `d306b9d`, docker/compose main `5f94fb0` (`COMPOSE/x`),
+nodejs/node `v24.x` `14a1fee` (`NODE/x`), nodejs/docker-node main `b6ff152`, torvalds/linux master
+`654ae5d` and man-pages master `ae6b221`. **Live** here means the sandbox's Linux 6.18.44 kernel for
+the mount and Node **24.20.0** for every socket fact.
+
+**8.1 A tmpfs named volume takes `uid`, `gid`, `mode` and `size` from `o:`.**
+`DOCS/reference/compose-file/volumes.md` §driver_opts: "The `type`, `o`, and `device` keys are passed
+through to the local driver" — the keys Docker's own `docker volume create --opt type=tmpfs --opt
+device=tmpfs --opt o=size=100m,uid=1000` example uses
+(`CLI/docs/reference/commandline/volume_create.md:89-91`).
+The local driver accepts `type=tmpfs` — `MOBY/daemon/volume/local/local_unix.go:22-34` lists `type,
+o, device, size` with no filesystem allowlist, and `mandatoryOpts` wants `device` and `type` beside
+`o` — and mounts `mount -t tmpfs -o <o> tmpfs <path>` with the string verbatim (`localVolume.mount`,
+`:162`). The kernel documents `mode`, `uid` and `gid` as options on "the initial root directory" and
+`size` with a `k`/`m`/`g` suffix (`Documentation/filesystems/tmpfs.rst`). **Live**:
+`size=1m,uid=1000,gid=1000,mode=0770` mounted, and `findmnt` read back
+`rw,relatime,size=1024k,mode=770,uid=1000,gid=1000`. Two traps: a top-level `size` in `driver_opts`
+is an XFS project quota, refused with "quota size requested but no quota support"
+(`local_unix.go:65-73`) — the size belongs inside `o`; and the Compose schema types `driver_opts`
+values `string | number` (`SPEC/schema/compose-spec.json`), so `o` is a quoted scalar.
+
+**8.2 Changed `driver_opts` are ignored on an existing volume, silently.**
+`COMPOSE/pkg/compose/create.go` warns only when a name-matched volume belongs to another project
+(`warnUnmanagedVolumes`, `:235-256`, whose comment says such volumes are "matched by name and reused
+untouched"); nothing diffs `driver_opts`. An edited `o:` line therefore changes nothing on an
+installed instance until the volume is removed — which is why a changed option is a new volume
+name in this repo and never `docker compose down -v`, which removes `db-store`'s record with it
+(`compose.yaml:392-394` is the file keeping operators away from exactly that).
+
+**8.3 One volume, two containers, `read_only` untouched.** "A given volume can be mounted into
+multiple containers simultaneously" (`DOCS/manuals/engine/storage/volumes.md`); a shared one is
+declared at the top-level `volumes` key (`SPEC/spec.md` §volumes). `--read-only` "mounts the
+container's root filesystem as read only prohibiting writes to locations other than the specified
+volumes" (`CLI/docs/reference/commandline/container_run.md`, with `touch /icanwrite/here` as its
+example); in moby only `s.Root.Readonly` follows the flag and each mount carries its own `ro`
+(`MOBY/daemon/oci_linux.go:598-620`, `:714`). Volume sharing is a daemon mount, not a network
+operation: `network_mode: none` and a shared volume coexist (`SPEC/spec.md` §network_mode names only
+`networks` as its conflict), and `depends_on` is an opt-in ordering gate nothing ties to a volume
+(§depends_on). Docker Desktop runs dockerd inside its Linux VM (`DOCS/manuals/desktop/features/vmm.md`),
+so the mount happens there and the kernel facts hold; a `--tmpfs` *mount*, by contrast, is
+Linux-only and cannot be shared between containers (`DOCS/manuals/engine/storage/tmpfs.md`
+§Limitations) — the named volume is the mechanism that shares.
+
+**8.4 uid 1000 is the image's `node`.** `nodejs/docker-node` `24/alpine3.23/Dockerfile:5-6`:
+`addgroup -g 1000 node && adduser -u 1000 -G node`; `Dockerfile:122`'s `USER node` is therefore
+uid/gid 1000 with no `user:` line, which is what `uid=1000,gid=1000` in `o:` matches.
+
+**8.5 Who can connect.** `man7/unix.7` §"Pathname socket ownership and permissions": "pathname
+sockets honor the permissions of the directory they are in", creating one needs write and search on
+the directory, and "on Linux, connecting to a stream socket object requires write permission on that
+socket"; search on the directory during `connect` is `man7/path_resolution.7` (`EACCES`). **Live**
+matrix, directory `0770` owned `1000:1000`:
+
+| dir | socket | client uid | connect |
+|---|---|---|---|
+| 0770 | 0755 | 1000 | ok |
+| 0770 | 0660 | 1000 | ok |
+| 0770 | 0660 | 1001 | `EACCES` — no search on the directory |
+| 0777 | 0660 | 1001 | `EACCES` — no write on the socket |
+
+So the fence is "uid 1000 or gid 1000" (mode 0660 grants the group), and root connects regardless
+through `CAP_DAC_OVERRIDE`. Nor is the mode a bound against the app itself: the app runs as the
+directory's owner and can `chmod` both. What bounds the socket is the mount set — only `app` and
+`worker` mount the volume — and the host: moby creates `volumes/` and each volume's directory
+`0701` and its `_data` `0755` (`MOBY/daemon/volume/local/local.go:65`, `:188`, `:193`) beneath a data
+root a packaged daemon keeps `0710 root:root` — the mode the daemon gives its own `containers`
+directory (`MOBY/daemon/daemon.go:1008`); the root's own line was not pinned — so a host uid or gid
+1000 cannot traverse to the mount, and host root can. Not exercised: SELinux-enforcing hosts, where
+`container_t` is MCS-constrained per container and the cross-container `connect` may be denied with
+the mode right; `userns-remap`, where `uid=1000` is the daemon namespace's; rootless Docker.
+
+**8.6 Node creates the socket at `0777 & ~umask` — 0755 under the image's 022 — and `listen` takes
+no mode.** unix(7): "The socket file has all permissions enabled, other than those that are turned
+off by the process umask." **Live**: `server.listen(path)` → `0755`; `fs.chmodSync(path, 0o660)` in
+the `listening` handler → `660`; `process.umask(0o117)` before `listen` → `660` as well (unix(7)
+notes `fchmod` does not work). Inside a `0770` directory the listen-to-chmod window admits only
+uid/gid 1000 anyway.
+
+**8.7 Path length.** `sun_path` is 108 bytes on Linux including the terminator (unix(7) §Address
+format and BUGS); `NODE/doc/api/net.md` §"Identifying paths for IPC connections" gives the usable
+figure, "107 bytes on Linux and 103 on macOS". `/run/price-worker/worker.sock` is 29 bytes and
+`/tmp/portfolio-worker.sock` 26; a dev socket belongs under a short fixed `/tmp/` prefix, never the
+checkout path.
+
+**8.8 The stale file, and what a dead worker looks like.** net.md, same section: a Unix socket "will
+persist until unlinked" after a crash; `server.listen`: "One of the most common errors raised when
+listening is `EADDRINUSE`". **Live**: a file left by a killed listener fails `listen()` with
+`EADDRINUSE`; unlink first and it succeeds; `server.close()` removes the file itself (a later unlink
+finds `ENOENT`). From the client: no file → `ENOENT`; a file nobody listens on, or a regular file at
+the path → `ECONNREFUSED`; a uid or mode that does not line up → `EACCES` — and each arrives with
+`syscall: "connect"` on the error, which is the property an app keys "no worker" on rather than a
+code list. A directory at the path fails the *worker's* unlink with `EISDIR` and its listen with
+`EADDRINUSE`; a volume whose inodes are spent fails listen with `ENOSPC` (`nr_inodes` defaults from
+RAM, not from `size=`); a volume whose *data* is full does not — `bind()` needs no blocks.
+
+**8.9 `node:http` on the socket, and what its timeouts do not do.** `http.request({ socketPath })`
+(not combinable with `host`/`port`) and `signal` are documented options (`NODE/doc/api/http.md`);
+`http.Server` extends `net.Server`, so `maxConnections` applies — on reaching it a connection is
+accepted and closed at once, and a client on the socket sees `EPIPE`/close, not `ECONNREFUSED`
+(**live**). Defaults, **live**: `requestTimeout` 300 000, `headersTimeout` 60 000,
+`keepAliveTimeout` 5 000 plus `keepAliveTimeoutBuffer` 1 000 (added v24.6.0),
+`connectionsCheckingInterval` **30 000**, `maxRequestsPerSocket` 0, `maxConnections` and
+`server.timeout` unset. Two facts the numbers hide. `headersTimeout` and `requestTimeout` expire only
+a connection that has sent at least one request byte — `src/node_http_parser.cc` adds a parser to
+the checked list at `on_message_begin` (`:739-744`) and `Expired` walks only that list
+(`:1253-1275`) — so a connection that sends nothing is never touched by them, and only
+`server.timeout` (socket inactivity; `setTimeout` destroys by default) closes it; and expiry is
+*polled* on `connectionsCheckingInterval` (`lib/_http_server.js:614-625`), so 5 s deadlines under the
+default interval bind at 5–35 s. **Live**: a silent connection under `headersTimeout: 500` was still
+open at 3 s with the interval at its default *and* at 100 ms; a request line followed by dribbled
+headers closed at 602 ms with the interval at 50 ms. Keep-alive: `http.globalAgent.keepAlive` is
+`true` (Node ≥ 19) and the agent pools by `socketPath` — two sequential requests reused one
+connection and the answer said `Connection: keep-alive`; `agent: false` gave `Connection: close`
+and a second connection (**live**); `maxRequestsPerSocket = 1` makes the server answer
+`Connection: close` itself. Abort shape: an `http.request` under `AbortSignal.timeout(ms)` against a
+handler that never answers emits `error` with `name: "AbortError"`, `code: "ABORT_ERR"`, message
+"The operation was aborted" and `cause.name === "TimeoutError"` (**live**) — `fetch` rejects with the
+signal's reason directly (§5.3), so the two are checked differently.
+
+**8.10 `node -e` as a healthcheck on `node:24-alpine`.** `CMD` is exec'd with no shell
+(`MOBY/daemon/health.go:344` `cmdProbe{shell: false}`, `:82` splits `cmd[0]`/`cmd[1:]`;
+`SPEC/spec.md` §healthcheck names `CMD-SHELL` as the `/bin/sh` form); `node` is
+`/usr/local/bin/node` in the image (`24/alpine3.23/Dockerfile:23`); exit 0 is healthy and anything
+else, "including invalid exit code", is failure (`health.go`), so the probe must `process.exit(1)`
+on error; and it runs as the container's own user (`health.go:85` `execConfig.User =
+cntr.Config.User`), so it fails for exactly the reasons the app would — the right party to prove
+the socket's permissions.

@@ -1,15 +1,18 @@
-# 03 — The two hardening rules
+# 03 — The three hardening rules
 
 _Part of [0018-price-worker.md](../0018-price-worker.md) (§3.1)._
 
-**What to build:** Two rules in the app's own price path, against the provider it has today: a price
-ceiling in `toProviderQuote`, a sibling of the rate and close ceilings that already exist, so one
-absurd figure cannot abort a whole refresh; and a seven-day window, both sides of today, outside
-which the quote path writes no `price_daily` close — so a hostile or merely wrong
-`regularMarketTime` can neither rewrite the past nor plant the future.
+**What to build:** Three rules in the app's own price path, against the provider it has today, and a
+cap on what one observation archives: a price ceiling in `toProviderQuote`, a sibling of the rate
+and close ceilings that already exist, so one absurd figure cannot abort a whole refresh; a
+seven-day window, both sides of today, outside which the quote path writes no `price_daily` close —
+so a hostile or merely wrong `regularMarketTime` can neither rewrite the past nor plant the future;
+a floor in `toProviderHistory` at `range.from`, the mirror of the cut it already makes at `until`, so
+one bar dated before first-held cannot close a coverage gap for good; and `archived()` refusing a
+payload over 32 KB, so a worker cannot turn the observation log into the disk.
 
-Its own ticket because both rules guard against an honest provider's bad day as much as against a
-hostile worker, both are pure domain rules with fixture-shaped tests, and neither shares a line with
+Its own ticket because every rule guards against an honest provider's bad day as much as against a
+hostile worker, all are pure domain rules with fixture-shaped tests, and none shares a line with
 [01](01-one-refresh-and-the-batch-abort.md) or [02](02-the-batched-probe.md).
 
 **Blocked by:** Nothing. Parallel with [01](01-one-refresh-and-the-batch-abort.md),
@@ -55,6 +58,32 @@ hostile worker, both are pure domain rules with fixture-shaped tests, and neithe
 - [ ] One `console.warn` per refresh naming the instruments whose close was skipped; the module
       header's account of which past rows a refresh can rewrite is updated with the rule
 
+**The floor** (`app/lib/price-provider.server.ts`)
+
+- [ ] `toProviderHistory` (`:483`) skips a bar whose market date is before `range.from` exactly as
+      it skips one at or past `range.until` (`:541`, today the only date cut). The reason, in the
+      docstring beside the `until` sentence: `writeBackfilledCloses` inserts where absent
+      (`prices.server.ts:988`), so a bar dated 1971 lands as a row; the gap predicate
+      `NO_CLOSE_BY_FIRST_HELD` (`:253-258`) is satisfied by any row dated at or before first-held,
+      so that one row removes the instrument from the candidate set permanently while the ledger
+      says `filled` and the real gap — first-held back to the spine's true start — is never filled;
+      ADR-0011 forbids overwriting a close and nothing in the app deletes `price_daily`, so the
+      recovery would be `psql`. An honest answer never carries a bar before `period1`, which is
+      `from`, so the cut costs nothing
+
+**The archive cap** (`app/lib/prices.server.ts`)
+
+- [ ] `archived()` (`:1015-1024`) answers `null` for a payload whose serialised form is over 32 KB —
+      `ARCHIVE_PAYLOAD_CAP`, beside the function, with the reasoning: an honest quote entry is
+      2–4 KB; the observation log keys on `(instrument_id, as_of)` and inserts where absent
+      (`:1072`), so a worker varying `regularMarketTime` adds a row per instrument per tick, and
+      uncapped each row could carry the client's whole body cap into the cluster that shares a
+      filesystem with the dumps. One `console.warn` naming the symbol and the size, in the shape of
+      the function's serialise-failure line (`:1021`); `null` is "treated as absent" by the
+      function's own contract and the column is nullable
+      (`migrations/0009_price_observation.sql:64`), so the quote and the observation still land,
+      without the document
+
 **Tests**
 
 - [ ] `tests/price-provider.test.ts`: a `regularMarketPrice` at the ceiling yields `null`, one below
@@ -68,6 +97,17 @@ hostile worker, both are pure domain rules with fixture-shaped tests, and neithe
 - [ ] The six existing cases that assert a written close (`tests/refresh-quotes.test.ts:125`, `:169`,
       `:203`, `:227`, `:247`, `:357`) carry June-2026 `asOf` fixtures against the real clock and need
       the same fake clock, or an `asOf` relative to now
+- [ ] `tests/price-provider.test.ts`, "reading a day of history" (`:421`): a chart carrying one bar
+      dated before `RANGE.from` (`:380`) and one inside the range yields the inside close only — the
+      bar before the range is not written
+- [ ] `tests/price-backfill.test.ts`, "what a batch writes to the spine" (`:611`): the real adapter
+      over a client stub (`tests/price-provider.test.ts:704-786` is the shape) whose chart carries a
+      single bar dated 1971 for an instrument first held in 2024 writes no `price_daily` row,
+      ledgers the attempt `nothing_to_write`, and leaves the instrument in the gap list — the bar
+      does not close the gap
+- [ ] `tests/refresh-quotes.test.ts`: a fake quote whose raw entry serialises to 33 KB lands its
+      `quote` row and an observation whose `payload` is `null`, with the warning naming the symbol;
+      one at 4 KB archives the document
 
 **Gates**
 

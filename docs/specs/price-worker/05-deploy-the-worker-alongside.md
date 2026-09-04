@@ -3,13 +3,14 @@
 _Part of [0018-price-worker.md](../0018-price-worker.md) (§3.6, §3.8)._
 
 **What to build:** The compose changes that put the worker into production without touching the
-app's own fetching: the `price-worker-sock` volume, the `worker` service with the full hardening on
-its own egress bridge, `app` mounting the volume it does not yet use, the socket healthcheck, the
-dev override that builds the worker from the checkout, the header and the upgrade note — this is
-where the Engine floor is declared — and the smoke coverage. The app keeps fetching and nothing
-calls the socket yet, so the worker listens, idles and reports healthy. Every deploy from this
-commit still refreshes prices, which is what lets [06](06-the-app-cutover.md) be a clean, code-only
-cutover. Nothing is asked of the operator's `.env`: the worker needs no credential and no variable.
+app's own fetching: the `price-worker-sock` volume, the `worker` service with the full hardening and
+its resource bounds on its own egress bridge, `app` mounting the volume it does not yet use, the
+socket healthcheck, the dev override that builds the worker from the checkout, the header and the
+upgrade note — this is where the Engine floor is declared — and the smoke coverage. The app keeps
+fetching and nothing calls the socket yet, so the worker listens, idles and reports healthy. Every
+deploy from this commit still refreshes prices, which is what lets [06](06-the-app-cutover.md) be a
+clean, code-only cutover. Nothing is asked of the operator's `.env`: the worker needs no credential
+and no variable.
 
 Its own ticket because a compose diff is reviewed apart from the code that will use it, and because
 the release that introduces a service and a volume deserves its own upgrade note.
@@ -21,17 +22,27 @@ the release that introduces a service and a volume deserves its own upgrade note
 **The volume** (`compose.yaml`, the `volumes:` block at `:377`)
 
 - [ ] `price-worker-sock`: `driver: local` with `driver_opts: { type: tmpfs, device: tmpfs, o:
-      "size=1m,uid=1000,gid=1000,mode=0770" }` — builder verifies the option string against the
-      compose spec and the local volume driver docs, and that a tmpfs-backed named volume takes
-      `uid`, `gid` and `mode` from `o:` on the Engine floor below. The comment beside it, in
+      "size=1m,uid=1000,gid=1000,mode=0770" }` — the three keys pass through to `mount -t tmpfs`,
+      and the exact string was mounted and read back (research note §8.1, which also has the two
+      traps: `size` belongs inside `o`, and `o` is a quoted scalar). The comment beside it, in
       `db-store`'s form (`:378-394`): a tmpfs because the socket file is the only content and must
       not outlive the host; `uid`/`gid` 1000 because `app` and `worker` both run as the image's
-      `node` user, so the socket file the worker creates at `0660` is connectable by the app and by
-      nothing else on the host; a megabyte because a socket needs none, and a full volume is a
-      refresh outage rather than a data loss
+      `node` user (§8.4), so the socket file the worker creates at `0660` in the `0770` directory is
+      connectable by uid 1000 or gid 1000 — and by root, which `CAP_DAC_OVERRIDE` admits regardless
+      (§8.5); the mode is not the fence, the app owning the directory and able to `chmod` it — the
+      fence is that only `app` and `worker` mount the volume, which smoke asserts below;
+      `driver_opts` are read once, when the volume is created, and a name-matched volume is reused
+      untouched (§8.2), so a release that changes this line changes the volume's *name*, as
+      [08](08-the-egress-allowlist.md) does for the network, and its upgrade note says so — never
+      `docker compose down -v`, which removes `db-store`'s record with it (`:392-394`); a megabyte
+      because a socket needs no blocks — a *data*-full volume does not stop `bind()`, while spent
+      inodes (`nr_inodes` defaults from RAM, not from `size`) or a directory squatting the path do
+      stop the worker's next start (`ENOSPC`; `EISDIR` then `EADDRINUSE` — §8.8), a refresh outage
+      recovered by recreating the volume ([09](09-documents-and-runbooks.md)'s runbook entry), never
+      a data loss
 - [ ] Mounted at `/run/price-worker` in `worker` and in `app` — `app` from this ticket, so the
       cutover changes no compose line. `read_only: true` stays on both: the volume is the one
-      writable path either needs for this
+      writable path either needs for this (§8.3)
 
 **The service** (`compose.yaml`)
 
@@ -39,21 +50,28 @@ the release that introduces a service and a volume deserves its own upgrade note
       "./server/price-worker.ts"]` — an `entrypoint:` also drops the image `CMD`, so neither the
       migration step nor `react-router-serve` runs as the worker; `restart: unless-stopped` — every
       long-running service declares one, and a worker left stopped after a daemon restart is the
-      sole fetcher silently gone; `logging: *container-logging`; **no `depends_on`** — it needs no
-      database and no other service, and startup needs nothing to exist but the volume
-- [ ] Environment: `TZ: UTC` and nothing else — no `DATABASE_URL`, no `PGPASSWORD`, no
-      `MARKET_TIMEZONE` (the worker reads no setting); `PRICE_WORKER_SOCKET` is left at its default,
-      which is the mount path
-- [ ] Hardening copied from `app` (`:215-221`): `no-new-privileges`, `cap_drop: ALL`, `read_only`,
-      `tmpfs: [/tmp]`; the image's `node` user (uid 1000); no `ports:` — the worker has no TCP
-      listener to publish
+      sole fetcher silently gone; `logging: *container-logging` (`:38`); **no `depends_on`** — it
+      needs no database and no other service, and startup needs nothing to exist but the volume
+- [ ] Environment: nothing at all — no `DATABASE_URL`, no `PGPASSWORD`, no `MARKET_TIMEZONE`, and
+      no `TZ` (the worker reads no clock, and the image sets `TZ=UTC`, `Dockerfile:94-96`);
+      `PRICE_WORKER_SOCKET` is left at its default, which is the mount path
+- [ ] Hardening copied from `app` (`:215-221`): `no-new-privileges`, `cap_drop: ALL`, `read_only`;
+      the image's `node` user (uid 1000); no `ports:` — the worker has no TCP listener to publish.
+      And bounds `app` does not carry, because this is the container the design expects to be
+      compromised and nothing today stops a fork bomb, a memory balloon or a `dd` into an unsized
+      `/tmp` from driving the host into the OOM killer, whose usual victim is Postgres:
+      `pids_limit: 64`; a memory limit of `256m` — builder verifies whether the repo's Compose
+      honours `mem_limit` or `deploy.resources.limits.memory` without swarm, and uses that one; and
+      `tmpfs: ["/tmp:size=64m"]` in place of `app`'s unsized `/tmp`
 - [ ] Healthcheck: `["CMD", "node", "-e", "<script>"]` where the script does `http.request({
-      socketPath: '/run/price-worker/worker.sock', path: '/healthz' })` and exits 0 on a `200`, 1 on
-      anything else, an error, or 5 s elapsed — `node -e` as `app`'s own check does (`:223-227`),
-      so no shell and no busybox applet is assumed; interval 15s, timeout 5s, retries 3,
-      start_period 10s. The comment beside it says what `dump`'s says (`:174-178`): nothing restarts
-      an unhealthy container, this is for `docker compose ps`, and "unhealthy" means the worker is
-      not accepting requests on its socket — never "Yahoo is failing"
+      socketPath: '/run/price-worker/worker.sock', path: '/healthz', agent: false })` and exits 0
+      on a `200`, 1 on anything else, an error, or 5 s elapsed — `node -e` as `app`'s own check does
+      (`:223-227`): `CMD` is exec'd with no shell, `node` is on the image's PATH, and the probe runs
+      as the container's user, the right party to prove the socket's permissions (§8.10); interval
+      15s, timeout 5s, retries 3, start_period 10s. The comment beside it says what `dump`'s says
+      (`:174-178`): nothing restarts an unhealthy container, this is for `docker compose ps`, and
+      "unhealthy" means the worker is not accepting requests on its socket — never "Yahoo is
+      failing"
 - [ ] The header (`:1-2`, `:20`) is corrected: one worker on the same image, reached over a socket
       in a shared volume and holding no credential; "every other setting has a working default"
       still true, since the worker adds none; and the Engine 28.0 floor with its check, `docker
@@ -85,9 +103,13 @@ the release that introduces a service and a volume deserves its own upgrade note
       from [06](06-the-app-cutover.md) on under the old file runs with no volume and no worker:
       stale prices, `/healthz` green, one "no worker listening at /run/price-worker/worker.sock"
       line per tick; then check the engine; then `up -d`, which recreates `app` once (its mounts
-      changed) — the brief outage every upgrade already has, not a fault. The environment table
-      (`:238`) gains `PRICE_WORKER_SOCKET`, optional, and Monitoring gains the worker's healthcheck
-      beside `:710` with its meaning. The rest of the record is
+      changed) — the brief outage every upgrade already has, not a fault. The note also states the
+      volume convention for whoever edits it next: a changed option string is a new volume name in
+      the release that changes it, never `down -v`. The environment table (`:238`) gains
+      `PRICE_WORKER_SOCKET`, optional, and Monitoring gains the worker's healthcheck beside `:710`
+      with its meaning. Installing (`:84-92`) gains one sentence for the hosts smoke never runs on —
+      SELinux-enforcing, `userns-remap`, rootless Docker (§8.5) — pointing at the from-`app` socket
+      check below as the one command to run by hand after `up -d`. The rest of the record is
       [09](09-documents-and-runbooks.md)'s
 
 **Smoke** (`scripts/smoke-test.sh`)
@@ -107,9 +129,13 @@ the release that introduces a service and a volume deserves its own upgrade note
 - [ ] The "in the image" file checks (`:230-232`) cover the three files
       [04](04-the-price-worker-process.md) added
 - [ ] From `app`: `docker compose exec -T app node -e '<GET /healthz over
-      /run/price-worker/worker.sock>'` exits 0 on a `200` — the one positive assertion the channel
-      allows, and the proof that the volume, the uids and the mode line up; from `worker`, `grep '
-      /run/price-worker ' /proc/mounts` names `tmpfs`
+      /run/price-worker/worker.sock, agent: false>'` exits 0 on a `200` — the one positive assertion
+      the channel allows, and the proof that the volume, the uids and the mode line up; from
+      `worker`, `grep ' /run/price-worker ' /proc/mounts` names `tmpfs`
+- [ ] `docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}'` of `db`, `dump`, `gate` and `caddy`
+      names no `price-worker-sock` — the fence is the mount set, and this is its assertion; `docker
+      inspect -f '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' <worker container>` prints two
+      non-zero numbers
 - [ ] From `worker`, through `node -e` with `net.connect` and a socket timeout of 3 s (a connect to
       an unroutable address otherwise waits on the kernel's default, minutes): `app:3000`,
       `gate:4180` and `db:5432` fail by name and by the addresses `docker inspect` reports; `timeout

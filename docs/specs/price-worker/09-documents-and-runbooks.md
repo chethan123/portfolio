@@ -70,20 +70,31 @@ story, not rewritten.
 
 **`docs/operating.md`**
 
+- [ ] What runs here (`:28-33`, the services table; `:35-37`, "only `caddy` is reachable from your
+      LAN; `app`, `db` and `gate`…"; `:56-59`, "All four drop… Three run as…"; and the verify
+      step's "All four services `running` and `healthy`", `:206`): six services, the worker's and
+      the proxy's uid and bounds, and the shared volume
 - [ ] Installing (`:84-92`): the Engine 28.0 and Compose floors with their checks, landed by
-      [05](05-deploy-the-worker-alongside.md) and [07](07-the-network-lockdown.md). Running against
-      your own Postgres (`:184-197`): `compose.external-db.yaml` — defined and shipped by
-      [07](07-the-network-lockdown.md), written up here and not redefined: the `-f` pair on every
-      compose command, and exactly which guarantees remain in that mode: the worker still holds no
-      credential and shares no network with `app` or `gate`; **not** `app`'s no-egress guarantee,
-      that bridge carrying a default route. Nothing about roles: the worker needs none, and "can
-      create tables" stays the whole of what the app's role needs
+      [05](05-deploy-the-worker-alongside.md) and [07](07-the-network-lockdown.md), and 05's
+      sentence for the hosts smoke never runs on — SELinux-enforcing, `userns-remap`, rootless
+      Docker — pointing at the from-`app` socket check as the one command to run by hand. Running
+      against your own Postgres (`:184-197`): `compose.external-db.yaml` — defined and shipped by
+      [07](07-the-network-lockdown.md), written up here and not redefined:
+      `COMPOSE_FILE=compose.yaml:compose.external-db.yaml` in `.env`, once; the symptom of
+      forgetting it — `app` crash-looping on `ETIMEDOUT`/`EHOSTUNREACH` to its Postgres, with no
+      message naming the override; and exactly which guarantees remain in that mode: the worker
+      still holds no credential and shares no network with `app` or `gate`; **not** `app`'s
+      no-egress guarantee, that bridge carrying a default route. Nothing about roles: the worker
+      needs none, and "can create tables" stays the whole of what the app's role needs
 - [ ] Environment variables (`:238`): `POSTGRES_PASSWORD` required; `PGPASSWORD` and the URL rule;
       generated passwords mandated; `.env` before any compose command; `PRICE_WORKER_SOCKET`
       optional, re-read. Monitoring: the worker's and the proxy's healthchecks beside `:710`, what
-      each proves; Logs (`:717`): the `Price worker` and `Egress proxy` stems; "There is no price
-      line in the log" (`:761`): now six causes — the worker not listening, the proxy down — with
-      their signatures
+      each proves; Logs (`:717`): the `Price worker` and `Egress proxy` stems, and under the `Price
+      provider failed` bullet (`:738`) the three signatures a dead worker, a dead proxy and an
+      unreachable Yahoo leave every tick — landed by [06](06-the-app-cutover.md) and
+      [08](08-the-egress-allowlist.md), re-read as one. "There is no price line in the log"
+      (`:761`) keeps its four causes: they are about a refresh that never ran, and a dead worker or
+      proxy is a refresh that ran and failed
 - [ ] Restoring (`:870`): `docker compose stop app` stays the first line, and the reason at `:894`
       stays true of `app` alone; one sentence beside it: **the worker may keep running** — it holds
       no database connection and nothing about the restore reaches it, so `stop app` alone is what
@@ -93,8 +104,9 @@ story, not rewritten.
 - [ ] Upgrading (`:949`): "replace `compose.yaml` with the release's copy before `up -d`" and its
       symptom (a new image under an old file runs with no volume and no worker: stale prices, health
       green, one "no worker listening" line per tick), and the rollback note with `DATABASE_URL`
-      back in `.env` — landed by [05](05-deploy-the-worker-alongside.md) and
-      [07](07-the-network-lockdown.md). Security (`:485`): what the worker can and cannot reach — no
+      back in `.env` — landed by [05](05-deploy-the-worker-alongside.md),
+      [07](07-the-network-lockdown.md) and [08](08-the-egress-allowlist.md), and 05's volume
+      convention — a changed option string is a new volume name, never `down -v`. Security (`:485`): what the worker can and cannot reach — no
       database, no `app`, no `gate`; the socket and the proxy only — the five hosts and the
       server-name rule, the three adversaries in an operator's words
 
@@ -102,10 +114,20 @@ story, not rewritten.
 
 - [ ] "Prices have stopped updating" (`:270`): first `docker compose ps` for `app`, `worker` and
       `egress-proxy`; the `Price provider failed` grep now tells "no worker listening" from Yahoo,
-      and `fetch failed` with one cause on every `Price worker` line tells the proxy from Yahoo. "I
-      changed the database password" (`:525`): `.env` first, no URL to edit; "I need to restore"
-      (`:553`): stop `app` only — the worker may keep running; "`docker compose up` refuses to
-      start" (`:49`): `POSTGRES_PASSWORD`, and that `ps`, `logs` and `down` refuse too
+      `fetch failed` with one cause on every `Price worker` line tells the proxy from Yahoo, and
+      `Proxy response (502)` in that cause tells Yahoo or the resolver down behind a healthy proxy
+      from an SNI teardown. A new entry, **"`worker` is restarting with `EADDRINUSE`, `ENOSPC` or
+      `EISDIR` at `/run/price-worker/worker.sock`"**: the volume is polluted — a directory squatting
+      the path or its inodes spent, by a compromised or mishandled `app` — and no restart of
+      `worker` ends it; `docker compose rm -sf app worker` (stop *and* remove — a stopped container
+      still references the volume, and `docker volume rm` refuses one in use), `docker volume rm
+      portfolio_price-worker-sock`, `docker compose up -d`; the cluster and the dumps are untouched,
+      being directories in the checkout. Beside **Refresh now**: with JavaScript off against a slow
+      worker the press can block up to 190 s, and a house proxy that cuts at 60 s shows its own
+      `502`/`504` while the refresh completes behind it — reload rather than press again. "I changed
+      the database password" (`:525`): `.env` first, no URL to edit; "I need to restore" (`:553`):
+      stop `app` only — the worker may keep running; "`docker compose up` refuses to start" (`:49`):
+      `POSTGRES_PASSWORD`, and that `ps`, `logs` and `down` refuse too
 - [ ] The `.env.worker` recipe [06](06-the-app-cutover.md) landed under Recipes
       (`developing.md:331`), re-read. "Verify the split convention" (`:435`): the call now runs
       through `server/yahoo-client.ts`, from the worker's environment. `:564-571`: `.env.worker` is

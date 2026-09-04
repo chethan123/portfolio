@@ -10,10 +10,11 @@ exported function that the Yahoo batch probe uses now and the socket probe
 Its own ticket because the loop at `resolveAll` probes serially today, and over the socket each
 call would be a round trip; the change touches the resolver, the probe, one route
 and two test files, and none of that shares a line with [01](01-one-refresh-and-the-batch-abort.md)
-or [03](03-the-two-hardening-rules.md).
+or [03](03-the-three-hardening-rules.md).
 
-**Blocked by:** Nothing. Parallel with [01](01-one-refresh-and-the-batch-abort.md),
-[03](03-the-two-hardening-rules.md) and [04](04-the-price-worker-process.md).
+**Blocked by:** Nothing. Parallel with [01](01-one-refresh-and-the-batch-abort.md) and
+[03](03-the-three-hardening-rules.md); [04](04-the-price-worker-process.md) waits on it, since both
+rewrite the probe's client and the describe at `tests/price-provider.test.ts:291`.
 
 **Status:** ready-for-agent
 
@@ -46,7 +47,10 @@ or [03](03-the-two-hardening-rules.md).
       `getQuotes`, because the seam collapses a refusal into an absence by design (`:719-731`) and
       the probe needs the refusal named
 - [ ] `probeSymbols(symbols, client = yahooClient)` is one `quote(symbols)` call plus that function,
-      never throws (`:688`'s reason), and replaces `probeSymbol`
+      never throws (`:688`'s reason), and replaces `probeSymbol`. Its type replaces `ProbeSymbol`
+      (`:649`): `export type ProbeSymbols = (symbols: string[]) => Promise<Map<string,
+      SymbolProbe>>`, the shape `ResolutionDeps.probe` is declared with and the socket probe
+      ([06](06-the-app-cutover.md)) is typed as
 - [ ] `app/routes/upload/instruments.tsx:104-106` passes `{ probe: probeSymbols }` — the route names
       the dependency and states no rule
 

@@ -1,4 +1,4 @@
-# 08 — The network lockdown and the password cutover
+# 07 — The network lockdown and the password cutover
 
 _Part of [0018-price-worker.md](../0018-price-worker.md) (§3.6)._
 
@@ -13,8 +13,8 @@ cannot be provoked — rather than the configuration.
 
 Its own ticket because after [06](06-the-app-cutover.md) the app fetches nothing itself, so this
 diff is networks and passwords only, and a network diff is reviewed by drawing it. It is also the
-second release that refuses `up` for an existing install, and the one whose upgrade touches the
-database.
+first release that refuses `up` for an existing install — [05](05-deploy-the-worker-alongside.md)
+asked nothing of `.env` — and the one whose upgrade touches the database.
 
 **Blocked by:** [06](06-the-app-cutover.md).
 
@@ -41,9 +41,12 @@ database.
       own header and in the docs: **the no-egress guarantee for `app` is off**, because that bridge
       carries a default route and requirement 1 is exactly what it relaxes; what remains is
       requirement 3 by construction — the worker holds no credential to read anything with — and
-      requirement 5, the worker still sharing no network with `app` or `gate`. The upgrade note for
-      such installs is `docker compose -f compose.yaml -f compose.external-db.yaml up -d`, and the
-      `-f` pair belongs on every later compose command, `ps`, `logs` and `down` included.
+      requirement 5, the worker still sharing no network with `app` or `gate`. Such installs set
+      `COMPOSE_FILE=compose.yaml:compose.external-db.yaml` in `.env`, once — Compose reads it from
+      the project's `.env`, and `scripts/smoke-test.sh:26` is the repo's own precedent, with `:20-25`
+      the argument against a flag per command — rather than `-f` on every `ps`, `logs` and `down`.
+      The override forgotten has its own signature, and the docs name it: `app` crash-looping on
+      `ETIMEDOUT`/`EHOSTUNREACH` to its Postgres, with no message naming the override.
       [09](09-documents-and-runbooks.md) documents the mode; this ticket defines it
 - [ ] The header repeats the Engine 28.0 floor [05](05-deploy-the-worker-alongside.md) declared, now
       load-bearing,
@@ -74,6 +77,11 @@ database.
       becomes a required line generated with `openssl rand -hex 32`
 - [ ] The header's "every other setting has a working default" (`:20`) is rewritten:
       `POSTGRES_PASSWORD` joins the settings deliberately without one
+- [ ] The lines that still say the password lives in a URL, each rewritten for `POSTGRES_PASSWORD`:
+      `compose.yaml:57` ("Change them = change `DATABASE_URL` too"), `docs/runbook.md:586` (`.env`
+      "holds `DATABASE_URL` and the gate's four"), `docs/operating.md:176` ("every setting has a
+      working default except `DATABASE_URL`") and `:1063` (the Postgres major upgrade's "make sure
+      `DATABASE_URL` agrees")
 
 **The upgrade runbook** (`docs/operating.md`, Upgrading `:949`; the rest is
 [09](09-documents-and-runbooks.md)'s)

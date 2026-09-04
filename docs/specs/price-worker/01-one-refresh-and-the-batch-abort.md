@@ -11,11 +11,11 @@ batch abort with nothing ledgered. Both against the existing Yahoo adapter, whic
 Its own ticket because three callers hold the lock and build the provider today, and the cutover
 ([06](06-the-app-cutover.md)) has to change one default in one place; the batch abort is the ledger
 rule that cutover relies on, and a fake provider tests it now. The prefactor was cut into three
-([02](02-the-batched-probe.md), [03](03-the-two-hardening-rules.md)) because the pieces share no
+([02](02-the-batched-probe.md), [03](03-the-three-hardening-rules.md)) because the pieces share no
 line and each is reviewed alone.
 
 **Blocked by:** Nothing. Parallel with [02](02-the-batched-probe.md),
-[03](03-the-two-hardening-rules.md) and [04](04-the-price-worker-process.md).
+[03](03-the-three-hardening-rules.md) and [04](04-the-price-worker-process.md).
 
 **Status:** ready-for-agent
 
