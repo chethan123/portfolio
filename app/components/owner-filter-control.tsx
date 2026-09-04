@@ -25,7 +25,13 @@
  * where they don't). Hidden fields are how a GET form changes one thing
  * without resetting the rest, and arrive as a prop because the control knows
  * no screen's vocabulary — Holdings passes its filters, grouping and sort,
- * Overview its `range`/`start`/`end`.
+ * Overview its `range`/`start`/`end`. `useLocation` below is a read of the
+ * router, not state of this control's own.
+ *
+ * **Keyed on `location.key`**, so a client-side navigation resets this
+ * control the way a document load does: closed, and its boxes seeded from
+ * the address rather than from whatever the last render left in them. The
+ * checkbox comment below has the mechanism that makes the key necessary.
  *
  * **Not drawn when fewer than two people own an open account** — unless a
  * filter is on, when it draws whatever the roster holds: it is then the one
@@ -35,7 +41,7 @@
  * whichever screen an owner is absent from — wrong for a filter spanning
  * four of them.
  */
-import { Form, Link } from "react-router";
+import { Form, Link, useLocation } from "react-router";
 
 import { joinWords } from "~/lib/format";
 import { isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
@@ -60,6 +66,13 @@ export function OwnerFilterControl({
    */
   hidden: Record<string, string>;
 }) {
+  // Read for its `key` alone, and before the early return below because this
+  // is a hook: a one-owner household clearing its filter moves *this mounted*
+  // control from drawn to `null`, so a call after the return would change the
+  // render's hook count, which React refuses (`overview.tsx` keeps the same
+  // rule for `useMasked` on a screen that empties).
+  const location = useLocation();
+
   // One name is not a choice, and nobody at all is not a filter — unless one
   // is already on: a household of one selectable owner can still carry
   // `?owner=` from a bookmark, and a control that vanished then would leave
@@ -71,7 +84,20 @@ export function OwnerFilterControl({
   const narrowedTo = owners.filter((owner) => chosen.has(owner.id));
 
   return (
-    <details className="owner-filter">
+    // The navigation's own key, not the selection's: the selection is
+    // sometimes unchanged across exactly the navigation that has to reset the
+    // boxes — ticking every owner is spelled `?owner=` nothing at all
+    // (ADR-0008), so the collapse in `owner-reading.server.ts` lands on the
+    // address it left with `selected` empty before and after, and a key made
+    // of the selection would hold three ticked boxes over a screen reading
+    // "Everyone". Keying the disclosure rather than the form inside it closes
+    // the menu too, which is what a document load does to this control and
+    // what the range control's popover already does on every apply.
+    // Every navigation, not only this control's own: a fetcher whose action
+    // redirects is one — the masking toggle — so hiding amounts with the menu
+    // open now closes it and drops an unapplied tick, where it used to leave
+    // both standing. That is the cost of one rule over a special case.
+    <details key={location.key} className="owner-filter">
       <summary aria-current={isFiltered(selected) ? "true" : undefined}>
         <span className="u-label">Owner</span>
         <span className="owner-filter-summary">{summarise(narrowedTo, owners, selected)}</span>
@@ -101,7 +127,18 @@ export function OwnerFilterControl({
                   save it would trade a readable list for a redirect, and
                   building the address in script would cost the control its
                   no-JavaScript property; the bounce is the cheaper of the
-                  three. */}
+                  three.
+
+                  `defaultChecked`, but it is the disclosure's `key` above —
+                  not this attribute — that makes a box follow the address.
+                  React writes `defaultChecked` on every re-render, and a
+                  checkbox ignores it from the moment its *dirty checkedness*
+                  flag is set: React sets that on every box here at hydration,
+                  not only on the ones a reader clicks. Without the remount a
+                  box would therefore sit at its current checkedness for the
+                  life of the page, however far the address moved on. Nothing
+                  a server render emits differs either way, so no test in this
+                  repository can see it — check it in a browser. */}
               <input
                 id={`owner-${owner.id}`}
                 type="checkbox"
