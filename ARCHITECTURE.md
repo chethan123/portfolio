@@ -1659,9 +1659,11 @@ Three stages, each with one job:
 
 ```
 ┌─ deps ────────────────────────────────────────────────────────────────┐
-│ node:24-slim · COPY package.json package-lock.json · npm ci --include=dev│
-│ Invalidated by a dependency change and by nothing else — changing a    │
-│ route does not reinstall.                                             │
+│ node:24-slim · COPY package.json package-lock.json                    │
+│ npm ci --include=dev --ignore-scripts                                 │
+│ Invalidated by a dependency change and by nothing else — changing a   │
+│ route does not reinstall. No install hook runs: the lockfile's only   │
+│ one is esbuild's, whose output Vite never uses.                       │
 └───────────────────────────────┬───────────────────────────────────────┘
 ┌─ build ───────────────────────▼───────────────────────────────────────┐
 │ npm run build          → client and server bundles, via Vite          │
@@ -1673,24 +1675,32 @@ Three stages, each with one job:
 │      the runtime stage is specified to contain no compiler, and the   │
 │      two bin symlinks would otherwise still resolve                   │
 │ node scripts/prune-unreachable-deps.mjs   → logs its own removals     │
-│   ── yahoo-finance2 declares the MCP SERVER SDK, a Deno shim and a    │
-│      fetch-mocking library as RUNTIME deps, for a subpath and two     │
-│      bins this app never imports; they bring a second Express, plus   │
-│      Hono, jose, cors and ajv. The script marks the tree with those   │
-│      three edges intact and again with them cut, and deletes only     │
-│      the difference — so it cannot remove anything still reachable    │
-│ rm -rf node_modules/yahoo-finance2/script                             │
-│   ── the CommonJS half of its dual build; the tree is ESM-only, so    │
-│      only esm/ can be reached                                         │
+│   ── yahoo-finance2 declares the MCP SERVER SDK, a Deno shim, a       │
+│      fetch-mocker and more as RUNTIME deps, reached only through its  │
+│      CLI bins, /mcp subpath and Deno import map — none of which this  │
+│      app imports; they bring a second Express, plus Hono, jose, cors  │
+│      and ajv. The script marks the tree with the edges it names       │
+│      intact and again with them cut, and deletes only the difference  │
+│      — so it cannot remove anything still reachable                   │
+│ rm -rf node_modules/yahoo-finance2/script, esm/bin, esm/src/mcp,      │
+│        esm/deps, skills; node_modules/.package-lock.json, .vite-temp  │
+│   ── the CommonJS half of its dual build (the tree is ESM-only), the  │
+│      CLIs and MCP transport the cut edges served, then build scratch: │
+│      npm's stale install inventory, Vite's temp dir, emptied scopes   │
+│ node -e … package.json    → scripts and devDependencies dropped;      │
+│                             only "type": "module" is read at runtime  │
 └───────────────────────────────┬───────────────────────────────────────┘
 ┌─ runtime ─────────────────────▼───────────────────────────────────────┐
 │ node:24-alpine · USER node · NODE_ENV=production TZ=UTC PORT=3000     │
-│ node_modules/ build/ package.json                                     │
+│ rm -rf npm, npx, corepack, yarn, Node's headers and docs              │
+│   ── nothing here runs them; a whiteout, so no bytes saved — surface  │
+│ node_modules/ build/ package.json   ── root-owned: the process reads  │
+│                                        its code and cannot rewrite it │
 │ server/{config,validate-config,db,migrations,migrate}.ts              │
 │   ── run under Node's TYPE STRIPPING; no build step for them          │
 │ migrations/*.sql   ── the DB is the source of truth, so they ship     │
 │ HEALTHCHECK GET /healthz                                              │
-│ No compiler, no dev dependencies, no source tree.                     │
+│ No compiler, no package manager, no dev dependencies, no source tree. │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2153,7 +2163,7 @@ recipe a human followed by hand — a defence that works until the day nobody ha
 | `seed-demo.ts` | One plausible household portfolio, generated: several institutions, two people, years of statements, a drawdown, an instrument nobody can quote, a loan that sums negative — because a screenshot where everything is priced is a screenshot of the easy case. Idempotent, one transaction, and it refuses to touch a database missing its own marker. There is no `--force` |
 | `capture-screenshots.ts` | Every committed screenshot, retaken in one command against the demo household — the images are the one thing here that can go stale silently. Nothing the seed regenerates is hardcoded: accounts are found by kind, the edited row by having a cost basis. The first-run shots come from a second, migrated-but-unseeded database |
 | `render-icons.ts` | The committed PWA icons, rasterised from `public/icon.svg`, and the manifest's `data:`-URI `icons` array (§7.7). Committed rather than generated at build time so the artifacts change only when someone means them to |
-| `prune-unreachable-deps.mjs` | Removes the production dependencies reachable only through the three `yahoo-finance2` edges this app never imports (its MCP server, a Deno shim, a fetch-mocker). Marks the tree with the edges intact and cut, deletes only the difference — so it cannot remove anything still reachable. Not a general garbage collector |
+| `prune-unreachable-deps.mjs` | Removes the production dependencies reachable only through the `yahoo-finance2` edges it names — those serving the package's CLI bins, its MCP subpath and its Deno import map, none of which this app imports. Marks the tree with the edges intact and cut, deletes only the difference — so it cannot remove anything still reachable. Not a general garbage collector |
 | `smoke-test.sh` | The CI-only container test, and the only coverage of §3.1, §3.2 and §8.1's deployment claims. Layers the dev override so it builds the working tree — otherwise every run would silently certify the last release |
 
 ### `tests/support/`

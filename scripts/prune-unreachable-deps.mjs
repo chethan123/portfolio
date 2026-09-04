@@ -1,13 +1,17 @@
 /**
  * Remove the production deps that exist only because `yahoo-finance2` ships an
- * MCP server and a fetch-mocker in its runtime `dependencies`. DESIGN.md §6.1
- * buys one thing from it — `quote()` — and three of its seven runtime deps
- * serve the `yahoo-finance2/mcp` subpath and two CLI bins never touched here:
+ * MCP server, two CLIs and a fetch-mocker in its runtime `dependencies`.
+ * DESIGN.md §6.1 buys one thing from it — `quote()` — and the deps below are
+ * reached only through its CLI bins, its `yahoo-finance2/mcp` subpath and its
+ * Deno import map, none of which this app touches:
  *
  *   @modelcontextprotocol/sdk   imported only by esm/src/mcp/** and esm/bin/yahoo-finance-mcp.js
  *   @deno/shim-deno             reached only from esm/deps/jsr.io/**, imported only by the bins
  *   fetch-mock-cache            never imported from JS at all — appears only in
  *                               esm/deno.js, a Deno import-map manifest
+ *   tough-cookie-file-store     imported only by the two bins (the mention in
+ *                               esm/src/lib/cookieJar.js is a JSDoc example)
+ *   json-schema                 appears only in esm/deno.js, like fetch-mock-cache
  *
  * Together they drag a second Express plus Hono, jose, cors, ajv and fifty
  * more packages into the runtime image where nothing can load them: dormant
@@ -19,13 +23,21 @@
  * future `yahoo-finance2` imports these from a used path. Not a general GC.
  *
  * Run after `npm prune --omit=dev`, from the repo root. The container smoke
- * test proves the result still serves.
+ * test proves the result still serves. The tree it leaves is deliberately
+ * inconsistent with `yahoo-finance2`'s manifest — `npm ls` over it reports
+ * the cut edges as missing, which is the point, not a fault.
  */
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 
 /** The edges to cut; the header has why each is unreachable. */
-const CUT = new Set(["@modelcontextprotocol/sdk", "@deno/shim-deno", "fetch-mock-cache"]);
+const CUT = new Set([
+  "@modelcontextprotocol/sdk",
+  "@deno/shim-deno",
+  "fetch-mock-cache",
+  "tough-cookie-file-store",
+  "json-schema",
+]);
 
 /** Cutting is scoped to this dependent, not global. */
 const CUT_FROM = "yahoo-finance2";

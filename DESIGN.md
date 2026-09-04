@@ -923,7 +923,7 @@ LAN dialling this box's published port directly, which is the threat the gate ex
 |---|---|
 | `deps` | `npm ci` against `package-lock.json` only, so dependency layers cache independently of source. Runs on `$BUILDPLATFORM` |
 | `build` | `react-router build` → client and server bundles. Runs on `$BUILDPLATFORM` |
-| `runtime` | `node:24-alpine`, production dependencies only, build output, migration `.sql` files. Runs as a **non-root user**. No compiler, no dev dependencies, no source tree |
+| `runtime` | `node:24-alpine`, production dependencies only, build output, migration `.sql` files. Runs as a **non-root user** that owns none of it. No compiler, no package manager, no dev dependencies, no source tree |
 
 **Only `runtime` is architecture-specific — and only `runtime` is Alpine.** `deps` and `build` are
 pinned to `$BUILDPLATFORM` and run natively on the builder against glibc; the per-platform stage

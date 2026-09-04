@@ -1,8 +1,12 @@
-# Nothing reaches the build context unless the Dockerfile asks, but the
-# explicit list keeps it small and secrets/node_modules impossible to include.
+# What reaches the image is the Dockerfile's COPY list and nothing else; this
+# list is what cannot reach the *builder* at all. It is a denylist, so it
+# names every file this checkout is told to create beside the Dockerfile that
+# no build must ever see: the instance's .env, the household's allowlist, an
+# operator's npm or compose overrides.
 .git
 .github
 .claude
+.agents
 .remember
 node_modules
 build
@@ -17,6 +21,11 @@ scripts
 LICENSE
 .env
 .env.*
+# The gate's allowlist — the family's real addresses (docs/google-sign-in.md
+# puts it here, beside compose.yaml).
+allowed-emails.txt
+.npmrc
+compose.override.yaml
 # The running instance's database (compose.yaml's `db-store`). Excluded for
 # more than size: it is 0700 uid 70, so for a non-root operator a build from a
 # checkout that has ever run dies sending the context — `error from sender: open
@@ -26,3 +35,6 @@ compose.yaml
 compose.dev.yaml
 compose.test.yaml
 vitest.config.ts
+# Stray diffs parked at the root (matches the root only, like every pattern
+# here without `**`).
+*.patch

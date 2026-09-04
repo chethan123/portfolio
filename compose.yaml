@@ -211,7 +211,8 @@ services:
       TZ: ${TZ:-UTC}
     # No `ports:`, same as `db` — only `caddy` faces outside; the app is
     # reached at `app:${PORT}`. Writes nothing to its own filesystem;
-    # `read_only` enforces that rather than merely intending it.
+    # `read_only` enforces that rather than merely intending it, and the image
+    # is root-owned so a plain `docker run` without it keeps the property.
     security_opt:
       - no-new-privileges:true
     cap_drop:

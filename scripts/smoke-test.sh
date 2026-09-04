@@ -239,10 +239,16 @@ printf 'no dev dependencies\n'
 # What `yahoo-finance2` declares but the app never loads (see
 # scripts/prune-unreachable-deps.mjs). Asserted here because nothing else can
 # catch the prune silently ceasing to fire.
-for pkg in @modelcontextprotocol/sdk @deno/shim-deno fetch-mock-cache hono jose cors; do
+for pkg in @modelcontextprotocol/sdk @deno/shim-deno fetch-mock-cache hono jose cors \
+  tough-cookie-file-store json-schema; do
   run_in_image "test ! -e /app/node_modules/$pkg" ||
     fail "unreachable dependency still in the runtime image: $pkg"
 done
+# And the files those edges existed for — the CLIs and the MCP transport —
+# which the Dockerfile removes by name, the same way it removes `script/`.
+run_in_image 'test ! -e /app/node_modules/yahoo-finance2/esm/bin &&
+  test ! -e /app/node_modules/yahoo-finance2/esm/src/mcp' ||
+  fail "yahoo-finance2's CLI or MCP sources are still in the runtime image"
 printf 'unreachable yahoo-finance2 dependencies pruned\n'
 
 # The other half: the prune must not have overshot into what the app needs.
@@ -271,6 +277,32 @@ for compiler in gcc cc g++ make tsc; do
   run_in_image "! command -v $compiler >/dev/null" || fail "compiler in the runtime image: $compiler"
 done
 printf 'no compiler\n'
+
+# The base image's package managers, which the Dockerfile removes: nothing in
+# the image runs them, and a registry client beside an egress is a loader for
+# whatever a compromised process asks for.
+for tool in npm npx yarn corepack; do
+  run_in_image "! command -v $tool >/dev/null" || fail "package manager in the runtime image: $tool"
+done
+printf 'no package manager\n'
+
+# Root-owned, so the process serving the code cannot rewrite it — the
+# migration runner would execute a planted .sql file on the next start. Asked
+# as the image's own user, the kernel's answer rather than the daemon's record
+# of a mount: `read_only` is compose's, this holds for a plain `docker run`.
+run_in_image 'test ! -w /app/migrations && test ! -w /app/build/server/index.js &&
+  test ! -w /app/docker-entrypoint.sh && test ! -w /app/node_modules' ||
+  fail "the runtime uid can write to its own code under /app"
+printf '/app is not writable by the runtime uid\n'
+
+# What ships of package.json is what the runtime reads — no scripts, no dev
+# list — and npm's install-time inventory, stale by the time the Dockerfile's
+# removals are done, does not ship at all.
+run_in_image 'node -e "const p=require(\"/app/package.json\");process.exit(p.scripts||p.devDependencies?1:0)"' ||
+  fail "package.json in the runtime image still carries scripts or devDependencies"
+run_in_image 'test ! -e /app/node_modules/.package-lock.json' ||
+  fail "npm's stale install inventory is still in the runtime image"
+printf 'no toolchain inventory\n'
 
 # --- Exactly one published port, and it belongs to caddy, not app or db -------
 log "Checking published ports"
