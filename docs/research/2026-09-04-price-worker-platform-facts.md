@@ -37,7 +37,12 @@ network can access host services listening on that bridge address, including any
 `0.0.0.0`. No address is assigned to the bridge when the network is created with gateway mode
 `isolated`", which requires `internal` (`DOCS/…/network/port-publishing.md:186-192`) — Engine
 **28.0.0** (moby#49262), and in compose the `driver_opts` key
-`com.docker.network.bridge.gateway_mode_ipv4: isolated`.
+`com.docker.network.bridge.gateway_mode_ipv4: isolated`. Under `isolated` the daemon allocates **no
+gateway address at all**: `bridge_linux.go`'s `GetSkipGwAlloc` returns `ipv4 =
+cfg.GwModeIPv4.isolated()` and `network.go`'s `ipamAllocateVersion` requests one only when
+`prefGateway != "" || !skipGwAlloc` (`MOBY/…/libnetwork`, master) — so `docker network inspect`'s
+IPAM `Gateway` is empty and the host's `br-…` device carries no `inet`, which is the daemon-side
+record a smoke test can read.
 
 **1.3 Engine 28.0 is a hard floor, because 26 ignores that option silently.** At **v26.1.4**
 `libnetwork/drivers/bridge/bridge_linux.go` has no `GatewayMode` at all and
@@ -45,8 +50,10 @@ network can access host services listening on that bridge address, including any
 skipped with no error, leaving a plain internal bridge *with* a host address. 27 refuses it loudly
 (`newGwMode` takes only `nat` and `routed`, `:343-351`). **For the smoke test:** on 26 the obvious
 assertions (external DNS fails, no default route) still pass, since both follow from `internal`
-alone. Only an *effect* assertion separates them — a TCP connect from `app` to the network gateway's
-`:80`, which succeeds on 26 and fails on 28.
+alone. What separates them is the gateway itself: 26 allocates one (a connect from `app` to its
+`:80` succeeds), 28 allocates none (§1.2). So the assertion is an empty IPAM `Gateway` and no
+`inet` on the bridge — never a connect, which against an empty field falls back to localhost and
+passes vacuously on the engines the floor admits.
 
 **1.4 DNS from an internal network fails, and can fail slowly.** The embedded resolver at
 `127.0.0.11` "is started with proxyDNS=false if the sandbox does not currently have a gateway", so a
@@ -82,12 +89,25 @@ ignores any default command from the image, for example the `CMD` instruction in
 **1.9 `${VAR:?message}` fails before anything is created, and names one variable.** It errors during
 model loading (`SPEC/12-interpolation.md`) with the text `required variable <NAME> is missing a
 value: <message>` (`compose-go` `template/template.go`), which saves only "the first error to be
-returned" (`:135-152`) — so an operator missing two new variables is told about one.
+returned" (`:135-152`) — so an operator missing two new variables is told about one. It runs
+before *every* command: with a `${VAR:?}` in the file and the variable unset, `exec`, `ps`, `stop`,
+`logs` and `down` all answer `required variable … is missing a value` before touching the daemon
+(live, Compose v5.1.1, no daemon needed) — a runbook writes `.env` before its `docker compose exec`
+step, not after.
 
 **1.10 Docker has no egress allowlist.** No per-host or per-domain egress policy exists in the
 network manuals or the 27/28/29 notes; the only operator hook is `DOCKER-USER`: host root, outside
 compose, IP-based against a CDN-fronted provider. An allowlist has to be a proxy the worker is
 forced through by topology.
+
+**1.11 A drifted network is recreated only by a Compose that recorded a hash on it.** `up` compares
+the config hash it stamped on the live network with the desired one and recreates on a difference;
+a network with no recorded hash — created by an older Compose, or by hand — is left untouched
+(`docker/compose` `pkg/compose/reconcile.go:192-219`, main). `NetworkHash` first appears in
+`create.go` between v2.30.0 and v2.35.0 (absent at v2.24, v2.27 and v2.30; present at v2.35 and
+v2.39). Turning an existing plain bridge `internal` is therefore not applied by an older Compose,
+while a network under a new name is created on every version; the exact first release is the
+Compose floor to state, pinned from the changelog.
 
 ## 2. PostgreSQL 17
 
@@ -139,7 +159,10 @@ user by way of a grant to `PUBLIC`" (`information_schema.sgml:4528-4540` and sib
 the leak class the test exists for, where `has_*_privilege` unions direct grants, PUBLIC and role
 memberships (`utils/adt/acl.c:1424-1460`). Membership matters on its own — `pg_read_all_data` reads
 everything "even without having it explicitly" (`user-manag.sgml:616-633`) — and live
-`pg_auth_members` holds **0 rows** for the worker, which is the assertion.
+`pg_auth_members` holds **0 rows where `member` is the worker**, which is the assertion, scoped to
+`member` on purpose: when a `CREATEROLE` non-superuser creates the role, PG 17 grants it to that
+creator `WITH ADMIN OPTION` — one row with `roleid = portfolio_worker` (live), legitimate on a
+bring-your-own install.
 
 **2.5 Role DDL is transactional, so it belongs in a migration.** `CREATE ROLE` is absent from
 `PreventInTransactionBlock`'s list (`tcop/utility.c`). Live: after the probe's `ROLLBACK`, `select
@@ -151,7 +174,12 @@ restore.** `pg_dump` dumps one database and no roles (`ref/pg_dump.sgml:46-51`) 
 privileges unless `--no-acl` (`:652-661`), and `pg_restore --single-transaction` implies
 `--exit-on-error` (`ref/pg_restore.sgml:614-626`). Live: a `grant` to a missing role → `ERROR: role
 "role_that_does_not_exist" does not exist`. So a machine rebuild rolls back the whole restore on
-that first `GRANT`, while the rehearsal drill — restoring onto the *same* cluster — passes.
+that first `GRANT`, while the rehearsal drill — restoring onto the *same* cluster — passes. The
+dump also carries `REVOKE … ON FUNCTION pg_catalog.… FROM PUBLIC` for the advisory functions once
+§2.7's revoke has run: `pg_dump` includes a `pg_catalog` function when `p.proacl IS DISTINCT FROM
+pip.initprivs` (`pg_dump.c` `getFuncs`, 17), and `pg_init_privs` holds no row for them — harmless
+replayed by the superuser, and a fatal first statement for a non-superuser restore under
+`--exit-on-error` (`pg_restore -L` drops the lines; `--no-acl` drops the worker's grants with them).
 
 **2.7 What a role with no grants at all can still do — the availability facts.** Each executed with
 a bare `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE` role holding zero grants:
@@ -159,9 +187,11 @@ a bare `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE` role holding zero grants:
 - **Advisory locks are unguarded.** Nothing guards them: `catalog/system_functions.sql`, which
   REVOKEs access at initdb time, has no `pg_advisory_*` entry (`func.sgml:30471-30496` documents no
   privilege). Live: the bare role took both keys this app uses (`refresh_key t`, `migrate_key t`);
-  after `revoke execute on function pg_advisory_lock(bigint), … (all 16 variants) from public` it is
-  denied, superusers unaffected. But `pg_init_privs` holds **no row** for them, so whether the
-  REVOKE survives a dump is unproven (§7).
+  after `revoke execute … from public` on every `pg_proc` entry where `proname like '%advisory%'` —
+  **21** functions on 17.10, the `pg_advisory_*` and `pg_try_advisory_*` families (a `like
+  'pg\_advisory%'` match catches 13 and leaves every `pg_try_advisory_*` executable,
+  `pg_try_advisory_lock` among them) — it is denied, superusers unaffected. `pg_init_privs` holds
+  **no row** for them, which is exactly why the REVOKE rides `pg_dump` (§2.6).
 - **TEMP is granted to PUBLIC by default** (`datacl = {=Tc/…}`): the bare role created and filled a
   temp table, and `revoke temporary on database … from public` binds it. **Large-object creation is
   PUBLIC** too: `lo_create(oid)` and `lo_from_bytea(oid,bytea)` are both `t`.
@@ -206,7 +236,10 @@ psql` password cutover possible.
 2.x/3.x cookie host, so an allowlist naming it is stale. Caveat: the consent branch follows whatever
 `Location` Yahoo returns, to depth 5. `chart()` needs no crumb and no cookie (`needsCrumb` defaults
 false, `yahooFinanceFetch.js:42`), so a history call is a plain GET while `quote` carries `&crumb=`
-and the cookie.
+and the cookie. Live (2026-09-04): all five resolve to the same two addresses as `mail.yahoo.com`,
+`login.yahoo.com` and `www.yahoo.com` (`69.147.65.251`, `69.147.65.252`), so a `CONNECT` allowlist on
+the host name alone does not separate the finance property from the rest of the edge — the TLS
+server name inside the tunnel does.
 
 **3.2 `versionCheck` is on by default and fetches npm — but only after a failure.** Default `true`
 (`lib/options/defaults.js`); the call is `fetch("https://registry.npmjs.org/yahoo-finance2/latest")`
@@ -218,12 +251,22 @@ removes it — the app passes no options at all today (`app/lib/price-provider.s
 (`moduleCommon.d.ts:16-21`) adds `validateOptions`/`validateResult`. At the default, one drifted
 field on one symbol throws `FailedYahooValidationError` for the *whole* call
 (`validateAndCoerceTypes.js:188-222`) — under a mailbox, every row answered `failed` and every
-instrument stale.
+instrument stale. Which option, live with an injected `fetch` and a chart payload carrying
+`meta.currency: 123` and a string `close`: the per-call third argument `{ validateResult: false }`
+returns it — `moduleExec.js:89-91` reads the flag and `:127-130` skips the throw; the reshape at
+`chart.js:258-275` still runs, so coercion is best-effort and the bad field arrives untouched. The
+constructor's `validation: { logErrors: false }` only silences the log and still throws, and
+`new YahooFinance({ validateResult: false })` is refused (`InvalidOptionsError`,
+`additionalProperties`).
 
 **3.4 A per-call `AbortSignal` is the only timeout there is.** The library has none of its own.
-`moduleOptions`, the third argument to `quote()` and `chart()`, is forwarded **unvalidated**
-(`moduleExec.js:52-62`) and its `fetchOptions` is spread into the request *and* handed to
-`getCrumb`, so `fetchOptions: { signal: AbortSignal.timeout(ms) }` covers the handshake too. Do
+`moduleOptions`, the third argument to `quote()` and `chart()`, is forwarded **unvalidated** to
+`_fetch` (`moduleExec.js:82`; the only reads of it are `validateOptions` at `:47-49` and
+`validateResult` at `:89-91`) and its `fetchOptions` is spread into the request *and* handed to
+`getCrumb`, so `fetchOptions: { signal: AbortSignal.timeout(ms) }` covers the handshake too. The
+handshake is memoised single-flight per cookie jar and runs under the **first** caller's
+`fetchOptions` (`yahooFinanceFetch.js:74`), its state cleared on failure — so a short signal handed
+in by one caller can abort a handshake another call had joined and fail both. Do
 **not** put one in the constructor's `fetchOptions` — that is a single signal for the instance's
 life. The library calls `moduleOpts.fetch || envFetch || this._opts.fetch || globalThis.fetch`
 (`yahooFinanceFetch.js`), so a process-wide proxy setting covers every request it makes, and its
@@ -246,8 +289,12 @@ URL wrong pw + PGPASSWORD right:      FAILED -> password authentication failed f
 server/db.ts createPool + PGPASSWORD:   OK   -> { current_user: 'portfolio' }
 ```
 
-`psql` 16.13 behaves identically. The driver reads its own environment — a sentence ARCHITECTURE
-§4.2's env-reader row needs.
+`psql` 16.13 behaves identically, and so does `pg_dump` (live, 16.13 against 17.10, which
+authenticates before it compares versions): no `PGPASSWORD` → `fe_sendauth: no password supplied`;
+set → authenticated, then the version mismatch; a wrong URL password beside a right variable →
+`password authentication failed`, the URL winning as with `pg`. `scripts/dump-loop.sh:95`'s `sed`
+extracts the host from a password-less URL. The driver reads its own environment — a sentence
+ARCHITECTURE §4.2's env-reader row needs.
 
 **4.2 A pooled connection is never reset, so `SET ROLE` leaks.** Neither `pg` nor `pg-pool` issues
 `DISCARD ALL` or `RESET ALL` on release (zero hits across `pg/lib/**` and `pg-pool/index.js`);
@@ -275,12 +322,20 @@ x = require()` each raise `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` (verified by runni
 `HTTPS_PROXY` and `NO_PROXY` are read **only** with `NODE_USE_ENV_PROXY=1` or `--use-env-proxy`,
 "added: v24.0.0 … Stability: 1.1 - Active Development" for `fetch`, the flag form at v24.5.0
 (`doc/api/cli.md:3898-3908`, v24.x), covering `fetch()` and undici — everything §3.4 routes through.
-It is process-wide and bypassable with a raw socket, so an egress bound rests on the network.
+It is process-wide and bypassable with a raw socket, so an egress bound rests on the network. Live:
+a local `http.Server` recording `CONNECT`, `HTTPS_PROXY` pointed at it — with `NODE_USE_ENV_PROXY=1`
+it saw `CONNECT example.com:443`; without the variable it saw nothing and the fetch went direct.
 
 **5.3 The worker's other primitives are present.** `AbortSignal.timeout` and `AbortSignal.any` are
 both functions on v24.20.0 (live), `--env-file` is non-experimental as of v24.10.0, and
 `import.meta.hot` is `undefined` outside Vite rather than an error (live), so a Vite HMR guard loads
-under plain `node`.
+under plain `node`. `import.meta.main` (added v24.2.0) is `true` for the entry file and `false` when
+that file is imported, under type stripping too (live); it is typed at `@types/node/module.d.ts:661`
+and is `undefined` under vitest. `AbortSignal.timeout(-1)` throws `RangeError [ERR_OUT_OF_RANGE]`,
+and `timeout(0)` aborts on the next macrotask with a `DOMException` named **`TimeoutError`** — the
+name a test asserts, not `AbortError`. undici reports every network failure as `TypeError: fetch
+failed` with the detail in `error.cause` (`ECONNREFUSED`; `Request was cancelled` against a dead
+proxy port under `NODE_USE_ENV_PROXY=1`).
 
 ## 6. oauth2-proxy 7.15.4 and Caddy 2
 
@@ -304,17 +359,10 @@ ACME, neither default CA, and no OCSP — Caddy staples only for certificates it
   sites were read from their generating sources, not the rendered pages.
 - **Live PostgreSQL was 17.10 from an npm-packaged build, not `postgres:17-alpine`** — §2.10 is read
   from `docker-entrypoint.sh` and the image README.
-- **Whether the advisory-lock REVOKE survives dump and restore is unproven** — `pg_dump` has
-  recorded privilege changes on system objects since 9.6, but `pg_init_privs` holds no row for those
-  functions. Check with `pg_restore --list | grep advisory` on a real dump; if absent, the runbook
-  repeats it.
-- **`pg_dump`'s `PGPASSWORD` handling was not exercised** — the only client here is 16.13, which
-  refuses the 17.10 server; `psql` was verified, and libpq is shared.
-- **That Node's `fetch` ignores `HTTPS_PROXY` without the flag could not be shown here**: the
-  sandbox intercepts egress transparently, so `fetch()` succeeded with the flag and without it.
+- **The moby and compose facts of §1.2 and §1.11 are read from upstream source**, not executed —
+  no daemon here; the `pg_dump.c` reading behind §2.6 is source too, since no 17 client exists here.
 - **No live Yahoo call.** `*.finance.yahoo.com` is refused at CONNECT here — the refusal
   `app/lib/price-provider.server.ts:29-31` already records. So §3.1's crumb finding is source-read,
   and whether the consent redirect fires from a household's IP is unknown.
 - **busybox applets were read from Alpine's build config**, not run (§1.7), and `getent` in
-  `postgres:17-alpine` was not confirmed at all. **`import.meta.main` was not checked** either,
-  though a worker entrypoint's "do not start the loop on import" guard needs it.
+  `postgres:17-alpine` was not confirmed at all.

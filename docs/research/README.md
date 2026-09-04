@@ -19,8 +19,10 @@ authoritative for the design itself.
    `gateway_mode_ipv4: isolated` does not exist before 28.0, and 26's label parser is a `switch`
    with no `default` branch — so the network comes up as a plain internal bridge that still holds a
    host address, and every obvious smoke assertion (external DNS fails, no default route) still
-   passes, because those follow from `internal` alone. 27 refuses the option loudly. Only an
-   *effect* assertion separates them: a TCP connect to the network gateway's `:80`.
+   passes, because those follow from `internal` alone. 27 refuses the option loudly. Only the
+   daemon's own record separates them: under `isolated` no gateway address is allocated, so
+   `docker network inspect` shows an empty IPAM `Gateway` and the bridge carries no `inet` — on 26
+   both are present, and a connect to the gateway is the wrong assertion on 28.
 
 2. **The grants hold, and the one thing that would undo them is a view.** Under `SET LOCAL ROLE`
    on a live 17.10, `SELECT` plus five column `UPDATE`s carry every statement the worker makes and
@@ -32,8 +34,11 @@ authoritative for the design itself.
 3. **The grants bound confidentiality, not availability.** A role holding no grants at all can take
    the two advisory locks this app uses — freezing every refresh and hanging `migrate.ts` — create
    temp tables and create large objects, each verified with a bare role and each closed by a REVOKE
-   that was tested. Whether the advisory-lock REVOKE survives `pg_dump`/`pg_restore` is the one
-   thing that could not be settled: `pg_init_privs` holds no row for those functions.
+   that was tested — twenty-one advisory functions, both the `pg_advisory_*` and `pg_try_advisory_*`
+   families, and `TEMP` revoked from PUBLIC, not from the role, which holds it only through PUBLIC.
+   The advisory REVOKE rides `pg_dump` (settled from `pg_dump.c`: a catalog function's ACL is dumped
+   when it differs from `pg_init_privs`, and those functions have no row there), which is why a
+   restore by a non-superuser needs `pg_restore -L` or `--no-acl`.
 
 ### Status
 
