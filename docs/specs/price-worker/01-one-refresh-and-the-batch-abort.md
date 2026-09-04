@@ -9,13 +9,13 @@ the control renders, so the route, the poller's tick and `requestRefresh` become
 batch abort with nothing ledgered. Both against the existing Yahoo adapter, which never throws it.
 
 Its own ticket because three callers hold the lock and build the provider today, and the cutover
-([07](07-the-app-cutover.md)) has to change one default in one place; the batch abort is the ledger
+([06](06-the-app-cutover.md)) has to change one default in one place; the batch abort is the ledger
 rule that cutover relies on, and a fake provider tests it now. The prefactor was cut into three
 ([02](02-the-batched-probe.md), [03](03-the-two-hardening-rules.md)) because the pieces share no
 line and each is reviewed alone.
 
 **Blocked by:** Nothing. Parallel with [02](02-the-batched-probe.md),
-[03](03-the-two-hardening-rules.md) and [04](04-the-mailbox-and-the-worker-role.md).
+[03](03-the-two-hardening-rules.md) and [04](04-the-price-worker-process.md).
 
 **Status:** ready-for-agent
 
@@ -27,9 +27,9 @@ line and each is reviewed alone.
       prices are kept:`, the poller's stem (`price-poller.server.ts:149`, `docs/operating.md:740`), and becomes `{ status: "error" }`, a report is `{ status:
       "done", report }` with `report: RefreshPricesReport` (`prices.server.ts:640`).
       The route's `Manual …` line (`refresh.ts:83`) retires with the route's catch;
-      `operating.md:741`'s sentence about it goes with [10](10-documents-and-runbooks.md).
+      `operating.md:741`'s sentence about it goes with [09](09-documents-and-runbooks.md).
       `outcomeOf(run): RefreshOutcome` projects `report.quotes` as the route does now (`:74-81`).
-      The default provider is `yahooPriceProvider()`, in this one place; [07](07-the-app-cutover.md)
+      The default provider is `yahooPriceProvider()`, in this one place; [06](06-the-app-cutover.md)
       changes it. An instance, not a factory: with no per-operation state to reset there is nothing
       a factory would buy, and the batch abort below is what keeps a dead worker's cost bounded
 - [ ] The route (`refresh.ts:58-86`) becomes `outcomeOf(await runRefresh({ quotes: true }))`; the
@@ -74,8 +74,8 @@ line and each is reviewed alone.
       with `report.quotes.providerFailed` true, because `refreshQuotes` catches the throw and marks
       every selected instrument stale (`prices.server.ts:795-798`); a backfill throw is ledgered per
       candidate or arrives as `batchFailed`. No provider fault reaches `error`, which is why the
-      dead-worker path of [07](07-the-app-cutover.md) reports `providerFailed` and not a failure of
-      the run. The route's own test comes with [07](07-the-app-cutover.md)
+      dead-worker path of [06](06-the-app-cutover.md) reports `providerFailed` and not a failure of
+      the run. The route's own test comes with [06](06-the-app-cutover.md)
 - [ ] `tests/price-backfill.test.ts`: a fake throwing `ProviderUnreachable` on the second of three
       candidates leaves the first's ledger row, none for the other two, and `refreshPrices`
       reporting `batchFailed: true` with one attempt counted; the log line is the single warning

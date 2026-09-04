@@ -4,16 +4,16 @@ _Part of [0018-price-worker.md](../0018-price-worker.md) (§3.4)._
 
 **What to build:** `ResolutionDeps.probe` becomes required and batched — one library call for every
 feed symbol an upload creates, answered as a map of verdicts — with the verdict logic a pure
-exported function that the Yahoo batch probe uses now and the mailbox probe
-([07](07-the-app-cutover.md)) uses later. Issue #205's first item, on the code as it stands.
+exported function that the Yahoo batch probe uses now and the socket probe
+([06](06-the-app-cutover.md)) uses later. Issue #205's first item, on the code as it stands.
 
-Its own ticket because the loop at `resolveAll` probes serially today, and under the mailbox each
-call would be a round trip with a 3 s grace; the change touches the resolver, the probe, one route
+Its own ticket because the loop at `resolveAll` probes serially today, and over the socket each
+call would be a round trip; the change touches the resolver, the probe, one route
 and two test files, and none of that shares a line with [01](01-one-refresh-and-the-batch-abort.md)
 or [03](03-the-two-hardening-rules.md).
 
 **Blocked by:** Nothing. Parallel with [01](01-one-refresh-and-the-batch-abort.md),
-[03](03-the-two-hardening-rules.md) and [04](04-the-mailbox-and-the-worker-role.md).
+[03](03-the-two-hardening-rules.md) and [04](04-the-price-worker-process.md).
 
 **Status:** ready-for-agent
 
@@ -32,8 +32,8 @@ or [03](03-the-two-hardening-rules.md).
       returns an empty verdict map and **does not call `probe` at all**. Today's serial loop makes
       no provider call on that path (every plan fails the `create`/`feed` guard at `:502-505`), and
       the batched form must keep making none: a call of zero symbols is a round trip per manual
-      upload, and under the mailbox it is not even insertable — `provider_call`'s CHECK is one to a
-      hundred symbols (spec §3.2), so the ask would refuse before any worker saw it
+      upload, and over the socket the worker answers it `400` — one to a hundred symbols is the
+      bound (spec §3.2), so the ask would be refused after a round trip it should never have made
 
 **The probe** (`app/lib/price-provider.server.ts`)
 
@@ -59,7 +59,7 @@ or [03](03-the-two-hardening-rules.md).
       shape at every `resolveAll` site from `:99` (fourteen); the USD-probe cases (`:360`) gain two:
       three tickers, two strings each, cost one call carrying three symbols, with the verdicts on
       the right plans; and a manual-only submission resolves with a probe stub that was **never
-      called** — the case that would otherwise become a mailbox row per upload
+      called** — the case that would otherwise become a worker call per upload
 - [ ] `tests/price-provider.test.ts`: `probeVerdicts` — `ok` keyed by the asked symbol across a case
       difference, `non-usd` naming the currency, absent → `unavailable`, non-array → all
       `unavailable`. The describe at `:291` re-targets `probeSymbols` through the same client stub

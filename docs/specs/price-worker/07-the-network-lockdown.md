@@ -1,53 +1,56 @@
 # 08 — The network lockdown and the password cutover
 
-_Part of [0018-price-worker.md](../0018-price-worker.md) (§3.6, §3.7)._
+_Part of [0018-price-worker.md](../0018-price-worker.md) (§3.6)._
 
 **What to build:** The release where `app`, `db` and `dump` lose their internet route and the
-superuser password stops having a default. The full topology of spec §3.7 with the Engine and
+superuser password stops having a default. The full topology of spec §3.6 with the Engine and
 Compose floors stated where they will be read, and `compose.external-db.yaml` for the installs that
 keep their Postgres outside it; `POSTGRES_PASSWORD` required; `PGPASSWORD` on `app`
-and `dump` with the three `DATABASE_URL` defaults carrying user and host only; the checked-in
+and `dump` with the two `DATABASE_URL` defaults carrying user and host only; the checked-in
 `.env.example` URL line removed; the numbered upgrade runbook in an order Compose will actually run;
 and the smoke assertions that prove the effect — or read the daemon's own record where the effect
 cannot be provoked — rather than the configuration.
 
-Its own ticket because after [07](07-the-app-cutover.md) the app fetches nothing itself, so this
+Its own ticket because after [06](06-the-app-cutover.md) the app fetches nothing itself, so this
 diff is networks and passwords only, and a network diff is reviewed by drawing it. It is also the
 second release that refuses `up` for an existing install, and the one whose upgrade touches the
 database.
 
-**Blocked by:** [07](07-the-app-cutover.md).
+**Blocked by:** [06](06-the-app-cutover.md).
 
 **Status:** ready-for-agent
 
 **Topology** (`compose.yaml`)
 
-- [ ] The networks exactly as spec §3.7: `backend`, `worker-db`, `caddy-app` and `caddy-gate`
-      internal with `com.docker.network.bridge.gateway_mode_ipv4: isolated`; `egress-worker`,
-      `egress-gate` and `ingress` plain bridges; **`enable_ipv6: false` written on every one of the
-      seven** — unset, Compose sends a nil and the daemon's default decides; every service with an
-      explicit list and none on `default` any more — `db: [backend, worker-db]`, `dump: [backend]`,
-      `app: [backend, caddy-app]`, `worker: [worker-db, egress-worker]`, `gate: [caddy-gate,
-      egress-gate]`, `caddy: [caddy-app, caddy-gate, ingress]`
+- [ ] The networks exactly as spec §3.6: `backend`, `caddy-app` and `caddy-gate` internal with
+      `com.docker.network.bridge.gateway_mode_ipv4: isolated`; `egress-worker`, `egress-gate` and
+      `ingress` plain bridges; **`enable_ipv6: false` written on every one of the six** — unset,
+      Compose sends a nil and the daemon's default decides; every service with an explicit list and
+      none on `default` any more — `db: [backend]`, `dump: [backend]`, `app: [backend,
+      caddy-app]`, `worker: [egress-worker]` (where [05](05-deploy-the-worker-alongside.md) put it),
+      `gate: [caddy-gate, egress-gate]`, `caddy: [caddy-app, caddy-gate, ingress]`. `db` is
+      recreated once for its network, and `app` and `dump` restart with it — the brief outage the
+      upgrade note names
 - [ ] **`compose.external-db.yaml`**, shipped by this ticket, because this is the release that would
       otherwise break every install whose `DATABASE_URL` names a LAN or remote Postgres: on internal
-      networks only, `app` and `worker` have no route to that host at all and both crash-loop on the
-      first connection. The override is one plain bridge, `external-db: { enable_ipv6: false }`,
-      attached to `app` and `worker` and to nothing else — `dump` stays off it, since on a
-      bring-your-own install backups are the operator's Postgres's problem
-      (`docs/operating.md:195-197`). It says plainly what that mode gives up, in the file's own
-      header and in the docs: **the no-egress guarantee for `app` is off**, because that bridge
-      carries a default route and requirement 1 is exactly what it relaxes; what remains is the role
-      and the mailbox — the worker still reads no household table, and still shares no network with
-      `app` or `gate`. The upgrade note for such installs is `docker compose -f compose.yaml -f
-      compose.external-db.yaml up -d`, and the `-f` pair belongs on every later compose command,
-      `ps`, `logs` and `down` included. [10](10-documents-and-runbooks.md) documents the mode; this
-      ticket defines it
-- [ ] The header repeats the Engine 28.0 floor [06](06-deploy-the-worker-alongside.md) introduced,
+      networks only, `app` has no route to that host at all and crash-loops on the first
+      connection. The override is one plain bridge, `external-db: { enable_ipv6: false }`, attached
+      to `app` and to nothing else — the worker needs no database route, holding no credential, and
+      `dump` stays off it, since on a bring-your-own install backups are the operator's Postgres's
+      problem (`docs/operating.md:195-197`). It says plainly what that mode gives up, in the file's
+      own header and in the docs: **the no-egress guarantee for `app` is off**, because that bridge
+      carries a default route and requirement 1 is exactly what it relaxes; what remains is
+      requirement 3 by construction — the worker holds no credential to read anything with — and
+      requirement 5, the worker still sharing no network with `app` or `gate`. The upgrade note for
+      such installs is `docker compose -f compose.yaml -f compose.external-db.yaml up -d`, and the
+      `-f` pair belongs on every later compose command, `ps`, `logs` and `down` included.
+      [09](09-documents-and-runbooks.md) documents the mode; this ticket defines it
+- [ ] The header repeats the Engine 28.0 floor [05](05-deploy-the-worker-alongside.md) declared, now
+      load-bearing,
       with `docker version --format '{{.Server.Version}}'` and why: 26 ignores the gateway-mode
       option silently and keeps a host address on the bridge; 27 refuses it. Beside it the Compose
       floor: a network whose definition changed is recreated only by a Compose that recorded a
-      config hash on it (research note §1.11) — the reason [09](09-the-egress-allowlist.md) uses a
+      config hash on it (research note §1.11) — the reason [08](08-the-egress-allowlist.md) uses a
       new network name — and Installing (`docs/operating.md:84-92`, "any v2 is new enough") gains
       both floors and their checks
 - [ ] Caddy's reachability walk still holds against the `Caddyfile`: `/healthz` and the catch-all to
@@ -69,11 +72,11 @@ database.
 - [ ] `.env.example:23`'s explicit `DATABASE_URL` line goes; the comment says when to set one (your
       own Postgres) and that a URL password overrides `PGPASSWORD`. `:104`'s commented default
       becomes a required line generated with `openssl rand -hex 32`
-- [ ] The header's "every other setting has a working default" (`:20`) is rewritten: three are
-      deliberately without one
+- [ ] The header's "every other setting has a working default" (`:20`) is rewritten:
+      `POSTGRES_PASSWORD` joins the settings deliberately without one
 
 **The upgrade runbook** (`docs/operating.md`, Upgrading `:949`; the rest is
-[10](10-documents-and-runbooks.md)'s)
+[09](09-documents-and-runbooks.md)'s)
 
 - [ ] A numbered sequence with each step's reason, in the only order that runs — the new
       `compose.yaml` carries `${POSTGRES_PASSWORD:?}`, and Compose interpolates the whole model
@@ -92,15 +95,15 @@ database.
       file back needs `DATABASE_URL=postgres://portfolio:<the generated password>@db:5432/portfolio`
       back in `.env` (or the role's password reset to `portfolio` first), since the old file's
       default URL carries the old password — and that is the moment the password is back in a URL.
-      The mailbox table is additive and an old image ignores it
+      An old image ignores the worker and its volume; nothing this slice added is in the database
 - [ ] `:308-319`'s rotation recipe and `docs/runbook.md:525-552` lose the URL half: `.env` first,
       then the role, then `up -d`
 
 **Smoke** (`scripts/smoke-test.sh`)
 
-- [ ] Export a throwaway `POSTGRES_PASSWORD` before the refusal check (`:108-116`), beside
-      [06](06-deploy-the-worker-alongside.md)'s, and add the mirror refusal for it — `db` now comes
-      first in file order, so without the export the check names the wrong variable
+- [ ] Export a throwaway `POSTGRES_PASSWORD` before the refusal check (`:108-116`) and add the
+      mirror refusal for it: Compose reports only the first missing variable, in file order, and
+      `db` comes before `gate`, so without the export the gate check would name the wrong variable
 - [ ] From `app` (`node -e fetch` under `AbortSignal.timeout(5_000)` — with no route the embedded
       resolver answers `SERVFAIL` only after trying the host's upstreams), `db` and **`dump`**
       (busybox `wget -T 5`): a request to a public host fails; `timeout 5 nslookup example.com`
@@ -110,20 +113,20 @@ database.
       it runs the same `postgres:17-alpine` as `db` (`compose.yaml:33`, `:105`), so the three checks
       are the same three commands against a third service
 - [ ] The isolation is read from the daemon's record, never provoked with a connect: for each of the
-      four isolated networks `docker network inspect -f '{{if (index .IPAM.Config
+      three isolated networks `docker network inspect -f '{{if (index .IPAM.Config
       0).Gateway}}fail{{end}}'` prints nothing — under `isolated` no gateway address is allocated at
       all (research note §1.3), so the field is empty, and a connect to it would fall back to
       localhost and pass for the wrong reason — and on the host, `ip -4 addr show dev br-$(docker
       network inspect -f '{{slice .Id 0 12}}' …)` carries no `inet`. An engine that ignored
       `isolated` allocates the gateway, and both checks fail
-- [ ] From `worker`: `app` and `gate` unreachable by name and IP (kept from
-      [06](06-deploy-the-worker-alongside.md), with its 3 s socket timeout); `db:5432` connects; a
-      public host resolves; a TCP connect to `egress-worker`'s gateway on `:80` **succeeds** — that
-      network has a gateway, and the residual is proven rather than assumed; flipped by
-      [09](09-the-egress-allowlist.md). Never `ping` anywhere: `NET_RAW` is dropped; `nc -z -w 3` is
+- [ ] From `worker`: `app`, `gate` and `db` unreachable by name and IP (kept from
+      [05](05-deploy-the-worker-alongside.md), with its 3 s socket timeout); a public host
+      resolves; a TCP connect to `egress-worker`'s gateway on `:80` **succeeds** — that network has
+      a gateway, and the residual is proven rather than assumed; flipped by
+      [08](08-the-egress-allowlist.md). Never `ping` anywhere: `NET_RAW` is dropped; `nc -z -w 3` is
       the probe in a container with no node
 - [ ] The in-container `yahoo-finance2` import check (`:265-268`) runs in `worker` instead of `app`;
-      [07](07-the-app-cutover.md)'s bundle grep stays
+      [06](06-the-app-cutover.md)'s bundle grep stays
 - [ ] Every assertion on caps, uid, read-only root and published ports still passes with the
       networks in place
 

@@ -6,6 +6,15 @@ price-worker slice rests on, gathered 2026-09-04 against `5e21ab7`. The design b
 about a decision the spec wins, and where they disagree about what a platform does, this is the
 citation.*
 
+**The channel changed after this was written.** The mailbox this note's PostgreSQL section (§2) and
+§4.4 serve — a table through which the app asked and the worker answered, a minimal database role
+for the worker, its grants re-applied at every boot — was set aside by the owner on 2026-09-04 for a
+unix socket in a volume the app and the worker share ([spec 0018
+§2.5](../specs/0018-price-worker.md)); the worker now holds no database credential at all. Nothing
+below is deleted: §2 and §4.4 stay as the record of what a database credential for the
+internet-facing container would have cost, which is the ground the decision was taken on, and every
+other section supports the socket design as it supported the table.
+
 ## Sourcing, and what "live" means
 
 **Several doc sites are egress-blocked from the sandbox this was researched in** —

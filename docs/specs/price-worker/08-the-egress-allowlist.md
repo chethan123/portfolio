@@ -15,7 +15,7 @@ the household LAN as well as the internet, and "Yahoo Finance and nothing else" 
 honest code. After it a compromised worker can send bytes only to what Yahoo's edge serves under a
 server name the proxy matched to the `CONNECT` host, and has no resolver at all.
 
-**Blocked by:** [08](08-the-network-lockdown.md).
+**Blocked by:** [07](07-the-network-lockdown.md).
 
 **Status:** ready-for-agent
 
@@ -93,17 +93,17 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
 - [ ] The `egress-proxy` service on `[worker-proxy, egress-proxy]` with the app's image,
       `entrypoint: ["node", "./server/egress-proxy.ts"]`, `restart: unless-stopped`, the full
       hardening, uid 1000, no `ports:`, and a healthcheck that `net.connect`s to its own `:8888`
-- [ ] `worker` on `[worker-db, worker-proxy]`, with `NODE_USE_ENV_PROXY: "1"` and `HTTPS_PROXY:
-      http://egress-proxy:8888` — Node 24's `fetch` honours the pair only under the flag (research
-      note §5.2, exercised: without it the fetch goes direct), the library uses global `fetch`, and
-      both variables are the runtime's, not `config.ts`'s — `pg`'s connection is a raw socket and
-      ignores them. The worker now has no non-internal network: no resolver for public names
-      (hostnames travel inside `CONNECT` and the proxy resolves them) and no route to the host's
-      published `:80`
+- [ ] `worker` on `[worker-proxy]` alone, the socket volume still mounted, with `NODE_USE_ENV_PROXY:
+      "1"` and `HTTPS_PROXY: http://egress-proxy:8888` — Node 24's `fetch` honours the pair only
+      under the flag (research note §5.2, exercised: without it the fetch goes direct), the library
+      uses global `fetch`, and both variables are the runtime's, not `config.ts`'s; `app` sets
+      neither, and its calls to the worker travel a unix path no proxy setting touches. The worker
+      now has no non-internal network: no resolver for public names (hostnames travel inside
+      `CONNECT` and the proxy resolves them) and no route to the host's published `:80`
 - [ ] The upgrade note: replace `compose.yaml`, `up -d`, then `docker network rm
       portfolio_egress-worker` (Compose does not remove an unused network) and check `docker network
       inspect -f '{{.Internal}}' portfolio_worker-proxy` prints `true`. The compose header and, in
-      [10](10-documents-and-runbooks.md), DESIGN.md's services block gain the service
+      [09](09-documents-and-runbooks.md), DESIGN.md's services block gain the service
 
 **Smoke** (`scripts/smoke-test.sh`)
 
@@ -114,7 +114,7 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       since the `403`, the SNI teardown and the stopped-proxy case below prove the control without
       it; `timeout 5 nslookup example.com` now fails;
       `worker-proxy` shows an empty IPAM `Gateway` and no host `inet`, as
-      [08](08-the-network-lockdown.md)'s isolated networks do
+      [07](07-the-network-lockdown.md)'s isolated networks do
 - [ ] `docker compose stop egress-proxy`, then the same `fetch` from `worker` fails within its
       timeout; `start` it again. The network is the property, not the flag
 - [ ] Through the proxy: `CONNECT mail.yahoo.com:443` is refused with `403`, and so is a plain
@@ -129,11 +129,12 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       server-name rule, what a refused `CONNECT` in its log means, and the one operator action —
       upgrade — when Yahoo moves a host. "There is no price line in the log" (`:761`) gains the
       sixth cause, the proxy is down, with its signature: `docker compose ps egress-proxy` not
-      healthy, and every `Price worker` line and `failed` row of that minute carrying `fetch failed`
-      with the same cause — the worker stays healthy, since its heartbeat is the database poll
+      healthy, and every `Price worker` line of that minute carrying `fetch failed` with the same
+      cause, answered to the app as a `502` — the worker stays healthy, since its healthcheck asks
+      the socket and not Yahoo
 - [ ] ARCHITECTURE.md §2 (`:92-100`): the worker reaches Yahoo through the proxy; the full sentence,
       and the env-reader row naming `NODE_USE_ENV_PROXY` and `HTTPS_PROXY` as the runtime's, are
-      [10](10-documents-and-runbooks.md)'s
+      [09](09-documents-and-runbooks.md)'s
 
 **Gates**
 

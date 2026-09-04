@@ -13,7 +13,7 @@ hostile worker, both are pure domain rules with fixture-shaped tests, and neithe
 [01](01-one-refresh-and-the-batch-abort.md) or [02](02-the-batched-probe.md).
 
 **Blocked by:** Nothing. Parallel with [01](01-one-refresh-and-the-batch-abort.md),
-[02](02-the-batched-probe.md) and [04](04-the-mailbox-and-the-worker-role.md).
+[02](02-the-batched-probe.md) and [04](04-the-price-worker-process.md).
 
 **Status:** ready-for-agent
 

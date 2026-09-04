@@ -11,7 +11,8 @@ One document: [Price worker platform facts](./2026-09-04-price-worker-platform-f
 Docker, PostgreSQL 17, `yahoo-finance2`, `pg`, Node 24, oauth2-proxy and Caddy behaviour the
 price-worker slice rests on, gathered against `5e21ab7` and, where it could be, executed against a
 live PostgreSQL 17.10. It is the evidence under [spec 0018](../specs/0018-price-worker.md), which is
-authoritative for the design itself.
+authoritative for the design itself; its PostgreSQL facts served the table-shaped channel 0018's
+§2.5 set aside on 2026-09-04, and stand as the record of what it would have cost.
 
 ### The three things worth knowing without reading further
 
