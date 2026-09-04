@@ -21,11 +21,13 @@ line and each is reviewed alone.
 
 **`runRefresh`** (`app/lib/refresh.server.ts`, new)
 
-- [ ] `runRefresh({ quotes }, provider = liveProvider()): Promise<RefreshRun>` wraps
+- [ ] `runRefresh({ quotes }, provider = yahooPriceProvider()): Promise<RefreshRun>` wraps
       `withRefreshLock(() => refreshPrices(provider, getConfig().MARKET_TIMEZONE, { quotes },
-      getDb()))`: `null` is `{ status: "busy" }`, a throw is logged with the stem the route uses
-      today (`app/routes/refresh.ts:83`) and becomes `{ status: "error" }`, a report is `{ status:
+      getDb()))`: `null` is `{ status: "busy" }`, a throw is logged as `Price refresh failed; last known
+      prices are kept:`, the poller's stem (`price-poller.server.ts:149`, `docs/operating.md:740`), and becomes `{ status: "error" }`, a report is `{ status:
       "done", report }` with `report: RefreshPricesReport` (`prices.server.ts:640`).
+      The route's `Manual …` line (`refresh.ts:83`) retires with the route's catch;
+      `operating.md:741`'s sentence about it goes with [10](10-documents-and-runbooks.md).
       `outcomeOf(run): RefreshOutcome` projects `report.quotes` as the route does now (`:74-81`).
       The default provider is `yahooPriceProvider()`, in this one place; [07](07-the-app-cutover.md)
       changes it. An instance, not a factory: with no per-operation state to reset there is nothing

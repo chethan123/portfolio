@@ -56,7 +56,8 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       for 60 s is torn down, and at most eight tunnels run at once — the bound on a worker-driven
       denial (spec §8)
 - [ ] One log line per refusal naming the reason and the host(s), stem `Egress proxy`; none per
-      allowed tunnel. `if (import.meta.main)` guard, as the worker has; `Dockerfile:104-110` gains
+      allowed tunnel, and a connection that closes without a request line — the healthcheck's — is
+      not a refusal and is not logged. `if (import.meta.main)` guard, as the worker has; `Dockerfile:104-110` gains
       the file
 
 **Compose**

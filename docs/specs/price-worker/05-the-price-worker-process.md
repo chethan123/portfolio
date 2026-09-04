@@ -37,8 +37,9 @@ compose change exists; [06](06-deploy-the-worker-alongside.md) deploys what this
       { period1, interval: "1d", events: "split" })`; `ChartRequest` (`:589-598`) moves here and the
       app imports the type. Imports nothing from `app/lib` (`matchKey` would pull Kysely in)
 - [ ] `app/lib/price-provider.server.ts` deletes its `import("yahoo-finance2")` (`:619`),
-      `yahooClient` and the `QuoteClient`/`YahooClient` types (`:602-605`) and takes the client from
-      this module; `probeSymbols` ([02](02-the-batched-probe.md)) takes it too. ARCHITECTURE.md
+      `yahooClient` and the `QuoteClient`/`YahooClient` types (`:601-604`) and takes the client from
+      this module; `probeSymbols` ([02](02-the-batched-probe.md)) — or today's `probeSymbol`
+      (`:665-694`) while 02 has not landed — takes it too. ARCHITECTURE.md
       §4.2's import-site row (`:338`) is re-pointed at `server/yahoo-client.ts` here
 - [ ] `tests/yahoo-client.test.ts` (new) takes the client's own surface: the library's shape
       (`tests/price-provider.test.ts:788-818`); the request shape — `chart` forwarded with

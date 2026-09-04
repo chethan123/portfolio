@@ -109,7 +109,7 @@ with the Zod schemas the app validates Yahoo's own answers with today (§3.2).
 - **The ingest probe.** `ResolutionDeps.probe` (`app/lib/instrument-resolution.server.ts:212-216`)
   defaults to the live `probeSymbol`, called serially per created feed symbol; `non-usd` refuses
   (`:515-524`), `unavailable` creates anyway. The production caller and two route tests pass no
-  deps, the tests safe only because their fixtures are `manual` (§3.4 cites the sites).
+  deps, the tests safe only because their fixtures are `manual` (ticket 02 cites the sites).
 - **The deployment.** Five services, no custom networks, only `caddy` publishing a port
   (`compose.yaml:344-345`); the entrypoint validates, migrates, serves
   (`docker-entrypoint.sh:11-14`); `getConfig` is the one `process.env` read
@@ -360,7 +360,7 @@ Make the change easy before making it. Every piece below typechecks and tests ag
 `yahooPriceProvider()` as it stands, so the cutover (ticket 07) becomes "swap the provider, delete
 the client use". Three tickets, blocked by nothing, because the pieces share no line.
 
-- **(01) `runRefresh({ quotes }, provider = liveProvider())` in a new domain module,
+- **(01) `runRefresh({ quotes }, provider = yahooPriceProvider())` in a new domain module,
   `app/lib/refresh.server.ts`,** holds the lock, runs `refreshPrices` with the instance it was
   handed, and maps the result to the outcome the control renders, so the route, the poller's tick
   and `requestRefresh()` become thin callers — issue #159's ask, which also moves `RefreshOutcome`
@@ -442,7 +442,9 @@ failed` for every network failure and keeps the detail there (ticket 05 has the 
 **Startup** is `select 1 from provider_call limit 0`, retried forever with a backoff from 250 ms to
 a 5 s cap, logging on the transition into and out of failure: an authentication failure or `NOLOGIN`
 refusal (provisioning not yet run, or a daemon restart that ignored `depends_on`) is retryable, not
-fatal, and the same backoff governs a claimer whose database has gone.
+fatal, and the same backoff governs a claimer whose database has gone — a per-attempt line would
+fill the log at four a second through a restore's `dropdb`, and a fatal auth failure would
+crash-loop in a way that reads like a wrong password.
 
 **Health** is a heartbeat file in tmpfs, touched after every successful claim poll, empty ones
 included and failed ones never; the healthcheck asserts its age is under 60 s. No database session,

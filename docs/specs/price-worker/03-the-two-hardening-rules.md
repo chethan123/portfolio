@@ -55,6 +55,9 @@ hostile worker, both are pure domain rules with fixture-shaped tests, and neithe
       today's market date writes `quote` and the observation but no `price_daily` row, and leaves a
       seeded row for that day byte-identical; one struck eight days ahead writes no close either;
       one struck seven days before writes the close
+- [ ] The six existing cases that assert a written close (`tests/refresh-quotes.test.ts:125`, `:169`,
+      `:203`, `:227`, `:247`, `:357`) carry June-2026 `asOf` fixtures against the real clock and need
+      the same fake clock, or an `asOf` relative to now
 
 **Gates**
 
