@@ -366,3 +366,8 @@ by spec 0015's header for an ADR not yet written.
 **This does not anticipate spec 0015.** The second method, the second write path and the ledger are
 in-process, and nothing here is shaped as a mailbox for a worker. If that spec is built, it inherits
 a second endpoint to move, and that is a cost recorded in ADR-0011 rather than avoided here.
+
+**Superseded in part** by [0018](0018-price-worker.md): "spec 0015" in the two paragraphs above is
+the price-worker proposal that was never indexed and is deleted with 0018 — by number, 0015 is
+[0015-chart-series-assembly.md](0015-chart-series-assembly.md). 0018 is that worker, and it inherits
+the second endpoint exactly as this paragraph says; migration `0010` went to this slice.

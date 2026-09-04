@@ -10,6 +10,13 @@ its spine, the running system fetches that instrument's daily history from the f
 every trading day the spine does not already hold. It never replaces a row it recorded itself. This
 ADR is numbered 0011 because 0010 is reserved by spec 0015's header for an ADR not yet written.
 
+**Superseded in part** by [0018](../specs/0018-price-worker.md): "spec 0015" here — in the
+paragraph above, under "In-process", under "Mailbox-shaped, for the worker" and in "The outbound
+surface grows" — is the price-worker proposal that was never indexed and is deleted with 0018; by
+number, 0015 is now `0015-chart-series-assembly.md`. 0018 builds that worker as a remote provider
+behind one table and inherits the second call exactly as foreseen below; ADR-0010 stays reserved
+for it. Nothing else here is rewritten.
+
 ## What changed the mind
 
 A statement describes its own date, not the day it was uploaded, so the first upload of any
