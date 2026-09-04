@@ -8,6 +8,8 @@
  * driver boundary the other way: `quantity: 0.1` would introduce the float
  * this design spent a migration keeping out, so the types refuse it.
  */
+import { createHash } from "node:crypto";
+
 import type { Kysely } from "kysely";
 
 import type { Database } from "~/lib/db.server";
@@ -20,6 +22,8 @@ export type SeededClassification = { id: string; name: string; assetClass: Asset
 export type SeededInstrument = { id: string; symbol: string | null; name: string };
 export type SeededPositionSet = { id: string; accountId: string; asOf: string };
 export type SeededUploadDraft = { id: string; accountId: string };
+export type SeededPasskey = { credentialId: string; label: string };
+export type SeededUnlockGrant = { id: string; passkeyId: string };
 
 /** A line on a statement: how much of what, and what it cost. */
 export type HoldingInput = {
@@ -209,6 +213,52 @@ export type Fixtures = {
    * share position travel the same code path (DESIGN.md §2).
    */
   usdInstrument(): Promise<SeededInstrument>;
+
+  /**
+   * A passkey the household has enrolled (docs/adr/0012, `passkey`).
+   *
+   * The public key is required rather than defaulted, so the test that
+   * verifies a signature (ticket 02's) can never be handed a default key its
+   * signature was not made against.
+   */
+  seedPasskey(options: {
+    /** Base64url text, exactly as the library would return it. */
+    credentialId?: string;
+    /** The credential's public half. Whatever the verifier checks a signature against. */
+    publicKey: Uint8Array;
+    label?: string;
+    /** The signature counter. Defaults to a fresh credential's initial 0. */
+    counter?: number;
+    backupEligible?: boolean;
+    /** What registration reported. Stored comma-joined; omitted means none reported. */
+    transports?: string[];
+    /** True marks this as the household's one bootstrap enrolment (`passkey_bootstrap_idx`). */
+    bootstrap?: boolean;
+    enrolledAt?: Date | string;
+    /** Nullable until first use; a test about staleness or ordering sets this. */
+    lastUsedAt?: Date | string;
+  }): Promise<SeededPasskey>;
+
+  /**
+   * One browser's current unlock (docs/adr/0012, `unlock_grant`).
+   *
+   * `passkeyId` is a plain string rather than a `SeededPasskey`, so a test
+   * about the foreign key — a grant naming a passkey that does not exist —
+   * can hand it one directly.
+   */
+  seedUnlockGrant(options: {
+    /** Defaults to a long opaque-looking token, shaped like what the domain module mints. */
+    id?: string;
+    passkeyId: string;
+    /**
+     * Defaults an hour out — comfortably in the future, and deliberately
+     * not the lock's idle window: that figure is ticket 02's domain module
+     * to name in exactly one place, and a fixture restating it would only
+     * be able to silently disagree with it later. Set an already-past
+     * instant for a test about an expired grant.
+     */
+    expiresAt?: Date | string;
+  }): Promise<SeededUnlockGrant>;
 };
 
 /**
@@ -482,6 +532,67 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
       .execute();
   };
 
+  const seedPasskey: Fixtures["seedPasskey"] = async ({
+    credentialId = `credential-${next()}`,
+    publicKey,
+    label = `Passkey ${next()}`,
+    counter = 0,
+    backupEligible = false,
+    transports,
+    bootstrap = false,
+    enrolledAt,
+    lastUsedAt,
+  }) => {
+    const row = await db
+      .insertInto("passkey")
+      .values({
+        credential_id: credentialId,
+        public_key: Buffer.from(publicKey),
+        counter,
+        // An empty array is the library's "no transports reported", exactly
+        // as omitting the option is — `[].join(",")` would otherwise store
+        // `''`, and `''.split(',')` reads back as one bogus transport rather
+        // than none (the migration's `transports` comment states the rule).
+        transports: transports === undefined || transports.length === 0 ? null : transports.join(","),
+        backup_eligible: backupEligible,
+        label,
+        bootstrap,
+        // Left to the column default when a test does not care, exactly as
+        // `seedPositionSet` leaves its `created_at`.
+        ...(enrolledAt === undefined ? {} : { enrolled_at: enrolledAt }),
+        last_used_at: lastUsedAt ?? null,
+      })
+      .returning(["credential_id", "label"])
+      .executeTakeFirstOrThrow();
+
+    return { credentialId: row.credential_id, label: row.label };
+  };
+
+  const seedUnlockGrant: Fixtures["seedUnlockGrant"] = async ({
+    // A long opaque-looking token, shaped like what the domain module mints —
+    // base64url text, well past the `length(id) >= 32` check — rather than a
+    // short counted string. Hashed from the counter instead of drawn from a
+    // cryptographic source: this is a fixture, not the security boundary, and
+    // hashing keeps the default deterministic per call.
+    id = createHash("sha256").update(`unlock-grant-${next()}`).digest("base64url"),
+    passkeyId,
+    // Comfortably in the future — see the option's doc comment for why this
+    // is not the lock's idle window.
+    expiresAt = new Date(Date.now() + 60 * 60 * 1000),
+  }) => {
+    const row = await db
+      .insertInto("unlock_grant")
+      .values({
+        id,
+        passkey_id: passkeyId,
+        expires_at: expiresAt,
+      })
+      .returning(["id", "passkey_id"])
+      .executeTakeFirstOrThrow();
+
+    return { id: row.id, passkeyId: row.passkey_id };
+  };
+
   const usdInstrument: Fixtures["usdInstrument"] = async () => {
     const row = await db
       .selectFrom("instrument")
@@ -509,6 +620,8 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
     seedPoll,
     seedBackfillAttempt,
     seedManualNetWorth,
+    seedPasskey,
+    seedUnlockGrant,
     usdInstrument,
   };
 }
