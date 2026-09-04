@@ -73,11 +73,15 @@ rule repeated in every loader the way masking's is.
 
 - [ ] With no passkey, every screen renders — the no-op case, tested first because it is what the
       pull request ships
-- [ ] With a passkey and no grant, the assertion that bites is that **`next()` was never invoked** —
-      `servedThrough` in `tests/support/routes.ts` hands the middleware a stand-in response, so a test
-      can prove the stand-in was never taken. Asserting "the markup contains no figure" against a
-      refusal that renders nothing passes unconditionally, which is the vacuous test this is trying to
-      forbid
+- [ ] With a passkey and no grant, the assertion that bites is that **`next()` was never invoked**.
+      Asserting "the markup contains no figure" against a refusal that renders nothing passes
+      unconditionally, which is the vacuous test this is trying to forbid
+- [ ] `servedThrough` in `tests/support/routes.ts` cannot prove that today: its `next` closes over a
+      stand-in response and records nothing, so a middleware that awaited `next()` and *then* threw is
+      indistinguishable from one that refused first. This ticket changes that helper — an invocation
+      flag, or an injected `next` — and that change is part of its diff, not an assumption about it
+- [ ] A middleware that refuses by throwing never returns through the helper, so the test unwraps the
+      thrown `Response` the way the existing helpers do
 - [ ] A read failure refuses rather than continuing
 - [ ] With a live grant, the same screen renders as it does today
 - [ ] An expired grant refuses, and a grant extended by a request survives past its original expiry

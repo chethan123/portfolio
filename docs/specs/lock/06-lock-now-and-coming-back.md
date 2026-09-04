@@ -33,7 +33,8 @@ a thing you know you are about to do, and one tap beforehand beats any timer.
 
 - [ ] On `visibilitychange` to hidden the client records the time; on return, if the gap exceeds the
       grace, it navigates to the unlock screen
-- [ ] The grace is a constant named beside ticket 02's idle window, in one place
+- [ ] The grace uses the constant ticket 02 names beside the idle window — sixty seconds, and fifteen
+      minutes — rather than declaring a second one here
 - [ ] It navigates rather than covering the page, so the server decides. A client that re-locked by
       drawing over the screen would leave the figures underneath it
 - [ ] The module header says this is courtesy and never enforcement, because the next person to read

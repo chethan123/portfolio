@@ -51,9 +51,10 @@ the way.
 
 - [ ] Options request a platform authenticator, `userVerification: "required"`, and no attestation
 - [ ] The user entity is a real decision, not a formality: the name is the label the person typed, so
-      their password manager shows something they recognise, and the id is random per enrolment. A
-      shared id would let an authenticator treat a second enrolment as replacing the first, and this
-      household wants several passkeys to coexist
+      their password manager shows something they recognise, and the id is left to the library, which
+      generates a fresh one per enrolment. A shared id would let an authenticator treat a second
+      enrolment as replacing the first, and this household wants several passkeys to coexist. It is
+      not stored — see ticket 01
 - [ ] Already-enrolled credential ids are excluded, so a device cannot silently enrol twice
 - [ ] The challenge is generated server-side, held in the module's map, single-use, and expires
 - [ ] Verification stores the credential id, public key, counter, backup eligibility and the label; a
@@ -76,13 +77,13 @@ the way.
 - [ ] The signature counter is compared only under the condition the specification states, so a
       platform authenticator reporting a constant zero is not treated as a clone
 - [ ] A counter regression refuses the assertion and says so, rather than being logged and ignored
-- [ ] The returned user handle is checked against the stored one
 - [ ] The stored counter and `last_used_at` are updated on success; backup eligibility is not re-read
 - [ ] Success mints a grant whose window is the idle window named in one place with ticket 06's grace:
       fifteen minutes, and sixty seconds
-- [ ] Verifying a *registration* mints one too, and that is the only other thing that does. Registration
-      also carries the user-verification flag, so it is the same proof — and without it, enrolling the
-      first passkey would lock the browser that just enrolled it out on its own redirect back
+- [ ] Verifying a *registration* mints one only when the household held no passkey before it. That is
+      the bootstrap case, and without it the browser that enrolled the first passkey would be locked
+      out by its own redirect back. Every later enrolment already carries an assertion, which has
+      minted one — a registration minting a second would leave one request setting two cookies
 
 **Grants**
 
@@ -103,9 +104,16 @@ the way.
 
 **Enrolment and removal authorisation**
 
-- [ ] Enrolling a passkey and removing one each require a **fresh assertion**, verified in the same
-      request, not a live grant. A grant is what somebody holding an already-unlocked phone inherits,
-      and these two writes decide who may unlock in future
+- [ ] Enrolling a passkey and removing one each require a **fresh assertion**, not a live grant. A
+      grant is what somebody holding an already-unlocked phone inherits, and these two writes decide
+      who may unlock in future
+- [ ] The challenge is minted **for that action and that target** — enrolling, or removing this
+      passkey — and verification refuses one minted for anything else. "In the same request" is not
+      the binding: without a scoped challenge, an assertion produced to unlock would authorise a
+      removal, and one removal's assertion would authorise deleting any row the form named
+- [ ] The honest limit, in the module header where somebody will act on it: a provider whose vault is
+      already unlocked can return a verified assertion without prompting, so this raises the cost of a
+      borrowed phone rather than closing it
 - [ ] A request may enrol with no assertion only when no passkey exists at all: the instance is not
       locked at that moment, so there is nothing to bypass and anyone the gate admitted already sees
       every figure
@@ -113,6 +121,12 @@ the way.
       check: two browsers reading zero may both enrol, which is harmless, and the write decides the
       order. The window on the other side — after the last passkey is removed — is the design, and
       reaching it now requires an assertion, so it can no longer be walked into from a borrowed phone
+- [ ] Removal also requires its acknowledgement here rather than on the screen, the way `closeAccount`
+      requires its confirmation — a destructive write a replayed POST can reach silently was never
+      acknowledged at all
+- [ ] Removing the household's last passkey is allowed to be authorised by that same passkey. It is the
+      only credential that can, and it is how the lock is turned off; excluding the target from
+      `allowCredentials` would strand a one-passkey household
 - [ ] Any other request is refused, as a `ValidationError` with a message a screen can print — never a
       500, and never a silent success
 - [ ] There is no enrolment token and no second path. Recovery when every passkey is unreachable is
@@ -130,4 +144,6 @@ the way.
 - [ ] An admitted request with no grant can enrol before any passkey exists, and cannot after
 - [ ] A read failure while answering "is the instance locked" propagates rather than
       returning false
-- [ ] Money, dates and ids cross the driver boundary as strings as they do everywhere else
+- [ ] Ids cross the driver boundary as strings as they do everywhere else. The `timestamptz` columns
+      do not: `server/db.ts` leaves those as `Date`s deliberately, and the string rule covers
+      `numeric`, `int8` and `date`

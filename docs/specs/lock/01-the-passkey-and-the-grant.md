@@ -32,8 +32,11 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
 - [ ] `transports`, as text, from what registration reports. It is the hint a browser uses to decide
       which flows to offer, including the cross-device one the new-device story depends on — the one
       optional field here with a reader
-- [ ] `user_handle`, the random id given to the authenticator at registration, stored so the assertion's
-      own handle can be checked against it
+- [ ] No `user_handle` column. Registration generates one per enrolment and it matters — it is what
+      keeps two passkeys from the same provider as two entries rather than a replacement — but the
+      library does not return it from verification, storing it would mean carrying it across two
+      requests, and the check it would enable cannot fail: the credential is found by its own id and
+      the signature verified against that credential's key. Same test AAGUID failed
 - [ ] One backup flag, `backup_eligible`, and not the current-state flag beside it: eligibility is
       what "synced" means to a reader and is fixed when the passkey is created, while the current
       state would be a write on every unlock to keep one adjective fresh

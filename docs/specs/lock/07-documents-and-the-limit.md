@@ -39,6 +39,9 @@ false the moment this slice lands. Grep for the quoted phrase rather than trusti
 - [ ] `ADR-0002` again, further down — *"the only session cookie anywhere is the gate's, which the app
       never issues"*. Amending the first sentence and leaving this one is how a document ends up
       arguing with itself
+- [ ] `README.md` — *"The app therefore has no password, no login page and no session cookie of its
+      own, and it makes no authorization decision at all"*. The longest and most-read document in the
+      repository, carrying the same claim as the two ADR sentences above it
 - [ ] `CLAUDE.md` — *"The only deletes in the app are two narrow cases … plus `upload_draft`
       scaffolding rows"*. This slice adds three delete paths, and `CLAUDE.md` is the file an agent
       reads first

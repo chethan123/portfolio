@@ -18,7 +18,9 @@ household has enrolled; the grant it mints is a row in Postgres with a rolling i
 by an unguessable random id in a `SameSite=Lax` cookie. Enrolling a passkey and removing one each
 require a *fresh* assertion rather than a live grant, because a grant is precisely what the adversary
 named above inherits — otherwise a borrowed phone turns minutes of access into a passkey of its own,
-and into deleting everybody else's. The lock is on whenever the household holds
+and into deleting everybody else's. That raises the cost of those two writes; it does not close
+them, for the reason the next section gives about freshness, and no document here should claim
+otherwise. The lock is on whenever the household holds
 at least one passkey and off when it holds none — there is no switch to set, and removing the last
 passkey is how it is turned off.
 
@@ -121,10 +123,14 @@ second, unlocked way in.
   the hostname orphans every enrolled passkey, and every family member enrols again.
 - **A runtime dependency arrives** in a repository that prunes them deliberately. Verifying a
   WebAuthn assertion by hand is not a thing to do beside financial data.
-- **Revoking one passkey is in this slice after all, and it was nearly free.** Deleting a passkey
-  cascades to its grants, so a family member who loses a phone unlocks on any other enrolled device
-  and removes the lost one. What stays deferred is narrower than it first looked: only the gate's
-  own sign-out and cookie lifetime, which this slice does not touch.
+- **Revoking one passkey is in this slice, and it works for a household that holds more than one.**
+  Deleting a passkey cascades to its grants, so a family member who loses a phone unlocks on another
+  enrolled device and removes the lost one. A household holding exactly one passkey cannot: removal
+  needs an assertion, and the only credential that can give one is on the lost device. That case
+  falls back to the operator, which is why the enrolment screen presses for a second passkey rather
+  than leaving the household on one.
+- **What stays deferred is only the gate's own sign-out and cookie lifetime**, which this slice does
+  not touch.
 - **The grant cookie must be `SameSite=Lax`, never `Strict`.** The gate's redirect through Google
   returns as a top-level navigation; `Strict` would withhold the cookie and re-lock every browser
   every time the gate refreshed, which would read as a random bug.

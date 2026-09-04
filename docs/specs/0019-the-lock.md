@@ -82,10 +82,22 @@ when you add a device.
 Everything else an unlocked browser does needs only the grant. It is those two writes — the ones that
 change who may unlock in future — that are held to the higher bar.
 
+**And the bar is a bar, not a wall.** The same limit the ADR states about unlocking applies here: a
+provider whose vault is already unlocked may return a verified assertion without prompting anybody,
+and on the platform keychains this slice cannot refuse, it sometimes will. So this raises the cost of
+a borrowed phone rather than closing it, and is worth having because it fails closed on every
+authenticator that does prompt. Saying otherwise in the documents would be the dishonesty ADR-0002
+was careful to avoid.
+
+**Each ceremony is two deliberate taps, not one surprising pair of prompts.** An enrolment past the
+first needs an assertion and then a registration, which is two operating-system prompts. They cannot
+be chained off one gesture — WebKit requires each call to sit inside its own user activation — so the
+screen asks for them in two steps and says what the second is for.
+
 The first passkey needs no authorisation at all, because at that moment there is nothing to
 authorise: with no passkey enrolled the instance is not locked, and anyone the gate admitted already
-sees every figure. So the rule is one sentence — a live grant, or no passkey exists yet — and there
-is no token, no script and no second path. Recovery when every enrolled passkey is unreachable is the
+sees every figure. So the rule for the first passkey is that no passkey exists yet — and there is no
+token, no script and no second path. Recovery when every enrolled passkey is unreachable is the
 operator deleting them, which opens the instance; ADR-0005 already names the operator's shell as this
 instance's break-glass and this slice adds nothing to it.
 
@@ -178,6 +190,7 @@ deploy.** `vitest.config.ts` sets exactly one variable on purpose, and `tests/co
 that a minimal configuration is short; a second required key turns that test and every route test
 reaching `getConfig()` red inside the same pull request. So the ticket that adds the key also updates
 the test harness, the dev path and the Compose line, and lands them together.
+
 **Registration asks for a platform authenticator and user verification, and does not ask for
 attestation.** This is a single-tenant household instance with no policy about which authenticator
 models are acceptable and no metadata service to check one against.
@@ -187,8 +200,10 @@ is *eligible* for backup is what "synced" means to a reader and is fixed when it
 the separate current-state flag would be a write on every unlock to keep one adjective fresh. The
 AAGUID is not stored at all — nothing in this slice reads it.
 
-**Money and dates keep their existing rules.** Nothing in this slice computes an amount. Timestamps
-cross the driver boundary as strings like every other date.
+**Money and dates keep their existing rules, which are not the same rule.** Nothing in this slice
+computes an amount. Every column here is `timestamptz`, and `server/db.ts` deliberately leaves those
+as `Date`s — genuine instants compared in SQL — so the string-crossing rule that governs `numeric`,
+`int8` and `date` does not apply to them.
 
 ## Testing
 
@@ -206,8 +221,9 @@ fixture builders, the route helpers, full-sentence `it` names.
   flag inside the signed authenticator data would break the signature and the test would pass for the
   wrong reason. That user verification is required is asserted on the options and on the call, not by
   forging an assertion.
-- Enrolment authorisation is tested for the hole it exists to close: an admitted request with no
-  grant may not enrol, and the refusal names why.
+- Enrolment authorisation is tested for the hole it exists to close: a request holding a live grant
+  but no fresh assertion may neither enrol nor remove, and the refusal names why. A request with no
+  grant at all may still enrol while the household holds no passkey, and may not once it does.
 - The grant's cookie attributes are pinned the way masking's are pinned — the same kind of test, not
   the same values. `SameSite=Lax` with a test saying why `Strict` is wrong, plus `Secure`, `HttpOnly`
   and the `__Host-` prefix, which masking deliberately omits for reasons that do not transfer to a
