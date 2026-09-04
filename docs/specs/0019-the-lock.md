@@ -33,12 +33,16 @@ The app refuses, rather than hides. What it refuses, what lifts the refusal, and
 
 A browser holding no valid grant is shown the unlock screen, and no loader runs. The figures are
 not dotted, not hidden by CSS, and not present in the serialised loader data — they are never
-fetched. Enforcement is one middleware ahead of every route, beside the chart-range middleware that
-already exists, so the refusal is a single site a test can pin rather than a discipline spread over
-every loader.
+fetched. Enforcement is a `middleware` export from `app/root.tsx` — the one place in this framework a
+rule runs ahead of every route — so the refusal is a single site a test can pin rather than a
+discipline spread over every loader. It is deliberately not the shape of the chart-range middleware,
+the only other one here, which is registered on two routes and awaits `next()` to decorate the
+response; this one refuses before `next()` is called.
 
-Three things sit outside it: the unlock route itself, the health endpoint, and the service worker
-and the static assets it needs to render its offline page. Nothing else.
+Two router paths sit outside it: the unlock route itself, and the health endpoint the gate already
+exempts. The service worker, the manifest and the icons need no exemption — they are static files
+under `public/` that never reach the router, and ADR-0007 already made the offline page
+self-contained, so there is nothing for it to fetch.
 
 ### Unlocking
 
@@ -72,9 +76,12 @@ may enrol a passkey for itself or approve one for another browser; a browser tha
 through the cross-device flow is unlocked, so it may then enrol its own. Admission through the gate
 is not enough on its own, because the person holding your unlocked phone has that.
 
-The first passkey has no unlock to be authorised by, so the operator's shell mints a single-use
-enrolment token — the same break-glass shape ADR-0005 already names as this instance's answer when
-the front door cannot help.
+The first passkey needs no authorisation at all, because at that moment there is nothing to
+authorise: with no passkey enrolled the instance is not locked, and anyone the gate admitted already
+sees every figure. So the rule is one sentence — a live grant, or no passkey exists yet — and there
+is no token, no script and no second path. Recovery when every enrolled passkey is unreachable is the
+operator deleting them, which opens the instance; ADR-0005 already names the operator's shell as this
+instance's break-glass and this slice adds nothing to it.
 
 ### Turning it on and off
 
@@ -114,9 +121,9 @@ distinction; ADR-0002 needs its now-false sentence amended in the bracketed form
    it offers — so that there is no new secret to remember.
 6. As a family member on a new device, I want to unlock by approving it from a device I have already
    unlocked, so that adding a device does not need the operator.
-7. As the household operator setting this up for the first time, I want a documented shell path that
-   mints one enrolment token, so that the first passkey does not require a way in through the front
-   door.
+7. As the household operator setting this up for the first time, I want to enrol the first passkey
+   from the interface like any other, so that turning the lock on does not need a second mechanism
+   that exists only once.
 8. As the household operator, I want the enrolment screen to tell me that enrolling the first
    passkey locks everyone else's browser, so that I find out before it happens rather than from a
    family member.
@@ -130,8 +137,10 @@ distinction; ADR-0002 needs its now-false sentence amended in the bracketed form
     to leave me unlocked as I was, so that the two clocks do not compound into a double prompt.
 13. As the household operator, I want a browser that cannot run a passkey check to be locked rather
     than let through, so that the lock is not something a client can decline.
-14. As the household operator, I want the instance to be open again if I remove every passkey, so
-    that a lock that goes wrong is recoverable without a database console.
+14. As the household operator, I want the instance to be open again if every passkey is removed, so
+    that a lock that goes wrong is recoverable and the recovery is the one I already have.
+15. As a family member whose phone is gone for good, I want to remove its passkey from a device I can
+    still unlock, so that losing a device does not mean turning the lock off for everybody.
 
 ## Implementation Decisions
 
@@ -146,17 +155,26 @@ enrolment authorisation live in one `.server.ts` module. Routes translate and re
 asks one question and acts on the answer. No route states a lock rule and no route imports the
 WebAuthn packages directly.
 
-**The relying-party id comes from the configured public origin**, which the gate's redirect already
-depends on, so there is one place it is stated and one thing to get wrong. It is validated at
-startup against the rules the specification imposes — a domain, never an IP address — because the
-failure mode otherwise is every family member enrolling into a credential that cannot be used.
+**The relying-party id comes from `PUBLIC_ORIGIN`, which the app cannot read today.** The variable
+exists, but only as a Compose-level value the gate consumes for its redirect: `server/config.ts` has
+no such key and discards anything outside its schema, and DESIGN.md §10.1 states that split as a
+rule. So this slice adds the key to the config schema, the line to the `app` service's environment,
+the entry to `.env.example`, and the row to §10.1's table — one variable read by two services, named
+as the deliberate duplication it is. It is validated at startup by the existing `refine` shape, as a
+domain and never an IP address, because the failure otherwise is every family member enrolling a
+credential that cannot be used.
 
+**That validation, not the middleware, is this slice's one breaking deploy.** An `app` service with
+no `PUBLIC_ORIGIN` will refuse to start, so the config key and its Compose line land in the same pull
+request and the runbook says so.
 **Registration asks for a platform authenticator and user verification, and does not ask for
 attestation.** This is a single-tenant household instance with no policy about which authenticator
 models are acceptable and no metadata service to check one against.
 
-**Backup eligibility is recorded at enrolment and re-read on every assertion**, because it can
-change, and it is what the Settings list reports.
+**Backup eligibility is recorded at enrolment and not re-read.** One flag, not two: whether a passkey
+is *eligible* for backup is what "synced" means to a reader and is fixed when it is created, while
+the separate current-state flag would be a write on every unlock to keep one adjective fresh. The
+AAGUID is not stored at all — nothing in this slice reads it.
 
 **Money and dates keep their existing rules.** Nothing in this slice computes an amount. Timestamps
 cross the driver boundary as strings like every other date.
@@ -170,22 +188,25 @@ fixture builders, the route helpers, full-sentence `it` names.
   screen renders; with one enrolled and no grant every screen is refused; with a grant every screen
   renders; with an expired grant every screen is refused again. The refusal is asserted on the
   rendered markup containing no figure, not merely on a redirect.
-- Assertion verification is tested for what it refuses: a replayed challenge, a challenge that was
-  never issued, a wrong origin, a wrong relying-party id, a cleared user-verification flag, a
-  cleared user-presence flag, and a counter regression where the specification's condition applies.
-  A fixture assertion is generated once and stored, so the suite needs no browser.
+- Assertion verification is tested for what it refuses: a replayed challenge, one that was never
+  issued, one that has expired, a wrong origin, a wrong relying-party id, and a counter regression
+  where the specification's condition applies. A fixture assertion is generated once and stored, and
+  each refusal is provoked by varying the *server's* expectation rather than the fixture — flipping a
+  flag inside the signed authenticator data would break the signature and the test would pass for the
+  wrong reason. That user verification is required is asserted on the options and on the call, not by
+  forging an assertion.
 - Enrolment authorisation is tested for the hole it exists to close: an admitted request with no
   grant may not enrol, and the refusal names why.
-- The grant's cookie attributes are pinned the way masking's are, `SameSite=Lax` included, with a
-  test that says why `Strict` is wrong.
+- The grant's cookie attributes are pinned the way masking's are pinned — the same kind of test, not
+  the same values. `SameSite=Lax` with a test saying why `Strict` is wrong, plus `Secure`, `HttpOnly`
+  and the `__Host-` prefix, which masking deliberately omits for reasons that do not transfer to a
+  credential.
 - Turning the lock on and off is tested through the passkey count, not through a setting.
 - Masking's existing tests must still pass untouched; a masked *and* locked instance is not a new
   rendering path, because locked renders no screen to mask.
 
 ## Out of Scope
 
-- **Revoking one passkey on a lost device.** Removing the last passkey is the only off switch this
-  slice ships. The graded control belongs with the sign-out work the gate already owes.
 - **Any change to the gate** — its cookie lifetime, its refresh behaviour, or the sign-out control.
   Shortening that window is worth doing and is not this slice.
 - **A household dial for the idle window or the grace.** Both are constants named in one place until
@@ -205,10 +226,12 @@ whether a third-party password manager prompts or waves through after the app ha
 which decides how strong this actually is on the devices the household uses; and whether the
 cross-device flow behaves the same in standalone display mode as in a tab.
 
-**The gate's return-path bug is in this slice's way.** Caddy builds its sign-in redirect by
-interpolating the request URI without percent-encoding it, so a target carrying more than one query
-parameter truncates at the first ampersand — already tracked as an issue. The unlock screen's return
-path is exactly such a target once an owner filter and a chart range are in the address.
+**The gate's return-path bug is in this slice's way, and one ticket works around it.** Caddy builds
+its sign-in redirect by interpolating the request URI without percent-encoding it, so a target
+carrying more than one query parameter truncates at the first ampersand — already tracked as an
+issue. The unlock screen's return path is exactly such a target once an owner filter and a chart
+range are in the address, so it is carried as one encoded parameter rather than as the query it came
+from.
 
 **The offline page and the lock do not compose.** The service worker answers a rejected navigation
 with guidance; a locked browser that is also offline cannot unlock, because unlocking is a round
@@ -228,7 +251,6 @@ trip. That is correct and worth saying out loud rather than discovering.
   Settings screen, the synced-or-not column, removal, and the warning before the first one.
 - [`lock/06-lock-now-and-coming-back.md`](lock/06-lock-now-and-coming-back.md) — the chrome control
   and the re-entry grace.
-- [`lock/07-the-operators-first-passkey.md`](lock/07-the-operators-first-passkey.md) — the shell
-  path that mints one enrolment token, and the runbook for it.
-- [`lock/08-documents-and-the-limit.md`](lock/08-documents-and-the-limit.md) — every document
-  brought level, ADR-0002 amended, and the limitation stated in DESIGN.md §14.
+- [`lock/07-documents-and-the-limit.md`](lock/07-documents-and-the-limit.md) — every document
+  brought level, ADR-0002 amended, the limitation stated in DESIGN.md §14, and the operator's
+  recovery runbook.

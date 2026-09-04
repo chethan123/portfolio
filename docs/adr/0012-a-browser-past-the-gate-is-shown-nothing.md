@@ -8,8 +8,11 @@ that. ADR-0007 named this exact adversary — a cache "is readable by whoever ho
 phone" — and answered it for *stored* data by refusing to store any. This ADR answers it for the
 live session.
 
-The app now refuses. One middleware, ahead of every route: a browser holding no valid grant is
-shown the unlock screen and no loader runs, so the figures are not merely hidden but never sent.
+The app now refuses, in root middleware — a `middleware` export from `app/root.tsx`, which is the
+one place a rule can run ahead of every route in this framework. A browser holding no valid grant is
+turned away before `next()` is called, so no loader runs and the figures are not merely hidden but
+never fetched. This is deliberately not the shape of the chart-range middleware, the only other one
+here, which awaits `next()` and decorates the response it gets back.
 Unlocking is a WebAuthn assertion with `userVerification: "required"` against a passkey the
 household has enrolled; the grant it mints is a row in Postgres with a rolling idle expiry,
 addressed by an opaque id in a `SameSite=Lax` cookie. The lock is on whenever the household holds
@@ -27,7 +30,7 @@ request whether or not their browser holds a grant. The gate keeps a *person* ou
 reading while somebody sits beside you: names, dates and structure stay legible and only the
 figures become dots. The lock cannot serve that, because locked means nothing renders at all. The
 two answer different threats and both survive. What does not survive is ADR-0002's sentence that
-"the gate is the only thing that keeps anyone out" — see below.
+"the login gate (§10) is the only boundary this application has" — see below.
 
 ## What the platform can and cannot promise
 
@@ -95,8 +98,18 @@ second, unlocked way in.
 - **ADR-0002's payload decision is reversed for this surface.** Masking leaves the amounts in the
   serialised loader data on purpose, so unmasking costs no round trip; a locked browser is sent
   none, and unlocking is a round trip. Masking's own behaviour is unchanged.
-- **ADR-0002's stated limit is now wrong where it says the gate is the only thing that keeps anyone
-  out.** It is amended in place, in the bracketed form it already carries from ADR-0005.
+- **ADR-0002's stated limit is now wrong where it says the gate is the only boundary this
+  application has.** It is amended in place, in the bracketed form it already carries from ADR-0005.
+- **The app reads the instance's public origin for the first time.** `PUBLIC_ORIGIN` exists today as
+  a Compose-level variable the gate consumes, and DESIGN.md §10.1 says plainly that the app never
+  reads the gate's settings. The relying-party id has to come from somewhere stable, so the app
+  gains its first shared variable with the sidecar, and the environment table that records the split
+  gains a row.
+- **The grant cookie is `Secure` and `__Host-` prefixed**, where masking's is neither. Masking's
+  cookie is deliberately unprefixed and insecure because it carries a preference and an instance
+  genuinely reached over plain http must still get it; this one carries a credential, and WebAuthn
+  will not run outside a secure context anyway, so the attributes cost nothing and the prefix is
+  free.
 - **A browser that cannot run the ceremony cannot read this instance** once a passkey exists — an
   in-app WebView browser has no WebAuthn at all. This is not enforced by a capability check, which
   the client would control; it falls out of the server refusing until an assertion arrives.
@@ -105,8 +118,10 @@ second, unlocked way in.
   the hostname orphans every enrolled passkey, and every family member enrols again.
 - **A runtime dependency arrives** in a repository that prunes them deliberately. Verifying a
   WebAuthn assertion by hand is not a thing to do beside financial data.
-- **Revoking a passkey on a lost device is not in this slice.** Removing the last passkey turns the
-  lock off entirely, which is a blunt instrument; the graded control belongs with the sign-out work.
+- **Revoking one passkey is in this slice after all, and it was nearly free.** Deleting a passkey
+  cascades to its grants, so a family member who loses a phone unlocks on any other enrolled device
+  and removes the lost one. What stays deferred is narrower than it first looked: only the gate's
+  own sign-out and cookie lifetime, which this slice does not touch.
 - **The grant cookie must be `SameSite=Lax`, never `Strict`.** The gate's redirect through Google
   returns as a top-level navigation; `Strict` would withhold the cookie and re-lock every browser
   every time the gate refreshed, which would read as a random bug.
