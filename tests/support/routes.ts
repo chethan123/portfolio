@@ -9,6 +9,13 @@
  * rules underneath are `app/lib/*`'s. Pairs with `withDatabase`, which
  * scopes `getDb()` to the test's transaction, so an argument-less loader
  * query reads the seeded rows and rolls back with everything else.
+ *
+ * "The way the framework calls it" includes a step it is tempting to skip:
+ * every request a loader or action sees has already been rebuilt once by
+ * `callRouteHandler`, which can respell its query string along the way
+ * (`throughRouteHandler` below says how and why). A builder here that
+ * returned the bare `new Request(url)` a hand-typed address parses to would
+ * be testing a request no route ever actually receives.
  */
 import { RouterContextProvider } from "react-router";
 
@@ -26,12 +33,98 @@ function withCookie(request: Request, cookie?: string): Request {
   return request;
 }
 
-/** A GET, with search params if the route reads any, and a cookie if it reads one. */
-export function get(path: string, cookie?: string): Request {
-  return withCookie(new Request(`http://portfolio.local${path}`), cookie);
+/**
+ * The `RequestInit` react-router's own strippers pass to `new Request`,
+ * widened by the one field `lib.dom.d.ts` does not yet type: `duplex` is
+ * required by the Fetch spec whenever `body` is a stream rather than `null`,
+ * which is exactly the branch a POST takes below.
+ */
+type StreamingRequestInit = RequestInit & { duplex?: "half" };
+
+/**
+ * Rebuild a request from a (possibly just-mutated) `URL`, carrying its body,
+ * headers and signal across unchanged — the half both of react-router's own
+ * strippers share, pulled out here rather than repeated per the way the
+ * source does it.
+ */
+function rebuild(url: URL, request: Request): Request {
+  const init: StreamingRequestInit = {
+    method: request.method,
+    body: request.body,
+    headers: request.headers,
+    signal: request.signal,
+  };
+  if (init.body) init.duplex = "half";
+
+  return new Request(url.href, init);
 }
 
-/** A POST of form fields, encoded as a browser encodes them. */
+/**
+ * `stripIndexParam`, copied from react-router 7.18.2's
+ * `lib/server-runtime/data.ts` rather than reimplemented from what it is
+ * "supposed" to do: the one behaviour this whole file exists to reproduce is
+ * a `URLSearchParams.delete` re-serialising the query even when the deleted
+ * key was never present, and that is a fact about the form-urlencoded
+ * serialiser, not a rule worth restating in fresh words that could quietly
+ * stop matching it. (A same-named `stripIndexParam` also lives in
+ * react-router's client bundle, for single-fetch navigation — a different
+ * function, taking a `URL` rather than a `Request`, not this one.)
+ */
+function stripIndexParam(request: Request): Request {
+  const url = new URL(request.url);
+  const indexValues = url.searchParams.getAll("index");
+  url.searchParams.delete("index");
+  for (const value of indexValues) if (value) url.searchParams.append("index", value);
+
+  return rebuild(url, request);
+}
+
+/** `stripRoutesParam`, same source, same reason above. */
+function stripRoutesParam(request: Request): Request {
+  const url = new URL(request.url);
+  url.searchParams.delete("_routes");
+
+  return rebuild(url, request);
+}
+
+/**
+ * The request as a loader or action is actually handed it. react-router
+ * 7.18.2's `callRouteHandler` (`lib/server-runtime/data.ts`) rebuilds every
+ * request through `stripRoutesParam(stripIndexParam(...))` before a route
+ * ever sees it, and a `delete` of an **absent** key still marks
+ * `URLSearchParams` dirty, so Node re-derives `.search` from the
+ * form-urlencoded serialiser rather than returning the original string
+ * untouched — `,` becomes `%2C`, a space becomes `+`. A helper that skipped
+ * this handed a loader the URL parser's spelling, which is not the spelling
+ * either a `curl` or a browser's fetch ever produces once react-router has
+ * touched the request, and a test built on it settles on paper while the real
+ * thing loops: the settle chain in `tests/owner-reading.test.ts` was green
+ * against exactly that loop before this rebuild existed.
+ *
+ * This mirrors 7.18.2 behaviour, not a documented contract. Under
+ * `future.v8_passThroughRequests` the framework stops rebuilding and hands a
+ * loader `args.request` exactly as sent — not the fix, since it only moves
+ * the fixed-point question from this serialiser to whichever one the
+ * transport that sent the request used. Whoever flips that flag here must
+ * delete `throughRouteHandler` and its two strippers rather than trust them
+ * to still be reproducing anything real.
+ */
+function throughRouteHandler(request: Request): Request {
+  return stripRoutesParam(stripIndexParam(request));
+}
+
+/** A GET, with search params if the route reads any, and a cookie if it reads one. */
+export function get(path: string, cookie?: string): Request {
+  return withCookie(throughRouteHandler(new Request(`http://portfolio.local${path}`)), cookie);
+}
+
+/**
+ * A POST of form fields, encoded as a browser encodes them, then rebuilt the
+ * same way a GET is — the server wraps an action in the identical
+ * `callRouteHandler`, so a POST that skipped it would be faithful to nothing
+ * that reads a query parameter, even though no action here reads one the
+ * form serialiser would respell.
+ */
 export function post(
   path: string,
   fields: Record<string, string | string[]>,
@@ -44,7 +137,10 @@ export function post(
     else body.set(name, value);
   }
 
-  return withCookie(new Request(`http://portfolio.local${path}`, { method: "POST", body }), cookie);
+  return withCookie(
+    throughRouteHandler(new Request(`http://portfolio.local${path}`, { method: "POST", body })),
+    cookie,
+  );
 }
 
 /**
@@ -52,7 +148,10 @@ export function post(
  *
  * `formFields` drops file parts by design, so the drop screen reads the file
  * off the `FormData` itself — which means a journey through it has to send a
- * real one rather than a filename in a text field.
+ * real one rather than a filename in a text field. Rebuilt through the same
+ * `throughRouteHandler` as the other two builders: this one used to build its
+ * `Request` by hand and skip it, which made it the one builder in this file
+ * still lying about what a loader is handed.
  */
 export function postFile(
   path: string,
@@ -68,7 +167,7 @@ export function postFile(
     file.name,
   );
 
-  return new Request(`http://portfolio.local${path}`, { method: "POST", body });
+  return throughRouteHandler(new Request(`http://portfolio.local${path}`, { method: "POST", body }));
 }
 
 /**
@@ -139,6 +238,15 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
  * what the loader underneath it returns is `loader(args(...))`'s question,
  * not this one's. A middleware step may throw a `Response` instead of
  * returning one — `outcomeOf`/`responseOf` above are what unwrap that.
+ *
+ * **One thing this does not reproduce.** `callRouteHandler`'s rebuild is a
+ * loader/action-only step — the pipeline calls middleware with the request as
+ * it arrived, before `throughRouteHandler` above would ever touch it — so
+ * `servedThrough(middleware, get(...))` hands a middleware the request
+ * builders' already-rebuilt (form-normal) spelling where the real pipeline
+ * would still hand it the URL parser's. Harmless today: `chartRangeMiddleware`
+ * reads only `range`, which no owner-filter respelling touches. Worth stating
+ * rather than leaving for whoever adds the next middleware to discover cold.
  */
 export async function servedThrough(
   // Untyped against a generated `Route.MiddlewareFunction[]`, deliberately —
@@ -161,4 +269,19 @@ export async function servedThrough(
   }
 
   return response;
+}
+
+/**
+ * The canonical, repeated-key owner parameter for two or more ids — sorted
+ * numerically the way `canonicalise` (`owner-filter.ts`) orders them — for
+ * asserting a bounce target or building a request that is already canonical.
+ * Hand-built, deliberately not calling `toOwnerParam`: a test pinning the
+ * canonical spelling by calling the function under test would pass no matter
+ * what that function produced.
+ */
+export function ownerParam(...ids: string[]): string {
+  return [...ids]
+    .sort((a, b) => Number(a) - Number(b))
+    .map((id) => `owner=${id}`)
+    .join("&");
 }

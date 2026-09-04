@@ -48,7 +48,7 @@ Some places deliberately do not follow:
 
 ## It lasts as long as the address does
 
-The whole of the filter is in the address bar, as `?owner=3` or `?owner=1,3`. Nothing is stored.
+The whole of the filter is in the address bar, as `?owner=3` or `?owner=1&owner=3`. Nothing is stored.
 
 - **Reload, bookmark or share it** and you get the same reading. Sending the address to the other
   person in the household shows them exactly what you were looking at.

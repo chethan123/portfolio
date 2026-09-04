@@ -21,7 +21,7 @@ import { RANGE_COOKIE } from "~/lib/chart-range";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, redirectTo, servedThrough } from "../support/routes.ts";
+import { args, get, ownerParam, redirectTo, servedThrough } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -190,8 +190,11 @@ describe("the Overview read as an owner", () => {
 
       // Two of three, loaded together: exact decimal strings at the stored
       // scale, and the parts adding to the whole is the only check that catches
-      // a predicate narrowing one reader and not another.
-      const two = await at(`?owner=${[alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",")}`);
+      // a predicate narrowing one reader and not another. Called through
+      // `loader` directly rather than `redirectTo`, so the address has to
+      // already be canonical — `toOwnerParam`'s repeated key, sorted, not a
+      // joined string — or this throws the bounce instead of the data.
+      const two = await at(`?${ownerParam(alice.id, bob.id)}`);
       expect(two.change.current).toBe("12000.0000");
       expect(two.computed.at(-1)?.amount).toBe("12000.0000");
 
@@ -280,7 +283,11 @@ describe("the Overview read as an owner", () => {
         .execute();
 
       const hers = await loader(args(get(`/?owner=${alice.id}&range=all`)));
-      const stale = await loader(args(get(`/?owner=${alice.id},${bob.id}&range=all`)));
+      // Called through `loader` directly, so this has to be the address
+      // `ownerReading` already accepts unchanged — the repeated key, not a
+      // joined string (`toOwnerParam`'s doc says why the joined form bounces
+      // now instead of settling).
+      const stale = await loader(args(get(`/?${ownerParam(alice.id, bob.id)}&range=all`)));
 
       expect(stale.unknownOwner).toBe(true);
       expect(renderRoute(Overview, "/", stale)).toContain("Showing <b>Alice</b> only.");
@@ -339,7 +346,7 @@ describe("the Overview read as an owner", () => {
       const messy = `/?owner=${ids[1]},${ids[0]}&range=1m`;
 
       expect(await redirectTo(() => loader(args(get(messy))))).toBe(
-        `/?owner=${ids.join(",")}&range=1m`,
+        `/?${ownerParam(...ids)}&range=1m`,
       );
 
       // This screen's first thrown redirect, and it runs inside the range
@@ -350,7 +357,7 @@ describe("the Overview read as an owner", () => {
 
       // The cookie is still written for the page itself, or this would be a
       // fix that quietly removed the feature it was ordering itself against.
-      const settled = await servedAround(`/?owner=${ids.join(",")}&range=1m`);
+      const settled = await servedAround(`/?${ownerParam(...ids)}&range=1m`);
       expect(settled.headers.get("Set-Cookie")).toContain(RANGE_COOKIE);
     }),
   );
@@ -363,13 +370,16 @@ describe("the Overview read as an owner", () => {
         his: daysAgo(200),
       });
       await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "5000.00" });
-      const everyone = [alice.id, bob.id, carol.id].sort((a, b) => Number(a) - Number(b)).join(",");
+      // Already the canonical repeated key, sorted: this test is after the
+      // everyone-*collapse* bounce in isolation, not the respelling bounce a
+      // joined string would hit first now (`toOwnerParam`'s doc says why).
+      const everyone = ownerParam(alice.id, bob.id, carol.id);
 
       // Not merely a second URL for one view, which is what it is on the other
       // screens: a narrowed chart drops the pre-app history, so ticking every
       // box would have quietly cost the reader every year before the first
       // upload while the headline stayed identical.
-      expect(await redirectTo(() => loader(args(get(`/?owner=${everyone}&range=all`))))).toBe(
+      expect(await redirectTo(() => loader(args(get(`/?${everyone}&range=all`))))).toBe(
         "/?range=all",
       );
     }),
@@ -793,6 +803,24 @@ describe("a custom range", () => {
 
       expect(markup).toContain(`${daysAgo(100)} – ${daysAgo(10)}`);
       expect(markup).not.toMatch(/>Custom</);
+    }),
+  );
+
+  it(
+    "names the form the Custom chip opens, so the chip cannot silently go dead",
+    withDatabase(async (ctx) => {
+      await seedDayZero(ctx, daysAgo(200));
+
+      const markup = renderRoute(Overview, "/", await loader(args(get("/"))));
+
+      // The picker is a native popover: the chip is its invoker, and the form it
+      // names is what the browser lifts into the top layer — which is how the
+      // picker escapes the phone strip's overflow. React emits the prop's
+      // camelCase text on the server; HTML attribute names are case-insensitive.
+      const [, id] = markup.match(/<button[^>]*\bpopovertarget="([^"]+)"/i) ?? [];
+      expect(id).toBeDefined();
+      const [form] = markup.match(/<form[^>]*\bpopover="auto"[^>]*>/) ?? [];
+      expect(form).toContain(`id="${id}"`);
     }),
   );
 });

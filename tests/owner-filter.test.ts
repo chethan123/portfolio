@@ -29,7 +29,7 @@ const from = (search: string) => readOwnerFilter(new URLSearchParams(search));
  */
 const PARSES: [address: string, selected: string[], why: string][] = [
   ["?owner=3", ["3"], "a single id, which is what Holdings' old Owner select emitted"],
-  ["?owner=1,3", ["1", "3"], "the comma-separated grammar this slice adds"],
+  ["?owner=1,3", ["1", "3"], "the comma-separated grammar this module still reads, though it no longer emits it"],
   ["?owner=10,9", ["9", "10"], "ordered numerically, not lexicographically"],
   ["?owner=3,1", ["1", "3"], "sorted, so one view has one URL"],
   ["?owner=3,3", ["3"], "de-duplicated"],
@@ -54,7 +54,7 @@ const PARSES: [address: string, selected: string[], why: string][] = [
   ["?owner=a%26b", ["a&b"], "a decoded ampersand is one id, and must not become two parameters"],
   ["?owner=a+b", ["a b"], "a plus decodes to a space, and the id keeps it"],
   ["?owner=1%2C3", ["1", "3"], "a percent-encoded separator is still the separator"],
-  ["?owner=o'brien", ["o'brien"], "an apostrophe id is kept — the character URL and encodeURIComponent spell differently"],
+  ["?owner=o'brien", ["o'brien"], "an apostrophe id is kept — the character the fixed-point test below singles out"],
   ["?owner=100%25", ["100%"], "a percent sign survives, and must survive being spelled again"],
   ["?owner=%C3%A9", ["é"], "a non-ASCII id is kept, sorted after the digits"],
 ];
@@ -105,16 +105,18 @@ describe("the canonical spelling", () => {
   it("encodes each id, so an id carrying a separator cannot become a second parameter", () => {
     // Without the encode, `ownerSearch(["a&b"])` is `?owner=a&b` — an id
     // injecting a parameter into the address a loader is about to redirect to.
+    // `URLSearchParams.append` does this encoding itself now — there is no
+    // hand-rolled encoder left to get this wrong for a new character.
     expect(ownerSearch(["a&b"])).toBe("?owner=a%26b");
     expect(from(ownerSearch(["a&b"]))).toEqual(["a&b"]);
 
-    // The separator itself stays literal, because a canonical generator that
-    // spelled it `%2C` would disagree with `toSearch` on every Holdings link.
-    expect(ownerSearch(["1", "3"])).toBe("?owner=1,3");
+    // No separator at all between two ids — a repeated key — which is what
+    // removes the comma/`%2C` disagreement rather than choosing a side of it.
+    expect(ownerSearch(["1", "3"])).toBe("?owner=1&owner=3");
   });
 
   it("canonicalises what it is handed, so an unsorted filter has no second spelling", () => {
-    expect(toOwnerParam(["3", "1"])).toBe("owner=1,3");
+    expect(toOwnerParam(["3", "1"])).toBe("owner=1&owner=3");
     expect(toOwnerParam(["3", "3"])).toBe("owner=3");
   });
 
@@ -123,29 +125,34 @@ describe("the canonical spelling", () => {
     expect(ownerSearch(ALL_OWNERS)).toBe("");
   });
 
-  it("spells a selection as one comma-separated parameter, with and without the question mark", () => {
+  it("spells a selection as a repeated key, with and without the question mark", () => {
     // Two functions rather than one: `toSearch` in `holdings-view.ts` already
     // returns its string *with* a `?`, and composing two such strings gives
     // `?sort=value&?owner=1`.
-    expect(toOwnerParam(["1", "3"])).toBe("owner=1,3");
-    expect(ownerSearch(["1", "3"])).toBe("?owner=1,3");
+    expect(toOwnerParam(["1", "3"])).toBe("owner=1&owner=3");
+    expect(ownerSearch(["1", "3"])).toBe("?owner=1&owner=3");
   });
 
   it("hands a loader the address to redirect to, with the rest of the query kept", () => {
     const canonical = (search: string) => canonicalOwnerSearch(new URLSearchParams(search));
 
-    // Unchanged means no redirect.
-    expect(canonical("?owner=1,3")).toBe("?owner=1,3");
+    // Unchanged means no redirect. A repeated key is now the one spelling
+    // that is already canonical — everything else below bounces to it.
+    expect(canonical("?owner=1&owner=3")).toBe("?owner=1&owner=3");
     expect(canonical("?range=1m")).toBe("?range=1m");
     expect(canonical("")).toBe("");
 
-    // Every second spelling of one view resolves to the first.
-    expect(canonical("?owner=3,1")).toBe("?owner=1,3");
+    // Every second spelling of one view resolves to the first, the
+    // comma-separated grammar `readOwnerFilter` still accepts on the way in
+    // included — no multi-owner link ever pointed at that spelling, but a
+    // hand-typed or documented one may, and it settles in one hop rather
+    // than being refused.
+    expect(canonical("?owner=3,1")).toBe("?owner=1&owner=3");
     expect(canonical("?owner=3,3")).toBe("?owner=3");
-    expect(canonical("?owner=1&owner=3")).toBe("?owner=1,3");
+    expect(canonical("?owner=1,3")).toBe("?owner=1&owner=3");
     // Including the percent-encoded separator, which a verdict computed from
     // the decoded values could not have told apart from the literal one.
-    expect(canonical("?owner=1%2C3")).toBe("?owner=1,3");
+    expect(canonical("?owner=1%2C3")).toBe("?owner=1&owner=3");
     // The unfiltered screen's spelling is no parameter at all, so an empty one
     // is a second URL for a view that already has one.
     expect(canonical("?owner=")).toBe("");
@@ -153,7 +160,7 @@ describe("the canonical spelling", () => {
     // The rest of the address is kept, and the owner parameter leads it. A
     // target built from `ownerSearch` alone would drop a custom chart range.
     expect(canonical("?range=custom&start=2026-01-01&owner=3,1")).toBe(
-      "?owner=1,3&range=custom&start=2026-01-01",
+      "?owner=1&owner=3&range=custom&start=2026-01-01",
     );
   });
 
@@ -173,23 +180,60 @@ describe("the canonical spelling", () => {
     }
   });
 
-  it("is a fixed point of URL parsing itself, which is what lets a loader compare with strict equality", () => {
-    // The loaders compare `url.search` — the WHATWG parser's own spelling —
-    // against the canonical search with `!==` and bounce on a difference. That
-    // cannot loop only while nothing in a canonical address is respelled on
-    // arrival, so this test round-trips through a real `URL` rather than
-    // through this module's own serialisers, which is the round trip every
-    // redirect actually takes. The apostrophe is the case that once failed:
-    // `encodeURIComponent` leaves it bare where the parser writes `%27`, and
-    // `?owner=o'brien` could never equal its own canonical spelling.
-    const arrivesAsItself = (canonical: string) =>
+  it("is a fixed point of both serialisers a canonical address is put through, which is what lets a loader compare with strict equality", () => {
+    // Two different round trips, because two different pieces of machinery
+    // touch a canonical address on its way back to a loader. `new URL(...)`
+    // is what a request's own `url.search` already went through once, by the
+    // time anything here sees it. `new URLSearchParams(...)` is what
+    // react-router's `callRouteHandler` applies *again*, unconditionally, to
+    // rebuild the request a loader is actually handed (`toOwnerParam`'s doc
+    // has the mechanism) — the step this suite could not see before
+    // `tests/support/routes.ts` started reproducing it. A speller that is a
+    // fixed point of only one of the two loops on whichever character the
+    // two serialisers spell differently: the apostrophe was the first found
+    // this way (`encodeURIComponent` leaves it bare where the URL parser
+    // writes `%27`) and `~`, `!`, `(`, `)`, space were the ones the *form*
+    // serialiser disagreed with instead, never exercised because nothing
+    // before `toOwnerParam` was built from it.
+    const arrivesAsItself = (canonical: string) => {
       expect(new URL(`http://portfolio.test/${canonical}`).search).toBe(canonical);
+      // `""` (the unfiltered spelling) has no leading `?` to strip and put
+      // back — `URLSearchParams` would report it a fixed point of `?`, a
+      // string this module never produces, so the empty case is exempted
+      // rather than made to pass by accident.
+      if (canonical !== "") {
+        expect(`?${new URLSearchParams(canonical.slice(1))}`).toBe(canonical);
+      }
+    };
 
     for (const [address] of PARSES) {
       arrivesAsItself(canonicalOwnerSearch(new URLSearchParams(address)));
     }
 
-    for (const id of ["o'brien", "a b", "a&b", "100%", "é", "''", "1"]) {
+    // Every id `readOwnerFilter`'s table keeps on purpose, plus the ones the
+    // two serialisers are each known to spell differently: `~`, `!`, `(`, `)`
+    // and a bare space for the form serialiser; the apostrophe for the URL
+    // parser; `*`, `+`, `%` and a non-ASCII name because both encoders treat
+    // them specially in their own way; `03` for `withoutLeadingZeros`, and a
+    // 25-digit id for the same reason `owner-reading.server.ts` keeps one.
+    for (const id of [
+      "o'brien",
+      "a b",
+      "a&b",
+      "100%",
+      "é",
+      "''",
+      "1",
+      "~",
+      "!",
+      "(",
+      ")",
+      "*",
+      "+",
+      "%",
+      "03",
+      "1234567890123456789012345",
+    ]) {
       arrivesAsItself(ownerSearch([id]));
     }
 

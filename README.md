@@ -158,15 +158,15 @@ the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way
   household and wraps at a different width on each of the four screens, so the one control meant to
   look identical everywhere was the one whose layout tracked how many people happened to be
   recorded. Closed, it is a fixed shape that says who is being shown — a name or two, a count past
-  that. `<details>` is the browser's own disclosure, so this costs no JavaScript, as the custom
-  range picker beside it already showed.
+  that. `<details>` is the browser's own disclosure, so this costs no JavaScript — the custom range
+  picker beside it reaches the same no-JavaScript result through a native popover.
 
 - **It is noise reduction, never privacy.** Anyone may set it, clear it, and set it to anybody; the
   gate at the front door is the only thing that keeps anyone out, and every family member sees
   everything. It is never derived from who signed in — the app deliberately holds no mapping from a
   sign-in to an owner, and inventing one so that a screen could open on "you" is the short step to
   "and this is *your* data" that a household of shared money does not want taken.
-- **The URL is the whole of it.** `?owner=1,3` and nothing else: no cookie, no stored setting.
+- **The URL is the whole of it.** `?owner=1&owner=3` and nothing else: no cookie, no stored setting.
   Closing the tab forgets it because there is nothing left to remember it, and pasting the address
   to the other person in the household shows them the same reading — which a cookie could never do.
 - **A narrowed screen says so in words**, beside the figure it narrowed, because a filter that

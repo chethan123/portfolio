@@ -5,6 +5,50 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-04 — Platform facts under the price worker
+
+One document: [Price worker platform facts](./2026-09-04-price-worker-platform-facts.md) — the
+Docker, PostgreSQL 17, `yahoo-finance2`, `pg`, Node 24, oauth2-proxy and Caddy behaviour the
+price-worker slice rests on, gathered against `5e21ab7` and, where it could be, executed against a
+live PostgreSQL 17.10. It is the evidence under [spec 0018](../specs/0018-price-worker.md), which is
+authoritative for the design itself.
+
+### The three things worth knowing without reading further
+
+1. **Docker Engine 26 accepts the option the isolation rests on and ignores it, in silence.**
+   `gateway_mode_ipv4: isolated` does not exist before 28.0, and 26's label parser is a `switch`
+   with no `default` branch — so the network comes up as a plain internal bridge that still holds a
+   host address, and every obvious smoke assertion (external DNS fails, no default route) still
+   passes, because those follow from `internal` alone. 27 refuses the option loudly. Only the
+   daemon's own record separates them: under `isolated` no gateway address is allocated, so
+   `docker network inspect` shows an empty IPAM `Gateway` and the bridge carries no `inet` — on 26
+   both are present, and a connect to the gateway is the wrong assertion on 28.
+
+2. **The grants hold, and the one thing that would undo them is a view.** Under `SET LOCAL ROLE`
+   on a live 17.10, `SELECT` plus five column `UPDATE`s carry every statement the worker makes and
+   every household table is denied. But `holding_valued` runs with its owner's privileges — no
+   `security_invoker`, and no migration in this repo contains a single `GRANT` — so one grant on it
+   would hand over every account, person, holding and position-set row with no table grant to show
+   for it. The two SQL functions are already callable by anyone and fail *inside*, on `account`.
+
+3. **The grants bound confidentiality, not availability.** A role holding no grants at all can take
+   the two advisory locks this app uses — freezing every refresh and hanging `migrate.ts` — create
+   temp tables and create large objects, each verified with a bare role and each closed by a REVOKE
+   that was tested — twenty-one advisory functions, both the `pg_advisory_*` and `pg_try_advisory_*`
+   families, and `TEMP` revoked from PUBLIC, not from the role, which holds it only through PUBLIC.
+   The advisory REVOKE rides `pg_dump` (settled from `pg_dump.c`: a catalog function's ACL is dumped
+   when it differs from `pg_init_privs`, and those functions have no row there), which is why a
+   restore by a non-superuser needs `pg_restore -L` or `--no-acl`.
+
+### Status
+
+Nothing here is approved work; the spec is [0018](../specs/0018-price-worker.md). Several doc sites
+are egress-blocked from the research sandbox — `docs.docker.com`, `www.postgresql.org`,
+`node-postgres.com`, `caddyserver.com` among them — so those facts were read from the repositories
+that generate those pages, and are cited that way. There is no Docker daemon in that sandbox, so
+nothing in the Docker section was executed. §7 lists what could not be checked and must not be
+treated as settled.
+
 ## 2026-09-02 — Security and privacy audit
 
 One document: [Security and privacy audit](./2026-09-02-security-and-privacy-audit.md) — every
@@ -35,6 +79,7 @@ review produced are folded in, with two findings the review added.
 Findings only; nothing applied. The code fixes it names — `safeReturn`, `versionCheck`, the
 `.gitignore` and `.dockerignore` rules, the tracked leftovers, the dump credential in argv — are
 each a small pull request of their own, and the network split and required password are spec 0015.
+
 
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
 

@@ -37,6 +37,11 @@ export function toOwnerParam(filter: OwnerFilter): string;
 export function ownerSearch(filter: OwnerFilter): string;
 ```
 
+**Superseded in part:** the two examples above, `owner=1,3` and `?owner=1,3`, are not the canonical
+spelling for two or more ids — [0013's own banner](../0013-owner-filter.md) has the finding and the
+fix. `owner=3` for one id, and everything below about the two functions' shapes and the `?` trap,
+still hold.
+
 **The `?` is a real trap.** `toSearch` (`app/lib/holdings-view.ts:452`) returns its string *with* a
 leading `?`. Two functions exist here precisely so nobody concatenates two `?`-prefixed strings into
 `?sort=value&?owner=1`. `toOwnerParam` is the bare pair for composing; `ownerSearch` is the complete

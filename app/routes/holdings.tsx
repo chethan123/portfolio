@@ -110,9 +110,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Apply with one filter arrives as `?owner=1&account=&institution=&kind=&…`
   // — unreadable in a bookmark — and the bounce cleans it in one hop. And its
   // own bounce cannot loop, the half `owner-reading.server.ts`'s own comment
-  // does not cover (`spellId` is the shared half): `parseQuery(toSearch(q))`
-  // is `q`, so the respelled `url.search` is a fixed point of this screen's
-  // own grammar, not only of the owner parameter alone.
+  // does not cover (`toOwnerParam`'s fixed-point property, which `toSearch`
+  // composes with, is the shared half): `parseQuery(toSearch(q))` is `q`, so
+  // the respelled `url.search` is a fixed point of this screen's own grammar,
+  // not only of the owner parameter alone.
   const link = (owners: OwnerFilter) => toSearch(query, owners);
   const { reading, owner } = await ownerReading(request, {
     request: (owners) =>

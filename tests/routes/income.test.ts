@@ -16,7 +16,7 @@ import Income, { loader } from "../../app/routes/income.tsx";
 
 import { closeTestDatabase, withDatabase } from "../support/database.ts";
 import { renderRoute } from "../support/render.tsx";
-import { args, get, redirectTo } from "../support/routes.ts";
+import { args, get, ownerParam, redirectTo } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
@@ -131,14 +131,16 @@ describe("the filter's own plumbing", () => {
       const ids = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b));
 
       expect(await redirectTo(() => loader(args(get(`/income?owner=${ids[1]},${ids[0]}`))))).toBe(
-        `/income?owner=${ids.join(",")}`,
+        `/income?${ownerParam(...ids)}`,
       );
       expect(await redirectTo(() => loader(args(get("/income?owner="))))).toBe("/income");
 
       // Alice and Bob are the whole seeded household, so ticking every box is
       // the household under another name — the collapse is the second bounce
-      // this loader owes the address, not only the respelling above.
-      expect(await redirectTo(() => loader(args(get(`/income?owner=${ids.join(",")}`))))).toBe(
+      // this loader owes the address, not only the respelling above. Spelled
+      // already-canonical here on purpose, so this is the collapse bounce in
+      // isolation rather than the respelling bounce landing first.
+      expect(await redirectTo(() => loader(args(get(`/income?${ownerParam(...ids)}`))))).toBe(
         "/income",
       );
     }),

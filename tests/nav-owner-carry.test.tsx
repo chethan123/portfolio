@@ -37,17 +37,20 @@ function navTargets(html: string): string[] {
 
 describe("the navigation under an owner filter", () => {
   it("carries the owner param onto every screen the filter reaches", () => {
-    // Once for the desktop rail, once for the phone's bottom bar.
+    // Once for the desktop rail, once for the phone's bottom bar. `&amp;`
+    // because `ownerSearch` now spells two owners as a repeated key
+    // (`owner=1&owner=3`), and that `&` is HTML-escaped like any other
+    // attribute value once it lands in an `href`.
     expect(navTargets(shell("/holdings?owner=1,3"))).toEqual([
-      "/?owner=1,3",
-      "/holdings?owner=1,3",
-      "/analysis?owner=1,3",
-      "/income?owner=1,3",
+      "/?owner=1&amp;owner=3",
+      "/holdings?owner=1&amp;owner=3",
+      "/analysis?owner=1&amp;owner=3",
+      "/income?owner=1&amp;owner=3",
       "/settings",
-      "/?owner=1,3",
-      "/holdings?owner=1,3",
-      "/analysis?owner=1,3",
-      "/income?owner=1,3",
+      "/?owner=1&amp;owner=3",
+      "/holdings?owner=1&amp;owner=3",
+      "/analysis?owner=1&amp;owner=3",
+      "/income?owner=1&amp;owner=3",
       "/settings",
     ]);
   });
@@ -78,10 +81,12 @@ describe("the navigation under an owner filter", () => {
     );
   });
 
-  it("spells the selection the way the loaders redirect to, commas and all", () => {
-    // `%2C` would be a second spelling of one view, and the screens compare the
-    // canonical address to `url.search` as raw text.
-    expect(navTargets(shell("/holdings?owner=1,3"))).toContain("/analysis?owner=1,3");
+  it("spells the selection the way the loaders redirect to, repeated key and all", () => {
+    // `owner=1%2C3` (from a hand-joined string) would be a second spelling of
+    // one view, and the screens compare the canonical address to `url.search`
+    // as raw text — a nav link built from anything but `toOwnerParam` itself
+    // risks exactly that.
+    expect(navTargets(shell("/holdings?owner=1,3"))).toContain("/analysis?owner=1&amp;owner=3");
   });
 
   it("leaves an unfiltered instance's links bare", () => {

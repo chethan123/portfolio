@@ -4,7 +4,13 @@
  * by memory.
  *
  * **No JavaScript required**: every fixed preset is a plain link naming its
- * own `range`; Custom is a native `<details>` holding a GET form.
+ * own `range`; Custom is a native popover holding a GET form — a popover
+ * because the top layer sits outside every ancestor's overflow, and the
+ * phone strip is a scroll container that clipped the disclosure this once
+ * was (`app.css` keeps the mechanism beside the rule). Where `popover` is
+ * unsupported (Safari/iOS ≤ 16, Firefox < 125) the attribute is ignored, so
+ * the form renders as an always-open card in the strip and the button does
+ * nothing: still a working GET form, never a dead one.
  *
  * **Every link names its range explicitly, including the default.** With the
  * choice remembered in a cookie (spec 0008), a bare `.` would read back
@@ -19,6 +25,7 @@
  * Which three parameters are the control's own to rewrite is
  * `chart-range.ts`'s to say, beside the function that reads them back.
  */
+import { Fragment, useId } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { carriedParams, rangeSearch } from "~/lib/chart-range";
@@ -43,6 +50,7 @@ export function ChartRangeControl({
   customMax: IsoDate;
 }) {
   const [params] = useSearchParams();
+  const popoverId = useId();
 
   return (
     <nav className="segmented" aria-label="Chart range">
@@ -51,15 +59,20 @@ export function ChartRangeControl({
           const applied = range === "custom" && custom !== undefined;
 
           return (
-            <details key="custom" className="segmented-custom">
-              <summary aria-current={applied ? "true" : undefined}>
+            <Fragment key="custom">
+              <button
+                type="button"
+                className="segmented-custom"
+                popoverTarget={popoverId}
+                aria-current={applied ? "true" : undefined}
+              >
                 {/* The chosen span, once there is one, not the word "Custom"
                     — story 13: tell what you are looking at without reopening
                     the picker. */}
                 {applied ? `${custom.start} – ${custom.end}` : option.label}
-              </summary>
+              </button>
 
-              <form method="get" className="segmented-custom-form">
+              <form method="get" id={popoverId} popover="auto" className="segmented-custom-form">
                 <input type="hidden" name="range" value="custom" />
                 {/* A GET form submits its own fields and nothing else, so
                     everything the address held must be re-emitted here or
@@ -91,7 +104,7 @@ export function ChartRangeControl({
                   Apply
                 </button>
               </form>
-            </details>
+            </Fragment>
           );
         }
 
