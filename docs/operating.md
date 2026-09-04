@@ -474,8 +474,11 @@ Two properties are decisions rather than gaps
 ([ADR-0007](adr/0007-the-service-worker-stores-nothing.md)):
 
 - **Nothing is stored on the phone.** The service worker is network-only — no cached screens, no
-  last-known figures. Off the VPN, the installed app shows a branded connect-the-VPN page and
-  nothing else, so a phone that leaves the household holds no balances.
+  last-known figures — and every page and loader payload is sent `Cache-Control: no-store`, so the
+  browser's own cache holds none either (a masked page still carries every figure inside it). Off
+  the VPN, the installed app shows a branded connect-the-VPN page and nothing else, so a phone
+  that leaves the household holds no balances. The one thing this costs: on Firefox and Safari,
+  Back re-fetches the page through the gate rather than restoring it instantly.
 - **A LAN address does not install.** Service workers require a secure context; the house proxy's
   TLS supplies it at [`PUBLIC_ORIGIN`](#reverse-proxy-and-tls), plain-HTTP LAN addresses supply
   none — and the gate refuses those requests anyway.
@@ -549,10 +552,12 @@ that the app carries no cookie of its own it is the entire posture — which is 
 pins the attribute rather than inheriting it. Against a signed-in household that covers the ordinary
 cross-site form post.
 
-**No security headers are set at all.** No CSP, no HSTS, no `X-Frame-Options`, no
-`X-Content-Type-Options`: the app sets none and the Caddyfile sets none. If you want them, a `header`
-block in the Caddyfile is where they go. Nothing in the app depends on their absence, but nothing has
-been run behind a strict CSP either, so test it rather than assuming.
+**No security headers are set, with one exception.** Every page and loader payload carries
+`Cache-Control: no-store` — [nothing is stored on the phone](#installing-on-a-phone), kept at the
+HTTP layer as well as in the worker — and that is the whole list. No CSP, no HSTS, no
+`X-Frame-Options`, no `X-Content-Type-Options`: the app sets none and the Caddyfile sets none. If you
+want them, a `header` block in the Caddyfile is where they go. Nothing in the app depends on their
+absence, but nothing has been run behind a strict CSP either, so test it rather than assuming.
 
 **The gate container runs as root, holding one capability.** `app`, `db` and `caddy` do not; `gate`
 does, because the published `-alpine` image sets no `USER` and `compose.yaml` argues that pinning a

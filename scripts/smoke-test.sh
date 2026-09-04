@@ -542,12 +542,23 @@ rm -f "${DUMPS_DIR}/truncated.bin" "${DUMPS_DIR}/portfolio-2020-01-03.dump"
 # renderer, not the front door. `node -e` because the image carries no curl.
 log "Fetching a real page from the app container"
 
+# The first line of the capture is the response's Cache-Control, the rest is
+# the body: one request answers both questions below.
 page="$(docker compose exec -T app node -e \
-  'fetch("http://127.0.0.1:"+(process.env.PORT||3000)+"/").then(r=>r.text()).then(t=>process.stdout.write(t))' ||
+  'fetch("http://127.0.0.1:"+(process.env.PORT||3000)+"/").then(r=>{process.stdout.write((r.headers.get("cache-control")||"(none)")+"\n");return r.text()}).then(t=>process.stdout.write(t))' ||
   true)"
 [[ "$page" == *'aria-label="Primary"'* ]] || fail "GET / did not render the navigation rail"
 [[ "$page" == *"Portfolio"* ]] || fail "GET / did not render the brand"
 printf 'GET / rendered a page\n'
+
+# A rendered page carries the household's figures whether or not it is masked
+# (ADR-0002), so it must never land in a browser's disk cache or a proxy —
+# the same refusal ADR-0007 makes for the service worker, at the HTTP layer.
+# Asserted on a real page rather than on `/healthz`, which sets its own.
+cache_control="$(printf '%s\n' "$page" | head -1)"
+[[ "$cache_control" == "no-store" ]] ||
+  fail "GET / carried Cache-Control '${cache_control}', expected no-store"
+printf 'GET / -> Cache-Control: %s\n' "$cache_control"
 
 # The static assets Vite copies out of `public/` — the PWA manifest, the
 # service worker, the icon and the font. The one part of the image a rendered

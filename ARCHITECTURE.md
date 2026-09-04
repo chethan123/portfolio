@@ -1602,6 +1602,7 @@ allowlist does.
 | SQL injection | Kysely parameterises; the `sql` tag interpolates only bound values and compile-time-literal identifiers. Every externally supplied id is bound behind `couldBeId`'s digits-and-length test (`isOneOf` / `isAccount` in `valuation.server.ts`) |
 | Redirect targets | Centralised in `safeReturn` (`app/lib/return-path.ts`): a posted return path is resolved by the URL parser against a throwaway origin and must come back on it, so a `redirectTo=https://evil.test` posted from a form's hidden field — or its backslash spelling — lands on `/`. Both resource routes (`masking`, `refresh`) use it |
 | Error disclosure | Contained. The error page prints fixed wording chosen by the response status — nothing the throwing code wrote is printed (`app/components/error-page.tsx`, rendered by the `ErrorBoundary` at `root.tsx`) |
+| Caching | `Cache-Control: no-store` on every rendered document and single-fetch payload, error pages included — the root route's `headers` export (`app/root.tsx`), inherited by every route since none exports its own. `/healthz` sets its own; hashed `/assets/*` stay `immutable`. Masking is a display state (ADR-0002), so a cached page would carry every figure; this is ADR-0007's refusal applied to the browser's own cache and the house proxy |
 
 **The forwarded-header decision, stated plainly.** `caddy` trusts what reaches it from the house
 proxy within `private_ranges`, and `app` and `gate` trust `caddy` unconditionally. Both rest on one

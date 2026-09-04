@@ -46,6 +46,21 @@ import "./app.css";
  */
 
 /**
+ * Every rendered page and every single-fetch payload leaves with
+ * `Cache-Control: no-store`. Masking is a display state (ADR-0002), so a
+ * masked page still carries every figure in its hydration payload, and the
+ * household refused a cache on the phone (ADR-0007) — the browser's HTTP
+ * cache, and the house proxy in front, are that cache by another route. Set
+ * here once: a route that exports no `headers` inherits its parent's, and no
+ * route does, so this reaches every document and `.data` response, error
+ * pages included. `/healthz` states its own; hashed `/assets/*` keep the
+ * server's `immutable`; a resource route answers with its own `Response`. The
+ * price is back-forward restoration on Firefox and Safari: Back re-fetches
+ * through the gate.
+ */
+export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "no-store" });
+
+/**
  * What the shell around every page needs: whether anything guards the
  * instance, whether it is set up yet, and whether this browser is masked.
  *

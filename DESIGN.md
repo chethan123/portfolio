@@ -1016,7 +1016,9 @@ is the opposite: network-only, storing nothing, because a cache of the family's 
 every phone *outside* the gate's boundary. The household chose the clean device over the glanceable
 snapshot, and [ADR-0007](docs/adr/0007-the-service-worker-stores-nothing.md) is that answer written
 down, argument and all. Offline, the installed app shows a branded connect-the-VPN page and nothing
-else.
+else. The same refusal reaches the HTTP layer: every rendered page and loader payload is sent
+`Cache-Control: no-store` from the root route, so the browser's disk cache and the house proxy hold
+nothing either.
 
 **The "as of" timestamp is non-negotiable.** Silently showing yesterday's net worth as though it were
 live is the one genuinely dangerous failure mode in a finance app.

@@ -44,6 +44,11 @@ feature.
 - **Offline, the app shows guidance and nothing else.** No figures, no stale chart, no cached
   shell. The offline page must stay a nicety, never a dependency — Android may evict a rarely-used
   registration, and losing it costs only the branding until the next visit.
+- **The browser's own cache is held to the same rule.** Every rendered page and loader payload is
+  sent `Cache-Control: no-store` (the root route's `headers` export), because a page carries every
+  figure whether or not it is masked (ADR-0002) and the disk cache — or the house proxy in front —
+  is a cache outside the boundary by another route. The price is that Back on Firefox and Safari
+  re-fetches through the gate instead of restoring the page.
 - **The worker must stay small enough to audit by eye.** Its rule has no test harness; review and
   a tripwire test (no `caches.open`, no `indexedDB` in the file) are the enforcement. A change
   that makes the worker hard to read in one sitting has already broken the rule's enforcement.
