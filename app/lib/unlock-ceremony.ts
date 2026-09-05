@@ -1,13 +1,14 @@
 /**
- * The unlock screen's client-only seam onto `@simplewebauthn/browser`
- * (docs/adr/0012, spec 0019, ticket 04) — the one file in this application
- * that names that package, and it never does so at module scope. Every
- * export below reaches it through a dynamic `import()` inside a function
- * body, so the package is only ever resolved and evaluated when a browser
- * actually calls one of these functions — which happens from `unlock.tsx`'s
- * component only inside a `useEffect` or an event handler, neither of which
- * ever runs during a server render. A static `import { startAuthentication }
- * from "@simplewebauthn/browser"` at the top of this file (or of the route)
+ * The client-only seam onto `@simplewebauthn/browser` (docs/adr/0012, spec
+ * 0019, tickets 04 and 05) — the one file in this application that names
+ * that package, and it never does so at module scope. Every export below
+ * reaches it through a dynamic `import()` inside a function body, so the
+ * package is only ever resolved and evaluated when a browser actually calls
+ * one of these functions — which happens from `unlock.tsx`'s component and
+ * from Settings → Passkeys' (`app/routes/settings/passkeys.tsx`) only inside
+ * a `useEffect` or an event handler, neither of which ever runs during a
+ * server render. A static `import { startAuthentication } from
+ * "@simplewebauthn/browser"` at the top of this file (or of either route)
  * would sit in the module's top-level scope in *every* bundle that pulls
  * this module in, including the server one, which is exactly the shape
  * CLAUDE.md's bundle-boundary rule forbids for a route that renders on the
@@ -18,18 +19,22 @@
  * Plain `.ts`, not `.server.ts`: this ships to the browser on purpose, the
  * mirror image of that suffix's usual meaning.
  *
- * **Only types cross statically.** `PublicKeyCredentialRequestOptionsJSON`
- * and `AuthenticationResponseJSON` are `import type`s, erased entirely by
+ * **Only types cross statically.** `PublicKeyCredentialRequestOptionsJSON`,
+ * `PublicKeyCredentialCreationOptionsJSON`, `AuthenticationResponseJSON` and
+ * `RegistrationResponseJSON` are `import type`s, erased entirely by
  * `verbatimModuleSyntax` — they add nothing to any bundle, so importing them
  * from this package rather than restating them by hand is free.
  *
- * **What a cancelled or timed-out prompt actually throws.** Checked against
- * the installed `node_modules/@simplewebauthn/browser@14.0.0` source
- * (`esm/methods/startAuthentication.js` calling
- * `esm/helpers/identifyAuthenticationError.js`) rather than assumed: a
- * `navigator.credentials.get()` rejection named `NotAllowedError` is passed
- * straight through, wrapped in a `WebAuthnError` whose own `code` is the
- * literal `ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY` and whose comment says why —
+ * **What a cancelled or timed-out prompt actually throws — for both
+ * ceremonies.** Checked against the installed
+ * `node_modules/@simplewebauthn/browser@14.0.0` source
+ * (`esm/methods/startAuthentication.js` and `startRegistration.js`, each
+ * calling its own `identifyAuthenticationError.js`/
+ * `identifyRegistrationError.js`) rather than assumed: a
+ * `navigator.credentials.get()` **or** `.create()` rejection named
+ * `NotAllowedError` is passed straight through by both helpers, wrapped in a
+ * `WebAuthnError` whose own `code` is the literal
+ * `ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY` and whose comment says why —
  * "Platforms are overloading this error beyond what the spec defines and we
  * don't want to overwrite potentially useful error messages." Critically,
  * `WebAuthnError`'s constructor sets `this.name = name ?? cause.name`, and
@@ -38,12 +43,23 @@
  * the platform's own signal, not a guess. The same DOMException name is
  * spec-overloaded for a dismissed prompt *and* a ceremony that simply ran out
  * of time, and nothing observable here tells the two apart — which is why
- * {@link requestAssertion} does not try to, and why the screen's copy for
- * this outcome never claims to know which one happened.
+ * neither {@link requestAssertion} nor {@link requestRegistration} tries to,
+ * and why neither screen's copy for this outcome claims to know which one
+ * happened.
+ *
+ * **A registration's own `InvalidStateError`** — "the authenticator was
+ * previously registered" — falls to the same generic `"failed"` branch
+ * {@link requestRegistration} gives every non-dismissal: it is the client-side
+ * half of `lock.server.ts`'s `excludeCredentials` (an authenticator the
+ * server already knows about refuses to create a second credential for this
+ * relying party), and the server's own `DUPLICATE_PASSKEY_MESSAGE` is the
+ * other half, for whatever reaches it anyway.
  */
 import type {
   AuthenticationResponseJSON,
+  PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
+  RegistrationResponseJSON,
 } from "@simplewebauthn/browser";
 
 /**
@@ -115,6 +131,43 @@ export async function requestAssertion(
     return {
       status: "failed",
       message: error instanceof Error ? error.message : "The passkey check could not run.",
+    };
+  }
+}
+
+/** {@link AssertionOutcome}'s registration twin — ticket 05's second ceremony. */
+export type RegistrationOutcome =
+  | { status: "ok"; response: RegistrationResponseJSON }
+  | { status: "dismissed" }
+  | { status: "failed"; message: string };
+
+/**
+ * Run the registration ceremony against server-issued options — the second
+ * of enrolling another passkey's two taps (spec 0019), or the whole of
+ * enrolling the first. Never verifies anything and never talks to this
+ * instance's own server; that is `completeRegistration`'s job, behind
+ * `.server.ts`'s own boundary. This only asks the browser to create a
+ * credential and produce a signed response, or say why it could not.
+ */
+export async function requestRegistration(
+  optionsJSON: PublicKeyCredentialCreationOptionsJSON,
+): Promise<RegistrationOutcome> {
+  // Same shape as {@link requestAssertion}'s own try, for the same reason: a
+  // failed chunk load reads as "could not run this ceremony", not a crash.
+  try {
+    const { startRegistration } = await import("@simplewebauthn/browser");
+    const response = await startRegistration({ optionsJSON });
+    return { status: "ok", response };
+  } catch (error) {
+    if (error instanceof Error && error.name === "NotAllowedError") {
+      return { status: "dismissed" };
+    }
+    return {
+      status: "failed",
+      // Its own wording, not {@link requestAssertion}'s — creating a
+      // credential is not "a check", and a load failure reported in the
+      // assertion's own words would misname the ceremony that actually failed.
+      message: error instanceof Error ? error.message : "The passkey creation could not run.",
     };
   }
 }

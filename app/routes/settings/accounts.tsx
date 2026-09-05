@@ -45,9 +45,22 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-/** UTC, and formatted on the server: the database stores UTC and a date
- *  formatted in the browser's locale would differ between the server-rendered
- *  markup and the hydrated one. */
+/**
+ * UTC, and formatted on the server: the database stores UTC and a date
+ * formatted in the browser's locale would differ between the server-rendered
+ * markup and the hydrated one — the same argument `~/lib/format.ts`'s
+ * `formatDate` makes for itself.
+ *
+ * **Not moved onto that shared helper.** `formatDate` renders "5 Sep 2026";
+ * this renders "2026-09-05", the same ISO form `settings/prices.tsx`'s own
+ * `on` already shows for a date beside a figure on an adjacent Settings tab.
+ * Adopting `formatDate` here would fix this one call site's duplication
+ * while leaving that one standing, trading a repo with two date renderers
+ * for one with two renderers *and* a mismatched sibling. Reconciling the two
+ * formats is worth doing — it just is not this ticket's, which added
+ * `formatDate` because the repo had none, not because it owns every date on
+ * screen.
+ */
 const closedOn = (closedAt: Date | null): string | null =>
   closedAt === null ? null : new Date(closedAt).toISOString().slice(0, 10);
 

@@ -72,6 +72,10 @@ describe("@simplewebauthn/browser never crosses a static value import", () => {
 
     expect(paths).toContain("lib/unlock-ceremony.ts");
     expect(paths).toContain("routes/unlock.tsx");
+    // Names a file under `routes/settings/` specifically — this walk is
+    // recursive, and a broken descent into that one subdirectory would
+    // otherwise still pass the two flat-level checks above.
+    expect(paths).toContain("routes/settings/passkeys.tsx");
     expect(paths.length).toBeGreaterThan(30);
   });
 });
