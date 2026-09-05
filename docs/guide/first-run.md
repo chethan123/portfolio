@@ -22,7 +22,9 @@ What is not there, so you do not go looking for it:
   same things — see [People and accounts](people-and-accounts.md#add-the-people).
 - **No sign-out control.** Closing the tab does not sign you out. If a phone is lost, and the
   household has enrolled passkeys, revoke that phone's from Settings → Passkeys on any browser that
-  is still unlocked — see [Removing a passkey](passkeys.md#removing-a-passkey). Whoever runs the
+  is still unlocked — see [Removing a passkey](passkeys.md#removing-a-passkey). Any browser that
+  got in with that passkey is locked again straight away; one that was let in by approving on a
+  different device is locked by the clock instead, within fifteen minutes. Whoever runs the
   instance is the recovery only when no passkey can be reached at all, and stopping an address
   getting in through the front door is still theirs to do, from outside the app.
 

@@ -34,12 +34,13 @@ next time anyone opens it. Only the browser doing the enrolling is spared.
 
 One thing it does not do is wipe a screen somebody is already looking at. A phone left open on the
 overview keeps showing those figures until it asks the app for something new — tapping through to
-another screen, or pulling to refresh, is what turns it into the unlock screen. Two things do that
-without anybody tapping, and both are described under [When it locks
+another screen, or pulling to refresh, is what turns it into the unlock screen. One thing does that
+without anybody tapping, and it is described under [When it locks
 itself](#when-it-locks-itself-and-locking-it-yourself): switching away from that phone for about a
-minute and coming back to it, and its own clock running out. What will *not* work is looking for
-**Lock now** on that device — a page drawn before the household held any passkey has no such
-control, because there was nothing to lock when it was drawn.
+minute and coming back to it. Its own clock running out is not the same thing — a screen nobody
+touches keeps its figures, and the refusal arrives only with the next thing that screen asks for.
+What will *not* work is looking for **Lock now** on that device — a page drawn before the household
+held any passkey has no such control, because there was nothing to lock when it was drawn.
 
 Enrolling that very first passkey skips only one thing every later one needs: checking in with a
 passkey you already have, first — there is nothing yet to check yourself against. It still takes two
