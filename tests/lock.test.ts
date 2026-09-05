@@ -599,9 +599,53 @@ describe("unlocking", () => {
       }
 
       // Evicted, not merely unspent: a spent-or-expired refusal would be the
-      // wrong sentence here and would mean the cap did not actually apply.
+      // wrong sentence here and would mean the cap did not actually apply —
+      // this is the "unlock" purpose's own budget (finding 2's partition),
+      // exercised in isolation from the other three.
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(first.challenge), db));
       expect(refusal.fieldErrors.form).toMatch(/never issued/);
+    }),
+    20_000,
+  );
+
+  it(
+    "a flood of unlock challenges cannot evict a live enrol challenge (finding 2's partition)",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const enrol = await enrolmentAssertionOptions(db);
+
+      // The one purpose an un-granted browser can reach at all, flooded past
+      // its own budget — the exact repro finding 2 describes against
+      // `/unlock` itself, minted straight against the domain module here.
+      for (let i = 0; i < 501; i++) {
+        await unlockOptions(db);
+      }
+
+      // Not evicted: the enrol challenge minted before the flood still
+      // verifies, rather than refusing "never issued" for a confirmation
+      // that really was issued.
+      const { grant } = await beginEnrolment("Second phone", assertionResponse(enrol.challenge), db);
+      expect(grant).toBeDefined();
+    }),
+    20_000,
+  );
+
+  it(
+    "a flood of unlock challenges cannot evict a live remove challenge (finding 2's partition)",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const remove = await removalAssertionOptions(credentialId, db);
+
+      for (let i = 0; i < 501; i++) {
+        await unlockOptions(db);
+      }
+
+      const { grant } = await removePasskey(
+        credentialId,
+        { assertion: assertionResponse(remove.challenge), confirmRemoval: "true" },
+        db,
+      );
+      expect(grant).toBeDefined();
     }),
     20_000,
   );

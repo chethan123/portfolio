@@ -363,6 +363,42 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const firstRun =
     rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
+  /**
+   * The one screen rendered before any grant is proven — `LOCK_EXEMPT_PATHS`
+   * above is what lets the middleware serve it at all, and the chrome around
+   * it assumes the opposite of that: the nav rail links to Holdings,
+   * Analysis and Income; Upload assumes an account already exists to receive
+   * a statement; the masking toggle writes `document.cookie` *before* any
+   * network round trip, which on this screen would be a browser that has
+   * proved nothing genuinely changing persistent state and then bouncing;
+   * the first-run prompt and the open-instance banner both read off setup
+   * state — which of three configurations the household is in, whether
+   * anything guards the instance at all — that a browser holding no grant
+   * has no business learning (finding 3). Fifteen interactive elements, all
+   * dead ends, one of them worse than dead.
+   *
+   * Checked by exact pathname rather than reusing `LOCK_EXEMPT_PATHS`
+   * itself: `/healthz` is on that list too and never reaches `Layout` at all
+   * — it renders no component — so "the lock does not guard this path" and
+   * "this path gets no chrome" are two different questions that only happen
+   * to share an answer for `/unlock` today; folding them into one array
+   * would make a future exemption's chrome a coincidence of that array
+   * rather than a decision someone made.
+   *
+   * Placed here, in `Layout`, rather than inside `unlock.tsx`'s own
+   * component — the existing precedent one paragraph up, suppressing the
+   * first-run prompt under `/settings`, draws the same line: the chrome is
+   * assembled in exactly one place for every route, and a route earns its
+   * way out of a piece of it here rather than rendering past a shell it was
+   * handed. It also pre-empts ticket 06's lock-now control, which is drawn
+   * "in both places `MaskingToggle` is rendered" and only while the instance
+   * is locked at all — both of which are true of this screen, and a stray
+   * copy of `MaskingToggle` here would have carried it along for free,
+   * offering to lock a browser that is already locked and, worse, discarding
+   * the return address ticket 03 encoded to get the reader back to it.
+   */
+  const isUnlockScreen = normalizedPathname(pathname) === "/unlock";
+
   return (
     <html lang="en">
       <head>
@@ -379,56 +415,68 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
-        <div className="app">
-          <nav className="app-rail" aria-label="Primary">
-            <Brand search={owners} />
-            <ul className="app-nav">
-              <NavItems items={NAVIGATION} search={owners} />
-            </ul>
-            <ul className="app-nav app-nav--footer">
-              <NavItems items={FOOTER_NAVIGATION} />
-            </ul>
-            {/* In the rail's foot beside Settings rather than in its nav list:
-                it is a control, not a destination, and a `<li>` among the links
-                would announce it as one. */}
-            <MaskingToggle className="app-rail-masking" />
-
-            <Link className="button app-rail-action" to="/upload">
-              <UploadIcon />
-              Upload statement
-            </Link>
-          </nav>
-
-          <div className="app-canvas">
-            {/* Below 1024px the rail is gone, so the bar carries the mark and
-             * the one action the rail's foot would have held. */}
-            <header className="app-topbar">
-              <Brand search={owners} />
-              <div className="app-topbar-actions">
-                <MaskingToggle />
-                <Link className="button" to="/upload">
-                  <UploadIcon />
-                  Upload
-                </Link>
-              </div>
-            </header>
-
-            {rootData?.gated === false ? <OpenInstanceBanner /> : null}
-            <main className="app-main">
-              {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
-              {children}
-            </main>
+        {isUnlockScreen ? (
+          // The bare shell: no nav, no toggles, no upload button, no
+          // first-run prompt, no banner — see this function's own comment
+          // above. `.app`/`.app-main` are reused rather than new classes
+          // invented for one screen, so this gets the same centred column
+          // and padding every other page's content sits in without pulling
+          // in a single rail- or topbar-specific rule.
+          <div className="app">
+            <main className="app-main">{children}</main>
           </div>
+        ) : (
+          <div className="app">
+            <nav className="app-rail" aria-label="Primary">
+              <Brand search={owners} />
+              <ul className="app-nav">
+                <NavItems items={NAVIGATION} search={owners} />
+              </ul>
+              <ul className="app-nav app-nav--footer">
+                <NavItems items={FOOTER_NAVIGATION} />
+              </ul>
+              {/* In the rail's foot beside Settings rather than in its nav list:
+                  it is a control, not a destination, and a `<li>` among the links
+                  would announce it as one. */}
+              <MaskingToggle className="app-rail-masking" />
 
-          {/* The phone's nav: a bottom bar, which is what every mobile mock
-           * does — no drawer and no hamburger anywhere in the set (§13.1). */}
-          <nav className="app-bottomnav" aria-label="Primary">
-            <ul className="app-nav">
-              <NavItems items={NAVIGATION} search={owners} />
-              <NavItems items={FOOTER_NAVIGATION} />
-            </ul>
-          </nav>
-        </div>
+              <Link className="button app-rail-action" to="/upload">
+                <UploadIcon />
+                Upload statement
+              </Link>
+            </nav>
+
+            <div className="app-canvas">
+              {/* Below 1024px the rail is gone, so the bar carries the mark and
+               * the one action the rail's foot would have held. */}
+              <header className="app-topbar">
+                <Brand search={owners} />
+                <div className="app-topbar-actions">
+                  <MaskingToggle />
+                  <Link className="button" to="/upload">
+                    <UploadIcon />
+                    Upload
+                  </Link>
+                </div>
+              </header>
+
+              {rootData?.gated === false ? <OpenInstanceBanner /> : null}
+              <main className="app-main">
+                {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
+                {children}
+              </main>
+            </div>
+
+            {/* The phone's nav: a bottom bar, which is what every mobile mock
+             * does — no drawer and no hamburger anywhere in the set (§13.1). */}
+            <nav className="app-bottomnav" aria-label="Primary">
+              <ul className="app-nav">
+                <NavItems items={NAVIGATION} search={owners} />
+                <NavItems items={FOOTER_NAVIGATION} />
+              </ul>
+            </nav>
+          </div>
+        )}
         <ScrollRestoration />
         <Scripts />
         {/* The worker exists for its offline page alone and stores nothing on
