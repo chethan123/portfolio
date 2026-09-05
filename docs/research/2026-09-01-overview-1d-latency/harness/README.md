@@ -34,7 +34,7 @@ in front of the select — `create temp table … as` is how `compare.sql` captu
 
 ```sh
 psql postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test -c 'create database portfolio_bench'
-printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_bench\n' > .env.bench
+printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_bench\nPUBLIC_ORIGIN=http://localhost:5173\n' > .env.bench
 node --env-file=.env.bench ./server/migrate.ts
 node --env-file=.env.bench ./scripts/seed-demo.ts       # its header explains what it refuses
 
@@ -46,7 +46,7 @@ psql "$DB" -v cadence=15 -v days=1 -f $H/scale-observations.sql
 
 SESSION=$(psql "$DB" -tAc 'select max(market_date) from price_observation')
 
-DATABASE_URL=$DB node $H/time-overview.ts 1d 1y         # the loader's queries, wave by wave
+DATABASE_URL=$DB PUBLIC_ORIGIN=http://localhost:5173 node $H/time-overview.ts 1d 1y   # the loader's queries, wave by wave
 psql "$DB" -v session=$SESSION -f $H/compare.sql        # 0 differences, both ways
 
 psql "$DB" -v session=$SESSION -v prefix='explain (analyze, buffers)' -f $H/session-current.sql

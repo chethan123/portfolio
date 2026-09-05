@@ -56,10 +56,20 @@
  * column's `check` bounds it to exactly that range, and `Number()` cannot
  * lose anything converting a value that narrow. This is not an exception to
  * the numeric-boundary rule — it is a value the rule was never about.
+ *
+ * **A WebAuthn response arrives as `unknown`, because it is client-submitted
+ * JSON.** Every exported function that takes one types its parameter
+ * `unknown` and narrows through {@link narrowAssertion} or
+ * {@link narrowRegistration} before touching it — this is the boundary
+ * CLAUDE.md means by "Zod at the boundaries only, in the domain module".
+ * Only the outer shape this module itself dereferences (the id, the client
+ * data) is checked; the rest is the library's own response schema to state,
+ * left untouched for `verifyAuthenticationResponse` and
+ * `verifyRegistrationResponse` to accept or refuse on their own terms.
  */
 import { randomBytes, randomFillSync } from "node:crypto";
 
-import { sql, type Kysely } from "kysely";
+import { sql, type Kysely, type Selectable } from "kysely";
 import { z } from "zod";
 
 import {
@@ -162,13 +172,32 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
 // Grants
 // ---------------------------------------------------------------------------
 
-function toGrant(row: { id: string; passkey_id: string; expires_at: Date }): UnlockGrant {
+/** A row this module reads or writes back, as `unlock_grant`'s own columns — never hand-copied. */
+type UnlockGrantRow = Pick<Selectable<Database["unlock_grant"]>, "id" | "passkey_id" | "expires_at">;
+
+function toGrant(row: UnlockGrantRow): UnlockGrant {
   return { id: row.id, passkeyId: row.passkey_id, expiresAt: row.expires_at };
 }
 
 /** A cryptographically random opaque id, well past `unlock_grant`'s `length(id) >= 32` check. */
 function randomGrantId(): string {
   return randomBytes(32).toString("base64url");
+}
+
+/**
+ * What every caller of {@link mintGrant} refuses with when the passkey it was
+ * about to credit no longer exists — a race genuinely reachable from two
+ * ordinary requests (an unlock and a removal, say) landing at once, never a
+ * 500.
+ */
+const PASSKEY_REMOVED_MID_VERIFICATION_MESSAGE =
+  "This passkey was removed while this confirmation was being checked. Start again.";
+
+/** Whether `error` is a foreign-key violation naming `constraint` — Postgres's `23503`. */
+function isForeignKeyViolation(error: unknown, constraint: string): boolean {
+  if (!(error instanceof Error)) return false;
+  const { code, constraint: violated } = error as { code?: unknown; constraint?: unknown };
+  return code === "23503" && violated === constraint;
 }
 
 /**
@@ -182,20 +211,46 @@ function randomGrantId(): string {
  * `completeRegistration`, `removePasskey`) — none of them hands out a grant
  * on its own say-so, and this function must not become the one export that
  * does.
+ *
+ * **The passkey this credits can vanish after the caller last checked it.**
+ * `verifyScopedAssertion` reads the row, verifies the assertion, and only
+ * then reaches here — a window wide enough for a concurrent removal to land
+ * inside it. Rather than re-reading the row first (itself no closer to
+ * atomic), the insert is left to find out: `unlock_grant.passkey_id`
+ * references `passkey.credential_id`, so a passkey gone by the time this
+ * runs makes the insert itself fail with `unlock_grant_passkey_id_fkey`,
+ * caught here and turned into the one message every such race shares — never
+ * the raw violation, which is what a concurrent unlock, enrolment or removal
+ * used to surface as a 500. The insert runs through
+ * {@link guardedAgainstConstraintViolation}, the same as
+ * {@link completeRegistration}'s own inserts, so a caught violation cannot
+ * leave a caller's own transaction — a test's `withDatabase`, today;
+ * conceivably a future multi-step route wrapping this call in one —
+ * aborted for whatever runs after it.
  */
 async function mintGrant(passkeyId: string, db: Kysely<Database> = getDb()): Promise<UnlockGrant> {
   const now = new Date();
   await db.deleteFrom("unlock_grant").where("expires_at", "<=", now).execute();
 
-  const row = await db
-    .insertInto("unlock_grant")
-    .values({
-      id: randomGrantId(),
-      passkey_id: passkeyId,
-      expires_at: new Date(now.getTime() + IDLE_WINDOW_MS),
-    })
-    .returning(["id", "passkey_id", "expires_at"])
-    .executeTakeFirstOrThrow();
+  let row: UnlockGrantRow;
+  try {
+    row = await guardedAgainstConstraintViolation(db, () =>
+      db
+        .insertInto("unlock_grant")
+        .values({
+          id: randomGrantId(),
+          passkey_id: passkeyId,
+          expires_at: new Date(now.getTime() + IDLE_WINDOW_MS),
+        })
+        .returning(["id", "passkey_id", "expires_at"])
+        .executeTakeFirstOrThrow(),
+    );
+  } catch (cause) {
+    if (isForeignKeyViolation(cause, "unlock_grant_passkey_id_fkey")) {
+      throw ValidationError.form(PASSKEY_REMOVED_MID_VERIFICATION_MESSAGE);
+    }
+    throw cause;
+  }
 
   return toGrant(row);
 }
@@ -389,6 +444,50 @@ function decodeChallenge(clientDataJSON: string): string {
   return clientData.data.challenge;
 }
 
+/**
+ * The outer shape of a WebAuthn response this module actually dereferences
+ * before either verifier runs: the credential id, read to look up the
+ * enrolled passkey, and the client data, handed to {@link decodeChallenge}.
+ * Everything past that — `rawId`, `type`, `clientExtensionResults`,
+ * `authenticatorData`, `signature`, `attestationObject`, and every other
+ * field either verifier reads — is the library's own response schema to
+ * state, not this module's to restate (CLAUDE.md: Zod at the boundaries
+ * only, in the domain module).
+ *
+ * A response reaches this module as JSON from the client, and so as
+ * `unknown` at every exported entry point below. Without this check, `{}`
+ * or `{"response": null}` dereferences straight into a `TypeError` — no
+ * verifier's own `catch` is in scope that early, so a hostile or merely
+ * broken answer became a 500 rather than a refusal.
+ */
+const webAuthnResponseShape = z.object({
+  id: z.string().min(1),
+  response: z.object({ clientDataJSON: z.string().min(1) }),
+});
+
+const UNREADABLE_RESPONSE_MESSAGE = "This passkey response could not be read.";
+
+/**
+ * Narrow a client-submitted assertion, or refuse before it is ever
+ * dereferenced. The original `value` is returned, not the parsed one: only
+ * the outer shape is checked here, so every field neither this module nor
+ * the schema above names still reaches the verifier untouched.
+ */
+function narrowAssertion(value: unknown): AuthenticationResponseJSON {
+  if (!webAuthnResponseShape.safeParse(value).success) {
+    throw ValidationError.form(UNREADABLE_RESPONSE_MESSAGE);
+  }
+  return value as AuthenticationResponseJSON;
+}
+
+/** {@link narrowAssertion}'s registration-response twin. */
+function narrowRegistration(value: unknown): RegistrationResponseJSON {
+  if (!webAuthnResponseShape.safeParse(value).success) {
+    throw ValidationError.form(UNREADABLE_RESPONSE_MESSAGE);
+  }
+  return value as RegistrationResponseJSON;
+}
+
 // ---------------------------------------------------------------------------
 // Unlocking, and the shared assertion machinery enrolling and removing lean on
 // ---------------------------------------------------------------------------
@@ -467,6 +566,15 @@ export async function removalAssertionOptions(
  * Nothing is written before `verified.verified` is checked: a response
  * verified against the wrong public key refuses here, mints no grant, and
  * touches neither `counter` nor `last_used_at`.
+ *
+ * **The passkey read above can be removed by another request before this
+ * returns.** The counter update that follows is silently a no-op against a
+ * row that is already gone — Postgres raises nothing for an `update` that
+ * matches zero rows — so it is {@link mintGrant}'s own insert, not this
+ * function, that discovers the passkey is gone and refuses; see its header
+ * for why catching that one violation there, rather than re-checking the
+ * row count here, is what closes the race regardless of exactly when the
+ * concurrent removal lands.
  */
 async function verifyScopedAssertion(
   response: AuthenticationResponseJSON,
@@ -531,12 +639,16 @@ async function verifyScopedAssertion(
   return mintGrant(passkeyRow.credential_id, db);
 }
 
-/** Verify the unlock screen's assertion. Refuses; on success, mints and returns the grant. */
+/**
+ * Verify the unlock screen's assertion. Refuses; on success, mints and
+ * returns the grant. `response` is the client's submitted JSON, `unknown`
+ * until {@link narrowAssertion} checks it — see that function's header.
+ */
 export async function verifyUnlock(
-  response: AuthenticationResponseJSON,
+  response: unknown,
   db: Kysely<Database> = getDb(),
 ): Promise<UnlockGrant> {
-  return verifyScopedAssertion(response, { kind: "unlock" }, db);
+  return verifyScopedAssertion(narrowAssertion(response), { kind: "unlock" }, db);
 }
 
 // ---------------------------------------------------------------------------
@@ -596,7 +708,7 @@ const labelInput = z.object({ label: requiredText("A label", 60) });
  */
 export async function beginEnrolment(
   label: string,
-  assertion: AuthenticationResponseJSON | undefined,
+  assertion: unknown,
   db: Kysely<Database> = getDb(),
 ): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; grant: UnlockGrant | undefined }> {
   const { label: validLabel } = parseInput(labelInput, { label });
@@ -611,21 +723,24 @@ export async function beginEnrolment(
           "being unlocked on this browser is not enough on its own.",
       );
     }
-    grant = await verifyScopedAssertion(assertion, { kind: "enrol" }, db);
+    grant = await verifyScopedAssertion(narrowAssertion(assertion), { kind: "enrol" }, db);
   }
 
   const options = await registrationOptionsFor(validLabel, /* bootstrap */ !locked, db, expectedRelyingParty());
   return { options, grant };
 }
 
-/** A row this module just wrote or found, as {@link Passkey} needs it printed. */
-type PasskeyRow = {
-  credential_id: string;
-  label: string;
-  backup_eligible: boolean;
-  enrolled_at: Date;
-  last_used_at: Date | null;
-};
+/**
+ * A row this module just wrote or found, as {@link Passkey} needs it printed
+ * — derived from the generated schema (`Database["passkey"]`) via Kysely's
+ * `Selectable` rather than hand-copied, so a schema change or a driver
+ * type-parser change surfaces here at `typecheck` instead of leaving
+ * `sql<PasskeyRow>` below asserting a shape the columns no longer have.
+ */
+type PasskeyRow = Pick<
+  Selectable<Database["passkey"]>,
+  "credential_id" | "label" | "backup_eligible" | "enrolled_at" | "last_used_at"
+>;
 
 function toPasskey(row: PasskeyRow): Passkey {
   return {
@@ -647,13 +762,15 @@ function uniqueViolationConstraint(error: unknown): string | undefined {
 /**
  * Run `body`'s one statement guarded by a SQL savepoint when `db` is already
  * inside a transaction — which is exactly what `withDatabase` hands every
- * test, and the point is that a *caught* unique-constraint violation must
- * not leave that whole transaction aborted for whatever the caller runs
- * next. Outside a transaction — `getDb()`'s ordinary, autocommitting
- * process-wide handle, what every real request uses — each statement is
- * already its own implicit transaction, so this does nothing at all.
+ * test, and the point is that a *caught* constraint violation (a duplicate
+ * key, in `completeRegistration`; a foreign key gone missing out from under
+ * `mintGrant`) must not leave that whole transaction aborted for whatever
+ * the caller runs next. Outside a transaction — `getDb()`'s ordinary,
+ * autocommitting process-wide handle, what every real request uses — each
+ * statement is already its own implicit transaction, so this does nothing
+ * at all.
  */
-async function guardedAgainstDuplicateKey<T>(
+async function guardedAgainstConstraintViolation<T>(
   db: Kysely<Database>,
   body: () => Promise<T>,
 ): Promise<T> {
@@ -701,10 +818,10 @@ const DUPLICATE_PASSKEY_MESSAGE = "This passkey is already enrolled.";
  * entry first, that race is reported as `passkey_pkey`, not
  * `passkey_bootstrap_idx`, so both constraint names are handled here rather
  * than only the one this path's own index owns. Both inserts run through
- * {@link guardedAgainstDuplicateKey}, so a caught violation cannot leave a
- * caller's own transaction — a test's `withDatabase`, today; conceivably a
- * future multi-step route wrapping this call in one — aborted for whatever
- * runs after it.
+ * {@link guardedAgainstConstraintViolation}, so a caught violation cannot
+ * leave a caller's own transaction — a test's `withDatabase`, today;
+ * conceivably a future multi-step route wrapping this call in one —
+ * aborted for whatever runs after it.
  *
  * Verifying a bootstrap registration mints a grant — the browser that
  * enrolled the first passkey must not be locked out by its own redirect
@@ -720,11 +837,12 @@ const DUPLICATE_PASSKEY_MESSAGE = "This passkey is already enrolled.";
  * a bug to fix: A can unlock with the passkey it just created.
  */
 export async function completeRegistration(
-  response: RegistrationResponseJSON,
+  response: unknown,
   db: Kysely<Database> = getDb(),
 ): Promise<{ passkey: Passkey; grant: UnlockGrant | undefined }> {
+  const parsedResponse = narrowRegistration(response);
   const expected = expectedRelyingParty();
-  const challengeText = decodeChallenge(response.response.clientDataJSON);
+  const challengeText = decodeChallenge(parsedResponse.response.clientDataJSON);
   const purpose = takeChallenge(challengeText);
   if (purpose.kind !== "register") {
     throw ValidationError.form(
@@ -736,7 +854,7 @@ export async function completeRegistration(
   let verified: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
   try {
     verified = await verifyRegistrationResponse({
-      response,
+      response: parsedResponse,
       expectedChallenge: challengeText,
       expectedOrigin: expected.origin,
       expectedRPID: expected.rpID,
@@ -760,7 +878,7 @@ export async function completeRegistration(
   if (purpose.bootstrap) {
     let row: PasskeyRow | undefined;
     try {
-      row = await guardedAgainstDuplicateKey(db, async () => {
+      row = await guardedAgainstConstraintViolation(db, async () => {
         const result = await sql<PasskeyRow>`
           insert into passkey (credential_id, public_key, counter, transports, backup_eligible, label, bootstrap)
           select ${credential.id}, ${publicKey}, ${credential.counter}, ${transports}, ${backupEligible}, ${purpose.label}, true
@@ -790,7 +908,7 @@ export async function completeRegistration(
 
   let row: PasskeyRow;
   try {
-    row = await guardedAgainstDuplicateKey(db, () =>
+    row = await guardedAgainstConstraintViolation(db, () =>
       db
         .insertInto("passkey")
         .values({
@@ -843,7 +961,7 @@ export async function completeRegistration(
  */
 export async function removePasskey(
   credentialId: string,
-  input: { assertion: AuthenticationResponseJSON | undefined; confirmRemoval?: string },
+  input: { assertion: unknown; confirmRemoval?: string },
   db: Kysely<Database> = getDb(),
 ): Promise<{ grant: UnlockGrant }> {
   const existing = await db
@@ -869,7 +987,7 @@ export async function removePasskey(
     );
   }
 
-  const grant = await verifyScopedAssertion(input.assertion, { kind: "remove", credentialId }, db);
+  const grant = await verifyScopedAssertion(narrowAssertion(input.assertion), { kind: "remove", credentialId }, db);
 
   const deleted = await db.deleteFrom("passkey").where("credential_id", "=", credentialId).executeTakeFirst();
   if (deleted.numDeletedRows === 0n) {
