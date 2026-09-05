@@ -21,19 +21,37 @@
  * number instead of importing `lock.ts`'s — shows up here rather than only
  * in a real browser nobody is running.
  *
- * `resolveReentryCallback` lives in `app/root.tsx`, not here, because it is
- * `Layout`'s own decision, not `watchReentry`'s (its own header there argues
- * why) — but it is imported directly below, the same way `tests/routes/
- * root.test.ts` already reaches into `app/root.tsx` for `loader` and
- * `middleware` without rendering anything. A review of this pull request
- * found the previous version of the test just below constructed its own
- * copy of `Layout`'s decision instead of importing it, which stayed green
- * even after reverting the production wiring back to the bug it was meant to
- * catch — calling the real export is what closes that gap.
+ * `resolveReentryCallback`, `assumePasskeyForReentry`, `hasSettled` and
+ * `shouldStayLocked` all live in `app/root.tsx`, not here, because each is
+ * `Layout`'s own decision rather than `watchReentry`'s (`resolveReentryCallback`'s
+ * own header there argues why, and the same argument holds for the other
+ * three) — but every one is imported directly below, the same way
+ * `tests/routes/root.test.ts` already reaches into `app/root.tsx` for
+ * `loader` and `middleware` without rendering anything. A review of this
+ * pull request found an earlier version of one such test constructed its
+ * own copy of `Layout`'s decision instead of importing it, which stayed
+ * green even after reverting the production wiring back to the bug it was
+ * meant to catch — calling the real export is what closes that gap.
+ *
+ * `hasSettled` and `shouldStayLocked` (findings A and B) prove the settle
+ * effect's *decision rule* — that an idle reading needs evidence of prior
+ * activity first, and that both signals have to clear before the other —
+ * not the React Router scheduling that makes a bare idle reading arrive
+ * early in the first place. That race needs a real `startTransition` and a
+ * real fetcher, which is exactly the browser/jsdom rendering this suite's
+ * own house style rules out; the two functions below are what stayed
+ * genuinely unit-testable once the decision moved into them, and the gap is
+ * named here rather than papered over with a component test that would
+ * only exercise a mock of the race, not the race itself.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resolveReentryCallback } from "../app/root.tsx";
+import {
+  assumePasskeyForReentry,
+  hasSettled,
+  resolveReentryCallback,
+  shouldStayLocked,
+} from "../app/root.tsx";
 import { REENTRY_GRACE_MS } from "~/lib/lock";
 import { shouldPostLock, watchReentry } from "~/lib/reentry";
 
@@ -492,4 +510,77 @@ describe("watchReentry", () => {
       teardown();
     },
   );
+});
+
+describe("hasSettled", () => {
+  it(
+    "does not settle on an idle reading that was never preceded by an active one",
+    () => {
+      // Finding A: React Router 7.18.2 publishes a fetcher's (and a
+      // revalidator's) first move away from `idle` through
+      // `startTransition`, so `setLocking(true)` can commit a render that
+      // still sees this signal as `idle` — the reading from before the
+      // round ever started, not proof it finished. Reverting `hasSettled`
+      // to `(_everActive, isIdleNow) => isIdleNow` (dropping the evidence
+      // requirement) would read this as settled; it must not.
+      expect(hasSettled(false, true)).toBe(false);
+    },
+  );
+
+  it("settles once an idle reading follows a genuinely active one", () => {
+    expect(hasSettled(true, true)).toBe(true);
+  });
+
+  it("does not settle while the signal is still active, regardless of history", () => {
+    expect(hasSettled(true, false)).toBe(false);
+    expect(hasSettled(false, false)).toBe(false);
+  });
+});
+
+describe("shouldStayLocked", () => {
+  it(
+    "keeps the page replaced once the lock post has settled but the forced revalidation it triggers has not",
+    () => {
+      // Finding B: the settle effect used to clear `locking` the instant the
+      // fetcher alone went idle, calling `revalidate()` in the same breath
+      // — the figures were back on screen for the whole of that
+      // revalidation's own round trip. Reverting to that shape is
+      // `shouldStayLocked = (fetcherIsSettled) => !fetcherIsSettled`,
+      // ignoring the second argument entirely; under that reversion this
+      // reads `false` (fetcher settled ⇒ stop staying locked), failing the
+      // assertion below.
+      expect(shouldStayLocked(true, false)).toBe(true);
+    },
+  );
+
+  it("clears only once both the lock post and the revalidation it triggers have settled", () => {
+    expect(shouldStayLocked(true, true)).toBe(false);
+  });
+
+  it("stays locked before the fetcher itself has even settled, whatever the revalidation reads", () => {
+    expect(shouldStayLocked(false, false)).toBe(true);
+    expect(shouldStayLocked(false, true)).toBe(true);
+  });
+});
+
+describe("assumePasskeyForReentry", () => {
+  it("assumes a passkey is enrolled once the loader's own isLocked read has failed, even though hasPasskey reads false", () => {
+    // Finding C: the loader's `hasPasskey` fails toward `false` on a throw
+    // (its own header explains why that bias is right for the chrome), and
+    // `resolveReentryCallback` reading `false` chooses `askServer` over
+    // `postLock` — the branch that lets a live grant merely be extended
+    // rather than ended. Reverting to `hasPasskey` alone (ignoring
+    // `passkeyCheckFailed`) would answer `false` here; the guard must take
+    // the cautious branch instead.
+    expect(assumePasskeyForReentry(false, true)).toBe(true);
+  });
+
+  it("still reports no passkey once the read genuinely answered false, with no failure to excuse it", () => {
+    expect(assumePasskeyForReentry(false, false)).toBe(false);
+  });
+
+  it("stays true once a passkey is confirmed enrolled, whether or not the read also failed", () => {
+    expect(assumePasskeyForReentry(true, false)).toBe(true);
+    expect(assumePasskeyForReentry(true, true)).toBe(true);
+  });
 });

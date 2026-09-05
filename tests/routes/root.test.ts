@@ -84,6 +84,13 @@ describe("the shell's loader", () => {
       // never a figure, so the fail-safe answer here is "no control" rather
       // than "show one that clears a grant which may not exist".
       expect(data.hasPasskey).toBe(false);
+
+      // Finding C: `hasPasskey: false` on its own does not distinguish "no
+      // passkey" from "could not tell" — `passkeyCheckFailed` is what tells
+      // `app/root.tsx`'s `assumePasskeyForReentry` the two apart, so the
+      // reentry guard takes the cautious branch on exactly this outage
+      // rather than reading it the same as a confirmed-empty household.
+      expect(data.passkeyCheckFailed).toBe(true);
     } finally {
       await unreachable.destroy();
     }
@@ -105,14 +112,21 @@ describe("the shell's loader", () => {
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({ publicKey: new Uint8Array([1, 1, 1]) });
 
-      expect((await loader(args(get("/")))).hasPasskey).toBe(true);
+      const data = await loader(args(get("/")));
+      expect(data.hasPasskey).toBe(true);
+      expect(data.passkeyCheckFailed).toBe(false);
     }),
   );
 
   it(
     "reports no passkey while the household holds none at all",
     withDatabase(async () => {
-      expect((await loader(args(get("/")))).hasPasskey).toBe(false);
+      const data = await loader(args(get("/")));
+      expect(data.hasPasskey).toBe(false);
+      // The read answered, plainly — never confused with the outage case
+      // above, which also answers `hasPasskey: false` but for a different
+      // reason `passkeyCheckFailed` is what carries.
+      expect(data.passkeyCheckFailed).toBe(false);
     }),
   );
 });
@@ -155,6 +169,7 @@ describe("the shell's loader on /unlock — the household's setup state must not
         masked: true,
         maskingPolicy: "masked",
         hasPasskey: false,
+        passkeyCheckFailed: false,
       });
     }),
   );
@@ -171,6 +186,7 @@ describe("the shell's loader on /unlock — the household's setup state must not
           masked: true,
           maskingPolicy: "masked",
           hasPasskey: false,
+          passkeyCheckFailed: false,
         });
       } finally {
         await unreachable.destroy();
@@ -397,6 +413,72 @@ describe("the lock middleware", () => {
         // The one difference from the POST case just above: a read that
         // merely failed to answer is not proof this grant is gone, and
         // nothing about a stray GET says otherwise either.
+        expect(response.headers.get("Set-Cookie")).toBeNull();
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "clears the grant cookie on a refusal from a POST to a percent-encoded spelling of /lock-now, since the router would match it the same way",
+    async () => {
+      // Finding D: react-router decodes each pathname segment before
+      // matching any route (`decodePath`, react-router 7.18.2), so
+      // `POST /lock%2Dnow` reaches this same action exactly as
+      // `POST /lock-now` does. The middleware's own outage carve-out used to
+      // compare the raw, undecoded pathname, read this as an ordinary path,
+      // and leave the cookie alone — reverting `normalizedPathname` back to
+      // comparing `pathname.toLowerCase()` without decoding first fails this
+      // test the same way it failed the plain-`/lock-now` test above before
+      // finding 3's fix, since `/lock%2dnow` never equals `/lock-now`.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, post("/lock%2Dnow", {}), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        expect(response.headers.get("Set-Cookie")).toMatch(/max-age=0/i);
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "refuses without throwing, and leaves the cookie alone, on a path carrying a malformed percent escape",
+    async () => {
+      // Finding D's other half: `decodeURIComponent` throws on a dangling
+      // `%`, and a path predicate the middleware calls on every request must
+      // never propagate that — `decodedPathname`'s own `catch` falls back to
+      // the raw value, matching `decodePath` itself. The raw value here is
+      // `/lock-now%`, which is not `/lock-now` either way, so this is an
+      // ordinary refusal: not treated as `/lock-now` (cookie untouched), and
+      // not a 500 from an uncaught `URIError`.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, post("/lock-now%", {}), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
         expect(response.headers.get("Set-Cookie")).toBeNull();
       } finally {
         await unreachable.destroy();

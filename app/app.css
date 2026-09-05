@@ -493,26 +493,26 @@ a {
   background: var(--surface-emphasis);
 }
 
-/* The reentry guard's automatic-lock overlay (finding 2, `app/root.tsx`).
- * `inert` on the chrome underneath is the actual fix — this is only its
- * human-readable half, so it must sit above every layer that chrome draws:
- * 50 is the highest `z-index` anything else in this file uses (the rail and
- * the phone's bottom nav), and this has to win against both. A fixed dark
- * scrim rather than a themed one on purpose: it is up for at most the
- * length of one request, never long enough to want to agree with the
- * viewer's theme, and a colour that reads as "something is happening" in
- * both is worth more here than one more token. */
-.reentry-lock-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
+/* The reentry guard's automatic-lock notice (`app/root.tsx`'s `locking`
+ * state). Used to be a scrim over the chrome with a z-index high enough to
+ * beat the rail and the phone's bottom nav — concealment built as a scrim
+ * over the page rather than a replacement for it, in two ways at once: a
+ * 72%-opaque background a reader could still read balances through, and no
+ * z-index a native `popover` respects regardless, since it paints in the
+ * browser's own top layer above every one of them. `app/root.tsx` now
+ * renders this *instead of* the chrome and
+ * `children`, never over them, so there is nothing left here to out-stack —
+ * no scrim opacity, no z-index, no popover left mounted to escape above it.
+ * `.app-main` already centres a column and pads it (shared with `/unlock`'s
+ * own bare shell); this modifier only adds enough to also centre one line
+ * vertically on what is otherwise an empty screen. */
+.app-lock-notice {
+  min-height: 100vh;
   align-items: center;
   justify-content: center;
-  background: rgb(17 24 39 / 0.72);
 }
 
-.reentry-lock-overlay p {
+.app-lock-notice p {
   margin: 0;
   padding: var(--space-sm) var(--space-md);
   border-radius: var(--radius-lg);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Link,
   Links,
@@ -74,6 +74,38 @@ import "./app.css";
 export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
 
 /**
+ * Decodes a pathname exactly the way `matchRoutes` does before matching any
+ * route against it — `decodePath` (react-router 7.18.2,
+ * `lib/router/utils.ts`): each `/`-separated segment is decoded on its own,
+ * with any literal `/` a decode produces re-escaped back to `%2F` so it can
+ * never introduce a path separator that was not in the URL. Reproduced
+ * rather than imported — this is not a `.server` module's value crossing the
+ * bundle boundary, but a private router helper `react-router` does not
+ * export at all, from either side of it.
+ *
+ * **A malformed escape falls back to the raw value, never throws** — the
+ * router's own behaviour: `decodePath` wraps its call in a `try`/`catch` and
+ * warns rather than propagating, because a middleware's path predicate has
+ * to answer *some* boolean for every request the framework will otherwise
+ * go on to route, including one carrying a segment nobody's percent-encoder
+ * ever produced. Answering "not a match" for that segment (the raw,
+ * undecoded string never equals a plain-ASCII constant like `/lock-now`
+ * anyway) is the same conclusion `matchRoutes` reaches for it — a malformed
+ * path matches no route pattern either — reached here without a throw
+ * either place.
+ */
+function decodedPathname(pathname: string): string {
+  try {
+    return pathname
+      .split("/")
+      .map((segment) => decodeURIComponent(segment).replace(/\//g, "%2F"))
+      .join("/");
+  } catch {
+    return pathname;
+  }
+}
+
+/**
  * Normalises a pathname the way the router itself matches route paths,
  * before comparing it against {@link LOCK_EXEMPT_PATHS} — `Array.includes`
  * alone is an exact, case-sensitive compare, and the router is neither:
@@ -87,9 +119,23 @@ export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
  * `compose.yaml`'s healthchecks, and this array — and this function is what
  * keeps the third one honest against the router's own rule rather than a
  * guess at it.
+ *
+ * **Decoded first** ({@link decodedPathname}, finding D) — `matchRoutes`
+ * decodes every segment before it ever compares one, and this function used
+ * not to: `POST /lock%2Dnow` reached `isLockNowPath` below as the literal
+ * string `/lock%2dnow`, which never equals `LOCK_NOW_ACTION`, so the one
+ * request most in need of the outage carve-out — a reader who pressed "Lock
+ * now" while the database was down, with a browser or proxy that happened to
+ * percent-encode the hyphen — read as an ordinary path instead and kept the
+ * cookie {@link redirectToUnlock} was asked to clear. Every caller of this
+ * function shares the fix, not only that one: {@link LOCK_EXEMPT_PATHS} and
+ * `isUnlockPath` are exactly as reachable through an encoded spelling, and a
+ * predicate claiming to match what the router matched has to mean it for
+ * all three.
  */
 function normalizedPathname(pathname: string): string {
-  const lower = pathname.toLowerCase();
+  const decoded = decodedPathname(pathname);
+  const lower = decoded.toLowerCase();
   const stripped = lower.replace(/\/+$/, "");
   return stripped === "" ? "/" : stripped;
 }
@@ -347,6 +393,9 @@ export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
  * off — both moot in practice, since `Layout`'s bare-shell branch for this
  * route drops every control regardless of what either field says, but the
  * type this loader returns has to agree with the branch that does read them.
+ * `passkeyCheckFailed: false` for the same reason: this screen's `isLocked`
+ * read never even runs (this loader returns before it), so there is no
+ * uncertain reading here to report either.
  */
 const UNLOCK_SCREEN_ROOT_DATA = {
   gated: true,
@@ -354,6 +403,7 @@ const UNLOCK_SCREEN_ROOT_DATA = {
   masked: true,
   maskingPolicy: "masked" as MaskingPolicy,
   hasPasskey: false,
+  passkeyCheckFailed: false,
 };
 
 /**
@@ -433,11 +483,29 @@ export async function loader({ request }: Route.LoaderArgs) {
   // again until a navigation. Never a figure, though — there is no reason to
   // fail toward showing a button that clears a grant which may be exactly
   // what is protecting this render.
+  //
+  // **`hasPasskey: false` on a throw is not the same claim as "no passkey"
+  // (finding C), and `passkeyCheckFailed` is what lets a reader downstream
+  // tell the two apart.** `hasPasskey` alone answers the chrome's question —
+  // draw the lock-now control or not — and fails toward `false` for exactly
+  // the reason two paragraphs up; that bias is right for a button. It is
+  // wrong for `resolveReentryCallback`'s question, which is not "is there a
+  // control to draw" but "should a hidden-too-long return post the lock or
+  // merely ask the server" — an `isLocked` that could not answer is not
+  // proof there is nothing to protect, and reading it as one lets a stale
+  // reader's `askServer` fallback ask a middleware that is *itself* failing
+  // the same read, wave the request through, and extend the very grant the
+  // guard exists to end. `passkeyCheckFailed` carries that distinction to
+  // `app/root.tsx`'s own {@link assumePasskeyForReentry}, so an uncertain
+  // read takes the cautious branch there without changing what `hasPasskey`
+  // means for the control it already gates.
   let hasPasskey = false;
+  let passkeyCheckFailed = false;
   try {
     hasPasskey = await isLocked();
   } catch (error) {
     console.error("Lock check failed; hiding the lock-now control rather than guessing:", error);
+    passkeyCheckFailed = true;
   }
 
   // Read here rather than in the banner, because a component cannot: the value
@@ -448,6 +516,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     masked,
     maskingPolicy,
     hasPasskey,
+    passkeyCheckFailed,
   };
 }
 
@@ -554,6 +623,84 @@ export function resolveReentryCallback(
   return hasPasskey ? actions.postLock : actions.askServer;
 }
 
+/**
+ * What `resolveReentryCallback` above should be handed for `hasPasskey`,
+ * given the root loader's own two-field answer (finding C) — not
+ * `rootData.hasPasskey` read alone, any more. The loader's `hasPasskey`
+ * fails toward `false` on an `isLocked` it could not answer, which is the
+ * right bias for the chrome's control and the wrong one here: `false` feeds
+ * `resolveReentryCallback` straight into `askServer`, the fallback whose own
+ * header calls it "cheap" precisely because it trusts a middleware that,
+ * during the same outage, is failing the identical read and waving the
+ * request through — a live grant `askServer` would then only extend, never
+ * end. `passkeyCheckFailed` is what this reads instead of trusting the
+ * `false`: true takes the cautious branch (as good as a passkey being
+ * believed enrolled) regardless of what `hasPasskey` itself says, because
+ * posting the lock on an uncertain read costs one needless round trip and
+ * failing to post one costs the guard's whole purpose.
+ */
+export function assumePasskeyForReentry(hasPasskey: boolean, passkeyCheckFailed: boolean): boolean {
+  return hasPasskey || passkeyCheckFailed;
+}
+
+/**
+ * Whether a signal that reports `"idle"` while nothing is happening has
+ * actually finished one round, given whether this render has seen it away
+ * from `"idle"` at any point since the round began. Shared by the two
+ * signals the settle effect below watches (findings A and B): a
+ * `useFetcher`'s own `state` while the automatic lock post is in flight, and
+ * `useRevalidator`'s own `state` while the forced revalidation it triggers
+ * is in flight.
+ *
+ * **Finding A, verified against `node_modules/react-router` (7.18.2) rather
+ * than assumed.** `useFetcher().submit` (`chunk-7XGYIT3M.js`) forwards
+ * `useSubmit`'s callback with no `flushSync` option supplied, so
+ * `router.fetch`'s own `flushSync = (opts && opts.flushSync) === true`
+ * (`chunk-HHGH3NKS.js`) resolves to `false` for this call. Every state that
+ * update produces — including the fetcher's first move away from `"idle"` —
+ * is published through `RouterProvider`'s `setState`, which wraps exactly
+ * that case in `React.startTransition(...)` rather than an ordinary update
+ * (same file: `if (reactDomFlushSyncImpl && flushSync) { … } else { … }`,
+ * the `else` being `startTransition`). `setLocking(true)` beside `postLock`'s
+ * own call to `submitLock` is an ordinary `useState` setter, carrying no such
+ * wrapping. React is free to commit a render showing `locking === true`
+ * before the transitioned update showing this fetcher as anything but
+ * `"idle"` ever commits — so an effect that treated *any* `"idle"` reading
+ * taken while `locking` is true as a settle could fire on the reading that
+ * predates the post ever starting, clearing the guard and revalidating
+ * before `/lock-now` had been asked for at all. The claim holds as read; the
+ * fix is what this function's `everActive` parameter is for — an `"idle"`
+ * reading only counts once this render has actually seen the signal away
+ * from it first.
+ *
+ * **Finding B reuses the identical shape for a second signal.** `useRevalidator`'s
+ * own `state.revalidation` is set to `"loading"` by a plain `updateState`
+ * call inside `router.revalidate()` with no `flushSync` either, so it is
+ * exactly as capable of presenting a stale `"idle"` reading immediately after
+ * the settle effect calls `revalidate()` as the fetcher was immediately
+ * after `submitLock` was called — the same evidence-before-idle-counts rule
+ * applies to it for the same reason.
+ */
+export function hasSettled(everActive: boolean, isIdleNow: boolean): boolean {
+  return everActive && isIdleNow;
+}
+
+/**
+ * Finding B's own rule, on top of {@link hasSettled}: the automatic lock's
+ * replacement view must stay up until *both* the lock post and the forced
+ * revalidation it triggers have settled, not merely the first of the two.
+ * The settle effect used to clear `locking` and call `revalidate()` in the
+ * same breath the instant the fetcher alone went idle — correct for
+ * `/lock-now`'s own request, wrong for what came after it: React Router
+ * keeps whatever the current route already rendered on screen while a
+ * revalidation's loaders are in flight, so the figures this whole feature
+ * exists to hide were back, readable and interactive, for the entirety of
+ * that round trip, and indefinitely if it never resolved.
+ */
+export function shouldStayLocked(fetcherIsSettled: boolean, revalidationIsSettled: boolean): boolean {
+  return !fetcherIsSettled || !revalidationIsSettled;
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   // From the root loader, not a prop: `Layout` wraps error boundaries too,
   // where there is no loader data at all. The banner lives here so every
@@ -626,7 +773,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // one that may not apply".
   const hasPasskey = rootData?.hasPasskey === true;
 
-  // Named directly in the effect's dependency array below, not stashed in a
+  // Finding C: never read alone by the reentry effect below any more — see
+  // `assumePasskeyForReentry`'s own header for why an uncertain `isLocked`
+  // must not fall in with "no passkey" for that one decision.
+  const passkeyCheckFailed = rootData?.passkeyCheckFailed === true;
+
+  // Named directly in the effects' dependency arrays below, not stashed in a
   // ref: both are `useCallback`-memoised on stable deps in react-router
   // 7.18.2 (`useRevalidator` on `[dataRouterContext.router]`; `useFetcher`'s
   // own `submit` on `[fetcherKey, submitImpl]`, where `fetcherKey` never
@@ -636,71 +788,112 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // there is no identity churn to route around — and even if one did
   // change, naming it here is correct: a re-subscribe, not a bug.
   const { submit: submitLock, state: lockFetcherState } = useFetcher();
-  const { revalidate } = useRevalidator();
+  const { revalidate, state: revalidationState } = useRevalidator();
 
   /**
    * Whether the automatic, re-entry-triggered lock post below is in
-   * flight. Set synchronously inside `watchReentry`'s hidden-too-long
-   * callback, in the same call that starts the fetcher submission — not
-   * derived solely from {@link lockFetcherState}, because that value only
-   * begins to change once `submitLock` itself has run, and the whole point
-   * (finding 2, below) is for this browser to already be inert by then, not
-   * a tick later. Cleared once the fetcher reports idle again, which for a
-   * live grant only happens once `/lock-now`'s redirect has actually been
-   * followed all the way to a rendered `/unlock` — react-router 7.18.2 marks
-   * a fetcher that carried a followed redirect done only on
-   * `completeNavigation` (`markFetchRedirectsDone`, the router's core
-   * chunk), never earlier. That same "cleared" instant is also the settle
-   * the next effect below watches for: this state's own transition back to
-   * `false`, not a bare read of `lockFetcherState`, since mount already
-   * presents `lockFetcherState === "idle"` with nothing having posted
-   * anything — only `locking` tells the two apart.
+   * flight — and, now, whether the forced revalidation it settles into is
+   * still running too (finding B). Set synchronously inside `watchReentry`'s
+   * hidden-too-long callback, in the same call that starts the fetcher
+   * submission — not derived solely from {@link lockFetcherState}, because
+   * that value only begins to change once `submitLock` itself has run, and
+   * the whole point is for this browser to already be showing the
+   * replacement render by then, not a tick later.
+   *
+   * **What this state actually conceals, since the redesign.** `Layout`'s
+   * render below shows the "Locking this browser…" notice *instead of* the
+   * chrome and `children` while this is `true`, never over them — a review
+   * of this ticket found concealment built as a scrim over the page rather
+   * than as a replacement for it, in two ways at once: a 72%-opaque
+   * background a reader could still read balances through, and the
+   * chart-range control's own native `popover`, which
+   * paints in the browser's top layer above any `z-index` and which `inert`
+   * makes unresponsive without ever closing. Neither survives not being
+   * rendered at all — there is nothing behind this notice to see through and
+   * no popover left mounted to escape above it. `inert` accordingly has
+   * nothing left to do: it used to stop a *tap* on the chrome from starting
+   * a navigation while this state was `true`, and the chrome is not on
+   * screen to tap any more, so it is dropped from both branches below rather
+   * than kept as a redundant guard over an empty subtree.
+   *
+   * **What replacing the render does not do on its own is close the timing
+   * gap findings A and B are about** — see {@link hasSettled} and
+   * {@link shouldStayLocked}'s own headers for each, and the settle effect
+   * below for how the two are wired together. Whichever settles this state
+   * back to `false`, one thing stays true from the previous design: a
+   * browser's own Back/Forward controls, a swipe-back gesture, or a history
+   * keyboard shortcut can still start a POP navigation while this is `true`,
+   * and none of them are taps this page could ever have disabled. Such a
+   * POP still runs the root middleware like any navigation does, and it can
+   * win a race against `/lock-now`'s own `DELETE` — read the grant while it
+   * is still live, and render whatever protected route the reader popped
+   * back to as this route's own `children`. Full replacement means that
+   * rendered page is never shown regardless — `children` is simply not part
+   * of what this branch draws — but it does not make that raced render
+   * *correct*, which is exactly why the settle effect still forces a
+   * revalidation rather than only waiting for the fetcher: revalidating asks
+   * the root middleware again for whatever route is actually current at that
+   * instant, POP-won race or not, and only once that answer is in does this
+   * state clear.
    */
   const [locking, setLocking] = useState(false);
 
+  // The evidence `hasSettled` needs for each of the two signals the effect
+  // below watches — refs, not state, because a decision an effect makes on
+  // its own next run is not something this component ever renders. Reset at
+  // the top of every lock attempt (`postLock` below), not only at mount, so
+  // a second automatic lock later in the same tab's life does not inherit a
+  // stale "already saw this settle" from the first.
+  const fetcherEverActive = useRef(false);
+  const revalidationEverActive = useRef(false);
+  // Guards calling `revalidate()` more than once per attempt — read and set
+  // synchronously inside the effect below, ahead of whatever render actually
+  // shows `revalidationState` having moved off `"idle"` (finding B's own
+  // reason `revalidationEverActive` alone cannot be trusted for this).
+  const revalidationStarted = useRef(false);
+
   /**
-   * The gap `inert` alone cannot close (this pull request's own finding —
-   * distinct from the stale-`hasPasskey` one the reentry effect's header
-   * below still calls "finding 1", from an earlier round on this same
-   * ticket). `inert` on the chrome below stops a *tap* from starting a
-   * navigation while the automatic lock post is in flight, but the
-   * browser's own Back/Forward controls, a swipe-back gesture, and a history
-   * keyboard shortcut are not taps on this subtree — none of them are
-   * disabled by it. Such a POP still runs the root middleware like any
-   * navigation does, but it can win a race against `/lock-now`'s own
-   * `DELETE`: read the grant while it is still live, render whatever
-   * protected route the reader popped back to, and leave that page on
-   * screen once this effect clears `locking` and the overlay disappears —
-   * the reader is left looking at a page rendered *after* the lock was
-   * asked for, with `inert` never having failed at anything it actually
-   * covers.
+   * Settles the automatic lock post — findings A and B, together. Watches
+   * two signals in sequence: this fetcher's own state while `/lock-now` is
+   * in flight, then `useRevalidator`'s while the revalidation that fetcher's
+   * genuine settle kicks off is in flight. Neither is trusted on a bare
+   * `"idle"` reading; each needs {@link hasSettled}'s own evidence first,
+   * for the identical reason spelled out there — both publish their first
+   * move away from `"idle"` through `startTransition`, so an `"idle"` read
+   * while `locking` is `true` is exactly as likely to be the reading from
+   * *before* either one started as the one from after it finished.
    *
-   * The fix does not try to stop that POP — nothing here can, since it never
-   * touches this subtree — it stops trusting whatever the POP rendered.
-   * Once `lockFetcherState` reports `idle` for a settle that was genuinely
-   * mid-post (`locking` was `true`), `/lock-now`'s own action has already
-   * run to completion: its `DELETE` landed before its response's redirect
-   * could be produced. Revalidating *now* asks the root middleware again for
-   * whatever route is actually on screen at this instant, POP-won race or
-   * not — no grant, it refuses and redirects to `/unlock`; still somehow
-   * live, a harmless extra database read. The outcome stops depending on
-   * which navigation happened to finish last.
+   * `revalidate()` is called at most once per attempt (`revalidationStarted`
+   * above), and only once the fetcher itself has genuinely settled — calling
+   * it any earlier would ask the middleware about a grant `/lock-now` had
+   * not yet deleted. `locking` clears only once {@link shouldStayLocked}
+   * says both stages are done; until then this effect returns having
+   * changed nothing but its own refs.
    *
    * **Cannot loop.** `locking` is itself a dependency here, and the
    * `setLocking(false)` below is what flips it — the *next* run of this
    * effect, the one that same state change triggers, finds `locking` already
-   * `false` and returns above before calling `revalidate` a second time.
-   * `revalidate()` never touches `lockFetcherState` either (a root
-   * revalidation, not a fetcher submission), so nothing here re-arms this
-   * effect from the other side: one settle, at most one forced
-   * revalidation.
+   * `false` and returns above before touching `revalidate` again.
    */
   useEffect(() => {
-    if (lockFetcherState !== "idle" || !locking) return;
+    if (!locking) return;
+
+    if (lockFetcherState !== "idle") fetcherEverActive.current = true;
+    const fetcherIsSettled = hasSettled(fetcherEverActive.current, lockFetcherState === "idle");
+
+    if (fetcherIsSettled && !revalidationStarted.current) {
+      revalidationStarted.current = true;
+      revalidate();
+    }
+
+    if (revalidationState !== "idle") revalidationEverActive.current = true;
+    const revalidationIsSettled =
+      revalidationStarted.current && hasSettled(revalidationEverActive.current, revalidationState === "idle");
+
+    if (shouldStayLocked(fetcherIsSettled, revalidationIsSettled)) return;
 
     setLocking(false);
-    revalidate();
-  }, [lockFetcherState, locking, revalidate]);
+  }, [locking, lockFetcherState, revalidationState, revalidate]);
 
   /**
    * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
@@ -727,19 +920,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
    * pick up state this render never had. A database read at worst, never a
    * blind tab.
    *
-   * That decision — `hasPasskey` true posts the lock, false asks the server,
-   * never `null` either way — is {@link resolveReentryCallback}, imported
-   * rather than written inline here: the regression test added alongside
-   * this comment calls that same exported function, so this call site is
-   * the only place the decision can be made without leaving the test able
-   * to pass against a reverted wiring (that function's own header carries
-   * the rest of the argument).
+   * That decision — assumed-enrolled posts the lock, otherwise asks the
+   * server, never `null` either way — is {@link resolveReentryCallback},
+   * imported rather than written inline here: the regression test added
+   * alongside this comment calls that same exported function, so this call
+   * site is the only place the decision can be made without leaving the
+   * test able to pass against a reverted wiring (that function's own header
+   * carries the rest of the argument). What counts as "assumed-enrolled" is
+   * {@link assumePasskeyForReentry}, not `hasPasskey` alone — finding C:
+   * `hasPasskey` fails toward `false` on an `isLocked` that could not
+   * answer, which is the chrome's own bias and the wrong one for this
+   * decision (that function's own header).
    */
   useEffect(() => {
     if (isUnlockScreen) return;
 
     return watchReentry(
-      resolveReentryCallback(hasPasskey, {
+      resolveReentryCallback(assumePasskeyForReentry(hasPasskey, passkeyCheckFailed), {
         // Nothing this browser's own post could protect *as far as this
         // render knows* — but that belief is exactly what can be stale
         // (this effect's own header). Asking the server is the cheap,
@@ -747,6 +944,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
         // database, and refuses on its own if a passkey exists now.
         askServer: revalidate,
         postLock: () => {
+          // Fresh evidence for a fresh attempt — see {@link locking}'s own
+          // header on why stale refs from an earlier lock in this same tab's
+          // life must not leak into this one.
+          fetcherEverActive.current = false;
+          revalidationEverActive.current = false;
+          revalidationStarted.current = false;
+
           // Set before `submitLock` runs, not after — see {@link locking}'s
           // own header for why the ordering here is the whole fix for
           // finding 2, not a stylistic choice.
@@ -767,25 +971,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
           // chunk) captures this fetcher's own load id before awaiting the
           // action, and once the action resolves it compares that id
           // against whatever the *last-started* navigation's id is: if a
-          // newer navigation was started meanwhile — a tap on still-live
-          // chrome, since nothing yet stops one — the fetcher's redirect is
-          // discarded outright (`getDoneFetcher(void 0)`) rather than
-          // followed, and the page that navigation rendered stays on screen
-          // with the grant already gone underneath it. `Lock now`'s own
-          // render below is what actually closes that gap: `inert` on the
-          // chrome from the moment `locking` turns true means no tap can
-          // start that newer navigation in the first place, so there is
-          // nothing left for this race to discard. The chrome's own "Lock
-          // now" **button** stays a real `<form method="post">`
-          // (`LockNowControl`) — it must keep working with JavaScript off,
-          // which is why it is a form and not a submit call at all; only
-          // this automatic, re-entry-triggered post changes.
+          // newer navigation was started meanwhile — nothing this browser
+          // could tap, since the chrome is not rendered while `locking` is
+          // `true`, but a POP navigation still can — the fetcher's redirect
+          // is discarded outright (`getDoneFetcher(void 0)`) rather than
+          // followed, and whatever that navigation matched would render as
+          // this route's own `children`, with the grant already gone
+          // underneath it. `locking`'s own render below is what actually
+          // closes that gap now: `children` is not part of what it draws,
+          // and the settle effect's forced revalidation is what confirms the
+          // raced render was never authorised before this state clears. The
+          // chrome's own "Lock now" **button** stays a real
+          // `<form method="post">` (`LockNowControl`) — it must keep working
+          // with JavaScript off, which is why it is a form and not a submit
+          // call at all; only this automatic, re-entry-triggered post
+          // changes.
           submitLock(null, { method: "post", action: LOCK_NOW_ACTION });
         },
       }),
       () => revalidate(),
     );
-  }, [isUnlockScreen, hasPasskey, submitLock, revalidate]);
+  }, [isUnlockScreen, hasPasskey, passkeyCheckFailed, submitLock, revalidate]);
 
   return (
     <html lang="en">
@@ -803,18 +1009,36 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
-        {isUnlockScreen ? (
+        {locking ? (
+          // The automatic lock's replacement render — instead of the chrome
+          // and `children` below, never over them:
+          // `locking`'s own header says why. `.app`/`.app-main` reused
+          // exactly as the bare shell just below reuses them, so this gets
+          // the same centred column every other page sits in, plus one
+          // modifier (`app.css`) to centre a single line on an otherwise
+          // empty screen. Proportionate on purpose — an ordinary return
+          // after sixty seconds hidden, not a rare failure — so it says one
+          // thing and asks nothing: no button, nothing to dismiss, because
+          // there is nothing here for a reader to decide.
+          <div className="app">
+            <main className="app-main app-lock-notice">
+              <p role="alert" aria-live="assertive">
+                Locking this browser…
+              </p>
+            </main>
+          </div>
+        ) : isUnlockScreen ? (
           // The bare shell: no nav, no toggles, no upload button, no
           // first-run prompt, no banner — see this function's own comment
           // above. `.app`/`.app-main` are reused rather than new classes
           // invented for one screen, so this gets the same centred column
           // and padding every other page's content sits in without pulling
           // in a single rail- or topbar-specific rule.
-          <div className="app" inert={locking || undefined}>
+          <div className="app">
             <main className="app-main">{children}</main>
           </div>
         ) : (
-          <div className="app" inert={locking || undefined}>
+          <div className="app">
             <nav className="app-rail" aria-label="Primary">
               <Brand search={owners} />
               <ul className="app-nav">
@@ -869,22 +1093,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </nav>
           </div>
         )}
-        {/* Finding 2's actual fix is `inert` on the chrome above, set the
-         * instant the automatic lock post goes out (`locking`'s own header
-         * on the reentry effect) — this overlay is the human-readable half
-         * of that, not the mechanism: `inert` alone would leave a reader
-         * tapping a now-unresponsive screen with no idea why. Proportionate
-         * on purpose — an ordinary return after sixty seconds hidden, not a
-         * rare failure — so it says one thing and asks nothing: no button,
-         * nothing to dismiss, because there is nothing here for a reader to
-         * decide. It clears itself the moment the fetcher reports idle
-         * again, whether that is because `/lock-now`'s redirect landed on
-         * `/unlock` or because the post itself failed outright. */}
-        {locking ? (
-          <div className="reentry-lock-overlay" role="alert" aria-live="assertive">
-            <p>Locking this browser…</p>
-          </div>
-        ) : null}
         <ScrollRestoration />
         <Scripts />
         {/* The worker exists for its offline page alone and stores nothing on
