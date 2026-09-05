@@ -36,6 +36,16 @@ services:
     image: portfolio-app:dev
     pull_policy: build
 
+  # Same tag as `app` and `worker` above, built from the same checkout:
+  # without this, smoke would pull the released image, which lacks
+  # server/egress-proxy.ts, and certify code ticket 08 did not write.
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: portfolio-app:dev
+    pull_policy: build
+
   # CI asserts the dump container reaches `healthy` inside a smoke test that
   # lasts minutes, not hours: production's 5-minute interval and 15-minute
   # start period would still read `starting` when the run ends. The check
