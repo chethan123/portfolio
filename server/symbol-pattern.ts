@@ -5,7 +5,7 @@
  * one compromised. The app's copy (imported from here too, from the
  * cutover in ticket 06) is a courtesy — it saves a round trip and keeps a
  * stored symbol the app's own rule permits (length <= 40, any character,
- * `instrument-resolution.server.ts:308-312`) from costing a whole call — but
+ * `instrument-resolution.server.ts:314-315`) from costing a whole call — but
  * it is not the guard anything security-sensitive rests on.
  *
  * No imports: this file is the only copy, shared by a worker whose whole

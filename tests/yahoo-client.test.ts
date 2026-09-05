@@ -62,6 +62,20 @@ describe("the shape of the library this client wraps", () => {
 
     expect(seen.length).toBeGreaterThan(0);
   });
+
+  it("refuses to be used as a bare static, which is the trap this module exists to avoid", async () => {
+    // The other direction, and the one the architecture document states as
+    // fact: the class's statics are not a usable client. If a future version
+    // makes them work, this fails and the indirection can go — which is the
+    // only signal that would tell us so.
+    const { default: YahooFinance } = await import("yahoo-finance2");
+    const bare = YahooFinance as unknown as { chart(symbol: string, request: unknown): Promise<unknown> };
+
+    // Synchronously, before any promise exists — so the failure a regression
+    // to the bare class would produce is a throw at the call site, not a
+    // rejection something might swallow.
+    expect(() => bare.chart("VTI", REQUEST)).toThrow(/new YahooFinance/);
+  });
 });
 
 describe("the request a chart call forwards", () => {

@@ -16,13 +16,18 @@
  * **Bounds, all of them defensive against the app's own compromise, not
  * against Yahoo:** `maxConnections` 8 and `maxRequestsPerSocket` 1 (so Node
  * itself answers `Connection: close`); `headersTimeout`/`requestTimeout` at
- * 5 s, checked every `connectionsCheckingInterval` (1 s in production) —
- * both expire only a connection that has sent at least one byte (research
- * `2026-09-04-price-worker-platform-facts.md` §8.9); `server.timeout` at
- * 35 s, past the 30 s Yahoo watchdog, for the silent connection those two
- * never touch, since a request waiting on Yahoo is inactive on the socket
- * itself; a body read to 16 KB with the socket destroyed and no status past
- * it. Per-endpoint rate caps — quotes ten calls a minute, history twenty —
+ * 5 s, checked every `connectionsCheckingInterval` (1 s in production — the
+ * default is 30 s, which would let a 5 s deadline bind anywhere up to 35).
+ * On this Node a connection that sends nothing is expired by those two as
+ * well, not only by `server.timeout`: research §8.9 said otherwise and is
+ * corrected in place, its own probe having never called `.resume()` and so
+ * never seen the close. `server.timeout` at 35 s is still the bound worth
+ * having, past the 30 s Yahoo watchdog — it catches the connection that has
+ * sent its request and gone idle while a handler waits on Yahoo, which the
+ * other two no longer touch once the headers have landed; a body read to
+ * 16 KB with the socket destroyed and no status past it.
+ *
+ * Per-endpoint rate caps — quotes ten calls a minute, history twenty —
  * exist because the worker is the honest component when the app is not: a
  * runaway or compromised app must not spend the household's one Yahoo
  * relationship (spec §3.5's arithmetic: a tick costs at most
