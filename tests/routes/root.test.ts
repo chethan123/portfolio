@@ -371,6 +371,40 @@ describe("the lock middleware", () => {
   );
 
   it(
+    "leaves the grant cookie alone on a refusal from a GET to /lock-now, since a crawler or a pasted link never asked to end anyone's session",
+    async () => {
+      // The method is as much a part of the exception above as the path:
+      // `/lock-now` is action-only, so nothing a reader did produces a `GET`
+      // there — this is a crawler, a pasted URL, or a stray retry. Treating
+      // it as the reader's own request to end their session would expire a
+      // perfectly live grant on a request nobody meant, the moment a
+      // transient outage happened to coincide with one.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, get("/lock-now"), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        // The one difference from the POST case just above: a read that
+        // merely failed to answer is not proof this grant is gone, and
+        // nothing about a stray GET says otherwise either.
+        expect(response.headers.get("Set-Cookie")).toBeNull();
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
     "invokes next, and lets its stand-in response through, once the browser holds a live grant",
     withDatabase(async ({ seedPasskey, seedUnlockGrant }) => {
       const passkey = await seedPasskey({ publicKey: A_PUBLIC_KEY });

@@ -20,9 +20,20 @@
  * can actually catch — `reentry.ts` changing to declare a *different*
  * number instead of importing `lock.ts`'s — shows up here rather than only
  * in a real browser nobody is running.
+ *
+ * `resolveReentryCallback` lives in `app/root.tsx`, not here, because it is
+ * `Layout`'s own decision, not `watchReentry`'s (its own header there argues
+ * why) — but it is imported directly below, the same way `tests/routes/
+ * root.test.ts` already reaches into `app/root.tsx` for `loader` and
+ * `middleware` without rendering anything. A review of this pull request
+ * found the previous version of the test just below constructed its own
+ * copy of `Layout`'s decision instead of importing it, which stayed green
+ * even after reverting the production wiring back to the bug it was meant to
+ * catch — calling the real export is what closes that gap.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { resolveReentryCallback } from "../app/root.tsx";
 import { REENTRY_GRACE_MS } from "~/lib/lock";
 import { shouldPostLock, watchReentry } from "~/lib/reentry";
 
@@ -358,25 +369,29 @@ describe("watchReentry", () => {
   it(
     "would have left a passkey enrolled elsewhere unnoticed for this tab's whole lifetime under the old, hasPasskey-gated installation — and does not under the fix",
     () => {
-      // Finding 1: a page renders with `hasPasskey: false` — the household
-      // held none yet — and then, in another browser entirely, enrols its
-      // first passkey. This tab is never told; its own `hasPasskey` is
-      // baked in at render time and stays false for as long as the page
-      // lives. `app/root.tsx` used to decide whether to install this half
-      // *at all* off that same stale flag (`hasPasskey ? cb : null`,
-      // reproduced literally as `postLockOld` below): with no passkey
-      // believed enrolled, it passed `null`, and `watchReentry` skips
-      // installing the `visibilitychange` listener outright for a `null`
-      // `postLock` — not only for the return in progress, but for the
-      // rest of this tab's life, since nothing re-runs the effect that
-      // decided it. Foregrounding the tab after the grace, having missed
-      // the enrolment, produces an ordinary, non-persisted `pageshow` —
-      // the *other* half's own trigger — so nothing here ever asks the
-      // server either. The fix moves the decision inside the callback
-      // instead of into whether it installs: `postLockNew` below is what
-      // `app/root.tsx` passes now, on the identical stale-`false` render —
-      // always a real function, deciding at the instant the return
-      // actually happens rather than at mount.
+      // A page renders with `hasPasskey: false` — the household held none
+      // yet — and then, in another browser entirely, enrols its first
+      // passkey. This tab is never told; its own `hasPasskey` is baked in at
+      // render time and stays false for as long as the page lives.
+      // `app/root.tsx` used to decide whether to install this half *at all*
+      // off that same stale flag (`hasPasskey ? cb : null`, reproduced
+      // literally as `postLockOld` below): with no passkey believed
+      // enrolled, it passed `null`, and `watchReentry` skips installing the
+      // `visibilitychange` listener outright for a `null` `postLock` — not
+      // only for the return in progress, but for the rest of this tab's
+      // life, since nothing re-runs the effect that decided it.
+      // Foregrounding the tab after the grace, having missed the enrolment,
+      // produces an ordinary, non-persisted `pageshow` — the *other* half's
+      // own trigger — so nothing here ever asks the server either. The fix
+      // moves the decision inside the callback instead of into whether it
+      // installs: `resolveReentryCallback` — imported from `app/root.tsx`
+      // itself, not reproduced here — is what decides now, on the identical
+      // stale-`false` render, always returning a real function rather than
+      // `null`. Calling the production function directly, rather than a
+      // hand-written stand-in for it, is what makes reverting `app/root.tsx`'s
+      // wiring back to the old ternary fail this test: that revert removes
+      // this function's only production caller and, with it, the export
+      // this file imports.
       const perf = vi.spyOn(performance, "now");
       let clock = 0;
       perf.mockImplementation(() => clock);
@@ -399,10 +414,10 @@ describe("watchReentry", () => {
       teardownOld();
 
       const askServer = vi.fn();
-      const postLockNew = () => {
-        if (!hasPasskeyAtRender) askServer();
-        else postToLockNow();
-      };
+      const postLockNew = resolveReentryCallback(hasPasskeyAtRender, {
+        postLock: postToLockNow,
+        askServer,
+      });
       const newBrowser = install();
       const teardownNew = watchReentry(postLockNew, vi.fn());
 
@@ -419,6 +434,28 @@ describe("watchReentry", () => {
       teardownNew();
     },
   );
+
+  describe("resolveReentryCallback", () => {
+    it("returns the postLock action once a passkey is believed enrolled, so the reentry guard still posts the lock", () => {
+      const postLock = vi.fn();
+      const askServer = vi.fn();
+
+      resolveReentryCallback(true, { postLock, askServer })();
+
+      expect(postLock).toHaveBeenCalledTimes(1);
+      expect(askServer).not.toHaveBeenCalled();
+    });
+
+    it("returns the askServer action while no passkey is believed enrolled, rather than a callback that stays silent", () => {
+      const postLock = vi.fn();
+      const askServer = vi.fn();
+
+      resolveReentryCallback(false, { postLock, askServer })();
+
+      expect(askServer).toHaveBeenCalledTimes(1);
+      expect(postLock).not.toHaveBeenCalled();
+    });
+  });
 
   it(
     "still posts the lock once the grace is exceeded even though the monotonic clock stalled through a suspend",
