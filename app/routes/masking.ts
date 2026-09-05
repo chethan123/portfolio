@@ -11,8 +11,14 @@
  * cookie's name, vocabulary or lifetime: all three live in `masking.ts`, so
  * the two cannot drift.
  *
- * Nothing guards this route and nothing needs to: the gate in front admits
- * or refuses a request before the router ever sees it.
+ * Who may press it is the gate's own business, unchanged: it admits or
+ * refuses a request before the router ever sees it, and every family member
+ * it admits sees and can do everything. Since ticket 03, whether a browser
+ * may reach this route *at all* is the lock's: root middleware refuses a
+ * request from a browser holding no live grant before this action runs, and
+ * a refusal here is redirected to `/`, never back to this route — `POST`
+ * has no return address a redirect's own `GET` could land on
+ * (`app/root.tsx`'s `redirectToUnlock`).
  */
 import { redirect } from "react-router";
 

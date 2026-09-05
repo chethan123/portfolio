@@ -14,6 +14,7 @@
 import { useFetchers, useRouteLoaderData } from "react-router";
 
 import type { Option } from "./account-options.ts";
+import { readCookie } from "./cookies.ts";
 import type { loader as rootLoader } from "../root.tsx";
 
 /**
@@ -131,24 +132,12 @@ export function clearedMaskingCookie(): string {
 /**
  * What this browser arrived with, or `undefined`. Parsed by hand: the value
  * is unsigned and two characters wide, and the framework's helper is async
- * and shaped for signed session payloads. Matched on the whole name, never a
- * substring — `unmasked=1` ends in `masked=1`, and a looser match would read
- * a different cookie's value as this one's, silently, in one direction.
+ * and shaped for signed session payloads. `readCookie` (`cookies.ts`) is the
+ * whole-name matcher itself, extracted from here so the lock's grant cookie
+ * (ticket 03) reuses it rather than restating it a third time.
  */
 export function readMaskingCookie(request: Request): string | undefined {
-  const header = request.headers.get("Cookie");
-  if (header === null) return undefined;
-
-  for (const pair of header.split(";")) {
-    const separator = pair.indexOf("=");
-    if (separator === -1) continue;
-
-    if (pair.slice(0, separator).trim() === MASKING_COOKIE) {
-      return pair.slice(separator + 1).trim();
-    }
-  }
-
-  return undefined;
+  return readCookie(request, MASKING_COOKIE);
 }
 
 /**
