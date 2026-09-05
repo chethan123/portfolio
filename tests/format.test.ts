@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   compactScale,
   formatCompact,
+  formatDate,
   formatMoney,
   formatPercent,
   formatSignedMoney,
@@ -163,5 +164,29 @@ describe("toPlotValue", () => {
     const off = toPlotValue("12345678901234567.90");
 
     expect(Math.abs(banked - off) / banked).toBeLessThan(1e-9);
+  });
+});
+
+/**
+ * `formatDate` had no test at all (finding 9): nothing anywhere referenced
+ * it, so the one thing its own header argues for — the UTC pin, without
+ * which the server-rendered and hydrated markup could each print a
+ * different calendar day for the same instant — was free to drift and every
+ * existing test would still pass. Pinned here beside its siblings, matching
+ * this file's own house style of asserting an exact string rather than
+ * a shape.
+ */
+describe("formatDate", () => {
+  it("renders a short calendar date, no leading zero on the day", () => {
+    expect(formatDate(new Date("2026-09-05T12:00:00Z"))).toBe("5 Sep 2026");
+  });
+
+  it("is pinned to UTC, not the runtime's ambient timezone", () => {
+    // Half past midnight UTC on New Year's Day: any zone behind UTC — every
+    // zone this application's household could plausibly run in — reads this
+    // same instant as the evening of 31 December. A mutation dropping the
+    // `timeZone: "UTC"` option (or retargeting it to one of those zones)
+    // prints "31 Dec 2025" here; only the pin prints "1 Jan 2026".
+    expect(formatDate(new Date("2026-01-01T00:30:00Z"))).toBe("1 Jan 2026");
   });
 });

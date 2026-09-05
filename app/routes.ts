@@ -49,6 +49,10 @@ export default [
     // How the screens open untouched — the masking policy today, §12's theme
     // choice when it lands (spec 0007).
     route("display", "routes/settings/display.tsx"),
+    // The lock's own Settings screen (docs/adr/0012, spec 0019, ticket 05):
+    // list, enrol, remove. Beside Display — it carries no amount, so masking
+    // does not touch it.
+    route("passkeys", "routes/settings/passkeys.tsx"),
   ]),
 
   // The screen a browser holding no valid grant is shown (docs/adr/0012,

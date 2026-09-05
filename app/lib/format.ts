@@ -1,13 +1,27 @@
 /**
  * Display formatting for the decimal strings the valuation layer returns.
- * Every function takes a string, returns a string; none calls `Number()`,
- * `parseFloat` or `Intl.NumberFormat` on money — all three need a float, and
- * §4.1 keeps money out of floats end to end. Rounding and grouping work on
- * the digits themselves, exact by construction.
+ * Every money function takes a string, returns a string; none calls
+ * `Number()`, `parseFloat` or `Intl.NumberFormat` on money — all three need a
+ * float, and §4.1 keeps money out of floats end to end. Rounding and
+ * grouping work on the digits themselves, exact by construction.
  *
  * Formats, never computes: no add, subtract or divide here. Arithmetic on
  * money happens in SQL, in `numeric` (DESIGN.md §8.2) — a helper here would
  * be an invitation to do it twice.
+ *
+ * `formatDate` is the one function below that is not about money: a
+ * `timestamptz` instant (Settings → Passkeys' enrolled/last-used columns,
+ * docs/adr/0012), rendered as a calendar date rather than computed. It still
+ * renders and never computes — no arithmetic on the instant, just
+ * `Intl.DateTimeFormat` — and it is pinned to UTC for the same reason
+ * `settings/accounts.tsx`'s `closedOn` reads a closed date through
+ * `toISOString` rather than the ambient locale: a date formatted in whichever
+ * zone happens to be running would print one string on the server and a
+ * different one after hydration. Every function in this file renders on
+ * both server and hydration — that much is not what sets this one apart;
+ * `formatDate` is the one whose *output* depends on the environment it runs
+ * in unless pinned, since money's own digits carry no timezone to disagree
+ * about in the first place.
  */
 
 /** A decimal string taken apart. `int` and `frac` are digits only. */
@@ -207,6 +221,25 @@ export function isPositive(decimal: string): boolean {
  */
 export function toPlotValue(decimal: string): number {
   return Number(decimal);
+}
+
+/**
+ * `2026-09-05T04:00:00Z` → `"5 Sep 2026"` — a `timestamptz` instant read as a
+ * calendar date. Fixed to UTC rather than the ambient locale (this file's own
+ * header says why); never for a figure, only for a date beside one.
+ */
+export function formatDate(instant: Date): string {
+  const parts: Record<string, string> = {};
+  for (const { type, value } of new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).formatToParts(instant)) {
+    parts[type] = value;
+  }
+
+  return `${parts.day} ${parts.month} ${parts.year}`;
 }
 
 /**

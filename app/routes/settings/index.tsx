@@ -61,6 +61,14 @@ export default function SettingsIndex() {
               that browser last left them.
             </dd>
 
+            <dt>
+              <Link to="/settings/passkeys">Passkeys</Link>
+            </dt>
+            <dd>
+              What can unlock a browser once the household holds one — enrol another, see which
+              are synced, and remove one that is lost for good.
+            </dd>
+
             <dt>Classifications, Instruments and History</dt>
             <dd>
               Asset labels, ticker and manual-price management, and the hand-typed net worth

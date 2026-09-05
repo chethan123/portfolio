@@ -39,6 +39,18 @@ export const IDLE_WINDOW_MS = 15 * 60 * 1000;
 export const REENTRY_GRACE_MS = 60 * 1000;
 
 /**
+ * How long a passkey's label may be — `lock.server.ts`'s own bound
+ * (`requiredText("A label", LABEL_MAX_LENGTH)`), stated here rather than
+ * there for the reason every other constant in this file already is:
+ * Settings → Passkeys' `<input>` needs the identical number for its own
+ * `maxLength`, in browser-reachable component code, and a value import of a
+ * `.server` module from there ships that module's server code into the
+ * client bundle or breaks the build (CLAUDE.md's bundle-boundary rule) — the
+ * exact failure `npm run build` catches if this ever moves back.
+ */
+export const LABEL_MAX_LENGTH = 60;
+
+/**
  * `passkey.transports`, split back into a list — `null` reads as none
  * (migration 0012's comment on the column).
  */
