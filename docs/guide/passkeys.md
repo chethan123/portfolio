@@ -103,10 +103,10 @@ The other way round is narrower than it sounds: a single device can hold more th
 usually only when a different provider makes the second one, or a separate authenticator sits
 alongside the device's own vault. Asking the same vault for a second passkey for this app usually
 does not work — it already recognises this app from the first and refuses to create another, rather
-than quietly making a second. What you see when it refuses is the provider's own sentence, in its
-own words rather than this app's ("The authenticator was previously registered", in Chrome), and
-the form stays where it was, still waiting for a creation that cannot happen. Reloading the page is
-how to start over from there. Settings → Passkeys lists each one the household holds, and marks
+than quietly making a second. What this app says when that happens is that the provider already
+holds a passkey for it and will not make a second, so the next one has to come from a different
+device or from a different provider on this one; **Start over** beside the create button puts the
+form back where it began. Settings → Passkeys lists each one the household holds, and marks
 whether it is the kind that *can* be handed to your other devices that way, or whether it is tied to
 the one device that made it.
 

@@ -506,6 +506,28 @@ type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
  * orphaned passkey nobody asked for. Checking first is what keeps that from
  * ever happening rather than merely reporting it afterwards.
  */
+/**
+ * What the family reads when the provider refuses to make a second passkey
+ * for this app — `excludeCredentials`' client-side half. The library's own
+ * sentence for it is "The authenticator was previously registered", which is
+ * about authenticators rather than about what to do, and which used to be
+ * printed here verbatim with the form left waiting on a creation that could
+ * not happen.
+ */
+/**
+ * Shown only inside `<noscript>`: enrolling and removing are both event
+ * handlers, so with scripting off every control on this screen is inert
+ * rather than missing, and a reader is owed the reason rather than left
+ * pressing one. Names the fix first, as `unlock.tsx`'s own does.
+ */
+export const NOSCRIPT_MESSAGE =
+  "This browser has scripting turned off, and enrolling or removing a passkey needs it. " +
+  "Turn scripting on, or use a browser that has it.";
+
+export const ALREADY_REGISTERED_MESSAGE =
+  "This provider already holds a passkey for this app and will not make a second. " +
+  "Make the next one from a different device, or from a different provider on this one.";
+
 const REGISTRATION_OPTIONS_TTL_MS = 2 * 60 * 1000;
 
 /**
@@ -639,10 +661,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
     if (result.intent !== "beginEnrolment" && result.intent !== "completeRegistration") return;
 
     if (!result.ok) {
-      setNote(result.formError);
-      setPhase("idle");
-      setRegistrationOptions(null);
-      setRegistrationMintedAt(null);
+      resetEnrolment(setNote, setPhase, setRegistrationOptions, setRegistrationMintedAt, result.formError);
       return;
     }
 
@@ -745,6 +764,20 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
       return;
     }
 
+    if (outcome.status === "alreadyRegistered") {
+      // Unlike the other two this is not worth retrying — the same provider
+      // will refuse again — so the panel goes back to the start rather than
+      // waiting on a press that cannot succeed.
+      resetEnrolment(
+        setNote,
+        setPhase,
+        setRegistrationOptions,
+        setRegistrationMintedAt,
+        ALREADY_REGISTERED_MESSAGE,
+      );
+      return;
+    }
+
     // Neither ever reached the server, so nothing was spent: staying ready
     // to create lets a retry reuse the very same registration challenge
     // rather than reconfirming identity from scratch.
@@ -821,12 +854,38 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
           </p>
         ) : null}
 
+        {/* Real HTML, not a React branch, for the same reason `unlock.tsx`'s
+            is: this is only ever shown by a browser actually running with
+            scripting off, which is the one case `supported` above can never
+            observe — `supportsPasskeys` never runs without it. Both halves of
+            enrolling are event handlers, so with scripting off the buttons
+            below are inert rather than absent. */}
+        <noscript>
+          <p className="empty-note">{NOSCRIPT_MESSAGE}</p>
+        </noscript>
+
         {!canUseAPasskey ? (
           <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>
         ) : readyToCreate ? (
-          <button type="button" className="button" onClick={handleCreatePasskey} disabled={busy}>
-            Create the passkey named "{confirmedLabel}"
-          </button>
+          <>
+            <button type="button" className="button" onClick={handleCreatePasskey} disabled={busy}>
+              Create the passkey named "{confirmedLabel}"
+            </button>
+            {/* The way out of this step. Without it the only exits were a
+                reload and the two-minute TTL, and the provider-already-holds-
+                one refusal leaves a reader here with the label input
+                disabled and nothing to press. */}
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={() =>
+                resetEnrolment(setNote, setPhase, setRegistrationOptions, setRegistrationMintedAt)
+              }
+              disabled={busy}
+            >
+              Start over
+            </button>
+          </>
         ) : hasPasskeys ? (
           <>
             <p className="field-note">
@@ -871,6 +930,33 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
  * alone, run only from the Confirm removal press itself (`PasskeyRow`'s own
  * header on why that press, and never this one, is what runs the ceremony).
  */
+/**
+ * Put the enrolment panel back to where a fresh attempt starts: no note, no
+ * phase, no registration options and no minted-at. Four setters rather than
+ * one state object because that is the shape this file already uses
+ * ({@link applyRemovalOptionsResult} below), and because the two callers are
+ * a server refusal and a person pressing Start over — the same four things
+ * either way, which is what makes this worth extracting rather than written
+ * twice and allowed to drift.
+ *
+ * The unspent `register` challenge is simply abandoned. That costs nothing:
+ * {@link REGISTRATION_OPTIONS_TTL_MS}'s own header says a stale one is
+ * refused on arrival anyway, and it is bounded by the per-purpose budget the
+ * domain module keeps.
+ */
+export function resetEnrolment(
+  setNote: (note: string | null) => void,
+  setPhase: (phase: EnrolPhase) => void,
+  setRegistrationOptions: (options: RegistrationOptions | null) => void,
+  setRegistrationMintedAt: (mintedAt: number | null) => void,
+  note: string | null = null,
+): void {
+  setNote(note);
+  setPhase("idle");
+  setRegistrationOptions(null);
+  setRegistrationMintedAt(null);
+}
+
 export function applyRemovalOptionsResult(
   result: ActionData,
   setNote: (note: string | null) => void,
