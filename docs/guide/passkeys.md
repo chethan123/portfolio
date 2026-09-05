@@ -113,10 +113,16 @@ already unlocks that passkey provider on that device.** A phone sitting unlocked
 hands, with its own vault already open, answers **Unlock** the same way it would for you. Narrowing
 that risk is what this feature is for — it is not a promise that it closes it.
 
-If this particular device does not hold a passkey the household has enrolled, it can still ask a
-different one for help. Your browser offers a way to reach another device — usually by scanning
-something with the phone or laptop that does hold one — and approving it there is what unlocks the
-browser you started on.
+If this particular device does not hold a passkey the household has enrolled, it may still be able to
+ask a different one for help. Your browser may offer a way to reach another device — usually by
+scanning something with the phone or tablet that does hold the passkey — and approving it there is
+what unlocks the browser you started on. Whether that offer appears at all is your browser's decision
+and the passkey provider's, not this app's, so it is not something to count on until somebody has
+seen it work here.
+
+If it is not offered, there are three ways back in: another browser on this device, a device that can
+reach a passkey the household has enrolled, or asking whoever set this app up for your household to
+help you back in.
 
 If the check is dismissed, or it does not finish, nothing has changed and nothing is lost — press
 **Unlock** and try again.

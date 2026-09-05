@@ -809,8 +809,11 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
             />
             <strong>
               Enrolling this passkey locks every other browser in the household immediately —
-              each one will need its own passkey, or a cross-device unlock approved from one
-              already enrolled, to see anything here again. This browser stays unlocked.
+              each one will need its own passkey to see anything here again. Whether a locked
+              browser can instead be unlocked by approving from a device that already holds this
+              passkey depends on the provider that made it, and nobody has tried it here yet —
+              whoever set this app up for the household knows how to check. This browser stays
+              unlocked.
             </strong>
           </label>
         ) : null}

@@ -741,6 +741,45 @@ locked whenever the household holds at least one passkey, and open whenever it h
 brand-new instance holds none, so every family member the gate admits sees every figure, exactly as
 it always has — nothing here changes what a fresh install looks like.
 
+### Before the household's first passkey
+
+**Nobody has done this yet.** The slice that shipped the lock was verified against a real Postgres
+and a headless Chromium, and against no real device at all. Until somebody runs the two steps below
+on the household's own phones, one sentence the enrolment screen shows is a reasonable expectation
+rather than an observed fact, and that screen hedges it accordingly.
+
+1. Enrol the household's first passkey on the household's primary phone.
+2. On a second device holding no passkey, open the instance, press **Unlock**, and watch for an
+   offer to use another device — a code to scan, or a prompt arriving on the phone. Approve it on
+   the phone, and confirm the second device lands on the Overview.
+
+If step 2 offers nothing of the kind, try it again in another browser on that device — WebKit and
+Chromium do not read the stored transports the same way, so one browser's silence is not every
+browser's. If none of them offers it, the first thing to try is another passkey rather than a
+reset. A locked
+browser is offered every credential the household holds (`allowCredentialList`,
+[`app/lib/lock.server.ts`](../app/lib/lock.server.ts)), and the rule below turns on *any one* of
+them reporting `hybrid`. So enrol a second passkey from a browser that is still unlocked — usually
+the one that did the first enrolment — using a different provider, since a passkey is created on the
+device doing the enrolling and the provider that made the first one is excluded from making a
+second. If that is not possible either, deleting every passkey returns the instance to open —
+[the runbook](runbook.md#every-browser-is-locked-and-no-passkey-can-be-reached) carries the command
+and the order to run it in — and the household can enrol again from a provider whose passkeys reach
+other devices.
+
+Which providers those are is a fact about the *registering* client rather than about this app. The
+credentials this instance offers a locked browser carry whatever transports the enrolling client
+reported, and both WebKit and Chromium hide the use-another-device option when every offered
+credential lists `internal` alone. Current iCloud Keychain and Google Password Manager report
+`hybrid` beside `internal`, which is what makes the option appear, and Chrome's own macOS profile
+authenticator reports no transports at all, which Chromium alone reads as "allow everything" —
+WebKit offers the option only where a credential lists `hybrid` itself. Older
+Safari and Android values were not verified, and nothing else has been checked.
+
+**Write down what you find, here.** Once the walk has been run, record which providers were tried
+and what each offered. That record is what lets a later change take the hedge out of the enrolment
+screen's own sentence: it may say what was observed, and until then it keeps hedging.
+
 ### Enrolling the first one locks everyone else, from their very next request
 
 The moment anyone enrols the household's first passkey, every *other* browser in the household is
