@@ -17,11 +17,21 @@ line and each is reviewed alone.
 **Blocked by:** Nothing. Parallel with [02](02-the-batched-probe.md),
 [03](03-the-three-hardening-rules.md) and [04](04-the-price-worker-process.md).
 
-**Status:** ready-for-agent
+**Status:** built — the acceptance list below is ticked, `pricing/06`'s precedent.
+
+**Corrected.** One box below promised `tests/price-poller.test.ts` would need no change. It did.
+Moving the lock into `runRefresh` moves the tick's two log lines *outside* it: `withRefreshLock`
+releases the pooled connection in its own `finally`, before its promise resolves, so the lines are
+written after the release rather than before it. `watchedPool`'s "handing a connection back is the
+last thing a tick does" — the sentence both tests in `describe("what the batch writes to the log")`
+synchronise on — stopped being true. One of them failed; the other would have gone on passing
+while asserting nothing, which a mutation check confirmed. Both now wait one turn of the macrotask
+queue for the lines they are about, and `watchedPool`'s docstring says so. The lines themselves are
+unchanged in level, stem and content.
 
 **`runRefresh`** (`app/lib/refresh.server.ts`, new)
 
-- [ ] `runRefresh({ quotes }, provider = yahooPriceProvider()): Promise<RefreshRun>` wraps
+- [x] `runRefresh({ quotes }, provider = yahooPriceProvider()): Promise<RefreshRun>` wraps
       `withRefreshLock(() => refreshPrices(provider, getConfig().MARKET_TIMEZONE, { quotes },
       getDb()))`: `null` is `{ status: "busy" }`, a throw is logged as `Price refresh failed; last known
       prices are kept:`, the poller's stem (`price-poller.server.ts:149`, `docs/operating.md:740`), and becomes `{ status: "error" }`, a report is `{ status:
@@ -32,30 +42,31 @@ line and each is reviewed alone.
       The default provider is `yahooPriceProvider()`, in this one place; [06](06-the-app-cutover.md)
       changes it. An instance, not a factory: with no per-operation state to reset there is nothing
       a factory would buy, and the batch abort below is what keeps a dead worker's cost bounded
-- [ ] The route (`refresh.ts:58-86`) becomes `outcomeOf(await runRefresh({ quotes: true }))`; the
+- [x] The route (`refresh.ts:58-86`) becomes `outcomeOf(await runRefresh({ quotes: true }))`; the
       redirect rule at `:45-47` is untouched. `RefreshOutcome` (`:21-33`) moves to the new module
       and `app/components/price-freshness.tsx:16` imports the type from there, as `import type` —
       the one `lib → routes` import in the tree, gone, and the `.server.ts` boundary kept
-- [ ] The poller's tick (`app/lib/price-poller.server.ts:127-147`) and `requestRefresh` (`:245-259`)
+- [x] The poller's tick (`app/lib/price-poller.server.ts:127-147`) and `requestRefresh` (`:245-259`)
       call `runRefresh(…, state.provider)`; `PollerState.provider` (`:59-72`) and the
       `startPricePoller(provider = …)` default (`:193`) stay exactly as they are; the market-hours
       decision (`:114`) and the cadence read (`:119-123`) stay the poller's — #159's constraint —
       and its two log lines (`:139-146`) are written from the run's report exactly as today. Neither
-      caller constructs a provider afterwards; `tests/price-poller.test.ts` is untouched
+      caller constructs a provider afterwards; ~~`tests/price-poller.test.ts` is untouched~~ — see
+      the **Corrected** banner above: it needed the synchronisation point the moved lock took away
 
 **`ProviderUnreachable` and the batch abort**
 
-- [ ] `export class ProviderUnreachable extends Error` beside `PriceProvider`
+- [x] `export class ProviderUnreachable extends Error` beside `PriceProvider`
       (`price-provider.server.ts:155-162`), its message operator-facing; the Yahoo adapter never
       throws it
-- [ ] `backfillCloses` (`prices.server.ts:548`): the per-candidate catch (`:568-587`) rethrows a
+- [x] `backfillCloses` (`prices.server.ts:548`): the per-candidate catch (`:568-587`) rethrows a
       `ProviderUnreachable` **unchanged** instead of ledgering it; the existing outer catch
       (`:630-634`) then wraps it once in `BackfillBatchFailed` (`:501-509`) with the partial report,
       exactly as it does for a database error today. Not wrapped inside the loop — that would nest
       two `BackfillBatchFailed`s and the composition would log the inner wrapper, not the cause. The
       attempt in flight and every candidate after it get no ledger row, so the retry clock
       (`:306-316`) is not charged for a dead worker
-- [ ] The composition's catch (`:688-702`) branches on `error.cause instanceof ProviderUnreachable`:
+- [x] The composition's catch (`:688-702`) branches on `error.cause instanceof ProviderUnreachable`:
       one `console.warn` carrying the cause's text, and *not* "the quotes it ran beside are
       unaffected" — false whenever the quotes call hit the same dead worker: one connect attempt and
       one log line per call site, quotes and the batch abort, at most two of each in one tick for
@@ -63,7 +74,7 @@ line and each is reviewed alone.
 
 **Tests**
 
-- [ ] `tests/refresh.test.ts` (new): `process.env.DATABASE_URL = TEST_DATABASE_URL` **before** any
+- [x] `tests/refresh.test.ts` (new): `process.env.DATABASE_URL = TEST_DATABASE_URL` **before** any
       import that reaches `getConfig()` (`tests/price-poller.test.ts:37` is the precedent — it
       memoises, and `withRefreshLock` reaches the process-wide pool). `runRefresh` with a fake
       provider answers `done` with the quotes' counts; `busy` while a second `pg` client
@@ -71,16 +82,16 @@ line and each is reviewed alone.
       holds the advisory lock on its own session — `withDatabase`'s transaction is not one; and
       `error` when the **database or the lock** fails — a closed pool, or `withRefreshLock` stubbed
       to throw — since `runRefresh`'s catch only ever sees what escapes `refreshPrices`
-- [ ] A separate case pins what `error` is *not*: a fake whose `getQuotes` throws answers `done`
+- [x] A separate case pins what `error` is *not*: a fake whose `getQuotes` throws answers `done`
       with `report.quotes.providerFailed` true, because `refreshQuotes` catches the throw and marks
       every selected instrument stale (`prices.server.ts:795-798`); a backfill throw is ledgered per
       candidate or arrives as `batchFailed`. No provider fault reaches `error`, which is why the
       dead-worker path of [06](06-the-app-cutover.md) reports `providerFailed` and not a failure of
       the run. The route's own test comes with [06](06-the-app-cutover.md)
-- [ ] `tests/price-backfill.test.ts`: a fake throwing `ProviderUnreachable` on the second of three
+- [x] `tests/price-backfill.test.ts`: a fake throwing `ProviderUnreachable` on the second of three
       candidates leaves the first's ledger row, none for the other two, and `refreshPrices`
       reporting `batchFailed: true` with one attempt counted; the log line is the single warning
 
 **Gates**
 
-- [ ] `npm run typecheck`, `npm test`, `npm run build` green
+- [x] `npm run typecheck`, `npm test`, `npm run build` green

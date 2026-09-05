@@ -730,11 +730,13 @@ and may drift — the code owns the wording:
   are ordinary.
 - **One line per backfill batch a tick ran that attempted or failed something** — stem
   `Price backfill`: instruments attempted, closes written, and how many calls failed. Informational
-  when nothing failed, a warning otherwise, and preceded by `Price backfill batch failed` at error
-  level when the batch itself could not go on. **Absent when there was nothing to fill**, which is
-  the ordinary case on an instance whose spine covers everything held — so, like the line above, a
-  silence here is usually not a fault. What each attempt came to is a `price_backfill` row and a
-  sentence at Settings → Prices.
+  when nothing failed, a warning otherwise, and preceded by `Price backfill batch failed` when the
+  batch itself could not go on — at error level, except when the provider could not be reached at
+  all, which is a warning carrying the reason: a provider that is simply absent is not a batch that
+  went wrong, and nothing is ledgered for it. Grep the stem, not the level. **Absent when there was
+  nothing to fill**, which is the ordinary case on an instance whose spine covers everything held
+  — so, like the line above, a silence here is usually not a fault. What each attempt came to is a
+  `price_backfill` row and a sentence at Settings → Prices.
 - **A provider outage** at error level — stem `Price provider failed` — every selected instrument
   is marked stale and the last known prices are kept. Other refresh failures (the pool, the
   advisory lock, the transaction) log `Price refresh failed`; the same failure on a **Refresh now**

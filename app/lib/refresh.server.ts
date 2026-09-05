@@ -1,8 +1,9 @@
 /**
  * One refresh, start to finish: the lock, the provider call, and the mapping
- * from what came back to what a caller renders. Before this module, three
- * callers — the route, the poller's tick, and `requestRefresh` — each held
- * the lock and built a provider by hand (issue #159); a worker cutover
+ * from what came back to what a caller renders. Before this module the lock
+ * was taken in two places — the route, which also built its own provider, and
+ * the poller's tick, which `requestRefresh` drives (issue #159); a worker
+ * cutover
  * ([spec 0018](../../docs/specs/0018-price-worker.md) §3.4) has to change one
  * default in one place instead of three, and the batch abort that cutover
  * relies on (§3.1) needs one caller to test against a fake provider.
@@ -26,9 +27,11 @@ import {
 
 /**
  * What one press of "Refresh now" came to, in the shape the control renders.
- * Moved here from `app/routes/refresh.ts` (issue #159) — the one `lib →
- * routes` import in the tree, gone; `price-freshness.tsx` now imports the
- * type from here instead.
+ * Moved here from `app/routes/refresh.ts` (issue #159) — the tree's one
+ * import out of `app/routes/`, gone: `price-freshness.tsx` took the type from
+ * a route module, where a *value* import would have compiled. From a
+ * `.server.ts` module the build refuses one, so the boundary is now enforced
+ * rather than merely observed.
  */
 export type RefreshOutcome =
   | {
@@ -49,7 +52,7 @@ export type RefreshOutcome =
  * shape: `report.quotes` is `RefreshPricesReport`'s own, nullable when quotes
  * were not asked for. {@link runRefresh}'s `{ quotes: true }` overload narrows
  * it further, mirroring how `refreshPrices` narrows `RefreshPricesReport`
- * itself (`prices.server.ts:666-678`).
+ * itself (`prices.server.ts:687-704`).
  */
 export type RefreshRun =
   | { status: "done"; report: RefreshPricesReport }
@@ -73,7 +76,7 @@ type RunWithQuotes =
  * everything that escapes `refreshPrices` itself: the pool, the lock, the
  * transaction. It is never a provider fault — `refreshQuotes` catches that and
  * reports `providerFailed` inside a `done` run
- * (`prices.server.ts:793-799`), and `backfillCloses` ledgers a provider
+ * (`prices.server.ts:824-830`), and `backfillCloses` ledgers a provider
  * failure per candidate rather than throwing one out (the one exception,
  * `ProviderUnreachable`, still surfaces as `done` with `backfill.batchFailed`
  * — the composition inside `refreshPrices` catches it, per §3.1 of the
@@ -88,10 +91,11 @@ type RunWithQuotes =
  * untouched (story 18) is the one a throw cannot show. Every path here returns
  * something {@link outcomeOf} can render.
  *
- * The default provider is `yahooPriceProvider()`, in this one place — the
- * price-worker cutover changes it here and nowhere else. An instance, not a
- * factory: with no per-operation state to reset there is nothing a factory
- * would buy.
+ * The default provider is `yahooPriceProvider()`, and this is the only place
+ * a *caller* of a refresh names one — the price-worker cutover changes it here
+ * and in `startPricePoller`'s own default, which holds one instance for the
+ * process. An instance, not a factory: with no per-operation state to reset
+ * there is nothing a factory would buy.
  */
 export async function runRefresh(
   options: { quotes: true },

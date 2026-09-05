@@ -3,21 +3,21 @@
  * database or the lock itself (`error`), and a fake provider's counts
  * (`done`) — plus the one case that pins what `error` is *not*, since a
  * provider throwing is `refreshQuotes`'s job to catch, never `runRefresh`'s
- * (`prices.server.ts:793-799`).
+ * (`prices.server.ts:824-830`).
  *
  * `runRefresh` reads through `getDb()`/`getPool()` rather than taking either
  * as a parameter, exactly as every real caller does, so a test scopes both
  * through `withDb`: `db` is the fixture-seeded transaction `withDatabase`
  * always rolls back, and `pool` is a real connection for the advisory lock
  * `withRefreshLock` takes on its own session — `tests/price-poller.test.ts`'s
- * precedent (its header comment, and `:104`'s `watchedPool`), needed here for
+ * precedent (its header comment, and `:105`'s `watchedPool`), needed here for
  * the same reason: `withRefreshLock` reaches the process-wide pool, which a
  * transaction is not.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
 import { withDb } from "~/lib/db.server";
-import { runRefresh } from "~/lib/refresh.server";
+import { outcomeOf, runRefresh } from "~/lib/refresh.server";
 import { createPool } from "../server/db.ts";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/database.ts";
@@ -103,10 +103,41 @@ describe("a run that takes the lock", () => {
   );
 
   it(
+    "projects a done run's quotes into the outcome the control renders",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The mapping the route used to hold (`app/routes/refresh.ts` before
+      // this module), over a real report rather than a hand-built one: a
+      // field crossed here shows the household the wrong figure, and the
+      // route has no assertion of its own until [06] gives it one.
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const pool = createPool(TEST_DATABASE_URL);
+
+      try {
+        const outcome = await withDb(
+          db,
+          async () => outcomeOf(await runRefresh({ quotes: true }, fakeProvider([quote("VTI")]))),
+          pool,
+        );
+
+        expect(outcome).toEqual({
+          status: "done",
+          requested: 1,
+          priced: 1,
+          stale: 0,
+          observed: 1,
+          providerFailed: false,
+        });
+      } finally {
+        await pool.end();
+      }
+    }),
+  );
+
+  it(
     "answers done with providerFailed, not error, when the provider itself throws",
     withDatabase(async ({ db, seedInstrument }) => {
       // `refreshQuotes` catches this and marks every selected instrument
-      // stale (`prices.server.ts:793-799`) — no provider fault ever reaches
+      // stale (`prices.server.ts:825-830`) — no provider fault ever reaches
       // `runRefresh`'s own catch, which is why the dead-worker path a future
       // slice adds reports `providerFailed` and not a failed run.
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
@@ -138,6 +169,9 @@ describe("a run that cannot take the lock", () => {
         const run = await withDb(db, () => runRefresh({ quotes: true }, fakeProvider()), pool);
 
         expect(run).toEqual({ status: "busy" });
+        // Passed through untouched: there is no report to project, and the
+        // control renders "someone else is refreshing" from this alone.
+        expect(outcomeOf(run)).toEqual({ status: "busy" });
       } finally {
         await holder.query(`select pg_advisory_unlock(${REFRESH_ADVISORY_LOCK_KEY})`);
         holder.release();
