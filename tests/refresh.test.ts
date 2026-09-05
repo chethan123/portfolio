@@ -109,7 +109,11 @@ describe("a run that takes the lock", () => {
       // this module), over a real report rather than a hand-built one: a
       // field crossed here shows the household the wrong figure, and the
       // route has no assertion of its own until [06] gives it one.
+      // Two instruments and one quote, so every count in the outcome is a
+      // different number: with all five equal, a projection that crossed two
+      // fields would read correctly and the case would prove nothing.
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedInstrument({ symbol: "VXUS", priceSource: "feed" });
       const pool = createPool(TEST_DATABASE_URL);
 
       try {
@@ -121,9 +125,9 @@ describe("a run that takes the lock", () => {
 
         expect(outcome).toEqual({
           status: "done",
-          requested: 1,
+          requested: 2,
           priced: 1,
-          stale: 0,
+          stale: 1,
           observed: 1,
           providerFailed: false,
         });

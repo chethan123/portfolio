@@ -29,6 +29,20 @@ while asserting nothing, which a mutation check confirmed. Both now wait one tur
 queue for the lines they are about, and `watchedPool`'s docstring says so. The lines themselves are
 unchanged in level, stem and content.
 
+Two more claims in the boxes were wrong when they were written, and are struck below. The retired
+import was `components → routes`, not `lib → routes` — no `app/lib` module has ever imported from
+`app/routes`; the interesting half is that a type taken from a route module would have compiled as
+a *value* import, and from a `.server.ts` module the build refuses one. And `requestRefresh` does
+not call `runRefresh`: it calls `tick`, which does, and it is byte-identical to what it was.
+
+One deferral was taken here rather than in [09](09-documents-and-runbooks.md). This ticket retires
+the `Manual price refresh failed` stem, and `docs/operating.md`'s log guide is the authority that
+tells an operator to grep it; the same guide had to be corrected here anyway, because it promised
+that `Price backfill batch failed` always appears at error level and the abort logs a warning.
+Leaving a stem that no longer exists two lines under a sentence this ticket rewrote would have been
+worse than the deferral was meant to avoid. Both bullets were reflowed to their original line
+counts, so no citation into that file moved.
+
 **`runRefresh`** (`app/lib/refresh.server.ts`, new)
 
 - [x] `runRefresh({ quotes }, provider = yahooPriceProvider()): Promise<RefreshRun>` wraps
@@ -37,7 +51,8 @@ unchanged in level, stem and content.
       prices are kept:`, the poller's stem (`price-poller.server.ts:149`, `docs/operating.md:740`), and becomes `{ status: "error" }`, a report is `{ status:
       "done", report }` with `report: RefreshPricesReport` (`prices.server.ts:640`).
       The route's `Manual …` line (`refresh.ts:83`) retires with the route's catch;
-      `operating.md:741`'s sentence about it goes with [09](09-documents-and-runbooks.md).
+      `operating.md:741`'s sentence about it was taken here instead of in
+      [09](09-documents-and-runbooks.md) — see the banner.
       `outcomeOf(run): RefreshOutcome` projects `report.quotes` as the route does now (`:74-81`).
       The default provider is `yahooPriceProvider()`, in this one place; [06](06-the-app-cutover.md)
       changes it. An instance, not a factory: with no per-operation state to reset there is nothing
@@ -45,9 +60,11 @@ unchanged in level, stem and content.
 - [x] The route (`refresh.ts:58-86`) becomes `outcomeOf(await runRefresh({ quotes: true }))`; the
       redirect rule at `:45-47` is untouched. `RefreshOutcome` (`:21-33`) moves to the new module
       and `app/components/price-freshness.tsx:16` imports the type from there, as `import type` —
-      the one `lib → routes` import in the tree, gone, and the `.server.ts` boundary kept
-- [x] The poller's tick (`app/lib/price-poller.server.ts:127-147`) and `requestRefresh` (`:245-259`)
-      call `runRefresh(…, state.provider)`; `PollerState.provider` (`:59-72`) and the
+      ~~the one `lib → routes` import in the tree, gone~~ (it was `components → routes` — see the
+      banner), and the `.server.ts` boundary kept
+- [x] The poller's tick (`app/lib/price-poller.server.ts:127-147`) ~~and `requestRefresh`
+      (`:245-259`)~~ call `runRefresh(…, state.provider)` — `requestRefresh` reaches it through the
+      tick and is unchanged, as it was before this ticket; `PollerState.provider` (`:59-72`) and the
       `startPricePoller(provider = …)` default (`:193`) stay exactly as they are; the market-hours
       decision (`:114`) and the cadence read (`:119-123`) stay the poller's — #159's constraint —
       and its two log lines (`:139-146`) are written from the run's report exactly as today. Neither

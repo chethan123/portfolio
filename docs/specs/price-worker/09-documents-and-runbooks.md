@@ -151,11 +151,9 @@ story, not rewritten.
       itself failed; see the error above." to the batch summary; since 01 the line above it is a
       *warning* whenever the provider could not be reached, so the sentence points at a level that
       is not there — "see the line above" is the whole fix. `docs/operating.md`'s backfill bullet
-      was corrected in 01 to say the stem carries both levels and to grep the stem rather than the
-      level; re-read it against whatever the worker's arrival makes true. And `operating.md:741`'s
-      sentence about the **Refresh now** press logging `Manual price refresh failed` — 01 retired
-      that stem for the poller's own `Price refresh failed`, and 01's box deferred the sentence
-      here
+      was corrected in 01, along with the sentence that told an operator to grep the retired
+      `Manual price refresh failed` stem; re-read both against whatever the worker's arrival makes
+      true
 - [ ] `server/db.ts:59-61`: the lock client now spans the socket round trip to the worker rather
       than the app's own provider network work. `app/lib/price-poller.server.ts:2-6` and
       `compose.yaml:1-2` no longer argue against a worker; re-read. PR #220, if still open, is
