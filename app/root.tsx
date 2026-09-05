@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Link,
   Links,
@@ -110,6 +110,20 @@ function isUnlockPath(pathname: string): boolean {
 }
 
 /**
+ * Whether `pathname` is `/lock-now` — read only by {@link lockMiddleware}, to
+ * decide whether its *own* refusal should clear the grant cookie (finding
+ * 3), never to exempt the path itself. `/lock-now` is not on
+ * {@link LOCK_EXEMPT_PATHS} and must not be: an unauthenticated POST there
+ * still has to pass the same lock this middleware enforces everywhere else,
+ * or anyone could end any household's grant with no credential at all. All
+ * that changes on this one path is what a *refusal* does to the cookie —
+ * argued at {@link redirectToUnlock}'s own header.
+ */
+function isLockNowPath(pathname: string): boolean {
+  return normalizedPathname(pathname) === LOCK_NOW_ACTION;
+}
+
+/**
  * Every response the lock middleware lets through carries this — and it is
  * worth being exact about what that buys, because it is less than this slice
  * originally claimed.
@@ -160,9 +174,16 @@ function withNoStore(response: Response): Response {
  * already resolves to `/` for an absent parameter — the same fallback a
  * missing or unsafe one gets today.
  *
- * `clearCookie` is true only when a grant lookup came back definitively
- * empty — never on a mere read failure, which is not proof the cookie's
- * grant is actually gone.
+ * `clearCookie` is true when a grant lookup came back definitively empty —
+ * proof the cookie's grant is actually gone — or when the refused request
+ * targets `/lock-now` itself (finding 3, {@link isLockNowPath}): nowhere
+ * else is a mere read failure proof of that, but a reader who posted to
+ * `/lock-now` has already asked to end this browser's grant, and an outage
+ * that merely stops the middleware from *confirming* it is gone is not a
+ * reason to hand it back once the database recovers. `lock-now.ts`'s own
+ * action already clears the cookie on every path through it; this covers
+ * the one failure mode that never reaches it — a refusal thrown here, before
+ * `next()` ever runs that action.
  */
 function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Response {
   const target = new URL(UNLOCK_PATH, url);
@@ -223,8 +244,16 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
  * catches around `firstRunStep`, which is right for a first-run hint that
  * may fail open, and wrong for a boundary — a boundary that opens the
  * moment Postgres hiccups is not a boundary. Every such failure refuses
- * here too, but clears no cookie: a read that merely failed to answer is
- * not proof the grant it names is actually gone.
+ * here too, and clears no cookie — with one deliberate exception (finding
+ * 3): a read that merely failed to answer is not proof the grant it names
+ * is actually gone, *except* when the refused request was itself a POST to
+ * `/lock-now` ({@link isLockNowPath}). A reader who pressed "Lock now"
+ * during an outage has already stated their intent; `/lock-now`'s own
+ * action clears the cookie on every path *through* it (`lock-now.ts`'s own
+ * header), but an outage in `isLocked`/`touchGrant` refuses here, before
+ * that action ever runs, so this is the one place that intent can otherwise
+ * go unhonoured. Honouring it — clearing the cookie on this path's refusal
+ * too — is strictly safer than preserving a grant the reader asked to end.
  *
  * **A live grant is extended by the request that used it** — {@link
  * touchGrant} itself skips the write unless less than half the idle window
@@ -248,25 +277,30 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
     return withNoStore(await next());
   }
 
+  // Whether *this* refusal, whatever throws it below, should clear the
+  // cookie regardless of the reason — finding 3's exception, argued at
+  // this function's own header and {@link redirectToUnlock}'s.
+  const isLockNowRequest = isLockNowPath(url.pathname);
+
   let locked: boolean;
   try {
     locked = await isLocked();
   } catch (error) {
     console.error("Lock check failed; refusing rather than continuing:", error);
-    throw redirectToUnlock(url, request.method, false);
+    throw redirectToUnlock(url, request.method, isLockNowRequest);
   }
 
   if (!locked) return withNoStore(await next());
 
   const grantId = readLockCookie(request);
-  if (grantId === undefined) throw redirectToUnlock(url, request.method, false);
+  if (grantId === undefined) throw redirectToUnlock(url, request.method, isLockNowRequest);
 
   let grant: Awaited<ReturnType<typeof touchGrant>>;
   try {
     grant = await touchGrant(grantId);
   } catch (error) {
     console.error("Grant check failed; refusing rather than continuing:", error);
-    throw redirectToUnlock(url, request.method, false);
+    throw redirectToUnlock(url, request.method, isLockNowRequest);
   }
 
   if (grant === undefined) throw redirectToUnlock(url, request.method, true);
@@ -553,53 +587,103 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // `router.navigate`) and neither changes for the life of this app, so
   // there is no identity churn to route around — and even if one did
   // change, naming it here is correct: a re-subscribe, not a bug.
-  const { submit: submitLock } = useFetcher();
+  const { submit: submitLock, state: lockFetcherState } = useFetcher();
   const { revalidate } = useRevalidator();
+
+  /**
+   * Whether the automatic, re-entry-triggered lock post below is in
+   * flight. Set synchronously inside `watchReentry`'s hidden-too-long
+   * callback, in the same call that starts the fetcher submission — not
+   * derived solely from {@link lockFetcherState}, because that value only
+   * begins to change once `submitLock` itself has run, and the whole point
+   * (finding 2, below) is for this browser to already be inert by then, not
+   * a tick later. Cleared once the fetcher reports idle again, which for a
+   * live grant only happens once `/lock-now`'s redirect has actually been
+   * followed all the way to a rendered `/unlock` — react-router 7.18.2 marks
+   * a fetcher that carried a followed redirect done only on
+   * `completeNavigation` (`markFetchRedirectsDone`, the router's core
+   * chunk), never earlier.
+   */
+  const [locking, setLocking] = useState(false);
+
+  useEffect(() => {
+    if (lockFetcherState === "idle") setLocking(false);
+  }, [lockFetcherState]);
 
   /**
    * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
    * the whole argument for what each half does and does not promise; this
    * effect is only the wiring.
    *
-   * **The two halves are gated on different conditions, on purpose.** The
-   * `pageshow` half (`askServer`, wired unconditionally below) only
-   * revalidates — cheap and correct in every state — so it installs
-   * whenever this is not the unlock screen (this function's own comment on
-   * {@link isUnlockScreen} above), full stop. It must **not** also require
-   * `hasPasskey`: that flag is baked into this page at render time, and it
-   * is exactly the value that goes stale — a page rendered while the
-   * household held no passkey installs no listener at all under the old,
-   * single guard, and a passkey enrolled from another browser afterward
-   * would leave a page restored from the back/forward cache with no grant
-   * and no server round trip, the precise gap `pageshow` exists to close.
-   * The `visibilitychange`/`postLock` half stays gated on `hasPasskey`,
-   * passed as `null` to {@link watchReentry} to skip it entirely otherwise:
-   * posting a lock when nothing is enrolled would send the reader on a
-   * pointless `/lock-now` → `/unlock` → `/` round trip for a browser that
-   * was never locked in the first place.
+   * **Both halves install unconditionally now, on purpose, and neither may
+   * ever go back to gating installation on `hasPasskey`.** That flag is
+   * baked into this page at render time, and it is exactly the value that
+   * goes stale: a page rendered while the household held no passkey used to
+   * pass `null` for the `visibilitychange` half, which skipped installing
+   * that listener for this tab's entire lifetime (`watchReentry`'s own
+   * doc). A passkey enrolled from another browser afterward then left this
+   * tab with nothing watching at all — foregrounding it past the grace
+   * produced an ordinary, non-persisted `pageshow`, which the other half
+   * was never wired to catch either, and the tab kept showing balances
+   * (finding 1). The fix is not a different gate on the same installation;
+   * it is moving the decision out of *whether this fires* and into *what it
+   * does once it fires* — the callback below reads `hasPasskey` only at the
+   * instant a hidden-too-long return actually happens, and even then never
+   * to decide silence: with a passkey believed enrolled it posts the lock,
+   * same as before; with none believed enrolled it still asks the server,
+   * the identical revalidation the `pageshow` half already relies on to
+   * pick up state this render never had. A database read at worst, never a
+   * blind tab.
    */
   useEffect(() => {
     if (isUnlockScreen) return;
 
     return watchReentry(
-      // A fetcher submission, not `useSubmit`'s navigation mode: react-router
-      // 7.18.2's `startNavigation` unconditionally aborts the one pending
-      // navigation's `AbortController` the instant another navigation
-      // starts (`pendingNavigationController`, in the router core
-      // `react-router` ships), so a reader who taps a link while a
-      // navigation-mode lock post is in flight can cancel `deleteGrant()`
-      // before it runs and land on the page they asked for with their
-      // grant still live. A fetcher's request instead lives in its own
-      // entry in `fetchControllers`, keyed by the fetcher and entirely
-      // untouched by `startNavigation`, so a navigation elsewhere cannot
-      // cancel it — and a redirect a fetcher's action returns is still
-      // picked up by the router (`findRedirect` over the fetcher's own
-      // results) and followed, so the reader still lands on the unlock
-      // screen. The chrome's own "Lock now" **button** stays a real
-      // `<form method="post">` (`LockNowControl`) — it must keep working
-      // with JavaScript off, which is why it is a form and not a submit
-      // call at all; only this automatic, re-entry-triggered post changes.
-      hasPasskey ? () => submitLock(null, { method: "post", action: LOCK_NOW_ACTION }) : null,
+      () => {
+        if (!hasPasskey) {
+          // Nothing this browser's own post could protect *as far as this
+          // render knows* — but that belief is exactly what can be stale
+          // (this effect's own header). Asking the server is the cheap,
+          // always-correct fallback: the middleware answers off the live
+          // database, and refuses on its own if a passkey exists now.
+          revalidate();
+          return;
+        }
+
+        // Set before `submitLock` runs, not after — see {@link locking}'s
+        // own header for why the ordering here is the whole fix for
+        // finding 2, not a stylistic choice.
+        setLocking(true);
+
+        // A fetcher submission, not `useSubmit`'s navigation mode:
+        // react-router 7.18.2's `startNavigation` unconditionally aborts the
+        // one pending navigation's `AbortController` the instant another
+        // navigation starts (`pendingNavigationController`, in the router
+        // core `react-router` ships), so a reader who taps a link while a
+        // navigation-mode lock post is in flight can cancel `deleteGrant()`
+        // before it runs and land on the page they asked for with their
+        // grant still live. A fetcher's request instead lives in its own
+        // entry in `fetchControllers`, keyed by the fetcher and entirely
+        // untouched by `startNavigation`, so a navigation elsewhere cannot
+        // cancel it. **That is not the whole story, though (finding 2).**
+        // `handleFetcherAction` (same core chunk) captures this fetcher's
+        // own load id before awaiting the action, and once the action
+        // resolves it compares that id against whatever the *last-started*
+        // navigation's id is: if a newer navigation was started meanwhile —
+        // a tap on still-live chrome, since nothing yet stops one — the
+        // fetcher's redirect is discarded outright (`getDoneFetcher(void
+        // 0)`) rather than followed, and the page that navigation rendered
+        // stays on screen with the grant already gone underneath it. `Lock
+        // now`'s own render below is what actually closes that gap: `inert`
+        // on the chrome from the moment `locking` turns true means no tap
+        // can start that newer navigation in the first place, so there is
+        // nothing left for this race to discard. The chrome's own "Lock
+        // now" **button** stays a real `<form method="post">`
+        // (`LockNowControl`) — it must keep working with JavaScript off,
+        // which is why it is a form and not a submit call at all; only this
+        // automatic, re-entry-triggered post changes.
+        submitLock(null, { method: "post", action: LOCK_NOW_ACTION });
+      },
       () => revalidate(),
     );
   }, [isUnlockScreen, hasPasskey, submitLock, revalidate]);
@@ -627,11 +711,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           // invented for one screen, so this gets the same centred column
           // and padding every other page's content sits in without pulling
           // in a single rail- or topbar-specific rule.
-          <div className="app">
+          <div className="app" inert={locking || undefined}>
             <main className="app-main">{children}</main>
           </div>
         ) : (
-          <div className="app">
+          <div className="app" inert={locking || undefined}>
             <nav className="app-rail" aria-label="Primary">
               <Brand search={owners} />
               <ul className="app-nav">
@@ -686,6 +770,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </nav>
           </div>
         )}
+        {/* Finding 2's actual fix is `inert` on the chrome above, set the
+         * instant the automatic lock post goes out (`locking`'s own header
+         * on the reentry effect) — this overlay is the human-readable half
+         * of that, not the mechanism: `inert` alone would leave a reader
+         * tapping a now-unresponsive screen with no idea why. Proportionate
+         * on purpose — an ordinary return after sixty seconds hidden, not a
+         * rare failure — so it says one thing and asks nothing: no button,
+         * nothing to dismiss, because there is nothing here for a reader to
+         * decide. It clears itself the moment the fetcher reports idle
+         * again, whether that is because `/lock-now`'s redirect landed on
+         * `/unlock` or because the post itself failed outright. */}
+        {locking ? (
+          <div className="reentry-lock-overlay" role="alert" aria-live="assertive">
+            <p>Locking this browser…</p>
+          </div>
+        ) : null}
         <ScrollRestoration />
         <Scripts />
         {/* The worker exists for its offline page alone and stores nothing on

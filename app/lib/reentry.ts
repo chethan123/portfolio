@@ -47,18 +47,26 @@
  * nothing there, and closes the gap that survives everywhere else: Chrome,
  * unconditionally, and Safari's own local-dev loop.
  *
- * **`postLock` is nullable, and that is what lets `app/root.tsx` gate the
- * two halves on different conditions.** `hasPasskey` is baked into a page at
- * render time and can go stale — a household may enrol its first passkey in
- * another tab after this one already rendered with none. The `pageshow`
- * half only asks the loaders to run again, which is cheap and correct
- * regardless of whether this browser's render believed a passkey existed,
- * so it always wires up here. Posting a lock when nothing is enrolled would
- * instead send the reader on a pointless `/lock-now` → `/unlock` → `/` round
- * trip for a browser that was never locked in the first place, so that half
- * — the `visibilitychange` listener and the hidden-timer state behind it —
- * is installed only when the caller passes a real `postLock`; passing `null`
- * skips it outright rather than installing a listener with nothing to call.
+ * **`postLock` is nullable, for a caller with genuinely nothing this
+ * browser's own return could ever post — not, any more, for `app/root.tsx`
+ * gating either half on `hasPasskey`.** An earlier version of that effect
+ * passed `null` here whenever the household held no passkey at render time,
+ * on the reasoning that posting a lock with nothing enrolled would be a
+ * pointless `/lock-now` → `/unlock` → `/` round trip. That reasoning is
+ * where the bug lived: `hasPasskey` is baked into a page at render time and
+ * can go stale — a household may enrol its first passkey in another tab
+ * after this one already rendered with none — and passing `null` skips
+ * installing the `visibilitychange` listener for this tab's *entire*
+ * lifetime, not merely for one return. A page caught that way never got a
+ * second chance: the `pageshow` half only fires on a back/forward-cache
+ * restore, which an ordinary foreground-after-hidden never is. `app/root.tsx`
+ * now always passes a real function, and decides *inside* it, at the instant
+ * a hidden-too-long return actually happens, whether to post the lock or
+ * only ask the server — its own header on that effect carries the rest of
+ * the argument. What stays true here is only the narrower one: a caller with
+ * nothing at all this half could ever protect may still pass `null` to skip
+ * installing it outright, rather than installing a listener with nothing to
+ * call.
  *
  * **A persisted restore is not by itself evidence the grant is gone.**
  * Unlike the hidden-too-long case, which already knows what it wants (end

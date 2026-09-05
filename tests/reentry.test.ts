@@ -356,6 +356,71 @@ describe("watchReentry", () => {
   );
 
   it(
+    "would have left a passkey enrolled elsewhere unnoticed for this tab's whole lifetime under the old, hasPasskey-gated installation — and does not under the fix",
+    () => {
+      // Finding 1: a page renders with `hasPasskey: false` — the household
+      // held none yet — and then, in another browser entirely, enrols its
+      // first passkey. This tab is never told; its own `hasPasskey` is
+      // baked in at render time and stays false for as long as the page
+      // lives. `app/root.tsx` used to decide whether to install this half
+      // *at all* off that same stale flag (`hasPasskey ? cb : null`,
+      // reproduced literally as `postLockOld` below): with no passkey
+      // believed enrolled, it passed `null`, and `watchReentry` skips
+      // installing the `visibilitychange` listener outright for a `null`
+      // `postLock` — not only for the return in progress, but for the
+      // rest of this tab's life, since nothing re-runs the effect that
+      // decided it. Foregrounding the tab after the grace, having missed
+      // the enrolment, produces an ordinary, non-persisted `pageshow` —
+      // the *other* half's own trigger — so nothing here ever asks the
+      // server either. The fix moves the decision inside the callback
+      // instead of into whether it installs: `postLockNew` below is what
+      // `app/root.tsx` passes now, on the identical stale-`false` render —
+      // always a real function, deciding at the instant the return
+      // actually happens rather than at mount.
+      const perf = vi.spyOn(performance, "now");
+      let clock = 0;
+      perf.mockImplementation(() => clock);
+
+      const hasPasskeyAtRender = false; // the stale belief this render was built on
+
+      const postToLockNow = vi.fn();
+      const postLockOld = hasPasskeyAtRender ? postToLockNow : null;
+      const oldBrowser = install();
+      const teardownOld = watchReentry(postLockOld, vi.fn());
+
+      oldBrowser.hide();
+      clock += REENTRY_GRACE_MS + 1;
+      oldBrowser.show();
+
+      // The bug, reproduced: no listener was ever installed, so nothing
+      // here noticed the return at all.
+      expect(oldBrowser.listenerCount("document", "visibilitychange")).toBe(0);
+      expect(postToLockNow).not.toHaveBeenCalled();
+      teardownOld();
+
+      const askServer = vi.fn();
+      const postLockNew = () => {
+        if (!hasPasskeyAtRender) askServer();
+        else postToLockNow();
+      };
+      const newBrowser = install();
+      const teardownNew = watchReentry(postLockNew, vi.fn());
+
+      newBrowser.hide();
+      clock += REENTRY_GRACE_MS + 1;
+      newBrowser.show();
+
+      // The fix: the listener is installed regardless, so the return is
+      // noticed — and, on this same stale belief, it asks the server
+      // (which re-checks the live database) rather than staying silent.
+      expect(newBrowser.listenerCount("document", "visibilitychange")).toBe(1);
+      expect(askServer).toHaveBeenCalledTimes(1);
+      expect(postToLockNow).not.toHaveBeenCalled();
+      teardownNew();
+    },
+  );
+
+  it(
     "still posts the lock once the grace is exceeded even though the monotonic clock stalled through a suspend",
     () => {
       // The other direction, and the more important one: `performance.now()`
