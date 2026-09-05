@@ -335,7 +335,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:619` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:620` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 
 **Owned by a module, upheld by its callers.**
@@ -464,7 +464,7 @@ rather than a number to notice.
 | Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft, captures `account.external_account_number` when still null | Yes — a new set |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes — a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes — a new set |
-| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:663`) |
+| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:639`) |
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
 | Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes — it fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
 
@@ -657,7 +657,7 @@ split is exact and each side is a decision:
 
 **Only two of those deletes are reachable from the application at all:** a person who owns no
 accounts (`people.server.ts:278`), and a just-created, never-held instrument that lost an alias race
-(`instrument-resolution.server.ts:663`). There is no account delete and no position-set delete
+(`instrument-resolution.server.ts:639`). There is no account delete and no position-set delete
 anywhere in `app/`. The rest of the table is a standing guarantee about someone with a `psql`
 session, not about a screen.
 

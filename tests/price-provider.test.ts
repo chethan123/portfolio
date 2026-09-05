@@ -15,7 +15,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   CurrencyRefused,
-  probeSymbol,
+  probeSymbols,
+  probeVerdicts,
   toProviderHistory,
   toProviderQuote,
   yahooClient,
@@ -288,7 +289,68 @@ describe("the raw entry kept for the archive", () => {
   });
 });
 
-describe("probing a symbol at creation time", () => {
+describe("probeVerdicts — the verdict logic a batched probe answers with", () => {
+  it("lands an ok verdict on the asked symbol across a case difference", () => {
+    // The provider echoes its own spelling; the verdict must key on what was
+    // asked, `refreshQuotes`'s own matching rule, or a caller's map lookup by
+    // its own symbol would miss.
+    const verdicts = probeVerdicts(
+      ["vti"],
+      [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" }],
+      FETCHED_AT,
+    );
+
+    expect(verdicts).toEqual(new Map([["vti", { status: "ok", quoteType: null }]]));
+  });
+
+  it("answers both spellings when one ticker was asked for twice", () => {
+    // Two rows of a statement can name one ticker two ways. Each used to be
+    // probed on its own and each got the answer; batched, one entry has to
+    // serve both asked symbols, or the second instrument is created with no
+    // quote type for a ticker the feed answered perfectly well.
+    const verdicts = probeVerdicts(
+      ["vti", "VTI"],
+      [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" }],
+      FETCHED_AT,
+    );
+
+    expect(verdicts).toEqual(
+      new Map([
+        ["vti", { status: "ok", quoteType: "ETF" }],
+        ["VTI", { status: "ok", quoteType: "ETF" }],
+      ]),
+    );
+  });
+
+  it("names the currency a CurrencyRefused carries, on the symbol it names", () => {
+    const verdicts = probeVerdicts(
+      ["VOD.L"],
+      [{ symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" }],
+      FETCHED_AT,
+    );
+
+    expect(verdicts).toEqual(new Map([["VOD.L", { status: "non-usd", currency: "GBP" }]]));
+  });
+
+  it("answers unavailable for a symbol no entry claims", () => {
+    const verdicts = probeVerdicts(["MISTYPED"], [], FETCHED_AT);
+
+    expect(verdicts).toEqual(new Map([["MISTYPED", { status: "unavailable" }]]));
+  });
+
+  it("answers unavailable for every symbol asked when the payload is not even a list", () => {
+    const verdicts = probeVerdicts(["VTI", "VXUS"], "not an array", FETCHED_AT);
+
+    expect(verdicts).toEqual(
+      new Map([
+        ["VTI", { status: "unavailable" }],
+        ["VXUS", { status: "unavailable" }],
+      ]),
+    );
+  });
+});
+
+describe("probing symbols at creation time", () => {
   // The creation-time half of the currency guard (0004, "Resolution, and the
   // guard that has to run here"). Stubs only: the probe takes the client as a
   // parameter for exactly this reason, and no test here reaches the network.
@@ -297,8 +359,8 @@ describe("probing a symbol at creation time", () => {
   });
 
   it("answers ok for a symbol that resolves in USD", async () => {
-    const probe = await probeSymbol(
-      "VTI",
+    const verdicts = await probeSymbols(
+      ["VTI"],
       clientAnswering(async () => [
         { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" },
       ]),
@@ -306,18 +368,18 @@ describe("probing a symbol at creation time", () => {
 
     // Null rather than a guess: this payload never said what the thing is, and
     // the column it feeds is the provider's vocabulary or nothing.
-    expect(probe).toEqual({ status: "ok", quoteType: null });
+    expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
   });
 
   it("carries what the provider calls the instrument, for the row it creates", async () => {
-    const probe = await probeSymbol(
-      "VTI",
+    const verdicts = await probeSymbols(
+      ["VTI"],
       clientAnswering(async () => [
         { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" },
       ]),
     );
 
-    expect(probe).toEqual({ status: "ok", quoteType: "ETF" });
+    expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: "ETF" });
   });
 
   it("carries the provider's currency when the quote is not in USD", async () => {
@@ -326,14 +388,14 @@ describe("probing a symbol at creation time", () => {
     // built on getQuotes, where a refusal becomes an absent quote. The
     // currency arrives as the refresh guard spells it, so the refusal names
     // symbol and currency in the same words.
-    const probe = await probeSymbol(
-      "VOD.L",
+    const verdicts = await probeSymbols(
+      ["VOD.L"],
       clientAnswering(async () => [
         { symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" },
       ]),
     );
 
-    expect(probe).toEqual({ status: "non-usd", currency: "GBP" });
+    expect(verdicts.get("VOD.L")).toEqual({ status: "non-usd", currency: "GBP" });
   });
 
   it("answers unavailable for a symbol the provider does not know", async () => {
@@ -341,36 +403,60 @@ describe("probing a symbol at creation time", () => {
     // ordinary spelling of "never heard of it". Creation proceeds and the next
     // refresh marks the instrument stale, same as any symbol that stops
     // quoting.
-    const probe = await probeSymbol("MISTYPED", clientAnswering(async () => []));
+    const verdicts = await probeSymbols(["MISTYPED"], clientAnswering(async () => []));
 
-    expect(probe).toEqual({ status: "unavailable" });
+    expect(verdicts.get("MISTYPED")).toEqual({ status: "unavailable" });
   });
 
-  it("answers unavailable rather than throwing when the provider fails", async () => {
+  it("answers unavailable for every symbol asked rather than throwing when the provider fails", async () => {
     // A provider error or timeout must not block creation (0004). The probe
     // never throws; the caller has no catch to write.
-    const probe = await probeSymbol(
-      "VTI",
+    const verdicts = await probeSymbols(
+      ["VTI", "VXUS"],
       clientAnswering(async () => {
         throw new Error("socket hang up");
       }),
     );
 
-    expect(probe).toEqual({ status: "unavailable" });
+    expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
+    expect(verdicts.get("VXUS")).toEqual({ status: "unavailable" });
   });
 
   it("answers unavailable for a payload that is not even a list", async () => {
     // An unofficial endpoint can change shape under us. A payload the schema
     // has never seen is a provider failure, not a reason to refuse creation.
-    const probe = await probeSymbol("VTI", clientAnswering(async () => "not an array"));
+    const verdicts = await probeSymbols(["VTI"], clientAnswering(async () => "not an array"));
 
-    expect(probe).toEqual({ status: "unavailable" });
+    expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
   });
 
   it("answers unavailable for an entry it does not recognise", async () => {
-    const probe = await probeSymbol("VTI", clientAnswering(async () => [{ nothing: "useful" }]));
+    const verdicts = await probeSymbols(
+      ["VTI"],
+      clientAnswering(async () => [{ nothing: "useful" }]),
+    );
 
-    expect(probe).toEqual({ status: "unavailable" });
+    expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
+  });
+
+  it("costs one call carrying every symbol asked", async () => {
+    const calls: string[][] = [];
+    const verdicts = await probeSymbols(
+      ["VTI", "VXUS", "BND"],
+      clientAnswering(async (symbols) => {
+        calls.push(symbols);
+        return [
+          { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" },
+          { symbol: "VXUS", regularMarketPrice: 60.2, currency: "USD" },
+          { symbol: "BND", regularMarketPrice: 72.1, currency: "USD" },
+        ];
+      }),
+    );
+
+    expect(calls).toEqual([["VTI", "VXUS", "BND"]]);
+    expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
+    expect(verdicts.get("VXUS")).toEqual({ status: "ok", quoteType: null });
+    expect(verdicts.get("BND")).toEqual({ status: "ok", quoteType: null });
   });
 });
 

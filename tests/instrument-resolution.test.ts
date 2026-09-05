@@ -24,39 +24,43 @@ import {
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
-import type { ProbeSymbol } from "~/lib/price-provider.server";
+import type { ProbeSymbols } from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
 
 /**
- * A probe that answers `ok` and counts how often it was asked.
+ * A probe that answers `ok` for every symbol asked and counts the calls —
+ * each call carries every symbol it was asked in one go, so "probed once per
+ * created feed instrument" is checked on the call list, not a call count.
  *
  * `quoteType` is what the provider would have said, because the created row
  * stores it (§4.4) — a stub answering null here would pass while telling the
  * screen every instrument is unclassifiable.
  */
-function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbol; calls: string[] } {
-  const calls: string[] = [];
+function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbols; calls: string[][] } {
+  const calls: string[][] = [];
   return {
     calls,
-    probe: async (symbol) => {
-      calls.push(symbol);
-      return { status: "ok", quoteType };
+    probe: async (symbols) => {
+      calls.push(symbols);
+      return new Map(symbols.map((symbol) => [symbol, { status: "ok", quoteType } as const]));
     },
   };
 }
 
-/** A probe whose provider is having a bad day, whatever the symbol. */
-const unavailableProbe: ProbeSymbol = async () => ({ status: "unavailable" });
+/** A probe whose provider is having a bad day, whatever the symbols. */
+const unavailableProbe: ProbeSymbols = async (symbols) =>
+  new Map(symbols.map((symbol) => [symbol, { status: "unavailable" } as const]));
 
 /** A probe that quotes every symbol in the given currency. */
 const foreignProbe =
-  (currency: string): ProbeSymbol =>
-  async () => ({ status: "non-usd", currency });
+  (currency: string): ProbeSymbols =>
+  async (symbols) =>
+    new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency } as const]));
 
 /** A probe that must never be reached — pointing at existing, manual creates. */
-const forbiddenProbe: ProbeSymbol = async (symbol) => {
-  throw new Error(`The probe was called for ${symbol}, and this path must not probe.`);
+const forbiddenProbe: ProbeSymbols = async (symbols) => {
+  throw new Error(`The probe was called for ${symbols.join(", ")}, and this path must not probe.`);
 };
 
 /** A complete, valid "create" answer; override per test. */
@@ -218,7 +222,7 @@ describe("resolveAll — creating an instrument", () => {
       expect(alias.instrument_id).toBe(instrument.id);
       expect(resolved).toEqual([{ raw: "VXUS", instrumentId: instrument.id }]);
 
-      expect(calls).toEqual(["VXUS"]);
+      expect(calls).toEqual([["VXUS"]]);
     }),
   );
 
@@ -420,6 +424,97 @@ describe("resolveAll — the USD probe", () => {
       expect(instrument.price_source).toBe("feed");
 
       await expect(unresolvedStrings(["VXUS"], db)).resolves.toEqual([]);
+    }),
+  );
+
+  it(
+    "probes three tickers named by six strings in one call carrying three symbols, landing each verdict on the right plans",
+    withDatabase(async ({ db, seedClassification }) => {
+      // Two strings per ticker — a mispairing here would either double the
+      // call or land a verdict meant for one ticker onto another's plans.
+      const classification = await seedClassification();
+      const calls: string[][] = [];
+      const probe: ProbeSymbols = async (symbols) => {
+        calls.push(symbols);
+        return new Map([
+          ["VTI", { status: "ok", quoteType: "ETF" }],
+          ["VWRL", { status: "non-usd", currency: "GBP" }],
+          ["ZZZZ", { status: "unavailable" }],
+        ]);
+      };
+
+      const answerFor = (symbol: string, label: string) =>
+        createFields({
+          symbol,
+          name: `${symbol} fund ${label}`,
+          classificationId: classification.id,
+          newClassificationName: "",
+          newClassificationAssetClass: "",
+        });
+
+      const refusal = await refusalOf(() =>
+        resolveAll(
+          [
+            { raw: "VTI A", fields: answerFor("VTI", "A") },
+            { raw: "VTI B", fields: answerFor("VTI", "B") },
+            { raw: "VWRL A", fields: answerFor("VWRL", "A") },
+            { raw: "VWRL B", fields: answerFor("VWRL", "B") },
+            { raw: "ZZZZ A", fields: answerFor("ZZZZ", "A") },
+            { raw: "ZZZZ B", fields: answerFor("ZZZZ", "B") },
+          ],
+          { probe },
+          db,
+        ),
+      );
+
+      // One call, three distinct symbols — not six, and not three calls.
+      expect(calls).toEqual([["VTI", "VWRL", "ZZZZ"]]);
+
+      // Only the two strings naming the refused ticker are refused; the ok
+      // and unavailable tickers' strings are untouched by it.
+      expect(Object.keys(refusal.fieldErrors)).toEqual(["symbol-2", "symbol-3"]);
+      expect(refusal.fieldErrors["symbol-2"]).toBe(
+        "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
+      );
+      expect(refusal.fieldErrors["symbol-3"]).toBe(
+        "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
+      );
+    }),
+  );
+
+  it(
+    "resolves a manual-only submission with a probe stub that was never called",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The call counter is the assertion, not the created row's absence of
+      // one: a manual-only submission — the common case — must make no
+      // provider call at all, because over the socket a zero-symbol ask is a
+      // round trip the worker refuses anyway.
+      const classification = await seedClassification();
+      const calls: string[][] = [];
+      const probe: ProbeSymbols = async (symbols) => {
+        calls.push(symbols);
+        return new Map();
+      };
+
+      await resolveAll(
+        [
+          {
+            raw: "VANG TARGET RET 2045",
+            fields: createFields({
+              symbol: "",
+              name: "Vanguard Target Retirement 2045 Trust II",
+              priceSource: "manual",
+              classificationId: classification.id,
+              newClassificationName: "",
+              newClassificationAssetClass: "",
+            }),
+          },
+        ],
+        { probe },
+        db,
+      );
+
+      expect(calls).toHaveLength(0);
     }),
   );
 });

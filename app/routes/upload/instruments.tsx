@@ -15,6 +15,7 @@ import {
   resolveAll,
   sameRawStrings,
 } from "~/lib/instrument-resolution.server";
+import { probeSymbols } from "~/lib/price-provider.server";
 import { parseDraft, requireDraft } from "~/lib/uploads.server";
 
 import type { UploadStepsData } from "~/components/upload-steps";
@@ -103,6 +104,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     // have been CRLF-mangled by the form round trip.
     await resolveAll(
       unresolved.map((raw, index) => ({ raw, fields: resolutionFieldsAt(values, index) })),
+      { probe: probeSymbols },
     );
 
     return redirect(`/upload/${draft.id}/review`);
