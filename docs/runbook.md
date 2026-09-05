@@ -302,10 +302,16 @@ ordinary. So:
   docker compose logs --tail=500 app | grep -i "Price poller did not start"
   ```
 
-- **The provider is unreachable.** Grep for the stem `Price provider failed`, or for `Price refresh`
-  lines reporting stale instruments. Last-known prices are kept and marked stale — never zeroed —
-  and `/healthz` deliberately stays `200`, because a third-party outage must not make Compose
-  restart a healthy app. Nothing to do but check egress.
+- **The provider is unreachable, or `worker` is.** Grep for the stem `Price provider failed`, or for
+  `Price refresh` lines reporting stale instruments. Last-known prices are kept and marked stale —
+  never zeroed — and `/healthz` deliberately stays `200`, because a third-party outage must not make
+  Compose restart a healthy app. `app` has no egress of its own by construction — every fetch
+  crosses the shared socket to `worker` instead — so this stem now covers a dead, restarting or
+  never-started `worker` too, and reads `no worker listening at /run/price-worker/worker.sock
+  (ENOENT)` for that case rather than naming a provider. Check `docker compose ps` for `worker`
+  before anything else, and [the worker's own healthcheck](operating.md#the-workers-own-healthcheck)
+  for what its states mean: giving `app` a network back does not fix a dead worker, and undoes this
+  release's isolation for nothing.
 
 **Do.** Press **Refresh now** on any figure screen first — it spends a provider request
 immediately, works outside market hours, and needs no restart. The line it prints under the button
@@ -587,10 +593,23 @@ Why: [Security](operating.md#security).
 **Confirm.** `app` (and `dump`, if it is enabled) crash-looping, with `password authentication
 failed for user "portfolio"` in the log.
 
-**Do.** `POSTGRES_PASSWORD` is read by Postgres only when it first initialises an empty data
-directory, and never again. On an instance that has already run, changing it in `.env` does nothing
-to the role by itself. Write the new value to `.env` first, then change the role to match, then
-recreate the containers that still hold the old one:
+**Do.** Check `.env` for a leftover `DATABASE_URL` line first:
+
+```sh
+grep -n '^DATABASE_URL=' .env
+```
+
+`pg` prefers a URL's own password to `PGPASSWORD`, so a line left over from before the release that
+took the password out of `DATABASE_URL` keeps authenticating with whatever that line names, however
+correctly the role and `POSTGRES_PASSWORD` already agree — delete it and run `docker compose up -d`
+again, and this is fixed. (Unless you run your own Postgres —
+[Running against your own Postgres](operating.md#running-against-your-own-postgres) — where this
+entry does not apply at all: your `DATABASE_URL` is meant to carry the password there.)
+
+If that line was never there, the role itself has not been changed to match. `POSTGRES_PASSWORD` is
+read by Postgres only when it first initialises an empty data directory, and never again, so editing
+it in `.env` alone does nothing to a role that already exists. Write the new value to `.env` first,
+then change the role to match, then recreate the containers that still hold the old one:
 
 ```sh
 # In .env: POSTGRES_PASSWORD=the-new-one
@@ -599,11 +618,45 @@ docker compose exec db psql -U portfolio -d portfolio \
 docker compose up -d
 ```
 
-`app` and `dump` both read the password through `PGPASSWORD`, set from this same variable — there is
-no `DATABASE_URL` to keep in sync with it any more. The user and database names are hardcoded
-literals in `compose.yaml`, not variables; only the password is substituted.
+`app` and `dump` both read the password through `PGPASSWORD`, set from this same variable — once the
+leftover `DATABASE_URL` above is gone, there is nothing left to keep in sync with it. The user and
+database names are hardcoded literals in `compose.yaml`, not variables; only the password is
+substituted.
 
 Why: [Environment variables](operating.md#environment-variables).
+
+---
+
+## I lost `.env` and do not know `POSTGRES_PASSWORD`
+
+**Confirm.** Every `docker compose` command — `up`, `ps`, `logs`, `exec`, all of them — refuses
+immediately, naming one required variable before any container is touched. It will not necessarily
+be `POSTGRES_PASSWORD`: interpolation has no fixed order, so a `.env` missing everything could just
+as easily be refused by one of the gate's own variables first.
+
+**Do.** You do not need to recover the value that was lost. `db`'s own local socket authenticates on
+`trust`, never on a password, so a shell inside the container can set the role to whatever you like
+without knowing what it used to be — the same [rotation](operating.md#environment-variables) an
+operator who still has the old password uses on purpose. Rebuild `.env` from
+[`.env.example`](../.env.example) far enough to clear the refusal: `GATE_CLIENT_ID` and
+`GATE_CLIENT_SECRET` come back from the Google Cloud console, `GATE_COOKIE_SECRET` is simply
+regenerated (this signs the household out — the one real cost here), `PUBLIC_ORIGIN` is whatever
+hostname your house proxy already serves this at, `DUMP_UID`/`DUMP_GID` are `id -u`/`id -g` for the
+account `./volumes/dumps` belongs to, and `POSTGRES_PASSWORD` is any freshly generated value —
+`openssl rand -hex 32` is fine, because nothing has checked it against the running role yet. Once
+every required variable holds something:
+
+```sh
+docker compose exec db psql -U portfolio -d portfolio \
+  -c "alter role portfolio with password 'the-value-you-just-generated'"
+docker compose up -d
+```
+
+If the host has also rebooted since `.env` was lost, `db` still starts cleanly on that placeholder
+value: Postgres reads `POSTGRES_PASSWORD` only once, to initialise an empty data directory, and this
+one is not empty — the value only has to match what you put in `.env`, never what it originally was.
+
+Why: [Environment variables](operating.md#environment-variables), [Backups](operating.md#backups).
 
 ---
 

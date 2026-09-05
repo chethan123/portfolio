@@ -84,25 +84,40 @@ irreversible act to sit than a flag on a routine command.
 
 **Host requirements.** Docker Engine 28.0 or newer, with the Compose v2 plugin — `docker compose`,
 two words, not the older `docker-compose` script — and Docker Compose 2.31.0 or newer beside it, a
-second floor this release adds. Resolving a volume's `device:` relative to the Compose file has
-worked since Compose 1.27.4, well under both floors; the new one exists for something this release
-actually does at `up` time. `docker compose up` only recreates an existing network to match a changed
-definition when the Compose that created it stamped a config hash onto it, a comparison
-`docker/compose` added in November 2024 and first shipped in 2.31.0. Below that version there is no
-hash to compare, so `up` leaves an existing plain bridge exactly as plain as it found it even once
-this release's `compose.yaml` turns it `internal` — a successful `up`, no isolation, and nothing in
-the output says so. The Engine floor was declared when `worker` first brought a non-default network
-into this file, even though nothing wired the kernel isolation that needed it yet; this release is
-what makes it load-bearing, with the `gateway_mode_ipv4` option that Engine 26 ignores silently,
-leaving a host address reachable on the bridge, and Engine 27 refuses outright. Check both before you
-replace `compose.yaml`: `docker version --format '{{.Server.Version}}'` and `docker compose version
---short`; below either floor, upgrade first — an old Engine or an old Compose no longer merely misses
-a feature here, it leaves the network looking locked down when it is not. Port 80 free. Outbound
-HTTPS to `ghcr.io`, because the app image is pulled, and to `quay.io`, because the gate image is. A
-Google account for each family member, and one Google Cloud project to hold the OAuth client.
-`linux/amd64` and `linux/arm64` are both published, so a Raspberry Pi or an ARM NAS needs nothing
-special. There is no build step and therefore no build-memory requirement — that is the whole point
-of publishing the image, and it is what makes a small NAS or VPS a reasonable host.
+second floor declared alongside the first. Only one of the two actually bites on this release, and
+they are worth telling apart rather than checking together as if they meant the same thing.
+
+**The Engine floor is load-bearing now.** It was declared when `worker` first brought a non-default
+network into this file, even though nothing wired the kernel isolation that needed it yet; this
+release is what makes it bite, with the `gateway_mode_ipv4: isolated` option `backend`, `caddy-app`
+and `caddy-gate` below all carry — Engine 26 ignores that option silently, leaving a host address
+reachable on the bridge, and Engine 27 refuses it outright, either way with `docker compose up`
+still reporting success. Check it before you replace `compose.yaml`:
+`docker version --format '{{.Server.Version}}'`; below `28.0`, upgrade the Engine first — it does
+not merely miss a feature here, it leaves the network looking locked down when it is not, and
+nothing in the output says so.
+
+**The Compose floor is not load-bearing yet.** Resolving a volume's `device:` relative to the
+Compose file has worked since Compose 1.27.4, well under it; the 2.31.0 floor exists for something
+no release has needed so far. `docker compose up` only recreates an *existing* network to match a
+changed definition when the Compose that created it stamped a config hash onto it, a comparison
+`docker/compose` added in November 2024 and first shipped in 2.31.0 — below that version there is no
+hash to compare, so a future release that redefines a network already running under an older
+Compose would see `up` leave it exactly as it found it, a successful `up` with nothing in the output
+to say the change never took. This release does not do that: `egress-worker` is the only network
+here that predates it, and this release leaves that one byte-identical; the five others —
+`backend`, `caddy-app`, `caddy-gate`, `egress-gate` and `ingress` — are all created from nothing, and
+the implicit `default` network they replace is removed outright rather than redefined. There is
+nothing already running for an old Compose to fail to reconcile, so nothing here fails on a Compose
+below 2.31.0 — check it too (`docker compose version --short`), for whichever later release does
+touch one of these five again, but it is not a reason to stop today.
+
+Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image is pulled, and to `quay.io`,
+because the gate image is. A Google account for each family member, and one Google Cloud project to
+hold the OAuth client. `linux/amd64` and `linux/arm64` are both published, so a Raspberry Pi or an
+ARM NAS needs nothing special. There is no build step and therefore no build-memory requirement —
+that is the whole point of publishing the image, and it is what makes a small NAS or VPS a
+reasonable host.
 
 Node itself is a requirement for *working on* this, not for running it.
 
@@ -211,8 +226,21 @@ Set `DATABASE_URL` in `.env` to point at it. Four things that catch people:
 - The connection is made from inside a container, so `localhost` in that URL means the *app
   container*, not your host. Use a hostname or address the container can actually reach.
 - The bundled `db` service still starts, still initialises `./volumes/db/data`, and `app` still
-  waits for it to report healthy. Setting `DATABASE_URL` does not remove it — delete the `db` service and `app`'s
-  `depends_on` block if you do not want it running.
+  waits for it to report healthy. Setting `DATABASE_URL` alone does not remove it, and deleting the
+  `db` service by hand does not work on this release: `dump` also depends on it and is not written
+  to be optional, so removing `db` without removing `dump` too leaves `service "dump" depends on
+  undefined service "db": invalid compose project` and every verb refuses. Load
+  [`compose.external-db.yaml`](../compose.external-db.yaml) instead, built for exactly this — put
+  `COMPOSE_FILE=compose.yaml:compose.external-db.yaml` in `.env` rather than passing `-f` on every
+  command, and it gates `db` and `dump` behind a profile nothing sets by default, so neither starts,
+  and gives `app` a fourth network, `external-db`, that — unlike every other network here — carries
+  a default route, because reaching a host outside this Compose project needs one. Forgetting the
+  override leaves the bundled `db` running and `app` still without that route, so the connection to
+  your own Postgres fails outright: `EAI_AGAIN` or `ENOTFOUND` when `DATABASE_URL` names a hostname,
+  since resolving it is what fails first, and `ETIMEDOUT` or `EHOSTUNREACH` when it names a bare IP
+  instead, with nothing in either message naming this file. `POSTGRES_PASSWORD` is still required
+  with the override loaded, even though `db` never starts under it — `compose.yaml` still
+  interpolates its value for the `PGPASSWORD` `app` reads — so generate one regardless.
 - Migrations run at every container start, against whatever `DATABASE_URL` names, so the role needs
   to be able to create tables. There is no separate migrate step to run.
 - Every `pg_dump` command below runs *inside* the bundled `db` container. On your own Postgres,
@@ -363,7 +391,10 @@ household enrol again once the new hostname is serving. Skipping that does not m
 passkeys — it leaves the instance locked, with none that can unlock it.
 
 **Two more that Compose reads and the application never sees.** `POSTGRES_PASSWORD` is the `db`
-service's password, covered under [Running against your own Postgres](#running-against-your-own-postgres).
+service's password; how to set it the first time is [above](#what-to-put-in-env), and how to change
+it once the cluster already exists is a few paragraphs down in this same section — not under
+[Running against your own Postgres](#running-against-your-own-postgres), which is only about
+pointing at a Postgres this project does not manage.
 `APP_VERSION` is the published image tag the `app` service runs — it defaults to `1`, the floating
 major, which is what makes `docker compose up -d` an upgrade. Pin a full version (`APP_VERSION=1.0.3`)
 to hold this instance where it is, or to go back to a known-good image; see
@@ -1069,13 +1100,20 @@ kept for a few weeks is proportionate for a household.
 
 "Nothing outside Postgres" is true of *data* and false of *configuration*. `.env` and
 `allowed-emails.txt` are both gitignored and dockerignored on purpose, so nothing else in the world
-has a copy of them. What is in them that is not recoverable from anywhere:
+has a copy of them — and losing `.env` entirely has a first symptom none of what follows fixes:
+`docker compose` will not run a single command, `exec` included, while any required variable is
+empty, so getting back in comes before getting back the value that used to be right. What each one
+costs to recover, once a command runs again:
 
 - `GATE_CLIENT_ID` and `GATE_CLIENT_SECRET` — recoverable, but only from the Google Cloud console,
   and the secret may have to be regenerated there rather than read back.
-- `GATE_COOKIE_SECRET` — regenerating it signs the household out. Recoverable, and annoying.
-- `POSTGRES_PASSWORD` — the worst of them, because `./volumes/db/data` was initialised with it
-  and still expects it. A restored dump does not help; see [`runbook.md`](runbook.md).
+- `GATE_COOKIE_SECRET` — recoverable by regenerating it, which signs the household out.
+- `POSTGRES_PASSWORD` — recoverable with no outside help at all, and the one most likely to be
+  assumed otherwise: `./volumes/db/data` was initialised with the old value, but `db`'s own local
+  socket authenticates on `trust`, never on a password, so a freshly generated value written to
+  `.env` and matched to the role over `exec` restores service without ever needing to recall what
+  the old one was — [`runbook.md`](runbook.md#i-lost-env-and-do-not-know-postgres_password) has the
+  walk-through, including the case where the containers themselves are not running either.
 - `allowed-emails.txt` — losing it is a locked-out household until you retype it, because the stack
   will not start without the file at all.
 
@@ -1175,6 +1213,17 @@ docker compose up -d
 curl -sf http://localhost/healthz
 ```
 
+**That is the shape of an ordinary upgrade: dump, note the tag, `up -d`, confirm.** It assumes
+`compose.yaml` has not itself changed shape, so `exec` and `images` still run against whatever is
+already deployed. A release that adds a required variable to `compose.yaml` breaks that assumption
+before you have typed anything, because checking out the release's tag already replaces the file on
+disk: every verb after that — `exec` included — is interpolated against the whole file before it
+runs, and refuses on the first variable `.env` does not yet hold, with the `>` redirect above still
+creating a zero-byte file that looks exactly like a dump. **This release does that**, with
+`${POSTGRES_PASSWORD:?}` newly on `db`. Its own instructions, further down this section, carry a
+backup timed for the moment it can actually run — take that one instead of the block above when
+crossing this release.
+
 There is no `git pull` and no build. The `app` service is set `pull_policy: always`, so
 `docker compose up -d` fetches whatever the pinned tag currently points at and recreates the
 container; with the default floating `APP_VERSION=1` that is the newest `v1.x.y` release. A
@@ -1183,27 +1232,28 @@ checkout of this repository is not needed to run or upgrade an instance — only
 `volumes/db/data` and `volumes/dumps` directories beside them.
 
 **A release that adds a service or a volume needs `compose.yaml` replaced too, not just the image
-pulled — this one does, adding `worker` and the `price-worker-sock` volume that carries prices to
-it.** `compose.yaml` is one of the files above that `pull_policy: always` never touches, so bring
-the new one in yourself, in this order: replace `compose.yaml` with this repository's copy at the
-release's tag — there is no GitHub Release and no attached file to fetch instead, only the git tag CI
-built the pushed image tags from
-([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)'s `publish` job); confirm the engine
-next — `docker version --format '{{.Server.Version}}'` at or above `28.0`, the floor this release
-declares. Nothing in *this* release fails on an older Engine — the floor is a warning for the
-network-lockdown release, not a requirement of this one — so a check below `28.0` today means
-schedule the Engine upgrade before that release, not stop here. Then `docker compose up -d`, which
-recreates `app` once, because its mounts changed — the brief outage every upgrade already has, not a
-fault — and brings `worker` up alongside it for the first time. Run
-[the socket check](#verify-it-actually-worked) again afterwards: a host whose engine or container
-runtime changed since the old instance was last verified is exactly the case that check exists to
-catch, and nothing else here will.
+pulled.** The release that added `worker` and the `price-worker-sock` volume was the first to need
+this, and every release since has needed it again, this one included: `compose.yaml` is one of the
+files above that `pull_policy: always` never touches, so bring the new one in yourself, in this
+order — replace `compose.yaml` with this repository's copy at the release's tag (there is no GitHub
+Release and no attached file to fetch instead, only the git tag CI built the pushed image tags from,
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)'s `publish` job) — then confirm the
+Engine: `docker version --format '{{.Server.Version}}'` at or above `28.0`. **That floor was
+declared at the release that added `worker`, as a warning for a network-lockdown release still to
+come — this is that release, so the warning is over: an Engine below 28.0 now lets `up` report
+success while the isolation below is silently ignored** ([Installing](#installing) has what each
+version short of it does instead). Then `docker compose up -d`; if this is the first time you are
+crossing the release that added `worker`, that command is also what recreates `app` for its changed
+mounts and brings `worker` up alongside it. Run [the socket check](#verify-it-actually-worked) again
+afterwards: a host whose engine or container runtime changed since the old instance was last
+verified is exactly the case that check exists to catch, and nothing else here will.
 
-Skip it, and the release that introduced the worker will not tell you: `app` still fetched its own
-prices then, and `worker` simply idled unused. **That grace is over as of this release**, the one
-that has `app` dial the worker instead of fetching for itself. Start it under the old file and
-there is no volume and no worker: prices go stale while `/healthz` keeps answering green — a
-missing price provider was never a health signal — and the only sign in the log is one
+Skip the `compose.yaml` replacement when crossing the release that added `worker`, and nothing will
+tell you: `app` still fetched its own prices under the old file, and `worker` simply idled unused.
+That grace ended with that release — `app` has dialed `worker` instead of fetching for itself ever
+since. Start today's image under a `compose.yaml` from before that point and there is no volume and
+no worker: prices go stale while `/healthz` keeps answering green — a missing price provider was
+never a health signal — and the only sign in the log is one
 `no worker listening at /run/price-worker/worker.sock` line per call site, up to two per tick.
 
 **A changed `driver_opts` line means a new volume name, never `docker compose down -v`.** Compose
@@ -1229,14 +1279,25 @@ be running when the new image starts can stall the instance for the length of th
 
 ```sh
 docker compose stop dump
-docker compose up -d app caddy gate worker
-docker compose start dump
+docker compose up -d db app caddy gate worker
+docker compose up -d dump
 ```
 
-`worker` has no `depends_on` tying it to anything else, so an explicit service list that leaves it
-off is not a partial upgrade — it never starts it at all, and looks exactly like success: everything
-named comes up healthy, and the missing service is an *absent* row in `docker compose ps`, not an
-unhealthy one, which is the row this recipe would otherwise leave nobody checking for.
+**The last line is `up -d`, never `start`.** `start` resumes the existing container exactly as it
+was already created and reads none of `compose.yaml`'s current definition, so it is only safe when
+the service it targets has not itself changed — and `dump` has, in this release: a new network,
+`PGPASSWORD` newly required, and a rewritten `DATABASE_URL` default. Resumed with `start` it comes
+back on whichever network it last held, unable to reach `db` on the new one, and its healthcheck's
+`start_period: 15m` leaves `docker compose ps` showing a plausible row for a quarter of an hour
+before that would be noticed. `up -d dump` re-converges it against the file on disk instead, which
+costs nothing when `dump` has not changed and is the only form still correct when it has. `db` is in
+the middle line for the same reason: this release also moves it to a network of its own, where a
+plain image-tag bump would not have touched it — check what a given release actually changed rather
+than copying this line unchanged next time. `worker` has no `depends_on` tying it to anything else,
+so naming it explicitly is what starts it at all: a list that left it off would look exactly like
+success, everything named coming up healthy with the missing service an *absent* row in
+`docker compose ps` rather than an unhealthy one, which is the row this recipe would otherwise leave
+nobody checking for.
 
 **This does not upgrade the gate.** `gate` is pinned to an exact release with no variable in front
 of it, so `docker compose up -d` recreates the container on the same image forever. Moving it is
@@ -1247,12 +1308,14 @@ security release — nothing here will tell you one exists.
 cross `1` → `2`, because a major is where a breaking change would be. Read the release notes, set
 `APP_VERSION=2` in `.env`, then run the same procedure above.
 
-**This release requires `.env` set up before `docker compose up -d` will do anything, and only one
-order gets there.** The new `compose.yaml` carries `${POSTGRES_PASSWORD:?}` on `db`, and Compose
-interpolates the whole model before every command it runs, `exec` included — refusing an empty value
-exactly as it refuses a missing one — so nothing reaches Postgres, not even a shell inside the
-running container, until `.env` holds it. Confirm the floors in [Installing](#installing) first —
-Engine 28.0 and Compose 2.31.0, both load-bearing as of this release — then, in this order:
+**This release requires `.env` set up before `docker compose up -d` — or any other compose verb —
+will do anything, and the last three steps have only one order that works.** The new `compose.yaml` carries
+`${POSTGRES_PASSWORD:?}` on `db`, and Compose interpolates the whole model before every command it
+runs: `exec`, `ps`, `logs`, `restart` and `down` all refuse identically, not only a shell inside the
+running container, so nothing reaches Postgres until `.env` holds something for it. Confirm the
+Engine floor in [Installing](#installing) first — `28.0`, load-bearing as of this release; Compose
+`2.31.0` is declared there too, but nothing in this release needs it, so it is not a reason to stop
+here. Then, in this order:
 
 1. Replace `compose.yaml` with this release's copy.
 2. Delete the `DATABASE_URL` line from `.env`, unless you run your own Postgres
@@ -1261,8 +1324,21 @@ Engine 28.0 and Compose 2.31.0, both load-bearing as of this release — then, i
    `dump` on `password authentication failed` once step 4 below actually changes the role, instead of
    picking up the new one through `PGPASSWORD` the way it should.
 3. Generate the password with `openssl rand -hex 32` and write it to `.env` as
-   `POSTGRES_PASSWORD`. Skip this and step 5 refuses by name — the message `compose.yaml` carries
+   `POSTGRES_PASSWORD`. Skip this and step 4 refuses by name — the message `compose.yaml` carries
    points back to this section — rather than starting anything half-configured.
+
+**Take the pre-upgrade backup here, between steps 3 and 4, not before either of them.** Earlier and
+interpolation refuses `exec` exactly as it refuses every other verb, because `.env` does not hold
+anything for `POSTGRES_PASSWORD` yet; from this point on it does, and the role has not been touched
+yet either, so `db`'s own local `trust` line takes the dump under whatever password is already
+running, regardless of what step 3 just wrote:
+
+```sh
+docker compose exec -T db pg_dump -U portfolio -d portfolio --format=custom \
+  > "portfolio-pre-upgrade-$(date +%F).dump"
+docker compose images app    # write the tag down: it is half of your way back
+```
+
 4. Change the role, while the old containers are still running on it:
    `docker compose exec db psql -U portfolio -d portfolio -c "alter role portfolio with password
    'the-generated-value'"`. `exec` reaches `db` over the container's own loopback `trust` line,
@@ -1270,12 +1346,33 @@ Engine 28.0 and Compose 2.31.0, both load-bearing as of this release — then, i
    believe the password is — and from the moment it runs, any *new* connection either of them opens
    starts failing on `password authentication failed`, though a connection already held keeps
    working.
-5. `docker compose up -d`, which recreates `db` for its new network and restarts `app` and `dump`
-   alongside it — the brief outage a network change to any of them already causes — now reading the
-   password staged in step 3.
+5. `docker compose up -d`, which recreates every service that gains a network in this release — `db`,
+   `dump`, `app`, `gate` and `caddy` — now reading the password staged in step 3; `worker` alone is
+   untouched. `caddy` is one of the five, and it is the one that publishes `80:8080`, so the outage
+   this step causes reaches the whole instance for as long as the recreated containers take to
+   report healthy again, not only the database-facing services a shorter list might suggest.
 
 Between steps 4 and 5, only new connections from the old containers fail; nothing is lost, and
 nothing here needs redoing.
+
+**`docker compose ps` reporting everything healthy afterwards is necessary and not sufficient** — it
+is the same row whether the isolation actually took, whether the role's password actually changed,
+and whether a stale `DATABASE_URL` is still in `.env` overriding it. Run these three instead, and
+read them together rather than stopping at the first one that passes:
+
+```sh
+grep -n '^DATABASE_URL=' .env
+docker network inspect -f '{{if (index .IPAM.Config 0).Gateway}}{{(index .IPAM.Config 0).Gateway}}{{end}}' portfolio_backend
+curl -sf http://localhost/healthz
+```
+
+A line printed by the first means step 2 was skipped and `app` is still authenticating with
+whatever password that line names rather than the one just staged — delete it and run
+`docker compose up -d` again. A gateway address printed by the second means the Engine is below
+`28.0` and this release's isolation did not take, silently, whatever `docker compose up` itself
+reported — see [Installing](#installing). A `curl` failure with both of those clean points at step 4:
+the role never actually changed, or changed to something other than what step 3 wrote — re-run the
+`alter role` command there.
 
 The entrypoint validates the configuration, applies any new migrations to completion, and only then
 starts serving — so a request is never served against a half-migrated schema. Migrations are
