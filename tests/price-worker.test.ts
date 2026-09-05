@@ -1297,10 +1297,7 @@ describe("the socket file and its lifecycle", () => {
   it("takes its SIGTERM handler back off and closes the server when chmod fails", async () => {
     // The one failure path with a live server behind it: `listen` has already
     // succeeded, so unlike a failed `listen` there is something still bound to
-    // the path. Left alone it keeps answering on a socket the caller was told
-    // it never got — and, since `connect` on a unix socket wants *write*
-    // permission, one the `chmod` that just failed had not yet opened to the
-    // group, so `app` cannot reach it and nothing but this teardown will.
+    // the path, answering on a socket the caller was told it never got.
     const before = process.listeners("SIGTERM");
     chmodOverride.impl = () =>
       Promise.reject(Object.assign(new Error("chmod failed"), { code: "ENOENT" }));
@@ -1316,6 +1313,22 @@ describe("the socket file and its lifecycle", () => {
     await expect(rawRequest(currentSocketPath, "GET", "/healthz")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("takes its SIGTERM handler back off when listen throws rather than emits", async () => {
+    // `listen` reports most failures by emitting `error`, and the reject path
+    // above takes the listener off for those. It does not report all of them
+    // that way: Node reads a `socketPath` that parses as a number as a TCP
+    // port, and an out-of-range one throws `ERR_SOCKET_BAD_PORT` synchronously
+    // — out of the promise executor, past the `error` listener entirely. That
+    // is the same shape of miss as the `chmod` path above, one call earlier.
+    const before = process.listeners("SIGTERM");
+
+    await expect(
+      startWorker({ socketPath: "99999", yahoo: fakeYahoo(), timeouts: TEST_TIMEOUTS }),
+    ).rejects.toMatchObject({ code: "ERR_SOCKET_BAD_PORT" });
+
+    expect(process.listeners("SIGTERM").filter((fn) => !before.includes(fn))).toHaveLength(0);
   });
 
   it("exits on SIGTERM even while every connection it admits is held open", async () => {
