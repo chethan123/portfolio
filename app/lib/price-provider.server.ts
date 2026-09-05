@@ -219,6 +219,25 @@ const RATE_CEILING = 10 ** 16;
 const CLOSE_CEILING = 10 ** 16;
 
 /**
+ * The widest price `quote.price` holds — `numeric(20, 4)`, the same sixteen
+ * integer digits as {@link RATE_CEILING} and {@link CLOSE_CEILING}, and the
+ * same reasoning: a figure this big is not a price, and Postgres answers the
+ * overflow by aborting the statement inside the refresh transaction — every
+ * instrument stale for one bad symbol, not just the one that carried the
+ * figure. Dropped, not clamped, so the quote itself is absent and the symbol
+ * goes stale exactly as it does when no price arrives at all.
+ *
+ * What this does not guard, and cannot: the reader's `quantity × price`
+ * product (`0006_annual_dividend.sql:149`). `quantity` is `numeric(20, 8)`
+ * (`0001_initial_schema.sql:186`), so a legal price under this ceiling can
+ * still overflow the product against the widest legal quantity;
+ * `fitsTheMoneyColumn` (`app/lib/positions.server.ts:206`) guards that product
+ * where the quantity is written, and spec 0018 §8 keeps the gap as a residual
+ * rather than a bug this ceiling could close.
+ */
+const PRICE_CEILING = 10 ** 16;
+
+/**
  * A figure the bound `numeric` column can actually store, or null. A
  * distressed instrument — a $0.02 price still carrying a $2.50 rate —
  * derives a 12500% yield, and Postgres answers overflow by aborting the
@@ -332,11 +351,14 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
       ? quote.regularMarketPrice
       : undefined;
 
-  const price = decimal(quoted, 4);
+  // Bounded like the rate and the close columns, and for the identical
+  // reason: `quote.price` is `numeric(20, 4)`, so an unbounded figure aborts
+  // the refresh transaction for every instrument, not just this one.
+  const price = inRange(decimal(quoted, 4), PRICE_CEILING);
 
   // No usable price is not an error — Yahoo drops delisted and unknown
-  // symbols, and the caller's answer either way is: keep the last price, mark
-  // it stale.
+  // symbols, and a ceiling-dropped figure is treated the same way. Either way
+  // the caller's answer is: keep the last price, mark it stale.
   if (price === null) return null;
 
   // Checked only once there is a price to refuse.
@@ -539,6 +561,19 @@ export function toProviderHistory(
     // the reason the adapter gives for leaving `period2` absent: the request
     // deliberately fetches past the range, and this is the rule.
     if (date >= range.until) continue;
+
+    // The mirror image at the other end. `writeBackfilledCloses` inserts
+    // where absent, so a hostile or merely wrong bar dated 1971 would land as
+    // a row — and the gap predicate `NO_CLOSE_BY_FIRST_HELD`
+    // (`prices.server.ts:253-258`) is satisfied by any row at or before
+    // first-held, so that one row would take the instrument out of the
+    // candidate set for good while the ledger says `filled`: the real gap,
+    // first-held back to the spine's true start, is never filled. ADR-0011
+    // forbids overwriting a close and nothing in the app deletes
+    // `price_daily`, so the recovery would be `psql`. An honest answer never
+    // carries a bar before `period1`, which is `from`, so the cut costs
+    // nothing.
+    if (date < range.from) continue;
 
     // A non-positive close is not a close, for the reason `toProviderQuote`
     // refuses one: zero is what the endpoint returns for a symbol it half

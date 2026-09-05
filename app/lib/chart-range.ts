@@ -137,7 +137,7 @@ export const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice
 
 const parseIso = (date: IsoDate): number => Date.parse(`${date}T00:00:00Z`);
 
-function addDays(date: IsoDate, days: number): IsoDate {
+export function addDays(date: IsoDate, days: number): IsoDate {
   return isoDate(parseIso(date) + days * DAY_MS);
 }
 
