@@ -1,7 +1,12 @@
 /**
  * The reentry guard's testable rules (ticket 06, `~/lib/reentry.ts`):
  * `shouldPostLock`'s boundary, and `watchReentry`'s own wiring of the two
- * DOM signals it watches.
+ * DOM signals it watches — which now includes the postLock-or-askServer
+ * decision itself (finding 6): `watchReentry` takes `assumedPasskey` as a
+ * plain `boolean` and decides internally which action a hidden-too-long
+ * return invokes, so that decision is proven here, against the real export,
+ * rather than against a copy `app/root.tsx`'s call site could quietly stop
+ * making.
  *
  * `shouldPostLock` is exercised as the pure function it is — no document, no
  * window, no clock of its own. `watchReentry` genuinely touches `document`
@@ -21,37 +26,30 @@
  * number instead of importing `lock.ts`'s — shows up here rather than only
  * in a real browser nobody is running.
  *
- * `resolveReentryCallback`, `assumePasskeyForReentry`, `hasSettled` and
- * `shouldStayLocked` all live in `app/root.tsx`, not here, because each is
- * `Layout`'s own decision rather than `watchReentry`'s (`resolveReentryCallback`'s
- * own header there argues why, and the same argument holds for the other
- * three) — but every one is imported directly below, the same way
- * `tests/routes/root.test.ts` already reaches into `app/root.tsx` for
- * `loader` and `middleware` without rendering anything. A review of this
- * pull request found an earlier version of one such test constructed its
- * own copy of `Layout`'s decision instead of importing it, which stayed
- * green even after reverting the production wiring back to the bug it was
- * meant to catch — calling the real export is what closes that gap.
+ * `assumePasskeyForReentry` lives in `app/root.tsx`, not here, because it is
+ * `Layout`'s own translation of the root loader's two-field answer (finding
+ * C) into the plain `boolean` `watchReentry` actually takes — imported
+ * directly below, the same way `tests/routes/root.test.ts` already reaches
+ * into `app/root.tsx` for `loader` and `middleware` without rendering
+ * anything.
  *
- * `hasSettled` and `shouldStayLocked` (findings A and B) prove the settle
- * effect's *decision rule* — that an idle reading needs evidence of prior
- * activity first, and that both signals have to clear before the other —
- * not the React Router scheduling that makes a bare idle reading arrive
- * early in the first place. That race needs a real `startTransition` and a
- * real fetcher, which is exactly the browser/jsdom rendering this suite's
- * own house style rules out; the two functions below are what stayed
- * genuinely unit-testable once the decision moved into them, and the gap is
- * named here rather than papered over with a component test that would
- * only exercise a mock of the race, not the race itself.
+ * **What moved here, and why the previous version of this file could not
+ * catch a reverted call site.** Two earlier rounds put the
+ * postLock-or-askServer decision in `app/root.tsx` instead — first as an
+ * inline arrow function, then as an exported `resolveReentryCallback` this
+ * file called directly — and both left `watchReentry` itself accepting
+ * whatever the call site handed it, `null` included. A regression test that
+ * called `resolveReentryCallback` proved that function's own logic, never
+ * that `Layout` actually used it: reverting the call site back to
+ * `hasPasskey ? callback : null` kept every such test green. `watchReentry`
+ * taking `assumedPasskey` and both actions directly, with no nullable slot
+ * left in its signature at all, is what closes that gap — the old call
+ * shape does not typecheck against this one, so a reverted call site fails
+ * `npm run typecheck` before any test ever runs.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  assumePasskeyForReentry,
-  hasSettled,
-  resolveReentryCallback,
-  shouldStayLocked,
-} from "../app/root.tsx";
+import { assumePasskeyForReentry } from "../app/root.tsx";
 import { REENTRY_GRACE_MS } from "~/lib/lock";
 import { shouldPostLock, watchReentry } from "~/lib/reentry";
 
@@ -209,7 +207,7 @@ describe("watchReentry", () => {
     return browser;
   }
 
-  it("posts the lock, and does not ask the server, once a hidden gap exceeds the grace", () => {
+  it("posts the lock, and does not ask the server, once a hidden gap exceeds the grace, while a passkey is assumed enrolled", () => {
     const browser = install();
     const perf = vi.spyOn(performance, "now");
     let clock = 0;
@@ -217,7 +215,7 @@ describe("watchReentry", () => {
 
     const postLock = vi.fn();
     const askServer = vi.fn();
-    const teardown = watchReentry(postLock, askServer);
+    const teardown = watchReentry(true, { postLock, askServer }, vi.fn());
 
     browser.hide();
     clock += REENTRY_GRACE_MS + 1;
@@ -228,6 +226,47 @@ describe("watchReentry", () => {
     teardown();
   });
 
+  it(
+    "asks the server instead, and never posts the lock, once a hidden gap exceeds the grace while no passkey is assumed enrolled — the decision `watchReentry` now makes internally (finding 6)",
+    () => {
+      // Two earlier rounds left this decision at the call site instead —
+      // first an inline arrow function, then an exported
+      // `resolveReentryCallback` a regression test called directly — and
+      // both left room for `app/root.tsx` to keep gating *installation*
+      // itself on a `hasPasskey` belief baked in at render time, which can
+      // go stale the moment a passkey is enrolled from another browser.
+      // `watchReentry` deciding internally, off a plain `assumedPasskey`
+      // boolean, is what this test actually exercises: there is no `null`
+      // this call could have passed instead to skip noticing the return.
+      const browser = install();
+      const perf = vi.spyOn(performance, "now");
+      let clock = 0;
+      perf.mockImplementation(() => clock);
+
+      const postLock = vi.fn();
+      const askServer = vi.fn();
+      const teardown = watchReentry(false, { postLock, askServer }, vi.fn());
+
+      browser.hide();
+      clock += REENTRY_GRACE_MS + 1;
+      browser.show();
+
+      expect(askServer).toHaveBeenCalledTimes(1);
+      expect(postLock).not.toHaveBeenCalled();
+      teardown();
+    },
+  );
+
+  it("installs the visibilitychange listener regardless of whether a passkey is assumed enrolled, never skipping it the way the old hasPasskey-gated call site could (finding 1)", () => {
+    const browser = install();
+    const teardown = watchReentry(false, { postLock: vi.fn(), askServer: vi.fn() }, vi.fn());
+
+    expect(browser.listenerCount("document", "visibilitychange")).toBe(1);
+    expect(browser.listenerCount("window", "pageshow")).toBe(1);
+
+    teardown();
+  });
+
   it("does not post for a hidden gap within the grace — an ordinary app switch", () => {
     const browser = install();
     const perf = vi.spyOn(performance, "now");
@@ -235,7 +274,7 @@ describe("watchReentry", () => {
     perf.mockImplementation(() => clock);
 
     const postLock = vi.fn();
-    const teardown = watchReentry(postLock, vi.fn());
+    const teardown = watchReentry(true, { postLock, askServer: vi.fn() }, vi.fn());
 
     browser.hide();
     clock += REENTRY_GRACE_MS - 1;
@@ -261,7 +300,7 @@ describe("watchReentry", () => {
     browser.hideSilently();
 
     const postLock = vi.fn();
-    const teardown = watchReentry(postLock, vi.fn());
+    const teardown = watchReentry(true, { postLock, askServer: vi.fn() }, vi.fn());
 
     clock += REENTRY_GRACE_MS + 1;
     browser.show();
@@ -270,27 +309,29 @@ describe("watchReentry", () => {
     teardown();
   });
 
-  it("asks the server, and does not post the lock, on a persisted pageshow", () => {
+  it("calls onPersistedRestore, and posts no lock and asks nothing else, on a persisted pageshow", () => {
     const browser = install();
     const postLock = vi.fn();
     const askServer = vi.fn();
-    const teardown = watchReentry(postLock, askServer);
+    const onPersistedRestore = vi.fn();
+    const teardown = watchReentry(true, { postLock, askServer }, onPersistedRestore);
 
     browser.pageshow(true);
 
-    expect(askServer).toHaveBeenCalledTimes(1);
+    expect(onPersistedRestore).toHaveBeenCalledTimes(1);
     expect(postLock).not.toHaveBeenCalled();
+    expect(askServer).not.toHaveBeenCalled();
     teardown();
   });
 
-  it("does not ask the server on an ordinary, non-persisted pageshow", () => {
+  it("does not call onPersistedRestore on an ordinary, non-persisted pageshow", () => {
     const browser = install();
-    const askServer = vi.fn();
-    const teardown = watchReentry(vi.fn(), askServer);
+    const onPersistedRestore = vi.fn();
+    const teardown = watchReentry(true, { postLock: vi.fn(), askServer: vi.fn() }, onPersistedRestore);
 
     browser.pageshow(false);
 
-    expect(askServer).not.toHaveBeenCalled();
+    expect(onPersistedRestore).not.toHaveBeenCalled();
     teardown();
   });
 
@@ -301,8 +342,8 @@ describe("watchReentry", () => {
     perf.mockImplementation(() => clock);
 
     const postLock = vi.fn();
-    const askServer = vi.fn();
-    const teardown = watchReentry(postLock, askServer);
+    const onPersistedRestore = vi.fn();
+    const teardown = watchReentry(true, { postLock, askServer: vi.fn() }, onPersistedRestore);
 
     expect(browser.listenerCount("document", "visibilitychange")).toBe(1);
     expect(browser.listenerCount("window", "pageshow")).toBe(1);
@@ -319,33 +360,7 @@ describe("watchReentry", () => {
     browser.pageshow(true);
 
     expect(postLock).not.toHaveBeenCalled();
-    expect(askServer).not.toHaveBeenCalled();
-  });
-
-  it("installs no visibilitychange listener at all, and never posts, when there is nothing to post a lock for", () => {
-    // `app/root.tsx` passes `null` wherever the household holds no passkey
-    // (finding 3): the `pageshow` half still installs — it only
-    // revalidates — but the `visibilitychange`/`postLock` half must not,
-    // since posting a lock for nothing would send the reader on a pointless
-    // round trip. Proven on the listener count, not only on the callback
-    // never firing, because installing a no-op listener would still leave
-    // stale hidden-timer state ticking for no reason.
-    const browser = install();
-    const askServer = vi.fn();
-    const teardown = watchReentry(null, askServer);
-
-    expect(browser.listenerCount("document", "visibilitychange")).toBe(0);
-    expect(browser.listenerCount("window", "pageshow")).toBe(1);
-
-    // Hiding and showing the tab has no listener left to notice at all.
-    browser.hide();
-    browser.show();
-
-    browser.pageshow(true);
-    expect(askServer).toHaveBeenCalledTimes(1);
-
-    teardown();
-    expect(browser.listenerCount("window", "pageshow")).toBe(0);
+    expect(onPersistedRestore).not.toHaveBeenCalled();
   });
 
   it(
@@ -368,7 +383,7 @@ describe("watchReentry", () => {
       perf.mockImplementation(() => clock);
 
       const postLock = vi.fn();
-      const teardown = watchReentry(postLock, vi.fn());
+      const teardown = watchReentry(true, { postLock, askServer: vi.fn() }, vi.fn());
 
       browser.hide();
       // The wall clock jumps back an hour while the tab sits hidden — far
@@ -383,97 +398,6 @@ describe("watchReentry", () => {
       teardown();
     },
   );
-
-  it(
-    "would have left a passkey enrolled elsewhere unnoticed for this tab's whole lifetime under the old, hasPasskey-gated installation — and does not under the fix",
-    () => {
-      // A page renders with `hasPasskey: false` — the household held none
-      // yet — and then, in another browser entirely, enrols its first
-      // passkey. This tab is never told; its own `hasPasskey` is baked in at
-      // render time and stays false for as long as the page lives.
-      // `app/root.tsx` used to decide whether to install this half *at all*
-      // off that same stale flag (`hasPasskey ? cb : null`, reproduced
-      // literally as `postLockOld` below): with no passkey believed
-      // enrolled, it passed `null`, and `watchReentry` skips installing the
-      // `visibilitychange` listener outright for a `null` `postLock` — not
-      // only for the return in progress, but for the rest of this tab's
-      // life, since nothing re-runs the effect that decided it.
-      // Foregrounding the tab after the grace, having missed the enrolment,
-      // produces an ordinary, non-persisted `pageshow` — the *other* half's
-      // own trigger — so nothing here ever asks the server either. The fix
-      // moves the decision inside the callback instead of into whether it
-      // installs: `resolveReentryCallback` — imported from `app/root.tsx`
-      // itself, not reproduced here — is what decides now, on the identical
-      // stale-`false` render, always returning a real function rather than
-      // `null`. Calling the production function directly, rather than a
-      // hand-written stand-in for it, is what makes reverting `app/root.tsx`'s
-      // wiring back to the old ternary fail this test: that revert removes
-      // this function's only production caller and, with it, the export
-      // this file imports.
-      const perf = vi.spyOn(performance, "now");
-      let clock = 0;
-      perf.mockImplementation(() => clock);
-
-      const hasPasskeyAtRender = false; // the stale belief this render was built on
-
-      const postToLockNow = vi.fn();
-      const postLockOld = hasPasskeyAtRender ? postToLockNow : null;
-      const oldBrowser = install();
-      const teardownOld = watchReentry(postLockOld, vi.fn());
-
-      oldBrowser.hide();
-      clock += REENTRY_GRACE_MS + 1;
-      oldBrowser.show();
-
-      // The bug, reproduced: no listener was ever installed, so nothing
-      // here noticed the return at all.
-      expect(oldBrowser.listenerCount("document", "visibilitychange")).toBe(0);
-      expect(postToLockNow).not.toHaveBeenCalled();
-      teardownOld();
-
-      const askServer = vi.fn();
-      const postLockNew = resolveReentryCallback(hasPasskeyAtRender, {
-        postLock: postToLockNow,
-        askServer,
-      });
-      const newBrowser = install();
-      const teardownNew = watchReentry(postLockNew, vi.fn());
-
-      newBrowser.hide();
-      clock += REENTRY_GRACE_MS + 1;
-      newBrowser.show();
-
-      // The fix: the listener is installed regardless, so the return is
-      // noticed — and, on this same stale belief, it asks the server
-      // (which re-checks the live database) rather than staying silent.
-      expect(newBrowser.listenerCount("document", "visibilitychange")).toBe(1);
-      expect(askServer).toHaveBeenCalledTimes(1);
-      expect(postToLockNow).not.toHaveBeenCalled();
-      teardownNew();
-    },
-  );
-
-  describe("resolveReentryCallback", () => {
-    it("returns the postLock action once a passkey is believed enrolled, so the reentry guard still posts the lock", () => {
-      const postLock = vi.fn();
-      const askServer = vi.fn();
-
-      resolveReentryCallback(true, { postLock, askServer })();
-
-      expect(postLock).toHaveBeenCalledTimes(1);
-      expect(askServer).not.toHaveBeenCalled();
-    });
-
-    it("returns the askServer action while no passkey is believed enrolled, rather than a callback that stays silent", () => {
-      const postLock = vi.fn();
-      const askServer = vi.fn();
-
-      resolveReentryCallback(false, { postLock, askServer })();
-
-      expect(askServer).toHaveBeenCalledTimes(1);
-      expect(postLock).not.toHaveBeenCalled();
-    });
-  });
 
   it(
     "still posts the lock once the grace is exceeded even though the monotonic clock stalled through a suspend",
@@ -497,7 +421,7 @@ describe("watchReentry", () => {
       perf.mockImplementation(() => clock);
 
       const postLock = vi.fn();
-      const teardown = watchReentry(postLock, vi.fn());
+      const teardown = watchReentry(true, { postLock, askServer: vi.fn() }, vi.fn());
 
       browser.hide();
       // The device suspends: the wall clock keeps advancing well past the
@@ -512,63 +436,12 @@ describe("watchReentry", () => {
   );
 });
 
-describe("hasSettled", () => {
-  it(
-    "does not settle on an idle reading that was never preceded by an active one",
-    () => {
-      // Finding A: React Router 7.18.2 publishes a fetcher's (and a
-      // revalidator's) first move away from `idle` through
-      // `startTransition`, so `setLocking(true)` can commit a render that
-      // still sees this signal as `idle` — the reading from before the
-      // round ever started, not proof it finished. Reverting `hasSettled`
-      // to `(_everActive, isIdleNow) => isIdleNow` (dropping the evidence
-      // requirement) would read this as settled; it must not.
-      expect(hasSettled(false, true)).toBe(false);
-    },
-  );
-
-  it("settles once an idle reading follows a genuinely active one", () => {
-    expect(hasSettled(true, true)).toBe(true);
-  });
-
-  it("does not settle while the signal is still active, regardless of history", () => {
-    expect(hasSettled(true, false)).toBe(false);
-    expect(hasSettled(false, false)).toBe(false);
-  });
-});
-
-describe("shouldStayLocked", () => {
-  it(
-    "keeps the page replaced once the lock post has settled but the forced revalidation it triggers has not",
-    () => {
-      // Finding B: the settle effect used to clear `locking` the instant the
-      // fetcher alone went idle, calling `revalidate()` in the same breath
-      // — the figures were back on screen for the whole of that
-      // revalidation's own round trip. Reverting to that shape is
-      // `shouldStayLocked = (fetcherIsSettled) => !fetcherIsSettled`,
-      // ignoring the second argument entirely; under that reversion this
-      // reads `false` (fetcher settled ⇒ stop staying locked), failing the
-      // assertion below.
-      expect(shouldStayLocked(true, false)).toBe(true);
-    },
-  );
-
-  it("clears only once both the lock post and the revalidation it triggers have settled", () => {
-    expect(shouldStayLocked(true, true)).toBe(false);
-  });
-
-  it("stays locked before the fetcher itself has even settled, whatever the revalidation reads", () => {
-    expect(shouldStayLocked(false, false)).toBe(true);
-    expect(shouldStayLocked(false, true)).toBe(true);
-  });
-});
-
 describe("assumePasskeyForReentry", () => {
   it("assumes a passkey is enrolled once the loader's own isLocked read has failed, even though hasPasskey reads false", () => {
     // Finding C: the loader's `hasPasskey` fails toward `false` on a throw
     // (its own header explains why that bias is right for the chrome), and
-    // `resolveReentryCallback` reading `false` chooses `askServer` over
-    // `postLock` — the branch that lets a live grant merely be extended
+    // `watchReentry` reading `false` for `assumedPasskey` chooses `askServer`
+    // over `postLock` — the branch that lets a live grant merely be extended
     // rather than ended. Reverting to `hasPasskey` alone (ignoring
     // `passkeyCheckFailed`) would answer `false` here; the guard must take
     // the cautious branch instead.

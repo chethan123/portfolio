@@ -352,7 +352,7 @@ describe("the lock middleware", () => {
   );
 
   it(
-    "clears the grant cookie on a refusal that is itself a POST to /lock-now, since an outage must not strand a grant the reader asked to end",
+    "clears the grant cookie on a refusal that is itself a POST to /lock-now carrying that browser's own grant, since an outage must not strand a grant the reader asked to end",
     async () => {
       // Finding 3: `/lock-now`'s own action already clears the cookie on
       // every path through it (`lock-now.test.ts`'s own coverage), but an
@@ -360,10 +360,48 @@ describe("the lock middleware", () => {
       // the exact case this middleware used to leave the cookie alone for,
       // on the reasoning (right everywhere else) that a mere read failure
       // is not proof the grant is gone. A reader who pressed "Lock now"
-      // during the outage has already asked to end this browser's grant;
-      // once the database recovers, an uncleared cookie would admit them
-      // again — precisely the outcome pressing the control was supposed to
-      // rule out.
+      // during the outage, from a browser that still carries its own grant
+      // cookie, has already asked to end this browser's grant; once the
+      // database recovers, an uncleared cookie would admit them again —
+      // precisely the outcome pressing the control was supposed to rule
+      // out. The cookie is seeded here (finding 4) — a genuine same-origin
+      // "Lock now" press always carries it — so this test stays distinct
+      // from the cross-site shape just below, which never does.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, post("/lock-now", {}, `${LOCK_COOKIE}=some-grant-id`), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        expect(response.headers.get("Set-Cookie")).toMatch(/max-age=0/i);
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "leaves the grant cookie alone on a refusal that is a POST to /lock-now during an outage, when the request carries no grant cookie at all — the cross-site forgery shape (finding 4, P1)",
+    async () => {
+      // `SameSite=Lax` withholds `LOCK_COOKIE` from a cross-site form
+      // POST — the browser never sends it — so a request that reaches here
+      // with no cookie at all is exactly what an attacker's page
+      // auto-submitting a form to this instance's own `/lock-now` produces,
+      // indistinguishable by path and method alone from a real "Lock now"
+      // press made during an outage. Treating path-and-method as proof
+      // (the bug) cleared a cookie this request never named; requiring the
+      // cookie closes it without inventing a second CSRF mechanism beside
+      // the framework's own `Origin` check and this app's existing
+      // `SameSite=Lax` posture (ADR-0005).
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -379,11 +417,35 @@ describe("the lock middleware", () => {
         expect(called).toBe(false);
         expect(response.status).toBeGreaterThanOrEqual(300);
         expect(response.status).toBeLessThan(400);
-        expect(response.headers.get("Set-Cookie")).toMatch(/max-age=0/i);
+        expect(response.headers.get("Set-Cookie")).toBeNull();
       } finally {
         await unreachable.destroy();
       }
     },
+  );
+
+  it(
+    "leaves the grant cookie alone on a refusal that is a POST to /lock-now with no grant cookie, even while the household is locked and the database is perfectly reachable — the ordinary-operation cross-site shape (finding 4, P1)",
+    withDatabase(async ({ seedPasskey }) => {
+      // The same forgery, without needing an outage to reach it at all: a
+      // locked household refuses any request carrying no grant cookie
+      // regardless of path, and a forged `POST /lock-now` is exactly such a
+      // request. This is the more common shape in practice — no outage
+      // required — and the one a P1 severity actually describes.
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+      let called = false;
+
+      const response = await responseOf(() =>
+        servedThrough(middleware, post("/lock-now", {}), {}, () => {
+          called = true;
+        }),
+      );
+
+      expect(called).toBe(false);
+      expect(response.status).toBeGreaterThanOrEqual(300);
+      expect(response.status).toBeLessThan(400);
+      expect(response.headers.get("Set-Cookie")).toBeNull();
+    }),
   );
 
   it(
@@ -431,14 +493,17 @@ describe("the lock middleware", () => {
       // and leave the cookie alone — reverting `normalizedPathname` back to
       // comparing `pathname.toLowerCase()` without decoding first fails this
       // test the same way it failed the plain-`/lock-now` test above before
-      // finding 3's fix, since `/lock%2dnow` never equals `/lock-now`.
+      // finding 3's fix, since `/lock%2dnow` never equals `/lock-now`. The
+      // cookie is seeded here (finding 4) for the same reason it is on that
+      // plain-spelling test: this exercises the encoded-path decoding, not
+      // the cookie requirement, which has its own dedicated tests above.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
       try {
         const response = await withDb(unreachable, () =>
           responseOf(() =>
-            servedThrough(middleware, post("/lock%2Dnow", {}), {}, () => {
+            servedThrough(middleware, post("/lock%2Dnow", {}, `${LOCK_COOKIE}=some-grant-id`), {}, () => {
               called = true;
             }),
           ),

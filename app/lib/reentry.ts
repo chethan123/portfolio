@@ -49,26 +49,29 @@
  * nothing there, and closes the gap that survives everywhere else: Chrome,
  * unconditionally, and Safari's own local-dev loop.
  *
- * **`postLock` is nullable, for a caller with genuinely nothing this
- * browser's own return could ever post — not, any more, for `app/root.tsx`
- * gating either half on `hasPasskey`.** An earlier version of that effect
- * passed `null` here whenever the household held no passkey at render time,
- * on the reasoning that posting a lock with nothing enrolled would be a
- * pointless `/lock-now` → `/unlock` → `/` round trip. That reasoning is
- * where the bug lived: `hasPasskey` is baked into a page at render time and
- * can go stale — a household may enrol its first passkey in another tab
- * after this one already rendered with none — and passing `null` skips
- * installing the `visibilitychange` listener for this tab's *entire*
- * lifetime, not merely for one return. A page caught that way never got a
- * second chance: the `pageshow` half only fires on a back/forward-cache
- * restore, which an ordinary foreground-after-hidden never is. `app/root.tsx`
- * now always passes a real function, and decides *inside* it, at the instant
- * a hidden-too-long return actually happens, whether to post the lock or
- * only ask the server — its own header on that effect carries the rest of
- * the argument. What stays true here is only the narrower one: a caller with
- * nothing at all this half could ever protect may still pass `null` to skip
- * installing it outright, rather than installing a listener with nothing to
- * call.
+ * **The postLock-or-askServer decision lives here now, not at the call
+ * site — and both halves install unconditionally, always.** An earlier
+ * version left that decision in `app/root.tsx`, which decided *whether to
+ * install the `visibilitychange` listener at all* off `hasPasskey` at render
+ * time: `watchReentry(hasPasskey ? callback : null, askServer)`. That
+ * reasoning is where the bug lived — `hasPasskey` is baked into a page at
+ * render time and can go stale (a household may enrol its first passkey in
+ * another tab after this one already rendered with none), and passing
+ * `null` skipped installing the listener for this tab's *entire* lifetime,
+ * not merely for one return. A page caught that way never got a second
+ * chance: the `pageshow` half only fires on a back/forward-cache restore,
+ * which an ordinary foreground-after-hidden never is. A second review round
+ * found that moving the decision into a *function* the call site still chose
+ * whether to call (`resolveReentryCallback`) did not close the gap either —
+ * the call site could still revert to gating installation on `hasPasskey`
+ * and every existing test stayed green, since none of them called through
+ * the production wiring itself. The fix is structural rather than
+ * behavioural: `watchReentry` takes `assumedPasskey` as a plain `boolean` and
+ * both real actions, always installs both listeners, and decides internally,
+ * at the instant a hidden-too-long return actually happens, whether to post
+ * the lock or only ask the server. There is no nullable slot left for a call
+ * site to pass `null` into — the old call shape does not typecheck against
+ * this one at all.
  *
  * **A persisted restore is not by itself evidence the grant is gone.**
  * Unlike the hidden-too-long case, which already knows what it wants (end
@@ -137,21 +140,43 @@ function readClocks(): HiddenAt {
 }
 
 /**
- * Wires this file's signals onto `document` and `window`, and hands back the
- * teardown a `useEffect` needs.
- *
- * `postLock` runs only once {@link shouldPostLock} says the grace has
- * actually passed since this browser was last hidden — never on every
- * return, which would post on the ordinary few seconds of switching apps
- * story 4 asks this feature not to be tiresome about. Pass `null` to skip
- * that half entirely — no `visibilitychange` listener, no hidden-timer
- * state — when there is nothing this browser's lock could protect (this
- * file's own header explains why `app/root.tsx` needs that). `askServer`
- * runs on every `pageshow` whose `event.persisted` is true, unconditionally
- * and regardless of `postLock`: see this file's header for why that call
- * must never assume the answer is "gone" the way `postLock`'s does.
+ * What a hidden-too-long return does once it happens: `postLock` ends this
+ * browser's own reading outright; `askServer` merely re-asks the middleware,
+ * for a belief that might already be stale ({@link watchReentry}'s own
+ * `assumedPasskey` parameter doc).
  */
-export function watchReentry(postLock: (() => void) | null, askServer: () => void): () => void {
+export type ReentryActions = { postLock: () => void; askServer: () => void };
+
+/**
+ * Wires this file's signals onto `document` and `window`, and hands back the
+ * teardown a `useEffect` needs. Both listeners install unconditionally,
+ * always — see this file's own header for why that is the fix rather than a
+ * stylistic choice.
+ *
+ * **`assumedPasskey` is read only at the instant a hidden-too-long return
+ * actually happens, never at wire time.** A hidden-too-long return
+ * ({@link shouldPostLock} saying the grace has passed) calls
+ * `actions.postLock()` when `assumedPasskey` is true, and
+ * `actions.askServer()` otherwise — never silence: a page that rendered
+ * believing no passkey was enrolled may be wrong by the time it actually
+ * returns, and asking the server is the cheap, always-correct fallback for
+ * that belief, the same one `onPersistedRestore` below already relies on.
+ * Nothing here posts on every ordinary return, which would be tiresome about
+ * the few seconds of switching apps (story 4) — only once the grace has
+ * actually passed.
+ *
+ * `onPersistedRestore` runs on every `pageshow` whose `event.persisted` is
+ * true, unconditionally and regardless of `assumedPasskey`: see this file's
+ * header for why that call must never assume the answer is "gone" the way
+ * `actions.postLock` does. Kept as its own parameter rather than folded into
+ * `actions.askServer` — it answers a different trigger (a back/forward-cache
+ * restore, never a hidden-too-long return) that this change did not touch.
+ */
+export function watchReentry(
+  assumedPasskey: boolean,
+  actions: ReentryActions,
+  onPersistedRestore: () => void,
+): () => void {
   // Seeded from the current visibility state, not `null` — a page mounted
   // into an already-hidden tab (opened in a background tab, or hydrated
   // while the document is already hidden) never sees a `visibilitychange`
@@ -160,30 +185,31 @@ export function watchReentry(postLock: (() => void) | null, askServer: () => voi
   // `document.visibilityState` here means such a page measures its own
   // hidden gap from the moment this function ran, instead of never arming
   // the timer for its whole lifetime.
-  let hiddenAt: HiddenAt | null = postLock !== null && document.visibilityState === "hidden" ? readClocks() : null;
+  let hiddenAt: HiddenAt | null = document.visibilityState === "hidden" ? readClocks() : null;
 
   function onVisibilityChange(): void {
-    if (postLock === null) return; // never registered when null; see below.
-
     if (document.visibilityState === "hidden") {
       hiddenAt = readClocks();
       return;
     }
 
     const { wallMs, monoMs } = readClocks();
-    if (shouldPostLock(hiddenAt, wallMs, monoMs)) postLock();
+    if (shouldPostLock(hiddenAt, wallMs, monoMs)) {
+      if (assumedPasskey) actions.postLock();
+      else actions.askServer();
+    }
     hiddenAt = null;
   }
 
   function onPageShow(event: PageTransitionEvent): void {
-    if (event.persisted) askServer();
+    if (event.persisted) onPersistedRestore();
   }
 
-  if (postLock !== null) document.addEventListener("visibilitychange", onVisibilityChange);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("pageshow", onPageShow);
 
   return () => {
-    if (postLock !== null) document.removeEventListener("visibilitychange", onVisibilityChange);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     window.removeEventListener("pageshow", onPageShow);
   };
 }
