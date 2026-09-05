@@ -45,10 +45,15 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
       noticing
 - [ ] A human-readable label, `not null`, so Settings has something to print that is not a hash
 - [ ] `enrolled_at` and `last_used_at` as `timestamptz`; `last_used_at` nullable until first use
-- [ ] Only one passkey may be the household's first. A partial unique index — or an insert conditional
-      on none existing — makes the eligibility check and the insert one atomic act, so two browsers
-      that both read zero cannot both enrol. Without it the second finishes after the first and gains
-      a passkey without the fresh assertion the rule requires
+- [ ] Only one passkey may be the household's first, and it takes **two** mechanisms rather than
+      either one. A partial unique index closes the concurrent half — two inserts in flight at once,
+      neither able to see the other's uncommitted row — and an insert conditional on none existing
+      closes the committed half, where a passkey landed while a browser sat between beginning an
+      enrolment and finishing it. Neither is enough alone: under READ COMMITTED two conditional
+      inserts each take their own snapshot, each sees an empty table, and both land; and a unique
+      index can only say *at most one row carries the flag*, never *the table was empty*. Without both,
+      the second browser finishes after the first and gains a passkey without the fresh assertion the
+      rule requires
 - [ ] `unlock_grant` holds its id as a random token from a cryptographic source, text, not a sequence.
       The initial migration's convention is `bigint generated always as identity`, and departing from
       it is the point rather than an oversight: this id travels in a cookie and is the whole of the

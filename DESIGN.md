@@ -944,19 +944,24 @@ Migrations must be idempotent so a restart is always safe.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `DATABASE_URL` | yes | — | Postgres connection string |
+| `PUBLIC_ORIGIN` | yes | — | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. Also read by the `gate` service — see below |
 | `AUTH_GATE` | no | `none` | Whether something in front of the app authenticates: `external` or `none`. It guards nothing — it only decides whether the warning banner (§10) is drawn, so that the app neither cries wolf behind the gate nor stays quiet without one. Compose sets `external`, because in that file it is a fact |
 | `PORT` | no | `3000` | HTTP listen port |
 | `MAX_UPLOAD_MB` | no | `10` | Largest statement upload accepted, in whole MB |
 | `MARKET_TIMEZONE` | no | `America/New_York` | Market-hours calculation, and the trading day a quote's close is filed under |
 | `TZ` | no | `UTC` | Container clock; the database stores UTC regardless |
 
-**The gate's own settings are not in that table, because the app never reads them.** Its Google
-client, its cookie secret and `PUBLIC_ORIGIN` — the `https://` origin the house proxy serves, which
-the gate builds its redirect from and which must match the URI registered with Google — are
-Compose-level variables consumed by the `gate` service. They are the only settings anywhere with no
-default, and a missing one stops `up`. Who may enter is not a variable at all: a file of addresses
-beside the Compose file, one per line, because it is a list that grows rather than a value that
-changes. `.env.example`'s gate section is the operator-facing recipe for all of it.
+**The rest of the gate's settings are not in that table, because the app reads none of the rest.**
+`PUBLIC_ORIGIN` moved into the table above for exactly that reason: unlike its neighbours, the app
+now derives the lock's WebAuthn relying-party id from it
+(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`), which is its first shared variable
+with the sidecar. Its Google client and its cookie secret genuinely are the gate's alone —
+Compose-level variables consumed only by the `gate` service, with no default, and a missing one
+stops `up` the same way a missing `PUBLIC_ORIGIN` does. Who may enter is not a variable at all: a
+file of addresses beside the Compose file, one per line, because it is a list that grows rather
+than a value that changes. `.env.example`'s gate section is the operator-facing recipe for those two
+and the allowlist; `PUBLIC_ORIGIN`'s own recipe sits beside `DATABASE_URL`'s now, in the section
+above it.
 
 **The household's settings are deliberately not in that table.** Environment variables remain the
 whole of what an *operator* configures — everything validated at startup, everything that needs a
