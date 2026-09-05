@@ -47,6 +47,11 @@ the inline numbers, and open the line before editing near it.
 Still correct as written: `tests/price-poller.test.ts:139-149` and `:37`, `app/lib/db.server.ts:17`,
 `tests/support/routes.ts:31-34`, `docs/developing.md:56-60`.
 
+Every number in that table is as of the commit this ticket was addressed to, which is what an
+implementer needed. Some of them move again in this ticket's own diff — `## Upgrading` ends up
+lower still once the Logs bullet and the developer's recipe are in — so read the tree, not the
+table, once the work has landed.
+
 **The uncounted work.** Removing `yahooPriceProvider` and `probeSymbols` breaks two test files the
 checklist never names, at compile time:
 
