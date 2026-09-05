@@ -556,7 +556,9 @@ docker compose start app
 ```
 
 `unlock_grant.passkey_id` references `passkey` `on delete cascade`, so the delete also removes every
-browser's current grant along with the passkey that minted it — nothing is left half-cleared.
+browser's current grant along with the passkey that minted it — nothing is left half-cleared. Every
+browser still holds a cookie naming one of those deleted rows; it names nothing now, and is cleared
+on that browser's first refusal once somebody enrols again.
 
 Why, including why the order above is stop-delete-start and not delete-then-restart:
 [The lock](operating.md#the-lock).

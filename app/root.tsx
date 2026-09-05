@@ -359,10 +359,23 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
  * a rendered 404 — app chrome only, since the root loader does not run
  * either, so no figure is on it — rather than the unlock screen, and that
  * response carries no `no-store` of its own. Separately, exempting
- * `/healthz` also exempts its single-fetch (`.data`) form, which is
- * harmless: that route holds no household data either way. Neither is worth
- * code; both are worth saying, so this header's account of what the lock
- * covers stays honest about where it stops.
+ * `/healthz` also exempts its single-fetch (`.data`) form — and that is not
+ * harmless in the way an earlier version of this comment claimed. The health
+ * route holds no household data, but a `.data` request runs *every* matched
+ * loader, this file's own included, and the root loader's neutral branch
+ * fires only for `/unlock` — so a browser holding no grant can read `gated`,
+ * `firstRun`, `masked`, `maskingPolicy` and `hasPasskey` off `/healthz.data`,
+ * which are exactly the fields the loader's own header says a proven-nothing
+ * browser has no business learning. **Kept deliberately, decided 2026-09-05**
+ * (spec 0020's "Decisions"): the request sits behind the gate, so the reader
+ * is a signed-in family member; the fields are setup state and never a
+ * figure; and a second rule for the exemption's shape costs more than it
+ * buys. In production the Caddyfile's `handle /healthz` is exact, so
+ * `/healthz.data` does not reach this exemption at all. Recorded with its
+ * reason so the next reader does not "fix" it. Neither this nor the
+ * unmatched-path case above is worth code; both are worth saying, so this
+ * header's account of what the lock covers stays honest about where it
+ * stops.
  */
 const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) => {
   if (LOCK_EXEMPT_PATHS.includes(normalizedPathname(url.pathname))) {
@@ -519,11 +532,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   // `createContext` would push these assertions into `servedThrough`-style
   // tests instead. Fails toward *not* drawing the control: unlike the
   // middleware, this is not the boundary — hiding a control on a database
-  // hiccup costs a family member one screen's worth of chrome and, with it,
-  // the re-entry effect below that gates on the same flag: a page rendered
-  // while this read throws carries no visibility trigger and no `pageshow`
-  // re-check for its whole lifetime, since the effect's deps do not change
-  // again until a navigation. Never a figure, though — there is no reason to
+  // hiccup costs a family member one screen's worth of chrome and nothing
+  // more: the re-entry effect below does *not* gate on this flag — it
+  // installs both listeners on every page regardless of what this render
+  // believes about the household, which is the whole point of the parameter
+  // that used to carry that belief being gone. Never a figure, though —
+  // there is no reason to
   // fail toward showing a button that clears a grant which may be exactly
   // what is protecting this render.
   //
@@ -730,28 +744,36 @@ export function Layout({ children }: { children: React.ReactNode }) {
    * needed a scrim, a replacement render, or a state machine watching for
    * either one to settle.
    *
-   * **A tab that discovers a passkey it did not know about is deliberately
-   * left alone.** A review round asked for one to post the lock on
-   * discovering that `hasPasskey` had flipped, on the reasoning that its
-   * belief was stale. The case that produces is a *sibling tab of the very
-   * browser that just enrolled*: the ceremony minted that browser's grant,
-   * the cookie is shared across its tabs, and posting here would delete it —
+   * **One trigger is declined here, and it is not the one below.** A review
+   * round asked for a tab to post the lock on *discovering* that
+   * `hasPasskey` had flipped, on the reasoning that its belief was stale.
+   * The case that produces is a *sibling tab of the very browser that just
+   * enrolled*: the ceremony minted that browser's grant, the cookie is
+   * shared across its tabs, and posting on that discovery would delete it —
    * locking the household out of the browser it enrolled from, seconds after
    * it did. `docs/specs/lock/05-enrolling-and-listing-passkeys.md` names that
-   * outcome as the thing not to do: the browser that enrolled the first
-   * passkey is not locked out by its own success. A different browser has no
-   * grant to share and is already refused by the middleware, which is where
-   * that refusal belongs.
+   * outcome as the thing not to do. A different browser has no grant to
+   * share and is already refused by the middleware, which is where that
+   * refusal belongs.
+   *
+   * A **hidden-too-long return** is a different trigger and is *not*
+   * declined: it posts, whatever this page believes about the household, so
+   * a tab hidden across its own browser's first enrolment does delete the
+   * grant that enrolment minted. That is spec 0019's story 3 asking for
+   * exactly this — the cost is one unlock prompt, and the redirect back to
+   * Settings still renders, which is what ticket 05's "not locked out by its
+   * own success" is actually scoped to.
    */
   const attemptLock = useCallback((): void => {
     void postLockNow(revalidate, fetch);
   }, [revalidate]);
 
   /**
-   * What a hidden-too-long return with no passkey believed enrolled does,
-   * and what a persisted `pageshow` restore does regardless of that belief
-   * (`~/lib/reentry.ts`'s own header on both): ask the middleware again, and
-   * stop there. Revalidating *is* the answer — it re-runs the root
+   * What a persisted `pageshow` restore does, and the only thing it does
+   * (`~/lib/reentry.ts`'s own header): ask the middleware again, and stop
+   * there. It is not what a hidden-too-long return does — that posts the
+   * lock, through `attemptLock` above, and no belief is left anywhere here
+   * that could route it here instead. Revalidating *is* the answer — it re-runs the root
    * middleware, which refuses a browser holding no live grant and redirects
    * it to `/unlock`. Nothing here decides the belief was stale and posts a
    * lock off the back of it; the paragraph on {@link attemptLock} above says

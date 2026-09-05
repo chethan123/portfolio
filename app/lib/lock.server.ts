@@ -188,10 +188,12 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
 
 /**
  * The grant's cookie — named for the table the id it carries addresses.
- * `__Host-` prefixed because this one carries a credential, where masking's
- * cookie deliberately carries neither prefix nor `Secure` (its own header):
- * a passkey will not run outside a secure context anyway, so the attributes
- * cost this feature nothing.
+ * `__Host-` prefixed because this one carries the id of a live unlock, where
+ * masking's cookie deliberately carries neither prefix nor `Secure` (its own
+ * header): a passkey will not run outside a secure context anyway, so the
+ * attributes cost this feature nothing. Never "a credential" — `CONTEXT.md`
+ * gives that word to the passkey itself, and what this carries is an opaque
+ * id with no claim of its own (`migrations/0012_lock.sql`).
  *
  * **The dev loop's plain-http localhost was tried, not argued.** Chromium
  * 141 accepts, stores and returns this cookie over `http://localhost` and
@@ -209,7 +211,7 @@ export const LOCK_COOKIE = "__Host-unlock_grant";
 /**
  * The `Set-Cookie` value for a browser whose assertion this module just
  * verified. `Secure`, `HttpOnly`, `Path=/` and the `__Host-` prefix all
- * follow from carrying a credential rather than a preference (this file's
+ * follow from carrying an unlock's id rather than a preference (this file's
  * comment on {@link LOCK_COOKIE}). No `Max-Age`: the *grant row* is the
  * authority on how long this lasts, extended by the request that uses it
  * ({@link touchGrant}) — a fixed cookie lifetime set once at unlock would

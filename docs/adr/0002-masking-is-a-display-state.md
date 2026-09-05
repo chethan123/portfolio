@@ -52,9 +52,10 @@ Nothing in it is a secret, and it grants nothing — the only session cookie any
 (ADR-0005), which the app never issues and which the gate keeps encrypted and `HttpOnly` on its own
 side of the boundary (its default; this repo pins only `SameSite` and `Secure`).
 
-[No longer the only one: the app's own grant cookie (ADR-0012) is a credential too, and, like the
-gate's, it is `HttpOnly` — the row it names is the authority, not the cookie itself, so nothing about
-it needs the script access masking's cookie exists for. That does not make masking's the one cookie
+[No longer the only one: the app's own grant cookie (ADR-0012) is `HttpOnly` too, and for the same
+kind of reason — it carries an opaque id naming one browser's unlock rather than a preference, and
+the row that id names is the authority, so nothing about it needs the script access masking's cookie
+exists for. That does not make masking's the one cookie
 in this stack deliberately not `HttpOnly` — the chart-range preference (`app/lib/chart-range.ts`) is
 set the same way, and for the same reason: it too carries a preference rather than a credential. What
 actually singles masking's out is the two writers this paragraph opened with: client script sets it

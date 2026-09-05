@@ -120,7 +120,9 @@ unprotected-instance banner already uses. Removing the last passkey turns the lo
 ### What re-locks it
 
 The idle expiry on the grant is the guarantee, and it is the only thing enforced server-side:
-**fifteen minutes**, extended by the requests that use it. On top of it, a browser hidden longer than
+**at most fifteen minutes** from the last request that rolled it, and as little as seven and a half —
+`touchGrant` rolls the window only when under half of it remains, so a request at minute five extends
+nothing. On top of it, a browser hidden longer than
 a **sixty second** grace **posts the lock action** when it comes back rather than merely navigating —
 navigating alone would leave the grant and its cookie live, so Back or a typed URL would still be
 admitted and nothing would have been locked. The trigger is still a courtesy, because a hidden page

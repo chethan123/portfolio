@@ -613,8 +613,10 @@ refused with nothing counting them. Nothing in the Caddyfile limits rates either
 encrypted rather than merely signed, `SameSite=Lax` and `Secure` are set explicitly, and the
 lifetime is the seven-day default — which is what makes signing in a once-per-device event rather
 than a weekly ritual, because the renewal bounces through Google without showing anyone a screen.
-There is no server-side session store, so there is nothing to revoke a single cookie against; see
-[the levers below](#revocation-and-the-levers-you-have).
+The *gate* keeps no server-side session store, so there is nothing to revoke one of its cookies
+against; see [the levers below](#revocation-and-the-levers-you-have). The lock's own grants are a
+different matter — those are rows, revocable one at a time, and [The lock](#the-lock) below says
+how.
 
 **There is no CSRF token anywhere.** `SameSite=Lax` is the whole of the posture. The app issues a
 cookie of its own now too — [the lock](#the-lock)'s grant — so the posture no longer rests on the
@@ -780,6 +782,11 @@ through the front door: doing it means reaching into the database directly, the 
 every passkey is gone the instance reads exactly as though none was ever enrolled — unlocked, with
 anyone the gate admits free to enrol again — because that is what "holds no passkey" already means;
 there is no third state.
+
+**Every browser in the household still holds a cookie naming a row you just deleted, and that is
+fine.** The row is the authority and the cookie carries no claim of its own, so once the passkeys are
+gone those cookies name nothing; the instance is unlocked for everybody either way. Each is cleared
+on that browser's first refusal after somebody enrols again. Nobody has to clear anything by hand.
 
 **The delete alone does not close a ceremony already in flight — stopping `app` before you delete does.**
 A registration challenge lives in the app's own process memory, not in the database, for two minutes

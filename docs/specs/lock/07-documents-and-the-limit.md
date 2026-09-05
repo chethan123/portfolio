@@ -111,13 +111,16 @@ false the moment this slice lands. Grep for the quoted phrase rather than trusti
       own (the unlock screen); ticket 05, on its own branch, already retook its own — the Settings tab
       strip shots — because that screen renders with no passkey enrolled. Ticket 06 defers its
       screenshots to this ticket's single capture pass rather than retaking them itself, and this ticket
-      is what has to own that capture, not merely check for it: the capture path seeds no passkey today,
-      so `isLocked()` is false throughout and the lock-now control cannot render in either chrome
-      position, in any shot, no matter how the rest of the set is retaken. Closing that gap is this
-      ticket's own work — `scripts/seed-demo.ts` must seed one passkey, and
-      `scripts/capture-screenshots.ts` must mint a grant against it and set the `__Host-unlock_grant`
-      cookie on the capture browser — one change to the two scripts serving this ticket's own shots of
-      the control, rather than a third ticket fighting tickets 05 and 06 over the same PNGs. With that
+      is what has to own that capture, not merely check for it: the capture path seeded no passkey, so
+      `isLocked()` was false throughout and the lock-now control could not render in either chrome
+      position, in any shot, no matter how the rest of the set was retaken. **What shipped closes that
+      gap in one script rather than two**, and the record should say so: `scripts/seed-demo.ts`
+      deliberately seeds none (its own header says why — the demo household is the *unlocked* one, and
+      a passkey nobody can sign for would be a row a developer then has to delete), and
+      `scripts/capture-screenshots.ts` plants a placeholder passkey itself, mints a grant against it and
+      sets the `__Host-unlock_grant` cookie on the capture browser (`ensureCapturePasskey`,
+      `mintCaptureGrant`). The outcome this box asked for is met; the two-script route it named is not
+      the route taken. With that
       done, this ticket checks the whole set, ticket 06's control included — `docs/README.md` and
       `docs/developing.md` both say a change to a screen is not finished until they are, and this slice
       changes the chrome, adds a Settings tab and adds a screen

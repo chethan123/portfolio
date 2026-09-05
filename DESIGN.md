@@ -835,8 +835,10 @@ routing here, so it is not needed.
 
 **Authentication happens in front of the app, and the app does none of it.** The gate signs each
 family member in with Google and admits only the addresses on the allowlist; a request that reaches
-the app has already been admitted, so the app carries no sign-in page, no password and no session of
-its own. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this
+the app has already been admitted, so the app carries no sign-in page and no password of its own.
+Nor does it carry a session in the sense that phrase usually means: the lock's grant (ADR-0012) is a
+fact about one browser at one moment and about nothing else — it names no person, carries no claim
+of its own, and answers only whether *this* browser has proven a passkey recently enough. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this
 stack rather than in the operator's proxy, and `docs/operating.md` is where an operator runs it.
 
 **That is per-person at the door and nowhere behind it.** The gate knows which family member is
@@ -1064,8 +1066,10 @@ The chart's range choice is the third of these display states, and it travels th
 same reason: the last-picked preset rides a cookie (spec 0008) so the server draws the remembered
 range on first paint. None of the three is a credential. A fourth cookie now is: the lock's own grant
 (ADR-0012), which is why it alone among this stack's cookies is `HttpOnly`, `Secure`, and `__Host-`
-prefixed — it carries a credential rather than a preference, and none of the three display states
-above needed any of that.
+prefixed — it carries an opaque id naming one browser's unlock rather than a preference, and none of
+the three display states above needed any of that. Not a passkey: `CONTEXT.md` gives that word to
+the credential the household enrolled, and this cookie carries no claim of its own
+(`migrations/0012_lock.sql`).
 
 **Tokens, defined once:**
 

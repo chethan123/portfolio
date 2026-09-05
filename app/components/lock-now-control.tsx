@@ -6,8 +6,10 @@
  * outright, on this browser, right now.
  *
  * **Drawn only while the household holds a passkey at all.** `app/root.tsx`'s
- * `Layout` is what decides that — off `rootData.locked`, the same field the
- * reentry guard (`~/lib/reentry.ts`) gates itself on — and passes nothing to
+ * `Layout` is what decides that — off the root loader's `hasPasskey`, and
+ * that flag decides this control and nothing else: the reentry guard
+ * (`~/lib/reentry.ts`) installs on every page regardless of it — and passes
+ * nothing to
  * this component when it should not render, rather than this component
  * reading the flag and rendering nothing itself: `MaskingToggle` has no such
  * flag to read, because masking has no off switch, and copying one here would

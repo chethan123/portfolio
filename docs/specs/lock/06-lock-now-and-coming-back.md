@@ -70,11 +70,12 @@ a thing you know you are about to do, and one tap beforehand beats any timer.
 - [ ] After the action, a request carrying the old cookie is refused — the grant is gone, not merely
       redirected past
 - [ ] The screenshots are deferred to ticket 07's single capture pass, not retaken here: the capture
-      path (`scripts/capture-screenshots.ts`, `scripts/seed-demo.ts`) seeds no passkey at all, so
+      path (`scripts/capture-screenshots.ts`, `scripts/seed-demo.ts`) seeded no passkey at all, so
       `isLocked()` is false throughout capture and neither chrome layout this ticket changes ever
       renders the control. Making it render needs a seeded passkey *and* a live grant plus the cookie
       on the capture browser — one change to the capture scripts that serves tickets 05 and 06
-      together, rather than three tickets fighting over the same PNGs
+      together, rather than three tickets fighting over the same PNGs. (What shipped does it in
+      `capture-screenshots.ts` alone, and ticket 07's own box carries the why.)
 - [ ] `watchReentry`'s own wiring is simulated with a plain `document`/`window` stand-in (two listener
       methods on each, a clock) — no jsdom, no real browser, following spec 0007's call for masking's
       client-side cookie write on the pieces that genuinely need nothing more. `shouldPostLock`'s

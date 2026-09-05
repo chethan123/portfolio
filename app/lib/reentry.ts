@@ -19,7 +19,9 @@
  * the grant row server-side — that deletion is not a courtesy, it is the one
  * thing here that is not a suggestion. And if a browser never fires
  * `visibilitychange` at all because it was suspended before it could, the
- * grant simply rides out its own fifteen-minute idle window instead;
+ * grant simply rides out its own idle window instead — at most fifteen
+ * minutes from the last request that rolled it, and as little as seven and a
+ * half, since `touchGrant` rolls only under half a window;
  * nothing about this file staying silent leaves a browser unlocked forever.
  *
  * **The `pageshow` half answers a narrower, uglier gap than a timer ever
@@ -83,7 +85,8 @@
  * direction — the annoyance that gets a real security feature turned off.
  *
  * **What none of this reaches.** A grant deleted by this file, by the
- * explicit control, or by the ordinary fifteen-minute idle window ends the
+ * explicit control, or by the ordinary idle window — at most fifteen minutes
+ * from the last request that rolled it — ends the
  * *next* request — it does not reach into a page already drawn. A second tab
  * of this same browser, open on a different screen, keeps its rendered
  * figures on screen until it next asks the server for anything; this file
@@ -158,10 +161,16 @@ function readClocks(): HiddenAt {
  * happened" would continue exactly as if `/lock-now`'s own action had
  * actually run and deleted the grant. `response.ok` — 200-299, where the
  * redirect this action returns lands once `fetch`'s own default
- * redirect-following reaches `/unlock` — is the one answer here that
- * actually means the grant is gone; anything else must not go on to
- * revalidate as though it were, because a still-live grant would only be
- * extended by that call, never ended.
+ * redirect-following reaches `/unlock` — is the best signal a `fetch` has
+ * that the grant is gone, and anything else must not go on to revalidate as
+ * though it were, because a still-live grant would only be extended by that
+ * call, never ended.
+ *
+ * It is a signal rather than a proof, and the difference is worth stating:
+ * *any* 2xx satisfies it, and a captive portal answering 200 with its own
+ * HTML does — as would the gate's sign-in page, were the provider button not
+ * skipped. Nothing observable here tells that apart from this instance's own
+ * answer, and the idle window is what covers the case where it cannot.
  *
  * **`keepalive: true`.** A plain `fetch` is aborted the instant its own
  * document unloads — exactly the moment this call matters most: the grace
@@ -250,6 +259,14 @@ export function watchReentry(postLock: () => void, onPersistedRestore: () => voi
   // `document.visibilityState` here means such a page measures its own
   // hidden gap from the moment this function ran, instead of never arming
   // the timer for its whole lifetime.
+  //
+  // **The cost, kept deliberately (spec 0020's own decision).** A tab opened
+  // without switching to it has therefore been "hidden" since it opened, so
+  // the first look at it more than a grace later locks the whole browser —
+  // a tab that never went anywhere, locking on a return it never made. That
+  // is one unlock prompt, and it fails toward locking, which is the
+  // direction spec 0019's story 3 asks for; the alternative fails the other
+  // way for a tab that genuinely was left behind.
   let hiddenAt: HiddenAt | null = document.visibilityState === "hidden" ? readClocks() : null;
 
   function onVisibilityChange(): void {

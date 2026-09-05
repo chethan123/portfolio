@@ -687,7 +687,7 @@ split is exact and each side is a decision:
 
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
 hand.** Above `unlock_grant`'s own row, every referencing delete describes something no screen
-performs: a person who owns no accounts (`people.server.ts:278`) and a just-created, never-held
+performs: a person who owns no accounts (`people.server.ts`'s `removePerson`) and a just-created, never-held
 instrument that lost an alias race (`instrument-resolution.server.ts:639`) are the only two
 application deletes reaching that half, there is no account delete and no position-set delete
 anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
