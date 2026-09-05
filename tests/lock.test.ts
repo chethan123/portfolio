@@ -12,17 +12,20 @@
  * signature outright, which is that file's own rule and would pass a test
  * for the wrong reason.
  *
- * Three tests below (`describe("duplicate credential id"`, `describe("counter
- * concurrency"`, `describe("passkey removed mid-verification"`) drive genuine
+ * Five `describe` blocks below — `duplicate credential id`, `concurrent
+ * bootstrap registrations`, `counter concurrency`, `passkey removed
+ * mid-verification` and `touchGrant, deleted mid-touch` — drive genuine
  * cross-connection races against the real test database rather than
- * `withDatabase`'s single rolled-back transaction — the same reason
+ * `withDatabase`'s single rolled-back transaction, the same reason
  * `tests/lock-schema.test.ts` does for `passkey_bootstrap_idx`. Each cleans
  * up its own committed rows at both ends, the way that file does, because
- * all three share `tests/support/webauthn.ts`'s one signable credential id
- * with every `withDatabase` test in this file. Each also synchronises
- * through {@link waitUntilBlocked} — polling real, observable database state
- * rather than a fixed delay — so the interleaving it pins is not a guess
- * about timing that a loaded runner can guess wrong.
+ * they share `tests/support/webauthn.ts`'s one signable credential id with
+ * every `withDatabase` test here. All but `duplicate credential id`
+ * synchronise through {@link waitUntilBlocked} — polling real, observable
+ * database state rather than a fixed delay — so the interleaving each pins
+ * is not a guess about timing that a loaded runner can guess wrong; that one
+ * still sleeps, and races only against how fast the driver dispatches a
+ * statement rather than against which of two refusals fires.
  */
 import { generateKeyPairSync } from "node:crypto";
 
@@ -564,12 +567,15 @@ describe("unlocking", () => {
       await seedFixturePasskey(seedPasskey, /* counter */ 3);
       const options = await unlockOptions(db);
 
-      // Signed with a counter *ahead* of the stored one, deliberately: at or
-      // below it the library refuses on the counter instead and this would
-      // pass for the wrong reason — green even if user verification stopped
-      // being enforced at all. Ahead of it, the missing UV bit is the only
-      // thing left that can refuse, and the stored 3 below is what a
-      // wrongly-accepted assertion would have moved to 5.
+      // Signed with a counter *ahead* of the stored one, deliberately. The
+      // library checks user verification first (`:175-176`) and the counter
+      // after (`:182-188`), so on this code either counter refuses and the
+      // choice looks arbitrary. It is not: the case this test exists for is
+      // the one where UV enforcement has gone — and there a counter at or
+      // below the stored one refuses on the counter instead, so the test
+      // would stay green while pinning nothing. Ahead of it, there is
+      // nothing left to refuse but the missing UV bit, and the stored 3
+      // below is what a wrongly-accepted assertion would have moved to 5.
       const refusal = await refusalOf(() =>
         verifyUnlock(
           assertionResponse(options.challenge, { counter: 5, flags: NO_USER_VERIFICATION_FLAGS }),
@@ -577,6 +583,16 @@ describe("unlocking", () => {
         ),
       );
       expect(refusal).toBeInstanceOf(ValidationError);
+      // Which refusal, not merely that there was one: every library throw
+      // collapses into the same `ValidationError` here, so without this the
+      // test would stay green if the fixture ever stopped signing a
+      // non-default `flags` correctly — pinning a broken signature rather
+      // than the rule. The operator's own log carries the cause, and the
+      // counter test below asserts it the same way.
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("assertion (unlock)"),
+        expect.objectContaining({ message: expect.stringContaining("User verification required") }),
+      );
 
       const row = await db
         .selectFrom("passkey")
@@ -1450,9 +1466,15 @@ describe("concurrent bootstrap registrations", () => {
         );
         blocked.catch(() => {});
 
-        // The same reason the duplicate-id race above waits: without it this
-        // is a race against how fast the driver dispatches B's statement.
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // Waited for, never guessed at. A fixed sleep only assumes B's insert
+        // reached Postgres and blocked before A committed, and if A commits
+        // first B's own `where not exists` refuses it instead — the same
+        // message, from the other half, so the assertions below cannot tell
+        // the difference and this stops pinning the index at all. Polling
+        // for B's backend actually waiting on a lock is what makes the
+        // interleaving the one this test claims.
+        const pidB = await backendPid(trxB);
+        await waitUntilBlocked(database, pidB);
         await trxA.commit().execute();
 
         const refusal = await refusalOf(() => blocked);
@@ -1480,6 +1502,7 @@ describe("concurrent bootstrap registrations", () => {
         if (cleanupError !== undefined && !bodyFailed) throw cleanupError;
       }
     },
+    20_000,
   );
 });
 

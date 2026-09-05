@@ -148,7 +148,7 @@ export const backupEligible = true;
 // up | uv | be | bs | at — the attested-credential-data flag only registration sets.
 const REGISTRATION_FLAGS = 0x5d;
 // up | uv | be | bs — no attested credential data on an assertion.
-export const AUTHENTICATION_FLAGS = 0x1d;
+const AUTHENTICATION_FLAGS = 0x1d;
 /**
  * The same assertion with the user-verification bit cleared — user present,
  * nobody checked. A real authenticator sends this when it was asked for
