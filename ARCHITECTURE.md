@@ -2014,6 +2014,9 @@ still live in the current code:
 | `migrations.ts` | Discovery, ledger, advisory lock, per-file transactions |
 | `migrate.ts` | The CLI the entrypoint runs |
 | `validate-config.ts` | The startup gate — fails fast, naming every bad variable |
+| `price-worker.ts` | The worker process: an HTTP server on a unix socket and the only thing that reaches the provider at run time. It holds no database credential and opens no TCP listener (spec 0018 §2.5) |
+| `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/` |
+| `symbol-pattern.ts` | The one copy of the symbol pattern and its string guard, so both sides of the socket refuse the same spellings without either importing the other's schema |
 
 ### `app/lib/` — domain (`.server`) and pure
 
@@ -2025,7 +2028,7 @@ still live in the current code:
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill — its candidate query, its batch, its ledger, and the composition every refresh runs |
-| `price-provider.server.ts` | **The only importer of `yahoo-finance2`.** The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe |
+| `price-provider.server.ts` | The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe. The library itself is reached through `server/yahoo-client.ts`, its only importer |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |

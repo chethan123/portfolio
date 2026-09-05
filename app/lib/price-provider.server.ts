@@ -4,8 +4,9 @@
  * ADR-0011 adds a second, and the reasoning that chose the first still holds:
  * `yahoo-finance2` is an unofficial client for an unpublished endpoint and
  * can break; what makes that tolerable is that swapping it is a day's work —
- * true only while nothing outside this module imports `yahoo-finance2`. The
- * interface is also the test seam: CI never reaches the network.
+ * true only while `server/yahoo-client.ts` stays its one importer, which is
+ * where this module now reaches it. The interface is also the test seam: CI
+ * never reaches the network.
  *
  *   getQuotes        every symbol at once — the batching is why Yahoo was chosen
  *   getDailyCloses   one symbol, one range — history is per instrument, and the
