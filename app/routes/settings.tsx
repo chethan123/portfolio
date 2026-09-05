@@ -13,6 +13,7 @@ const TABS = [
   { to: "/settings/tax", label: "Tax" },
   { to: "/settings/prices", label: "Prices" },
   { to: "/settings/display", label: "Display" },
+  { to: "/settings/passkeys", label: "Passkeys" },
 ] as const;
 
 export default function SettingsLayout() {

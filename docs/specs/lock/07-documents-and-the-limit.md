@@ -107,10 +107,20 @@ false the moment this slice lands. Grep for the quoted phrase rather than trusti
 
 **The pictures**
 
-- [ ] The committed screenshots are retaken with `scripts/capture-screenshots.ts`. Tickets 04, 05 and
-      06 each retake their own and this ticket checks the whole set — `docs/README.md` and
-      `docs/developing.md` both say a change to a screen is not finished until they are, and this
-      slice changes the chrome, adds a Settings tab and adds a screen
+- [ ] The committed screenshots are retaken with `scripts/capture-screenshots.ts`. Ticket 04 retakes its
+      own (the unlock screen); ticket 05, on its own branch, already retook its own — the Settings tab
+      strip shots — because that screen renders with no passkey enrolled. Ticket 06 defers its
+      screenshots to this ticket's single capture pass rather than retaking them itself, and this ticket
+      is what has to own that capture, not merely check for it: the capture path seeds no passkey today,
+      so `isLocked()` is false throughout and the lock-now control cannot render in either chrome
+      position, in any shot, no matter how the rest of the set is retaken. Closing that gap is this
+      ticket's own work — `scripts/seed-demo.ts` must seed one passkey, and
+      `scripts/capture-screenshots.ts` must mint a grant against it and set the `__Host-unlock_grant`
+      cookie on the capture browser — one change to the two scripts serving this ticket's own shots of
+      the control, rather than a third ticket fighting tickets 05 and 06 over the same PNGs. With that
+      done, this ticket checks the whole set, ticket 06's control included — `docs/README.md` and
+      `docs/developing.md` both say a change to a screen is not finished until they are, and this slice
+      changes the chrome, adds a Settings tab and adds a screen
 
 **What is deliberately not written**
 

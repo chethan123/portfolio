@@ -42,14 +42,25 @@ a thing you know you are about to do, and one tap beforehand beats any timer.
       minutes — rather than declaring a second one here
 - [ ] It navigates rather than covering the page, so the server decides. A client that re-locked by
       drawing over the screen would leave the figures underneath it
+- [ ] A `pageshow` guard sits beside the `visibilitychange` one: on a restore with `event.persisted`
+      true, ask the server rather than trust the page handed back — a revalidation, not an
+      unconditional lock post, because a persisted restore is not by itself evidence the grant is gone
 - [ ] The module header says the *trigger* is courtesy and never enforcement, because the next person
       to read it will otherwise assume the security lives here. A hidden page cannot be trusted to run
       timers, and `visibilitychange` cannot tell a locked screen from an app switch — what it fires is
       a server-side deletion, which is not a courtesy at all
 - [ ] What locking cannot reach is said here too: another tab of the same browser keeps its rendered
-      figures until it next asks the server for something, and ticket 03's `no-store` is what stops a
-      back-forward restore handing a page back without asking. The guarantee is that the lock ends the
-      reading, not that it wipes what is already drawn
+      figures until it next asks the server for something. Ticket 03's `no-store` is *not* what stops a
+      back-forward restore handing a page back without asking, not in every engine: Chrome has admitted
+      a `no-store` document to its bfcache by default since 2025, caps such an entry's life at three
+      minutes, and evicts it early only when this browser's own cookies change, never when a grant or
+      passkey was removed elsewhere. Firefox refuses the cache outright regardless of protocol; Safari's
+      refusal is narrower — WebKit guards it on the response's protocol being HTTPS, so the identical
+      page over plain HTTP (this app's own local dev loop) is left eligible, and only a production
+      instance's HTTPS origin gets Safari's refusal for free. A `pageshow` guard beside the
+      `visibilitychange` one is what closes the gap that remains — Chrome always, and Safari's own
+      local-dev loop. The guarantee is that the lock ends the reading, not that it wipes what is already
+      drawn
 
 **Tests**
 
@@ -58,7 +69,13 @@ a thing you know you are about to do, and one tap beforehand beats any timer.
       all while the household holds no passkey
 - [ ] After the action, a request carrying the old cookie is refused — the grant is gone, not merely
       redirected past
-- [ ] The screenshots are retaken; this ticket changes both chrome layouts
-- [ ] The re-entry behaviour is not simulated: there is no browser in the suite, and spec 0007 made
-      the same call for masking's client-side cookie write. The constant and ticket 02's server-side
-      idle window are what the tests pin
+- [ ] The screenshots are deferred to ticket 07's single capture pass, not retaken here: the capture
+      path (`scripts/capture-screenshots.ts`, `scripts/seed-demo.ts`) seeds no passkey at all, so
+      `isLocked()` is false throughout capture and neither chrome layout this ticket changes ever
+      renders the control. Making it render needs a seeded passkey *and* a live grant plus the cookie
+      on the capture browser — one change to the capture scripts that serves tickets 05 and 06
+      together, rather than three tickets fighting over the same PNGs
+- [ ] `watchReentry`'s own wiring is simulated with a plain `document`/`window` stand-in (two listener
+      methods on each, a clock) — no jsdom, no real browser, following spec 0007's call for masking's
+      client-side cookie write on the pieces that genuinely need nothing more. `shouldPostLock`'s
+      boundary and the grace constant are what the tests pin beneath that

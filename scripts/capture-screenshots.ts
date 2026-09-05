@@ -436,6 +436,13 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(page, `docs/screenshots/account-balance-${theme}.png`);
     await visit(page, "/settings/accounts");
     await shoot(page, `docs/screenshots/settings-${theme}.png`);
+    // The lock's own tab, in the state a household that has not turned the
+    // lock on sees: the empty list and what enrolling the first passkey
+    // would do. The demo household holds no passkey, so this is honestly
+    // the screen it has — the enrolled-and-locked variants would need a
+    // seeded credential and a live grant, which this pass does not mint.
+    await visit(page, "/settings/passkeys");
+    await shoot(page, `docs/screenshots/settings-passkeys-${theme}.png`);
     await visit(page, "/upload");
     await shoot(page, `docs/screenshots/upload-${theme}.png`);
 
@@ -517,6 +524,8 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
   await shoot(page, "docs/guide/images/settings-tax.png");
   await visit(page, "/settings/prices");
   await shoot(page, "docs/guide/images/settings-prices.png");
+  await visit(page, "/settings/passkeys");
+  await shoot(page, "docs/guide/images/settings-passkeys.png");
 
   await visit(page, "/upload");
   await shoot(page, "docs/guide/images/upload-1-account-and-file.png");
