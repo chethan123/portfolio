@@ -266,38 +266,29 @@ describe("unlocking", () => {
     }),
   );
 
-  it(
-    "honours the return path on success, and refuses an absolute one through safeReturn",
-    withDatabase(async ({ seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const { options } = expectScreenData(await loader(args(get("/unlock"))));
-      const response = assertionResponse(options.challenge);
+  // Two spellings, one rule, and the moment that makes it worth a route test
+  // at all: the family member has just passed the ceremony, so whatever
+  // `Location` says is where they land. The first is refused by `safeReturn`'s
+  // origin check; the second resolves to *this* origin and is refused only by
+  // the check on what that function is about to return, so a route test that
+  // sent the absolute one alone would pass with the second check gone. The
+  // spelling is threaded in by calling `withDatabase` per case rather than
+  // handing `it.each` the wrapper, which would type-check and discard it
+  // (`tests/set-balance.test.ts`'s own note on the same trap).
+  it.each(["https://evil.test", "/..//evil.test"])(
+    "sends a verified browser to the Overview rather than to %j, which is off-site however it is spelled",
+    (redirectTo) =>
+      withDatabase(async ({ seedPasskey }) => {
+        await seedFixturePasskey(seedPasskey);
+        const { options } = expectScreenData(await loader(args(get("/unlock"))));
+        const response = assertionResponse(options.challenge);
 
-      const outcome = await action(
-        args(post("/unlock", { assertion: JSON.stringify(response), redirectTo: "https://evil.test" })),
-      );
+        const outcome = await action(
+          args(post("/unlock", { assertion: JSON.stringify(response), redirectTo })),
+        );
 
-      expect((outcome as Response).headers.get("Location")).toBe("/");
-    }),
-  );
-
-  it(
-    "sends a verified browser to the Overview rather than off-site when the return path resolves here but serialises scheme-relative",
-    withDatabase(async ({ seedPasskey }) => {
-      // The moment that makes this worth a route test: the family member has
-      // just passed the ceremony, so whatever `Location` says is where they
-      // land. `/..//evil.test` resolves to this origin with a pathname of
-      // `//evil.test`, which a browser reads as `https://evil.test/`.
-      await seedFixturePasskey(seedPasskey);
-      const { options } = expectScreenData(await loader(args(get("/unlock"))));
-      const response = assertionResponse(options.challenge);
-
-      const outcome = await action(
-        args(post("/unlock", { assertion: JSON.stringify(response), redirectTo: "/..//evil.test" })),
-      );
-
-      expect((outcome as Response).headers.get("Location")).toBe("/");
-    }),
+        expect((outcome as Response).headers.get("Location")).toBe("/");
+      })(),
   );
 
   it(
