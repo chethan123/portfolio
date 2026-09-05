@@ -8,10 +8,10 @@
  * Run from the repository root, against a throwaway database the application
  * is already serving:
  *
- *   printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\n' > .env.demo
+ *   printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\nPUBLIC_ORIGIN=http://localhost:5173\n' > .env.demo
  *   node --env-file=.env.demo ./server/migrate.ts
  *   node --env-file=.env.demo ./scripts/seed-demo.ts
- *   DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo npm run dev &
+ *   DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo PUBLIC_ORIGIN=http://localhost:5173 npm run dev &
  *
  *   node --env-file=.env.demo ./scripts/capture-screenshots.ts
  *

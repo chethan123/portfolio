@@ -53,8 +53,10 @@ docker compose -f compose.test.yaml up -d --wait
 docker compose -f compose.test.yaml exec db \
   psql -U portfolio -d portfolio_test -c 'create database portfolio_dev'
 
-# `.env.*` is gitignored except `.env.example`.
-printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_dev\n' > .env
+# `.env.*` is gitignored except `.env.example`. PUBLIC_ORIGIN is where the dev
+# server actually serves (see below) — `http://localhost` is the one scheme
+# WebAuthn and Secure Contexts both accept without real TLS.
+printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_dev\nPUBLIC_ORIGIN=http://localhost:5173\n' > .env
 
 node --env-file=.env ./server/migrate.ts   # Node needs the file named; see below
 npm run dev                               # Vite reads .env by itself
@@ -486,10 +488,11 @@ skip that line. Seed a throwaway database, serve it on a known port, then captur
 ```sh
 npx playwright install chromium
 
-printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\n' > .env.demo
+printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\nPUBLIC_ORIGIN=http://localhost:5173\n' > .env.demo
 node --env-file=.env.demo ./server/migrate.ts
 node --env-file=.env.demo ./scripts/seed-demo.ts
 DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo \
+PUBLIC_ORIGIN=http://localhost:5173 \
   npm run dev -- --port 5173 --strictPort &
 
 node --env-file=.env.demo ./scripts/capture-screenshots.ts

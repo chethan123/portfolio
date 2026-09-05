@@ -8,7 +8,7 @@
  *
  * Run from the repository root, against a throwaway database:
  *
- *   printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\n' > .env.demo
+ *   printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\nPUBLIC_ORIGIN=http://localhost:5173\n' > .env.demo
  *   node --env-file=.env.demo ./server/migrate.ts
  *   node --env-file=.env.demo ./scripts/seed-demo.ts
  *
