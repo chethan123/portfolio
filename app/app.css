@@ -2033,6 +2033,21 @@ a.account-row:hover {
   background: color-mix(in srgb, var(--primary-container) 88%, black);
 }
 
+/* Dimmer, and nothing else.
+   Until this rule a disabled `.button` looked identical to an enabled one, so
+   the family guide's "It stays greyed out until both the label and the tick
+   are done" described nothing. Deliberately not `.refresh-button:disabled`'s
+   shape below, which keeps full contrast and `cursor: progress` because its
+   disabled state means *busy* and says so. A `.button` is disabled for both
+   reasons — forbidden until the enrolment form is complete, and busy while a
+   passkey ceremony runs on the unlock screen — so this claims neither: no
+   `not-allowed` cursor over a button that is merely working, and no colour
+   change to argue with either meaning. */
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .button svg {
   width: 18px;
   height: 18px;

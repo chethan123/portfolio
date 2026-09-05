@@ -494,8 +494,9 @@ A browser past the gate is refused every screen until a passkey is checked
 ([ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md); `CONTEXT.md`'s `Locked`). `passkey`
 is the household's own enrolled credentials; `unlock_grant` is a minted unlock grant, addressed by an
 opaque id a cookie carries — the row is the authority, and the cookie carries no claim of its own. Not
-one row per browser: minting is unconditional, so a browser that loses its cookie and unlocks again
-leaves its old row live beside the new one, and a copied cookie lets two browsers use the same row.
+one row per browser: minting supersedes only the row this request's own cookie named, so a browser
+that lost its cookie and unlocks again leaves its old row live beside the new one, and a copied
+cookie lets two browsers use the same row.
 
 **`passkey`** — the public half of each enrolled credential, kept until a person removes it. The
 instance is locked whenever at least one row exists here and stops the moment none do.
@@ -538,8 +539,8 @@ Index: `unlock_grant_expires_at_idx` on `(expires_at)` — what the sweep reads,
 **Neither table is history.** Both are scaffolding, on the same footing as `upload_draft`, and both
 may be deleted from freely — where `position_set`, `holding` and the rest of the household's record
 may not. `passkey` rows are deleted the moment a person removes one, cascading away that passkey's
-own grants; `unlock_grant` rows are additionally swept once past their own expiry and deleted
-outright by an explicit lock.
+own grants; `unlock_grant` rows are additionally swept once past their own expiry, superseded when
+the browser holding one verifies another assertion, and deleted outright by an explicit lock.
 
 ## 5. Derived objects: how the schema is read
 

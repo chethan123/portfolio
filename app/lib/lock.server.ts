@@ -40,6 +40,12 @@
  * promise). Expiry is enforced again on read, which is the authoritative
  * check.
  *
+ * **One browser, one live grant.** Every verified assertion mints one, and
+ * mints it in place of whatever the same request's cookie already named, so
+ * a browser holds at most one live row at a time and "Lock now" ends all of
+ * what it holds. {@link mintGrant} owns the rule and
+ * {@link verifyScopedAssertion} owns its one exception.
+ *
  * **A failed ceremony spends its challenge.** {@link takeChallenge} marks an
  * entry spent the moment it is read, whether or not what follows verifies —
  * deliberate, since handing the same challenge back for a second guess is
@@ -75,6 +81,15 @@
  * `unknown` and narrows through {@link narrowAssertion} or
  * {@link narrowRegistration} before touching it — this is the boundary
  * CLAUDE.md means by "Zod at the boundaries only, in the domain module".
+ * The library's *output* is checked too, where this module can say something
+ * useful about it: the attested credential id, which
+ * {@link completeRegistration} bounds and compares before either insert. It
+ * is not the only value the library forwards from client-chosen bytes
+ * unvalidated — `public_key` is re-encoded CBOR the library checks only for
+ * a supported `alg` — but it is the one whose shape this module depends on,
+ * since it is the id every later assertion is looked up by and the one every
+ * browser is handed in `allowCredentials`.
+ *
  * Only the outer shape this module itself dereferences (the id, the client
  * data) is checked; the rest is the library's own response schema to state,
  * left untouched for `verifyAuthenticationResponse` and
@@ -188,10 +203,12 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
 
 /**
  * The grant's cookie — named for the table the id it carries addresses.
- * `__Host-` prefixed because this one carries a credential, where masking's
- * cookie deliberately carries neither prefix nor `Secure` (its own header):
- * a passkey will not run outside a secure context anyway, so the attributes
- * cost this feature nothing.
+ * `__Host-` prefixed because this one carries the id of an unlock row, where
+ * masking's cookie deliberately carries neither prefix nor `Secure` (its own
+ * header): a passkey will not run outside a secure context anyway, so the
+ * attributes cost this feature nothing. Not the passkey, and not a stand-in
+ * for one: what this carries is an opaque id with no claim of its own
+ * (`migrations/0012_lock.sql`).
  *
  * **The dev loop's plain-http localhost was tried, not argued.** Chromium
  * 141 accepts, stores and returns this cookie over `http://localhost` and
@@ -209,7 +226,7 @@ export const LOCK_COOKIE = "__Host-unlock_grant";
 /**
  * The `Set-Cookie` value for a browser whose assertion this module just
  * verified. `Secure`, `HttpOnly`, `Path=/` and the `__Host-` prefix all
- * follow from carrying a credential rather than a preference (this file's
+ * follow from carrying an unlock's id rather than a preference (this file's
  * comment on {@link LOCK_COOKIE}). No `Max-Age`: the *grant row* is the
  * authority on how long this lasts, extended by the request that uses it
  * ({@link touchGrant}) — a fixed cookie lifetime set once at unlock would
@@ -293,6 +310,26 @@ function isForeignKeyViolation(error: unknown, constraint: string): boolean {
  * on its own say-so, and this function must not become the one export that
  * does.
  *
+ * **`supersedes` is the row this browser is trading in**, so that verifying
+ * again replaces its grant rather than adding a second live one. It must
+ * come from the request's own `LOCK_COOKIE` and from nowhere else — never a
+ * form field, which a page could choose. That rule is a discipline rather
+ * than a check: nothing here confirms the id belongs to the caller, and
+ * nothing could — under ADR-0012 the id *is* the whole credential, so naming
+ * a grant and holding it are the same act, and `/lock-now` already ends one
+ * on the strength of the cookie alone. What keeps a page from aiming this at
+ * somebody else is `HttpOnly` and `SameSite=Lax` on the cookie, not this
+ * function.
+ *
+ * **The delete before the insert has a cost, and it is the accepted one.** A
+ * caller that refuses *after* this returns — {@link removePasskey} finding
+ * its target already gone, say — leaves the browser holding a cookie whose
+ * row is deleted, so a refused action locks it where it used to stay
+ * unlocked. That is the same direction every other failure here takes: no
+ * live grant rather than two. It also changes what "Start again" means on
+ * the messages that follow such a refusal — unlock again, rather than retry
+ * the step.
+ *
  * **The passkey this credits can vanish after the caller last checked it.**
  * `verifyScopedAssertion` reads the row, verifies the assertion, and only
  * then reaches here — a window wide enough for a concurrent removal to land
@@ -309,9 +346,23 @@ function isForeignKeyViolation(error: unknown, constraint: string): boolean {
  * conceivably a future multi-step route wrapping this call in one —
  * aborted for whatever runs after it.
  */
-async function mintGrant(passkeyId: string, db: Kysely<Database> = getDb()): Promise<UnlockGrant> {
+async function mintGrant(
+  passkeyId: string,
+  db: Kysely<Database> = getDb(),
+  supersedes?: string,
+): Promise<UnlockGrant> {
   const now = new Date();
   await db.deleteFrom("unlock_grant").where("expires_at", "<=", now).execute();
+
+  // Deleted before the insert, never after: a failure between the two leaves
+  // this browser holding no live grant, which is the direction every other
+  // failure in this module already takes. A `supersedes` naming nothing — a
+  // cookie whose row already swept, or one from a browser that never had one
+  // — deletes nothing and is not an error; there is no state to reconcile
+  // either way.
+  if (supersedes !== undefined) {
+    await db.deleteFrom("unlock_grant").where("id", "=", supersedes).execute();
+  }
 
   let row: UnlockGrantRow;
   try {
@@ -658,6 +709,42 @@ const webAuthnResponseShape = z.object({
 const UNREADABLE_RESPONSE_MESSAGE = "This passkey response could not be read.";
 
 /**
+ * The one field of a *registration* this module stores straight out of the
+ * client's own answer. `verifyRegistrationResponse` copies it verbatim —
+ * `transports: response.response.transports`
+ * (`node_modules/@simplewebauthn/server/esm/registration/verifyRegistrationResponse.js:202`)
+ * — and checks nothing about it, so anything the shared shape above lets
+ * through reaches `joinTransports` and then the column. A string rather than
+ * an array turned `transports.join` into a `TypeError` outside every `catch`
+ * and so into a 500; `[""]` stored the empty string migration 0012's own
+ * comment says the writer must refuse; and a comma inside an entry is a
+ * separator the reader splits on.
+ *
+ * The vocabulary is deliberately *not* enforced. That same migration comment
+ * says an unknown transport is still worth keeping — a value this app has
+ * never heard of is exactly what a browser needs to offer a path this app
+ * did not know about. The *count* is bounded even so: the whole registered
+ * vocabulary is six values, and without a cap a registration reporting
+ * twenty thousand of them stores a row of two hundred thousand characters
+ * that every browser is then handed inside `allowCredentials` on every
+ * unlock — the same poisoning as the empty entry, by volume rather than by
+ * value.
+ */
+const MAX_REPORTED_TRANSPORTS = 8;
+
+const registrationResponseShape = webAuthnResponseShape.extend({
+  response: webAuthnResponseShape.shape.response.extend({
+    transports: z
+      .array(z.string().min(1).max(32).refine((one) => !one.includes(",")))
+      .max(MAX_REPORTED_TRANSPORTS)
+      .optional(),
+  }),
+});
+
+const REGISTRATION_TRANSPORTS_MESSAGE =
+  "This passkey listed how it can be reached in a form this app cannot store. Try enrolling it again.";
+
+/**
  * Narrow a client-submitted assertion, or refuse before it is ever
  * dereferenced. The original `value` is returned, not the parsed one: only
  * the outer shape is checked here, so every field neither this module nor
@@ -670,10 +757,23 @@ function narrowAssertion(value: unknown): AuthenticationResponseJSON {
   return value as AuthenticationResponseJSON;
 }
 
-/** {@link narrowAssertion}'s registration-response twin. */
+/**
+ * {@link narrowAssertion}'s registration-response twin, plus the one extra
+ * field a registration *stores* — see {@link registrationResponseShape}. The
+ * two schemas are checked in order and differ by exactly that field, so the
+ * second failure can only be `transports` and gets its own sentence rather
+ * than the generic one.
+ *
+ * This runs before the challenge is spent, which is fine: the author is a
+ * gate-admitted family member either way, and a refusal here costs them a
+ * re-fetch of the options they were going to need anyway.
+ */
 function narrowRegistration(value: unknown): RegistrationResponseJSON {
   if (!webAuthnResponseShape.safeParse(value).success) {
     throw ValidationError.form(UNREADABLE_RESPONSE_MESSAGE);
+  }
+  if (!registrationResponseShape.safeParse(value).success) {
+    throw ValidationError.form(REGISTRATION_TRANSPORTS_MESSAGE);
   }
   return value as RegistrationResponseJSON;
 }
@@ -759,6 +859,42 @@ export async function removalAssertionOptions(
 }
 
 /**
+ * The one refusal the family can act on, told apart from every other
+ * verification failure by the library's own message.
+ *
+ * `verifyAuthenticationResponse` throws at
+ * `node_modules/@simplewebauthn/server/esm/authentication/verifyAuthenticationResponse.js:182-188`
+ * (`@simplewebauthn/server` 14.0.0, the pinned exact version; the CJS build
+ * carries the same throw at `script/…:191`)
+ * when `(counter > 0 || credential.counter > 0) && counter <= credential.counter`,
+ * with a message that begins `Response counter value`. Matched on that
+ * prefix rather than on `instanceof Error` alone, which every other failure
+ * that function *throws* also satisfies — a loose match would relabel a
+ * wrong relying-party id and a missing user verification as possible copies,
+ * which costs more than the message is worth. (A wrong public key is not on
+ * that list: `verifySignature` answers false rather than throwing, so it
+ * never reaches this catch at all.)
+ *
+ * **It is judged before the signature is checked** (`:192`), so a forged
+ * response carrying a low counter reaches this branch too. The sentence
+ * below therefore says the counter went backwards and what that can mean,
+ * and never that the passkey *was* copied — which is all this instance
+ * knows, and all a household can act on either way.
+ */
+function isCounterRegression(cause: unknown): boolean {
+  return cause instanceof Error && cause.message.startsWith("Response counter value");
+}
+
+/**
+ * Deliberately not "cloned", "copied device" or any of the words
+ * `CONTEXT.md`'s `Passkey` and `Locked` entries rule out: it names what
+ * happened, what it can mean, and the one thing to do about it.
+ */
+const COUNTER_WENT_BACKWARDS_MESSAGE =
+  "This passkey's counter went backwards, which can mean a copy of it exists somewhere. " +
+  "The check was refused. Remove this passkey from Settings → Passkeys and enrol it again.";
+
+/**
  * Verify an assertion scoped to `expected` — refusing a challenge that was
  * never issued, one already spent, one that has expired, and one minted for
  * a different action or a different target, each its own message before the
@@ -767,8 +903,11 @@ export async function removalAssertionOptions(
  * platform authenticator reporting a constant zero is not treated as a
  * clone; a regression makes it throw, surfaced here as a refusal — logged
  * with the underlying cause and which ceremony it was, never silently
- * ignored — rather than restated: the library owns that comparison, and
- * this only observes what it decided. `requireUserVerification` is left at
+ * ignored, and answered with its own sentence rather than the generic one
+ * ({@link isCounterRegression}) — rather than restated: the library owns
+ * that comparison, and this only observes what it decided. Ticket 02 of the
+ * lock slice asked that a regression "refuse the assertion and say so"
+ * (`docs/specs/lock/02-the-two-ceremonies.md`). `requireUserVerification` is left at
  * the library's own default (`true`) rather than restated.
  *
  * On success: the stored counter moves forward only (`greatest`, one
@@ -777,7 +916,10 @@ export async function removalAssertionOptions(
  * constant zero still gets used), backup eligibility is not re-read, and a
  * grant is minted — every verified assertion mints one, which is exactly
  * what makes a grant insufficient on its own to authorise enrolling or
- * removing (see this module's header).
+ * removing (see this module's header). The grant this request already
+ * carried, if it named one, is superseded in the same call, so a browser
+ * holds at most one live grant at a time; the one exception is argued
+ * beside the call that makes it.
  *
  * Nothing is written before `verified.verified` is checked: a response
  * verified against the wrong public key refuses here, mints no grant, and
@@ -796,6 +938,7 @@ async function verifyScopedAssertion(
   response: AuthenticationResponseJSON,
   expected: AssertionScope,
   db: Kysely<Database>,
+  supersedes?: string,
 ): Promise<UnlockGrant> {
   const rp = expectedRelyingParty();
   const challengeText = decodeChallenge(response.response.clientDataJSON);
@@ -835,6 +978,7 @@ async function verifyScopedAssertion(
     });
   } catch (cause) {
     console.error(`Passkey assertion (${expected.kind}) failed to verify:`, cause);
+    if (isCounterRegression(cause)) throw ValidationError.form(COUNTER_WENT_BACKWARDS_MESSAGE);
     throw ValidationError.form("This passkey could not be verified. Try again.");
   }
 
@@ -852,19 +996,40 @@ async function verifyScopedAssertion(
     .where("credential_id", "=", passkeyRow.credential_id)
     .execute();
 
-  return mintGrant(passkeyRow.credential_id, db);
+  // **The one case a browser's prior grant is kept.** A removal signed by the
+  // very passkey it removes — a synced vault answering with the target,
+  // which ADR-0012 allows — is about to have the grant minted just below
+  // cascaded away with that passkey. Superseding the prior grant as well
+  // would leave that browser holding zero live rows, and the removal screen
+  // has just told it, in the `safeElsewhere` warning
+  // (`app/routes/settings/passkeys.tsx`), that it "stays unlocked
+  // afterwards". Keeping the prior row in that one case keeps the promise
+  // and still leaves exactly one live grant for the browser: the prior
+  // survives, the minted one is cascaded.
+  const signerIsRemovalTarget =
+    expected.kind === "remove" && expected.credentialId === passkeyRow.credential_id;
+
+  return mintGrant(passkeyRow.credential_id, db, signerIsRemovalTarget ? undefined : supersedes);
 }
 
 /**
  * Verify the unlock screen's assertion. Refuses; on success, mints and
  * returns the grant. `response` is the client's submitted JSON, `unknown`
  * until {@link narrowAssertion} checks it — see that function's header.
+ *
+ * `supersedes` is this request's own cookie, for the browser that reaches
+ * the unlock screen still carrying a live-but-stale grant: verifying
+ * replaces that row rather than leaving it live beside the new one
+ * ({@link mintGrant}). It sits after `db` because `db` is the injected seam
+ * every function here already puts last, and the route that has a cookie to
+ * pass has no database to pass.
  */
 export async function verifyUnlock(
   response: unknown,
   db: Kysely<Database> = getDb(),
+  supersedes?: string,
 ): Promise<UnlockGrant> {
-  return verifyScopedAssertion(narrowAssertion(response), { kind: "unlock" }, db);
+  return verifyScopedAssertion(narrowAssertion(response), { kind: "unlock" }, db, supersedes);
 }
 
 // ---------------------------------------------------------------------------
@@ -970,23 +1135,27 @@ const FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE =
  * here, not the whole security boundary: the *committed* half is closed by
  * {@link completeRegistration}'s conditional insert, and the *concurrent*
  * half by migration 0012's `passkey_bootstrap_idx` — neither is enough
- * alone, and that migration's comment on the index is explicit about why.
+ * alone, and that migration's comment on the index is explicit about why,
+ * and about the one interleaving the pair still leaves open.
  * That same bootstrap case also requires `acknowledgement` to be exactly
  * `"true"` — see {@link FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE}. Ignored once
  * the household holds a passkey: the warning this guards is shown only for
  * the first one, and enrolling a second changes nothing for anybody.
  *
  * Every later enrolment needs `assertion`, verified as scoped to `"enrol"`
- * — which also mints a grant, the same as any verified assertion. The
+ * — which also mints a grant, the same as any verified assertion, and
+ * supersedes the one `input.supersedes` names, so the browser confirming an
+ * enrolment ends with one live grant rather than two ({@link mintGrant}).
+ * `supersedes` is the request's own cookie and never a form field. The
  * registration challenge returned here carries `label`, and is accepted by
  * {@link completeRegistration} only against it.
  */
 export async function beginEnrolment(
   label: string,
-  input: { assertion: unknown; acknowledgement?: string },
+  input: { assertion: unknown; acknowledgement?: string; supersedes?: string },
   db: Kysely<Database> = getDb(),
 ): Promise<{ options: RegistrationOptions; grant: UnlockGrant | undefined }> {
-  const { assertion, acknowledgement } = input;
+  const { assertion, acknowledgement, supersedes } = input;
   const { label: validLabel } = parseInput(labelInput, { label });
 
   const locked = await isLocked(db);
@@ -999,7 +1168,7 @@ export async function beginEnrolment(
           "being unlocked on this browser is not enough on its own.",
       );
     }
-    grant = await verifyScopedAssertion(narrowAssertion(assertion), { kind: "enrol" }, db);
+    grant = await verifyScopedAssertion(narrowAssertion(assertion), { kind: "enrol" }, db, supersedes);
   } else if (acknowledgement !== "true") {
     throw ValidationError.form(FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE);
   }
@@ -1073,6 +1242,20 @@ const BOOTSTRAP_TAKEN_MESSAGE =
 const DUPLICATE_PASSKEY_MESSAGE = "This passkey is already enrolled.";
 
 /**
+ * The WebAuthn specification's ceiling on a credential id, in decoded bytes.
+ * Checked against the library's *output* rather than the client's `id`,
+ * because those are two different values and only one of them is stored —
+ * see the comment beside the check in {@link completeRegistration}.
+ */
+const MAX_CREDENTIAL_ID_BYTES = 1023;
+
+const CREDENTIAL_ID_LENGTH_MESSAGE =
+  "This passkey gave itself an identifier of a length this app cannot store. Try enrolling it again.";
+
+const CREDENTIAL_ID_MISMATCH_MESSAGE =
+  "This passkey named itself two different things in one answer, so it was not enrolled.";
+
+/**
  * Complete a registration begun by {@link beginEnrolment} — accepted only
  * against the single-use `"register"` challenge that call minted, never
  * against whatever challenge a stale or forged form happens to carry.
@@ -1083,7 +1266,13 @@ const DUPLICATE_PASSKEY_MESSAGE = "This passkey is already enrolled.";
  * partial unique index on `passkey.bootstrap` closes the other half — two
  * such statements each seeing an empty table under READ COMMITTED — and its
  * unique-violation surfaces here as a refusal, never a 500. Neither half is
- * sufficient alone (migration 0012's comment on `passkey_bootstrap_idx`).
+ * sufficient alone, and the two together still leave one interleaving open:
+ * a bootstrap insert racing an *ordinary* one, which was decided to be
+ * ordinary by an earlier request that saw the passkey authorising it and
+ * carries no predicate of its own. Migration 0012's comment on
+ * `passkey_bootstrap_idx` sets out what the pair does and does not
+ * guarantee, how narrow that window is, and why neither way of closing it
+ * was taken; this is not the place to repeat it.
  *
  * **A duplicate credential id is always a printable refusal, however it
  * arrives.** Both the bootstrap and the non-bootstrap path let the unique
@@ -1147,6 +1336,40 @@ export async function completeRegistration(
   }
 
   const { credential, credentialDeviceType } = verified.registrationInfo;
+
+  // **The library's own output, checked — for the one value it forwards from
+  // client-chosen bytes without validating.** `credential.id` is
+  // `isoBase64URL.fromBuffer(credentialID)` read straight out of the attested
+  // credential data, whose length is whatever the two-byte `credIDLen` field
+  // said (`helpers/parseAuthenticatorData.js:34-36`). Nothing bounds it: the
+  // response-level checks compare `id` to `rawId` only
+  // (`registration/verifyRegistrationResponse.js:38-44`) and never to the
+  // attested bytes, and the emptiness guard at `:121` is `!credentialID`,
+  // which a zero-length `Uint8Array` passes because it is an object. A stored
+  // `""` then rides in every browser's `allowCredentials`, and an over-long
+  // one is past the specification's 1023-byte ceiling.
+  //
+  // **No counter check here, deliberately.** The library reads it with
+  // `getUint32` (`helpers/parseAuthenticatorData.js:27`), so it cannot arrive
+  // outside the column's own range; the review's `4294967295` case is the
+  // maximum that range accepts rather than a value outside it, and what makes
+  // that passkey useless afterwards is the specification's own
+  // strictly-greater rule, not anything this insert could have refused.
+  const credentialIdBytes = isoBase64URL.toBuffer(credential.id);
+  if (credentialIdBytes.byteLength < 1 || credentialIdBytes.byteLength > MAX_CREDENTIAL_ID_BYTES) {
+    throw ValidationError.form(CREDENTIAL_ID_LENGTH_MESSAGE);
+  }
+  // Also the check that refuses a *non-canonically encoded* id — padded, or
+  // spelled in standard base64 — since `isoBase64URL.fromBuffer` always emits
+  // the canonical unpadded form. No browser reaches that: the library already
+  // demands `id === rawId` and `@simplewebauthn/browser` derives both from
+  // the same bytes through the same encoder. A client that did would meet
+  // this message with its challenge already spent, so it has to fetch fresh
+  // options before trying again.
+  if (credential.id !== parsedResponse.id) {
+    throw ValidationError.form(CREDENTIAL_ID_MISMATCH_MESSAGE);
+  }
+
   const publicKey = Buffer.from(credential.publicKey);
   const transports = joinTransports(credential.transports);
   // BE, not BS: eligibility for backup is what "synced" means to a reader
@@ -1236,10 +1459,16 @@ export async function completeRegistration(
  * just-minted one included, when the target is what authorised this
  * request — through the schema's cascade, which is what locks this browser
  * the moment such a removal succeeds; nothing here needs to special-case it.
+ *
+ * `input.supersedes` is the request's own cookie, and it is the one place
+ * this module declines to supersede: when the signer *is* the target, the
+ * grant just minted is about to be cascaded away, so the prior one is left
+ * alone rather than deleted beside it — {@link verifyScopedAssertion} makes
+ * that call and argues it there.
  */
 export async function removePasskey(
   credentialId: string,
-  input: { assertion: unknown; confirmRemoval?: string },
+  input: { assertion: unknown; confirmRemoval?: string; supersedes?: string },
   db: Kysely<Database> = getDb(),
 ): Promise<{ grant: UnlockGrant }> {
   const existing = await db
@@ -1265,7 +1494,12 @@ export async function removePasskey(
     );
   }
 
-  const grant = await verifyScopedAssertion(narrowAssertion(input.assertion), { kind: "remove", credentialId }, db);
+  const grant = await verifyScopedAssertion(
+    narrowAssertion(input.assertion),
+    { kind: "remove", credentialId },
+    db,
+    input.supersedes,
+  );
 
   const deleted = await db.deleteFrom("passkey").where("credential_id", "=", credentialId).executeTakeFirst();
   if (deleted.numDeletedRows === 0n) {

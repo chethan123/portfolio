@@ -262,16 +262,26 @@ function withNoStore(response: Response): Response {
  * session the victim never asked to end. Requiring the cookie is not a new
  * mechanism: it is the same `SameSite=Lax` posture (ADR-0005,
  * docs/research/2026-09-02-security-and-privacy-audit.md §S5) doing the one
- * thing it already does — never inventing a second CSRF check beside the
- * framework's own `Origin` check. React Router 7.18.2's own
- * `throwIfPotentialCSRFAttack` runs *before* this middleware for every
- * mutation method (`handleDocumentRequest`, ahead of `staticHandler.query`,
- * which is where the middleware pipeline actually runs) and would already
- * refuse a request whose `Origin` mismatches the host with 400 — but a
- * request carrying no `Origin` header at all skips that check entirely
- * (`originDomain` stays `null`), so this middleware's own cookie requirement
- * is the second, independent reason a forged POST cannot clear a grant it
- * does not carry, not merely a restatement of the framework's.
+ * thing it already does — and it is the last of three reasons rather than
+ * the only one.
+ *
+ * The other two are `Origin` checks — alternatives over disjoint sets of
+ * routes, so exactly one of them is live for any given request — and neither
+ * is invented here. React
+ * Router 7.18.2's own `throwIfPotentialCSRFAttack` refuses a mismatched
+ * `Origin` with a 400 for document mutations and for single-fetch actions,
+ * ahead of `staticHandler.query`, which is where the middleware pipeline
+ * actually runs. It does not run for a resource route — which `/lock-now`
+ * is — so {@link crossOriginMutationMiddleware} restates the framework's
+ * rule for exactly the routes the framework skips, ahead of this middleware
+ * in the `middleware` array; that function's own header cites where each
+ * one runs and where it does not.
+ *
+ * Neither `Origin` check reaches a request that carries no `Origin` header
+ * at all: the framework leaves `originDomain` `null` and continues, and the
+ * middleware that mirrors it continues too. That request is what the cookie
+ * requirement is for, and it is why the requirement is independent of both
+ * rather than a restatement of either.
  */
 function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Response {
   const target = new URL(UNLOCK_PATH, url);
@@ -284,6 +294,88 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
     clearCookie ? { headers: { "Set-Cookie": clearedLockCookie() } } : undefined,
   );
 }
+
+/**
+ * The mutation methods this app judges an `Origin` for, in the framework's
+ * own spelling and its own shape: React Router builds `validMutationMethods`
+ * as a `Set` over `validMutationMethodsArr`
+ * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:1345-1350`
+ * and `:1351-1353`) and reads it back through `isMutationMethod` at
+ * `:5575-5577`, uppercasing as it goes. Written out because the framework
+ * exports none of them, and kept to that set rather than a wider one so
+ * `OPTIONS` and `HEAD` are not judged — a preflight carries a cross-origin
+ * `Origin` by definition and mutates nothing.
+ */
+const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Who may *ask*, as against which browser may *read* — which is
+ * {@link lockMiddleware}'s question, and the reason this is a separate
+ * function listed before it rather than six lines at the top of that one.
+ *
+ * React Router 7.18.2 runs this check itself, as `throwIfPotentialCSRFAttack`
+ * (`node_modules/react-router/dist/development/chunk-ZA36QIGN.mjs:747-765`),
+ * for single-fetch actions (`:854`) and for document requests whose method is
+ * a mutation (`:1417-1419`) — and not for a resource route, which
+ * `handleResourceRequest` (`:1563-1609`) serves with no such call. `/lock-now`,
+ * `/masking` and `/refresh` are resource routes: action-only, no component,
+ * posted to directly. So the framework's rule stops exactly where this app's
+ * three mutations live, and this restates it there — the same method set, the
+ * same comparison, the same status, with the two departures named below.
+ *
+ * **Hosts, and never `PUBLIC_ORIGIN`.** The framework compares
+ * `new URL(origin).host` against `new URL(request.url).host` (`:751`, `:757`,
+ * `:758`), so behind the proxy this agrees with it on the routes it already
+ * covers rather than disagreeing with it about a scheme or a port. Reading the
+ * configured origin instead would also refuse this suite's own requests,
+ * which address the instance as `http://portfolio.local`
+ * (`tests/support/routes.ts`) while the config is `https://portfolio.local`
+ * (`vitest.config.ts`). The corollary is worth knowing: a deployment whose
+ * proxy rewrites `Host` makes this refuse — and it already makes the
+ * framework refuse every document and single-fetch mutation, so such an
+ * instance is broken before this middleware sees it.
+ *
+ * **No `Origin` continues.** A plain HTML form from this instance sends one;
+ * a request with none is the shape the framework also lets through
+ * (`originDomain` stays `null` at `:751`, so the comparison at `:758` is
+ * falsy). What stands between that request and a cleared grant is the cookie
+ * the refusal path requires — {@link redirectToUnlock}'s own header.
+ *
+ * **`Origin: null` is refused.** It is a real value — a sandboxed frame, a
+ * redirected form post — rather than a missing header, and the framework
+ * refuses it: it keeps the literal string instead of parsing it (`:751`),
+ * finds it unequal to the host and not an allowed origin (`:758-762`), and
+ * its callers turn that throw into a 400 (`:859`, `:1425`). Here the string is
+ * simply unparseable as a URL and lands in the same refusal, which is the same
+ * answer by a shorter road.
+ *
+ * **Two places this is deliberately not identical.** An `Origin` that parses
+ * to an *empty* host — `about:blank`, `data:`, `file:` — leaves the
+ * framework's `originDomain` falsy at `:758` and is admitted there; here it
+ * fails the comparison and is refused, which is the safer direction and is
+ * close to theoretical anyway, since browsers send `Origin: null` for those.
+ * And the framework's `allowedActionOrigins` allowlist (`:758-760`,
+ * `isAllowedOrigin` at `:805`) has no counterpart here: this app never sets
+ * it, and `@react-router/dev`'s own documentation says it does not apply to
+ * resource routes, so there is nothing to mirror today — but whoever sets it
+ * later has to teach this function about it too, because this one runs on
+ * every route.
+ */
+const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) => {
+  if (!MUTATION_METHODS.has(request.method.toUpperCase())) return;
+
+  const origin = request.headers.get("Origin");
+  if (origin === null) return;
+
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    throw new Response(null, { status: 400 });
+  }
+
+  if (originHost !== new URL(request.url).host) throw new Response(null, { status: 400 });
+};
 
 /**
  * The lock (docs/adr/0012): a browser holding no valid grant is turned away
@@ -359,10 +451,26 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
  * a rendered 404 — app chrome only, since the root loader does not run
  * either, so no figure is on it — rather than the unlock screen, and that
  * response carries no `no-store` of its own. Separately, exempting
- * `/healthz` also exempts its single-fetch (`.data`) form, which is
- * harmless: that route holds no household data either way. Neither is worth
- * code; both are worth saying, so this header's account of what the lock
- * covers stays honest about where it stops.
+ * `/healthz` also exempts its single-fetch (`.data`) form, and that is not the
+ * nothing it looks like. The health route holds no household data, but a
+ * `.data` request with no `_routes` filter runs *every* matched loader —
+ * `singleFetchLoaders` honours that parameter when it is present — this
+ * file's own included, and
+ * the root loader's neutral branch fires only for `/unlock` — so a browser
+ * holding no grant can read `gated`, `firstRun`, `masked`, `maskingPolicy`
+ * and `hasPasskey` off `/healthz.data`, which are exactly the fields
+ * {@link UNLOCK_SCREEN_ROOT_DATA}'s own header says a proven-nothing browser
+ * has no business learning. **Kept deliberately, decided 2026-09-05**
+ * (spec 0020's "Decisions"): the fields are setup state and never a figure,
+ * and a second rule for the exemption's shape costs more than it buys. In
+ * production the Caddyfile's `handle /healthz` is an exact path matcher, so
+ * `/healthz.data` does not match it — it falls to the catch-all `handle`
+ * and is challenged by `forward_auth` like everything else, which is what
+ * makes this reader a signed-in family member rather than anybody at all.
+ * Recorded with its reason so the next reader does not "fix" it. Neither this nor the
+ * unmatched-path case above is worth code; both are worth saying, so this
+ * header's account of what the lock covers stays honest about where it
+ * stops.
  */
 const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) => {
   if (LOCK_EXEMPT_PATHS.includes(normalizedPathname(url.pathname))) {
@@ -419,7 +527,12 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
   return withNoStore(await next());
 };
 
-export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
+/**
+ * Order is the rule rather than a preference: who may ask is settled before
+ * which browser may read, so a forged mutation is refused without a database
+ * call and without rolling anybody's grant.
+ */
+export const middleware: Route.MiddlewareFunction[] = [crossOriginMutationMiddleware, lockMiddleware];
 
 /**
  * The unlock screen's own answer — never the household's. `Layout` renders no
@@ -519,13 +632,13 @@ export async function loader({ request }: Route.LoaderArgs) {
   // `createContext` would push these assertions into `servedThrough`-style
   // tests instead. Fails toward *not* drawing the control: unlike the
   // middleware, this is not the boundary — hiding a control on a database
-  // hiccup costs a family member one screen's worth of chrome and, with it,
-  // the re-entry effect below that gates on the same flag: a page rendered
-  // while this read throws carries no visibility trigger and no `pageshow`
-  // re-check for its whole lifetime, since the effect's deps do not change
-  // again until a navigation. Never a figure, though — there is no reason to
-  // fail toward showing a button that clears a grant which may be exactly
-  // what is protecting this render.
+  // hiccup costs a family member one screen's worth of chrome and nothing
+  // more: the re-entry effect below does *not* gate on this flag — it
+  // installs both listeners on every page but the unlock screen, whatever
+  // this render believes about the household, which is the whole point of
+  // the parameter that used to carry that belief being gone. Never a figure,
+  // though — there is no reason to fail toward showing a button that clears
+  // a grant which may be exactly what is protecting this render.
   //
   // **This answers the chrome's question only** — draw the lock-now control
   // or not — which is why failing toward `false` is right here. It used to
@@ -730,28 +843,36 @@ export function Layout({ children }: { children: React.ReactNode }) {
    * needed a scrim, a replacement render, or a state machine watching for
    * either one to settle.
    *
-   * **A tab that discovers a passkey it did not know about is deliberately
-   * left alone.** A review round asked for one to post the lock on
-   * discovering that `hasPasskey` had flipped, on the reasoning that its
-   * belief was stale. The case that produces is a *sibling tab of the very
-   * browser that just enrolled*: the ceremony minted that browser's grant,
-   * the cookie is shared across its tabs, and posting here would delete it —
+   * **One trigger is declined here, and it is not the one below.** A review
+   * round asked for a tab to post the lock on *discovering* that
+   * `hasPasskey` had flipped, on the reasoning that its belief was stale.
+   * The case that produces is a *sibling tab of the very browser that just
+   * enrolled*: the ceremony minted that browser's grant, the cookie is
+   * shared across its tabs, and posting on that discovery would delete it —
    * locking the household out of the browser it enrolled from, seconds after
    * it did. `docs/specs/lock/05-enrolling-and-listing-passkeys.md` names that
-   * outcome as the thing not to do: the browser that enrolled the first
-   * passkey is not locked out by its own success. A different browser has no
-   * grant to share and is already refused by the middleware, which is where
-   * that refusal belongs.
+   * outcome as the thing not to do. A different browser has no grant to
+   * share and is already refused by the middleware, which is where that
+   * refusal belongs.
+   *
+   * A **hidden-too-long return** is a different trigger and is *not*
+   * declined: it posts, whatever this page believes about the household, so
+   * a tab hidden across its own browser's first enrolment does delete the
+   * grant that enrolment minted. That is spec 0019's story 3 asking for
+   * exactly this — the cost is one unlock prompt, and the redirect back to
+   * Settings still renders, which is what ticket 05's "not locked out by its
+   * own success" is actually scoped to.
    */
   const attemptLock = useCallback((): void => {
     void postLockNow(revalidate, fetch);
   }, [revalidate]);
 
   /**
-   * What a hidden-too-long return with no passkey believed enrolled does,
-   * and what a persisted `pageshow` restore does regardless of that belief
-   * (`~/lib/reentry.ts`'s own header on both): ask the middleware again, and
-   * stop there. Revalidating *is* the answer — it re-runs the root
+   * What a persisted `pageshow` restore does, and the only thing it does
+   * (`~/lib/reentry.ts`'s own header): ask the middleware again, and stop
+   * there. It is not what a hidden-too-long return does — that posts the
+   * lock, through `attemptLock` above, and no belief is left anywhere here
+   * that could route it here instead. Revalidating *is* the answer — it re-runs the root
    * middleware, which refuses a browser holding no live grant and redirects
    * it to `/unlock`. Nothing here decides the belief was stale and posts a
    * lock off the back of it; the paragraph on {@link attemptLock} above says
@@ -771,6 +892,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
    * from handing `watchReentry` a `hasPasskey` belief that this page baked in
    * at render time; the parameter that carried it is gone, so there is no
    * longer a shape here for a call site to get wrong.
+   *
+   * **No test in this repository reaches the line below, and none can.** The
+   * suite is DOM-less by design (CLAUDE.md, "Tests"): every `Layout` test
+   * renders through `renderToStaticMarkup`, where React runs no effect at
+   * all, so a reintroduced `if (!hasPasskey) return;` on the next line would
+   * pass `npm run typecheck`, `npm run build` and every one of these tests.
+   * `tests/reentry.test.ts` drives `watchReentry` directly and pins what it
+   * does once installed; that this component installs it is checked by hand
+   * instead, by the drive script under
+   * `docs/research/2026-09-05-lock-slice-launch-review/harness/` — its steps
+   * S8 (hidden past the grace posts the lock) and S9 (a tab that rendered
+   * before the first enrolment locks on its return) both fail if this effect
+   * stops running. Do not close the gap by adding jsdom or a test renderer;
+   * the gap is stated here so the next person knows the manual check is the
+   * evidence.
    */
   useEffect(() => {
     if (isUnlockScreen) return;

@@ -26,8 +26,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRODUCTION_TIMEOUTS, startWorker, type WorkerTimeouts } from "../server/price-worker.ts";
 import { createYahooClient, type YahooClient } from "../server/yahoo-client.ts";
 
-/** The entry point itself: the SIGTERM handler belongs to it, not to `startWorker`. */
+/**
+ * The entry point as a real child process — the only way to watch a signal
+ * land and an exit code come back. The `SIGTERM` handler itself is
+ * `startWorker`'s, registered before it listens; the entry adds only the
+ * `.catch` that logs a failed start.
+ */
 const WORKER_ENTRY = fileURLToPath(new URL("../server/price-worker.ts", import.meta.url));
+
+/**
+ * The one seam this file controls: `startWorker`'s own `await
+ * chmod(socketPath, 0o660)`. `undefined` means the real one, so every case
+ * runs against the actual filesystem — `unlink` and the rest included, since
+ * only `chmod` is ever indirected — until a case sets `impl`, and `afterEach`
+ * puts it back whether that case passed, failed or timed out. Two cases need
+ * it: one holds the gap between `listen` and `chmod` open, the other makes the
+ * `chmod` fail. The shape is `tests/routes/lock-now.test.ts:28-49`'s.
+ */
+const chmodOverride = vi.hoisted(() => ({
+  impl: undefined as ((path: string, mode: number) => Promise<void>) | undefined,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    chmod: (path: string, mode: number) =>
+      chmodOverride.impl ? chmodOverride.impl(path, mode) : actual.chmod(path, mode),
+  };
+});
 
 /** Wait until the worker has created its socket, or give up loudly. */
 async function waitForSocket(path: string): Promise<void> {
@@ -111,6 +138,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
+  chmodOverride.impl = undefined;
   if (currentServer) {
     await new Promise<void>((resolve) => currentServer!.close(() => resolve()));
     currentServer = undefined;
@@ -1223,8 +1251,76 @@ describe("the socket file and its lifecycle", () => {
     );
   });
 
+  it("installs its SIGTERM handler before the socket is connectable", async () => {
+    // The unit-level counterpart to the entry-point case below: that one
+    // proves the handler works end to end, this one proves it is there in the
+    // instant that matters. `listen` makes the socket connectable through the
+    // kernel's backlog while `chmod` is still an await away, and that gap is
+    // under two milliseconds wide, so it is gated here rather than raced —
+    // `chmod` waits on a promise this case holds open, widening the gap to
+    // exactly as long as the assertion needs.
+    const before = process.listeners("SIGTERM");
+    let releaseChmod = (): void => {};
+    const chmodGate = new Promise<void>((resolve) => {
+      releaseChmod = resolve;
+    });
+    // The real `chmod` is not needed once the gate has done its job: this case
+    // asserts on a listener, never on the mode, and `afterEach` removes the
+    // socket either way.
+    chmodOverride.impl = async () => {
+      await chmodGate;
+    };
+
+    const starting = startWorker({
+      socketPath: currentSocketPath,
+      yahoo: fakeYahoo(),
+      timeouts: TEST_TIMEOUTS,
+    });
+
+    try {
+      await waitForSocket(currentSocketPath);
+
+      // The listener it added, not merely a bigger count: this file's cases
+      // each start a server, so the number alone would not say whose.
+      const added = process.listeners("SIGTERM").filter((fn) => !before.includes(fn));
+      expect(added).toHaveLength(1);
+    } finally {
+      releaseChmod();
+      // Through the shared `currentServer`, so `afterEach` closes it and the
+      // `close` handler takes the listener back off — which is the removal
+      // `startWorker` relies on to keep one listener per live server rather
+      // than one per case.
+      currentServer = await starting;
+    }
+  });
+
+  it("takes its SIGTERM handler back off and closes the server when chmod fails", async () => {
+    // The one failure path with a live server behind it: `listen` has already
+    // succeeded, so unlike a failed `listen` there is something still bound to
+    // the path. Left alone it keeps answering on a socket the caller was told
+    // it never got — and, since `connect` on a unix socket wants *write*
+    // permission, one the `chmod` that just failed had not yet opened to the
+    // group, so `app` cannot reach it and nothing but this teardown will.
+    const before = process.listeners("SIGTERM");
+    chmodOverride.impl = () =>
+      Promise.reject(Object.assign(new Error("chmod failed"), { code: "ENOENT" }));
+
+    await expect(
+      startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo(), timeouts: TEST_TIMEOUTS }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    expect(process.listeners("SIGTERM").filter((fn) => !before.includes(fn))).toHaveLength(0);
+    // `close()` unlinks the path, so the socket is not merely refusing —
+    // it is gone, and `ENOENT` is what says the teardown ran rather than the
+    // server simply having stopped accepting.
+    await expect(rawRequest(currentSocketPath, "GET", "/healthz")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("exits on SIGTERM even while every connection it admits is held open", async () => {
-    // The entry point, not `startWorker`, because the handler is the entry's.
+    // Spawned rather than called, because an exit code is the assertion and
+    // only a child process has one.
     // A stop has to finish inside Docker's ten-second grace, and `close()`
     // waits for every connection: a socket that has sent nothing is not
     // *idle* in Node's sense, so closing only the idle ones leaves exactly

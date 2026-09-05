@@ -74,6 +74,11 @@ one resolved term and one hard decision at a time, which is the intended pace.
   guide on user-visible rules** — nothing is deleted, closing is not deleting, an unpriced holding
   is not a zero. The README states them at the altitude of a module seam for a contributor; the
   guide states them as consequences for a household.
+- **[`guide/passkeys.md`](guide/passkeys.md)'s three ways back into a locked browser restate the
+  unlock screen's own list** (`app/routes/unlock.tsx`), for a reader whose browser did not offer the
+  cross-device path — a case the screen itself says nothing about, so there is nothing on screen for
+  the guide to send them to. The screen is the one to believe; re-check the guide when that list
+  changes.
 - **[`operating.md`](operating.md) restates parts of `.env.example`.** Named there, in place.
 - **[`../ARCHITECTURE.md`](../ARCHITECTURE.md) §3.3 restates [`../DESIGN.md`](../DESIGN.md) §10.1's
   environment variable table**, for a contributor reading the code rather than an operator

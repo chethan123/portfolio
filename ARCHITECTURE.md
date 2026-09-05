@@ -346,6 +346,7 @@ grep. They come in three tiers.
 | Importing `yahoo-finance2` | `server/yahoo-client.ts:121` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 | Enforcing the lock | `app/root.tsx`'s `middleware` export — `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it — the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
+| Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes — which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. |
 
 **Owned by a module, upheld by its callers.**
 
@@ -689,14 +690,15 @@ split is exact and each side is a decision:
 
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
 hand.** Above `unlock_grant`'s own row, every referencing delete describes something no screen
-performs: a person who owns no accounts (`people.server.ts:278`) and a just-created, never-held
+performs: a person who owns no accounts (`people.server.ts`'s `removePerson`) and a just-created, never-held
 instrument that lost an alias race (`instrument-resolution.server.ts:639`) are the only two
 application deletes reaching that half, there is no account delete and no position-set delete
 anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
 about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
-both routinely: removing a passkey (`lock.server.ts:1270`'s `removePasskey`), the explicit "Lock
-now" control (`app/routes/lock-now.ts`, through `lock.server.ts:431`'s `deleteGrant`), and the
-expired-grant sweep every grant mint runs first (`lock.server.ts:314`) each issue a real `DELETE`
+both routinely: removing a passkey (`removePasskey`), the explicit "Lock
+now" control (`app/routes/lock-now.ts`, through `deleteGrant`), and the
+expired-grant sweep every grant mint runs first (`mintGrant`) — each in
+`app/lib/lock.server.ts` — issue a real `DELETE`
 from a route. The cascade this table adds is what then carries a passkey removal into ending that
 passkey's own grants with it — a further delete the application never states as its own statement.
 

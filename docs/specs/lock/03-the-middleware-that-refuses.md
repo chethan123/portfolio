@@ -60,7 +60,8 @@ rule repeated in every loader the way masking's is.
 - [ ] `__Host-` prefixed, `Secure`, `HttpOnly`, `Path=/`, `SameSite=Lax`
 - [ ] `Secure` and the prefix are where this parts company with the masking cookie, which omits both
       deliberately because it carries a preference and must survive an instance reached over plain
-      http. This one carries a credential, and WebAuthn will not run outside a secure context anyway
+      http. This one carries the id of an unlock row, and WebAuthn will not run outside a secure
+      context anyway
 - [ ] The dev loop serves plain http on localhost, where a `Secure` cookie is a browser-by-browser
       carve-out rather than a guarantee. Say in the module header whether the dev path works, having
       actually tried it, rather than leaving the next person to find out

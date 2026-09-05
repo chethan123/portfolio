@@ -129,6 +129,13 @@ export function post(
   path: string,
   fields: Record<string, string | string[]>,
   cookie?: string,
+  // Headers a browser would attach that no other test needs to state.
+  // `Origin` is the one there is now a rule about
+  // (`crossOriginMutationMiddleware`, `app/root.tsx`), and leaving it out is
+  // itself a case that rule decides — so it is an option here rather than a
+  // default, and every builder call that omits it keeps sending no `Origin`
+  // at all.
+  headers?: Record<string, string>,
 ): Request {
   const body = new FormData();
 
@@ -137,10 +144,12 @@ export function post(
     else body.set(name, value);
   }
 
-  return withCookie(
+  const request = withCookie(
     throughRouteHandler(new Request(`http://portfolio.local${path}`, { method: "POST", body })),
     cookie,
   );
+  for (const [name, value] of Object.entries(headers ?? {})) request.headers.set(name, value);
+  return request;
 }
 
 /**
@@ -257,6 +266,20 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
  * would still hand it the URL parser's. Harmless today: `chartRangeMiddleware`
  * reads only `range`, which no owner-filter respelling touches. Worth stating
  * rather than leaving for whoever adds the next middleware to discover cold.
+ *
+ * **A second thing it does not reproduce, now that an array can hold two.**
+ * The real pipeline nests: `next()` recurses into the following middleware
+ * and the handler runs only past the last one
+ * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:4843-4891`),
+ * and it calls `next()` *itself* for a middleware that returns nothing
+ * (`:4884`). The loop below is flat instead: each step gets the same
+ * stand-in `next`, and a step that returns nothing leaves `response`
+ * undefined for the next step to overwrite. So `onNext` answers "did any
+ * step call `next`", never "which one", and *order* cannot be asserted here
+ * directly — a caller proving that one middleware runs before another has to
+ * arrange for the two to answer differently and assert which answer came
+ * back, as `tests/routes/root.test.ts`'s cross-origin refusal does against
+ * an unreachable database.
  */
 export async function servedThrough(
   // Untyped against a generated `Route.MiddlewareFunction[]`, deliberately —

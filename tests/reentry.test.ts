@@ -1,12 +1,12 @@
 /**
  * The reentry guard's testable rules (ticket 06, `~/lib/reentry.ts`):
  * `shouldPostLock`'s boundary, and `watchReentry`'s own wiring of the two
- * DOM signals it watches — which now includes the postLock-or-askServer
- * decision itself (finding 6): `watchReentry` takes `assumedPasskey` as a
- * plain `boolean` and decides internally which action a hidden-too-long
- * return invokes, so that decision is proven here, against the real export,
- * rather than against a copy `app/root.tsx`'s call site could quietly stop
- * making.
+ * DOM signals it watches. `watchReentry` takes the two actions and no
+ * belief of any kind: a hidden-too-long return posts the lock, a persisted
+ * restore asks the server, and neither consults what the last render
+ * thought about the household. Both are proven here against the real
+ * export, rather than against a copy `app/root.tsx`'s call site could
+ * quietly stop making.
  *
  * `shouldPostLock` is exercised as the pure function it is — no document, no
  * window, no clock of its own. `watchReentry` genuinely touches `document`
@@ -26,19 +26,20 @@
  * number instead of importing `lock.ts`'s — shows up here rather than only
  * in a real browser nobody is running.
  *
- * **What moved here, and why the previous version of this file could not
- * catch a reverted call site.** Two earlier rounds put the
- * postLock-or-askServer decision in `app/root.tsx` instead — first as an
- * inline arrow function, then as an exported `resolveReentryCallback` this
- * file called directly — and both left `watchReentry` itself accepting
- * whatever the call site handed it, `null` included. A regression test that
- * called `resolveReentryCallback` proved that function's own logic, never
- * that `Layout` actually used it: reverting the call site back to
- * `hasPasskey ? callback : null` kept every such test green. `watchReentry`
- * taking `assumedPasskey` and both actions directly, with no nullable slot
- * left in its signature at all, is what closes that gap — the old call
- * shape does not typecheck against this one, so a reverted call site fails
- * `npm run typecheck` before any test ever runs.
+ * **Why the signature is what pins this, and not a test.** Three earlier
+ * rounds gave the guard a `hasPasskey` belief to consult — first inline in
+ * `app/root.tsx`, then through an exported helper this file called
+ * directly, then as a parameter of `watchReentry` itself — and each left
+ * the call site free to hand it something stale, `null` included. A test
+ * calling the helper proved the helper, never that `Layout` used it:
+ * reverting the call site to `hasPasskey ? callback : null` kept every such
+ * test green. Nothing here can close that, because a `Layout` render under
+ * `renderToStaticMarkup` runs no effect. What closes it is that the
+ * parameter is gone: the old call shape does not typecheck against the
+ * current signature, so a reverted call site fails `npm run typecheck`
+ * before any test runs. The effect's own installation — that `Layout`
+ * calls `watchReentry` at all — is checked by hand, and `app/root.tsx`
+ * says where.
  * **`postLockNow`, added when concealment was removed.** Five review rounds
  * spent on a mechanism that hid the page while `/lock-now` was in flight
  * found nothing wrong with the *lock* this app specifies — every finding was
@@ -213,54 +214,20 @@ describe("watchReentry", () => {
     perf.mockImplementation(() => clock);
 
     const postLock = vi.fn();
-    const teardown = watchReentry(postLock, vi.fn());
+    const onPersistedRestore = vi.fn();
+    const teardown = watchReentry(postLock, onPersistedRestore);
 
     browser.hide();
     clock += REENTRY_GRACE_MS + 1;
     browser.show();
 
     expect(postLock).toHaveBeenCalledTimes(1);
+    // And only the lock: ticket 06 asks the persisted-restore path for a
+    // revalidation, and a hidden-too-long return is a different trigger
+    // that must not borrow it.
+    expect(onPersistedRestore).not.toHaveBeenCalled();
     teardown();
   });
-
-  it(
-    "posts the lock on a hidden-too-long return in a household this page rendered before any passkey existed",
-    () => {
-      // The bug this replaces. Three versions of `watchReentry` took a
-      // `hasPasskey` belief and, reading false, revalidated instead of
-      // posting. That belief is loader data from the last render, so a tab
-      // that rendered before the household's first-ever enrolment carried
-      // `false` into a return that happened after it — and the grant the
-      // enrolling tab minted is shared with this one, so the middleware
-      // admitted it and a browser hidden well past the grace went on
-      // reading. Ticket 06 states the trigger without a condition, so there
-      // is no belief left to hand this: the only thing a hidden-too-long
-      // return can do now is post.
-      //
-      // There is no `false` to pass here any more. That is the point — the
-      // parameter that carried the stale answer no longer exists, so this
-      // rule cannot be reverted without changing the signature.
-      const browser = install();
-      const perf = vi.spyOn(performance, "now");
-      let clock = 0;
-      perf.mockImplementation(() => clock);
-
-      const postLock = vi.fn();
-      const onPersistedRestore = vi.fn();
-      const teardown = watchReentry(postLock, onPersistedRestore);
-
-      browser.hide();
-      clock += REENTRY_GRACE_MS + 1;
-      browser.show();
-
-      expect(postLock).toHaveBeenCalledTimes(1);
-      // Not the persisted-restore path: ticket 06 asks that one for a
-      // revalidation rather than a post, and a hidden-too-long return is a
-      // different trigger that must not borrow it.
-      expect(onPersistedRestore).not.toHaveBeenCalled();
-      teardown();
-    },
-  );
 
   it("installs both listeners unconditionally, never skipping one the way the old hasPasskey-gated call site could", () => {
     const browser = install();
@@ -317,7 +284,6 @@ describe("watchReentry", () => {
   it("calls onPersistedRestore, and posts no lock and asks nothing else, on a persisted pageshow", () => {
     const browser = install();
     const postLock = vi.fn();
-    const askServer = vi.fn();
     const onPersistedRestore = vi.fn();
     const teardown = watchReentry(postLock, onPersistedRestore);
 
@@ -325,7 +291,6 @@ describe("watchReentry", () => {
 
     expect(onPersistedRestore).toHaveBeenCalledTimes(1);
     expect(postLock).not.toHaveBeenCalled();
-    expect(askServer).not.toHaveBeenCalled();
     teardown();
   });
 

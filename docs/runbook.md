@@ -562,10 +562,30 @@ docker compose start app
 ```
 
 `unlock_grant.passkey_id` references `passkey` `on delete cascade`, so the delete also removes every
-browser's current grant along with the passkey that minted it — nothing is left half-cleared.
+browser's current grant along with the passkey that minted it — nothing is left half-cleared. Every
+browser still holds a cookie naming one of those deleted rows; it names nothing now, and is cleared
+on that browser's first refusal once somebody enrols again.
 
 Why, including why the order above is stop-delete-start and not delete-then-restart:
 [The lock](operating.md#the-lock).
+
+---
+
+## A second device offers no way to use another device on the unlock screen
+
+**Confirm.** A browser that holds no passkey shows the unlock screen, and pressing **Unlock** offers
+only this device's own provider — no code to scan, no prompt arriving on a phone that does hold one.
+Another browser on the same device behaves the same way.
+
+**Do.** From a browser that is still unlocked — usually the one that enrolled the household's first
+passkey — enrol a second passkey using a different provider, then press **Unlock** on the affected
+device again. If no browser is still unlocked, unlock one on a device that can reach a passkey the
+household has enrolled, and enrol from there. If no enrolled passkey can be reached at all, or the
+second passkey changes nothing, this is
+[Every browser is locked and no passkey can be reached](#every-browser-is-locked-and-no-passkey-can-be-reached)
+above instead.
+
+Why: [Before the household's first passkey](operating.md#before-the-households-first-passkey).
 
 ---
 
