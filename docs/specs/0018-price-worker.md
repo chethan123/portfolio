@@ -320,6 +320,16 @@ and JSON-parsed. Its outcomes, in the order they are told apart:
 - The body cap throws a plain error naming it; any status but `200` throws a plain error carrying
   the answer's `error` text, so the ledger records what Yahoo said, or what the worker refused;
   `200` is the parsed body.
+- **Added on building [ticket 06](price-worker/06-the-app-cutover.md): a quotes refresh is
+  all-or-nothing above one batch.** `getQuotes` sends ⌈symbols / 100⌉ requests in sequence and lets
+  a rejection from any of them escape, so a failure on the third discards the first two batches'
+  answers and `refreshQuotes` marks every instrument stale. That is the honest outcome rather than
+  a defect: the interface has no channel for a partial answer, and returning one would report
+  success while silently omitting instruments, which is the shape §8.2 exists to refuse. It does
+  put a hard ceiling on the household this design serves, and the ceiling is §3.5's own arithmetic
+  read backwards — the worker admits ten quotes calls a minute, so a household past a thousand
+  instruments fails its eleventh batch on every refresh, for ever. Nothing here raises the cap or
+  spends fewer calls; a household that large has outgrown a tick that fetches everything.
 - **Added on building [ticket 06](price-worker/06-the-app-cutover.md): a sixth outcome, and the
   budget above does not cover it.** If the worker dies *after* its response headers and *before*
   the declared body completes, Node emits neither `error` nor `end` on that request, and the abort

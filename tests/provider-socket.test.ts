@@ -91,6 +91,41 @@ describe("socketProvider().getQuotes", () => {
     expect(quotes.map((quote) => quote.symbol)).toEqual(["VTI"]);
   });
 
+  it("scrubs a refused symbol's newline before it reaches the log, so a forged line stays inert", async () => {
+    // The same guard as `ask`'s own `scrubForLog` on a non-200 error body,
+    // at its other call site: a feed symbol is stored, and
+    // `instrument-resolution.server.ts` accepts any character up to forty of
+    // them while an `unavailable` probe still lets the instrument be
+    // created — so one saved with a newline in it would otherwise forge a
+    // second, operator-visible line under the very `Price worker:` stem
+    // `docs/operating.md` tells the operator to grep, on every refresh from
+    // then on. One `console.warn` call with no raw newline in its message is
+    // "exactly one physical log line" — the forged text lands as trailing
+    // content on that one line rather than a line of its own.
+    const seen: string[][] = [];
+    await start({
+      quote: async (symbols) => {
+        seen.push(symbols);
+        return [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" }];
+      },
+      chart: async () => ({}),
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const quotes = await socketProvider().getQuotes(["VTI", "AAA\nPrice worker: forged line"]);
+
+    // Before `mockRestore()`, which also clears the recorded calls.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0]!;
+    expect(message).toBe(
+      "Price provider: dropping symbols the pattern refuses: AAA Price worker: forged line",
+    );
+    warn.mockRestore();
+
+    expect(seen).toEqual([["VTI"]]);
+    expect(quotes.map((quote) => quote.symbol)).toEqual(["VTI"]);
+  });
+
   it("splits 101 symbols into two requests", async () => {
     const seen: string[][] = [];
     await start({
@@ -464,6 +499,45 @@ describe("ask", () => {
     await expect(ask("quotes", { symbols: ["VTI"] })).rejects.toThrow(
       "quotes response from the worker was not valid JSON",
     );
+  });
+
+  it("rejects an empty body on a 200, but still takes the status-only path when a non-200 has one", async () => {
+    // Two different meanings for the same empty wire shape (the module
+    // header above `ask`, and the comment at its `text.length === 0`
+    // branch): a `200` with nothing behind it is the same lie an
+    // unparseable body is — the worker's own `JSON.stringify` renders a
+    // drifted `undefined` result as no body at all, and swallowing it would
+    // read back as an empty quotes batch or a `no-history` answer, neither
+    // of which is true. A non-`200` with nothing behind it is instead the
+    // legitimate shape of a refusal Node itself writes — its `clientError`
+    // path (`server/price-worker.ts`) answers with a status line and no
+    // body — so that half must still resolve through the ordinary
+    // `String(res.statusCode)` fallback, never reject as malformed. Raw
+    // servers, not `start()`: `sendJson` always writes a full body, so only
+    // a server outside the worker's own protocol can produce either shape.
+    const empty200 = http.createServer((req, res) => {
+      res.writeHead(200);
+      res.end();
+    });
+    await new Promise<void>((resolve) => empty200.listen(SOCKET_PATH, resolve));
+
+    await expect(ask("quotes", { symbols: ["VTI"] })).rejects.toThrow(
+      "the worker answered quotes with 200 and an empty body",
+    );
+
+    await new Promise<void>((resolve) => empty200.close(() => resolve()));
+
+    // A fresh server on the same path (proven safe above: Node's own unix
+    // socket file goes with the first server's `close`) for the non-200
+    // half, so this one test pins both — a case that skipped either half
+    // would still pass a test asserting only the other.
+    currentServer = http.createServer((req, res) => {
+      res.writeHead(502);
+      res.end();
+    });
+    await new Promise<void>((resolve) => currentServer!.listen(SOCKET_PATH, resolve));
+
+    await expect(ask("quotes", { symbols: ["VTI"] })).rejects.toThrow("502");
   });
 });
 

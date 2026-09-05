@@ -1014,6 +1014,7 @@ sequenceDiagram
     participant U as Reader
     participant R as instruments route
     participant IR as resolveAll()
+    participant W as price worker
     participant Y as Yahoo (probe)
     participant PG as Postgres
 
@@ -1022,8 +1023,10 @@ sequenceDiagram
     IR->>IR: validate ALL, collect field-level refusals
     Note right of IR: Nothing is written unless everything<br/>passes: a refusal must re-render the<br/>same list of questions it was asked.
     alt creating a feed instrument
-        IR->>Y: socketProbe(every new feed symbol, over the worker's socket)
-        Y-->>IR: per symbol: ok{quoteType} | non-usd{currency} | unavailable
+        IR->>W: socketProbe(every new feed symbol) over the unix socket
+        W->>Y: one quote call for the batch
+        Y-->>W: raw quotes
+        W-->>IR: per symbol: ok{quoteType} | non-usd{currency} | unavailable
         Note right of IR: non-usd REFUSES creation.<br/>unavailable does NOT block — the next<br/>refresh marks it stale like any symbol.
     end
     IR->>PG: BEGIN

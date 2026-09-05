@@ -124,7 +124,7 @@ const ERROR_TEXT_LIMIT = 1000;
  * the body back — the first code to do that, and so the first place this
  * reading side needs the same guard the worker's writing side already has.
  */
-function scrubProviderReason(text: string): string {
+function scrubForLog(text: string): string {
   return text.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, ERROR_TEXT_LIMIT);
 }
 
@@ -156,7 +156,7 @@ function scrubProviderReason(text: string): string {
  *  3. The body cap spent mid-response is a plain `Error` naming it, the
  *     request destroyed with no further read.
  *  4. A status other than `200` is a plain `Error` carrying the body's own
- *     `error` text — scrubbed and capped ({@link scrubProviderReason}) before
+ *     `error` text — scrubbed and capped ({@link scrubForLog}) before
  *     it reaches an `Error.message`, since it can be a forged or
  *     upstream-supplied string, not only the worker's own — or the bare
  *     status when the body carries none.
@@ -237,8 +237,18 @@ export async function ask(
             // report empty quotes with nothing logged, or an unparseable
             // history answer read back as `no-history`, `price-provider
             // .server.ts`'s own "a lie the ledger repeats."
+            // An empty body is a legitimate shape only from a refusal Node
+            // itself wrote — its `clientError` answers carry a status line and
+            // nothing else. On a `200` it is the same lie as an unparseable
+            // one: the worker's `JSON.stringify` renders a drifted `undefined`
+            // result as no body at all, which would read back as an empty
+            // batch or as `no-history`.
             let parsed: unknown;
             if (text.length === 0) {
+              if (res.statusCode === 200) {
+                reject(new Error(`the worker answered ${kind} with 200 and an empty body`));
+                return;
+              }
               parsed = undefined;
             } else {
               try {
@@ -268,7 +278,7 @@ export async function ask(
                     // stem `docs/operating.md` tells the operator to grep,
                     // once it reaches `console.error` (`prices.server.ts`) or
                     // `price_backfill.error`, a column nothing prunes.
-                    scrubProviderReason((parsed as { error: string }).error)
+                    scrubForLog((parsed as { error: string }).error)
                   : String(res.statusCode);
               reject(new Error(reason));
               return;
@@ -353,7 +363,13 @@ function wellFormedSymbols(symbols: string[]): string[] {
   }
 
   if (bad.length > 0) {
-    console.warn(`Price provider: dropping symbols the pattern refuses: ${bad.join(", ")}`);
+    // Scrubbed for the same reason the worker's error text is: a feed symbol
+    // is stored, and `instrument-resolution.server.ts` accepts any character
+    // up to forty of them, while an `unavailable` probe still lets the
+    // instrument be created. So one saved with a newline in it would forge
+    // operator-visible log lines on every refresh from then on.
+    const named = bad.map((symbol) => scrubForLog(symbol)).join(", ");
+    console.warn(`Price provider: dropping symbols the pattern refuses: ${named}`);
   }
 
   return good;
