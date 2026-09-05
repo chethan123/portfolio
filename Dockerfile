@@ -111,6 +111,7 @@ COPY --chown=node:node \
   server/yahoo-client.ts \
   server/symbol-pattern.ts \
   server/price-worker.ts \
+  server/egress-proxy.ts \
   ./server/
 
 # The `.sql` files ship with the image and the entrypoint applies them —

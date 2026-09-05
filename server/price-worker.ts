@@ -276,12 +276,46 @@ function isTimeoutError(error: unknown): boolean {
 }
 
 /**
+ * The one detail {@link providerErrorText} takes from a cause: an `Error`'s
+ * own `message` — preferred over its `code`, not merely a fallback for its
+ * absence — or, for anything else, a string `code` if it has one.
+ * `undefined` when neither applies (a `cause` that is a bare number or the
+ * like), which the caller turns into `String(cause)`.
+ *
+ * The preference for `message` over `code` is deliberate, not incidental:
+ * measured against a real DNS failure behind `NODE_USE_ENV_PROXY`, the cause
+ * is an `Error` whose `code` is the bare string `"ENOTFOUND"` and whose own
+ * `message` is `"getaddrinfo ENOTFOUND egress-proxy"` — already inclusive of
+ * the code *and* the host `code` alone drops. Checking `code` first, as this
+ * function used to, is what produced ticket 08's `fetch failed: ENOTFOUND`.
+ */
+function detailFor(value: unknown): string | undefined {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "object" && value !== null && "code" in value) {
+    const code = (value as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return undefined;
+}
+
+/**
  * The text a provider failure answers with: the message alone, or —
  * undici's own errors are all `TypeError: fetch failed` with the real
- * reason in `cause` — the message with the cause's `code` (or, absent one,
- * the cause's own message) appended, cut to {@link ERROR_TEXT_LIMIT}
+ * reason nested in `cause` — the message with one more level of `cause`
+ * walked into via {@link detailFor}, cut to {@link ERROR_TEXT_LIMIT}
  * characters. A `TimeoutError`'s own message ("The operation was aborted
- * due to timeout") passes through the same way, since it carries no cause.
+ * due to timeout") passes through the causeless path, since it carries none.
+ *
+ * The walk is bounded to exactly one extra level (ticket 08's own framing:
+ * "widens `providerErrorText` by one level", not an unbounded one), which is
+ * as far as the shape it was widened for needs: measured against a real
+ * `fetch` refused by a local `CONNECT` proxy, `cause` is a `DOMException`
+ * whose own `message` — "Request was cancelled." — names nothing, and whose
+ * `code` is the *number* `0`, not a string {@link detailFor} would take;
+ * the informative text, `Proxy response (502) !== 200 when HTTP Tunneling`,
+ * sits at `cause.cause.message`. A plain `{ code }` object thrown directly
+ * (this file's own tests) has no `cause` of its own, so the walk stops at
+ * `detailFor(cause)` for it exactly as before.
  */
 function providerErrorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -289,15 +323,9 @@ function providerErrorText(error: unknown): string {
 
   if (cause === undefined) return message.slice(0, ERROR_TEXT_LIMIT);
 
-  const detail =
-    typeof cause === "object" &&
-    cause !== null &&
-    "code" in cause &&
-    typeof (cause as { code?: unknown }).code === "string"
-      ? (cause as { code: string }).code
-      : cause instanceof Error
-        ? cause.message
-        : String(cause);
+  const nestedCause = cause instanceof Error ? (cause as { cause?: unknown }).cause : undefined;
+  const nested = nestedCause !== undefined ? (detailFor(nestedCause) ?? String(nestedCause)) : undefined;
+  const detail = nested ?? detailFor(cause) ?? String(cause);
 
   return `${message}: ${detail}`.slice(0, ERROR_TEXT_LIMIT);
 }
