@@ -753,8 +753,10 @@ rather than an observed fact, and that screen hedges it accordingly.
    offer to use another device — a code to scan, or a prompt arriving on the phone. Approve it on
    the phone, and confirm the second device lands on the Overview.
 
-If step 2 offers nothing of the kind, every browser in the household without its own passkey is in
-the same position — and the first thing to try is another passkey rather than a reset. A locked
+If step 2 offers nothing of the kind, try it again in another browser on that device — WebKit and
+Chromium do not read the stored transports the same way, so one browser's silence is not every
+browser's. If none of them offers it, the first thing to try is another passkey rather than a
+reset. A locked
 browser is offered every credential the household holds (`allowCredentialList`,
 [`app/lib/lock.server.ts`](../app/lib/lock.server.ts)), and the rule below turns on *any one* of
 them reporting `hybrid`. So enrol a second passkey from a browser that is still unlocked — usually
@@ -770,7 +772,8 @@ credentials this instance offers a locked browser carry whatever transports the 
 reported, and both WebKit and Chromium hide the use-another-device option when every offered
 credential lists `internal` alone. Current iCloud Keychain and Google Password Manager report
 `hybrid` beside `internal`, which is what makes the option appear, and Chrome's own macOS profile
-authenticator reports no transports at all, which the same rule reads as "allow everything". Older
+authenticator reports no transports at all, which Chromium alone reads as "allow everything" —
+WebKit offers the option only where a credential lists `hybrid` itself. Older
 Safari and Android values were not verified, and nothing else has been checked.
 
 **Write down what you find, here.** Once the walk has been run, record which providers were tried

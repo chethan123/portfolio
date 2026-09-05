@@ -1412,7 +1412,13 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
       // been tried (docs/operating.md, "Before the household's first
       // passkey"). A reader deciding whether to lock the household out is
       // owed both sentences, so both are asserted.
-      expect(withoutOne).toContain("depends on the provider making this passkey");
+      expect(withoutOne).toContain("depends on the provider that made it");
+      // And that the approving device is *any* device holding the passkey,
+      // not this one. A passkey is not a device (CONTEXT.md) — it syncs — so
+      // a household that enrols from a laptop may well approve on the phone
+      // the vault synced it to, and a sentence naming this browser would be
+      // read as ruling that out.
+      expect(withoutOne).toContain("approving from a device that already holds this");
 
       await seedFixturePasskey(seedPasskey);
       const withOne = renderRoute(
@@ -1421,7 +1427,7 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
         await loader(args(get("/settings/passkeys"))),
       );
       expect(withOne).not.toContain("Enrolling this passkey locks every other browser");
-      expect(withOne).not.toContain("depends on the provider making this passkey");
+      expect(withOne).not.toContain("depends on the provider that made it");
     }),
   );
 

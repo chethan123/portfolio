@@ -571,7 +571,9 @@ Another browser on the same device behaves the same way.
 
 **Do.** From a browser that is still unlocked — usually the one that enrolled the household's first
 passkey — enrol a second passkey using a different provider, then press **Unlock** on the affected
-device again. If no browser is still unlocked, or the second passkey changes nothing, this is
+device again. If no browser is still unlocked, unlock one on a device that can reach a passkey the
+household has enrolled, and enrol from there. If no enrolled passkey can be reached at all, or the
+second passkey changes nothing, this is
 [Every browser is locked and no passkey can be reached](#every-browser-is-locked-and-no-passkey-can-be-reached)
 above instead.
 
