@@ -6,7 +6,7 @@
  * `shouldPostLock` is exercised as the pure function it is — no document, no
  * window, no clock of its own. `watchReentry` genuinely touches `document`
  * and `window`, but only two methods of each
- * (`addEventListener`/`removeEventListener`) and a clock, so the second
+ * (`addEventListener`/`removeEventListener`) and two clocks, so the second
  * describe block below stands a plain object in for each rather than a real
  * browser or jsdom (AGENTS.md's own rule against both) — the same call spec
  * 0007 made for masking's client-side cookie write, extended here now that
@@ -28,29 +28,75 @@ import { shouldPostLock, watchReentry } from "~/lib/reentry";
 
 describe("shouldPostLock", () => {
   it("never posts when this browser has not been hidden since it loaded", () => {
-    expect(shouldPostLock(null, Date.now())).toBe(false);
+    expect(shouldPostLock(null, Date.now(), performance.now())).toBe(false);
   });
 
   it("does not post for a gap that merely reaches the grace", () => {
     // "Exceeds", not "reaches" — the ticket's own word. A story-4 app switch
-    // landing exactly on the boundary must not read as tiresome.
-    const now = Date.now();
-    expect(shouldPostLock(now - REENTRY_GRACE_MS, now)).toBe(false);
+    // landing exactly on the boundary must not read as tiresome. Both
+    // clocks agree here, which is the ordinary case.
+    const wallMs = Date.now();
+    const monoMs = performance.now();
+    expect(
+      shouldPostLock({ wallMs: wallMs - REENTRY_GRACE_MS, monoMs: monoMs - REENTRY_GRACE_MS }, wallMs, monoMs),
+    ).toBe(false);
   });
 
   it("does not post for a gap one millisecond short of the grace", () => {
-    const now = Date.now();
-    expect(shouldPostLock(now - REENTRY_GRACE_MS + 1, now)).toBe(false);
+    const wallMs = Date.now();
+    const monoMs = performance.now();
+    expect(
+      shouldPostLock(
+        { wallMs: wallMs - REENTRY_GRACE_MS + 1, monoMs: monoMs - REENTRY_GRACE_MS + 1 },
+        wallMs,
+        monoMs,
+      ),
+    ).toBe(false);
   });
 
   it("posts once the gap exceeds the grace by even one millisecond", () => {
-    const now = Date.now();
-    expect(shouldPostLock(now - REENTRY_GRACE_MS - 1, now)).toBe(true);
+    const wallMs = Date.now();
+    const monoMs = performance.now();
+    expect(
+      shouldPostLock(
+        { wallMs: wallMs - REENTRY_GRACE_MS - 1, monoMs: monoMs - REENTRY_GRACE_MS - 1 },
+        wallMs,
+        monoMs,
+      ),
+    ).toBe(true);
   });
 
   it("posts for a browser that was gone far longer than the grace", () => {
-    const now = Date.now();
-    expect(shouldPostLock(now - REENTRY_GRACE_MS * 10, now)).toBe(true);
+    const wallMs = Date.now();
+    const monoMs = performance.now();
+    expect(
+      shouldPostLock(
+        { wallMs: wallMs - REENTRY_GRACE_MS * 10, monoMs: monoMs - REENTRY_GRACE_MS * 10 },
+        wallMs,
+        monoMs,
+      ),
+    ).toBe(true);
+  });
+
+  it("posts once the wall gap alone exceeds the grace, even though the monotonic clock stalled through a suspend", () => {
+    // The scenario `Math.max` exists for: `performance.now()` does not
+    // advance while a device is suspended, so a phone locked in a pocket
+    // for ten minutes can come back with a monotonic gap of only a
+    // millisecond — under the grace on its own. The wall gap, which does
+    // advance through a suspend, is what has to carry this.
+    const hidden = { wallMs: 0, monoMs: 0 };
+    expect(shouldPostLock(hidden, REENTRY_GRACE_MS + 1, 1)).toBe(true);
+  });
+
+  it("posts once the monotonic gap alone exceeds the grace, even though the wall clock ran backwards", () => {
+    // The other direction: an NTP correction, or someone setting the system
+    // clock back, makes the wall gap negative. The monotonic gap — which
+    // cannot run backwards — is what has to carry this one, and the
+    // negative wall value simply loses the `Math.max`.
+    const hidden = { wallMs: 1_700_000_000_000, monoMs: 0 };
+    const nowWallMs = hidden.wallMs - 60 * 60 * 1000; // the clock jumps back an hour
+    const nowMonoMs = REENTRY_GRACE_MS + 1;
+    expect(shouldPostLock(hidden, nowWallMs, nowMonoMs)).toBe(true);
   });
 });
 
@@ -95,6 +141,10 @@ function fakeBrowser() {
   return {
     fakeDocument,
     fakeWindow,
+    /** Sets `visibilityState` to hidden *before* any listener need exist to notice. */
+    hideSilently(): void {
+      visibilityState = "hidden";
+    },
     hide(): void {
       visibilityState = "hidden";
       documentListeners.get("visibilitychange")?.forEach((listener) => listener());
@@ -166,6 +216,31 @@ describe("watchReentry", () => {
     teardown();
   });
 
+  it("arms the timer at wire time for a page that mounts into an already-hidden tab, not only on a later visibilitychange", () => {
+    // A page opened in a background tab, or hydrated while the document is
+    // already hidden, never sees a `visibilitychange` *to* hidden — its
+    // first event is the transition back to visible. Hiding the fake
+    // browser *before* `watchReentry` ever wires a listener reproduces
+    // exactly that: nothing here catches the transition into hidden, only
+    // `watchReentry`'s own read of the current `visibilityState` at wire
+    // time can arm the timer.
+    const browser = install();
+    const perf = vi.spyOn(performance, "now");
+    let clock = 0;
+    perf.mockImplementation(() => clock);
+
+    browser.hideSilently();
+
+    const postLock = vi.fn();
+    const teardown = watchReentry(postLock, vi.fn());
+
+    clock += REENTRY_GRACE_MS + 1;
+    browser.show();
+
+    expect(postLock).toHaveBeenCalledTimes(1);
+    teardown();
+  });
+
   it("asks the server, and does not post the lock, on a persisted pageshow", () => {
     const browser = install();
     const postLock = vi.fn();
@@ -218,17 +293,42 @@ describe("watchReentry", () => {
     expect(askServer).not.toHaveBeenCalled();
   });
 
+  it("installs no visibilitychange listener at all, and never posts, when there is nothing to post a lock for", () => {
+    // `app/root.tsx` passes `null` wherever the household holds no passkey
+    // (finding 3): the `pageshow` half still installs — it only
+    // revalidates — but the `visibilitychange`/`postLock` half must not,
+    // since posting a lock for nothing would send the reader on a pointless
+    // round trip. Proven on the listener count, not only on the callback
+    // never firing, because installing a no-op listener would still leave
+    // stale hidden-timer state ticking for no reason.
+    const browser = install();
+    const askServer = vi.fn();
+    const teardown = watchReentry(null, askServer);
+
+    expect(browser.listenerCount("document", "visibilitychange")).toBe(0);
+    expect(browser.listenerCount("window", "pageshow")).toBe(1);
+
+    // Hiding and showing the tab has no listener left to notice at all.
+    browser.hide();
+    browser.show();
+
+    browser.pageshow(true);
+    expect(askServer).toHaveBeenCalledTimes(1);
+
+    teardown();
+    expect(browser.listenerCount("window", "pageshow")).toBe(0);
+  });
+
   it(
     "still posts the lock once the grace is exceeded even when the wall clock jumps backwards while hidden",
     () => {
-      // The point of finding 7: `Date.now()` can run backwards (an NTP
-      // correction, someone setting the system clock back) and, unmocked,
-      // would make this exact scenario silently disarm the trigger. Moving
-      // `Date.now()` backwards here while `performance.now()` keeps
-      // advancing normally proves the implementation reads the monotonic
-      // clock rather than the wall clock — reverting `reentry.ts` to
-      // `Date.now()` would fail this test, since the gap it would measure
-      // goes negative instead of past the grace.
+      // `Date.now()` can run backwards (an NTP correction, someone setting
+      // the system clock back), which would make the *wall* gap negative.
+      // Moving `Date.now()` backwards here while `performance.now()` keeps
+      // advancing normally past the grace proves the monotonic gap is what
+      // carries this — reverting `reentry.ts` to read only `Date.now()`
+      // would fail this test, since the gap it would measure goes negative
+      // instead of past the grace.
       const browser = install();
       const dateNow = vi.spyOn(Date, "now");
       let simulatedWallClock = 1_700_000_000_000;
@@ -248,6 +348,42 @@ describe("watchReentry", () => {
       // `performance.now()` cannot jump backwards; it keeps moving forward
       // past the grace, same as any other hidden period this long.
       clock += REENTRY_GRACE_MS + 1;
+      browser.show();
+
+      expect(postLock).toHaveBeenCalledTimes(1);
+      teardown();
+    },
+  );
+
+  it(
+    "still posts the lock once the grace is exceeded even though the monotonic clock stalled through a suspend",
+    () => {
+      // The other direction, and the more important one: `performance.now()`
+      // does not advance while a device is suspended (Linux, Android,
+      // macOS, iOS), so a phone locked in a pocket for ten minutes can come
+      // back measuring a monotonic gap of only a couple of milliseconds —
+      // under the grace on its own. The wall clock, which does advance
+      // through a suspend, is what has to carry this one; reverting
+      // `reentry.ts` to read only `performance.now()` would fail this test,
+      // since the monotonic gap it would measure alone stays under the
+      // grace.
+      const browser = install();
+      const dateNow = vi.spyOn(Date, "now");
+      let simulatedWallClock = 1_700_000_000_000;
+      dateNow.mockImplementation(() => simulatedWallClock);
+
+      const perf = vi.spyOn(performance, "now");
+      let clock = 0;
+      perf.mockImplementation(() => clock);
+
+      const postLock = vi.fn();
+      const teardown = watchReentry(postLock, vi.fn());
+
+      browser.hide();
+      // The device suspends: the wall clock keeps advancing well past the
+      // grace, but the monotonic clock barely moves at all.
+      simulatedWallClock += REENTRY_GRACE_MS + 1;
+      clock += 2;
       browser.show();
 
       expect(postLock).toHaveBeenCalledTimes(1);

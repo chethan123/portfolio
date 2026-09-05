@@ -8,11 +8,11 @@ import {
   Scripts,
   ScrollRestoration,
   redirect,
+  useFetcher,
   useLocation,
   useRevalidator,
   useRouteError,
   useRouteLoaderData,
-  useSubmit,
 } from "react-router";
 
 import { ErrorPage } from "~/components/error-page";
@@ -546,31 +546,63 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // Named directly in the effect's dependency array below, not stashed in a
   // ref: both are `useCallback`-memoised on stable deps in react-router
-  // 7.18.2 (`useRevalidator` on `[dataRouterContext.router]`; `useSubmit` on
-  // the basename, current route id, `router.fetch` and `router.navigate`)
-  // and neither changes for the life of this app, so there is no identity
-  // churn to route around — and even if one did change, naming it here is
-  // correct: a re-subscribe, not a bug.
-  const submit = useSubmit();
+  // 7.18.2 (`useRevalidator` on `[dataRouterContext.router]`; `useFetcher`'s
+  // own `submit` on `[fetcherKey, submitImpl]`, where `fetcherKey` never
+  // changes here and `submitImpl` is `useSubmit()`'s callback, itself
+  // memoised on the basename, current route id, `router.fetch` and
+  // `router.navigate`) and neither changes for the life of this app, so
+  // there is no identity churn to route around — and even if one did
+  // change, naming it here is correct: a re-subscribe, not a bug.
+  const { submit: submitLock } = useFetcher();
   const { revalidate } = useRevalidator();
 
   /**
    * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
-   * the whole argument for what each half does and does not promise. Off on
-   * the one screen that must never draw the lock-now control either (this
-   * function's own comment on {@link isUnlockScreen} just above), and off
-   * wherever the household holds no passkey: neither a hidden-too-long post
-   * nor a bfcache re-check has anything to protect on a browser that was
-   * never locked in the first place.
+   * the whole argument for what each half does and does not promise; this
+   * effect is only the wiring.
+   *
+   * **The two halves are gated on different conditions, on purpose.** The
+   * `pageshow` half (`askServer`, wired unconditionally below) only
+   * revalidates — cheap and correct in every state — so it installs
+   * whenever this is not the unlock screen (this function's own comment on
+   * {@link isUnlockScreen} above), full stop. It must **not** also require
+   * `hasPasskey`: that flag is baked into this page at render time, and it
+   * is exactly the value that goes stale — a page rendered while the
+   * household held no passkey installs no listener at all under the old,
+   * single guard, and a passkey enrolled from another browser afterward
+   * would leave a page restored from the back/forward cache with no grant
+   * and no server round trip, the precise gap `pageshow` exists to close.
+   * The `visibilitychange`/`postLock` half stays gated on `hasPasskey`,
+   * passed as `null` to {@link watchReentry} to skip it entirely otherwise:
+   * posting a lock when nothing is enrolled would send the reader on a
+   * pointless `/lock-now` → `/unlock` → `/` round trip for a browser that
+   * was never locked in the first place.
    */
   useEffect(() => {
-    if (isUnlockScreen || !hasPasskey) return;
+    if (isUnlockScreen) return;
 
     return watchReentry(
-      () => submit(null, { method: "post", action: LOCK_NOW_ACTION }),
+      // A fetcher submission, not `useSubmit`'s navigation mode: react-router
+      // 7.18.2's `startNavigation` unconditionally aborts the one pending
+      // navigation's `AbortController` the instant another navigation
+      // starts (`pendingNavigationController`, in the router core
+      // `react-router` ships), so a reader who taps a link while a
+      // navigation-mode lock post is in flight can cancel `deleteGrant()`
+      // before it runs and land on the page they asked for with their
+      // grant still live. A fetcher's request instead lives in its own
+      // entry in `fetchControllers`, keyed by the fetcher and entirely
+      // untouched by `startNavigation`, so a navigation elsewhere cannot
+      // cancel it — and a redirect a fetcher's action returns is still
+      // picked up by the router (`findRedirect` over the fetcher's own
+      // results) and followed, so the reader still lands on the unlock
+      // screen. The chrome's own "Lock now" **button** stays a real
+      // `<form method="post">` (`LockNowControl`) — it must keep working
+      // with JavaScript off, which is why it is a form and not a submit
+      // call at all; only this automatic, re-entry-triggered post changes.
+      hasPasskey ? () => submitLock(null, { method: "post", action: LOCK_NOW_ACTION }) : null,
       () => revalidate(),
     );
-  }, [isUnlockScreen, hasPasskey, submit, revalidate]);
+  }, [isUnlockScreen, hasPasskey, submitLock, revalidate]);
 
   return (
     <html lang="en">
@@ -632,7 +664,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   {hasPasskey ? <LockNowControl /> : null}
                   <Link className="button" to="/upload">
                     <UploadIcon />
-                    Upload
+                    <span>Upload</span>
                   </Link>
                 </div>
               </header>

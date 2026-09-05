@@ -589,6 +589,35 @@ a {
     white-space: nowrap;
   }
 
+  /* Upload joins them below 420px, because the third control is what stops
+   * the bar fitting. Measured at 360x780 with a passkey enrolled: the brand
+   * is ~135px, `.app-topbar-actions` is 48 + 12 + 48 + 12 + 108 = 228, and
+   * the bar's own `padding-inline` is 32 — 395 into a 360px viewport, so
+   * `document.body.scrollWidth` came back 379 and the page scrolled
+   * sideways, with the mark colliding with the first glyph and Upload
+   * clipped by the screen edge. As a glyph it is 48, which brings the row to
+   * 168 and the total to 335. The brand is what cannot give here, and a
+   * smaller gap would only put three 48px targets closer together. 420px
+   * rather than a device width: 360, 375 and 390 are all real phones and all
+   * need it. Same DELIBERATE DUPLICATION of `.visually-hidden` as the rule
+   * above, for the same reason — change it there, change it here. */
+  @media (max-width: 419px) {
+    .app-topbar .button {
+      padding: var(--space-sm);
+    }
+
+    .app-topbar .button span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+
   .app-bottomnav {
     position: fixed;
     inset: auto 0 0 0;

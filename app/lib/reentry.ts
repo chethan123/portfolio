@@ -8,21 +8,19 @@
  *
  * **The trigger is courtesy, never enforcement — worth saying here because
  * the next reader will otherwise assume the security lives in this file.**
- * The two clock reads that bracket a hidden period are exact, not a lower
- * bound: nothing here ticks while the tab is hidden, so there is no timer to
- * throttle and no drift to round away, and a browser suspended before
- * `visibilitychange` fires at all simply measures no gap rather than an
- * understated one. What this file genuinely cannot do is tell a phone locked
- * in somebody's pocket from a screen genuinely handed over — both hide the
- * page identically, and there is no signal here to tell them apart. That
- * limit is not the hole it sounds like: what {@link watchReentry}'s
- * `postLock` callback does once called is a real POST to the same route the
- * chrome's own "Lock now" control posts to, deleting the grant row
- * server-side — that deletion is not a courtesy, it is the one thing here
- * that is not a suggestion. And if a browser never fires `visibilitychange`
- * at all because it was suspended before it could, the grant simply rides
- * out its own fifteen-minute idle window instead; nothing about this file
- * staying silent leaves a browser unlocked forever.
+ * The clock reads that bracket a hidden period pin a boundary, not a lower
+ * bound on suspicion — see {@link shouldPostLock}'s own header for why two
+ * clocks are read rather than one. What this file genuinely cannot do is
+ * tell a phone locked in somebody's pocket from a screen genuinely handed
+ * over — both hide the page identically, and there is no signal here to
+ * tell them apart. That limit is not the hole it sounds like: what
+ * {@link watchReentry}'s `postLock` callback does once called is a real POST
+ * to the same route the chrome's own "Lock now" control posts to, deleting
+ * the grant row server-side — that deletion is not a courtesy, it is the one
+ * thing here that is not a suggestion. And if a browser never fires
+ * `visibilitychange` at all because it was suspended before it could, the
+ * grant simply rides out its own fifteen-minute idle window instead;
+ * nothing about this file staying silent leaves a browser unlocked forever.
  *
  * **The `pageshow` half answers a narrower, uglier gap than a timer ever
  * could.** Chrome has admitted a `Cache-Control: no-store` document to its
@@ -49,6 +47,19 @@
  * nothing there, and closes the gap that survives everywhere else: Chrome,
  * unconditionally, and Safari's own local-dev loop.
  *
+ * **`postLock` is nullable, and that is what lets `app/root.tsx` gate the
+ * two halves on different conditions.** `hasPasskey` is baked into a page at
+ * render time and can go stale — a household may enrol its first passkey in
+ * another tab after this one already rendered with none. The `pageshow`
+ * half only asks the loaders to run again, which is cheap and correct
+ * regardless of whether this browser's render believed a passkey existed,
+ * so it always wires up here. Posting a lock when nothing is enrolled would
+ * instead send the reader on a pointless `/lock-now` → `/unlock` → `/` round
+ * trip for a browser that was never locked in the first place, so that half
+ * — the `visibilitychange` listener and the hidden-timer state behind it —
+ * is installed only when the caller passes a real `postLock`; passing `null`
+ * skips it outright rather than installing a listener with nothing to call.
+ *
  * **A persisted restore is not by itself evidence the grant is gone.**
  * Unlike the hidden-too-long case, which already knows what it wants (end
  * this browser's reading, unconditionally), a bfcache restore might be
@@ -71,52 +82,86 @@
  */
 import { REENTRY_GRACE_MS } from "./lock.ts";
 
+/** The two clock readings taken together at the instant a tab goes hidden. */
+type HiddenAt = { wallMs: number; monoMs: number };
+
 /**
  * Whether a browser hidden since `hiddenAt` has been gone long enough, by
- * the time it is `now`, that coming back should post the lock action rather
- * than merely resuming. `hiddenAt === null` means this browser has not been
- * hidden since the page loaded — nothing to measure, so this never posts.
- * Both instants are `performance.now()`'s, not `Date.now()`'s — this
- * function does no clock reading itself, so any two consistent numbers pin
- * the same boundary in a test, but {@link watchReentry} below reads a
- * monotonic clock precisely so a wall-clock jump while hidden (an NTP
- * correction, someone setting the time back) cannot silently disarm it.
+ * the time it is `nowWallMs`/`nowMonoMs`, that coming back should post the
+ * lock action rather than merely resuming. `hiddenAt === null` means this
+ * browser has not been hidden since this function was wired up — nothing to
+ * measure, so this never posts.
  *
- * A pure function on purpose, taking both instants rather than reading the
- * clock itself: {@link watchReentry} is the only real caller, and a test can
- * pin the boundary — exceeds the grace, not merely reaches it — without a
- * browser or a timer.
+ * **Two clocks, not one, because each has a failure mode the other does not
+ * share.** `performance.now()` is monotonic — it never runs backwards — but
+ * on Linux, Android, macOS and iOS it does not advance while the device is
+ * suspended, so a phone locked in a pocket for ten minutes can come back
+ * measuring only the few seconds either side of the suspend: under the
+ * grace, on exactly the device and the exact scenario this feature exists
+ * for. `Date.now()` keeps advancing through a suspend, but it is a wall
+ * clock — an NTP correction or someone setting the system time back can
+ * move it backwards while the tab sits hidden, which would make its own
+ * elapsed value negative and silently disarm the trigger. Reading both and
+ * taking the larger elapsed value means neither failure mode is fatal on
+ * its own: a suspended device is carried by the wall-clock gap, and a
+ * clock set backwards simply loses to the monotonic gap, which cannot go
+ * negative. **Do not simplify this back to one clock** — that trades one of
+ * these two bugs for the other, it does not remove a redundancy.
+ *
+ * A pure function on purpose, taking every instant it needs rather than
+ * reading either clock itself: {@link watchReentry} is the only real caller,
+ * and a test can pin the boundary — exceeds the grace, not merely reaches
+ * it — without a browser or a timer.
  */
-export function shouldPostLock(hiddenAt: number | null, now: number): boolean {
-  return hiddenAt !== null && now - hiddenAt > REENTRY_GRACE_MS;
+export function shouldPostLock(hiddenAt: HiddenAt | null, nowWallMs: number, nowMonoMs: number): boolean {
+  if (hiddenAt === null) return false;
+
+  const wall = nowWallMs - hiddenAt.wallMs; // advances through suspend; can go negative
+  const mono = nowMonoMs - hiddenAt.monoMs; // never negative; can stall through suspend
+  return Math.max(wall, mono) > REENTRY_GRACE_MS;
+}
+
+/** Both clocks, read together, for whichever moment the caller needs pinned. */
+function readClocks(): HiddenAt {
+  return { wallMs: Date.now(), monoMs: performance.now() };
 }
 
 /**
- * Wires the two signals this file's header is about onto `document` and
- * `window`, and hands back the teardown a `useEffect` needs.
+ * Wires this file's signals onto `document` and `window`, and hands back the
+ * teardown a `useEffect` needs.
  *
  * `postLock` runs only once {@link shouldPostLock} says the grace has
  * actually passed since this browser was last hidden — never on every
  * return, which would post on the ordinary few seconds of switching apps
- * story 4 asks this feature not to be tiresome about. `askServer` runs on
- * every `pageshow` whose `event.persisted` is true, unconditionally: see
- * this file's header for why that call must never assume the answer is
- * "gone" the way `postLock`'s does.
+ * story 4 asks this feature not to be tiresome about. Pass `null` to skip
+ * that half entirely — no `visibilitychange` listener, no hidden-timer
+ * state — when there is nothing this browser's lock could protect (this
+ * file's own header explains why `app/root.tsx` needs that). `askServer`
+ * runs on every `pageshow` whose `event.persisted` is true, unconditionally
+ * and regardless of `postLock`: see this file's header for why that call
+ * must never assume the answer is "gone" the way `postLock`'s does.
  */
-export function watchReentry(postLock: () => void, askServer: () => void): () => void {
-  let hiddenAt: number | null = null;
+export function watchReentry(postLock: (() => void) | null, askServer: () => void): () => void {
+  // Seeded from the current visibility state, not `null` — a page mounted
+  // into an already-hidden tab (opened in a background tab, or hydrated
+  // while the document is already hidden) never sees a `visibilitychange`
+  // *to* hidden; its first event is the transition back to visible, and
+  // `shouldPostLock(null, …)` always answers false. Reading
+  // `document.visibilityState` here means such a page measures its own
+  // hidden gap from the moment this function ran, instead of never arming
+  // the timer for its whole lifetime.
+  let hiddenAt: HiddenAt | null = postLock !== null && document.visibilityState === "hidden" ? readClocks() : null;
 
   function onVisibilityChange(): void {
+    if (postLock === null) return; // never registered when null; see below.
+
     if (document.visibilityState === "hidden") {
-      // `performance.now()`, not `Date.now()`: this measures an elapsed
-      // duration, and only a monotonic clock keeps that duration from going
-      // negative — and the grace with it, silently — when the wall clock
-      // moves backwards while the tab sits hidden.
-      hiddenAt = performance.now();
+      hiddenAt = readClocks();
       return;
     }
 
-    if (shouldPostLock(hiddenAt, performance.now())) postLock();
+    const { wallMs, monoMs } = readClocks();
+    if (shouldPostLock(hiddenAt, wallMs, monoMs)) postLock();
     hiddenAt = null;
   }
 
@@ -124,11 +169,11 @@ export function watchReentry(postLock: () => void, askServer: () => void): () =>
     if (event.persisted) askServer();
   }
 
-  document.addEventListener("visibilitychange", onVisibilityChange);
+  if (postLock !== null) document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("pageshow", onPageShow);
 
   return () => {
-    document.removeEventListener("visibilitychange", onVisibilityChange);
+    if (postLock !== null) document.removeEventListener("visibilitychange", onVisibilityChange);
     window.removeEventListener("pageshow", onPageShow);
   };
 }

@@ -40,6 +40,19 @@
  * id, and a redirect to the unlock screen nothing was protecting any more,
  * is exactly the no-op that case deserves — which is what the test below
  * with no seeded passkey asserts.
+ *
+ * **The cookie clears even when the delete itself fails.** A rejected
+ * `deleteGrant` — the database down, say — used to throw before the
+ * response carrying `Set-Cookie` was ever built, so the reader who pressed
+ * this got an error page and a browser still holding a live grant cookie:
+ * once the database recovered, that grant admitted them again, exactly the
+ * outcome pressing the control was supposed to rule out. Catching the
+ * failure and still returning the cleared-cookie redirect means this
+ * browser is locked either way — the orphaned row, if the delete never
+ * landed, simply rides out its own idle window instead of outliving the
+ * reader's intent indefinitely. Logged with `console.error`, matching how
+ * `app/root.tsx` logs its own tolerated lock-check failures, since a failed
+ * delete is worth knowing about even though it must not block the redirect.
  */
 import { redirect } from "react-router";
 
@@ -50,7 +63,13 @@ import type { Route } from "./+types/lock-now";
 
 export async function action({ request }: Route.ActionArgs) {
   const grantId = readLockCookie(request);
-  if (grantId !== undefined) await deleteGrant(grantId);
+  if (grantId !== undefined) {
+    try {
+      await deleteGrant(grantId);
+    } catch (error) {
+      console.error("Grant delete failed; locking this browser anyway:", error);
+    }
+  }
 
   return redirect(UNLOCK_PATH, { headers: { "Set-Cookie": clearedLockCookie() } });
 }
