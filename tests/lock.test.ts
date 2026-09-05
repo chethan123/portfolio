@@ -12,17 +12,20 @@
  * signature outright, which is that file's own rule and would pass a test
  * for the wrong reason.
  *
- * Three tests below (`describe("duplicate credential id"`, `describe("counter
- * concurrency"`, `describe("passkey removed mid-verification"`) drive genuine
+ * Five `describe` blocks below — `duplicate credential id`, `concurrent
+ * bootstrap registrations`, `counter concurrency`, `passkey removed
+ * mid-verification` and `touchGrant, deleted mid-touch` — drive genuine
  * cross-connection races against the real test database rather than
- * `withDatabase`'s single rolled-back transaction — the same reason
+ * `withDatabase`'s single rolled-back transaction, the same reason
  * `tests/lock-schema.test.ts` does for `passkey_bootstrap_idx`. Each cleans
  * up its own committed rows at both ends, the way that file does, because
- * all three share `tests/support/webauthn.ts`'s one signable credential id
- * with every `withDatabase` test in this file. Each also synchronises
- * through {@link waitUntilBlocked} — polling real, observable database state
- * rather than a fixed delay — so the interleaving it pins is not a guess
- * about timing that a loaded runner can guess wrong.
+ * they share `tests/support/webauthn.ts`'s one signable credential id with
+ * every `withDatabase` test here. All but `duplicate credential id`
+ * synchronise through {@link waitUntilBlocked} — polling real, observable
+ * database state rather than a fixed delay — so the interleaving each pins
+ * is not a guess about timing that a loaded runner can guess wrong; that one
+ * still sleeps, and races only against how fast the driver dispatches a
+ * statement rather than against which of two refusals fires.
  */
 import { generateKeyPairSync } from "node:crypto";
 
@@ -40,6 +43,7 @@ import { IDLE_WINDOW_MS, RETURN_PARAM, joinTransports, splitTransports } from "~
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import type { Fixtures } from "./support/fixtures.ts";
 import {
+  NO_USER_VERIFICATION_FLAGS,
   assertionResponse,
   backupEligible,
   credentialId,
@@ -288,15 +292,27 @@ describe("the grant cookie", () => {
     expect(lockCookie("a-grant-id")).toMatch(/samesite=lax/i);
   });
 
-  it("is scoped to the whole app", () => {
-    expect(lockCookie("a-grant-id")).toContain("Path=/");
+  it("is scoped to the whole app, and to exactly that", () => {
+    // `toContain("Path=/")` alone also accepts `Path=/settings`, which would
+    // scope the grant to one screen and lock every other one; the attribute
+    // has to *end* there.
+    expect(lockCookie("a-grant-id")).toMatch(/;\s*Path=\/(?:;|$)/);
+  });
+
+  it("carries no Domain, which the __Host- prefix forbids and a browser would reject the cookie over", () => {
+    // The absence of an attribute, which no other test here checks: a
+    // `Domain=` added to either builder makes every browser drop the cookie
+    // outright, so the lock would refuse every request and no assertion on
+    // the four attributes that *are* present would notice.
+    expect(lockCookie("a-grant-id")).not.toMatch(/;\s*domain=/i);
+    expect(clearedLockCookie()).not.toMatch(/;\s*domain=/i);
   });
 
   it("expires immediately when cleared, carrying the same Secure and Path attributes a __Host- cookie needs to actually clear", () => {
     const cleared = clearedLockCookie();
     expect(cleared).toMatch(/max-age=0/i);
     expect(cleared).toMatch(/;\s*secure\b/i);
-    expect(cleared).toContain("Path=/");
+    expect(cleared).toMatch(/;\s*Path=\/(?:;|$)/);
   });
 });
 
@@ -533,10 +549,59 @@ describe("unlocking", () => {
       await verifyUnlock(assertionResponse(options.challenge), db);
 
       expect(capturedAssertionOptions).toHaveLength(1);
-      // Left at the library's own default (`true`) rather than restated —
-      // asserted here, on the call, rather than by forging a UV=false
-      // assertion the fixture cannot produce without breaking its signature.
+      // Left at the library's own default (`true`) rather than restated.
+      // This pins only that it was not restated; that the default is
+      // actually in force is the signed assertion below.
       expect(capturedAssertionOptions[0]?.requireUserVerification).toBeUndefined();
+    }),
+  );
+
+  it(
+    "refuses an assertion the authenticator signed without verifying anybody, writing nothing",
+    withDatabase(async ({ db, seedPasskey }) => {
+      // The library's default is `requireUserVerification: true`
+      // (`authentication/verifyAuthenticationResponse.js:24`) and it refuses
+      // at `:175-176`. Signed with the bit cleared rather than flipped after
+      // signing, so the refusal is the UV rule rather than a broken
+      // signature — the same re-signing the `counter` and `rpID` options do.
+      await seedFixturePasskey(seedPasskey, /* counter */ 3);
+      const options = await unlockOptions(db);
+
+      // Signed with a counter *ahead* of the stored one, deliberately. The
+      // library checks user verification first (`:175-176`) and the counter
+      // after (`:182-188`), so on this code either counter refuses and the
+      // choice looks arbitrary. It is not: the case this test exists for is
+      // the one where UV enforcement has gone — and there a counter at or
+      // below the stored one refuses on the counter instead, so the test
+      // would stay green while pinning nothing. Ahead of it, there is
+      // nothing left to refuse but the missing UV bit, and the stored 3
+      // below is what a wrongly-accepted assertion would have moved to 5.
+      const refusal = await refusalOf(() =>
+        verifyUnlock(
+          assertionResponse(options.challenge, { counter: 5, flags: NO_USER_VERIFICATION_FLAGS }),
+          db,
+        ),
+      );
+      expect(refusal).toBeInstanceOf(ValidationError);
+      // Which refusal, not merely that there was one: every library throw
+      // collapses into the same `ValidationError` here, so without this the
+      // test would stay green if the fixture ever stopped signing a
+      // non-default `flags` correctly — pinning a broken signature rather
+      // than the rule. The operator's own log carries the cause, and the
+      // counter test below asserts it the same way.
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("assertion (unlock)"),
+        expect.objectContaining({ message: expect.stringContaining("User verification required") }),
+      );
+
+      const row = await db
+        .selectFrom("passkey")
+        .select(["counter", "last_used_at"])
+        .where("credential_id", "=", credentialId)
+        .executeTakeFirstOrThrow();
+      expect(row.counter).toBe("3");
+      expect(row.last_used_at).toBeNull();
+      expect(await db.selectFrom("unlock_grant").select("id").execute()).toHaveLength(0);
     }),
   );
 
@@ -960,6 +1025,34 @@ describe("enrolling", () => {
   );
 
   it(
+    "refuses a bootstrap registration once an ordinary passkey landed while it was in flight",
+    withDatabase(async ({ db, seedPasskey }) => {
+      const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
+
+      // The twin of the test above, and the one that pins the conditional
+      // insert on its own. There the interloper is flagged `bootstrap`, so
+      // `passkey_bootstrap_idx` refuses before the insert's own predicate
+      // ever decides anything; here it is an ordinary passkey — the state a
+      // household reaches after "bootstrap A, enrol B, remove A" — so the
+      // index sees nothing to conflict with and only
+      // `where not exists (select 1 from passkey)` is left to say no.
+      await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, credentialId: "already-there", bootstrap: false });
+
+      const refusal = await refusalOf(() =>
+        completeRegistration(registrationResponse(begun.options.challenge), db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/no longer without one/);
+
+      const rows = await db
+        .selectFrom("passkey")
+        .select("credential_id")
+        .where("credential_id", "=", credentialId)
+        .execute();
+      expect(rows).toHaveLength(0);
+    }),
+  );
+
+  it(
     "does not authorise an enrolment with an assertion scoped to unlocking",
     withDatabase(async ({ db, seedPasskey }) => {
       // Any enrolled passkey makes the household locked, so `beginEnrolment`
@@ -1044,6 +1137,37 @@ describe("removing", () => {
         await db.selectFrom("passkey").select("credential_id").where("credential_id", "=", credentialId).execute(),
       ).toHaveLength(1);
       expect(await readGrant(grant.id, db)).toBeDefined();
+    }),
+  );
+
+  it(
+    "leaves the passkey, its grants and the assertion itself alone when a valid removal arrives without the acknowledgement",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      // Every other test of this refusal sends no assertion at all, so the
+      // passkey survives whichever of the two checks fires and deleting the
+      // acknowledgement check changes only a message. This one sends an
+      // assertion that would otherwise succeed.
+      const passkey = await seedFixturePasskey(seedPasskey);
+      const grant = await seedUnlockGrant({ passkeyId: passkey.credentialId });
+      const options = await removalAssertionOptions(credentialId, db);
+      const assertion = assertionResponse(options.challenge);
+
+      const refusal = await refusalOf(() =>
+        removePasskey(credentialId, { assertion, confirmRemoval: undefined }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/one-way/);
+
+      expect(
+        await db.selectFrom("passkey").select("credential_id").where("credential_id", "=", credentialId).execute(),
+      ).toHaveLength(1);
+      expect(await readGrant(grant.id, db)).toBeDefined();
+      // Nothing minted: the assertion was never verified.
+      expect(await db.selectFrom("unlock_grant").select("id").execute()).toHaveLength(1);
+
+      // And the challenge was never spent, which is the other half of
+      // "still ahead of verification": the very same assertion still works.
+      const { grant: minted } = await removePasskey(credentialId, { assertion, confirmRemoval: "true" }, db);
+      expect(minted.passkeyId).toBe(credentialId);
     }),
   );
 
@@ -1537,6 +1661,85 @@ describe("duplicate credential id", () => {
         let cleanupError: unknown;
         try {
           await database.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
+        } catch (error) {
+          cleanupError = error;
+        }
+        if (cleanupError !== undefined && !bodyFailed) throw cleanupError;
+      }
+    },
+    20_000,
+  );
+});
+
+describe("concurrent bootstrap registrations", () => {
+  it(
+    "lets exactly one of two bootstrap registrations with distinct credential ids land",
+    async () => {
+      // The partial index's own half of the first-enrolment race, driven
+      // through the module rather than through raw fixture SQL. The
+      // duplicate-credential-id race above cannot reach it: both inserts
+      // there carry the same id, so `passkey_pkey` fires first and the
+      // index never decides anything. With two *distinct* ids the primary
+      // key has nothing to say and `passkey_bootstrap_idx` is the only
+      // thing left that can refuse — the review's surviving mutation, which
+      // wrote `bootstrap = false` into the conditional insert, is red here.
+      const database = await testDatabase();
+      const otherCredentialId = "second-devic";
+      const both = [credentialId, otherCredentialId];
+
+      await database.deleteFrom("passkey").where("credential_id", "in", both).execute();
+
+      const trxA = await database.startTransaction().execute();
+      const trxB = await database.startTransaction().execute();
+      let bodyFailed = false;
+
+      try {
+        const beginA = await beginEnrolment("Device A", { assertion: undefined, acknowledgement: "true" }, trxA);
+        const beginB = await beginEnrolment("Device B", { assertion: undefined, acknowledgement: "true" }, trxB);
+
+        await completeRegistration(registrationResponse(beginA.options.challenge), trxA);
+
+        // B's own `where not exists` cannot see A's uncommitted row, so it
+        // proceeds to insert and blocks on A's index entry instead.
+        const blocked = completeRegistration(
+          registrationResponse(beginB.options.challenge, {
+            credentialId: otherCredentialId,
+            publicKey: unrelatedPublicKeyCose(),
+          }),
+          trxB,
+        );
+        blocked.catch(() => {});
+
+        // Waited for, never guessed at. A fixed sleep only assumes B's insert
+        // reached Postgres and blocked before A committed, and if A commits
+        // first B's own `where not exists` refuses it instead — the same
+        // message, from the other half, so the assertions below cannot tell
+        // the difference and this stops pinning the index at all. Polling
+        // for B's backend actually waiting on a lock is what makes the
+        // interleaving the one this test claims.
+        const pidB = await backendPid(trxB);
+        await waitUntilBlocked(database, pidB);
+        await trxA.commit().execute();
+
+        const refusal = await refusalOf(() => blocked);
+        expect(refusal.fieldErrors.form).toMatch(/no longer without one/);
+
+        const landed = await database
+          .selectFrom("passkey")
+          .select("credential_id")
+          .where("credential_id", "in", both)
+          .execute();
+        expect(landed.map((row) => row.credential_id)).toEqual([credentialId]);
+      } catch (error) {
+        bodyFailed = true;
+        throw error;
+      } finally {
+        if (!trxA.isCommitted && !trxA.isRolledBack) await trxA.rollback().execute().catch(() => {});
+        if (!trxB.isCommitted && !trxB.isRolledBack) await trxB.rollback().execute().catch(() => {});
+
+        let cleanupError: unknown;
+        try {
+          await database.deleteFrom("passkey").where("credential_id", "in", both).execute();
         } catch (error) {
           cleanupError = error;
         }
