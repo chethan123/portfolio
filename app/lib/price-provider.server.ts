@@ -162,6 +162,23 @@ export type PriceProvider = {
 };
 
 /**
+ * The provider process could not be reached at all — not a rate limit, not a
+ * shape change, not an unknown symbol, every one of which the caller already
+ * has an answer for (ledgered per attempt, or an absent quote). This means
+ * there was no answer to have. `backfillCloses` treats it specially because of
+ * what it would otherwise cost: a socket-backed provider (a later slice)
+ * restarts independently of this process, so "unreachable right now" is a
+ * deploy-time event rather than the endpoint's own trouble, and ledgering it
+ * per candidate would defer up to a batch's worth of instruments a full day
+ * each for a worker that came back a minute later. The Yahoo adapter never
+ * throws it — nothing here can tell "the library failed" from "the process
+ * behind it is gone," so it exists for the provider that can.
+ */
+export class ProviderUnreachable extends Error {
+  override readonly name = "ProviderUnreachable";
+}
+
+/**
  * A quote in a currency we cannot hold. §6.1 puts this guard at instrument
  * resolution; it is enforced here too because the failure it prevents is the
  * worst available — no error anywhere, GBP quietly summed into a USD net

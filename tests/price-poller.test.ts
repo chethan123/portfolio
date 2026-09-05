@@ -98,8 +98,9 @@ type WatchedPool = {
  * tick takes is a real advisory lock on a real session, which is the whole
  * subject; and `idleCount` / `totalCount` below are then the pool's own
  * accounting of what became of the connection rather than this file's opinion
- * of it. Handing a connection back is also the last thing a tick does, which
- * makes it the signal a test waits on instead of a sleep.
+ * of it. Handing a connection back is the last thing a tick does that this
+ * file can see, which makes it the signal a test waits on instead of a sleep —
+ * though no longer the tick's own last act: `tickFinished` below says why.
  */
 function watchedPool(): WatchedPool {
   const pool = createPool(TEST_DATABASE_URL);
@@ -135,6 +136,19 @@ function watchedPool(): WatchedPool {
     close: () => pool.end(),
   };
 }
+
+/**
+ * Let the tick reach its log lines.
+ *
+ * `handedBack` alone stopped meaning "the tick is done" when the lock moved
+ * into `runRefresh`: `withRefreshLock` releases the connection in its own
+ * `finally`, before its promise resolves, so the two lines the tick writes
+ * from the run's report now land a few promise resolutions after the pool has
+ * its connection back. Nothing between the two does I/O, so one turn of the
+ * macrotask queue drains every one of them — a sleep would be guessing at a
+ * duration, and a fixed number of `await`s at a hop count.
+ */
+const tickFinished = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
  * Fire the poller's interval `ticks` times, at an instant it believes is `at`.
@@ -494,6 +508,7 @@ describe("what the batch writes to the log", () => {
           async () => {
             runTicks(provider, { at: WEEKEND });
             await watched.handedBack(1);
+            await tickFinished();
           },
           watched.pool,
         );
@@ -527,6 +542,7 @@ describe("what the batch writes to the log", () => {
           async () => {
             runTicks(provider, { at: WEEKEND });
             await watched.handedBack(1);
+            await tickFinished();
           },
           watched.pool,
         );
