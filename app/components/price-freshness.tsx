@@ -13,7 +13,7 @@ import { useFetcher, useLocation } from "react-router";
 
 import { RefreshIcon } from "./icons.tsx";
 
-import type { RefreshOutcome } from "../routes/refresh.ts";
+import type { RefreshOutcome } from "../lib/refresh.server.ts";
 
 /** What the loader hands over. Already rendered; this component computes nothing. */
 export type FreshnessView = {

@@ -146,6 +146,14 @@ story, not rewritten.
 - [ ] `README.md` "Where prices come from" (`:592-600`): "there is no worker container" is false,
       and the only importer of `yahoo-finance2` is `server/yahoo-client.ts`; the deployment diagram
       (`:458`) gains the worker and the proxy, with the socket edge between `app` and `worker`
+- [ ] Two lines [01](01-one-refresh-and-the-batch-abort.md) left level-inconsistent, which that
+      ticket's own file list did not reach. `app/lib/price-poller.server.ts:174` appends "The batch
+      itself failed; see the error above." to the batch summary; since 01 the line above it is a
+      *warning* whenever the provider could not be reached, so the sentence points at a level that
+      is not there — "see the line above" is the whole fix. `docs/operating.md`'s backfill bullet
+      was corrected in 01, along with the sentence that told an operator to grep the retired
+      `Manual price refresh failed` stem; re-read both against whatever the worker's arrival makes
+      true
 - [ ] `server/db.ts:59-61`: the lock client now spans the socket round trip to the worker rather
       than the app's own provider network work. `app/lib/price-poller.server.ts:2-6` and
       `compose.yaml:1-2` no longer argue against a worker; re-read. PR #220, if still open, is

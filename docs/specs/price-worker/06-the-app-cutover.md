@@ -86,7 +86,11 @@ volume is already mounted in `app`.
 
 - [ ] `runRefresh`'s default becomes `socketProvider()`, `startPricePoller`'s the same (one instance
       for the process, as today); `app/routes/upload/instruments.tsx:104-106` passes `{ probe:
-      socketProbe }`
+      socketProbe }`. `socketProvider()` must not throw when it is *built* — only when it is
+      called: it is `runRefresh`'s default parameter, evaluated before that function's `try`, so a
+      constructor that threw would escape "never throws" into the route's error boundary and
+      replace the page the control promises to leave standing. Nothing in §3.3 asks it to do
+      anything at construction, so this is a constraint to keep rather than work to do
 - [ ] `app/lib/price-provider.server.ts` loses `yahooPriceProvider` and `probeSymbols` and keeps the
       types, the schemas, `toProviderQuote`, `toProviderHistory`, `probeVerdicts`,
       `CurrencyRefused`, `ProviderUnreachable` and `isMissingHistory`; its header (`:1-12`) says the

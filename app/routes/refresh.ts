@@ -11,36 +11,26 @@
  * grant before this action runs, and a refusal here is redirected to `/`,
  * never back to this route — `POST` has no return address a redirect's own
  * `GET` could land on (`app/root.tsx`'s `redirectToUnlock`).
+ *
+ * A thin translator, and nothing more (issue #159): the lock, the provider
+ * and the outcome it renders all belong to `runRefresh`/`outcomeOf`
+ * (`app/lib/refresh.server.ts`), which the poller's tick and `requestRefresh`
+ * now share.
  */
 import { redirect } from "react-router";
 
-import { getConfig } from "../../server/config.ts";
-import { getDb } from "../lib/db.server.ts";
-import { yahooPriceProvider } from "../lib/price-provider.server.ts";
-import { refreshPrices, withRefreshLock } from "../lib/prices.server.ts";
+import { outcomeOf, runRefresh, type RefreshOutcome } from "../lib/refresh.server.ts";
 import { safeReturn } from "../lib/return-path.ts";
 
 import type { Route } from "./+types/refresh";
 
-/** What one press did, in the shape the control renders. */
-export type RefreshOutcome =
-  | {
-      status: "done";
-      requested: number;
-      priced: number;
-      stale: number;
-      observed: number;
-      providerFailed: boolean;
-    }
-  /** Someone else — the poller, or another tab — holds the lock. */
-  | { status: "busy" }
-  /** The database, not the provider. A provider failure is a `done` above. */
-  | { status: "error" };
-
 export async function action({ request }: Route.ActionArgs): Promise<RefreshOutcome | Response> {
   const form = await request.formData();
 
-  const outcome = await run();
+  // A press runs the backfill batch too (ADR-0011), and reports the quotes
+  // as it always has: what it promises the person is prices, and the batch is
+  // a side effect they will see on the chart.
+  const outcome = outcomeOf(await runRefresh({ quotes: true }));
 
   // A document POST means JavaScript is off and no fetcher waits for this
   // data — it would render as a bare payload on a blank page. Redirect back
@@ -52,40 +42,4 @@ export async function action({ request }: Route.ActionArgs): Promise<RefreshOutc
   }
 
   return outcome;
-}
-
-/**
- * Never throws: a throw from a route action reaches the error boundary and
- * replaces the whole page — the one failure this control promises to show
- * inline, figures untouched (story 18), is the one a throw cannot show.
- * Every path returns something the control can render.
- */
-async function run(): Promise<RefreshOutcome> {
-  try {
-    // A press runs the backfill batch too (ADR-0011), and reports the quotes
-    // as it always has: what it promises the person is prices, and the batch is
-    // a side effect they will see on the chart. A batch that failed is the
-    // composition's own log line and never this outcome — the control renders
-    // an error as "the figures above are unchanged", which is false the moment
-    // the quotes have committed.
-    const report = await withRefreshLock(() =>
-      refreshPrices(yahooPriceProvider(), getConfig().MARKET_TIMEZONE, { quotes: true }, getDb()),
-    );
-
-    // `null` is the lock held elsewhere — not a failure: whoever holds it is
-    // fetching the prices right now.
-    if (report === null) return { status: "busy" };
-
-    return {
-      status: "done",
-      requested: report.quotes.requested,
-      priced: report.quotes.priced,
-      stale: report.quotes.stale,
-      observed: report.quotes.observed,
-      providerFailed: report.quotes.providerFailed,
-    };
-  } catch (error) {
-    console.error("Manual price refresh failed; last known prices are kept:", error);
-    return { status: "error" };
-  }
 }
