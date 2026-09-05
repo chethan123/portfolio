@@ -220,8 +220,8 @@ describe("enrolledText / lastUsedText / syncLabel — a row's own rendered summa
     expect(lastUsedText(new Date("2026-03-14T12:00:00Z"))).toBe("14 Mar 2026");
   });
 
-  it("says Synced only when the stored flag is backup-eligible", () => {
-    expect(syncLabel(true)).toBe("Synced");
+  it("says the credential can sync to other devices only when the stored flag is backup-eligible, never that a copy already exists", () => {
+    expect(syncLabel(true)).toBe("Can sync to other devices");
   });
 
   it("says Bound to a single device when the stored flag is not backup-eligible", () => {
@@ -1458,7 +1458,7 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
 
       const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
 
-      expect(markup).toContain("Synced");
+      expect(markup).toContain("Can sync to other devices");
       expect(markup).toContain("Bound to a single device");
     }),
   );

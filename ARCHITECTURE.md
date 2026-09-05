@@ -549,6 +549,7 @@ erDiagram
     INSTRUMENT ||--o{ PRICE_BACKFILL : "history fetched for"
     INSTRUMENT ||--o{ PRICE_OBSERVATION : "was quoted at"
     CLASSIFICATION ||--o{ INSTRUMENT : "labels"
+    PASSKEY ||--o{ UNLOCK_GRANT : "mints (on delete cascade)"
 
     PERSON {
         bigint id PK
@@ -638,6 +639,23 @@ erDiagram
         boolean had_first_sightings "nullable — the step strip's memory"
         timestamptz created_at "swept at 24h"
     }
+    PASSKEY {
+        text credential_id PK "exactly as the library returns it, never re-encoded"
+        bytea public_key "the public half; the private half is never seen"
+        bigint counter "0..4294967295 — the signature counter, checked for regression"
+        text transports "nullable — comma-joined hints, never the empty string"
+        boolean backup_eligible "eligible for backup, not proof a copy exists"
+        text label "typed at enrolment, so Settings prints a name and not a hash"
+        boolean bootstrap "the one enrolment that carried no assertion"
+        timestamptz enrolled_at
+        timestamptz last_used_at "nullable — every verified assertion, not only unlocks"
+    }
+    UNLOCK_GRANT {
+        text id PK "32 bytes of randomness — the cookie carries this and claims nothing"
+        text passkey_id FK "on delete cascade"
+        timestamptz granted_at
+        timestamptz expires_at "rolling idle expiry, extended by the requests that use it"
+    }
 ```
 
 These tables stand outside the graph because they reference nothing:
@@ -665,12 +683,20 @@ split is exact and each side is a decision:
 | `instrument_alias.instrument_id` → `instrument` | `CASCADE` | An alias is vocabulary about a row that no longer exists. |
 | `quote` / `price_daily` / `price_observation` / `price_backfill` → `instrument` | `CASCADE` | Prices for a nonexistent instrument. The observation log is append-only and never pruned, but it is not history in the sense a position set is: it describes an instrument, and an instrument that never existed was never quoted — nor was its history ever fetched, which is why the backfill ledger cascades with the rest rather than standing outside the graph as `price_poll` does. |
 | `upload_draft.account_id` → `account` | `CASCADE` | A draft is **scaffolding**, not history. A half-finished upload into a gone account stages nothing. |
+| `unlock_grant.passkey_id` → `passkey` | `CASCADE` | Removing a passkey ends its own grants with it — how a family member who loses a phone revokes it from any other browser they can still unlock (ADR-0012). |
 
-**Only two of those deletes are reachable from the application at all:** a person who owns no
-accounts (`people.server.ts:278`), and a just-created, never-held instrument that lost an alias race
-(`instrument-resolution.server.ts:639`). There is no account delete and no position-set delete
-anywhere in `app/`. The rest of the table is a standing guarantee about someone with a `psql`
-session, not about a screen.
+**Which half of this table the application ever triggers is a rule, not a count to keep current by
+hand.** Above `unlock_grant`'s own row, every referencing delete describes something no screen
+performs: a person who owns no accounts (`people.server.ts:278`) and a just-created, never-held
+instrument that lost an alias race (`instrument-resolution.server.ts:639`) are the only two
+application deletes reaching that half, there is no account delete and no position-set delete
+anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
+about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
+both routinely: removing a passkey (`lock.server.ts:1270`'s `removePasskey`), the explicit "Lock
+now" control (`app/routes/lock-now.ts`, through `lock.server.ts:431`'s `deleteGrant`), and the
+expired-grant sweep every grant mint runs first (`lock.server.ts:314`) each issue a real `DELETE`
+from a route. The cascade this table adds is what then carries a passkey removal into ending that
+passkey's own grants with it — a further delete the application never states as its own statement.
 
 Retirement is `account.closed_at`, never a delete. `holding_valued` excludes closed accounts;
 `holding_valued_at(d)` includes them for the dates they were open (`closed_at is null or closed_at >

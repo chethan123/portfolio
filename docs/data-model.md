@@ -56,6 +56,7 @@ erDiagram
     instrument ||--o{ price_daily : "closed at (CASCADE)"
     instrument ||--o{ price_backfill : "history fetched for (CASCADE)"
     instrument ||--o{ price_observation : "observed at (CASCADE)"
+    passkey ||--o{ unlock_grant : "grants (CASCADE)"
 
     person {
         bigint id PK
@@ -144,6 +145,23 @@ erDiagram
         jsonb mapping "nullable"
         boolean had_first_sightings "nullable"
         timestamptz created_at
+    }
+    passkey {
+        text credential_id PK
+        bytea public_key
+        bigint counter "0-4294967295, the signature counter"
+        text transports "nullable — comma-joined, never the empty string"
+        boolean backup_eligible "eligible for backup, not that a copy exists"
+        text label
+        boolean bootstrap "at most one live row — passkey_bootstrap_idx"
+        timestamptz enrolled_at
+        timestamptz last_used_at "nullable — any verified assertion against it, not only unlock"
+    }
+    unlock_grant {
+        text id PK "length(id) >= 32"
+        text passkey_id FK
+        timestamptz granted_at
+        timestamptz expires_at "rolling idle expiry"
     }
 ```
 
@@ -488,7 +506,7 @@ instance is locked whenever at least one row exists here and stops the moment no
 | `label` | `text` | no | human-readable, typed at enrolment, so Settings has something to print that is not a hash |
 | `bootstrap` | `boolean` | no | default `false`; set only by the one enrolment that carried no assertion, because the household held no passkey yet |
 | `enrolled_at` | `timestamptz` | no | default `now()` |
-| `last_used_at` | `timestamptz` | yes | null until the first unlock |
+| `last_used_at` | `timestamptz` | yes | null until this passkey first authorises anything: `verifyScopedAssertion` (`app/lib/lock.server.ts`) writes it on **every** verified assertion, not only an unlock — including the "prove yourself" assertion that authorises enrolling another passkey or removing one |
 
 Constraint: `passkey_bootstrap_idx` — a unique partial index on `(bootstrap) where bootstrap`, so at
 most one live row ever carries the flag. It closes only the *concurrent* half of "the household's

@@ -38,14 +38,22 @@
  * and the drafts go to the 24-hour sweep. Committing would also change the
  * household every other shot is of.
  *
- * Since migration 0012, `seed-demo.ts` also plants one passkey — so the
- * instance this script captures is genuinely locked, and every browser it
- * drives needs a live grant before the application will show it anything.
- * `mintCaptureGrant` mints one row for the whole run and `setGrantCookie`
- * carries it onto each fresh context; both live beside `GRANT_COOKIE`, which
- * explains why a plain `addCookies` call — the masking cookie's own line
- * above it — cannot do this one's job. The `--first-run` pass mints nothing:
- * that database holds no passkey, so it is honestly unlocked and needs none.
+ * Since migration 0012, this script plants one passkey and mints a grant
+ * against it — `seed-demo.ts` deliberately does not (its own header says
+ * why: a placeholder credential would leave every developer following
+ * docs/developing.md locked out with no assertion that could ever succeed).
+ * This script has no such problem: nothing in a capture run ever presents a
+ * real WebAuthn response, so a placeholder `credential_id` and `public_key`
+ * nobody's authenticator holds the private half of is exactly as good as a
+ * real one for its purposes. `ensureCapturePasskey` plants that row (once —
+ * idempotent against a second capture run with no re-seed between) and
+ * `mintCaptureGrant` mints one grant for the whole run against it;
+ * `setGrantCookie` carries that grant onto each fresh context. Both live
+ * beside `GRANT_COOKIE`, which explains why a plain `addCookies` call — the
+ * masking cookie's own line below it — cannot do this one's job. The
+ * `--first-run` pass mints nothing and plants no passkey: that database is
+ * migrated but unseeded, and the empty-instance shots are of it honestly
+ * unlocked.
  */
 import { randomBytes } from "node:crypto";
 
@@ -84,14 +92,14 @@ type Theme = "light" | "dark";
  * Set once per run by {@link mintCaptureGrant}, read by every {@link open}
  * call — module state rather than a parameter threaded through the dozen
  * call sites `open` already has, none of which take one today. `undefined`
- * on the `--first-run` pass (never minted: see that function) and on any
- * pass against a database `seed-demo.ts` seeded before it planted a passkey,
- * which is the honest case of a genuinely unlocked instance, not a bug in
- * this script to route around.
+ * only on the `--first-run` pass — {@link captureFirstRun} never calls
+ * {@link mintCaptureGrant} at all, so that database (migrated but unseeded)
+ * is captured honestly unlocked. Every other pass plants its own passkey
+ * (see {@link ensureCapturePasskey}) and so always has a grant to carry.
  */
 let captureGrant: { id: string; expiresAt: Date } | undefined;
 
-async function open(browser: Browser, theme: Theme, mobile = false): Promise<Page> {
+async function open(browser: Browser, theme: Theme, mobile = false, masked = false): Promise<Page> {
   const context = await browser.newContext({
     viewport: mobile ? MOBILE : DESKTOP,
     deviceScaleFactor: 2,
@@ -104,9 +112,10 @@ async function open(browser: Browser, theme: Theme, mobile = false): Promise<Pag
   // 0007): the policy seeds *masked*, and a fresh Playwright context has
   // never been toggled, so without it the whole shot list silently retakes
   // as pictures of dots — exactly the silent staleness this script exists to
-  // prevent. The masking shots are the deliberate exception and set their
-  // own cookie back.
-  await context.addCookies([{ ...UNMASKED_COOKIE, url: BASE_URL }]);
+  // prevent. `masked` is the deliberate exception (finding 2): it sets the
+  // cookie back to {@link MASKED_COOKIE} instead, for the one pair of shots
+  // that is supposed to picture dots.
+  await context.addCookies([{ ...(masked ? MASKED_COOKIE : UNMASKED_COOKIE), url: BASE_URL }]);
 
   const page = await context.newPage();
   if (captureGrant !== undefined) await setGrantCookie(context, page, captureGrant);
@@ -122,6 +131,14 @@ async function open(browser: Browser, theme: Theme, mobile = false): Promise<Pag
  * `path`, and `url` scopes it.
  */
 const UNMASKED_COOKIE = { name: "masked", value: "0" } as const;
+
+/**
+ * The masked variant of {@link UNMASKED_COOKIE}, for the one pair of shots
+ * (finding 2) that must picture the dots rather than hide them: `masking.ts`'s
+ * own `MASKED` value, spelled out here for the identical reason
+ * `UNMASKED_COOKIE`'s own header gives for itself.
+ */
+const MASKED_COOKIE = { name: "masked", value: "1" } as const;
 
 /**
  * The lock's own cookie name (`app/lib/lock.server.ts`'s `LOCK_COOKIE`),
@@ -155,36 +172,74 @@ const GRANT_COOKIE = "__Host-unlock_grant";
 const CAPTURE_GRANT_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
 /**
- * Mint one grant for the whole run and remember it in {@link captureGrant} —
- * once, here, never per context: every {@link open} call reuses the same
- * row, exactly as one browser's cookie would across however many tabs a
- * family member opened. Writes directly to `unlock_grant` through the pool
- * this script already holds, the same licence `ARCHITECTURE.md` grants
- * `seed-demo.ts` for `price_daily` — this script is not the application
- * either, and going through a real unlock ceremony would need a credential
- * Chromium has no authenticator to produce.
+ * Plant this run's own passkey (migration 0012) — so the lock's own chrome,
+ * the "Lock now" control and the Passkeys tab's enrolled row, has something
+ * to render rather than photographing forever as though the household never
+ * turned the lock on — and hand back its `credential_id`. `seed-demo.ts`
+ * deliberately does not write this row itself any more (finding 1: a
+ * placeholder credential there would leave every developer following
+ * docs/developing.md locked out with no assertion that could ever succeed);
+ * this script has the licence `seed-demo.ts` no longer needs, because
+ * nothing in a capture run ever presents a real WebAuthn response — nothing
+ * here ever reads `credential_id` or `public_key` back through
+ * `@simplewebauthn/server`, so a reader who assumed otherwise would go
+ * looking for the device these decode to and find none. `backup_eligible:
+ * true` — {@link syncLabel}'s own "Can sync to other devices" printed over
+ * "Bound to a single device" (`app/routes/settings/passkeys.tsx`) — because
+ * a platform passkey backed by a phone's own account is the common case
+ * this household would actually be shown, not the exception.
  *
- * **Does nothing when the database holds no passkey.** `isLocked()`'s whole
- * answer is whether `passkey` holds a row (migration 0012); reading that
- * table directly rather than importing `lock.server.ts` keeps this script
- * on the same no-shared-module footing {@link GRANT_COOKIE} argues for
- * itself. An unseeded or not-yet-reseeded database is genuinely unlocked,
- * and {@link captureGrant} staying `undefined` is what lets `open` leave its
- * cookie unset for exactly that case rather than minting a grant nothing
- * will ever check.
+ * **Idempotent, reading before writing.** A second capture run against the
+ * same seeded database (no re-seed between the two) finds the first run's
+ * row already in place and returns its id rather than trying to insert a
+ * second `bootstrap: true` row on top of it — `passkey_bootstrap_idx`
+ * (migration 0012's one-live-bootstrap-row rule) would refuse that outright.
+ * `seed-demo.ts`'s own `WIPE` list still clears this row on the next
+ * re-seed, so a stale placeholder never survives past the household it was
+ * planted for.
  */
-async function mintCaptureGrant(pool: Pool): Promise<void> {
+async function ensureCapturePasskey(pool: Pool): Promise<string> {
   const { rows } = await pool.query<{ credential_id: string }>(
     `select credential_id from passkey order by enrolled_at, credential_id limit 1`,
   );
-  const passkey = rows[0];
-  if (passkey === undefined) return;
+  const existing = rows[0];
+  if (existing !== undefined) return existing.credential_id;
+
+  const { rows: inserted } = await pool.query<{ credential_id: string }>(
+    `insert into passkey (credential_id, public_key, backup_eligible, label, bootstrap)
+     values ($1, $2, $3, $4, true)
+     returning credential_id`,
+    [
+      "demo-placeholder-credential-id",
+      Buffer.from("demo placeholder public key — never verified"),
+      true,
+      "Alex's Phone",
+    ],
+  );
+  const planted = inserted[0];
+  if (planted === undefined) throw new Error("Failed to plant the capture passkey.");
+  return planted.credential_id;
+}
+
+/**
+ * Mint one grant for the whole run and remember it in {@link captureGrant} —
+ * once, here, never per context: every {@link open} call reuses the same
+ * row, exactly as one browser's cookie would across however many tabs a
+ * family member opened. Writes directly to `unlock_grant` (after
+ * {@link ensureCapturePasskey} writes `passkey`) through the pool this
+ * script already holds, the same licence `ARCHITECTURE.md` grants
+ * `seed-demo.ts` for `price_daily` — this script is not the application
+ * either, and going through a real unlock ceremony would need a credential
+ * Chromium has no authenticator to produce.
+ */
+async function mintCaptureGrant(pool: Pool): Promise<void> {
+  const credentialId = await ensureCapturePasskey(pool);
 
   const id = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + CAPTURE_GRANT_LIFETIME_MS);
   await pool.query(`insert into unlock_grant (id, passkey_id, expires_at) values ($1, $2, $3)`, [
     id,
-    passkey.credential_id,
+    credentialId,
     expiresAt,
   ]);
   captureGrant = { id, expiresAt };
@@ -524,6 +579,17 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await visit(page, "/");
     await shoot(page, `docs/screenshots/overview-${theme}.png`);
 
+    // The masked variant of the exact same screen (finding 2): a fresh
+    // context with the masking cookie set back to *masked* rather than
+    // {@link UNMASKED_COOKIE}'s `0` — `open`'s own header has promised this
+    // exception since before this pair of shots existed to fulfill it. A
+    // separate context, not a cookie flip on `page` mid-run: every other
+    // shot in this loop runs on `page` and must stay unmasked throughout.
+    const maskedPage = await open(browser, theme, false, true);
+    await visit(maskedPage, "/");
+    await shoot(maskedPage, `docs/screenshots/overview-masked-${theme}.png`);
+    await maskedPage.close();
+
     // One owner, as a pair with the shot above (spec 0013): the filter is
     // only legible as a difference — smaller headline, owners named, pre-app
     // line withheld. At **All** deliberately: the withheld-history note only
@@ -560,8 +626,8 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(page, `docs/screenshots/account-balance-${theme}.png`);
     await visit(page, "/settings/accounts");
     await shoot(page, `docs/screenshots/settings-${theme}.png`);
-    // The lock's own tab, now that `seed-demo.ts` plants one passkey and
-    // this script mints a live grant against it (`captureGrant`): the
+    // The lock's own tab, now that this script plants one passkey and mints
+    // a live grant against it (`ensureCapturePasskey`, `captureGrant`): the
     // enrolled row, not the empty list a never-locked household would see.
     await visit(page, "/settings/passkeys");
     await shoot(page, `docs/screenshots/settings-passkeys-${theme}.png`);

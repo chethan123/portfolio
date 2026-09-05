@@ -521,20 +521,39 @@ docker compose exec db psql -U portfolio -d portfolio \
   -c "select credential_id, label, enrolled_at, last_used_at from passkey order by enrolled_at"
 ```
 
-One row per enrolled passkey. An empty result means the instance is not actually locked at all — go
-to [Nobody can sign in](#nobody-can-sign-in) instead.
+**If you removed the bundled `db` service and point at your own Postgres**
+([Running against your own Postgres](operating.md#running-against-your-own-postgres)), there is no
+`db` container to exec into — run the identical SQL through your own database's own administrative
+connection instead, from anywhere that can reach it:
 
-**Do.** Delete every row. There is no token, no recovery code and no second path in through the front
-door — this is the one way back, and it returns the instance to the same state a fresh install
-starts in: unlocked, with anyone the gate admits free to enrol a passkey again.
+```sh
+psql "$DATABASE_URL" \
+  -c "select credential_id, label, enrolled_at, last_used_at from passkey order by enrolled_at"
+```
+
+One row per enrolled passkey, either way. An empty result means the instance is not actually locked
+at all — go to [Nobody can sign in](#nobody-can-sign-in) instead.
+
+**Do.** Delete every row, then restart `app`. There is no token, no recovery code and no second path
+in through the front door — this is the one way back, and it returns the instance to the same state a
+fresh install starts in: unlocked, with anyone the gate admits free to enrol a passkey again.
 
 ```sh
 docker compose exec db psql -U portfolio -d portfolio -c "delete from passkey"
+# or, against your own Postgres:
+psql "$DATABASE_URL" -c "delete from passkey"
+
+docker compose restart app
 ```
 
-`unlock_grant.passkey_id` references `passkey` `on delete cascade`, so this also deletes every
-browser's current grant along with the passkey that minted it — nothing is left half-cleared, and
-nobody needs restarting. The very next request each browser makes is answered as unlocked.
+`unlock_grant.passkey_id` references `passkey` `on delete cascade`, so the delete also removes every
+browser's current grant along with the passkey that minted it — nothing is left half-cleared.
+
+**Restarting `app` is part of this recovery, not an optional extra.** A browser that was already
+mid-enrolment when you ran the delete can still complete it afterward and re-lock the instance —
+restarting `app` is what closes that window; if you would rather not restart, wait at least two
+minutes with the Passkeys screen left untouched by everyone instead before trusting the instance is
+actually clear.
 
 Why: [The lock](operating.md#the-lock).
 
@@ -632,7 +651,17 @@ Then: install Docker, clone, copy `.env` and `allowed-emails.txt` into place,
 If the public origin changes with the machine, `PUBLIC_ORIGIN` and the redirect URI registered on
 the Google OAuth client both have to change with it, or nobody can sign in.
 
-Why: [Installing](operating.md#installing), [Backups](operating.md#backups).
+**If the household holds any passkeys, a hostname change locks the instance with none that work.**
+The passkey check runs against `PUBLIC_ORIGIN`'s own hostname, not only the gate's redirect — so a
+passkey enrolled against the old hostname stops verifying under the new one, restored intact or not.
+Delete every passkey as part of the move (the command is in
+[Every browser is locked and no passkey can be reached](#every-browser-is-locked-and-no-passkey-can-be-reached)),
+before or right after you bring the new machine up, and have the household enrol again once it is
+serving the new hostname. Moving without doing that does not merely orphan the old passkeys — it
+leaves the new instance locked, with nothing that can unlock it.
+
+Why: [Installing](operating.md#installing), [Backups](operating.md#backups),
+[The lock](operating.md#the-lock).
 
 ---
 

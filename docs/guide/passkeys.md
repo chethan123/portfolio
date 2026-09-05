@@ -25,10 +25,13 @@ created. The screen tells you this before you finish, and it is not a warning to
 that instant, every other phone and laptop in the house is locked, and will ask to be unlocked the
 next time anyone opens it. Only the browser doing the enrolling is spared.
 
-Enrolling that very first passkey asks nothing of you beyond a label and ticking that you understand
-what it is about to do — there is nothing yet to check yourself against. Every passkey after the
-first, and every removal, is different: each one asks you to check in with a passkey again first,
-right there (see below).
+Enrolling that very first passkey skips only one thing every later one needs: checking in with a
+passkey you already have, first — there is nothing yet to check yourself against. It still takes two
+presses of its own. The first asks for nothing more than a label and ticking that you understand what
+you are about to do; the second is the one that actually makes it — your browser and whatever holds
+your passkeys work together right there, the same handshake any passkey is made with, and it is the
+one you will actually notice happening. Every passkey after the first, and every removal, needs that
+check-in-with-a-passkey step before it even reaches that second press (see below).
 
 ## What a passkey actually is
 
@@ -41,15 +44,30 @@ account may be able to answer for it too, with nothing separate to create there.
 
 The other way round holds as well: one single device can hold more than one passkey, if more than
 one person has set theirs up there, or if you made a second one on it on purpose. Settings →
-Passkeys lists each one the household holds, and says for each whether it is synced like that or
-bound to the one device that made it — which is how you actually tell how strong any one of them is,
-rather than guessing.
+Passkeys lists each one the household holds, and marks whether it is the kind that *can* be handed to
+your other devices that way, or whether it is tied to the one device that made it.
+
+**That mark is not proof a second copy exists anywhere.** It says the provider holding this passkey
+is capable of syncing it, not that it actually has — a passkey made on a device you never signed
+anything else into is exactly as stuck as one that could never sync at all, the moment that one
+device is lost. Do not read it as "there is a spare somewhere" and stop there. **A household should
+enrol a second passkey regardless** — from a different device if at all possible — so that losing the
+first one never leaves nothing to unlock with.
 
 ## Unlocking a browser
 
-A locked browser shows exactly one control: **Unlock**. Press it, and your device asks whatever it
-normally asks to prove it is you — its own prompt, whatever that looks like here. Nothing new to
-remember, and no separate password: your device already knows how to check you.
+A locked browser shows exactly one control: **Unlock**. Press it, and whatever holds your passkey —
+your phone's own vault, or a password manager — decides what happens next, not this app. Often that
+is the same check you would expect it to run for anything else. But if that vault is already
+unlocked, it may hand back a completed check with nothing asked of you at all — no prompt, nothing to
+approve, straight through. That is not a corner this app is cutting: nothing about a passkey check,
+anywhere, can be made to always ask first, so this is the honest limit of what pressing **Unlock**
+can promise.
+
+Which is the thing worth actually carrying with you: **this lock is only ever as strong as whatever
+already unlocks that passkey provider on that device.** A phone sitting unlocked in someone else's
+hands, with its own vault already open, answers **Unlock** the same way it would for you. Narrowing
+that risk is what this feature is for — it is not a promise that it closes it.
 
 If this particular device does not hold a passkey the household has enrolled, it can still ask a
 different one for help. Your browser offers a way to reach another device — usually by scanning
@@ -59,11 +77,26 @@ browser you started on.
 If the check is dismissed, or it does not finish, nothing has changed and nothing is lost — press
 **Unlock** and try again.
 
-## Locking a browser yourself
+## When it locks itself, and locking it yourself
 
-You do not have to wait for it to happen on its own. **Lock now**, beside **Show amounts** in the
-navigation, locks this one browser immediately. Handing your phone to someone, even for a minute, is
-exactly when to press it first.
+A browser does not stay unlocked forever on its own say-so, even if nobody ever presses **Lock now**.
+
+**Fifteen minutes without you asking this app for anything is enough by itself.** Come back after a
+gap that long and it is locked again, waiting for another check. Ordinary use — reading a screen,
+opening another — keeps resetting that clock, so a browser you are actually using stays unlocked; one
+left open and forgotten does not.
+
+**Stepping away for around a minute does the same, sooner.** Switch away to another app or tab, or
+lock your phone, for about that long, and coming back to this one locks it on the spot rather than
+showing you whatever was on the screen — even if the fifteen-minute clock above still had plenty of
+time left. That is deliberate, not a glitch: a browser left behind and unlocked, even briefly, is
+exactly the situation this feature exists to close off.
+
+Neither of those needs you to do anything, and neither is a fault if it catches you off guard the
+first few times — it is the lock doing its job while you were not looking, not a random failure. **Lock
+now**, beside **Show amounts** in the navigation, is the one you control directly: press it and this
+browser locks immediately, without waiting on either clock. Handing your phone to someone, even for a
+minute, is exactly when to press it first.
 
 ## Removing a passkey
 

@@ -302,6 +302,17 @@ refusing it up front would be every unlock and every enrolment failing quietly o
 in production. Copying the address straight out of a browser's own address bar is exactly how a
 trailing slash gets in; strip it before it goes in `.env`.
 
+**Changing this value to a different hostname does more than move the gate's redirect.** The lock's
+relying-party id is derived from it too — the bare hostname, via `expectedRelyingParty` in
+[`app/lib/lock.server.ts`](../app/lib/lock.server.ts) — so every passkey enrolled against the old
+hostname stops verifying the moment the new one is served, whether or not the database that still
+lists it came along for the move. If the household holds any passkeys, moving to a new hostname is
+not only this variable and the registered redirect: remove every enrolled passkey as part of the
+move (the command is in
+[the runbook](runbook.md#every-browser-is-locked-and-no-passkey-can-be-reached)), then have the
+household enrol again once the new hostname is serving. Skipping that does not merely orphan the old
+passkeys — it leaves the instance locked, with none that can unlock it.
+
 **Two more that Compose reads and the application never sees.** `POSTGRES_PASSWORD` is the `db`
 service's password, covered under [Running against your own Postgres](#running-against-your-own-postgres).
 `APP_VERSION` is the published image tag the `app` service runs — it defaults to `1`, the floating
@@ -721,12 +732,28 @@ every passkey is gone the instance reads exactly as though none was ever enrolle
 anyone the gate admits free to enrol again — because that is what "holds no passkey" already means;
 there is no third state.
 
+**The delete alone does not close a ceremony already in flight.** A registration challenge lives in
+the app's own process memory, not in the database, for two minutes after it is minted
+(`CHALLENGE_TTL_MS` in [`app/lib/lock.server.ts`](../app/lib/lock.server.ts)); a browser that had
+already reached the "Create the passkey" step before you deleted every row can still complete that
+ceremony afterward, within that window. Because the challenge was minted while the household still
+held a passkey, the server accepts the completed ceremony as an ordinary later enrolment rather than
+a first one, writes the passkey with no check required, and the instance is locked again within
+seconds of you having cleared it. Restart `app` right after the delete to drop that in-memory map
+along with every other pending ceremony; short of a restart, the two minutes have to actually pass,
+untouched, before the instance is safely clear.
+
 ### `PUBLIC_ORIGIN` is stricter now than "must be set"
 
 The application validates it, not only the gate, and refuses to start on anything less than an exact
 canonical `https://` origin — see [Environment variables](#environment-variables) for the shape it
 wants and why. If the container is refusing to start over it, [the runbook](runbook.md#the-app-container-keeps-restarting)
 has the command that confirms it.
+
+**Planning to move this instance to a new hostname?** Read
+[the `PUBLIC_ORIGIN` entry in Environment variables](#environment-variables) before you do — the
+lock's identity is derived from this value too, and a hostname change orphans every passkey the
+household holds unless you remove them as part of the move.
 
 ---
 
