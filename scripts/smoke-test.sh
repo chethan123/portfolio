@@ -117,34 +117,62 @@ engine_major="${engine_version%%.*}"
 ((engine_major >= 28)) || fail "Docker Engine ${engine_version} is below the 28.0 floor"
 printf 'Docker Engine %s\n' "$engine_version"
 
+# --- Throwaway gate configuration ---------------------------------------------
+# Exported, not written to .env: the environment wins over .env, so the run is
+# identical on a bare CI runner and beside a real configured instance.
+# Exported ahead of both refusal checks below, not just the second one. The
+# first check asserts on the variable compose names, and compose names
+# whichever missing one it reaches first — that is Go map iteration, not file
+# order, so with two missing it is a coin flip. Every other required variable
+# has to be real by then for it to isolate the one it is about: the gate's
+# four here, and `DUMP_UID`/`DUMP_GID` at the top of this file. Moving either
+# below that check puts the flake back.
+export GATE_CLIENT_ID="smoke-test.apps.googleusercontent.com"
+export GATE_CLIENT_SECRET="smoke-test-client-secret"
+# The generation command from .env.example, run rather than quoted: the
+# sidecar refuses a value not decoding to 16/24/32 bytes, and a wrong-length
+# placeholder would fail in a way that reads like a gate bug.
+GATE_COOKIE_SECRET="$(openssl rand -base64 32 | tr -- '+/' '-_')"
+export GATE_COOKIE_SECRET
+export PUBLIC_ORIGIN="https://smoke.example.test"
+
 # --- The stack refuses to start without a database password -------------------
-# Same fail-closed contract as the gate credentials below, now for `db`'s
-# `${POSTGRES_PASSWORD:?}` — checked first and on purpose: `db` sits earlier
-# in the file than `gate`, and Compose reports only the first missing
-# variable it hits while interpolating. The gate's four are equally unset at
-# this point too — the throwaway ones below are exported only after this
-# check — so a refusal naming `POSTGRES_PASSWORD` rather than one of them is
-# what proves that file order, not merely assumes it.
+# Same fail-closed contract as the gate credentials checked below, now for
+# `db`'s `${POSTGRES_PASSWORD:?}`. There is no file order to lean on here —
+# compose-go interpolates by walking a Go map, and which of several missing
+# variables its refusal names first is not deterministic (measured with all
+# five unset: 33/40 named POSTGRES_PASSWORD, 7/40 named a gate variable — a
+# coin flip this check must not be built on). So this isolates the one
+# variable instead: the gate's four are exported above, real by this point,
+# which leaves POSTGRES_PASSWORD as the only thing compose can fail to
+# interpolate — the refusal can only name it. Matched against the
+# interpolator's own wording, not a bare substring, so a stray mention of the
+# variable's name elsewhere in stderr could not satisfy this for the wrong
+# reason.
 log "Checking the stack refuses to start without a database password"
 if refusal="$(env -u POSTGRES_PASSWORD docker compose --env-file /dev/null config --quiet 2>&1)"; then
   fail "compose accepted a configuration with no POSTGRES_PASSWORD"
 fi
-[[ "$refusal" == *"POSTGRES_PASSWORD"* ]] ||
-  fail "compose refused without naming POSTGRES_PASSWORD: ${refusal}"
+[[ "$refusal" == *"required variable POSTGRES_PASSWORD is missing a value"* ]] ||
+  fail "compose refused without the expected message: ${refusal}"
 printf 'compose refused: %s\n' "$refusal"
 
 # Exported here, ahead of the gate check below, so that check tests only what
-# it means to: unexported, `db`'s own `${POSTGRES_PASSWORD:?}` would be the
-# first thing missing (the same file-order fact proved above) and the gate
-# check would fail naming this variable instead of any gate one. Real for
-# the rest of the run — the bundled `db` boots on it like any other password.
+# it means to: unexported, `db`'s own `${POSTGRES_PASSWORD:?}` would still be
+# missing and the gate check would fail naming this variable instead of any
+# gate one. Real for the rest of the run — the bundled `db` boots on it like
+# any other password.
 export POSTGRES_PASSWORD="smoke-test-postgres-password"
 
 # --- The stack refuses to start half-protected --------------------------------
 # Unconfigured, compose must stop rather than bring up an ungated instance.
 # `config`, not `up`: interpolation is `up`'s first step and needs no daemon.
 # `--env-file /dev/null` so a developer's own .env cannot quietly satisfy the
-# variables and green this assertion for the wrong reason.
+# variables and green this assertion for the wrong reason. `env -u` unsets
+# all four gate variables at once regardless of what is exported above, and
+# `POSTGRES_PASSWORD` is real by now (exported just above) — so this stays as
+# clean an isolation as the check it follows, just of four names instead of
+# one.
 log "Checking the stack refuses to start without gate credentials"
 if refusal="$(env -u GATE_CLIENT_ID -u GATE_CLIENT_SECRET -u GATE_COOKIE_SECRET \
   -u PUBLIC_ORIGIN docker compose --env-file /dev/null config --quiet 2>&1)"; then
@@ -154,18 +182,6 @@ fi
    "$refusal" == *"GATE_COOKIE_SECRET"* || "$refusal" == *"PUBLIC_ORIGIN"* ]] ||
   fail "compose refused without naming the missing variable: ${refusal}"
 printf 'compose refused: %s\n' "$refusal"
-
-# --- Throwaway gate configuration ---------------------------------------------
-# Exported, not written to .env: the environment wins over .env, so the run is
-# identical on a bare CI runner and beside a real configured instance.
-export GATE_CLIENT_ID="smoke-test.apps.googleusercontent.com"
-export GATE_CLIENT_SECRET="smoke-test-client-secret"
-# The generation command from .env.example, run rather than quoted: the
-# sidecar refuses a value not decoding to 16/24/32 bytes, and a wrong-length
-# placeholder would fail in a way that reads like a gate bug.
-GATE_COOKIE_SECRET="$(openssl rand -base64 32 | tr -- '+/' '-_')"
-export GATE_COOKIE_SECRET
-export PUBLIC_ORIGIN="https://smoke.example.test"
 
 # Asked of compose rather than repeated here: the image `empty_db_dir` borrows a
 # root `find` from. Resolvable only now — `config` interpolates the whole file,
@@ -209,7 +225,21 @@ log "Checking compose.external-db.yaml starts neither db nor dump"
   # service Compose dropped for the active profile set is not a name it is
   # willing to take as an argument on every Compose version, and the thing
   # under test is what has a container, not what a literal name resolves to.
+  # `-a` is also why this can prove anything at all: it enumerates every
+  # container carrying this project's label, not the profile-filtered
+  # service list a bare `ps` consults — without it, `db` could never appear
+  # in the output regardless of whether the override created it, and the
+  # absence check below would hold vacuously every time.
   created="$(docker compose ps -a --services)"
+  # The positive control: if this command ever returned empty — a broken
+  # invocation, `docker compose ps` run against the wrong project — both
+  # `grep -Fxq` calls below would find nothing to match and this check would
+  # pass having tested nothing. Assert the three services this `up` actually
+  # asked for did appear before trusting what did not.
+  for present in app worker gate; do
+    grep -Fxq "$present" <<<"$created" ||
+      fail "compose.external-db.yaml: ${present} did not appear in ps -a --services either: ${created}"
+  done
   if grep -Fxq db <<<"$created" || grep -Fxq dump <<<"$created"; then
     fail "compose.external-db.yaml created a container for db or dump: ${created}"
   fi
@@ -522,7 +552,7 @@ done
 printf 'db, dump, gate, caddy do not mount price-worker-sock\n'
 
 # The mount set only says who is on the volume, not what they may do with it.
-# `app` mounts it `:ro` (compose.yaml:267) — deleting those two characters
+# `app` mounts it `:ro` (compose.yaml:281) — deleting those two characters
 # leaves every check above green, because nothing until now reads app's own
 # mount. `.RW` is Docker's own name for the field; false is a read-only mount.
 log "Checking app's price-worker-sock mount is read-only"
@@ -547,7 +577,7 @@ worker_mem="${resource_line##* }"
   fail "worker Memory is '${worker_mem}', expected 268435456 (256m)"
 printf 'worker: PidsLimit=%s Memory=%s\n' "$worker_pids" "$worker_mem"
 
-# compose.yaml:310-315 spends six lines arguing the worker gets no
+# compose.yaml:329-334 spends six lines arguing the worker gets no
 # `environment:` at all — no DATABASE_URL, no PGPASSWORD — because the
 # network fence below does not cover an external Postgres reachable over the
 # open internet. Asserted here so adding DATABASE_URL "for convenience" fails
@@ -609,31 +639,53 @@ printf 'worker: %s\n' "$mounts_line"
 log "Checking app, db and dump have no route out"
 
 # `db` and `dump` share an image with no node, so their request is busybox's
-# own `wget`; `app` has node but no `wget`, so its request goes through the
-# same `fetch` its own healthcheck uses, under a 5s abort. Both forms take
-# the full budget on a container with no route: the embedded resolver
-# answers SERVFAIL only after it has tried, and failed, to forward the
-# query upstream — never an immediate refusal.
+# own `wget`; `app` runs `node:24-alpine` (Dockerfile:89), whose busybox also
+# ships `wget` — the same busybox whose `nslookup` and `timeout` this
+# function calls two lines later — but its request goes through the same
+# `fetch` its own healthcheck already uses, so nothing extra has to be
+# shelled out. Both forms carry an explicit abort budget (5s / `-T 5`) rather
+# than trust the network to fail fast: with no gateway on these `internal:
+# true` networks the embedded resolver has nothing to forward to
+# (`proxyDNS=false`, research §1.4) and answers SERVFAIL immediately, but a
+# TCP SYN into a route that simply does not exist can still sit unanswered
+# far longer than that — the timeout is what actually bounds each probe, not
+# a naturally fast failure.
 expect_no_egress() {
-  local service="$1" default_route
+  local service="$1" default_route status
+  # A misspelled service name or a stopped container must fail loudly here,
+  # not read as "no route" the way any other non-zero exit below does:
+  # resolve the container up front so every probe runs against something
+  # real.
+  [[ -n "$(docker compose ps -q "$service")" ]] ||
+    fail "no running container for ${service} — cannot test its egress"
+
   if [[ "$service" == app ]]; then
     if docker compose exec -T app node -e '
       fetch("http://example.com/", { signal: AbortSignal.timeout(5000) })
         .then(() => process.exit(0))
         .catch(() => process.exit(1));
-    '; then
-      fail "${service} reached a public host over HTTP"
-    fi
+    '; then status=0; else status=$?; fi
   else
     if docker compose exec -T "$service" wget -T 5 -q -O /dev/null http://example.com/; then
-      fail "${service} reached a public host over HTTP"
+      status=0
+    else
+      status=$?
     fi
   fi
+  # 127 is the shell's own "command not found" inside the container — a
+  # missing applet must fail loudly too, not pass for having found "no
+  # route" the way every other non-zero status here does.
+  ((status != 127)) || fail "${service} has nothing to probe HTTP with inside the container (exit 127)"
+  ((status != 0)) || fail "${service} reached a public host over HTTP"
   printf '%s: no route to a public host over HTTP\n' "$service"
 
   if docker compose exec -T "$service" timeout 5 nslookup example.com >/dev/null 2>&1; then
-    fail "${service} resolved a public hostname"
+    status=0
+  else
+    status=$?
   fi
+  ((status != 127)) || fail "${service} has no nslookup to probe DNS with inside the container (exit 127)"
+  ((status != 0)) || fail "${service} resolved a public hostname"
   printf '%s: cannot resolve a public hostname\n' "$service"
 
   # `internal: true` drops the default route along with forwarding; a

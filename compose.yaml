@@ -1,6 +1,8 @@
 # The whole deployment — DESIGN.md §10.1. The price poller still runs
-# in-process in `app`; `worker` is the same image, reached over a socket in a
-# shared volume, and holds no credential of its own. The one scheduled
+# in-process in `app`, but since ticket 06's cutover it no longer calls Yahoo
+# itself: it dials `worker` — the same image, reached over a socket in a
+# shared volume, and holding no credential of its own — for every price
+# fetch. The one scheduled
 # service is `dump`, argued in ADR-0009 — a dump that stops when the app is
 # down is worthless, and `pg_dump` belongs to the database's image. `caddy`
 # is the ingress front door and the only service that publishes a port;
@@ -34,20 +36,31 @@
 # the first *isolated* ones — check with `docker version --format
 # '{{.Server.Version}}'`: 26 ignores `gateway_mode_ipv4` silently and leaves a
 # host address reachable on the bridge; 27 refuses the option outright.
-# Docker Compose 2.31.0 or newer is the second floor, beside it: `up`
-# recreates a network whose definition drifted only when it recorded a config
-# hash on the live one — on an older Compose there is no hash to compare, so
-# `up` leaves an existing plain bridge plain when this file turns it
-# `internal`, and reports success while the isolation never took.
-# scripts/smoke-test.sh checks the Engine floor and not this one, because the
-# two bite in different places: CI creates every network from nothing, so the
-# reconciler's recreate path never runs there and no Compose could fail the
-# smoke test for it. This floor bites on an operator's box, on the one `up`
-# that follows an existing install's networks changing definition — which is
-# why docs/operating.md, Installing puts `docker compose version --short`
-# beside the Engine check rather than leaving it to CI. A runner below the
-# Engine floor reads as "too old" here, not as a topology bug several checks
-# downstream.
+# Docker Compose 2.31.0 or newer is the second floor, beside it — but not, in
+# this release, a load-bearing one: `up` only recreates a network whose
+# definition drifted when it can compare against a config hash it recorded on
+# the live one, and nothing here asks it to. `egress-worker` is the one
+# network this release carries over from before it, and its definition is
+# byte-identical to ticket 05's — nothing to drift. The other five are
+# created from nothing: an existing install's implicit `default` bridge is
+# *removed* here, not redefined into `internal`. So no network in this
+# release makes the plain-bridge-to-`internal` transition this floor is
+# about, on an operator's box or in CI — an older Compose reconciles nothing
+# and reports success correctly either way. The floor stays declared anyway,
+# because it is cheap and it will bite the first release that does turn a
+# live network `internal`, at which point an old Compose would leave it plain
+# and still report success — which is why docs/operating.md, Installing puts
+# `docker compose version --short` beside the Engine check rather than
+# leaving it to CI. Until that release, say plainly that it does not bite
+# today, so an operator on a NAS is not sent to upgrade a plugin they do not
+# yet need. That is the opposite of the Engine floor above, which IS
+# load-bearing today: without it the isolation this file declares silently
+# does not take, on a fresh network exactly as on an existing one.
+# scripts/smoke-test.sh checks the Engine floor and not this one: CI creates
+# every network from nothing, so the reconciler's recreate path this floor
+# guards never runs there either, in this release or the next. A runner
+# below the Engine floor reads as "too old" here, not as a topology bug
+# several checks downstream.
 
 name: portfolio
 
@@ -232,15 +245,12 @@ services:
     logging: *container-logging
     depends_on:
       db:
-        # A cold boot must not fail on a startup race.
+        # A cold boot must not fail on a startup race. `required: false`
+        # belongs in compose.external-db.yaml, not here: the bundled install
+        # this file describes on its own needs `db` to exist and reach
+        # healthy, full stop — that override is the one install where a
+        # reference to a service Compose profiled out has to still render.
         condition: service_healthy
-        # Not required, because compose.external-db.yaml profiles `db` out
-        # of the project entirely while `app` still has to start there, and
-        # a reference to a service Compose dropped is a `config`-time error
-        # rather than merely an `up`-time one — that override cannot render
-        # at all without this line. It changes nothing on a normal boot: `db`
-        # exists, so the condition above still blocks until it is healthy.
-        required: false
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio@db:5432/portfolio}
       # No password in the URL any more — read instead as PGPASSWORD by
@@ -271,9 +281,14 @@ services:
       - price-worker-sock:/run/price-worker:ro
     # `backend` to reach `db`; `caddy-app` because that, not the default
     # bridge, is now the only path `caddy` has to it. Neither carries a
-    # default route — `app` has no way out to the internet at all, which is
-    # requirement 1. compose.external-db.yaml adds a third, `external-db`,
-    # to installs that need one.
+    # default route, so `app` has no route off these networks at IP level —
+    # forwarding needs `CAP_NET_ADMIN`, and `cap_drop: ALL` denies it, which
+    # is the part of requirement 1 this file actually closes. It is not the
+    # whole claim: spec 0018 §2.1 and §8 name the relay that remains — a
+    # compromised `app` still reaches `caddy` on `caddy-app`, and `caddy`
+    # proxies `/oauth2/*` to `gate`, which has egress — an application-layer
+    # path, known rather than closed. compose.external-db.yaml adds a third
+    # network, `external-db`, to installs that need one.
     networks:
       - backend
       - caddy-app
@@ -420,7 +435,12 @@ services:
     # this sidecar makes outbound, the token exchange against
     # `www.googleapis.com` (`accounts.google.com` is the browser's own
     # redirect, never a connection from this container). Neither network
-    # reaches `app`, `db` or `worker`.
+    # reaches `app`, `db` or `worker`. `egress-gate` is a plain bridge, so
+    # the residual is the same one the worker's own comment states plainly:
+    # unrestricted egress and, through the bridge's gateway, a route to the
+    # host and so to every host service bound on `0.0.0.0` — worth naming
+    # here because this is the container that runs as root and is the one
+    # thing in the stack that faces Google.
     networks:
       - caddy-gate
       - egress-gate
@@ -555,7 +575,7 @@ volumes:
   # `node` user (research §8.4), so the socket the worker creates at `0660`
   # inside this `0770` directory is connectable by uid 1000 or gid 1000 — and
   # by root regardless, through `CAP_DAC_OVERRIDE` (research §8.5). The mode
-  # is not the fence: `app`'s mount is `:ro` (line 267), so it cannot `chmod`
+  # is not the fence: `app`'s mount is `:ro` (line 281), so it cannot `chmod`
   # the directory or unlink the socket — a read-only mount refuses both with
   # `EROFS` before any ownership check runs. The fence is still the mount
   # set: only `app` and `worker` mount this volume at all, which
@@ -591,17 +611,26 @@ networks:
   # the escape an internal bridge otherwise still keeps: without it, every
   # container on the network gets an address on the host and can reach it —
   # a route to whatever else the house binds on `0.0.0.0`, a reverse proxy,
-  # SSH, a resolver on `:53` — isolated or not. This needs Docker Engine
-  # 28.0 and Docker Compose 2.31.0 or newer to actually take effect on an
-  # existing plain bridge (the header above has the argument for both).
+  # SSH, a resolver on `:53` — isolated or not. Docker Engine 28.0 is needed
+  # for `gateway_mode_ipv4: isolated` to take effect at all, fresh network or
+  # existing one alike — 26 ignores the option silently, 27 refuses it
+  # outright. Docker Compose 2.31.0 or newer is the separate floor for an
+  # *existing* plain bridge specifically: only that Compose recreates one
+  # whose definition drifted, rather than leaving it plain (the header above
+  # has the argument for both, and why this release does not yet need the
+  # second one).
   #
   # `backend` is `db` and `dump`'s only network, and `app`'s first — the
   # database reaches nothing, by construction rather than by firewall rule.
   # `caddy-app` and `caddy-gate` are kept apart on purpose, never one network
-  # carrying both `app` and `gate`: the Caddyfile's `trusted_proxies`
-  # invariant ("only Caddy can send X-Forwarded-*") depends on it for the
-  # container this design distrusts most — sharing a network, `app` could
-  # reach `gate:4180` directly and forge the headers the gate believes.
+  # carrying both `app` and `gate`: it closes the direct `gate:4180` path a
+  # shared network would otherwise give `app` — the container this design
+  # distrusts most. It does not make the Caddyfile's `trusted_proxies`
+  # invariant true on its own: `trusted_proxies static private_ranges`
+  # (Caddyfile:19) believes any private address, and `app`'s own bridge
+  # address is private, so `app` can still forge `X-Forwarded-*` *through*
+  # Caddy. The split's real gain is narrower — removing the direct route to
+  # `gate` — and that is the only claim made for it.
   #
   # `egress-worker`, `egress-gate` and `ingress` are plain bridges: carrying
   # a default route is the point of the first two, and the third is only

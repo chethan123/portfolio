@@ -6,14 +6,24 @@
 #
 # rather than `-f` on every `ps`, `logs` and `down` (scripts/smoke-test.sh's
 # own COMPOSE_FILE is the same precedent). Forgetting it has one signature:
-# `app` crash-looping on `ETIMEDOUT`/`EHOSTUNREACH` against its Postgres, with
-# nothing in the message naming this file.
+# `app` crash-looping against its Postgres, and which error names depends on
+# what `DATABASE_URL` holds — `ETIMEDOUT`/`EHOSTUNREACH` for a bare address,
+# `EAI_AGAIN`/`ENOTFOUND` for a hostname, which is what .env.example's own
+# example under "your own Postgres" uses — with nothing in either message
+# naming this file.
 #
-# What it gives up: requirement 1, the no-egress guarantee for `app`. On
-# `backend` and `caddy-app` alone `app` has no route anywhere; `external-db`
-# is a plain bridge carrying a default route, because reaching a host outside
-# this Compose project needs one. What survives: requirement 3, the worker
-# still holds no credential to read anything with — this file gives it
+# What it gives up is more than the topology alone suggests: requirement 1,
+# the no-egress guarantee for `app`. On `backend` and `caddy-app` alone `app`
+# has no route anywhere; `external-db` is a plain bridge carrying a default
+# route, because reaching a host outside this Compose project needs one —
+# that route is the point of adding it. But a network with a gateway also
+# silently restores external DNS: the embedded resolver only runs with
+# `proxyDNS=false` while a sandbox has none (research §1.4), so `app` can
+# resolve public hostnames again, not merely reach the one address this
+# override exists for. And the gateway is a route to the *host*, so `app`
+# also reaches every host service bound on `0.0.0.0` — the identical residual
+# compose.yaml spells out for `worker`. What survives: requirement 3, the
+# worker still holds no credential to read anything with — this file gives it
 # neither a network nor a variable — and requirement 5, the worker still
 # shares no network with `app` or `gate`.
 #
@@ -23,6 +33,14 @@
 # running against someone else's Postgres it would crash-loop under its own
 # `restart: on-failure` for nothing. Bringing the bundled database back is
 # `COMPOSE_PROFILES=bundled-db`, not deleting this file.
+#
+# `POSTGRES_PASSWORD` is still required even here, for a `db` this override
+# never starts: interpolation runs before profile filtering, so `up` still
+# refuses to render without it (compose.yaml's own `:?` on `services.db`), and
+# `app` still receives it as `PGPASSWORD`. Nothing about that value has to
+# match the Postgres this override actually points at — invent one, the same
+# way DUMP_UID and DUMP_GID are invented rather than looked up for the
+# bundled `dump` service (see .env.example).
 
 name: portfolio
 
@@ -34,6 +52,21 @@ services:
   app:
     networks:
       - external-db
+    depends_on:
+      db:
+        condition: service_healthy
+        # Not required, and only here: compose.yaml's own `depends_on` is a
+        # hard dependency, because the bundled install it describes needs
+        # `db` to exist and reach healthy before `app` starts, full stop. This
+        # override is the one install where that stops being true — `db` is
+        # profiled out below, so a reference to it is a `config`-time error
+        # rather than merely an `up`-time one, and this override cannot
+        # render at all without this line. `required: false` also turns a
+        # failed dependency from fatal to advisory, but only under this
+        # override: an install still running the bundled `db` never reaches
+        # this line, so `up` there still refuses to start `app` against a
+        # database that isn't healthy.
+        required: false
 
   db:
     profiles: ["bundled-db"]
