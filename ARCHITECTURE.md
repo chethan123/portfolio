@@ -1514,7 +1514,9 @@ transaction (§9). The check is therefore load-bearing rather than defensive.
 
 A past `price_daily` row *can* be rewritten, and that is not a violation: it is only ever rewritten
 with the provider's own price for the day that provider says it belongs to, so a rewrite is idempotent
-unless the provider itself revises a close — which is a correction, not corruption.
+unless the provider itself revises a close — which is a correction, not corruption. Bounded, since
+spec 0018 §3.1, to seven days either side of today's market date: past that a claimed date is not
+a correction but a different day asserted, and the quote path leaves it to the ledgered backfill.
 
 ### 7.4 Observability
 

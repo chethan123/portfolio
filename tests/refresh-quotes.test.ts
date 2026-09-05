@@ -910,7 +910,12 @@ describe("the observation log", () => {
 
   it(
     "rolls back with the quote and the close when a later write in the same refresh fails",
-    withDatabase(async ({ db, seedInstrument }) => {
+    withDatabase(async ({ db, seedInstrument }) =>
+      // The clock matters here even though the window is not the subject: the
+      // fixtures are struck in June, so under a real clock no close would be
+      // written at all and the `price_daily` assertion below would hold
+      // whether or not the transaction rolled back.
+      withClockNear("2026-06-05T21:00:00Z", async () => {
       const good = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedInstrument({ symbol: "BAD", priceSource: "feed" });
 
@@ -949,7 +954,8 @@ describe("the observation log", () => {
       expect(
         await db.selectFrom("price_daily").select("instrument_id").where("instrument_id", "=", good.id).execute(),
       ).toEqual([]);
-    }),
+      }),
+    ),
   );
 });
 
