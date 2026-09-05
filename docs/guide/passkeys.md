@@ -41,6 +41,34 @@ your passkeys work together right there, the same handshake any passkey is made 
 one you will actually notice happening. Every passkey after the first, and every removal, needs that
 check-in-with-a-passkey step before it even reaches that second press (see below).
 
+### Doing it
+
+While the household still holds none, every browser can reach everything, so do this from whichever
+one you already have open — it is the one that will stay unlocked afterwards.
+
+1. Open **Settings → Passkeys**.
+2. Under **Add a passkey**, fill in **Label** — up to 60 characters, and you type it yourself:
+   nothing is read off the browser. It is what the list on this screen calls this one, and what a
+   password manager shows when it later offers it. Something a person would recognise months from
+   now, like "Alex's phone", beats "passkey 1".
+3. Tick the box beside the bold warning. It only appears while the household holds none — no later
+   passkey asks for it.
+4. Press **Continue**. It stays greyed out until both the label and the tick are done.
+5. Press **Create the passkey named "…"**. This is the press that actually makes it: whatever holds
+   your passkeys — the device's own, or a password manager — takes over here and asks you to confirm
+   in whatever way it normally does. That prompt is theirs, not this app's, so it looks like the
+   rest of your device rather than like these screens.
+
+The screen comes back with the passkey listed above the form, showing the day it was enrolled, when
+it was last used, and whether it can sync to your other devices. **This browser is still unlocked** —
+enrolling never locks the browser that did the enrolling. Every other one in the household is locked
+from its next request onward.
+
+If the button in step 5 never appears, this browser cannot run the check at all; the screen says so
+in place of it, and [that section below](#if-a-browser-cannot-run-the-check-at-all) says what to do.
+Once it has worked, [enrol a second one](#removing-a-passkey) before long — a household on exactly
+one has no way to remove it if it goes missing.
+
 ## What a passkey actually is
 
 A passkey is not the same thing as a device, in either direction.
