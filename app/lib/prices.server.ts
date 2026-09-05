@@ -46,13 +46,23 @@
  * A past date's row *can* be rewritten, deliberately — only ever with the
  * provider's own price for the day the provider says it belongs to, so a
  * rewrite is idempotent unless the provider itself revises a close: a
- * correction, not corruption.
+ * correction, not corruption. **Bounded to a seven-day window around today's
+ * market date, either side** (spec 0018 §3.1): the upsert is keyed on
+ * `(instrument_id, date)` by `regularMarketTime` alone, so a quote dated
+ * further back is not "the same day, corrected" but a hostile or merely wrong
+ * provider claiming a different one — rewriting a day the poller already
+ * settled — and a quote dated further ahead would plant a close on a day yet
+ * to come, permanent if that day turns out to be a weekend or holiday the
+ * poller never revisits. Outside the window the quote and the observation
+ * still land; only the close is skipped, logged, and left to the backfill,
+ * which is ledgered and split-aware.
  *
  * Every exported query takes an optional `db`; tests pass a transaction they
  * roll back.
  */
 import { sql } from "kysely";
 
+import { addDays } from "./chart-range.ts";
 import { getDb, getPool, type Database } from "./db.server.ts";
 import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
 import type {
@@ -104,6 +114,15 @@ const BACKFILL_RETRY_INTERVAL = "1 day";
  * a week clears the longest run of non-trading days a US market has.
  */
 const BACKFILL_RANGE_LEAD_DAYS = 7;
+
+/**
+ * How far a quote's own market date may sit from today's, either side, before
+ * {@link writeDailyClose} refuses to write it. Seven for the same reason as
+ * {@link BACKFILL_RANGE_LEAD_DAYS}: it is the lag an honest NAV or a holiday
+ * quote can carry, and a week clears the longest run of non-trading days a US
+ * market has — beyond it a claimed date is not lag, it is wrong.
+ */
+const CLOSE_WINDOW_DAYS = 7;
 
 /**
  * Run a refresh, or decline because one is already running. Beside the
@@ -817,13 +836,24 @@ export async function refreshQuotes(
 
     const pricedIds = new Set<string>();
     let closes = 0;
+    const windowSkipped: string[] = [];
 
     for (const { instrumentId, quote } of matched) {
       await writeQuote(trx, instrumentId, quote);
       await writeQuoteType(trx, instrumentId, quote);
-      await writeDailyClose(trx, instrumentId, quote, marketTimeZone);
+      const wroteClose = await writeDailyClose(trx, instrumentId, quote, marketTimeZone);
       pricedIds.add(instrumentId);
-      closes += 1;
+      if (wroteClose) {
+        closes += 1;
+      } else {
+        windowSkipped.push(quote.symbol);
+      }
+    }
+
+    if (windowSkipped.length > 0) {
+      console.warn(
+        `Price close skipped, more than ${CLOSE_WINDOW_DAYS} days from today's market date: ${windowSkipped.join(", ")}`,
+      );
     }
 
     // Everything asked for that did not come back. §6.2: the last known price
@@ -927,18 +957,30 @@ async function writeQuoteType(
  * intraday poll safe — the row is rewritten through the session and settles
  * on the close — and a holiday poll harmless: its quote still carries the
  * previous trading day and rewrites it with the value already there.
+ *
+ * **Refuses to write outside {@link CLOSE_WINDOW_DAYS} of today's market
+ * date, either side** (module header): the decision is made before the
+ * upsert runs, never by clamping what it writes. Returns whether it wrote, so
+ * the caller counts only real writes rather than every attempt.
  */
 async function writeDailyClose(
   db: Kysely<Database>,
   instrumentId: string,
   quote: ProviderQuote,
   marketTimeZone: string,
-): Promise<void> {
+): Promise<boolean> {
+  const date = marketDateOf(quote.asOf, marketTimeZone);
+  const today = marketDateOf(new Date(), marketTimeZone);
+
+  if (date < addDays(today, -CLOSE_WINDOW_DAYS) || date > addDays(today, CLOSE_WINDOW_DAYS)) {
+    return false;
+  }
+
   await db
     .insertInto("price_daily")
     .values({
       instrument_id: instrumentId,
-      date: marketDateOf(quote.asOf, marketTimeZone),
+      date,
       close: quote.price,
     })
     .onConflict((conflict) =>
@@ -947,6 +989,8 @@ async function writeDailyClose(
         .doUpdateSet({ close: (builder) => builder.ref("excluded.close") }),
     )
     .execute();
+
+  return true;
 }
 
 /**
