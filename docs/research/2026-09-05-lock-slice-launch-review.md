@@ -511,15 +511,14 @@ five are the launch conditions; "re-verify" names what has to be looked at again
    `reentry.test.ts`, and the CSRF and `response.ok` claims; tickets 06/07 on `seed-demo.ts`;
    `ARCHITECTURE.md:690`; `operating.md:581`; a sentence in the recovery documents about the
    cookies browsers still hold. No code changes; no re-verification beyond reading.
-10. **Do not seed the re-entry clock from a hidden mount** (F10) — or seed it and treat the first
-    show of a never-visible tab as a return only if the tab was *previously* visible. Tests on the
-    stand-in. Re-verify: the "arms the timer at wire time" test's intent, which was about a tab
-    hydrated hidden and then genuinely returned to.
-11. **Close the third bootstrap interleaving or state it** (F11). Either take a table-level lock
-    (`lock table passkey in share row exclusive mode`) around the bootstrap insert so it serialises
-    against every concurrent insert, with the two-connection test extended to the plain-insert
-    partner; or correct the migration comment and ticket 01 to say what the two halves do and do
-    not close. Re-verify: the existing concurrent-bootstrap test.
+10. ~~**Do not seed the re-entry clock from a hidden mount** (F10).~~ Kept as it is by spec 0020's
+    own decision: it fails toward locking, and the cost is one prompt. Told to the family in
+    ticket 05; recorded beside the code in ticket 08.
+11. **State the third bootstrap interleaving** (F11) — spec 0020 decided "state it": the mirror
+    predicate only narrows the window and refuses a case the module names as fine, and the table
+    lock needs a transaction the module deliberately does not open. Ticket 09 corrects the
+    migration comment and ticket 01 of the lock slice to say what the two halves do and do not
+    close.
 12. **An `Origin` check on the resource-route POSTs** (F8.10's consequence) — `/lock-now`,
     `/masking`, `/refresh`: refuse a mutation whose `Origin` is present and not this instance's
     `PUBLIC_ORIGIN`, in one helper, matching what the framework does for document and single-fetch

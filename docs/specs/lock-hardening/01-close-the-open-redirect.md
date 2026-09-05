@@ -7,9 +7,10 @@ _Part of [0020-the-lock-hardened.md](../0020-the-lock-hardened.md). Acts on the 
 value which resolves to this origin but *serialises* as a scheme-relative URL is refused. Today
 `new URL("/..//evil.test", BASE)` has the right origin and a pathname of `//evil.test`; the
 function returns that pathname, `redirect()` hands it to the browser, and the browser goes to
-`https://evil.test/`. The unlock screen's loader and action both read the parameter through this
-function, so a family member sent `/unlock?redirectTo=/..//evil.test` is redirected off-site the
-moment the passkey ceremony succeeds. `/masking` and `/refresh` share the function and the bug.
+`https://evil.test/`. The unlock screen's loader (`app/routes/unlock.tsx:124`) and action (`:185`)
+both read the parameter through this function, so a family member sent
+`/unlock?redirectTo=/..//evil.test` is redirected off-site the moment the passkey ceremony
+succeeds. `/masking` and `/refresh` share the function and the bug.
 
 Its own ticket because it is one function, one rule, and the moment of authentication; nothing
 else in this slice touches return paths.
@@ -28,22 +29,22 @@ else in this slice touches return paths.
 - [ ] The refusal is the existing one: return `"/"`. No new message, no logging — a mangled return
       path is not an event a family member needs told about
 - [ ] A normal path with a query survives unchanged: `/holdings?group=account&sort=value` still
-      round-trips byte for byte (the existing test in `tests/refresh-control.test.ts` says so)
+      round-trips byte for byte (the existing test in `tests/refresh-control.test.ts:36-40` says so)
 - [ ] The module header gains two sentences on why the second check exists — the parser collapses
       a leading `..` before it appends the next empty segment, so the origin check alone passes a
       pathname that begins with `//` — beside the existing paragraph on `/\evil.test`
 
 **Tests**
 
-- [ ] In the file that already tests `safeReturn` (`tests/refresh-control.test.ts`, or a new
-      `tests/return-path.test.ts` if the existing file's name no longer fits what it holds — say
-      which and why in the commit): `/..//evil.test`, `/%2e%2e//evil.test`, `/.//evil.test`,
+- [ ] In the file that already tests `safeReturn` (`tests/refresh-control.test.ts`; keep it there —
+      moving it is a different change): `/..//evil.test`, `/%2e%2e//evil.test`, `/.//evil.test`,
       `/a/..//evil.test` and `/..\/evil.test` each return `"/"`; `//evil.test` and `/\evil.test`
-      still do; `/holdings?x=1` still returns itself
-- [ ] `tests/routes/unlock.test.ts`: the action, handed a verifying assertion and
-      `redirectTo=/..//evil.test`, redirects to `/`; the loader, on an open household or a browser
-      already holding a live grant, does the same — the two places the review shows the redirect
-      firing
+      still do; `/holdings?x=1` still returns itself. One `it.each` over the refused spellings is
+      the house's "fewer, sharper"
+- [ ] One route test, not three: in `tests/routes/unlock.test.ts`, the action handed a verifying
+      assertion and `redirectTo=/..//evil.test` redirects to `/`. The loader's two bounces already
+      go through the same function and are pinned at `tests/routes/unlock.test.ts:94-106`; do not
+      restate them with a new input
 - [ ] Each `it` is a sentence stating the rule, not the input
 
 **Verification**
