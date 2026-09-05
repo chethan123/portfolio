@@ -694,8 +694,8 @@ anywhere in `app/`, and the rest is a standing guarantee about someone with a `p
 about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
 both routinely: removing a passkey (`removePasskey`), the explicit "Lock
 now" control (`app/routes/lock-now.ts`, through `deleteGrant`), and the
-expired-grant sweep every grant mint runs first (`mintGrant`) — all three in
-`app/lib/lock.server.ts` — each issue a real `DELETE`
+expired-grant sweep every grant mint runs first (`mintGrant`) — each in
+`app/lib/lock.server.ts` — issue a real `DELETE`
 from a route. The cascade this table adds is what then carries a passkey removal into ending that
 passkey's own grants with it — a further delete the application never states as its own statement.
 

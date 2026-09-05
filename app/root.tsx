@@ -361,7 +361,9 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
  * response carries no `no-store` of its own. Separately, exempting
  * `/healthz` also exempts its single-fetch (`.data`) form, and that is not the
  * nothing it looks like. The health route holds no household data, but a
- * `.data` request runs *every* matched loader, this file's own included, and
+ * `.data` request with no `_routes` filter runs *every* matched loader —
+ * `singleFetchLoaders` honours that parameter when it is present — this
+ * file's own included, and
  * the root loader's neutral branch fires only for `/unlock` — so a browser
  * holding no grant can read `gated`, `firstRun`, `masked`, `maskingPolicy`
  * and `hasPasskey` off `/healthz.data`, which are exactly the fields

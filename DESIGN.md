@@ -838,8 +838,9 @@ family member in with Google and admits only the addresses on the allowlist; a r
 the app has already been admitted, so the app carries no sign-in page and no password of its own.
 Nor does it carry a session in the sense that phrase usually means: the lock's grant (ADR-0012) is a
 fact about one browser at one moment and about nothing else — it names no person, its cookie carries
-no claim of its own, and it answers only whether *this* browser has proven a passkey recently
-enough. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this stack
+no claim of its own, and it answers only whether the cookie presented names a live row. That is a
+bearer's answer rather than proof this browser ran a check, which is the limit ADR-0012 states
+outright. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this stack
 rather than in the operator's proxy, and `docs/operating.md` is where an operator runs it.
 
 **That is per-person at the door and nowhere behind it.** The gate knows which family member is

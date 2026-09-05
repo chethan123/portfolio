@@ -21,9 +21,10 @@
  * `visibilitychange` at all because it was suspended before it could, the
  * grant simply rides out its own idle window instead — at most fifteen
  * minutes after the last request that rolled it, which is as little as seven
- * and a half after the last request of any kind, since `touchGrant` rolls
- * only when under half the window remains; nothing about this file staying
- * silent leaves a browser unlocked forever.
+ * and a half after the last request that reached `touchGrant` at all, since
+ * it rolls only when under half the window remains. An exempt or unmatched
+ * path rolls nothing, so neither counts; either way, nothing about this file
+ * staying silent leaves a browser unlocked forever.
  *
  * **The `pageshow` half answers a narrower, uglier gap than a timer ever
  * could.** Chrome has admitted a `Cache-Control: no-store` document to its
@@ -160,20 +161,25 @@ function readClocks(): HiddenAt {
  * success.** A 502 or 503 from a proxy in front of this instance is not a
  * rejected promise; treating "the promise resolved" alone as "the lock
  * happened" would continue exactly as if `/lock-now`'s own action had
- * actually run and deleted the grant. `response.ok` — 200-299, where the
- * redirect this action returns lands once `fetch`'s own default
- * redirect-following reaches `/unlock` — is the best signal a `fetch` has
- * that the grant is gone, and anything else must not go on to revalidate as
- * though it were, because a still-live grant would only be extended by that
- * call, never ended.
+ * actually run. `response.ok` — 200-299, where the redirect this action
+ * returns lands once `fetch`'s own default redirect-following reaches
+ * `/unlock` — is the best signal a `fetch` has that this browser has been
+ * locked. Not that the row is gone: the action catches a failed
+ * `deleteGrant`, logs it and returns the clearing redirect anyway
+ * (`app/routes/lock-now.ts`), leaving that row to its idle window on purpose.
+ * Anything short of `ok` must not go on to revalidate as though the lock had
+ * happened, because a still-live grant would only be extended by that call,
+ * never ended.
  *
  * It is a signal rather than a proof, and the difference is worth stating:
  * *any* 2xx satisfies it, and the gate's own sign-in page would — it is
  * same-origin and answers 200 with HTML — were the provider button not
  * skipped (`compose.yaml`, `OAUTH2_PROXY_SKIP_PROVIDER_BUTTON`). Something
- * intercepting a plain-http dev origin could do the same. Nothing observable
- * here tells either apart from this instance's own answer, and the idle
- * window is what covers the case where it cannot.
+ * intercepting a plain-http dev origin could do the same. The *status* tells
+ * neither apart from this instance's own answer. `response.url` would — the
+ * gate redirects a 401 to `/oauth2/sign_in` where this action redirects to
+ * `/unlock` — but nothing here reads it, because the idle window covers the
+ * case anyway and a second signal to keep true is not worth its own bug.
  *
  * **`keepalive: true`.** A plain `fetch` is aborted the instant its own
  * document unloads — exactly the moment this call matters most: the grace

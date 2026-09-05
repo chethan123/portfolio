@@ -188,7 +188,7 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
 
 /**
  * The grant's cookie — named for the table the id it carries addresses.
- * `__Host-` prefixed because this one carries the id of a live unlock, where
+ * `__Host-` prefixed because this one carries the id of an unlock row, where
  * masking's cookie deliberately carries neither prefix nor `Secure` (its own
  * header): a passkey will not run outside a secure context anyway, so the
  * attributes cost this feature nothing. Not the passkey, and not a stand-in
