@@ -86,6 +86,18 @@ a household choice at [Settings → Display](settings.md#display). It is a defen
 over your shoulder, not a lock — the sign-in above keeps a person out, and the lock keeps a browser
 out.
 
+## If a browser asks you to unlock
+
+Masking is not the only thing that can stand between an open screen and a closed one. Once anybody
+in the household has enrolled a passkey — from Settings → Passkeys — every browser, however recently
+it signed in through Google, is refused every screen until it proves itself with its own passkey
+check. Signing in again does not clear it, and unlocking one browser does nothing for any other.
+
+A brand-new instance holds no passkey at all, so none of this applies yet. The moment somebody
+enrols the first one, though, every *other* browser in the household is locked immediately — not
+just the one doing the enrolling. See [Passkeys and the lock](passkeys.md) for what that means and
+how to get a locked browser back in.
+
 ## Light and dark
 
 The app follows whatever your device is set to. There is no toggle in the app, and nothing to

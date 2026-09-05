@@ -467,6 +467,53 @@ before anything else.
 | `filename` | `text` | no | primary key; the applied migration file |
 | `applied_at` | `timestamptz` | no | default `now()` |
 
+### 4.8 The lock: `passkey`, `unlock_grant`
+
+A browser past the gate is refused every screen until a passkey is checked
+([ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md); `CONTEXT.md`'s `Locked`). `passkey`
+is the household's own enrolled credentials; `unlock_grant` is one browser's current unlock,
+addressed by an opaque id a cookie carries — the row is the authority, and the cookie carries no
+claim of its own.
+
+**`passkey`** — the public half of each enrolled credential, kept until a person removes it. The
+instance is locked whenever at least one row exists here and stops the moment none do.
+
+| Column | Type | Nullable | Meaning |
+|---|---|---|---|
+| `credential_id` | `text` | no | primary key; exactly as the library returns it, never re-encoded on the way in or out |
+| `public_key` | `bytea` | no | the credential's public key |
+| `counter` | `bigint` | no | default `0`; CHECK `counter >= 0 and counter <= 4294967295` — the signature counter, a 32-bit unsigned value by specification |
+| `transports` | `text` | yes | comma-joined transport hints reported at registration; null means none reported (never the empty string) |
+| `backup_eligible` | `boolean` | no | eligibility for backup, fixed at enrolment and never re-read — what "synced" means to a reader |
+| `label` | `text` | no | human-readable, typed at enrolment, so Settings has something to print that is not a hash |
+| `bootstrap` | `boolean` | no | default `false`; set only by the one enrolment that carried no assertion, because the household held no passkey yet |
+| `enrolled_at` | `timestamptz` | no | default `now()` |
+| `last_used_at` | `timestamptz` | yes | null until the first unlock |
+
+Constraint: `passkey_bootstrap_idx` — a unique partial index on `(bootstrap) where bootstrap`, so at
+most one live row ever carries the flag. It closes only the *concurrent* half of "the household's
+first passkey needs no authorisation": the *committed* half is closed by the application's own
+conditional insert, and neither is sufficient alone (migration 0012's own comment on the index has
+the full argument).
+
+**`unlock_grant`** — one browser's current unlock, minted by a verified assertion.
+
+| Column | Type | Nullable | Meaning |
+|---|---|---|---|
+| `id` | `text` | no | primary key; CHECK `length(id) >= 32` — a cryptographically random token, never a sequential one, since it travels in a cookie and is the whole of the cookie's security |
+| `passkey_id` | `text` → `passkey` | no | `ON DELETE CASCADE` — removing a passkey ends its grants with it |
+| `granted_at` | `timestamptz` | no | default `now()` |
+| `expires_at` | `timestamptz` | no | the rolling idle expiry, extended by the request that uses it; deliberately unconstrained against `granted_at`, so a test can seed a row already past its expiry |
+
+Index: `unlock_grant_expires_at_idx` on `(expires_at)` — what the sweep reads, matching
+`upload_draft_created_at_idx`'s precedent.
+
+**Neither table is history.** Both are scaffolding, on the same footing as `upload_draft`, and both
+may be deleted from freely — where `position_set`, `holding` and the rest of the household's record
+may not. `passkey` rows are deleted the moment a person removes one, cascading away that passkey's
+own grants; `unlock_grant` rows are additionally swept once past their own expiry and deleted
+outright by an explicit lock.
+
 ## 5. Derived objects: how the schema is read
 
 The valuation rules live in SQL, defined once, so no two screens can compute a different answer for
@@ -603,10 +650,12 @@ flowchart LR
   again, inserting only days the spine does not already hold, and one `price_backfill` row per
   instrument attempted.
 - **Deletes are rare and enumerable.** From the application: a `person` owning no accounts, an
-  `instrument` that lost an alias race, and swept or consumed `upload_draft` rows. From a `psql`
-  session only: a bad upload's `position_set` — the design's undo, holdings cascading — which no
-  screen offers yet ([`importing-history.md`](importing-history.md) carries the statement). Nothing
-  else is ever deleted; accounts close via `closed_at`.
+  `instrument` that lost an alias race, a `passkey` a person removes (cascading its own
+  `unlock_grant` rows away with it), and swept, consumed or explicitly-cleared scaffolding —
+  `upload_draft` rows and `unlock_grant` rows alike (§4.8). From a `psql` session only: a bad
+  upload's `position_set` — the design's undo, holdings cascading — which no screen offers yet
+  ([`importing-history.md`](importing-history.md) carries the statement). Nothing else is ever
+  deleted; accounts close via `closed_at`.
 - **Never updated**: `position_set`, `holding`, `price_observation`, and `manual_networth` rows
   are append-only facts, and a `price_daily` row is only ever rewritten with the provider's own
   price for its day — a finished day changes only if the provider revises its close. Overwritten

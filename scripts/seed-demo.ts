@@ -2,9 +2,10 @@
  * A seeded demo database: one plausible household portfolio, generated so the
  * UI can be looked at against data shaped like real data — several accounts
  * and institutions, two people, three years of statements, a price history
- * with a drawdown, one unquotable instrument, a loan summing negative. Every
- * branch a dashboard renders is represented; everything-priced-with-basis is
- * only the easy case.
+ * with a drawdown, one unquotable instrument, a loan summing negative, one
+ * passkey so the lock's own chrome has something to render. Every branch a
+ * dashboard renders is represented; everything-priced-with-basis is only the
+ * easy case.
  *
  * Run from the repository root, against a throwaway database:
  *
@@ -717,7 +718,9 @@ const PRISTINE_PROBE = `
     (select count(*) from quote q join instrument i on i.id = q.instrument_id
        where i.symbol is distinct from 'USD')                                  as quotes,
     (select count(*) from price_observation)                                   as observations,
-    (select count(*) from price_poll)                                          as polls
+    (select count(*) from price_poll)                                          as polls,
+    (select count(*) from passkey)                                             as passkeys,
+    (select count(*) from unlock_grant)                                        as "unlock grants"
 `;
 
 class RefusedError extends Error {
@@ -754,12 +757,23 @@ async function assertSafeToSeed(client: PoolClient): Promise<boolean> {
 
 /**
  * Everything this script has ever written, removed in dependency order:
- * `position_set` first (cascades holdings, releases the RESTRICTs on account
- * and instrument), `classification` last (instruments hold it back). `USD`,
- * its `Cash` classification, its quote and its load-bearing 1970 close belong
- * to the initial migration and survive.
+ * `unlock_grant` before `passkey` — `unlock_grant.passkey_id` references
+ * `passkey.credential_id`, and this list stays a plain dependency order
+ * throughout rather than leaning on that foreign key's `on delete cascade` to
+ * cover for it — then `position_set` (cascades holdings, releases the
+ * RESTRICTs on account and instrument), `classification` last (instruments
+ * hold it back). `USD`, its `Cash` classification, its quote and its
+ * load-bearing 1970 close belong to the initial migration and survive.
+ *
+ * `passkey` has to be in this list at all, not only `unlock_grant`: a re-seed
+ * that left the previous run's row in place would try to insert a second
+ * `bootstrap: true` row on top of it, and `passkey_bootstrap_idx` (migration
+ * 0012) — one live bootstrap row, always — would refuse the second run
+ * rather than replace the first.
  */
 const WIPE = [
+  `delete from unlock_grant`,
+  `delete from passkey`,
   `delete from position_set`,
   `delete from account`,
   `delete from person`,
@@ -845,6 +859,39 @@ async function seed(
     people.set(person.name, person.id);
   }
   written.push({ table: "person", rows: people.size });
+
+  /*
+   * One passkey (migration 0012), so the lock's own chrome — the "Lock now"
+   * control, the Passkeys tab's enrolled row — has something to render
+   * rather than photographing forever as though the household never turned
+   * the lock on. `credential_id` and `public_key` are inert placeholders,
+   * not a real credential: nothing in a capture run ever presents an
+   * assertion (`capture-screenshots.ts` unlocks the browser by minting a
+   * grant directly, the same licence this script has to write `passkey`
+   * directly), so nothing ever reads these bytes back through
+   * `@simplewebauthn/server` — a reader who assumed otherwise would go
+   * looking for the device these decode to and find none. `backup_eligible:
+   * true` — "Synced" printed over "Bound to a single device"
+   * (`app/routes/settings/passkeys.tsx`'s `syncLabel`) — because a platform
+   * passkey backed by a phone's own account is the common case this
+   * household would actually be shown, not the exception. `bootstrap: true`
+   * because it is the household's only passkey, exactly as a real first
+   * enrolment sets it; the WIPE list removes this row (and the grant list
+   * removes any grant minted against it) on every re-seed so
+   * `passkey_bootstrap_idx` — one live bootstrap row, always — never meets a
+   * second one still standing from the run before.
+   */
+  await client.query(
+    `insert into passkey (credential_id, public_key, backup_eligible, label, bootstrap)
+     values ($1, $2, $3, $4, true)`,
+    [
+      "demo-placeholder-credential-id",
+      Buffer.from("demo placeholder public key — never verified"),
+      true,
+      "Alex's Phone",
+    ],
+  );
+  written.push({ table: "passkey", rows: 1 });
 
   /* classifications — plus the `Cash` row the migration already seeded */
   await client.query(

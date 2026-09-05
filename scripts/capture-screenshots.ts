@@ -37,8 +37,19 @@
  * shots need a live draft, which dies at commit — so the walk stops at review
  * and the drafts go to the 24-hour sweep. Committing would also change the
  * household every other shot is of.
+ *
+ * Since migration 0012, `seed-demo.ts` also plants one passkey — so the
+ * instance this script captures is genuinely locked, and every browser it
+ * drives needs a live grant before the application will show it anything.
+ * `mintCaptureGrant` mints one row for the whole run and `setGrantCookie`
+ * carries it onto each fresh context; both live beside `GRANT_COOKIE`, which
+ * explains why a plain `addCookies` call — the masking cookie's own line
+ * above it — cannot do this one's job. The `--first-run` pass mints nothing:
+ * that database holds no passkey, so it is honestly unlocked and needs none.
  */
-import { chromium, type Browser, type Page } from "playwright";
+import { randomBytes } from "node:crypto";
+
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
 import { loadConfig } from "../server/config.ts";
 import { createPool } from "../server/db.ts";
@@ -69,6 +80,17 @@ const FIRST_SIGHTING = "SCHD";
 
 type Theme = "light" | "dark";
 
+/**
+ * Set once per run by {@link mintCaptureGrant}, read by every {@link open}
+ * call — module state rather than a parameter threaded through the dozen
+ * call sites `open` already has, none of which take one today. `undefined`
+ * on the `--first-run` pass (never minted: see that function) and on any
+ * pass against a database `seed-demo.ts` seeded before it planted a passkey,
+ * which is the honest case of a genuinely unlocked instance, not a bug in
+ * this script to route around.
+ */
+let captureGrant: { id: string; expiresAt: Date } | undefined;
+
 async function open(browser: Browser, theme: Theme, mobile = false): Promise<Page> {
   const context = await browser.newContext({
     viewport: mobile ? MOBILE : DESKTOP,
@@ -86,7 +108,9 @@ async function open(browser: Browser, theme: Theme, mobile = false): Promise<Pag
   // own cookie back.
   await context.addCookies([{ ...UNMASKED_COOKIE, url: BASE_URL }]);
 
-  return context.newPage();
+  const page = await context.newPage();
+  if (captureGrant !== undefined) await setGrantCookie(context, page, captureGrant);
+  return page;
 }
 
 /**
@@ -98,6 +122,106 @@ async function open(browser: Browser, theme: Theme, mobile = false): Promise<Pag
  * `path`, and `url` scopes it.
  */
 const UNMASKED_COOKIE = { name: "masked", value: "0" } as const;
+
+/**
+ * The lock's own cookie name (`app/lib/lock.server.ts`'s `LOCK_COOKIE`),
+ * spelled out here rather than imported for the identical reason
+ * {@link UNMASKED_COOKIE}'s own comment gives for itself: this script talks
+ * to a *served* instance over HTTP, sharing no module with it.
+ *
+ * **Why this one cannot follow {@link UNMASKED_COOKIE}'s `addCookies` route.**
+ * The real cookie is `Secure`, and Playwright's own `addCookies` refuses a
+ * `Secure` cookie on an `http://` URL outright — it does not special-case
+ * `localhost` the way Chromium itself does (`lock.server.ts`'s own comment
+ * on `LOCK_COOKIE` records the control run establishing that Chromium
+ * accepts, stores and returns this exact cookie over plain `http://
+ * localhost` and `http://127.0.0.1`). {@link setGrantCookie} below reaches
+ * past Playwright's guard with a raw CDP `Network.setCookie`, which talks to
+ * Chromium directly and inherits its permissive-on-loopback behaviour rather
+ * than Playwright's own stricter one.
+ */
+const GRANT_COOKIE = "__Host-unlock_grant";
+
+/**
+ * Comfortably longer than the app's own fifteen-minute idle window
+ * (`app/lib/lock.ts`'s `IDLE_WINDOW_MS`) — this mints the grant once, before
+ * a single page opens, and the README pass alone drives well over thirty
+ * navigations across two themes plus two upload walks. Six hours is not a
+ * runtime this script has ever approached; it is a number picked to be
+ * obviously past any run this script could take, the same way
+ * `tests/support/fixtures.ts`'s `seedUnlockGrant` picks an hour for a single
+ * test rather than restating the idle window it is deliberately not testing.
+ */
+const CAPTURE_GRANT_LIFETIME_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Mint one grant for the whole run and remember it in {@link captureGrant} —
+ * once, here, never per context: every {@link open} call reuses the same
+ * row, exactly as one browser's cookie would across however many tabs a
+ * family member opened. Writes directly to `unlock_grant` through the pool
+ * this script already holds, the same licence `ARCHITECTURE.md` grants
+ * `seed-demo.ts` for `price_daily` — this script is not the application
+ * either, and going through a real unlock ceremony would need a credential
+ * Chromium has no authenticator to produce.
+ *
+ * **Does nothing when the database holds no passkey.** `isLocked()`'s whole
+ * answer is whether `passkey` holds a row (migration 0012); reading that
+ * table directly rather than importing `lock.server.ts` keeps this script
+ * on the same no-shared-module footing {@link GRANT_COOKIE} argues for
+ * itself. An unseeded or not-yet-reseeded database is genuinely unlocked,
+ * and {@link captureGrant} staying `undefined` is what lets `open` leave its
+ * cookie unset for exactly that case rather than minting a grant nothing
+ * will ever check.
+ */
+async function mintCaptureGrant(pool: Pool): Promise<void> {
+  const { rows } = await pool.query<{ credential_id: string }>(
+    `select credential_id from passkey order by enrolled_at, credential_id limit 1`,
+  );
+  const passkey = rows[0];
+  if (passkey === undefined) return;
+
+  const id = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + CAPTURE_GRANT_LIFETIME_MS);
+  await pool.query(`insert into unlock_grant (id, passkey_id, expires_at) values ($1, $2, $3)`, [
+    id,
+    passkey.credential_id,
+    expiresAt,
+  ]);
+  captureGrant = { id, expiresAt };
+}
+
+/**
+ * The workaround {@link GRANT_COOKIE}'s own comment promises: a raw
+ * `Network.setCookie` over a CDP session bound to `page`, which is Chromium
+ * itself deciding whether to accept a `Secure` cookie on this loopback
+ * origin rather than Playwright's own `addCookies` guard doing so. `url`,
+ * not `domain`, for the same reason `open`'s own `addCookies` call passes
+ * `url` rather than `domain` for {@link UNMASKED_COOKIE}: a `__Host-`
+ * prefixed cookie is rejected outright if it carries a `Domain` attribute at
+ * all, and `url` is what tells Chromium to store this host-only rather than
+ * scoped to a domain.
+ */
+async function setGrantCookie(
+  context: BrowserContext,
+  page: Page,
+  grant: { id: string; expiresAt: Date },
+): Promise<void> {
+  const session = await context.newCDPSession(page);
+  try {
+    await session.send("Network.setCookie", {
+      url: BASE_URL,
+      name: GRANT_COOKIE,
+      value: grant.id,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+      expires: grant.expiresAt.getTime() / 1000,
+    });
+  } finally {
+    await session.detach();
+  }
+}
 
 /**
  * Navigate and settle. Server-rendered with inline-SVG charts, so only the
@@ -436,11 +560,9 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(page, `docs/screenshots/account-balance-${theme}.png`);
     await visit(page, "/settings/accounts");
     await shoot(page, `docs/screenshots/settings-${theme}.png`);
-    // The lock's own tab, in the state a household that has not turned the
-    // lock on sees: the empty list and what enrolling the first passkey
-    // would do. The demo household holds no passkey, so this is honestly
-    // the screen it has — the enrolled-and-locked variants would need a
-    // seeded credential and a live grant, which this pass does not mint.
+    // The lock's own tab, now that `seed-demo.ts` plants one passkey and
+    // this script mints a live grant against it (`captureGrant`): the
+    // enrolled row, not the empty list a never-locked household would see.
     await visit(page, "/settings/passkeys");
     await shoot(page, `docs/screenshots/settings-passkeys-${theme}.png`);
     await visit(page, "/upload");
@@ -558,6 +680,9 @@ async function main(): Promise<void> {
     const { DATABASE_URL } = loadConfig(process.env);
     const pool = createPool(DATABASE_URL);
     try {
+      // Once, before any context opens — every `open()` call for the rest of
+      // this run reads the same grant (see `captureGrant`'s own comment).
+      await mintCaptureGrant(pool);
       const fixture = await prepare(pool);
       await captureReadme(browser, pool, fixture);
       await captureGuide(browser, pool, fixture);

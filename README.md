@@ -473,10 +473,14 @@ through; anything unvouched-for is handed to Google's own account chooser and co
 the address that signed in is on the operator's list. The sidecar's own interstitial page is
 skipped, so the only sign-in screen anyone in the household ever sees is Google's.
 
-The app therefore has no password, no login page and no session cookie of its own, and it makes no
-authorization decision at all: the list is the whole of it, and everyone admitted sees and can do
-everything. The verified address arrives on every request as a header the app deliberately ignores —
-attribution for a later feature, never permission.
+The app therefore has no password and no login page of its own, and it makes no authorization
+decision at all: the list is the whole of who may enter, and everyone admitted sees and can do
+everything. It does hold one cookie now, though — the lock's: once the household enrols a passkey, a
+browser holding no live grant is shown nothing until an assertion checks out, which is a fact about
+that one browser at that one moment and never an identity the app is keeping (masking, further down,
+is a different control answering a different question). The verified address arrives on every
+request as a header the app deliberately ignores — attribution for a later feature, never
+permission.
 
 Enforcement lives in this stack rather than in whatever proxy terminates TLS in front of it, because
 a device on the same LAN can dial this box's published port and land on the bundled Caddy directly.

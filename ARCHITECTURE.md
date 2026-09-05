@@ -109,6 +109,7 @@ application's dependency list while the instance still has one.
 | House proxy → Caddy | `X-Forwarded-*` | Believed, bounded by `trusted_proxies static private_ranges` in the `Caddyfile`. The honest reading: **any LAN peer can forge these headers**, because this repository cannot know the operator's proxy address. See below for why that is affordable. |
 | Caddy → gate | `X-Forwarded-*`, `X-Real-IP`, `X-Forwarded-Uri` | **Yes, unconditionally.** The sidecar runs in reverse-proxy mode and builds its sign-in redirects from them, which is why `gate` publishes no port. |
 | Caddy → app | `X-Forwarded-*` and `X-Auth-Request-Email` | **Yes, unconditionally** — which is why `app` publishes no port. The trust costs nothing today: the app reads none of these (§7.6), and `copy_headers` replaces any client-sent email header with the gate's own, so a browser cannot assert an identity. |
+| Browser → app | `__Host-unlock_grant` cookie, forwarded through Caddy unmodified | **No.** It carries no claim — an opaque, cryptographically random id (`length(id) >= 32`) addressing a row in `unlock_grant`. A forged value names nothing; a copied live one only ever names the row it was copied from, which is what makes the row deletable and the honest limit of a bearer token. The row is the authority, never the cookie (docs/adr/0012). |
 | app → Yahoo | JSON quote and chart payloads | No. Both parsed through Zod, currency-guarded, floats converted at the boundary. A split the chart payload cannot be read through refuses that instrument's whole history rather than filling some rows right and some wrong. |
 
 **Why a forgeable forwarded header is affordable.** Nothing downstream *authorises* on one. The
@@ -342,6 +343,7 @@ grep. They come in three tiers.
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
 | Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:637` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
+| Enforcing the lock | `app/root.tsx`'s `middleware` export — `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it — the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
 
 **Owned by a module, upheld by its callers.**
 
@@ -444,11 +446,15 @@ sequenceDiagram
 
 Three properties of this path are deliberate:
 
-1. **The gate is in front of the process, not inside it.** There is no authentication middleware and
-   no open list in the app; a request that reaches a loader has already been admitted at the front
-   door. Everything the app serves is behind it, static assets included — which the in-app gate this
+1. **The gate is in front of the process, not inside it, and decides *who*.** A request that reaches
+   a loader has already been admitted at the front door — that judgment is made there and nowhere
+   else. Everything the app serves is behind it, static assets included — which the in-app gate this
    replaced could not manage, because assets are served ahead of the router. A route added by a later
    slice is protected the moment it exists, and nobody has to remember to protect it. See §7.6.
+   **The app does now carry authentication middleware and an open list of its own** — the lock's
+   `middleware` export and its `LOCK_EXEMPT_PATHS` (`app/root.tsx`, ADR-0012; §4.2, §7.6 below) — but
+   they refuse a *browser* holding no live grant, never decide *which person* is asking. That
+   judgment is still the gate's alone.
 2. **Filtering and grouping are pure functions over one array**, not seven new SQL predicates. The
    screen's table and the subtotals under it are computed from the same rows, so agreement is
    structural rather than something to keep true. Nothing the table displays costs a second query;
@@ -1593,14 +1599,14 @@ allowlist does.
 
 | Control | State |
 |---|---|
-| Authentication | **Outside the app, and mandatory.** `caddy` asks the `gate` sidecar (oauth2-proxy, OIDC to Google) about every request and refuses anything it has not vouched for. The app authenticates nobody: it carries no password, no login route and no session of its own |
+| Authentication | **Outside the app, and mandatory, for *who* is asking.** `caddy` asks the `gate` sidecar (oauth2-proxy, OIDC to Google) about every request and refuses anything it has not vouched for. The app still carries no password and no login route of its own. It does carry a cookie now — the lock's (ADR-0012): a grant names one browser at one moment, never a person, so it settles nothing about *who* is asking, only whether *this browser* has passed a check |
 | Authorisation | **None; every session sees everything.** There is no user table and no per-person permissions. The verified email arrives on every request and the app reads it nowhere — attribution, never permission (`CONTEXT.md`, "Authenticated email"). A screen that consulted it would be inventing a household rule nobody made |
 | Admission policy | One flat file of addresses, mounted read-only into `gate`. Deliberately not an email-domain rule: the narrowest domain that admits this family also admits every Gmail account alive |
-| Enforcement point | This stack's `caddy`, and only there. **Everything is challenged except `/healthz`** — static assets included, which the in-app gate could not cover. The `Caddyfile` is the single list of exemptions in the deployment; the operator's house proxy is deliberately *not* an enforcement point, because a LAN device can bypass it by dialling this box directly |
+| Enforcement point | This stack's `caddy`, and only there for *person* authentication. **Everything is challenged except `/healthz`** — static assets included, which the in-app gate could not cover. The `Caddyfile` used to be the single list of exemptions in the deployment; the lock (ADR-0012) now keeps a second, `LOCK_EXEMPT_PATHS` in `app/root.tsx` — `/unlock` and `/healthz` again, since a locked browser still needs both — pinned by a test that fails the moment that array grows without a decision behind it. The operator's house proxy is deliberately *not* an enforcement point, because a LAN device can bypass it by dialling this box directly |
 | What makes it airtight | `app` publishes no port. Not tidiness: it is the reason there is no path to a loader that skips the check. A `ports:` line on `app` would not weaken the gate, it would end it |
 | Session revocation | Two grains, both the operator's. Removing an address from the allowlist ends that person's sessions everywhere — the gate re-checks each request's email against the file, which it watches for changes. Rotating the gate's cookie secret ends everyone's at once. There is no per-device revocation, and no sign-out control (DESIGN.md §14) |
-| Session storage | The gate's encrypted cookie and nothing else. Both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in |
-| Cookie attributes | `SameSite=Lax` and `Secure`, pinned in `compose.yaml` rather than inherited. With the app carrying no cookie of its own, the gate's `SameSite` **is** this instance's CSRF posture, so it is stated rather than defaulted |
+| Session storage | The gate's encrypted cookie for *who* is admitted; nothing else on that question. The lock (ADR-0012) stores a different fact in Postgres — one row per browser's current unlock, addressed by the grant cookie above — never a file: both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in |
+| Cookie attributes | `SameSite=Lax` and `Secure` on the gate's cookie, pinned in `compose.yaml` rather than inherited. **The app now issues one of its own** — the lock's grant cookie (ADR-0012), `__Host-` prefixed, `Secure`, `HttpOnly`, and `SameSite=Lax`, never `Strict`: the gate's own sign-in bounce returns as a top-level, cross-site navigation, and `Strict` would withhold the grant cookie on that very trip and re-lock every browser on the gate's own schedule. The instance's CSRF posture is still `SameSite=Lax` on every cookie here; that no longer follows from the app carrying none of its own, since it now does |
 | Fail-closed startup | Every variable the gate requires is a `${VAR:?}` interpolation, and the allowlist bind mount sets `create_host_path: false`. A missing credential or a missing allowlist stops `docker compose up` naming it, rather than starting an instance that is open |
 | TLS | **The operator's, in front of this stack.** Everything inside speaks plain HTTP; the public hostname and its certificate belong to the house-wide proxy, and `PUBLIC_ORIGIN` is the `https://` origin it serves — which is also the redirect URI registered with Google, character for character |
 | Upload bounds | Guarded twice — `Content-Length` before the body is read, then `File.size` after |
@@ -2040,6 +2046,7 @@ still live in the current code:
 | `lock.server.ts` | **The only module that imports `@simplewebauthn/server`.** Ceremony options, assertion and registration verification, grant minting and its rolling idle expiry, and the fresh-assertion authorisation that enrolling or removing a passkey requires (docs/adr/0012, spec 0019). The grant cookie's own builders live here too, `HttpOnly`, so nothing browser-reachable ever needs them. The middleware (`app/root.tsx`) asks this module one question — is there a live grant — and acts on the answer |
 | `lock.ts` | The lock's browser-safe vocabulary: the idle-window and re-entry-grace constants, the one encoding rule `passkey.transports` is written and read through, and the return-address query parameter the unlock screen carries. Plain `.ts`, not `.server.ts` — the same argument `masking.ts` makes for itself. Pure, and in the client bundle |
 | `unlock-ceremony.ts` | The unlock screen's client-only seam onto `@simplewebauthn/browser` — the one file naming that package, and only inside a dynamic `import()` in a function body, never at module scope, so it never sits in a server bundle. `supportsPasskeys()` decides only what the screen shows, never what the server allows |
+| `reentry.ts` | What a browser does about being hidden and shown again (docs/adr/0012, ticket 06): a visibility-based grace before an automatic "Lock now" post, and a `pageshow`/`event.persisted` re-check for a back-forward-cache restore. Plain `.ts`, in the client bundle, importing only `lock.ts`'s constants. A courtesy trigger, never the boundary — the grant's own rolling idle expiry is what actually enforces |
 | `account-options.ts` | The closed vocabularies the forms are built from and the domain validates against — account kind, tax treatment, asset class — and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
 | `account-label.ts` | The upload picker's labels — grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |
@@ -2058,11 +2065,14 @@ still live in the current code:
 | `return-path.ts` | **The one place that decides where a form may send the browser back to.** A control posting to a resource route carries the page it was pressed on, and that field arrives from the request — attacker-controlled. `safeReturn` resolves it against a throwaway origin and demands that origin back, deliberately not a first-characters pattern: `/\evil.test` passes any such test and the URL standard then resolves it to another host (§7.6) |
 | `database.generated.ts` | `kysely-codegen` output, views included. Regenerated after every migration |
 
-**There is no authentication module, and its absence is the design.** A contributor looking for one
-should read §7.6 and stop: authentication is a Compose service and a `Caddyfile`, not code in
-`app/`. The only trace inside the process is `AUTH_GATE` deciding whether the warning banner is
-drawn, and a comment beside the lock's own `middleware` export in `app/root.tsx` recording that the
-verified email rides in on every request and is read by nothing.
+**There is no module that decides *who* is asking, and that absence is still the design.** A
+contributor looking for one should read §7.6 and stop: identifying a person is a Compose service and
+a `Caddyfile`, not code in `app/`. What `lock.server.ts` above decides is a different question —
+*whether this browser holds a live grant* — and it decides that alone: a grant names a browser,
+never a person (docs/adr/0012), so nothing here reopens what the previous sentence rules out. The
+only other trace inside the process is `AUTH_GATE` deciding whether the warning banner is drawn, and
+a comment beside the lock's own `middleware` export in `app/root.tsx` recording that the verified
+email rides in on every request and is read by nothing.
 
 ### `app/` and `app/routes/` — the shell and the screens
 
@@ -2096,7 +2106,9 @@ there.
 | `settings/tax.tsx` | The capital gains rate — a stored setting, not an environment variable, because it is the household's number (`0005_app_setting.sql`) |
 | `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls — and the list of holdings whose price history does not reach as far back as they are held, with the last attempt's outcome in words |
 | `settings/display.tsx` | The masking policy a browser opens in. **Not the masking control** — ADR-0002 records why that lives in the chrome |
+| `settings/passkeys.tsx` | Settings → Passkeys (docs/adr/0012, spec 0019, ticket 05): list the household's enrolled passkeys, enrol another, remove one. Everything about whether either is allowed is `lock.server.ts`'s own rule, restated nowhere here — this route asks for a label or a confirmation, hands the browser's own WebAuthn response to the domain module, and prints back whatever it decided |
 | `unlock.tsx` | The lock's one screen (docs/adr/0012, spec 0019): one action, calling `navigator.credentials.get()` against a server-issued challenge, and an honest message where the ceremony cannot run or scripting is off, naming the recoveries that exist before the operator. The first screen in the app that requires JavaScript — there is no progressive-enhancement path for a passkey check |
+| `lock-now.ts` | "Lock now" (ticket 06): an action-only resource route, `masking.ts`'s own shape, that deletes this browser's grant and clears its cookie — posted by the chrome's explicit control and by the re-entry guard's own automatic post alike. No return address: the point of pressing it is to stop the screen being readable, not to offer it back |
 | `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
 | `refresh.ts` | The one way a person spends a provider request on demand — a resource route, like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. A thin caller of `lib/refresh.server.ts`, which owns the run and `RefreshOutcome` |
 | `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Never checks the provider, never requires authentication (§7.4) |
@@ -2112,6 +2124,7 @@ functions rather than only a component, so this tree is not purely presentationa
 |---|---|
 | `amount.tsx` | **The one component that renders an amount** (spec 0007, ADR-0002): every absolute figure comes through here and every ratio does not. One component rather than a flag on the formatters, because the guarantee is only as good as its narrowest point; `masking-boundary.test.ts` asserts the import boundary in place of a linter. `Delta` lives here and asks it for the figure rather than being a second renderer |
 | `masking-toggle.tsx` | The control that hides every amount, in the chrome, labelled with what it will do rather than what is true. Two writers, one click: a real form to `/masking` for scripting-off, and a direct cookie write so the flip happens at the speed of a hand |
+| `lock-now-control.tsx` | The chrome's other control (ticket 06, docs/adr/0012): a real `<form method="post">` to `/lock-now`, drawn only while the household holds a passkey at all. Beside `MaskingToggle` and never mistakable for it — that one dots the amounts on a screen you are reading; this one ends the reading outright, on this browser, right now |
 | `open-instance-banner.tsx` | The standing warning that nothing guards this instance. Not dismissible, never drawn behind the gate, and it names no variable — a banner offering the setting as the fix would teach the one mistake that silences it while leaving the instance open |
 | `first-run-prompt.tsx` | The one setup prompt, naming the next step only. Doing the thing it asks for is what removes it |
 | `error-page.tsx` | Where a thrown error lands. The wording is ours and the status alone picks it; nothing the throwing code wrote is printed (§7.6) |

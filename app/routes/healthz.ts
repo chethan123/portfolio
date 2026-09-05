@@ -9,7 +9,11 @@ import { checkHealth } from "~/lib/db.server";
  * Two non-goals: no price-provider check (failing on a third-party outage
  * would make Compose restart a healthy app), and no authentication, so
  * monitoring needs no credentials — the gate in front must exempt this path,
- * and its Caddyfile is the only list of such exemptions in the deployment.
+ * which its Caddyfile used to be the only list of such exemptions for. This
+ * path is on the app's own lock's exempt list too now (`LOCK_EXEMPT_PATHS`,
+ * `app/root.tsx`, docs/adr/0012) — a locked instance still answers `/healthz`
+ * with no passkey check, since monitoring can hold no credential for one
+ * either. That array is pinned by a test that fails the moment it grows.
  */
 export async function loader() {
   const health = await checkHealth();

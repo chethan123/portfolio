@@ -52,6 +52,13 @@ Nothing in it is a secret, and it grants nothing — the only session cookie any
 (ADR-0005), which the app never issues and which the gate keeps encrypted and `HttpOnly` on its own
 side of the boundary (its default; this repo pins only `SameSite` and `Secure`).
 
+[No longer the only one: the app's own grant cookie (ADR-0012) is a credential too, and, like the
+gate's, it is `HttpOnly` — the row it names is the authority, not the cookie itself, so nothing about
+it needs the script access masking's cookie exists for. Masking's remains the one cookie in this
+stack that is deliberately not `HttpOnly`, which is the point this paragraph was actually making;
+what changed is only that the gate's is no longer the sole credential-bearing cookie it is being
+compared against.]
+
 ## Considered options
 
 **State in `app_setting` as well.** Coherent, and it matches the Tax tab exactly. Rejected because

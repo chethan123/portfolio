@@ -3,7 +3,7 @@
 Everything that changes what the app knows, apart from [uploading a statement](upload.md).
 
 **Settings** sits at the foot of the left-hand navigation. Inside it, a strip of tabs: **Overview**,
-**People**, **Accounts**, **Tax**, **Prices** and **Display**.
+**People**, **Accounts**, **Tax**, **Prices**, **Display** and **Passkeys**.
 
 ## Overview
 
@@ -104,9 +104,11 @@ out of the current view everywhere else.
 Settings; there is no control that does it. If you close one by mistake, add it again and record
 against the new one.
 
-**Nothing in this application deletes anything.** There is no delete button anywhere, on any screen.
-An account is closed; a balance or a statement is corrected by recording another one; a person can
-only be removed once they own nothing at all.
+**Almost nothing in this application deletes anything.** An account is closed rather than removed,
+and a balance or a statement is corrected by recording another one rather than overwriting it. Two
+things really do delete, immediately and with no undo: removing a person, once they own nothing at
+all, and removing a passkey on [Settings → Passkeys](#passkeys) — see [Passkeys and the
+lock](passkeys.md) for what that does to whatever it was unlocking.
 
 ## Tax
 
@@ -153,6 +155,16 @@ This is the household's standing answer, not the control itself. The control —
 no network to do it. Masking hides every amount behind dots while names, dates, the shape of the
 chart and every percentage stay readable. It is not a lock: the amounts are still in the page, and
 the sign-in at the front door keeps a person out while the lock keeps a browser out.
+
+## Passkeys
+
+What can unlock a browser, once the household holds one. Enrol another, see which are synced, and
+remove one that is gone for good — the full explanation, in the household's own words rather than
+this page's, is [Passkeys and the lock](passkeys.md).
+
+No passkey enrolled is not a broken state — it is what a fresh instance already is: unlocked, exactly
+as before this tab existed. Enrolling the first one is what turns the lock on, for every browser but
+the one doing it, immediately.
 
 ---
 
