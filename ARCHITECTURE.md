@@ -83,7 +83,7 @@ graph LR
     browser -.->|"sign-in redirect"| google
     csv -.->|"uploaded through the browser"| browser
     app -->|SQL over the compose network| db
-    app -->|"batched quote fetch, market hours only, per the refresh cadence (seeded 15 min)<br/>+ a per-symbol history fetch on the same refresh, at any hour, while a spine has a gap<br/>+ a one-symbol probe at instrument creation, in the request path"| yahoo
+    app -->|"batched quote fetch, market hours only, per the refresh cadence (seeded 15 min)<br/>+ a per-symbol history fetch on the same refresh, at any hour, while a spine has a gap<br/>+ one batched probe at instrument creation, in the request path"| yahoo
 
     classDef ext fill:#f5f0e8,stroke:#8a7a5c,color:#3b3222
     class yahoo,csv,google,house ext
@@ -93,8 +93,8 @@ graph LR
 is the application's, and its only one: no email, no object store, no queue, no cache tier, no
 analytics. It is reached three ways, over two endpoints — the poller's batched *quote* fetch and
 the per-symbol *chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the
-request path entirely, and `probeSymbol`, a single-symbol currency check that runs *inside* a form
-submission when someone creates a feed-priced instrument (§6.1). The last is the only place a
+request path entirely, and `probeSymbols`, a currency check over every symbol one submission
+creates, run *inside* the form submission that creates them (§6.1). The last is the only place a
 third party can make a person wait. All three go through the one interface in §7.5, precisely
 because the endpoint is unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
 the browser is redirected there to sign in and the sidecar exchanges the code for a token, both
@@ -985,8 +985,8 @@ sequenceDiagram
     IR->>IR: validate ALL, collect field-level refusals
     Note right of IR: Nothing is written unless everything<br/>passes: a refusal must re-render the<br/>same list of questions it was asked.
     alt creating a feed instrument
-        IR->>Y: probeSymbol(symbol)
-        Y-->>IR: ok{quoteType} | non-usd{currency} | unavailable
+        IR->>Y: probeSymbols(every new feed symbol)
+        Y-->>IR: per symbol: ok{quoteType} | non-usd{currency} | unavailable
         Note right of IR: non-usd REFUSES creation.<br/>unavailable does NOT block — the next<br/>refresh marks it stale like any symbol.
     end
     IR->>PG: BEGIN
@@ -1567,9 +1567,9 @@ These conversions happen at this boundary and nowhere else:
   would be one more place to forget.
 - **The payload is parsed through Zod**, so a shape change is a refusal rather than a `NaN`.
 - **The currency guard.** A non-USD quote is refused. `getQuotes` turns that into an *absent* quote,
-  because a refresh must not lose ninety-nine prices over one foreign listing. `probeSymbol`, used at
-  instrument creation, returns it *named* — because there the caller is a person creating one
-  instrument, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
+  because a refresh must not lose ninety-nine prices over one foreign listing. `probeSymbols`, used at
+  instrument creation, returns it *named* per symbol — because there the caller is a person
+  creating instruments, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
   the one distinction they can act on. `getDailyCloses` refuses a non-USD history the same way,
   before a figure is read.
 - **The split un-adjust**, on history only. The feed restates closes through later splits while a
