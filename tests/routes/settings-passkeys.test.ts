@@ -70,12 +70,15 @@ const {
   lastUsedText,
   loader,
   lockedByOtherRow,
+  ALREADY_REGISTERED_MESSAGE,
   NO_CEREMONY_MESSAGE,
+  NOSCRIPT_MESSAGE,
   REGISTRATION_OPTIONS_EXPIRED_MESSAGE,
   registrationOptionsExpired,
   removalConfirmDisabled,
   removalWarningKind,
   removalWarningText,
+  resetEnrolment,
   runConfirmCeremony,
   runRemovalCeremony,
   syncLabel,
@@ -93,6 +96,10 @@ const {
 } = await import("~/lib/lock.server");
 const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { middleware } = await import("../../app/root.tsx");
+// The window the screen's guard is measured against, read from where the
+// domain and the screen now share it (ticket 11's F14) rather than restated
+// here — a restatement is exactly the drift that finding was about.
+const { CHALLENGE_TTL_MS } = await import("~/lib/lock");
 
 afterAll(closeTestDatabase);
 
@@ -405,12 +412,12 @@ describe("registrationOptionsExpired — the stale-registration-options guard", 
     expect(registrationOptionsExpired(1_000, 1_000)).toBe(false);
   });
 
-  it("is not expired just under the two-minute TTL lock.server.ts's own CHALLENGE_TTL_MS grants", () => {
-    expect(registrationOptionsExpired(0, 2 * 60 * 1000 - 1)).toBe(false);
+  it("is not expired just under the window CHALLENGE_TTL_MS grants", () => {
+    expect(registrationOptionsExpired(0, CHALLENGE_TTL_MS - 1)).toBe(false);
   });
 
-  it("is expired at exactly the two-minute mark", () => {
-    expect(registrationOptionsExpired(0, 2 * 60 * 1000)).toBe(true);
+  it("is expired at exactly the window CHALLENGE_TTL_MS grants", () => {
+    expect(registrationOptionsExpired(0, CHALLENGE_TTL_MS)).toBe(true);
   });
 
   it(
@@ -419,7 +426,7 @@ describe("registrationOptionsExpired — the stale-registration-options guard", 
     // Create step for as long as they like before pressing it again.
     "stays expired well past the TTL, the case a dismissed creation followed by a long pause produces",
     () => {
-      expect(registrationOptionsExpired(0, 5 * 60 * 1000)).toBe(true);
+      expect(registrationOptionsExpired(0, CHALLENGE_TTL_MS * 2.5)).toBe(true);
     },
   );
 });
@@ -1596,6 +1603,56 @@ describe("vocabulary — CONTEXT.md's Passkey entry rules these out, and this sc
       for (const word of ["biometric", "fingerprint", "face", "device credential", "enrolled device"]) {
         expect(markup).not.toContain(word);
       }
+    }),
+  );
+});
+
+describe("starting the enrolment panel over", () => {
+  it("clears the note, the phase and both halves of the registration options together", () => {
+    const calls: Record<string, unknown> = {};
+
+    resetEnrolment(
+      (note) => (calls.note = note),
+      (phase) => (calls.phase = phase),
+      (options) => (calls.options = options),
+      (mintedAt) => (calls.mintedAt = mintedAt),
+    );
+
+    // All four, because leaving `registrationOptions` behind is exactly what
+    // keeps the create button up over a ceremony that cannot succeed, and
+    // leaving `registrationMintedAt` behind is what makes the next attempt
+    // measure its TTL from the wrong instant.
+    expect(calls).toEqual({ note: null, phase: "idle", options: null, mintedAt: null });
+  });
+
+  it("carries a note through when a caller has one to leave on the screen", () => {
+    let note: string | null = "untouched";
+
+    resetEnrolment(
+      (next) => (note = next),
+      () => {},
+      () => {},
+      () => {},
+      ALREADY_REGISTERED_MESSAGE,
+    );
+
+    expect(note).toBe(ALREADY_REGISTERED_MESSAGE);
+  });
+});
+
+describe("the screen with scripting off", () => {
+  it(
+    "says why enrolling and removing are inert, rather than leaving a reader pressing a button that is",
+    withDatabase(async () => {
+      const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
+
+      // Real HTML rather than a React branch, so it is in the server render
+      // itself — which is the only place a browser with scripting off will
+      // ever see it. The whole sentence, as `tests/routes/unlock.test.ts`
+      // asserts its own: a fragment would hold with the message rewritten to
+      // say something else entirely.
+      expect(markup).toContain("<noscript>");
+      expect(markup).toContain(NOSCRIPT_MESSAGE);
     }),
   );
 });

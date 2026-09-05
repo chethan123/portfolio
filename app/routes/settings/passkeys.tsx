@@ -104,7 +104,7 @@ import { data, useFetcher, useRevalidator } from "react-router";
 
 import { formatDate, formatDateLocal } from "~/lib/format";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
-import { LABEL_MAX_LENGTH } from "~/lib/lock";
+import { CHALLENGE_TTL_MS, LABEL_MAX_LENGTH } from "~/lib/lock";
 import {
   beginEnrolment,
   clearedLockCookie,
@@ -508,19 +508,31 @@ function LocalDate({ instant, initialText }: { instant: Date; initialText: strin
 type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
 
 /**
- * How long registration options stay usable before `requestRegistration`
- * must not be handed them at all (the stale-registration-options guard) — matching `lock.server.ts`'s
- * own `CHALLENGE_TTL_MS`, restated rather than imported: that constant is a
- * `.server.ts` export, and reaching it from code this component runs in the
- * browser would ship server code past the bundle boundary CLAUDE.md draws,
- * the identical reason `unlock-ceremony.ts`'s own ceremony imports are all
- * dynamic. Past this, the ceremony still runs — the authenticator creates a
- * real credential in the family member's own password manager — and only
- * *then* does the server refuse the stale challenge behind it, leaving an
- * orphaned passkey nobody asked for. Checking first is what keeps that from
- * ever happening rather than merely reporting it afterwards.
+ * What the family reads when the provider refuses to make a second passkey
+ * for this app — `excludeCredentials`' client-side half. The library's own
+ * sentence for it is "The authenticator was previously registered", which is
+ * about authenticators rather than about what to do, and which used to be
+ * printed here verbatim with the form left waiting on a creation that could
+ * not happen.
  */
-const REGISTRATION_OPTIONS_TTL_MS = 2 * 60 * 1000;
+export const ALREADY_REGISTERED_MESSAGE =
+  "This provider already holds a passkey for this app and will not make a second. " +
+  "Make the next one from a different device, or from a different provider on this one.";
+
+/**
+ * Shown only inside `<noscript>`: enrolling and removing are both event
+ * handlers, so with scripting off this screen's own controls are inert
+ * rather than missing, and a reader is owed the reason rather than left
+ * pressing one. Names the fix first, as `unlock.tsx`'s own does.
+ *
+ * Scoped to those two deliberately. The chrome's Lock now on this same page
+ * is a real form post and goes on working without scripting — its own header
+ * says that is the point — so a sentence about *every* control here would be
+ * false.
+ */
+export const NOSCRIPT_MESSAGE =
+  "This browser has scripting turned off, and enrolling or removing a passkey needs it. " +
+  "Turn scripting on, or use a browser that has it.";
 
 /**
  * Whether registration options minted at `mintedAt` are too stale at `now`
@@ -530,7 +542,7 @@ const REGISTRATION_OPTIONS_TTL_MS = 2 * 60 * 1000;
  * out.
  */
 export function registrationOptionsExpired(mintedAt: number, now: number): boolean {
-  return now - mintedAt >= REGISTRATION_OPTIONS_TTL_MS;
+  return now - mintedAt >= CHALLENGE_TTL_MS;
 }
 
 /** Shown when the Create step sat long enough for its own options to expire (the stale-registration-options guard) — never silent, and never a passkey prompt run against a challenge that can no longer succeed. */
@@ -653,10 +665,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
     if (result.intent !== "beginEnrolment" && result.intent !== "completeRegistration") return;
 
     if (!result.ok) {
-      setNote(result.formError);
-      setPhase("idle");
-      setRegistrationOptions(null);
-      setRegistrationMintedAt(null);
+      resetEnrolment(setNote, setPhase, setRegistrationOptions, setRegistrationMintedAt, result.formError);
       return;
     }
 
@@ -759,14 +768,21 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
       return;
     }
 
-    // Neither ever reached the server, so nothing was spent: staying ready
-    // to create lets a retry reuse the very same registration challenge
-    // rather than reconfirming identity from scratch.
+    // None of the three ever reached the server, so nothing was spent:
+    // staying ready to create lets a retry reuse the very same registration
+    // challenge rather than reconfirming identity from scratch. That matters
+    // most for the already-registered case, whose own sentence tells the
+    // reader to try a different provider — the refusal came from the
+    // authenticator they picked, not from these options, so a second attempt
+    // through a different one succeeds against this same challenge. **Start
+    // over** is the exit for a reader who does not want to.
     setPhase("readyToCreate");
     setNote(
       outcome.status === "dismissed"
         ? "That passkey creation did not complete. Nothing has changed — press Create passkey to try again."
-        : outcome.message,
+        : outcome.status === "alreadyRegistered"
+          ? ALREADY_REGISTERED_MESSAGE
+          : outcome.message,
     );
   }
 
@@ -841,9 +857,25 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
         {!canUseAPasskey ? (
           <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>
         ) : readyToCreate ? (
-          <button type="button" className="button" onClick={handleCreatePasskey} disabled={busy}>
-            Create the passkey named "{confirmedLabel}"
-          </button>
+          <>
+            <button type="button" className="button" onClick={handleCreatePasskey} disabled={busy}>
+              Create the passkey named "{confirmedLabel}"
+            </button>
+            {/* The way out of this step. Without it the only exits were a
+                reload and the two-minute TTL, and the provider-already-holds-
+                one refusal leaves a reader here with the label input
+                disabled and nothing to press. */}
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={() =>
+                resetEnrolment(setNote, setPhase, setRegistrationOptions, setRegistrationMintedAt)
+              }
+              disabled={busy}
+            >
+              Start over
+            </button>
+          </>
         ) : hasPasskeys ? (
           <>
             <p className="field-note">
@@ -869,9 +901,52 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
             Continue
           </button>
         )}
+
+        {/* Real HTML, not a React branch, for the same reason `unlock.tsx`'s
+            is: this is only ever shown by a browser actually running with
+            scripting off, which is the one case `supported` above can never
+            observe — `supportsPasskeys` never runs without it. Enrolling and
+            removing are both event handlers, so with scripting off this
+            screen's own controls are inert rather than absent; the chrome's
+            Lock now is a real form post and still works.
+            **Last, as `unlock.tsx`'s is.** `.panel-form`'s sibling rules
+            (`app/app.css`) zero a button's top margin when it *directly*
+            follows a full-line member, and an element standing between them
+            — even a `display: none` one — stops that matching and reopens
+            the 24px drop the rule exists to close. */}
+        <noscript>
+          <p className="empty-note">{NOSCRIPT_MESSAGE}</p>
+        </noscript>
       </div>
     </section>
   );
+}
+
+/**
+ * Put the enrolment panel back to where a fresh attempt starts: no note, no
+ * phase, no registration options and no minted-at. Four setters rather than
+ * one state object because that is the shape this file already uses
+ * ({@link applyRemovalOptionsResult} below), and because the two callers are
+ * a server refusal and a person pressing Start over — the same four things
+ * either way, which is what makes this worth extracting rather than written
+ * twice and allowed to drift.
+ *
+ * The unspent `register` challenge is simply abandoned. That costs nothing:
+ * {@link CHALLENGE_TTL_MS}'s own header says a stale one is
+ * refused on arrival anyway, and it is bounded by the per-purpose budget the
+ * domain module keeps.
+ */
+export function resetEnrolment(
+  setNote: (note: string | null) => void,
+  setPhase: (phase: EnrolPhase) => void,
+  setRegistrationOptions: (options: RegistrationOptions | null) => void,
+  setRegistrationMintedAt: (mintedAt: number | null) => void,
+  note: string | null = null,
+): void {
+  setNote(note);
+  setPhase("idle");
+  setRegistrationOptions(null);
+  setRegistrationMintedAt(null);
 }
 
 // ---------------------------------------------------------------------------
