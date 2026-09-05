@@ -35,7 +35,7 @@ import type { AuthenticationResponseJSON, VerifiedAuthenticationResponse } from 
 
 import { createDatabase, type Database } from "~/lib/db.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
-import { IDLE_WINDOW_MS, RETURN_PARAM, joinTransports, splitTransports } from "~/lib/lock";
+import { CHALLENGE_TTL_MS, IDLE_WINDOW_MS, RETURN_PARAM, joinTransports, splitTransports } from "~/lib/lock";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import type { Fixtures } from "./support/fixtures.ts";
@@ -115,6 +115,7 @@ const {
   completeRegistration,
   deleteGrant,
   enrolmentAssertionOptions,
+  MAX_LIVE_CHALLENGES_PER_PURPOSE,
   isLocked,
   listPasskeys,
   lockCookie,
@@ -733,6 +734,67 @@ describe("unlocking", () => {
   );
 });
 
+/**
+ * The challenge map's own housekeeping — the two rules that decide whether a
+ * family member is told something true when a ceremony goes wrong. Driven
+ * against the real module-level map, since that is where both rules live.
+ */
+describe("the challenge map's housekeeping", () => {
+  it(
+    "tells a reader their confirmation expired rather than that this instance never issued it",
+    withDatabase(async ({ db }) => {
+      // The sweep used to delete on the instant of expiry, so the next mint
+      // by anybody made a stale submission read as "never issued by this
+      // instance" — true of the map, false about what happened, and the more
+      // alarming of the two to somebody who simply took too long.
+      const base = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(base);
+
+      try {
+        const stale = await unlockOptions(db);
+
+        clock.mockReturnValue(base + CHALLENGE_TTL_MS + 1_000);
+        // A later ceremony, which is what sweeps.
+        await unlockOptions(db);
+
+        const refusal = await refusalOf(() => verifyUnlock(assertionResponse(stale.challenge), db));
+        expect(refusal.fieldErrors.form).toMatch(/has expired/);
+      } finally {
+        clock.mockRestore();
+      }
+    }),
+  );
+
+  it(
+    "drops a spent confirmation before an unspent one when a purpose is over its budget",
+    withDatabase(async ({ db }) => {
+      // Eviction used to take the oldest of the kind whatever its state, so
+      // a flood of spend-and-retry cycles evicted the confirmation somebody
+      // was in the middle of. The oldest below is unspent and must survive;
+      // the ones spent in the middle are what the budget should reclaim.
+      const oldest = await unlockOptions(db);
+      const spent: string[] = [];
+
+      for (let i = 1; i < MAX_LIVE_CHALLENGES_PER_PURPOSE; i++) {
+        const { challenge } = await unlockOptions(db);
+        // Spend a handful from the middle, well away from the oldest.
+        if (i >= 400 && i < 405) {
+          await refusalOf(() => verifyUnlock(assertionResponse(challenge), db));
+          spent.push(challenge);
+        }
+      }
+
+      // Past the budget, so eviction runs.
+      for (let i = 0; i < spent.length; i++) await unlockOptions(db);
+
+      const refusal = await refusalOf(() => verifyUnlock(assertionResponse(oldest.challenge), db));
+      // Whatever else it says, not that this instance never issued it: the
+      // oldest is unspent, and the spent ones were there to be taken first.
+      expect(refusal.fieldErrors.form).not.toMatch(/never issued/);
+    }),
+  );
+});
+
 describe("enrolling", () => {
   it(
     "lets a request with no grant enrol before any passkey exists, and refuses once one does",
@@ -795,6 +857,43 @@ describe("enrolling", () => {
     withDatabase(async ({ db }) => {
       const refusal = await refusalOf(() => beginEnrolment("Kitchen\niPad", { assertion: undefined, acknowledgement: "true" }, db));
       expect(refusal).toBeInstanceOf(ValidationError);
+    }),
+  );
+
+  // One example per class the label rule refuses beyond C0/C1. Each is a
+  // character a reader cannot see in the list this label prints in: a line
+  // separator the message already promises against, an override and an
+  // isolate that can make a row read back to front so the wrong passkey is
+  // removed, and a zero width space that makes a label look blank or look
+  // identical to another.
+  it.each([
+    ["a line separator", "Kitchen\u2028iPad"],
+    ["a paragraph separator", "Kitchen\u2029iPad"],
+    ["a right-to-left override", "Kitchen\u202EiPad"],
+    ["a directional isolate", "Kitchen\u2066iPad"],
+    ["a zero width space", "Kitchen\u200BiPad"],
+  ])("refuses a label carrying %s", (_case, label) =>
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(() =>
+        beginEnrolment(label, { assertion: undefined, acknowledgement: "true" }, db),
+      );
+      expect(refusal).toBeInstanceOf(ValidationError);
+      expect(await isLocked(db)).toBe(false);
+    })(),
+  );
+
+  it(
+    "keeps a label whose emoji is held together by a zero width joiner",
+    withDatabase(async ({ db }) => {
+      // The deliberate exception. A family emoji is a sequence joined by
+      // U+200D, and refusing the joiner to catch an invisible character
+      // would refuse an ordinary label somebody actually chose.
+      const { options } = await beginEnrolment(
+        "\u{1F469}\u200D\u{1F469}\u200D\u{1F467} phone",
+        { assertion: undefined, acknowledgement: "true" },
+        db,
+      );
+      expect(options.user.name).toBe("\u{1F469}\u200D\u{1F469}\u200D\u{1F467} phone");
     }),
   );
 

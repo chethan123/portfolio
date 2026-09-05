@@ -56,6 +56,26 @@ export const REENTRY_GRACE_MS = 60 * 1000;
 export const LABEL_MAX_LENGTH = 60;
 
 /**
+ * How long a minted challenge is good for. Longer than the ceremony's own
+ * sixty-second default `timeout` (`generateRegistrationOptions`,
+ * `generateAuthenticationOptions`), so a slow password-manager prompt does
+ * not race the browser's give-up against ours; short enough that an
+ * abandoned challenge does not linger.
+ *
+ * Here rather than in `lock.server.ts` for the reason {@link
+ * LABEL_MAX_LENGTH} is: both sides need it. The domain module enforces it,
+ * and Settings → Passkeys reads it in the browser to decide whether
+ * registration options have gone stale *before* running the ceremony — past
+ * this the authenticator still creates a real credential in the family
+ * member's own password manager, and only then does the server refuse the
+ * challenge behind it, leaving a passkey nobody asked for. A `.server.ts`
+ * export cannot be reached from there, so the number used to be written
+ * twice with a comment explaining the copy; one place is better than an
+ * explanation.
+ */
+export const CHALLENGE_TTL_MS = 2 * 60 * 1000;
+
+/**
  * `passkey.transports`, split back into a list — `null` reads as none
  * (migration 0012's comment on the column).
  */
