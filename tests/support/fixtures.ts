@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 
 import type { Kysely } from "kysely";
+import type { Pool, PoolClient } from "pg";
 
 import type { Database } from "~/lib/db.server";
 import type { BackfillOutcome } from "~/lib/prices.server";
@@ -267,6 +268,56 @@ export type Fixtures = {
  */
 let sequence = 0;
 const next = (): number => ++sequence;
+
+/**
+ * The bootstrap race's three statements, over a raw `pg` handle rather than
+ * the Kysely transaction every builder above writes through.
+ *
+ * `withDatabase` hands a test one transaction, and the thing
+ * `passkey_bootstrap_idx` exists to make atomic is precisely what one
+ * transaction cannot exercise: two connections racing, neither able to see
+ * the other's uncommitted row. So the race needs raw connections — but the
+ * schema knowledge still belongs here rather than in the test, for the reason
+ * this whole file exists. A column added to `passkey` changes this file and
+ * no test.
+ *
+ * Typed on the shape `Pool` and `PoolClient` share, because the race issues
+ * its inserts on two pinned clients and its cleanup on the pool.
+ */
+type RawHandle = Pick<Pool | PoolClient, "query">;
+
+/** Insert a passkey flagged as the household's bootstrap enrolment. */
+export function insertBootstrapPasskey(
+  handle: RawHandle,
+  credentialId: string,
+): Promise<unknown> {
+  return handle.query(
+    `insert into passkey (credential_id, public_key, backup_eligible, label, bootstrap)
+     values ($1, $2, false, 'Race', true)`,
+    [credentialId, Buffer.from([0])],
+  );
+}
+
+/** Whether that passkey is there — the positive half of the race's assertion. */
+export async function bootstrapPasskeyExists(
+  handle: RawHandle,
+  credentialId: string,
+): Promise<boolean> {
+  const result = await handle.query("select 1 from passkey where credential_id = $1", [
+    credentialId,
+  ]);
+  return result.rows.length === 1;
+}
+
+/**
+ * Remove every passkey the race planted. Run at both ends of it: the race has
+ * to commit one row to unblock the other connection, and a run killed between
+ * that commit and its cleanup would otherwise leave the row behind for every
+ * later run to trip over.
+ */
+export async function clearRacingPasskeys(handle: RawHandle): Promise<void> {
+  await handle.query("delete from passkey where credential_id like $1", ["race-%"]);
+}
 
 export function makeFixtures(db: Kysely<Database>): Fixtures {
   const seedPerson: Fixtures["seedPerson"] = async ({ name = `Person ${next()}` } = {}) => {

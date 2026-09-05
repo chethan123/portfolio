@@ -13,6 +13,11 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { createPool } from "../server/db.ts";
 import {
+  bootstrapPasskeyExists,
+  clearRacingPasskeys,
+  insertBootstrapPasskey,
+} from "./support/fixtures.ts";
+import {
   TEST_DATABASE_URL,
   closeTestDatabase,
   testDatabase,
@@ -129,7 +134,9 @@ describe("passkey_bootstrap_idx", () => {
   // index is for is precisely the case a single transaction cannot exercise:
   // two bootstrap enrolments in flight at once, neither able to see the
   // other's uncommitted row. `pool-resilience.test.ts` is where this suite
-  // reaches Postgres the same way, outside the shared transaction.
+  // reaches Postgres the same way, outside the shared transaction; the
+  // statements themselves stay behind the fixture seam, where the schema is
+  // known once.
   it("lets exactly one of two concurrent bootstrap enrolments land", async () => {
     // Applies migrations itself rather than depending on a sibling test file
     // having run first — without this, running this file alone (a `-t`
@@ -138,98 +145,95 @@ describe("passkey_bootstrap_idx", () => {
     await testDatabase();
 
     const pool: Pool = createPool(TEST_DATABASE_URL);
+    let bodyFailed = false;
 
     try {
-      // A run of this test killed mid-way — between the commit below and its
-      // own cleanup — leaves a committed `race-a` row behind. Left alone, that
-      // row poisons every later run: the next run's insert of the same id
-      // hits the primary key before the bootstrap index is ever reached, and
-      // its transaction aborts before making a single assertion. Clearing it
-      // here as well as in the cleanup below is what stops one killed run
-      // from taking down every run after it.
-      await pool.query("delete from passkey where credential_id like 'race-%'");
+      // A run killed between the commit below and its own cleanup leaves a
+      // committed `race-a` behind. Left alone that row poisons every later
+      // run: the next insert of the same id hits the primary key before this
+      // index is ever reached, and its transaction aborts before a single
+      // assertion is made. Clearing here as well as below is what stops one
+      // killed run taking down every run after it.
+      await clearRacingPasskeys(pool);
 
       const clientA: PoolClient = await pool.connect();
-      const clientB: PoolClient = await pool.connect();
-
       try {
-        const insertBootstrap = (client: PoolClient, credentialId: string) =>
-          client.query(
-            `insert into passkey (credential_id, public_key, backup_eligible, label, bootstrap)
-             values ($1, $2, false, 'Race', true)`,
-            [credentialId, Buffer.from([0])],
-          );
+        // Acquired inside A's own cleanup scope: if this second checkout
+        // fails, A is still released, and `pool.end()` below does not wait
+        // forever on a client nothing will hand back.
+        const clientB: PoolClient = await pool.connect();
+        try {
+          await clientA.query("begin");
+          await clientB.query("begin");
 
-        await clientA.query("begin");
-        await clientB.query("begin");
+          // A's insert lands first and stays uncommitted — a tentative row
+          // whose fate no other transaction can yet know.
+          await insertBootstrapPasskey(clientA, "race-a");
 
-        // A's insert lands first and stays uncommitted — a tentative row
-        // whose fate no other transaction can yet know.
-        await insertBootstrap(clientA, "race-a");
+          // B's insert is issued while A is still open, so Postgres cannot
+          // yet say whether A's row will exist. B blocks here rather than
+          // returning, which is why this is not awaited immediately.
+          const blockedInsert = insertBootstrapPasskey(clientB, "race-b");
+          // A rejection handler at creation, closing the window between this
+          // line and the `await` below where an unhandled rejection — had the
+          // commit thrown first — would be reported against an unrelated test.
+          blockedInsert.catch(() => {});
 
-        // B's insert is issued while A is still open, so Postgres cannot yet
-        // say whether A's row will exist. B blocks here rather than
-        // returning, which is why this is not awaited immediately.
-        const blockedInsert = insertBootstrap(clientB, "race-b");
-        // Attaches a rejection handler at creation, closing the window
-        // between this line and the `await` below where an unhandled
-        // rejection — had the commit thrown first — would be reported
-        // against an unrelated test instead of this one.
-        blockedInsert.catch(() => {});
+          // Resolving A is what unblocks B: now that A's row is real, B's
+          // insert finds a genuine conflict rather than landing after the
+          // first, exactly as the migration's comment argues.
+          await clientA.query("commit");
 
-        // Resolving A is what unblocks B: now that A's row is real, B's
-        // insert re-checks the index and finds a genuine conflict rather than
-        // landing after the first, exactly as the migration's comment argues.
-        await clientA.query("commit");
+          // The constraint name is what makes this the index under test and
+          // not some other unique violation — the primary key would also
+          // satisfy a bare `{ code: "23505" }`.
+          await expect(blockedInsert).rejects.toMatchObject({
+            code: "23505",
+            constraint: "passkey_bootstrap_idx",
+          });
 
-        // The constraint name is what makes this the index under test and
-        // not some other unique violation — the primary key would also
-        // satisfy a bare `{ code: "23505" }`.
-        await expect(blockedInsert).rejects.toMatchObject({
-          code: "23505",
-          constraint: "passkey_bootstrap_idx",
-        });
+          // The index refusing the second insert is only half of what this
+          // test is named for; the other half is that the first one landed.
+          expect(await bootstrapPasskeyExists(pool, "race-a")).toBe(true);
 
-        // The index refusing the second insert is only half of what this
-        // test is named for; the other half is that the first one actually
-        // landed.
-        const landed = await pool.query<{ credential_id: string }>(
-          "select credential_id from passkey where credential_id = $1",
-          ["race-a"],
-        );
-        expect(landed.rows).toEqual([{ credential_id: "race-a" }]);
-
-        // What this index does *not* prove: that nothing may bootstrap once
-        // a passkey is already committed, however long ago. That half of the
-        // rule is ticket 02's conditional insert (`where not exists`), built
-        // in the module ticket 02 creates — the migration's comment on this
-        // index is explicit that emptiness is not a uniqueness predicate and
-        // no index can stand in for it.
+          // What this index does *not* prove: that nothing may bootstrap once
+          // a passkey is already committed, however long ago. That half of
+          // the rule is ticket 02's conditional insert (`where not exists`),
+          // built in the module ticket 02 creates — the migration's comment
+          // on this index is explicit that emptiness is not a uniqueness
+          // predicate and no index can stand in for it.
+        } finally {
+          // Rollback recovers a client left mid-transaction (aborted or not)
+          // as safely as it no-ops on one that already committed — cheap
+          // insurance against handing the pool back a connection stuck
+          // inside an open transaction.
+          await clientB.query("rollback").catch(() => {});
+          clientB.release();
+        }
       } finally {
-        // Rollback recovers a client left mid-transaction (aborted or not)
-        // just as safely as it no-ops on one that already committed — cheap
-        // insurance against handing the pool back a connection stuck inside
-        // an open transaction.
         await clientA.query("rollback").catch(() => {});
-        await clientB.query("rollback").catch(() => {});
         clientA.release();
-        clientB.release();
       }
+    } catch (error) {
+      bodyFailed = true;
+      throw error;
     } finally {
-      // On a fresh connection from the pool, never on `clientA` directly: if
-      // `clientA`'s own transaction aborted (exactly what a leaked `race-a`
-      // row from a previous killed run does, by hitting the primary key
-      // before this index is ever reached), a delete issued on `clientA`
-      // would itself throw — and everything after it in a single `finally`,
-      // `pool.end()` included, would never run. Its own `try`/`catch` keeps a
-      // failure here from doing the same to `pool.end()` just below.
+      // This test is the one place in the suite that commits outside
+      // `withDatabase`, so the compensating delete is what keeps the promise
+      // `tests/support/database.ts` makes about leaving the database as
+      // found. A failure here is therefore a failure of the test, not
+      // housekeeping to shrug at: a surviving `race-a` makes every later lock
+      // test read a household that holds a passkey. It is suppressed only
+      // when the body already failed, so a second-order error never replaces
+      // the diagnostic that actually matters.
+      let cleanupError: unknown;
       try {
-        await pool.query("delete from passkey where credential_id like 'race-%'");
-      } catch {
-        // Best effort: a pool broken enough to fail this delete has nothing
-        // further worth trying before it is closed regardless.
+        await clearRacingPasskeys(pool);
+      } catch (error) {
+        cleanupError = error;
       }
       await pool.end();
+      if (cleanupError !== undefined && !bodyFailed) throw cleanupError;
     }
   });
 });
