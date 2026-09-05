@@ -119,7 +119,7 @@ import { getConfig } from "../../server/config.ts";
 import { readCookie } from "./cookies.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError, parseInput, requiredText } from "./input.server.ts";
-import { IDLE_WINDOW_MS, LABEL_MAX_LENGTH, joinTransports, splitTransports } from "./lock.ts";
+import { CHALLENGE_TTL_MS, IDLE_WINDOW_MS, LABEL_MAX_LENGTH, joinTransports, splitTransports } from "./lock.ts";
 
 /** The household's own name, shown to a password manager as the relying party. */
 const RP_NAME = "Portfolio Tracker";
@@ -503,15 +503,6 @@ type ChallengePurpose =
 /** The purposes an *assertion* (a `navigator.credentials.get()` response) may be scoped to. */
 type AssertionScope = { kind: "unlock" } | { kind: "enrol" } | { kind: "remove"; credentialId: string };
 
-/**
- * How long a minted challenge is good for, in milliseconds. Longer than the
- * ceremony's own 60-second default `timeout` (`generateRegistrationOptions`,
- * `generateAuthenticationOptions`), so a slow password-manager prompt does
- * not race the browser's own give-up against ours; short enough that an
- * abandoned challenge does not linger.
- */
-const CHALLENGE_TTL_MS = 2 * 60 * 1000;
-
 /** Every kind a challenge can be minted for — {@link ChallengePurpose} without its per-target fields. */
 type ChallengeKind = ChallengePurpose["kind"];
 
@@ -547,7 +538,10 @@ const CHALLENGE_KINDS: readonly ChallengeKind[] = ["unlock", "enrol", "remove", 
  * confined to the one door it is reachable through, and never reaches the
  * two recovery paths sitting behind the lock.
  */
-const MAX_LIVE_CHALLENGES_PER_PURPOSE = 500;
+// Exported for `tests/lock.test.ts` alone, which has to fill a purpose's
+// budget to observe what eviction chooses — a test that hard-coded 500
+// beside this could only ever drift from it silently.
+export const MAX_LIVE_CHALLENGES_PER_PURPOSE = 500;
 
 type ChallengeEntry = { purpose: ChallengePurpose; expiresAt: number; spent: boolean };
 
@@ -574,23 +568,38 @@ const challenges = new Map<string, ChallengeEntry>();
  * found while walking it is that kind's oldest; cheap enough, since eviction
  * only ever runs once a kind is over its own budget, not on every mint.
  */
-function evictOldestOfKind(kind: ChallengeKind): void {
-  let live = 0;
+function evictOldestOfKind(kind: ChallengeKind, now: number): void {
+  let held = 0;
   for (const entry of challenges.values()) {
-    if (entry.purpose.kind === kind) live++;
+    if (entry.purpose.kind === kind) held++;
   }
 
-  while (live > MAX_LIVE_CHALLENGES_PER_PURPOSE) {
-    let oldest: string | undefined;
+  while (held > MAX_LIVE_CHALLENGES_PER_PURPOSE) {
+    // **A spent or expired entry goes first, always.** The budget bounds the
+    // map, so every entry of the kind counts toward it — but which one is
+    // dropped is a separate question, and dropping a *usable* challenge
+    // while a dead one sits beside it is how a flood of spend-and-retry
+    // cycles evicted the confirmation somebody was in the middle of. Nobody
+    // can use a spent or expired entry; it is only being kept so
+    // {@link takeChallenge} can say which of the two happened.
+    let victim: string | undefined;
     for (const [text, entry] of challenges) {
-      if (entry.purpose.kind === kind) {
-        oldest = text;
+      if (entry.purpose.kind === kind && (entry.spent || entry.expiresAt <= now)) {
+        victim = text;
         break;
       }
     }
-    if (oldest === undefined) break;
-    challenges.delete(oldest);
-    live--;
+    if (victim === undefined) {
+      for (const [text, entry] of challenges) {
+        if (entry.purpose.kind === kind) {
+          victim = text;
+          break;
+        }
+      }
+    }
+    if (victim === undefined) break;
+    challenges.delete(victim);
+    held--;
   }
 }
 
@@ -604,12 +613,20 @@ function evictOldestOfKind(kind: ChallengeKind): void {
  * reads the clock at the one moment it is guaranteed to be asked to.
  */
 function sweepChallenges(now: number): void {
+  // A *whole TTL past* expiry, not the expiry itself. Deleting on the
+  // instant an entry expires makes {@link takeChallenge}'s "has expired"
+  // sentence unreachable the moment any later ceremony mints anything: the
+  // entry is gone, so the same submission reads as "never issued by this
+  // instance" — a true statement about the map and a false one about what
+  // happened, and the more alarming of the two to a family member who simply
+  // took too long. Keeping it one more window costs one small entry per
+  // abandoned ceremony and buys the honest answer.
   for (const [text, entry] of challenges) {
-    if (entry.expiresAt <= now) challenges.delete(text);
+    if (entry.expiresAt + CHALLENGE_TTL_MS <= now) challenges.delete(text);
   }
 
   for (const kind of CHALLENGE_KINDS) {
-    evictOldestOfKind(kind);
+    evictOldestOfKind(kind, now);
   }
 }
 
@@ -1100,13 +1117,31 @@ async function registrationOptionsFor(
  * insert refuses only after), which is exactly why the refusal belongs at
  * this end of the ceremony and not the other.
  */
+/**
+ * The characters a label may not carry, and the ones it deliberately may.
+ *
+ * Refused: `\p{Cc}` (C0 and C1, which is where a NUL or a newline lives);
+ * U+2028 and U+2029, the line and paragraph separators — the message below
+ * promises no line break, and those are line breaks; the bidirectional
+ * overrides and isolates U+202A–U+202E and U+2066–U+2069, which can make a
+ * row in Settings read back to front, so somebody removes the wrong passkey;
+ * and U+200B, the zero width space, which makes a label that looks blank or
+ * looks identical to another one.
+ *
+ * Allowed on purpose: U+200D, the zero width joiner, and the variation
+ * selectors. Emoji sequences are built out of them, and a household that
+ * labels a passkey with one is doing nothing wrong — refusing them to catch
+ * an invisible character would cost more than it buys.
+ */
+const REFUSED_LABEL_CHARACTERS = /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B]/u;
+
 const NO_CONTROL_CHARACTERS_MESSAGE =
-  "A label cannot carry a line break or another control character.";
+  "A label cannot carry a line break, an invisible character, or another control character.";
 const NOT_WELL_FORMED_MESSAGE = "A label cannot carry an incomplete character.";
 
 const labelInput = z.object({
   label: requiredText("A label", LABEL_MAX_LENGTH)
-    .refine((value) => !/[\p{Cc}]/u.test(value), { message: NO_CONTROL_CHARACTERS_MESSAGE })
+    .refine((value) => !REFUSED_LABEL_CHARACTERS.test(value), { message: NO_CONTROL_CHARACTERS_MESSAGE })
     .refine((value) => value.isWellFormed(), { message: NOT_WELL_FORMED_MESSAGE }),
 });
 

@@ -104,7 +104,7 @@ import { data, useFetcher, useRevalidator } from "react-router";
 
 import { formatDate, formatDateLocal } from "~/lib/format";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
-import { LABEL_MAX_LENGTH } from "~/lib/lock";
+import { CHALLENGE_TTL_MS, LABEL_MAX_LENGTH } from "~/lib/lock";
 import {
   beginEnrolment,
   clearedLockCookie,
@@ -508,21 +508,6 @@ function LocalDate({ instant, initialText }: { instant: Date; initialText: strin
 type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
 
 /**
- * How long registration options stay usable before `requestRegistration`
- * must not be handed them at all (the stale-registration-options guard) — matching `lock.server.ts`'s
- * own `CHALLENGE_TTL_MS`, restated rather than imported: that constant is a
- * `.server.ts` export, and reaching it from code this component runs in the
- * browser would ship server code past the bundle boundary CLAUDE.md draws,
- * the identical reason `unlock-ceremony.ts`'s own ceremony imports are all
- * dynamic. Past this, the ceremony still runs — the authenticator creates a
- * real credential in the family member's own password manager — and only
- * *then* does the server refuse the stale challenge behind it, leaving an
- * orphaned passkey nobody asked for. Checking first is what keeps that from
- * ever happening rather than merely reporting it afterwards.
- */
-const REGISTRATION_OPTIONS_TTL_MS = 2 * 60 * 1000;
-
-/**
  * What the family reads when the provider refuses to make a second passkey
  * for this app — `excludeCredentials`' client-side half. The library's own
  * sentence for it is "The authenticator was previously registered", which is
@@ -557,7 +542,7 @@ export const NOSCRIPT_MESSAGE =
  * out.
  */
 export function registrationOptionsExpired(mintedAt: number, now: number): boolean {
-  return now - mintedAt >= REGISTRATION_OPTIONS_TTL_MS;
+  return now - mintedAt >= CHALLENGE_TTL_MS;
 }
 
 /** Shown when the Create step sat long enough for its own options to expire (the stale-registration-options guard) — never silent, and never a passkey prompt run against a challenge that can no longer succeed. */
@@ -947,7 +932,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
  * twice and allowed to drift.
  *
  * The unspent `register` challenge is simply abandoned. That costs nothing:
- * {@link REGISTRATION_OPTIONS_TTL_MS}'s own header says a stale one is
+ * {@link CHALLENGE_TTL_MS}'s own header says a stale one is
  * refused on arrival anyway, and it is bounded by the per-purpose budget the
  * domain module keeps.
  */
