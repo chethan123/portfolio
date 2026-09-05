@@ -85,6 +85,11 @@ In production the Caddyfile's `handle /healthz` is exact, so `/healthz.data` is 
 is a signed-in family member without a passkey, which is the adversary ADR-0012 names. Setup
 state, never a figure.
 
+_Decided 2026-09-05, after this review: kept as it is, deliberately — the request is behind the
+gate and the fields are setup state. Spec [0020](../specs/0020-the-lock-hardened.md) records the
+decision; its ticket 08 corrects the comment in `app/root.tsx` that gives the wrong reason for the
+same conclusion. No ticket changes the behaviour._
+
 ### F3 · should-fix — the two wirings the lock rests on are not pinned by any test
 
 Three regressions, each one line, each leaves the suite green:
@@ -461,11 +466,8 @@ five are the launch conditions; "re-verify" names what has to be looked at again
    resolves to `evil.test` and fails. Tests: the five spellings above, on `/unlock`, `/masking`
    and `/refresh`. Re-verify: the unlock action's redirect on a normal return, and the middleware's
    own `redirectTo` round trip.
-2. **Keep the root loader neutral on every exempt path** (F2). Either return
-   `UNLOCK_SCREEN_ROOT_DATA` for `/healthz` as for `/unlock`, or exempt `/healthz` only for a
-   request that is not a `.data` request. Test: `GET /healthz.data?_routes=root` while locked, no
-   cookie, carries none of the five fields. Re-verify: `/healthz` itself still 200 with no cookie;
-   the compose healthchecks.
+2. ~~**Keep the root loader neutral on every exempt path** (F2).~~ Declined by the owner on
+   2026-09-05; see the note under F2. The comment is corrected instead (spec 0020, ticket 08).
 3. **Pin the wiring** (F3). Five tests: (a) a request through the built server bundle's
    `createRequestHandler` — or a test that asserts `react-router.config.ts` exports
    `future.v8_middleware === true` at minimum — proving a locked, grant-less document request is
