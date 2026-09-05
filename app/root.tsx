@@ -771,6 +771,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
    * from handing `watchReentry` a `hasPasskey` belief that this page baked in
    * at render time; the parameter that carried it is gone, so there is no
    * longer a shape here for a call site to get wrong.
+   *
+   * **No test in this repository reaches the line below, and none can.** The
+   * suite is DOM-less by design (CLAUDE.md, "Tests"): every `Layout` test
+   * renders through `renderToStaticMarkup`, where React runs no effect at
+   * all, so a reintroduced `if (!hasPasskey) return;` on the next line would
+   * pass `npm run typecheck`, `npm run build` and every one of these tests.
+   * `tests/reentry.test.ts` drives `watchReentry` directly and pins what it
+   * does once installed; that this component installs it is checked by hand
+   * instead, by the drive script under
+   * `docs/research/2026-09-05-lock-slice-launch-review/harness/` — its steps
+   * S8 (hidden past the grace posts the lock) and S9 (a tab that rendered
+   * before the first enrolment locks on its return) both fail if this effect
+   * stops running. Do not close the gap by adding jsdom or a test renderer;
+   * the gap is stated here so the next person knows the manual check is the
+   * evidence.
    */
   useEffect(() => {
     if (isUnlockScreen) return;

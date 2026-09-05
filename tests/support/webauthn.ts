@@ -148,7 +148,19 @@ export const backupEligible = true;
 // up | uv | be | bs | at — the attested-credential-data flag only registration sets.
 const REGISTRATION_FLAGS = 0x5d;
 // up | uv | be | bs — no attested credential data on an assertion.
-const AUTHENTICATION_FLAGS = 0x1d;
+export const AUTHENTICATION_FLAGS = 0x1d;
+/**
+ * The same assertion with the user-verification bit cleared — user present,
+ * nobody checked. A real authenticator sends this when it was asked for
+ * `preferred` and had nothing to check with; this instance asks for
+ * `required` and the library refuses it. Exported because signing it is the
+ * only way to prove that refusal is *in force* rather than merely
+ * not-restated: the signature is made over `authData`, so flipping the bit
+ * by hand after signing would fail for the wrong reason, and re-signing
+ * through the `flags` option is the same move `counter` and `rpID` already
+ * make.
+ */
+export const NO_USER_VERIFICATION_FLAGS = AUTHENTICATION_FLAGS & ~0x04;
 
 /**
  * The origin and relying-party id this fixture's signature was made for,
@@ -246,9 +258,11 @@ export function registrationResponse(
  */
 export function assertionResponse(
   challenge: string,
-  options?: { counter?: number; rpID?: string },
+  options?: { counter?: number; rpID?: string; flags?: number },
 ): AuthenticationResponseJSON {
-  const authData = authenticatorData(AUTHENTICATION_FLAGS, options?.counter ?? 0, { rpID: options?.rpID });
+  const authData = authenticatorData(options?.flags ?? AUTHENTICATION_FLAGS, options?.counter ?? 0, {
+    rpID: options?.rpID,
+  });
   const rawClientDataJSON = clientDataJSON("webauthn.get", challenge);
   const clientDataHash = createHash("sha256").update(rawClientDataJSON).digest();
 
