@@ -67,6 +67,12 @@ services:
         # this line, so `up` there still refuses to start `app` against a
         # database that isn't healthy.
         required: false
+        # One cost, since compose has no way to make a value conditional on a
+        # profile: with this file loaded *and* `COMPOSE_PROFILES=bundled-db`,
+        # `db` exists again but the dependency stays advisory, so an unhealthy
+        # bundled database lets `app` start and crash-loop rather than holding
+        # it back. Load this override only for the mode it is for; the base
+        # file alone keeps the hard gate.
 
   db:
     profiles: ["bundled-db"]

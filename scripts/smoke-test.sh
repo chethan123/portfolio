@@ -218,6 +218,12 @@ fi
 log "Checking compose.external-db.yaml starts neither db nor dump"
 (
   export COMPOSE_FILE="compose.yaml:compose.external-db.yaml:compose.dev.yaml"
+  # Emptied, not merely left alone: this check's whole precondition is that no
+  # profile is active, and `COMPOSE_PROFILES=bundled-db` is a mode the override
+  # documents. Inherited from the caller's environment or the project `.env` it
+  # would start `db` and `dump` and fail the assertion below on a topology that
+  # is behaving exactly as designed.
+  export COMPOSE_PROFILES=""
   trap 'docker compose down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
   docker compose up -d --build app worker gate
   # Containers that exist at all, running or not — `-a` is what makes this

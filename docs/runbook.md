@@ -667,14 +667,17 @@ account `./volumes/dumps` belongs to, and `POSTGRES_PASSWORD` is any freshly gen
 every required variable holds something:
 
 ```sh
+docker compose up -d db
 docker compose exec db psql -U portfolio -d portfolio \
   -c "alter role portfolio with password 'the-value-you-just-generated'"
 docker compose up -d
 ```
 
-If the host has also rebooted since `.env` was lost, `db` still starts cleanly on that placeholder
-value: Postgres reads `POSTGRES_PASSWORD` only once, to initialise an empty data directory, and this
-one is not empty — the value only has to match what you put in `.env`, never what it originally was.
+`db` first, and on its own: `exec` enters a *running* container, and if the host rebooted while
+`.env` was unusable there is nothing to enter — every compose verb was refusing, so nothing came
+back up. It starts cleanly on the placeholder because Postgres reads `POSTGRES_PASSWORD` only once,
+to initialise an empty data directory, and this one is not empty: the value only has to match what
+you put in `.env`, never what it originally was.
 
 Why: [Environment variables](operating.md#environment-variables), [Backups](operating.md#backups).
 

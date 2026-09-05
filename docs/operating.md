@@ -1373,6 +1373,16 @@ here. Then, in this order:
    `POSTGRES_PASSWORD`. Skip this and step 4 refuses by name — the message `compose.yaml` carries
    points back to this section — rather than starting anything half-configured.
 
+**If you run your own Postgres, steps 4 and the backup below are not yours to run as written.**
+Both go through `docker compose exec db`, and under
+[`compose.external-db.yaml`](#running-against-your-own-postgres) there is no `db` service to enter —
+the profile keeps it from starting, so the command either fails outright or, worse, dumps a bundled
+container left behind by an earlier release and never touches the database `DATABASE_URL` actually
+names. Take the backup with your own Postgres's own tooling, and change the `portfolio` role's
+password there, by whatever route that server gives you. Steps 1, 2, 3 and 5 are the same for you as
+for anyone; `POSTGRES_PASSWORD` still has to hold something, because `compose.yaml` refuses to
+interpolate without it even for a service it will not start.
+
 **Take the pre-upgrade backup here, between steps 3 and 4, not before either of them.** Earlier and
 interpolation refuses `exec` exactly as it refuses every other verb, because `.env` does not hold
 anything for `POSTGRES_PASSWORD` yet; from this point on it does, and the role has not been touched
@@ -1491,8 +1501,15 @@ mkdir -p ./volumes/db/data
 docker run --rm \
   -v portfolio_db-data:/from -v "$PWD/volumes/db/data:/to" \
   postgres:17-alpine cp -a /from/. /to/   # -a keeps uid 70 and the 0700 mode
-docker compose up -d                      # on the new one
+docker compose up -d                      # on the new one — see the note below first
 ```
+
+**That last `up -d` refuses on this release until `.env` carries `POSTGRES_PASSWORD`**, and an
+instance old enough to still hold `portfolio_db-data` almost certainly has no such line — it was
+optional then, and commented out in the example file. The value has to match the password the copied
+cluster's `portfolio` role already holds, because nothing re-initialises it: put that in, or, if it
+is lost with the rest, do the password cutover in [Upgrading](#upgrading) first and change the role
+through `db`'s own local `trust` line once it is up.
 
 Check the instance, not the copy: sign in and open a screen with data on it. Then, once you are
 sure, `docker volume rm portfolio_db-data` — the last copy of anything you did not also dump.

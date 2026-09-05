@@ -313,8 +313,10 @@ services:
   # The internet-facing half of spec 0018: `yahoo-finance2` behind a unix
   # socket, same image as `app` with its `CMD` replaced by the worker
   # entrypoint. Since ticket 06's cutover `app` above dials this socket for
-  # every price fetch instead of calling Yahoo in-process; this is now the
-  # only container in the stack that reaches the internet at all.
+  # every price fetch instead of calling Yahoo in-process; no other container
+  # fetches a price. Not the only one with a route out, though — `gate` has
+  # one too, on `egress-gate`, for its token exchange with Google, and its
+  # own comment below says so.
   worker:
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
     pull_policy: always
