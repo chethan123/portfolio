@@ -111,6 +111,18 @@ export interface ManualNetworth {
   date: string;
 }
 
+export interface Passkey {
+  backup_eligible: boolean;
+  bootstrap: Generated<boolean>;
+  counter: Generated<Int8>;
+  credential_id: string;
+  enrolled_at: Generated<Timestamp>;
+  label: string;
+  last_used_at: Timestamp | null;
+  public_key: Buffer;
+  transports: string | null;
+}
+
 export interface Person {
   id: Generated<Int8>;
   name: string;
@@ -174,6 +186,13 @@ export interface SchemaMigrations {
   filename: string;
 }
 
+export interface UnlockGrant {
+  expires_at: Timestamp;
+  granted_at: Generated<Timestamp>;
+  id: string;
+  passkey_id: string;
+}
+
 export interface UploadDraft {
   account_id: Int8;
   as_of_date: string | null;
@@ -195,6 +214,7 @@ export interface DB {
   instrument: Instrument;
   instrument_alias: InstrumentAlias;
   manual_networth: ManualNetworth;
+  passkey: Passkey;
   person: Person;
   position_set: PositionSet;
   price_backfill: PriceBackfill;
@@ -203,5 +223,6 @@ export interface DB {
   price_poll: PricePoll;
   quote: Quote;
   schema_migrations: SchemaMigrations;
+  unlock_grant: UnlockGrant;
   upload_draft: UploadDraft;
 }
