@@ -456,12 +456,14 @@ async function unlinkIfExists(path: string): Promise<void> {
  * registered, before anything can be connected to; then `listen`; then
  * `chmod(socketPath, 0o660)` — `listen` creates the file at `0777 & ~umask`
  * (`0755` under the image's `022`) and takes no mode of its own (research
- * §8.6), and since `connect(2)` wants write permission, that mode admits
- * only the worker until this `chmod` opens it to the group. Any of the
- * three failing rejects with the raw error — its `code` and the path are
- * already in `.message` — so the caller below is the one place that logs and
- * exits; the two that fail after the handler is registered take it back off
- * on their way out, and the `chmod` one closes the server it is leaving.
+ * §8.6); the `chmod` widens the socket to the group rather than gating
+ * `app`, which runs as the same uid as this process and is already its
+ * owner. Four things can fail — the unlink, `listen` by event, `listen` by
+ * synchronous throw, and the `chmod` — and each rejects with the raw error,
+ * its `code` and the path already in `.message`, so the caller below is the
+ * one place that logs and exits. The three that fail after the handler is
+ * registered take it back off on their way out, and the `chmod` one also
+ * closes the server it is leaving.
  */
 export async function startWorker(options: StartWorkerOptions): Promise<http.Server> {
   const { socketPath, yahoo } = options;
@@ -519,14 +521,15 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   // another turn of the loop away. A `SIGTERM` arriving in that gap used to
   // find no handler at all and take Node's default disposition: the process
   // died by signal with the socket file still on disk, which is exactly the
-  // stop this handler exists to prevent. The gap is real but narrow — `listen`
-  // returning to `chmod` resolving measured under two milliseconds — so it is
-  // a race, not a certainty: spawning the entry point and signalling it the
-  // instant the socket file appeared, five of twelve starts died by signal
-  // before the move and none of twelve after, every one of the five leaving
-  // the file behind. The case pinning it in `tests/price-worker.test.ts` gates
-  // the `chmod` open rather than racing that window, which is why it fails
-  // every run instead of five times in twelve.
+  // stop this handler exists to prevent. The window is narrow — timing `bind`
+  // returning to this line over forty starts put the median near a tenth of a
+  // millisecond and the worst case under one — but narrow is not the same as
+  // unlikely, and how often a prober hits it says more about the prober than
+  // the code: spawning the entry point and signalling on the first inotify
+  // event caught it five times in twelve, and a busy spin on the file caught
+  // it twelve in twelve. None of twelve after the move, either way. The case
+  // pinning it in `tests/price-worker.test.ts` gates the `chmod` open rather
+  // than racing the window at all, so it fails on the ordering every run.
   const onSigterm = (): void => {
     // Every connection, not just the idle ones. `close()` waits for all of
     // them, and a socket that has never sent a byte is not *idle* in Node's
@@ -552,26 +555,36 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
       reject(error);
     };
     server.once("error", onListenError);
-    server.listen(socketPath, () => {
-      // Named, so this takes off the one listener this promise added and
-      // leaves any other alone.
+    try {
+      server.listen(socketPath, () => {
+        // Named, so this takes off the one listener this promise added and
+        // leaves any other alone.
+        server.removeListener("error", onListenError);
+        resolve();
+      });
+    } catch (error) {
+      // `listen` does not only *emit* its failures. Node reads any
+      // `socketPath` that parses as a number as a TCP port — `99999` throws
+      // `ERR_SOCKET_BAD_PORT` synchronously, straight out of this executor
+      // and past the `error` listener that would have cleaned up. Measured:
+      // the listener leaked on that path and on no other.
       server.removeListener("error", onListenError);
-      resolve();
-    });
+      onListenError(error instanceof Error ? error : new Error(String(error)));
+    }
   });
 
   try {
     await chmod(socketPath, 0o660);
   } catch (error) {
-    // The other failure path with a listener to take back — and the only one
-    // with a live server behind it, `listen` having already succeeded. What
-    // is left behind is not an over-open socket: `connect(2)` on a unix
-    // socket wants *write* permission, so the `0755` `listen` leaves under
-    // the image's umask admits nobody but the worker, and this `chmod` is
-    // what opens it to the group. Left alone it is worse than useless — a
-    // server still bound to a path the caller was told it never got, that
-    // `app` cannot reach and nothing will now widen. `close()` unlinks the
-    // path on its way out.
+    // The one failure path with a live server behind it, `listen` having
+    // already succeeded. The reason to tear down is not about permissions:
+    // `app` and `worker` run as the same uid (`compose.yaml`, neither carries
+    // a `user:` line), so `app` is this socket's *owner* and connects at the
+    // `0755` `listen` leaves as readily as at `0660` — the `chmod` widens the
+    // group, it does not gate `app`, and the `0770` directory is the fence
+    // either way (research §8.5, §8.6). The reason is plainer: a `startWorker`
+    // that rejected must not leave a server bound to a path its caller was
+    // told it never got. `close()` unlinks that path on its way out.
     process.removeListener("SIGTERM", onSigterm);
     server.closeAllConnections();
     server.close();
