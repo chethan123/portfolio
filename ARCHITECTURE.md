@@ -335,7 +335,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:637` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `server/yahoo-client.ts:118` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 
 **Owned by a module, upheld by its callers.**
@@ -1547,18 +1547,21 @@ the exemption survives only as long as that file says so.
                     ┌───────────┴────────────┐
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
-        the only importer in app/     implements both and nothing else;
-        (price-provider.server:776)   no test reaches the network
+        takes a YahooClient           implements both and nothing else;
+        (price-provider.server.ts:726)   no test reaches the network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
-makes that tolerable is that swapping it is a day's work — which is only true while this interface is
-the sole thing the write path imports. Both methods are required, not optional: a provider that
-cannot answer history is not this application's provider, and an optional method would let a batch be
-skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:933`), deliberately, to pin the static-versus-instance shape the
-adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
-client hands back.
+makes that tolerable is that swapping it is a day's work — which is only true while `server/yahoo-client.ts`
+is the sole importer of the library (ARCHITECTURE.md §4.2's single-site table), used by the worker
+directly and by this adapter until [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moves the
+app behind the socket. Both methods are required, not optional: a provider that cannot answer history
+is not this application's provider, and an optional method would let a batch be skipped with nothing
+saying so. One test (`tests/yahoo-client.test.ts:44`) pins the static-versus-instance shape the
+client depends on — `yahoo-finance2`'s default export is the `YahooFinance` *class*, whose own static
+`quote`/`chart` type-check and throw the moment either runs, before any network access — by swapping
+in a `fetch` that only records that it was reached: a regression back to the bare class would throw
+first and the fake would never see a call.
 
 These conversions happen at this boundary and nowhere else:
 

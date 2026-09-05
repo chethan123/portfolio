@@ -19,11 +19,11 @@ import {
   probeVerdicts,
   toProviderHistory,
   toProviderQuote,
-  yahooClient,
   yahooPriceProvider,
-  type ChartRequest,
   type HistoryRange,
 } from "~/lib/price-provider.server";
+
+import type { ChartRequest, YahooClient } from "../server/yahoo-client.ts";
 
 /** The fetch time, for the fallback path. Fixed so assertions can name it. */
 const FETCHED_AT = new Date("2026-06-05T18:00:00Z");
@@ -389,8 +389,13 @@ describe("probing symbols at creation time", () => {
   // The creation-time half of the currency guard (0004, "Resolution, and the
   // guard that has to run here"). Stubs only: the probe takes the client as a
   // parameter for exactly this reason, and no test here reaches the network.
-  const clientAnswering = (quote: (symbols: string[]) => Promise<unknown>) => async () => ({
+  // `chart` is never called by anything below — it exists only so the fake
+  // satisfies `YahooClient`'s shape (`server/yahoo-client.ts`).
+  const clientAnswering = (quote: (symbols: string[]) => Promise<unknown>): YahooClient => ({
     quote,
+    chart: () => {
+      throw new Error("not used in these tests");
+    },
   });
 
   it("answers ok for a symbol that resolves in USD", async () => {
@@ -824,8 +829,9 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
 
 describe("asking the client for one symbol's history", () => {
   /** A client with both halves, so the provider's type is satisfied honestly. */
-  const clientCharting = (chart: (symbol: string, options: ChartRequest) => Promise<unknown>) =>
-    async () => ({ quote: async () => [], chart });
+  const clientCharting = (
+    chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
+  ): YahooClient => ({ quote: async () => [], chart });
 
   it("sends one symbol per call, upper-cased, over the range's start", async () => {
     const seen: Array<{ symbol: string; options: ChartRequest }> = [];
@@ -902,38 +908,6 @@ describe("asking the client for one symbol's history", () => {
 
     await expect(provider.getDailyCloses("VTI", RANGE, NEW_YORK)).rejects.toThrow(
       "429 Too Many Requests",
-    );
-  });
-});
-
-describe("the shape of the library we depend on", () => {
-  it("hands back a client whose quote method is callable", async () => {
-    // The regression test for a bug that shipped. `yahoo-finance2`'s default
-    // export is the `YahooFinance` *class*, and the class carries a static
-    // `quote` that exists, type-checks, and throws "Call `const yahooFinance =
-    // new YahooFinance()` first" the moment it runs. Calling it on the export
-    // rather than on an instance fails on the first poll and every poll after,
-    // with the poller's catch swallowing it — no price is ever fetched and
-    // nothing in a fake-driven suite notices.
-    //
-    // No network: constructing the client and reading the method off it is the
-    // whole assertion.
-    const client = await yahooClient();
-
-    expect(typeof client.quote).toBe("function");
-    // The same trap, and the same regression: `chart` is a static on the class
-    // too, and calling it there throws on every backfill with the batch's catch
-    // swallowing it.
-    expect(typeof client.chart).toBe("function");
-  });
-
-  it("refuses to be used as a bare static, which is the trap", async () => {
-    // Pinning the reason the test above exists. If a future version makes the
-    // export directly callable this fails, and the indirection can go.
-    const { default: YahooFinance } = await import("yahoo-finance2");
-
-    expect(() => (YahooFinance as unknown as { quote: () => unknown }).quote()).toThrow(
-      /new YahooFinance\(\)/,
     );
   });
 });

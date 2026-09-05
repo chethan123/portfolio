@@ -61,6 +61,7 @@
  */
 import { z } from "zod";
 
+import { createYahooClient, type ChartRequest, type YahooClient } from "../../server/yahoo-client.ts";
 import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import { MONEY_SCALE, divide, render, toUnits } from "./money.ts";
 import { matchKey } from "./prices.server.ts";
@@ -593,55 +594,6 @@ export function toProviderHistory(
 }
 
 /**
- * The one `yahoo-finance2` instance this process uses. A fresh instance per
- * call redoes the library's cookie/crumb handshake — the backfill's
- * per-symbol `getDailyCloses` loop would become a burst of handshakes,
- * exactly what an unofficial endpoint rate-limits — and reset its
- * per-instance "shown once" notices, so the survey banner logged on every
- * tick. Memoized as a promise so two calls racing before the import resolves
- * still share one client.
- */
-let client: Promise<YahooClient> | undefined;
-
-/** The options one history call sends. Named so a fake can state what it saw. */
-export type ChartRequest = {
-  /** The range's start. A `YYYY-MM-DD` string; the library parses it to UTC midnight. */
-  period1: IsoDate;
-  interval: "1d";
-  /**
-   * `"split"` alone. The library's default is `"div|split|earn"`, and dividends
-   * and earnings are neither read nor wanted on this path.
-   */
-  events: "split";
-};
-
-/** What this module uses the library for, and nothing else. */
-type QuoteClient = { quote(symbols: string[]): Promise<unknown> };
-type YahooClient = QuoteClient & {
-  chart(symbol: string, options: ChartRequest): Promise<unknown>;
-};
-
-/**
- * The shared `yahoo-finance2` client. **The default export is a class, not a
- * client**: every method also exists on the class as a static that throws (a
- * v2-to-v4 upgrade guard), so calling `quote(...)` on the export type-checks
- * and fails at runtime on every tick, swallowed by the poller's catch — which
- * no fake-driven test would notice, hence `tests/price-provider.test.ts`
- * asserts the shape directly. Imported dynamically so the network-touching
- * dependency stays out of the module graph of anything importing only the
- * `PriceProvider` type. Typed as "an object with a callable `quote`" because
- * the library's own overloads do not resolve on an array query.
- */
-export async function yahooClient(): Promise<YahooClient> {
-  if (client === undefined) {
-    client = import("yahoo-finance2").then(
-      ({ default: YahooFinance }) => new YahooFinance() as unknown as YahooClient,
-    );
-  }
-  return client;
-}
-
-/**
  * What one probe can say — a closed set, because the caller's three answers
  * are fixed by the spec: create, refuse naming the currency, or create anyway
  * and let the next refresh mark it stale.
@@ -747,13 +699,11 @@ export function probeVerdicts(
  */
 export async function probeSymbols(
   symbols: string[],
-  // The quote half only, so a stub stays one async arrow returning one method.
-  client: () => Promise<QuoteClient> = yahooClient,
+  client: YahooClient = createYahooClient(),
 ): Promise<Map<string, SymbolProbe>> {
   try {
-    const provider = await client();
     const fetchedAt = new Date();
-    const raw = await provider.quote(symbols);
+    const raw = await client.quote(symbols);
     return probeVerdicts(symbols, raw, fetchedAt);
   } catch {
     // Deliberately everything: whatever the provider did, the caller's
@@ -773,18 +723,18 @@ export async function probeSymbols(
  * `ProviderQuote` has nowhere to carry it, on purpose (§6.1 stores no
  * currency column).
  */
-export function yahooPriceProvider(client: typeof yahooClient = yahooClient): PriceProvider {
+export function yahooPriceProvider(client: YahooClient = createYahooClient()): PriceProvider {
   return {
     async getQuotes(symbols: string[]): Promise<ProviderQuote[]> {
       if (symbols.length === 0) return [];
 
-      const provider = await client();
       const fetchedAt = new Date();
 
-      // `unknown[]` because `yahooClient` is typed loosely. Nothing is lost:
-      // `yahooQuote` validates every field read — the correct posture towards
-      // an unofficial client for an unpublished endpoint (§6.1).
-      const raw = (await provider.quote(symbols)) as unknown[];
+      // `unknown[]` because the client is typed loosely (`server/yahoo-client.ts`).
+      // Nothing is lost: `yahooQuote` validates every field read — the
+      // correct posture towards an unofficial client for an unpublished
+      // endpoint (§6.1).
+      const raw = (await client.quote(symbols)) as unknown[];
 
       const quotes: ProviderQuote[] = [];
       for (const entry of raw) {
@@ -809,8 +759,6 @@ export function yahooPriceProvider(client: typeof yahooClient = yahooClient): Pr
       marketTimeZone: string,
     ): Promise<ProviderHistory> {
       try {
-        const provider = await client();
-
         // One symbol per call. `matchKey` because that is the form the quote
         // path sends and the endpoint answers in; the stored symbol is
         // untouched, and nothing here matches one back — one call is one
@@ -824,11 +772,8 @@ export function yahooPriceProvider(client: typeof yahooClient = yahooClient): Pr
         // `until` and now out of `events.splits` while leaving every close in
         // the range adjusted for them: silently wrong by the whole factor. The
         // range's real end is enforced on each bar's market date instead.
-        const raw = await provider.chart(matchKey(symbol), {
-          period1: range.from,
-          interval: "1d",
-          events: "split",
-        });
+        const request: ChartRequest = { period1: range.from, interval: "1d", events: "split" };
+        const raw = await client.chart(matchKey(symbol), request);
 
         return toProviderHistory(raw, range, marketTimeZone);
       } catch (error) {
