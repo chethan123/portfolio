@@ -443,7 +443,7 @@ done
 # worker's socket — only app and worker may mount price-worker-sock at all.
 log "Checking the price-worker-sock volume fence"
 for service in db dump gate caddy; do
-  mount_names="$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' \
+  mount_names="$(docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' \
     "$(docker compose ps -q "$service")")" ||
     fail "could not inspect ${service}'s mounts"
   [[ "$mount_names" != *"price-worker-sock"* ]] ||
@@ -451,16 +451,43 @@ for service in db dump gate caddy; do
 done
 printf 'db, dump, gate, caddy do not mount price-worker-sock\n'
 
+# The mount set only says who is on the volume, not what they may do with it.
+# `app` mounts it `:ro` (compose.yaml:236) — deleting those two characters
+# leaves every check above green, because nothing until now reads app's own
+# mount. `.RW` is Docker's own name for the field; false is a read-only mount.
+log "Checking app's price-worker-sock mount is read-only"
+app_sock_rw="$(docker inspect --format \
+  '{{range .Mounts}}{{if eq .Destination "/run/price-worker"}}{{.RW}}{{end}}{{end}}' \
+  "$(docker compose ps -q app)")" || fail "could not inspect app's mounts"
+[[ "$app_sock_rw" == "false" ]] ||
+  fail "app mounts price-worker-sock read-write (RW=${app_sock_rw:-absent}); it may only connect"
+printf 'app: price-worker-sock is read-only\n'
+
 log "Checking the worker's resource bounds"
-resource_line="$(docker inspect -f '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' \
+resource_line="$(docker inspect --format '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' \
   "$(docker compose ps -q worker)")" || fail "could not inspect the worker's resource limits"
 worker_pids="${resource_line%% *}"
 worker_mem="${resource_line##* }"
-[[ "$worker_pids" =~ ^[0-9]+$ && "$worker_pids" -gt 0 ]] ||
-  fail "worker PidsLimit is '${worker_pids}', expected a positive number"
-[[ "$worker_mem" =~ ^[0-9]+$ && "$worker_mem" -gt 0 ]] ||
-  fail "worker Memory is '${worker_mem}', expected a positive number"
+# Exact, not "positive": compose.yaml sets pids_limit: 64 and mem_limit: 256m
+# (268435456 bytes) precisely to stop a fork bomb or a memory balloon, and
+# both of those still report as positive numbers.
+[[ "$worker_pids" == "64" ]] ||
+  fail "worker PidsLimit is '${worker_pids}', expected 64"
+[[ "$worker_mem" == "268435456" ]] ||
+  fail "worker Memory is '${worker_mem}', expected 268435456 (256m)"
 printf 'worker: PidsLimit=%s Memory=%s\n' "$worker_pids" "$worker_mem"
+
+# compose.yaml:271-276 spends six lines arguing the worker gets no
+# `environment:` at all — no DATABASE_URL, no PGPASSWORD — because the
+# network fence below does not cover an external Postgres reachable over the
+# open internet. Asserted here so adding DATABASE_URL "for convenience" fails
+# loudly instead of only ever passing.
+log "Checking the worker carries no DATABASE_URL"
+worker_env="$(docker inspect --format '{{json .Config.Env}}' "$(docker compose ps -q worker)")" ||
+  fail "could not inspect the worker's environment"
+[[ "$worker_env" != *"DATABASE_URL="* ]] ||
+  fail "worker's environment carries DATABASE_URL: ${worker_env}"
+printf 'worker: no DATABASE_URL\n'
 
 # The one positive assertion the channel allows: from app, over the shared
 # socket, at the mount path both sides agree on — the proof that the volume,
@@ -487,6 +514,18 @@ mounts_line="$(docker compose exec -T worker grep ' /run/price-worker ' /proc/mo
   fail "worker's /proc/mounts has no entry for /run/price-worker"
 [[ "$mounts_line" == *" tmpfs "* ]] ||
   fail "/run/price-worker is not tmpfs in worker: ${mounts_line}"
+# `*" tmpfs "*` alone also matches the device column: delete the volume's
+# `o:` string (compose.yaml's price-worker-sock driver_opts) and you get a
+# root-owned 1777 tmpfs of half of RAM that still binds and still passes that
+# check. The kernel shows tmpfs options in a fixed order — size, mode, uid,
+# gid — reproduced here with a throwaway mount:
+# `tmpfs /tmp/x tmpfs rw,relatime,size=1024k,mode=770,uid=1000,gid=1000 0 0`.
+# Matched one option at a time rather than as one run: the three are adjacent
+# only while nothing between them is set, and `nr_inodes` prints in that gap.
+for option in mode=770 uid=1000 gid=1000; do
+  [[ "$mounts_line" == *"$option"* ]] ||
+    fail "/run/price-worker tmpfs is missing ${option}: ${mounts_line}"
+done
 printf 'worker: %s\n' "$mounts_line"
 
 # --- The worker shares no network with app, gate or db ------------------------
@@ -496,14 +535,23 @@ printf 'worker: %s\n' "$mounts_line"
 # timeout — and never `ping`, since NET_RAW is dropped (cap_drop: ALL).
 log "Checking the worker cannot reach app, gate or db"
 
+# Space-separated, not concatenated: `{{range}}` supplies no separator of its
+# own, and a service on more than one network (spec §3.6, at ticket 07 —
+# the release this assertion exists for) would glue two addresses into one
+# string. That string still passes the `-n` guard below and reports
+# "unreachable" when probed, for the wrong reason, so every address the
+# service holds gets its own probe rather than one joined string.
 container_ip() {
-  docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+  docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' \
     "$(docker compose ps -q "$1")"
 }
 
+# ECONNREFUSED proves a route exists to that host — the port is merely
+# closed there — so it counts as reached, not unreachable. Everything else
+# (no route, unresolvable name, a real timeout) counts as unreachable.
 unreachable_from_worker() {
-  local host="$1" port="$2" desc="$3"
-  docker compose exec -T worker node -e '
+  local host="$1" port="$2" desc="$3" output
+  if output="$(docker compose exec -T worker node -e '
     const net = require("node:net");
     const [host, port] = process.argv.slice(1);
     const socket = net.connect({ host, port: Number(port) });
@@ -517,24 +565,34 @@ unreachable_from_worker() {
     socket.setTimeout(3000);
     socket.once("connect", () => finish(1));
     socket.once("timeout", () => finish(0));
-    socket.once("error", () => finish(0));
-  ' "$host" "$port" ||
-    fail "worker reached ${desc} (${host}:${port}) — network isolation broken"
-  printf 'worker cannot reach %s (%s:%s)\n' "$desc" "$host" "$port"
+    socket.once("error", (e) => finish(e.code === "ECONNREFUSED" ? 1 : 0));
+  ' "$host" "$port" 2>&1)"; then
+    printf 'worker cannot reach %s (%s:%s)\n' "$desc" "$host" "$port"
+    return 0
+  fi
+  # Empty output means the node script itself exited 1 (reached). Anything on
+  # stdout/stderr means `docker compose exec` never got that far — a missing
+  # container or a compose error should not read as a broken-isolation finding.
+  [[ -z "$output" ]] ||
+    fail "could not test whether worker can reach ${desc} (${host}:${port}): ${output}"
+  fail "worker reached ${desc} (${host}:${port}) — network isolation broken"
 }
 
-app_ip="$(container_ip app)"
-gate_ip="$(container_ip gate)"
-db_ip="$(container_ip db)"
-[[ -n "$app_ip" && -n "$gate_ip" && -n "$db_ip" ]] ||
-  fail "could not resolve a container IP: app=${app_ip:-?} gate=${gate_ip:-?} db=${db_ip:-?}"
+probe_all_ips() {
+  local service="$1" port="$2" desc="$3" ips ip
+  ips="$(container_ip "$service")"
+  [[ -n "$ips" ]] || fail "could not resolve a container IP for ${service}"
+  for ip in $ips; do
+    unreachable_from_worker "$ip" "$port" "${desc} by IP (${ip})"
+  done
+}
 
 unreachable_from_worker app 3000 "app by name"
-unreachable_from_worker "$app_ip" 3000 "app by IP"
+probe_all_ips app 3000 "app"
 unreachable_from_worker gate 4180 "gate by name"
-unreachable_from_worker "$gate_ip" 4180 "gate by IP"
+probe_all_ips gate 4180 "gate"
 unreachable_from_worker db 5432 "db by name"
-unreachable_from_worker "$db_ip" 5432 "db by IP"
+probe_all_ips db 5432 "db"
 
 # DNS still works — until 08's allowlist.
 docker compose exec -T worker timeout 5 nslookup example.com >/dev/null ||

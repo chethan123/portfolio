@@ -480,7 +480,7 @@ volumes:
 services:
   db:     { networks: [backend] }
   dump:   { networks: [backend] }
-  app:    { networks: [backend, caddy-app], volumes: [price-worker-sock:/run/price-worker] }   # no route out
+  app:    { networks: [backend, caddy-app], volumes: [price-worker-sock:/run/price-worker:ro] }   # no route out; :ro — it only connects
   worker: { networks: [egress-worker],     volumes: [price-worker-sock:/run/price-worker] }   # the internet and the socket, nothing else
   gate:   { networks: [caddy-gate, egress-gate] }
   caddy:  { networks: [caddy-app, caddy-gate, ingress] }
@@ -731,14 +731,19 @@ comment and the poller's header follow. `docs/data-model.md` is untouched: this 
   a feature on that property that reflects bytes; an in-TLS `Host:` naming another property under a
   wildcard certificate is the edge's to route, and if the edge ever accepts an encrypted ClientHello
   the check degrades to host-only.
-- **The shared tmpfs.** The app and the worker share a 1 MiB tmpfs: a compromised app can unlink or
-  replace the socket file, squat the path with a directory or spend the volume's inodes — a
+- **The shared tmpfs.** The app and the worker share a 1 MiB tmpfs: ~~a compromised app can unlink
+  or replace the socket file, squat the path with a directory or spend the volume's inodes~~ — a
   self-inflicted refresh outage that also stops the worker starting after its next restart
   (`EISDIR`, `EADDRINUSE`, `ENOSPC`; a *data*-full tmpfs does not stop `bind()`), recovered by
   recreating the volume (ticket 09's runbook entry); a compromised worker can do the same from its
-  side, denial only. A symlink the worker plants at the path is followed by the app's `connect()`
-  in the app's own mount namespace, which holds no other socket to reach; the app never reads the
-  volume and never creates a socket there.
+  side, denial only. **Corrected 2026-09-05, on building
+  [ticket 05](price-worker/05-deploy-the-worker-alongside.md): the app's half of that is gone.**
+  The app mounts the volume `:ro`, which makes every one of those three `EROFS` from its side —
+  measured through a read-only bind mount, where `chmod`, `unlink` and `bind` are all refused while
+  `connect(2)` still works, because the read-only check exempts a socket inode. The worker's side
+  stands as written, and it is the side that has to create the socket. A symlink the worker plants
+  at the path is followed by the app's `connect()` in the app's own mount namespace, which holds no
+  other socket to reach; the app never reads the volume and never creates a socket there.
 - **Who reaches the socket.** Host root does; a host uid or gid 1000 cannot traverse the daemon's
   data root (research §8.5). SELinux-enforcing hosts may deny the cross-container connect with the
   mode right; `userns-remap` and rootless Docker are untested — the from-`app` `/healthz` command

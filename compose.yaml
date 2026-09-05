@@ -496,8 +496,10 @@ volumes:
   # `node` user (research §8.4), so the socket the worker creates at `0660`
   # inside this `0770` directory is connectable by uid 1000 or gid 1000 — and
   # by root regardless, through `CAP_DAC_OVERRIDE` (research §8.5). The mode
-  # is not the fence: `app` owns the directory and can `chmod` it. The fence
-  # is that only `app` and `worker` mount this volume at all, which
+  # is not the fence: `app`'s mount is `:ro` (line 236), so it cannot `chmod`
+  # the directory or unlink the socket — a read-only mount refuses both with
+  # `EROFS` before any ownership check runs. The fence is still the mount
+  # set: only `app` and `worker` mount this volume at all, which
   # scripts/smoke-test.sh asserts.
   #
   # `size=1m`: a socket needs no blocks, and a *data*-full tmpfs would not
@@ -524,7 +526,13 @@ networks:
   # this release, so `db`, `dump`, `app`, `gate` and `caddy` all stay exactly
   # where they are, on the implicit `default` bridge, until the
   # network-lockdown release moves everyone off it. `worker` therefore shares
-  # no network with `app`, `gate` or `db`: unreachable from it by name and by
-  # IP, the volume above being its only link to the rest of the stack.
+  # no network with `app`, `gate` or `db`: unreachable from them by name and
+  # by IP *on the compose network* — the volume above is its only link there,
+  # and scripts/smoke-test.sh asserts exactly that. Not isolated outright:
+  # research §1.5 says any container with a route to the host reaches
+  # Caddy's published `:80`, so `worker` always reaches `app` too, over the
+  # host and through the gate, the same path a LAN browser uses. Do not read
+  # this comment as ruling `worker` out as a source of requests to `app` —
+  # closing that path is the network-lockdown release's job.
   egress-worker:
     enable_ipv6: false
