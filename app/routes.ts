@@ -51,6 +51,13 @@ export default [
     route("display", "routes/settings/display.tsx"),
   ]),
 
+  // The screen a browser holding no valid grant is shown (docs/adr/0012,
+  // ticket 04) — `LOCK_EXEMPT_PATHS` in app/root.tsx names this exact path so
+  // the lock's own middleware never refuses it. Grouped here, beside the
+  // other routes the lock's own machinery depends on, rather than in nav
+  // order: nobody clicks their way here, the middleware redirects them.
+  route("unlock", "routes/unlock.tsx"),
+
   // The masking toggle's writer (spec 0007). No UI — the chrome's control
   // posts here so the toggle works with JavaScript off.
   route("masking", "routes/masking.ts"),

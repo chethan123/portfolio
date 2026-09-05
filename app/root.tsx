@@ -90,6 +90,21 @@ function normalizedPathname(pathname: string): string {
 }
 
 /**
+ * Whether `pathname` is the unlock screen — used by the loader below to skip
+ * reads a browser holding no grant has no business triggering, and by
+ * `Layout` to skip the chrome around it. Deliberately its own check rather
+ * than a lookup into {@link LOCK_EXEMPT_PATHS}: that array answers "does the
+ * lock middleware guard this path", which `/healthz` is also on and which
+ * neither of these two questions is — `Layout`'s own header already makes
+ * this argument for the chrome; the loader's reads are a third question that
+ * only happens to share today's answer, not a reason to fold three questions
+ * into one array.
+ */
+function isUnlockPath(pathname: string): boolean {
+  return normalizedPathname(pathname) === "/unlock";
+}
+
+/**
  * Every response the lock middleware lets through carries this — and it is
  * worth being exact about what that buys, because it is less than this slice
  * originally claimed.
@@ -251,6 +266,29 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
 export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
 
 /**
+ * The unlock screen's own answer — never the household's. `Layout` renders no
+ * chrome for this route (its own header explains why), but React Router
+ * serialises whatever this loader returns regardless of what `Layout` goes on
+ * to do with it, so removing the chrome hid the *consumers* of `gated` and
+ * `firstRun` without touching the hydration payload a browser holding no
+ * grant can still read out of the page source. Each field here is this same
+ * loader's own existing fail-safe default for "the read did not happen" —
+ * `firstRun: null` (no step to nag about), `masked: true` and
+ * `maskingPolicy: "masked"` (of the two ways to be wrong, a page of dots
+ * cannot expose anything) — chosen again for the same reason: none of them
+ * hands a proven-nothing browser a fact about the household. `gated: true` is
+ * the one field with no existing failure default to reuse, so it gets a fresh
+ * one on the same principle — it is the value that keeps `OpenInstanceBanner`
+ * off, had this browser somehow reached a screen that reads it.
+ */
+const UNLOCK_SCREEN_ROOT_DATA = {
+  gated: true,
+  firstRun: null as FirstRunStep,
+  masked: true,
+  maskingPolicy: "masked" as MaskingPolicy,
+};
+
+/**
  * What the shell around every page needs: whether anything guards the
  * instance, whether it is set up yet, and whether this browser is masked.
  *
@@ -263,6 +301,19 @@ export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
  * after hydration would produce (story 30). The policy read fails to
  * *masked*: of the two ways to be wrong with the database down, a page of
  * dots cannot expose anything.
+ *
+ * **The unlock screen gets none of this.** `isUnlockPath` below is checked
+ * after starting the price poller and before any other read: a browser
+ * holding no grant can reach only this one route, and can hammer it, so
+ * skipping `firstRunStep` and the masking-policy read here is a saved
+ * database round trip on exactly the request an un-granted browser controls
+ * — not only a data-shape decision. `startPricePoller()` runs first and
+ * unconditionally regardless of that branch: it is the *only* server-side
+ * path every render passes through while an instance is locked and nobody
+ * has unlocked it yet, since every other route's loader is refused before it
+ * ever runs (the middleware above throws before calling `next()`); skipping
+ * it here would mean prices never refresh for a household that has not yet
+ * unlocked anything today.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   // The quote refresh loop (§6.2), started here because root's loader is the
@@ -270,6 +321,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   // under `react-router-serve`). Idempotent, not awaited, cannot throw:
   // polling must never be able to fail a page render.
   startPricePoller();
+
+  const url = new URL(request.url);
+  if (isUnlockPath(url.pathname)) return UNLOCK_SCREEN_ROOT_DATA;
 
   let firstRun: FirstRunStep = null;
 
@@ -387,6 +441,49 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const firstRun =
     rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
+  /**
+   * The one screen rendered before any grant is proven — `LOCK_EXEMPT_PATHS`
+   * above is what lets the middleware serve it at all, and the chrome around
+   * it assumes the opposite of that: the nav rail links to Holdings,
+   * Analysis and Income; Upload assumes an account already exists to receive
+   * a statement; the masking toggle writes `document.cookie` *before* any
+   * network round trip, which on this screen would be a browser that has
+   * proved nothing genuinely changing persistent state and then bouncing;
+   * the first-run prompt and the open-instance banner both read off setup
+   * state — which of three configurations the household is in, whether
+   * anything guards the instance at all — that a browser holding no grant
+   * has no business learning (finding 3). Fifteen interactive elements, all
+   * dead ends, one of them worse than dead.
+   *
+   * **Hiding the chrome is not what keeps that setup state unread.** This
+   * branch only decides what renders; `rootData` for this route is the
+   * loader's own neutral `UNLOCK_SCREEN_ROOT_DATA` (the loader's own header),
+   * so the fact that `firstRun` and the banner's `gated` go unused here is a
+   * second, redundant guard rather than the one thing standing between a
+   * proven-nothing browser and the hydration payload.
+   *
+   * Checked through {@link isUnlockPath} rather than reusing
+   * `LOCK_EXEMPT_PATHS` itself: `/healthz` is on that list too and never
+   * reaches `Layout` at all — it renders no component — so "the lock does
+   * not guard this path" and "this path gets no chrome" are two different
+   * questions that only happen to share an answer for `/unlock` today;
+   * folding them into one array would make a future exemption's chrome a
+   * coincidence of that array rather than a decision someone made.
+   *
+   * Placed here, in `Layout`, rather than inside `unlock.tsx`'s own
+   * component — the existing precedent one paragraph up, suppressing the
+   * first-run prompt under `/settings`, draws the same line: the chrome is
+   * assembled in exactly one place for every route, and a route earns its
+   * way out of a piece of it here rather than rendering past a shell it was
+   * handed. It also pre-empts ticket 06's lock-now control, which is drawn
+   * "in both places `MaskingToggle` is rendered" and only while the instance
+   * is locked at all — both of which are true of this screen, and a stray
+   * copy of `MaskingToggle` here would have carried it along for free,
+   * offering to lock a browser that is already locked and, worse, discarding
+   * the return address ticket 03 encoded to get the reader back to it.
+   */
+  const isUnlockScreen = isUnlockPath(pathname);
+
   return (
     <html lang="en">
       <head>
@@ -403,56 +500,68 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
-        <div className="app">
-          <nav className="app-rail" aria-label="Primary">
-            <Brand search={owners} />
-            <ul className="app-nav">
-              <NavItems items={NAVIGATION} search={owners} />
-            </ul>
-            <ul className="app-nav app-nav--footer">
-              <NavItems items={FOOTER_NAVIGATION} />
-            </ul>
-            {/* In the rail's foot beside Settings rather than in its nav list:
-                it is a control, not a destination, and a `<li>` among the links
-                would announce it as one. */}
-            <MaskingToggle className="app-rail-masking" />
-
-            <Link className="button app-rail-action" to="/upload">
-              <UploadIcon />
-              Upload statement
-            </Link>
-          </nav>
-
-          <div className="app-canvas">
-            {/* Below 1024px the rail is gone, so the bar carries the mark and
-             * the one action the rail's foot would have held. */}
-            <header className="app-topbar">
-              <Brand search={owners} />
-              <div className="app-topbar-actions">
-                <MaskingToggle />
-                <Link className="button" to="/upload">
-                  <UploadIcon />
-                  Upload
-                </Link>
-              </div>
-            </header>
-
-            {rootData?.gated === false ? <OpenInstanceBanner /> : null}
-            <main className="app-main">
-              {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
-              {children}
-            </main>
+        {isUnlockScreen ? (
+          // The bare shell: no nav, no toggles, no upload button, no
+          // first-run prompt, no banner — see this function's own comment
+          // above. `.app`/`.app-main` are reused rather than new classes
+          // invented for one screen, so this gets the same centred column
+          // and padding every other page's content sits in without pulling
+          // in a single rail- or topbar-specific rule.
+          <div className="app">
+            <main className="app-main">{children}</main>
           </div>
+        ) : (
+          <div className="app">
+            <nav className="app-rail" aria-label="Primary">
+              <Brand search={owners} />
+              <ul className="app-nav">
+                <NavItems items={NAVIGATION} search={owners} />
+              </ul>
+              <ul className="app-nav app-nav--footer">
+                <NavItems items={FOOTER_NAVIGATION} />
+              </ul>
+              {/* In the rail's foot beside Settings rather than in its nav list:
+                  it is a control, not a destination, and a `<li>` among the links
+                  would announce it as one. */}
+              <MaskingToggle className="app-rail-masking" />
 
-          {/* The phone's nav: a bottom bar, which is what every mobile mock
-           * does — no drawer and no hamburger anywhere in the set (§13.1). */}
-          <nav className="app-bottomnav" aria-label="Primary">
-            <ul className="app-nav">
-              <NavItems items={NAVIGATION} search={owners} />
-              <NavItems items={FOOTER_NAVIGATION} />
-            </ul>
-          </nav>
-        </div>
+              <Link className="button app-rail-action" to="/upload">
+                <UploadIcon />
+                Upload statement
+              </Link>
+            </nav>
+
+            <div className="app-canvas">
+              {/* Below 1024px the rail is gone, so the bar carries the mark and
+               * the one action the rail's foot would have held. */}
+              <header className="app-topbar">
+                <Brand search={owners} />
+                <div className="app-topbar-actions">
+                  <MaskingToggle />
+                  <Link className="button" to="/upload">
+                    <UploadIcon />
+                    Upload
+                  </Link>
+                </div>
+              </header>
+
+              {rootData?.gated === false ? <OpenInstanceBanner /> : null}
+              <main className="app-main">
+                {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
+                {children}
+              </main>
+            </div>
+
+            {/* The phone's nav: a bottom bar, which is what every mobile mock
+             * does — no drawer and no hamburger anywhere in the set (§13.1). */}
+            <nav className="app-bottomnav" aria-label="Primary">
+              <ul className="app-nav">
+                <NavItems items={NAVIGATION} search={owners} />
+                <NavItems items={FOOTER_NAVIGATION} />
+              </ul>
+            </nav>
+          </div>
+        )}
         <ScrollRestoration />
         <Scripts />
         {/* The worker exists for its offline page alone and stores nothing on

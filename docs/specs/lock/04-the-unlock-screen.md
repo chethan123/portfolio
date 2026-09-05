@@ -59,9 +59,20 @@ own instance between two pull requests.
       record: the ceremony inside an installed iOS home-screen web app, whether a third-party password
       manager prompts or waves through after backgrounding, and whether the cross-device flow behaves
       the same in standalone display mode as in a tab
-- [ ] Each is recorded as observed or as unavailable — an honest "could not check, no such device" is
+- [x] Each is recorded as observed or as unavailable — an honest "could not check, no such device" is
       an acceptable outcome and an unstated one is not. Every other acceptance list here can pass while
       the household's primary device cannot unlock
+
+  Recorded here, rather than in the route's module header, because this is the checklist a future
+  reader audits this ticket against — one fact in one place beats a second copy in the code free to
+  drift from it:
+
+  1. Whether the ceremony works inside an installed iOS home-screen web app — **could not check — no
+     such device available in this environment.**
+  2. Whether a third-party password manager prompts or waves through after the app has been
+     backgrounded — **could not check — no such device available in this environment.**
+  3. Whether the cross-device flow behaves the same in standalone display mode as in a tab — **could
+     not check — no such device available in this environment.**
 
 **Tests**
 
