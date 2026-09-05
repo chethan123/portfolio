@@ -75,6 +75,15 @@
  * `unknown` and narrows through {@link narrowAssertion} or
  * {@link narrowRegistration} before touching it — this is the boundary
  * CLAUDE.md means by "Zod at the boundaries only, in the domain module".
+ * The library's *output* is checked too, where this module can say something
+ * useful about it: the attested credential id, which
+ * {@link completeRegistration} bounds and compares before either insert. It
+ * is not the only value the library forwards from client-chosen bytes
+ * unvalidated — `public_key` is re-encoded CBOR the library checks only for
+ * a supported `alg` — but it is the one whose shape this module depends on,
+ * since it is the id every later assertion is looked up by and the one every
+ * browser is handed in `allowCredentials`.
+ *
  * Only the outer shape this module itself dereferences (the id, the client
  * data) is checked; the rest is the library's own response schema to state,
  * left untouched for `verifyAuthenticationResponse` and
@@ -658,6 +667,42 @@ const webAuthnResponseShape = z.object({
 const UNREADABLE_RESPONSE_MESSAGE = "This passkey response could not be read.";
 
 /**
+ * The one field of a *registration* this module stores straight out of the
+ * client's own answer. `verifyRegistrationResponse` copies it verbatim —
+ * `transports: response.response.transports`
+ * (`node_modules/@simplewebauthn/server/esm/registration/verifyRegistrationResponse.js:202`)
+ * — and checks nothing about it, so anything the shared shape above lets
+ * through reaches `joinTransports` and then the column. A string rather than
+ * an array turned `transports.join` into a `TypeError` outside every `catch`
+ * and so into a 500; `[""]` stored the empty string migration 0012's own
+ * comment says the writer must refuse; and a comma inside an entry is a
+ * separator the reader splits on.
+ *
+ * The vocabulary is deliberately *not* enforced. That same migration comment
+ * says an unknown transport is still worth keeping — a value this app has
+ * never heard of is exactly what a browser needs to offer a path this app
+ * did not know about. The *count* is bounded even so: the whole registered
+ * vocabulary is six values, and without a cap a registration reporting
+ * twenty thousand of them stores a row of two hundred thousand characters
+ * that every browser is then handed inside `allowCredentials` on every
+ * unlock — the same poisoning as the empty entry, by volume rather than by
+ * value.
+ */
+const MAX_REPORTED_TRANSPORTS = 8;
+
+const registrationResponseShape = webAuthnResponseShape.extend({
+  response: webAuthnResponseShape.shape.response.extend({
+    transports: z
+      .array(z.string().min(1).max(32).refine((one) => !one.includes(",")))
+      .max(MAX_REPORTED_TRANSPORTS)
+      .optional(),
+  }),
+});
+
+const REGISTRATION_TRANSPORTS_MESSAGE =
+  "This passkey listed how it can be reached in a form this app cannot store. Try enrolling it again.";
+
+/**
  * Narrow a client-submitted assertion, or refuse before it is ever
  * dereferenced. The original `value` is returned, not the parsed one: only
  * the outer shape is checked here, so every field neither this module nor
@@ -670,10 +715,23 @@ function narrowAssertion(value: unknown): AuthenticationResponseJSON {
   return value as AuthenticationResponseJSON;
 }
 
-/** {@link narrowAssertion}'s registration-response twin. */
+/**
+ * {@link narrowAssertion}'s registration-response twin, plus the one extra
+ * field a registration *stores* — see {@link registrationResponseShape}. The
+ * two schemas are checked in order and differ by exactly that field, so the
+ * second failure can only be `transports` and gets its own sentence rather
+ * than the generic one.
+ *
+ * This runs before the challenge is spent, which is fine: the author is a
+ * gate-admitted family member either way, and a refusal here costs them a
+ * re-fetch of the options they were going to need anyway.
+ */
 function narrowRegistration(value: unknown): RegistrationResponseJSON {
   if (!webAuthnResponseShape.safeParse(value).success) {
     throw ValidationError.form(UNREADABLE_RESPONSE_MESSAGE);
+  }
+  if (!registrationResponseShape.safeParse(value).success) {
+    throw ValidationError.form(REGISTRATION_TRANSPORTS_MESSAGE);
   }
   return value as RegistrationResponseJSON;
 }
@@ -1073,6 +1131,20 @@ const BOOTSTRAP_TAKEN_MESSAGE =
 const DUPLICATE_PASSKEY_MESSAGE = "This passkey is already enrolled.";
 
 /**
+ * The WebAuthn specification's ceiling on a credential id, in decoded bytes.
+ * Checked against the library's *output* rather than the client's `id`,
+ * because those are two different values and only one of them is stored —
+ * see the comment beside the check in {@link completeRegistration}.
+ */
+const MAX_CREDENTIAL_ID_BYTES = 1023;
+
+const CREDENTIAL_ID_LENGTH_MESSAGE =
+  "This passkey gave itself an identifier of a length this app cannot store. Try enrolling it again.";
+
+const CREDENTIAL_ID_MISMATCH_MESSAGE =
+  "This passkey named itself two different things in one answer, so it was not enrolled.";
+
+/**
  * Complete a registration begun by {@link beginEnrolment} — accepted only
  * against the single-use `"register"` challenge that call minted, never
  * against whatever challenge a stale or forged form happens to carry.
@@ -1147,6 +1219,40 @@ export async function completeRegistration(
   }
 
   const { credential, credentialDeviceType } = verified.registrationInfo;
+
+  // **The library's own output, checked — for the one value it forwards from
+  // client-chosen bytes without validating.** `credential.id` is
+  // `isoBase64URL.fromBuffer(credentialID)` read straight out of the attested
+  // credential data, whose length is whatever the two-byte `credIDLen` field
+  // said (`helpers/parseAuthenticatorData.js:34-36`). Nothing bounds it: the
+  // response-level checks compare `id` to `rawId` only
+  // (`registration/verifyRegistrationResponse.js:38-44`) and never to the
+  // attested bytes, and the emptiness guard at `:121` is `!credentialID`,
+  // which a zero-length `Uint8Array` passes because it is an object. A stored
+  // `""` then rides in every browser's `allowCredentials`, and an over-long
+  // one is past the specification's 1023-byte ceiling.
+  //
+  // **No counter check here, deliberately.** The library reads it with
+  // `getUint32` (`helpers/parseAuthenticatorData.js:27`), so it cannot arrive
+  // outside the column's own range; the review's `4294967295` case is the
+  // maximum that range accepts rather than a value outside it, and what makes
+  // that passkey useless afterwards is the specification's own
+  // strictly-greater rule, not anything this insert could have refused.
+  const credentialIdBytes = isoBase64URL.toBuffer(credential.id);
+  if (credentialIdBytes.byteLength < 1 || credentialIdBytes.byteLength > MAX_CREDENTIAL_ID_BYTES) {
+    throw ValidationError.form(CREDENTIAL_ID_LENGTH_MESSAGE);
+  }
+  // Also the check that refuses a *non-canonically encoded* id — padded, or
+  // spelled in standard base64 — since `isoBase64URL.fromBuffer` always emits
+  // the canonical unpadded form. No browser reaches that: the library already
+  // demands `id === rawId` and `@simplewebauthn/browser` derives both from
+  // the same bytes through the same encoder. A client that did would meet
+  // this message with its challenge already spent, so it has to fetch fresh
+  // options before trying again.
+  if (credential.id !== parsedResponse.id) {
+    throw ValidationError.form(CREDENTIAL_ID_MISMATCH_MESSAGE);
+  }
+
   const publicKey = Buffer.from(credential.publicKey);
   const transports = joinTransports(credential.transports);
   // BE, not BS: eligibility for backup is what "synced" means to a reader
