@@ -55,14 +55,16 @@
  * migrated but unseeded, and the empty-instance shots are of it honestly
  * unlocked.
  *
- * **Validate first, write second.** `main` checks the `demo_seed` marker
+ * **Validate first, write second.** `main` runs the whole of this through
+ * {@link prepareCapture}, which checks the `demo_seed` marker
  * ({@link requireDemoSeed}) and reads the fixture ({@link prepare}) before
  * either the passkey or the grant is inserted. Pointed at a migrated-but-
  * unseeded database, or any database that is not the one this script means,
  * both checks throw with nothing planted; minting the passkey and the grant
  * first and validating after would instead leave that database locked
  * behind a credential no authenticator owns, discovered only by the
- * exception that follows.
+ * exception that follows — the order {@link prepareCapture} exists to pin,
+ * so `main` cannot drift back to it by rearranging three inline calls.
  */
 import { randomBytes } from "node:crypto";
 
@@ -270,7 +272,7 @@ export async function ensureCapturePasskey(pool: Pool | PoolClient): Promise<str
  * either, and going through a real unlock ceremony would need a credential
  * Chromium has no authenticator to produce.
  */
-async function mintCaptureGrant(pool: Pool): Promise<void> {
+async function mintCaptureGrant(pool: Pool | PoolClient): Promise<void> {
   const credentialId = await ensureCapturePasskey(pool);
 
   const id = randomBytes(32).toString("base64url");
@@ -362,7 +364,7 @@ function refuse(what: string): never {
  * means a wrong `DATABASE_URL` refuses with nothing planted, exactly like
  * every other refusal in this file.
  */
-async function requireDemoSeed(pool: Pool): Promise<void> {
+async function requireDemoSeed(pool: Pool | PoolClient): Promise<void> {
   const { rows } = await pool.query<{ present: boolean }>(
     `select to_regclass('public.demo_seed') is not null as present`,
   );
@@ -370,7 +372,7 @@ async function requireDemoSeed(pool: Pool): Promise<void> {
 }
 
 /** Account ids, by kind, as this run of the seed happens to have numbered them. */
-async function accountsByKind(pool: Pool): Promise<Accounts> {
+async function accountsByKind(pool: Pool | PoolClient): Promise<Accounts> {
   const { rows } = await pool.query<{ id: string; kind: string }>(
     `select id, kind from account where closed_at is null order by id`,
   );
@@ -389,7 +391,7 @@ type Position = {
 };
 
 /** What an account holds on its newest statement. */
-async function currentPositions(pool: Pool, accountId: number): Promise<Position[]> {
+async function currentPositions(pool: Pool | PoolClient, accountId: number): Promise<Position[]> {
   const { rows } = await pool.query<Position>(
     `select i.symbol, i.name, h.quantity, h.cost_basis_per_share as "costBasis"
        from holding h
@@ -580,7 +582,7 @@ type Fixture = {
   csv: string;
 };
 
-async function prepare(pool: Pool): Promise<Fixture> {
+async function prepare(pool: Pool | PoolClient): Promise<Fixture> {
   const accounts = await accountsByKind(pool);
   const positions = await currentPositions(pool, accounts.brokerage);
 
@@ -612,6 +614,27 @@ async function prepare(pool: Pool): Promise<Fixture> {
     ownerId: owner.id,
     csv: authorStatement(positions, account.number ?? ""),
   };
+}
+
+/**
+ * The one sequence `main` runs before any context opens — validate this is
+ * genuinely the demo household ({@link requireDemoSeed}), read its fixture
+ * ({@link prepare}), only then plant this run's own passkey and grant
+ * ({@link mintCaptureGrant}) — in that order, every time, because this is the
+ * one function that decides the order rather than `main` inlining the three
+ * calls itself. **Exported so the test can pin the order against the code
+ * `main` actually runs, not a re-implementation of it**: a database with no
+ * `demo_seed` marker refuses here before either write runs, and restoring
+ * the old write-before-validate shape inside this function — the bug this
+ * file's header already tells that story about — is exactly what a
+ * still-empty `passkey` table after the rejection is checking for
+ * (`tests/scripts/capture-screenshots.test.ts`).
+ */
+export async function prepareCapture(pool: Pool | PoolClient): Promise<Fixture> {
+  await requireDemoSeed(pool);
+  const fixture = await prepare(pool);
+  await mintCaptureGrant(pool);
+  return fixture;
 }
 
 /**
@@ -805,16 +828,10 @@ async function main(): Promise<void> {
     const { DATABASE_URL } = loadConfig(process.env);
     const pool = createPool(DATABASE_URL);
     try {
-      // Validate before writing anything (finding 1): the marker and the
-      // fixture checks both have to pass before either the passkey or the
-      // grant is inserted, so a wrong or unseeded database refuses cleanly
-      // rather than being left locked behind a credential nothing can use.
-      await requireDemoSeed(pool);
-      const fixture = await prepare(pool);
-      // Only now, once both checks above have passed — before any context
-      // opens, since every `open()` call for the rest of this run reads the
-      // same grant (see `captureGrant`'s own comment).
-      await mintCaptureGrant(pool);
+      // Validate before writing anything, then plant this run's own passkey
+      // and grant (finding 1) — {@link prepareCapture}'s own header has the
+      // reasoning and is what the test pins the order against.
+      const fixture = await prepareCapture(pool);
       await captureReadme(browser, pool, fixture);
       await captureGuide(browser, pool, fixture);
     } finally {

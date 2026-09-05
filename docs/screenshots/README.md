@@ -28,6 +28,7 @@ This file carries what the script cannot: which shot is of what, and why.
 | `account-detail-*.png` | `/accounts/:id` | the `brokerage` one — it holds seven positions, including a stale price |
 | `account-balance-*.png` | `/accounts/:id` | the `liability` one — it carries the set-balance form |
 | `settings-*.png` | `/settings/accounts` | — |
+| `settings-passkeys-*.png` | `/settings/passkeys` | the capture script's own placeholder passkey (`ensureCapturePasskey`) — enrolled and backup-eligible, so the shot shows a household that has actually turned the lock on, above the add-a-passkey form, never the empty list before anyone has |
 | `upload-*.png` | `/upload` | — · the drop screen as it opens: the step strip, the account select, no file chosen and no refusal showing |
 | `upload-mapping-*.png` | `/upload/:draftId/columns` | the `brokerage` one · the unfilled first-upload state, with the file's own header and sample rows visible verbatim above the mapping selects |
 | `upload-review-*.png` | `/upload/:draftId/review` | the `brokerage` one · **the diff must show a removal listed in full.** The statement is authored against what the account currently holds so all three groups render and the removed row carries its quantity and last known value |

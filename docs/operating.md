@@ -722,10 +722,12 @@ hands an adversary.
 
 ### If every passkey the household holds becomes unreachable
 
-A household down to one passkey has no lever narrower than yours if that one is lost: removing a
-passkey needs a fresh check from a passkey that survives it, and a household on exactly one has none
-left once that one is gone. Encourage a second passkey the moment the first is enrolled, for exactly
-this reason.
+A household down to one passkey has no lever narrower than yours if that one becomes unreachable.
+Removing a passkey needs a fresh check from a reachable enrolled passkey — even the very one being
+removed, which is exactly how removing a household's last passkey turns the lock off — so what
+strands a household is not the removal rule but the passkey itself going missing: lost, broken, or
+otherwise out of reach, with nothing else enrolled to check in with. Encourage a second passkey the
+moment the first is enrolled, for exactly this reason.
 
 **Recovering is deleting every enrolled passkey**, which is the one thing that lifts the lock without
 a check — and it is deliberately the only thing. There is no token, no recovery code and no way in

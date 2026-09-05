@@ -1569,9 +1569,10 @@ one household's instance and the operator reads `docker compose logs`.
 | Freshness, in the UI | The "as of" line, driven by the *oldest* `quote.as_of` among held feed instruments |
 
 The two non-goals of `/healthz` are as important as what it checks: it never tests the price provider,
-and it never requires credentials. The second is now a property of the deployment rather than of the
-app — the app authenticates nothing at all, and it is the `Caddyfile` that exempts this one path, so
-the exemption survives only as long as that file says so.
+and it never requires credentials. That second property no longer survives on the `Caddyfile` alone:
+the lock (ADR-0012) checks its own `LOCK_EXEMPT_PATHS` in `app/root.tsx` before a request ever reaches
+a loader, and `/healthz` is on that list beside `/unlock` (§7.6) — pulling the app-side entry, even
+with the `Caddyfile`'s own exemption left in place, would lock monitoring out.
 
 ### 7.5 The provider seam
 
@@ -2180,7 +2181,7 @@ functions rather than only a component, so this tree is not purely presentationa
 | `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
 | `0010_price_backfill.sql` | `price_backfill` — one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
 | `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
-| `0012_lock.sql` | `passkey` and `unlock_grant` — the household's enrolled credentials and one browser's current unlock, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
+| `0012_lock.sql` | `passkey` and `unlock_grant` — the household's enrolled credentials and a minted unlock grant, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
 
 ### `public/`
 

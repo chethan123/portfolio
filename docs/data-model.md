@@ -492,9 +492,10 @@ before anything else.
 
 A browser past the gate is refused every screen until a passkey is checked
 ([ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md); `CONTEXT.md`'s `Locked`). `passkey`
-is the household's own enrolled credentials; `unlock_grant` is one browser's current unlock,
-addressed by an opaque id a cookie carries — the row is the authority, and the cookie carries no
-claim of its own.
+is the household's own enrolled credentials; `unlock_grant` is a minted unlock grant, addressed by an
+opaque id a cookie carries — the row is the authority, and the cookie carries no claim of its own. Not
+one row per browser: minting is unconditional, so a browser that loses its cookie and unlocks again
+leaves its old row live beside the new one, and a copied cookie lets two browsers use the same row.
 
 **`passkey`** — the public half of each enrolled credential, kept until a person removes it. The
 instance is locked whenever at least one row exists here and stops the moment none do.
@@ -505,7 +506,7 @@ instance is locked whenever at least one row exists here and stops the moment no
 | `public_key` | `bytea` | no | the credential's public key |
 | `counter` | `bigint` | no | default `0`; CHECK `counter >= 0 and counter <= 4294967295` — the signature counter, a 32-bit unsigned value by specification |
 | `transports` | `text` | yes | comma-joined transport hints reported at registration; null means none reported (never the empty string) |
-| `backup_eligible` | `boolean` | no | eligibility for backup, fixed at enrolment and never re-read — what "synced" means to a reader |
+| `backup_eligible` | `boolean` | no | eligibility for backup, fixed at enrolment and never re-read — that the credential *can* sync, never that a copy already exists |
 | `label` | `text` | no | human-readable, typed at enrolment, so Settings has something to print that is not a hash |
 | `bootstrap` | `boolean` | no | default `false`; set only by the one enrolment that carried no assertion, because the household held no passkey yet |
 | `enrolled_at` | `timestamptz` | no | default `now()` |
@@ -517,11 +518,12 @@ first passkey needs no authorisation": the *committed* half is closed by the app
 conditional insert, and neither is sufficient alone (migration 0012's own comment on the index has
 the full argument).
 
-**`unlock_grant`** — one browser's current unlock. Minted two ways: by a verified assertion against
-an already-enrolled passkey (an unlock, or the "prove yourself" step that authorises enrolling
-another passkey or removing one), or — for the household's very first passkey only — by that
-passkey's own successful registration, with no existing passkey to assert against yet; minting a
-grant there is what keeps the enrolling browser from being locked out by its own redirect back.
+**`unlock_grant`** — a minted unlock grant, addressed by its own opaque id. Minted two ways: by a
+verified assertion against an already-enrolled passkey (an unlock, or the "prove yourself" step that
+authorises enrolling another passkey or removing one), or — for the household's very first passkey
+only — by that passkey's own successful registration, with no existing passkey to assert against
+yet; minting a grant there is what keeps the enrolling browser from being locked out by its own
+redirect back.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|
