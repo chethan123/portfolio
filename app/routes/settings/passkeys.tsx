@@ -43,18 +43,52 @@
  * signed: it never overwrites a still-live prior grant with one this same
  * request is about to cascade away.
  *
- * **Options are minted on demand, not carried from page load.** A challenge
- * is spent, or refused as expired, the moment it is read
- * (`lock.server.ts`'s `takeChallenge` and its two-minute `CHALLENGE_TTL_MS`)
- * — a value fine to mint once per *ceremony* and wrong to mint once per
- * *row, per load*: a reader who leaves this tab open past that window would
- * have every control refuse "expired" the instant they finally pressed one,
- * and minting one for every row on every load and revalidation floods the
- * one budget each purpose's challenges share (`lock.server.ts`'s own
- * `MAX_LIVE_CHALLENGES_PER_PURPOSE`). So neither the "confirm with an
- * existing passkey" step's options nor a row's own removal options are in
- * `loaderData` at all — each control mints its own, via a dedicated
- * `intent`, at the moment it is actually pressed.
+ * **The two `.get()` ceremonies mint their options differently, and the
+ * difference is not stylistic.** `app/routes/unlock.tsx`'s own header (and
+ * commit c0af420, "Refresh the options when a ceremony fails, not when the
+ * next press asks") states the rule both follow: every WebAuthn ceremony
+ * must run inside the user activation of the press that started it, with no
+ * network round trip awaited ahead of it — a click handler that instead
+ * fetches options and only *then* runs the ceremony spends that click's
+ * activation on a network wait, and any loader, database or network slower
+ * than WebKit's transient-activation window turns an honest attempt into a
+ * `NotAllowedError` no prompt ever produced, indistinguishable from a
+ * dismissal. Enrolling needs exactly *one* such challenge per page — one
+ * family member proving themself before the browser they are already on
+ * mints a passkey — so it is minted in the loader, once per load, the same
+ * moment and the same cost `/unlock`'s own loader pays for its one challenge
+ * (`enrolmentAssertionOptions`, `loaderData.enrolOptions` below), and
+ * `EnrolPanel`'s confirm press runs `requestAssertion` against options
+ * already sitting in `loaderData` — never a fetch this same press starts.
+ * Removing is minted *per credential*: `removalAssertionOptions` scopes its
+ * challenge to `{ kind: "remove", credentialId }` (this file's next
+ * paragraph), so minting one for every row on every load — the shape that
+ * would keep the two ceremonies identical — would flood the "remove"
+ * purpose's shared budget (`lock.server.ts`'s own
+ * `MAX_LIVE_CHALLENGES_PER_PURPOSE`) with N challenges a household of N
+ * passkeys will mostly never spend. So removing stays two ordinary presses
+ * instead: the first ("Remove") mints that one row's own options and runs no
+ * ceremony at all; the second ("Confirm removal") runs `requestAssertion`
+ * directly off its own gesture, against the options the first press already
+ * fetched — still no await ahead of the ceremony, just paid for by an extra
+ * tap rather than an extra loader read. `PasskeyRow`'s own header has the
+ * rest.
+ *
+ * **Reused, not reinvented.** `shouldRunCeremony` — the guard that stops the
+ * confirm-identity ceremony from running before a fresh press, or a second
+ * time for the same one, or while a prior attempt's revalidation is still
+ * settling — is `unlock.tsx`'s own function, imported rather than restated:
+ * the reasoning is identical, and a second copy would only be a second place
+ * for it to drift. `shouldRevalidateBeforeRetry` is reused the same way,
+ * called with its own literal `"dismissed"`/`"failed"` values once the
+ * confirm ceremony settles into either — `loaderData.enrolOptions` goes
+ * stale exactly when `/unlock`'s own `loaderData.options` would, for the
+ * identical reason (both are minted once per load), so the fix is the
+ * identical call: revalidate the moment the outcome is known, from the
+ * outcome handler, never from the next press. Removal's own retry needs
+ * neither: its options are never carried across a revalidation in the first
+ * place, so a dismissed or failed confirm simply leaves them in place for a
+ * direct re-press — see `PasskeyRow`'s header for why that is enough.
  *
  * **Reading a request's own grant, not only whether one is enrolled.** Which
  * warning a removal shows depends on whether the target *is* this browser's
@@ -66,7 +100,7 @@
  * falsely reassuring one a plain `undefined` would otherwise produce.
  */
 import { useEffect, useRef, useState } from "react";
-import { data, useFetcher } from "react-router";
+import { data, useFetcher, useRevalidator } from "react-router";
 
 import { formatDate } from "~/lib/format";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
@@ -85,6 +119,8 @@ import {
   type Passkey,
 } from "~/lib/lock.server";
 import { requestAssertion, requestRegistration, supportsPasskeys } from "~/lib/unlock-ceremony";
+
+import { shouldRevalidateBeforeRetry, shouldRunCeremony } from "../unlock";
 
 import type { Route } from "./+types/passkeys";
 
@@ -115,8 +151,6 @@ type ActionData =
   | { intent: "completeRegistration"; ok: false; formError: string }
   | { intent: "remove"; ok: true; credentialId: string }
   | { intent: "remove"; ok: false; formError: string; credentialId: string }
-  | { intent: "enrolOptions"; ok: true; options: AssertionOptions }
-  | { intent: "enrolOptions"; ok: false; formError: string }
   | { intent: "removalOptions"; ok: true; credentialId: string; options: AssertionOptions }
   | { intent: "removalOptions"; ok: false; formError: string; credentialId: string }
   | { intent: "unreadable"; ok: false; formError: string };
@@ -134,8 +168,13 @@ type OwnPasskey = string | undefined | "unknown";
 
 /**
  * What the household holds, plus which passkey (if any) owns this request's
- * own grant. No options are minted here at all — see this file's own header
- * on why every control mints its own, on demand, instead.
+ * own grant, plus this page's one enrolment-confirmation challenge
+ * (`enrolOptions`) — minted here, unconditionally, on every GET this route
+ * answers, including a background revalidation and not only the first
+ * document request: exactly `/unlock`'s own loader's shape for exactly the
+ * same reason (this file's own header). A row's own removal options are
+ * never minted here — see this file's own header on why that one stays
+ * on-demand, per press, instead.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   const passkeys = await listPasskeys();
@@ -154,7 +193,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
 
-  return { passkeys, hasPasskeys, ownPasskeyId };
+  // Unguarded, like `/unlock`'s own `unlockOptions()` call: a database
+  // hiccup here throws into the framework's own error boundary exactly as
+  // any other unguarded read in this loader already would, rather than
+  // inventing a recovery for a challenge every enrolling press needs anyway.
+  const enrolOptions = await enrolmentAssertionOptions();
+
+  return { passkeys, hasPasskeys, ownPasskeyId, enrolOptions };
 }
 
 /** A client-submitted field that failed to parse becomes `undefined`, exactly as `unlock.tsx`'s action treats one. */
@@ -180,11 +225,6 @@ export async function action({ request }: Route.ActionArgs) {
   const intent = fields.intent;
 
   try {
-    if (intent === "enrolOptions") {
-      const options = await enrolmentAssertionOptions();
-      return data({ intent, ok: true as const, options });
-    }
-
     if (intent === "removalOptions") {
       const credentialId = fields.credentialId ?? "";
       const options = await removalAssertionOptions(credentialId);
@@ -279,13 +319,9 @@ export async function action({ request }: Route.ActionArgs) {
         return data({ intent, ok: false as const, formError, credentialId: fields.credentialId ?? "" });
       }
       if (intent === "removalOptions") {
-        // Neither control states a rule of its own — minting options cannot
-        // itself be refused — but the shape still has to exist for the type
-        // to be total.
+        // Minting options cannot itself be refused — but the shape still has
+        // to exist for the type to be total.
         return data({ intent, ok: false as const, formError, credentialId: fields.credentialId ?? "" });
-      }
-      if (intent === "enrolOptions") {
-        return data({ intent, ok: false as const, formError });
       }
       return data({ intent: intent as "beginEnrolment" | "completeRegistration", ok: false as const, formError });
     }
@@ -400,16 +436,19 @@ export function lastUsedText(lastUsedAt: Date | null): string {
 // ---------------------------------------------------------------------------
 
 /**
- * What the Add-a-passkey control is doing right now. `"mintingOptions"` and
- * `"confirming"` exist only for the confirm-with-an-existing-passkey step
- * (past the first passkey); the first passkey's own first tap goes straight
- * from `"idle"` to `"busy"` (the `beginEnrolment` submission itself) and,
- * once options are back, to `"readyToCreate"` — the same phase the
- * non-first flow lands on once its own confirm step succeeds. Neither flow
- * ever runs `requestRegistration` from anywhere but a direct click handler
- * (this file's own header on why the first passkey is two taps too).
+ * What the Add-a-passkey control is doing right now. `"confirming"` exists
+ * only for the confirm-with-an-existing-passkey step (past the first
+ * passkey), and — unlike the pre-fix version of this file — never waits on
+ * a fetch of its own: `loaderData.enrolOptions` is already in hand the
+ * moment this phase is entered (this file's own header). The first
+ * passkey's own first tap goes straight from `"idle"` to `"busy"` (the
+ * `beginEnrolment` submission itself) and, once options are back, to
+ * `"readyToCreate"` — the same phase the non-first flow lands on once its
+ * own confirm step succeeds. Neither flow ever runs `requestRegistration`
+ * from anywhere but a direct click handler (this file's own header on why
+ * the first passkey is two taps too).
  */
-type EnrolPhase = "idle" | "mintingOptions" | "confirming" | "busy" | "readyToCreate";
+type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
 
 /** Recoveries a family member can actually act on — never "the operator" (`CONTEXT.md`'s `Gate`/`Allowlist`, finding 10; `unlock.tsx`'s own precedent). */
 export const NO_CEREMONY_MESSAGE =
@@ -417,9 +456,64 @@ export const NO_CEREMONY_MESSAGE =
   "another browser on this device, or a device that can reach a passkey the household has " +
   "enrolled.";
 
-function EnrolPanel({ hasPasskeys, supported }: { hasPasskeys: boolean; supported: boolean | null }) {
+/** {@link EnrolPanel}'s own props — `enrolOptions` is `loaderData`'s, threaded down rather than re-read. */
+type EnrolPanelProps = { hasPasskeys: boolean; supported: boolean | null; enrolOptions: AssertionOptions };
+
+/**
+ * What running the confirm-identity ceremony once actually does — this
+ * file's own analogue of `unlock.tsx`'s `runCeremony`, pulled out of the
+ * effect that decides *whether* to run it for the identical reason: with
+ * `requestAssertion`, `submit` and `revalidate` all supplied by the caller
+ * rather than closed over, this half is callable and assertable on its own,
+ * with no browser and no effect.
+ *
+ * **`revalidate` is called from here, on the outcome, not from the next
+ * press** — the same rule and the same reason as `unlock.tsx`'s own
+ * `runCeremony`: `loaderData.enrolOptions` was minted once, at this page's
+ * load, exactly as `loaderData.options` is on `/unlock`, so a dismissed or
+ * failed attempt leaves it exactly as stale for exactly as long, and
+ * waiting for a *later* press to ask for a refresh would run that press's
+ * own `requestAssertion` after a network wait it started, outside the
+ * activation it was granted. Never called on the `"ok"` branch: the
+ * `beginEnrolment` submit that follows carries its own automatic
+ * post-action revalidation.
+ */
+export async function runConfirmCeremony(
+  optionsJSON: AssertionOptions,
+  label: string,
+  submit: ReturnType<typeof useFetcher<ActionData>>["submit"],
+  setPhase: (phase: EnrolPhase) => void,
+  setNote: (note: string | null) => void,
+  revalidate: () => void,
+): Promise<void> {
+  const outcome = await requestAssertion(optionsJSON);
+
+  if (outcome.status === "ok") {
+    const body: Record<string, string> = {
+      intent: "beginEnrolment",
+      label,
+      assertion: JSON.stringify(outcome.response),
+    };
+    void submit(body, { method: "post" });
+    return;
+  }
+
+  setPhase("idle");
+  setNote(
+    outcome.status === "dismissed"
+      ? "That confirmation did not complete. Nothing has changed — press Confirm to try again."
+      : outcome.message,
+  );
+  // Both branches above leave the page's one challenge unspent but stale —
+  // `shouldRevalidateBeforeRetry`'s own header on `/unlock` says why that
+  // still means "refresh it now" — so this is `shouldRevalidateBeforeRetry`
+  // called with its own literal values, reused rather than restated.
+  if (shouldRevalidateBeforeRetry(outcome.status === "dismissed" ? "dismissed" : "failed")) revalidate();
+}
+
+function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
   const fetcher = useFetcher<ActionData>();
-  const optionsFetcher = useFetcher<ActionData>();
+  const revalidator = useRevalidator();
   const [label, setLabel] = useState("");
   const [warningAcknowledged, setWarningAcknowledged] = useState(false);
   const [phase, setPhase] = useState<EnrolPhase>("idle");
@@ -432,12 +526,7 @@ function EnrolPanel({ hasPasskeys, supported }: { hasPasskeys: boolean; supporte
 
   // Never "readyToCreate": that phase is exactly when the Create button must
   // stay pressable, waiting on the tap that runs `requestRegistration`.
-  const busy =
-    phase === "mintingOptions" ||
-    phase === "confirming" ||
-    phase === "busy" ||
-    fetcher.state !== "idle" ||
-    optionsFetcher.state !== "idle";
+  const busy = phase === "confirming" || phase === "busy" || fetcher.state !== "idle";
 
   // React to the beginEnrolment/completeRegistration submission's own
   // answer once it settles — never by reading `fetcher.data` right after
@@ -476,54 +565,37 @@ function EnrolPanel({ hasPasskeys, supported }: { hasPasskeys: boolean; supporte
     setPhase("idle");
   }, [fetcher.state, fetcher.data]);
 
-  // Runs the "prove yourself" assertion once fresh, single-use options for
-  // it have actually landed — minted on demand, right when Confirm is
-  // pressed, rather than carried from page load (this file's own header,
-  // finding 5).
+  /**
+   * Runs the confirm-identity ceremony once {@link shouldRunCeremony} says
+   * to — imported from `unlock.tsx` rather than restated (this file's own
+   * header): its only two inputs that matter are "is this press
+   * `\"confirming\"`" and "has a prior attempt's revalidation settled",
+   * both of which apply here exactly as they do on `/unlock`, so the
+   * non-shared `EnrolPhase` values (`"busy"`, `"readyToCreate"`) are mapped
+   * to `"idle"` at the call site — a value `shouldRunCeremony` treats
+   * identically to every phase but `"confirming"` — rather than forking the
+   * function to add states it does not need to know about. Effect, not
+   * inline in the click handler, for the identical stale-closure reason
+   * `unlock.tsx`'s own effect states: this waits for `revalidator.state` to
+   * actually reach `"idle"` in the *props*, rather than guessing when a
+   * pending revalidation resolves.
+   */
   useEffect(() => {
-    if (phase !== "mintingOptions" || optionsFetcher.state !== "idle" || optionsFetcher.data === undefined) {
-      return;
-    }
-    if (confirmCeremonyStarted.current) return;
+    const mappedPhase = phase === "confirming" ? "confirming" : "idle";
+    if (!shouldRunCeremony(mappedPhase, revalidator.state, confirmCeremonyStarted.current)) return;
     confirmCeremonyStarted.current = true;
 
-    const minted = optionsFetcher.data;
-    if (!minted.ok || minted.intent !== "enrolOptions") {
-      confirmCeremonyStarted.current = false;
-      setPhase("idle");
-      setNote("Could not start a confirmation. Press Confirm to try again.");
-      return;
-    }
+    void runConfirmCeremony(enrolOptions, label, fetcher.submit, setPhase, setNote, revalidator.revalidate);
+  }, [phase, revalidator.state, revalidator.revalidate, enrolOptions, label, fetcher]);
 
-    setPhase("confirming");
-    void (async () => {
-      const outcome = await requestAssertion(minted.options);
-      confirmCeremonyStarted.current = false;
-
-      if (outcome.status === "ok") {
-        const body: Record<string, string> = {
-          intent: "beginEnrolment",
-          label,
-          assertion: JSON.stringify(outcome.response),
-        };
-        void fetcher.submit(body, { method: "post" });
-        return;
-      }
-
-      setPhase("idle");
-      setNote(
-        outcome.status === "dismissed"
-          ? "That confirmation did not complete. Nothing has changed — press Confirm to try again."
-          : outcome.message,
-      );
-    })();
-  }, [phase, optionsFetcher.state, optionsFetcher.data, label, fetcher]);
-
+  // Never runs anything itself — sets `phase` to `"confirming"` and lets the
+  // effect above run the ceremony against `loaderData.enrolOptions`, already
+  // in hand from this page's own load (this file's own header on why this
+  // control mints nothing on its own press, unlike a row's Remove).
   function handleConfirmIdentity() {
     setNote(null);
     confirmCeremonyStarted.current = false;
-    setPhase("mintingOptions");
-    void optionsFetcher.submit({ intent: "enrolOptions" }, { method: "post" });
+    setPhase("confirming");
   }
 
   // Runs `requestRegistration` directly off this press's own gesture — no
@@ -605,7 +677,7 @@ function EnrolPanel({ hasPasskeys, supported }: { hasPasskeys: boolean; supporte
         </div>
 
         {!hasPasskeys ? (
-          <label className="choice">
+          <label className="choice choice--prose">
             <input
               type="checkbox"
               checked={warningAcknowledged}
@@ -665,6 +737,105 @@ function EnrolPanel({ hasPasskeys, supported }: { hasPasskeys: boolean; supporte
 // The list, and removing one
 // ---------------------------------------------------------------------------
 
+/**
+ * What landing a removal options-fetch result actually does to a row's own
+ * state — pulled out of the effect that watches for it, mirroring
+ * `EnrolPanel`'s own `beginEnrolment`/`completeRegistration` handler and, for
+ * the same reason as `runConfirmCeremony` above, callable directly: this is
+ * the one place the fetched options are ever stored, and it never touches
+ * `requestAssertion` — that call belongs to {@link runRemovalCeremony}
+ * alone, run only from the Confirm removal press itself (`PasskeyRow`'s own
+ * header on why that press, and never this one, is what runs the ceremony).
+ */
+export function applyRemovalOptionsResult(
+  result: ActionData,
+  setNote: (note: string | null) => void,
+  setExpanded: (expanded: boolean) => void,
+  setRemovalOptions: (options: AssertionOptions | null) => void,
+): void {
+  if (result.intent !== "removalOptions") return;
+
+  if (!result.ok) {
+    setNote(result.formError);
+    setExpanded(false);
+    return;
+  }
+
+  setRemovalOptions(result.options);
+}
+
+/**
+ * Whether "Confirm removal" must stay disabled — this row's own analogue of
+ * `unlock.tsx`'s `UnlockControl` disabled check, restated because a row's
+ * options come from its own per-credential fetch (`removalAssertionOptions`
+ * scopes the challenge to this one credential — this file's own header)
+ * rather than from `loaderData`: the button must never be pressable while
+ * *this row's* own fetch is still in flight, which is exactly what stops a
+ * press from queueing the ceremony behind a network wait rather than
+ * running it off its own gesture.
+ */
+export function removalConfirmDisabled(
+  optionsFetcherState: "idle" | "loading" | "submitting",
+  acknowledged: boolean,
+  otherwiseBusy: boolean,
+): boolean {
+  return optionsFetcherState !== "idle" || !acknowledged || otherwiseBusy;
+}
+
+/**
+ * What running the removal's own ceremony once actually does — directly off
+ * the Confirm removal press's own gesture (`handleConfirmRemoval` calls this
+ * with no `await` ahead of it), never from an effect: unlike the confirm-
+ * identity ceremony above, a row's own `removalOptions` are never carried
+ * across a background revalidation — they are fetched once, by this same
+ * row's own prior press, and stay exactly as fresh until *this* row fetches
+ * again — so there is no revalidator state to wait on and nothing a
+ * stale-closure effect would protect against. A dismissed or failed outcome
+ * leaves `removalOptions` in place rather than discarding them: the
+ * challenge they carry was never spent (a dismissed or failed ceremony never
+ * reaches the server at all), so a second Confirm removal press can retry
+ * against the very same options with the identical no-network-wait
+ * guarantee, rather than this row needing to revalidate anything before it can.
+ */
+export async function runRemovalCeremony(
+  optionsJSON: AssertionOptions,
+  credentialId: string,
+  submit: ReturnType<typeof useFetcher<ActionData>>["submit"],
+  setNote: (note: string | null) => void,
+  setConfirming: (confirming: boolean) => void,
+  refetchOptions: () => void,
+): Promise<void> {
+  const outcome = await requestAssertion(optionsJSON);
+  setConfirming(false);
+
+  if (outcome.status !== "ok") {
+    setNote(
+      outcome.status === "dismissed"
+        ? "That confirmation did not complete. Nothing has changed — press Confirm removal to try again."
+        : outcome.message,
+    );
+    // The challenge these options carry is unspent — a dismissed or failed
+    // ceremony never reached the server — but it is not immortal:
+    // `lock.server.ts` gives every challenge two minutes, and a reader who
+    // dismisses a prompt and then thinks about it for longer would meet an
+    // expired-challenge refusal on their next press instead of a second
+    // prompt. So the refresh starts here, the moment the outcome settles and
+    // whatever idle time follows is free — never on the next press, which is
+    // the shape `unlock.tsx`'s own `runCeremony` rejects for putting a round
+    // trip inside the activation that press granted.
+    refetchOptions();
+    return;
+  }
+
+  const body: Record<string, string> = {
+    intent: "remove",
+    credentialId,
+    assertion: JSON.stringify(outcome.response),
+    confirmRemoval: "true",
+  };
+  void submit(body, { method: "post" });
+}
+
 function PasskeyRow({
   passkey,
   warningKind,
@@ -678,11 +849,18 @@ function PasskeyRow({
   const optionsFetcher = useFetcher<ActionData>();
   const [acknowledged, setAcknowledged] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [awaitingCeremony, setAwaitingCeremony] = useState(false);
-  // Guards the ceremony effect below against firing twice for one press —
-  // the same shape `unlock.tsx`'s own `ceremonyStarted` ref guards.
-  const ceremonyStarted = useRef(false);
-  const busy = fetcher.state !== "idle" || optionsFetcher.state !== "idle" || awaitingCeremony;
+  // Press 1 ("Remove") sets this the moment it fires this row's own
+  // options-fetch — before that fetch lands, not after — which is what
+  // reveals "Confirm removal" already disabled rather than not yet rendered
+  // at all (this file's own header).
+  const [expanded, setExpanded] = useState(false);
+  const [removalOptions, setRemovalOptions] = useState<AssertionOptions | null>(null);
+  // True only while `requestAssertion` itself is running, between the
+  // Confirm removal press and its outcome — no ref-guarded effect needed to
+  // stop a double-run, unlike the confirm-identity ceremony: this is a plain
+  // click handler, and disabling the button while this is true is enough.
+  const [confirming, setConfirming] = useState(false);
+  const busy = fetcher.state !== "idle" || confirming || supported === false;
 
   useEffect(() => {
     if (fetcher.state !== "idle" || fetcher.data === undefined) return;
@@ -690,46 +868,12 @@ function PasskeyRow({
     setNote(fetcher.data.ok ? null : fetcher.data.formError);
   }, [fetcher.state, fetcher.data]);
 
-  // Runs the removal's own assertion once fresh, single-use options scoped
-  // to *this* passkey have actually landed — minted on demand, right when
-  // Remove is pressed, rather than once per row on every load (this file's
-  // own header, finding 5).
+  // Stores this row's own removal options once they land — never runs the
+  // ceremony itself (`applyRemovalOptionsResult`'s own header).
   useEffect(() => {
-    if (!awaitingCeremony || optionsFetcher.state !== "idle" || optionsFetcher.data === undefined) return;
-    if (ceremonyStarted.current) return;
-    ceremonyStarted.current = true;
-
-    const minted = optionsFetcher.data;
-    if (!minted.ok || minted.intent !== "removalOptions") {
-      ceremonyStarted.current = false;
-      setAwaitingCeremony(false);
-      setNote("Could not start this confirmation. Press Remove to try again.");
-      return;
-    }
-
-    void (async () => {
-      const outcome = await requestAssertion(minted.options);
-      ceremonyStarted.current = false;
-      setAwaitingCeremony(false);
-
-      if (outcome.status !== "ok") {
-        setNote(
-          outcome.status === "dismissed"
-            ? "That confirmation did not complete. Nothing has changed — press Remove to try again."
-            : outcome.message,
-        );
-        return;
-      }
-
-      const body: Record<string, string> = {
-        intent: "remove",
-        credentialId: passkey.credentialId,
-        assertion: JSON.stringify(outcome.response),
-        confirmRemoval: "true",
-      };
-      void fetcher.submit(body, { method: "post" });
-    })();
-  }, [awaitingCeremony, optionsFetcher.state, optionsFetcher.data, passkey.credentialId, fetcher]);
+    if (optionsFetcher.state !== "idle" || optionsFetcher.data === undefined) return;
+    applyRemovalOptionsResult(optionsFetcher.data, setNote, setExpanded, setRemovalOptions);
+  }, [optionsFetcher.state, optionsFetcher.data]);
 
   function handleRemove() {
     setNote(null);
@@ -743,11 +887,42 @@ function PasskeyRow({
       return;
     }
 
-    ceremonyStarted.current = false;
-    setAwaitingCeremony(true);
+    // Press 1: mints this row's own options and runs no ceremony at all
+    // (this file's own header) — "Confirm removal" is what runs one, off
+    // its own separate press, once those options are actually in hand.
+    setExpanded(true);
+    requestRemovalOptions();
+  }
+
+  /**
+   * Mints this row's own options, from press 1 and from a settled ceremony
+   * alike. Clearing them first is what keeps {@link removalConfirmDisabled}
+   * honest: the Confirm removal press must never find options in hand that a
+   * fetch is in the middle of replacing.
+   */
+  function requestRemovalOptions() {
+    setRemovalOptions(null);
     void optionsFetcher.submit(
       { intent: "removalOptions", credentialId: passkey.credentialId },
       { method: "post" },
+    );
+  }
+
+  // Press 2: runs `requestAssertion` directly off this very click — no
+  // `await` ahead of it — against `removalOptions`, already sitting in state
+  // from press 1's own fetch (`runRemovalCeremony`'s own header on why this
+  // needs no effect, unlike `EnrolPanel`'s confirm-identity ceremony).
+  function handleConfirmRemoval() {
+    if (removalOptions === null) return;
+    setNote(null);
+    setConfirming(true);
+    void runRemovalCeremony(
+      removalOptions,
+      passkey.credentialId,
+      fetcher.submit,
+      setNote,
+      setConfirming,
+      requestRemovalOptions,
     );
   }
 
@@ -767,7 +942,7 @@ function PasskeyRow({
         </div>
 
         <div className="record-actions">
-          <label className="choice">
+          <label className="choice choice--prose">
             <input
               type="checkbox"
               checked={acknowledged}
@@ -776,15 +951,27 @@ function PasskeyRow({
             {removalWarningText(warningKind, passkey.label)}
           </label>
 
-          <button
-            type="button"
-            className="button button--danger"
-            onClick={handleRemove}
-            disabled={busy || supported === false}
-            aria-label={`Remove ${passkey.label}`}
-          >
-            Remove
-          </button>
+          {expanded ? (
+            <button
+              type="button"
+              className="button button--danger"
+              onClick={handleConfirmRemoval}
+              disabled={removalConfirmDisabled(optionsFetcher.state, acknowledged, busy)}
+              aria-label={`Confirm removing ${passkey.label}`}
+            >
+              Confirm removal
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="button button--danger"
+              onClick={handleRemove}
+              disabled={busy}
+              aria-label={`Remove ${passkey.label}`}
+            >
+              Remove
+            </button>
+          )}
         </div>
       </div>
 
@@ -798,7 +985,7 @@ function PasskeyRow({
 }
 
 export default function Passkeys({ loaderData }: Route.ComponentProps) {
-  const { passkeys, hasPasskeys, ownPasskeyId } = loaderData;
+  const { passkeys, hasPasskeys, ownPasskeyId, enrolOptions } = loaderData;
 
   const [supported, setSupported] = useState<boolean | null>(null);
   useEffect(() => {
@@ -851,7 +1038,7 @@ export default function Passkeys({ loaderData }: Route.ComponentProps) {
         </p>
       ) : null}
 
-      <EnrolPanel hasPasskeys={hasPasskeys} supported={supported} />
+      <EnrolPanel hasPasskeys={hasPasskeys} supported={supported} enrolOptions={enrolOptions} />
     </>
   );
 }

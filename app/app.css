@@ -2157,6 +2157,23 @@ label.choice {
   gap: var(--space-base);
 }
 
+/* A `.choice` whose label is a sentence rather than a word — the passkey
+ * warnings are the two on this screen — wears `.empty-note`'s own 52ch
+ * measure and aligns its box to the first line rather than to the middle of
+ * a paragraph. Not on `label.choice` itself: the owner filter's and the
+ * upload mapper's choices are single words, where a measure buys nothing and
+ * centring is right. The bold one before the household's first passkey is
+ * the most consequential sentence in the application; set across a 1440px
+ * panel it runs to about 120 characters a line, which is the width that
+ * makes a warning easiest to skip. */
+label.choice--prose {
+  align-items: start;
+}
+
+label.choice--prose > :not(input) {
+  max-width: 52ch;
+}
+
 /* A radio pair's group: a fieldset so the caption is announced with the
  * choice, reset to the bare labelled column every other control is — the
  * browser's inset border box is furniture no form here wears. */

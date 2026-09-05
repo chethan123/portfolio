@@ -8,9 +8,16 @@
  * its exact printed sentence rather than a route-invented paraphrase.
  *
  * The two ceremonies have no browser in this suite — `tests/routes/
- * unlock.test.ts`'s own header says why — so every assertion or
- * registration response below comes from `tests/support/webauthn.ts`,
- * signed for a challenge one of this file's own calls actually minted.
+ * unlock.test.ts`'s own header says why — so most assertion or registration
+ * responses below come from `tests/support/webauthn.ts`, signed for a
+ * challenge one of this file's own calls actually minted, posted straight to
+ * `action` without ever going through the client-side ceremony. The pure
+ * decisions this route pulls out of its own effects — `runConfirmCeremony`,
+ * `applyRemovalOptionsResult`, `removalConfirmDisabled`, `runRemovalCeremony`
+ * (this file's own header on why the two ceremonies need different ones) —
+ * are the exception: those are driven directly, with `~/lib/unlock-ceremony`
+ * mocked file-wide exactly as `unlock.test.ts` mocks it, since calling them
+ * directly is what actually exercises `requestAssertion`.
  *
  * This route's `action` returns most of its answers through react-router's
  * `data()` helper so it can attach a `Set-Cookie` alongside a plain payload;
@@ -22,7 +29,7 @@
  */
 import { generateKeyPairSync } from "node:crypto";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { isoCBOR } from "@simplewebauthn/server/helpers";
 
@@ -41,15 +48,31 @@ import {
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
+// Mocked file-wide, the same shape and the same reason as `unlock.test.ts`:
+// nothing in this suite has a browser to run the real ceremony, and the
+// component code under test here never calls either export outside a
+// `useEffect` or a click handler — except the four pure functions
+// (`runConfirmCeremony`, `applyRemovalOptionsResult`,
+// `removalConfirmDisabled`, `runRemovalCeremony`) this file drives directly,
+// which is exactly what needs `requestAssertion` mocked to be testable at all.
+vi.mock("~/lib/unlock-ceremony", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/unlock-ceremony")>();
+  return { ...actual, requestAssertion: vi.fn(), supportsPasskeys: vi.fn() };
+});
+
 const {
   action,
+  applyRemovalOptionsResult,
   default: Passkeys,
   enrolledText,
   lastUsedText,
   loader,
   NO_CEREMONY_MESSAGE,
+  removalConfirmDisabled,
   removalWarningKind,
   removalWarningText,
+  runConfirmCeremony,
+  runRemovalCeremony,
   syncLabel,
   UNREADABLE_SUBMISSION_MESSAGE,
 } = await import("../../app/routes/settings/passkeys.tsx");
@@ -63,6 +86,7 @@ const {
   removalAssertionOptions,
   unlockOptions,
 } = await import("~/lib/lock.server");
+const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { middleware } = await import("../../app/root.tsx");
 
 afterAll(closeTestDatabase);
@@ -224,31 +248,45 @@ describe("the loader", () => {
   );
 
   it(
-    "mints no options at all — every control mints its own on demand instead (finding 5)",
+    // This is the pin: the pre-fix version of this route minted the
+    // confirm-identity ceremony's options from a click handler's own fetch,
+    // which is exactly the bug `unlock.tsx`'s own commit c0af420 fixed on
+    // the sibling screen — a network round trip awaited ahead of the
+    // ceremony, spending the press's activation on the wait rather than the
+    // check. Minting `enrolOptions` here, in the loader, is what lets the
+    // confirm press run `requestAssertion` with no fetch ahead of it.
+    "returns this page's own enrolment assertion options, minted here rather than by a later press",
     withDatabase(async ({ seedPasskey }) => {
       await seedFixturePasskey(seedPasskey);
       const loaderData = await loader(args(get("/settings/passkeys")));
 
-      expect(loaderData).not.toHaveProperty("enrolOptions");
+      expect(loaderData.enrolOptions.challenge).toBeTruthy();
+    }),
+  );
+
+  it(
+    "mints a fresh enrolment challenge on every load, not the same one twice — the same rule `/unlock`'s own loader follows",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const first = await loader(args(get("/settings/passkeys")));
+      const second = await loader(args(get("/settings/passkeys")));
+
+      expect(second.enrolOptions.challenge).not.toBe(first.enrolOptions.challenge);
+    }),
+  );
+
+  it(
+    "mints nothing per row for removal — a household of many passkeys must not flood the shared budget on every load (finding 5)",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const loaderData = await loader(args(get("/settings/passkeys")));
+
       expect(loaderData.passkeys[0]).not.toHaveProperty("removalOptions");
     }),
   );
 });
 
-describe("minting options on demand, not once per row on every load (finding 5)", () => {
-  it(
-    "mints fresh enrol assertion options when the confirm control asks for them",
-    withDatabase(async ({ seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-
-      const outcome = await action(args(post("/settings/passkeys", { intent: "enrolOptions" })));
-      const payload = payloadOf<{ ok: true; options: { challenge: string } }>(outcome);
-
-      expect(payload.ok).toBe(true);
-      expect(payload.options.challenge).toBeTruthy();
-    }),
-  );
-
+describe("removal options are minted on demand, per press, never once per row on every load (finding 5)", () => {
   it(
     "mints fresh removal assertion options scoped to the requested passkey when a row's Remove control asks for them",
     withDatabase(async ({ seedPasskey }) => {
@@ -264,6 +302,249 @@ describe("minting options on demand, not once per row on every load (finding 5)"
       expect(payload.options.challenge).toBeTruthy();
     }),
   );
+
+  it(
+    // Locks in the shape this file's own header argues for: minting the
+    // confirm-identity ceremony's options is the loader's job now, not a
+    // press's — an `enrolOptions` intent reaching the action at all is
+    // itself the pre-fix shape coming back.
+    "no longer answers an 'enrolOptions' intent — that ceremony's options come from the loader now",
+    withDatabase(async () => {
+      const response = await responseOf(() => action(args(post("/settings/passkeys", { intent: "enrolOptions" }))));
+
+      expect(response.status).toBe(400);
+    }),
+  );
+});
+
+describe(
+  "runConfirmCeremony — the confirm-identity ceremony's own outcome handler, run directly with no browser " +
+    "(`unlock.tsx`'s own `runCeremony`, this route's analogue)",
+  () => {
+    const FAKE_OPTIONS = { challenge: "fixture-challenge" } as Awaited<ReturnType<typeof enrolmentAssertionOptions>>;
+
+    afterEach(() => {
+      vi.mocked(requestAssertion).mockReset();
+    });
+
+    it(
+      "submits beginEnrolment with the signed assertion and never revalidates once the ceremony succeeds",
+      async () => {
+        const response = assertionResponse("fixture-challenge");
+        vi.mocked(requestAssertion).mockResolvedValue({ status: "ok", response });
+        const submit = vi.fn().mockResolvedValue(undefined);
+        const setPhase = vi.fn();
+        const setNote = vi.fn();
+        const revalidate = vi.fn();
+
+        await runConfirmCeremony(FAKE_OPTIONS, "Kitchen iPad", submit as never, setPhase, setNote, revalidate);
+
+        expect(submit).toHaveBeenCalledWith(
+          { intent: "beginEnrolment", label: "Kitchen iPad", assertion: JSON.stringify(response) },
+          { method: "post" },
+        );
+        expect(setPhase).not.toHaveBeenCalled();
+        expect(setNote).not.toHaveBeenCalled();
+        // `submit`'s own promise already carries a post-action revalidation
+        // (`unlock.tsx`'s own header) — a second one here would be redundant.
+        expect(revalidate).not.toHaveBeenCalled();
+      },
+    );
+
+    it(
+      // The pin: a retry used to wait for a *later* press to revalidate,
+      // running the ceremony behind a pending network round trip and
+      // outside that press's own user activation (`unlock.tsx`'s commit
+      // c0af420). This is what proves the fix landed here too — the
+      // instant the outcome settles, not deferred to whenever the reader
+      // next presses Confirm.
+      "revalidates immediately once a dismissed prompt leaves loaderData.enrolOptions stale, without submitting",
+      async () => {
+        vi.mocked(requestAssertion).mockResolvedValue({ status: "dismissed" });
+        const submit = vi.fn();
+        const setPhase = vi.fn();
+        const setNote = vi.fn();
+        const revalidate = vi.fn();
+
+        await runConfirmCeremony(FAKE_OPTIONS, "Kitchen iPad", submit as never, setPhase, setNote, revalidate);
+
+        expect(submit).not.toHaveBeenCalled();
+        expect(setPhase).toHaveBeenCalledWith("idle");
+        expect(setNote).toHaveBeenCalledWith(expect.stringContaining("did not complete"));
+        expect(revalidate).toHaveBeenCalled();
+      },
+    );
+
+    it(
+      "revalidates immediately once a failed ceremony leaves loaderData.enrolOptions stale, carrying its own message",
+      async () => {
+        vi.mocked(requestAssertion).mockResolvedValue({ status: "failed", message: "No authenticator found." });
+        const submit = vi.fn();
+        const setPhase = vi.fn();
+        const setNote = vi.fn();
+        const revalidate = vi.fn();
+
+        await runConfirmCeremony(FAKE_OPTIONS, "Kitchen iPad", submit as never, setPhase, setNote, revalidate);
+
+        expect(submit).not.toHaveBeenCalled();
+        expect(setNote).toHaveBeenCalledWith("No authenticator found.");
+        expect(setPhase).toHaveBeenCalledWith("idle");
+        expect(revalidate).toHaveBeenCalled();
+      },
+    );
+  },
+);
+
+describe("applyRemovalOptionsResult — landing a row's own options-fetch never runs a ceremony", () => {
+  const FAKE_OPTIONS = { challenge: "fixture-challenge" } as Awaited<ReturnType<typeof enrolmentAssertionOptions>>;
+
+  afterEach(() => {
+    vi.mocked(requestAssertion).mockReset();
+  });
+
+  it(
+    // The bug this whole ticket fixes was exactly this: a row auto-ran the
+    // ceremony the moment its own options landed. This is the pin — landing
+    // a successful fetch only ever stores the options, never touches
+    // `requestAssertion`; that call belongs to `runRemovalCeremony` alone,
+    // off the reader's own second press.
+    "stores the landed options without ever calling requestAssertion",
+    () => {
+      const setNote = vi.fn();
+      const setExpanded = vi.fn();
+      const setRemovalOptions = vi.fn();
+
+      applyRemovalOptionsResult(
+        { intent: "removalOptions", ok: true, credentialId: "abc", options: FAKE_OPTIONS },
+        setNote,
+        setExpanded,
+        setRemovalOptions,
+      );
+
+      expect(setRemovalOptions).toHaveBeenCalledWith(FAKE_OPTIONS);
+      expect(setNote).not.toHaveBeenCalled();
+      expect(setExpanded).not.toHaveBeenCalled();
+      expect(requestAssertion).not.toHaveBeenCalled();
+    },
+  );
+
+  it("collapses the row back and notes the refusal when the fetch itself is refused", () => {
+    const setNote = vi.fn();
+    const setExpanded = vi.fn();
+    const setRemovalOptions = vi.fn();
+
+    applyRemovalOptionsResult(
+      { intent: "removalOptions", ok: false, formError: "refused", credentialId: "abc" },
+      setNote,
+      setExpanded,
+      setRemovalOptions,
+    );
+
+    expect(setNote).toHaveBeenCalledWith("refused");
+    expect(setExpanded).toHaveBeenCalledWith(false);
+    expect(setRemovalOptions).not.toHaveBeenCalled();
+  });
+
+  it("ignores a result meant for a different intent entirely", () => {
+    const setNote = vi.fn();
+    const setExpanded = vi.fn();
+    const setRemovalOptions = vi.fn();
+
+    applyRemovalOptionsResult(
+      { intent: "remove", ok: true, credentialId: "abc" },
+      setNote,
+      setExpanded,
+      setRemovalOptions,
+    );
+
+    expect(setNote).not.toHaveBeenCalled();
+    expect(setExpanded).not.toHaveBeenCalled();
+    expect(setRemovalOptions).not.toHaveBeenCalled();
+  });
+});
+
+describe("removalConfirmDisabled — a row's own Confirm removal button, disabled while press 1's fetch is still in flight", () => {
+  it.for([{ state: "loading" }, { state: "submitting" }] as const)(
+    "stays disabled while this row's own options-fetch is $state, even once acknowledged",
+    ({ state }) => {
+      expect(removalConfirmDisabled(state, true, false)).toBe(true);
+    },
+  );
+
+  it("is enabled once the fetch has landed, the checkbox is ticked, and nothing else is busy", () => {
+    expect(removalConfirmDisabled("idle", true, false)).toBe(false);
+  });
+
+  it("stays disabled once landed if the acknowledgement is not ticked", () => {
+    expect(removalConfirmDisabled("idle", false, false)).toBe(true);
+  });
+
+  it("stays disabled once landed and acknowledged if something else already makes the row busy", () => {
+    expect(removalConfirmDisabled("idle", true, true)).toBe(true);
+  });
+});
+
+describe("runRemovalCeremony — the removal's own ceremony, run directly off its own press with no browser", () => {
+  const FAKE_OPTIONS = { challenge: "fixture-challenge" } as Awaited<ReturnType<typeof enrolmentAssertionOptions>>;
+
+  afterEach(() => {
+    vi.mocked(requestAssertion).mockReset();
+  });
+
+  it("submits the remove intent with the signed assertion and the removal acknowledgement once the ceremony succeeds", async () => {
+    const response = assertionResponse("fixture-challenge");
+    vi.mocked(requestAssertion).mockResolvedValue({ status: "ok", response });
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const setNote = vi.fn();
+    const setConfirming = vi.fn();
+    const refetchOptions = vi.fn();
+
+    await runRemovalCeremony(FAKE_OPTIONS, "target-credential", submit as never, setNote, setConfirming, refetchOptions);
+
+    expect(refetchOptions).not.toHaveBeenCalled();
+    expect(submit).toHaveBeenCalledWith(
+      {
+        intent: "remove",
+        credentialId: "target-credential",
+        assertion: JSON.stringify(response),
+        confirmRemoval: "true",
+      },
+      { method: "post" },
+    );
+    expect(setConfirming).toHaveBeenCalledWith(false);
+    expect(setNote).not.toHaveBeenCalled();
+  });
+
+  it("notes a dismissed prompt, submits nothing, and re-mints this row's options so a later press meets a live challenge", async () => {
+    vi.mocked(requestAssertion).mockResolvedValue({ status: "dismissed" });
+    const submit = vi.fn();
+    const setNote = vi.fn();
+    const setConfirming = vi.fn();
+    const refetchOptions = vi.fn();
+
+    await runRemovalCeremony(FAKE_OPTIONS, "target-credential", submit as never, setNote, setConfirming, refetchOptions);
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(setNote).toHaveBeenCalledWith(expect.stringContaining("did not complete"));
+    expect(setConfirming).toHaveBeenCalledWith(false);
+    // The challenge is unspent but not immortal — two minutes, `lock.server.ts`.
+    expect(refetchOptions).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries a failed ceremony's own message, submits nothing, and re-mints this row's options", async () => {
+    vi.mocked(requestAssertion).mockResolvedValue({ status: "failed", message: "No authenticator found." });
+    const submit = vi.fn();
+    const setNote = vi.fn();
+    const setConfirming = vi.fn();
+    const refetchOptions = vi.fn();
+
+    await runRemovalCeremony(FAKE_OPTIONS, "target-credential", submit as never, setNote, setConfirming, refetchOptions);
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(setNote).toHaveBeenCalledWith("No authenticator found.");
+    expect(setConfirming).toHaveBeenCalledWith(false);
+    expect(refetchOptions).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("a submission this route cannot even read (finding 2, `unlock.tsx`'s own precedent)", () => {
