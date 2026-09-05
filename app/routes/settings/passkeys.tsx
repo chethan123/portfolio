@@ -520,6 +520,8 @@ type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
  * orphaned passkey nobody asked for. Checking first is what keeps that from
  * ever happening rather than merely reporting it afterwards.
  */
+const REGISTRATION_OPTIONS_TTL_MS = 2 * 60 * 1000;
+
 /**
  * What the family reads when the provider refuses to make a second passkey
  * for this app — `excludeCredentials`' client-side half. The library's own
@@ -528,6 +530,10 @@ type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
  * printed here verbatim with the form left waiting on a creation that could
  * not happen.
  */
+export const ALREADY_REGISTERED_MESSAGE =
+  "This provider already holds a passkey for this app and will not make a second. " +
+  "Make the next one from a different device, or from a different provider on this one.";
+
 /**
  * Shown only inside `<noscript>`: enrolling and removing are both event
  * handlers, so with scripting off every control on this screen is inert
@@ -537,12 +543,6 @@ type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
 export const NOSCRIPT_MESSAGE =
   "This browser has scripting turned off, and enrolling or removing a passkey needs it. " +
   "Turn scripting on, or use a browser that has it.";
-
-export const ALREADY_REGISTERED_MESSAGE =
-  "This provider already holds a passkey for this app and will not make a second. " +
-  "Make the next one from a different device, or from a different provider on this one.";
-
-const REGISTRATION_OPTIONS_TTL_MS = 2 * 60 * 1000;
 
 /**
  * Whether registration options minted at `mintedAt` are too stale at `now`
@@ -933,20 +933,6 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// The list, and removing one
-// ---------------------------------------------------------------------------
-
-/**
- * What landing a removal options-fetch result actually does to a row's own
- * state — pulled out of the effect that watches for it, mirroring
- * `EnrolPanel`'s own `beginEnrolment`/`completeRegistration` handler and, for
- * the same reason as `runConfirmCeremony` above, callable directly: this is
- * the one place the fetched options are ever stored, and it never touches
- * `requestAssertion` — that call belongs to {@link runRemovalCeremony}
- * alone, run only from the Confirm removal press itself (`PasskeyRow`'s own
- * header on why that press, and never this one, is what runs the ceremony).
- */
 /**
  * Put the enrolment panel back to where a fresh attempt starts: no note, no
  * phase, no registration options and no minted-at. Four setters rather than
@@ -974,6 +960,20 @@ export function resetEnrolment(
   setRegistrationMintedAt(null);
 }
 
+// ---------------------------------------------------------------------------
+// The list, and removing one
+// ---------------------------------------------------------------------------
+
+/**
+ * What landing a removal options-fetch result actually does to a row's own
+ * state — pulled out of the effect that watches for it, mirroring
+ * `EnrolPanel`'s own `beginEnrolment`/`completeRegistration` handler and, for
+ * the same reason as `runConfirmCeremony` above, callable directly: this is
+ * the one place the fetched options are ever stored, and it never touches
+ * `requestAssertion` — that call belongs to {@link runRemovalCeremony}
+ * alone, run only from the Confirm removal press itself (`PasskeyRow`'s own
+ * header on why that press, and never this one, is what runs the ceremony).
+ */
 export function applyRemovalOptionsResult(
   result: ActionData,
   setNote: (note: string | null) => void,
