@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import {
   Link,
   Links,
@@ -8,7 +8,6 @@ import {
   Scripts,
   ScrollRestoration,
   redirect,
-  useFetcher,
   useLocation,
   useRevalidator,
   useRouteError,
@@ -34,7 +33,7 @@ import { clearedLockCookie, isLocked, readLockCookie, touchGrant } from "~/lib/l
 import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
 import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { startPricePoller } from "~/lib/price-poller.server";
-import { watchReentry } from "~/lib/reentry";
+import { postLockNow, watchReentry } from "~/lib/reentry";
 import { readMaskingPolicy } from "~/lib/settings.server";
 import { getConfig } from "../server/config.ts";
 
@@ -74,6 +73,38 @@ import "./app.css";
 export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
 
 /**
+ * Decodes a pathname exactly the way `matchRoutes` does before matching any
+ * route against it — `decodePath` (react-router 7.18.2,
+ * `lib/router/utils.ts`): each `/`-separated segment is decoded on its own,
+ * with any literal `/` a decode produces re-escaped back to `%2F` so it can
+ * never introduce a path separator that was not in the URL. Reproduced
+ * rather than imported — this is not a `.server` module's value crossing the
+ * bundle boundary, but a private router helper `react-router` does not
+ * export at all, from either side of it.
+ *
+ * **A malformed escape falls back to the raw value, never throws** — the
+ * router's own behaviour: `decodePath` wraps its call in a `try`/`catch` and
+ * warns rather than propagating, because a middleware's path predicate has
+ * to answer *some* boolean for every request the framework will otherwise
+ * go on to route, including one carrying a segment nobody's percent-encoder
+ * ever produced. Answering "not a match" for that segment (the raw,
+ * undecoded string never equals a plain-ASCII constant like `/lock-now`
+ * anyway) is the same conclusion `matchRoutes` reaches for it — a malformed
+ * path matches no route pattern either — reached here without a throw
+ * either place.
+ */
+function decodedPathname(pathname: string): string {
+  try {
+    return pathname
+      .split("/")
+      .map((segment) => decodeURIComponent(segment).replace(/\//g, "%2F"))
+      .join("/");
+  } catch {
+    return pathname;
+  }
+}
+
+/**
  * Normalises a pathname the way the router itself matches route paths,
  * before comparing it against {@link LOCK_EXEMPT_PATHS} — `Array.includes`
  * alone is an exact, case-sensitive compare, and the router is neither:
@@ -87,9 +118,23 @@ export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
  * `compose.yaml`'s healthchecks, and this array — and this function is what
  * keeps the third one honest against the router's own rule rather than a
  * guess at it.
+ *
+ * **Decoded first** ({@link decodedPathname}, finding D) — `matchRoutes`
+ * decodes every segment before it ever compares one, and this function used
+ * not to: `POST /lock%2Dnow` reached `isLockNowPath` below as the literal
+ * string `/lock%2dnow`, which never equals `LOCK_NOW_ACTION`, so the one
+ * request most in need of the outage carve-out — a reader who pressed "Lock
+ * now" while the database was down, with a browser or proxy that happened to
+ * percent-encode the hyphen — read as an ordinary path instead and kept the
+ * cookie {@link redirectToUnlock} was asked to clear. Every caller of this
+ * function shares the fix, not only that one: {@link LOCK_EXEMPT_PATHS} and
+ * `isUnlockPath` are exactly as reachable through an encoded spelling, and a
+ * predicate claiming to match what the router matched has to mean it for
+ * all three.
  */
 function normalizedPathname(pathname: string): string {
-  const lower = pathname.toLowerCase();
+  const decoded = decodedPathname(pathname);
+  const lower = decoded.toLowerCase();
   const stripped = lower.replace(/\/+$/, "");
   return stripped === "" ? "/" : stripped;
 }
@@ -110,6 +155,34 @@ function isUnlockPath(pathname: string): boolean {
 }
 
 /**
+ * Whether `pathname` is `/lock-now` — read only by {@link lockMiddleware}, to
+ * decide whether its *own* refusal should clear the grant cookie (finding
+ * 3), never to exempt the path itself. `/lock-now` is not on
+ * {@link LOCK_EXEMPT_PATHS} and must not be: an unauthenticated POST there
+ * still has to pass the same lock this middleware enforces everywhere else,
+ * or anyone could end any household's grant with no credential at all. All
+ * that changes on this one path is what a *refusal* does to the cookie —
+ * argued at {@link redirectToUnlock}'s own header.
+ *
+ * **Path alone, deliberately — the method is a separate condition, checked
+ * where this is called.** `/lock-now` is action-only (`lock-now.ts`'s own
+ * header), so a `GET` or `HEAD` there is never the reader asking to end
+ * their session; it is a crawler, a pasted URL, or a stray retry, same as it
+ * would be for any other resource route. Folding the method in here would
+ * make this function answer two different questions — "is this the path"
+ * and "is this the request the exception is for" — under one name.
+ *
+ * **Not the whole of "is this the request the exception is for," any
+ * more (finding 4).** `lockMiddleware` also requires the refused request to
+ * carry its own grant cookie before treating a `POST /lock-now` as this
+ * browser asking to end its own session — this function only ever answers
+ * the path half of that; see {@link redirectToUnlock}'s own header.
+ */
+function isLockNowPath(pathname: string): boolean {
+  return normalizedPathname(pathname) === LOCK_NOW_ACTION;
+}
+
+/**
  * Every response the lock middleware lets through carries this — and it is
  * worth being exact about what that buys, because it is less than this slice
  * originally claimed.
@@ -119,9 +192,11 @@ function isUnlockPath(pathname: string): boolean {
  * that: `Source/WebCore/history/BackForwardCache.cpp` guards it on
  * `document->url().protocolIs("https")`, so the identical response over
  * plain HTTP — `http://localhost` included — is left eligible for its cache.
- * This app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost`/
- * `127.0.0.1` (`server/config.ts`), so in production Safari does refuse the
- * cache too; it is the plain-HTTP development loop where it does not.
+ * This app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost`
+ * itself — `server/config.ts` turns away every IP address before it
+ * reaches that carve-out, `127.0.0.1` included — so in production Safari
+ * does refuse the cache too; it is the plain-HTTP development loop, on
+ * that one hostname, where it does not.
  * **Chrome admits such a page regardless of protocol.**
  * `CacheControlNoStoreEnterBackForwardCache` has been enabled by default
  * since 2025; Chrome shortens such an entry's life to three minutes and
@@ -160,9 +235,43 @@ function withNoStore(response: Response): Response {
  * already resolves to `/` for an absent parameter — the same fallback a
  * missing or unsafe one gets today.
  *
- * `clearCookie` is true only when a grant lookup came back definitively
- * empty — never on a mere read failure, which is not proof the cookie's
- * grant is actually gone.
+ * `clearCookie` is true when a grant lookup came back definitively empty —
+ * proof the cookie's grant is actually gone — or when the refused request
+ * targets `/lock-now` itself (finding 3, {@link isLockNowPath}) **and that
+ * same request's own cookie names a grant** (finding 4): nowhere else is a
+ * mere read failure proof of that, but a reader who posted to `/lock-now`
+ * carrying their own grant cookie has already asked to end this browser's
+ * grant, and an outage that merely stops the middleware from *confirming*
+ * it is gone is not a reason to hand it back once the database recovers.
+ * `lock-now.ts`'s own action already clears the cookie on every path
+ * through it; this covers the one failure mode that never reaches it — a
+ * refusal thrown here, before `next()` ever runs that action.
+ *
+ * **The cookie requirement is what closes a cross-site forgery (finding
+ * 4, P1).** `SameSite=Lax` already withholds `LOCK_COOKIE` from a cross-site
+ * form POST — the browser never sends it — so a request that reaches here
+ * with no cookie at all is exactly as consistent with "an attacker's page
+ * auto-submitted a form to `/lock-now`" as it is with "an outage." Path and
+ * method match either way; only the cookie's presence tells them apart.
+ * Treating path-and-method alone as proof (the bug) meant such a forged POST
+ * — reachable the moment an attacker's page merely knows this instance's
+ * origin, no credential of any kind required — still received
+ * `Set-Cookie: …; Max-Age=0` on the response, which the browser processes
+ * regardless of `SameSite` (that attribute governs which requests *carry* a
+ * cookie, never which responses may *clear* one), silently ending a real
+ * session the victim never asked to end. Requiring the cookie is not a new
+ * mechanism: it is the same `SameSite=Lax` posture (ADR-0005,
+ * docs/research/2026-09-02-security-and-privacy-audit.md §S5) doing the one
+ * thing it already does — never inventing a second CSRF check beside the
+ * framework's own `Origin` check. React Router 7.18.2's own
+ * `throwIfPotentialCSRFAttack` runs *before* this middleware for every
+ * mutation method (`handleDocumentRequest`, ahead of `staticHandler.query`,
+ * which is where the middleware pipeline actually runs) and would already
+ * refuse a request whose `Origin` mismatches the host with 400 — but a
+ * request carrying no `Origin` header at all skips that check entirely
+ * (`originDomain` stays `null`), so this middleware's own cookie requirement
+ * is the second, independent reason a forged POST cannot clear a grant it
+ * does not carry, not merely a restatement of the framework's.
  */
 function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Response {
   const target = new URL(UNLOCK_PATH, url);
@@ -223,8 +332,20 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
  * catches around `firstRunStep`, which is right for a first-run hint that
  * may fail open, and wrong for a boundary — a boundary that opens the
  * moment Postgres hiccups is not a boundary. Every such failure refuses
- * here too, but clears no cookie: a read that merely failed to answer is
- * not proof the grant it names is actually gone.
+ * here too, and clears no cookie — with one deliberate exception (finding
+ * 3): a read that merely failed to answer is not proof the grant it names
+ * is actually gone, *except* when the refused request was itself a POST to
+ * `/lock-now` ({@link isLockNowPath}) **carrying that same browser's own
+ * grant cookie** (finding 4). A reader who pressed "Lock now" during an
+ * outage, from a browser that still holds its grant cookie, has already
+ * stated their intent; `/lock-now`'s own action clears the cookie on every
+ * path *through* it (`lock-now.ts`'s own header), but an outage in
+ * `isLocked`/`touchGrant` refuses here, before that action ever runs, so
+ * this is the one place that intent can otherwise go unhonoured. Honouring
+ * it — clearing the cookie on this path's refusal too — is strictly safer
+ * than preserving a grant the reader asked to end. The cookie requirement is
+ * what keeps this from also honouring a forged cross-site POST that carries
+ * no cookie at all — see {@link redirectToUnlock}'s own header.
  *
  * **A live grant is extended by the request that used it** — {@link
  * touchGrant} itself skips the write unless less than half the idle window
@@ -248,17 +369,41 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
     return withNoStore(await next());
   }
 
+  // Read before any database call, deliberately: whether this request even
+  // carries a grant cookie is not itself a lock-check answer, and both
+  // branches below (the outage carve-out and the ordinary "no cookie"
+  // refusal) need it either way.
+  const grantId = readLockCookie(request);
+
+  // Whether *this* refusal, whatever throws it below, should clear the
+  // cookie regardless of the reason — the exception argued at this
+  // function's own header and {@link redirectToUnlock}'s. Three things all
+  // have to be true, not two: the path, the method — `/lock-now` is
+  // action-only (`lock-now.ts`'s own header), so a `GET` or `HEAD` there is a
+  // crawler, a pasted URL, or a stray retry, never a reader asking to end
+  // this browser's grant — and, since finding 4, this request's own cookie
+  // naming a grant at all. Path and method alone are exactly what a
+  // cross-site forgery can produce with no credential whatsoever
+  // (`SameSite=Lax` withholds the cookie from that request, never from the
+  // response clearing it), so treating them as proof would expire a real
+  // session on a request its own browser never authorised — precisely the
+  // sign-out-nobody-asked-for every other refusal path here is written to
+  // avoid.
+  const isLockNowRequest = isLockNowPath(url.pathname) && request.method === "POST" && grantId !== undefined;
+
   let locked: boolean;
   try {
     locked = await isLocked();
   } catch (error) {
     console.error("Lock check failed; refusing rather than continuing:", error);
-    throw redirectToUnlock(url, request.method, false);
+    throw redirectToUnlock(url, request.method, isLockNowRequest);
   }
 
   if (!locked) return withNoStore(await next());
 
-  const grantId = readLockCookie(request);
+  // `isLockNowRequest` is already `false` on every path through here —
+  // it requires `grantId !== undefined` — so there is nothing this refusal
+  // could honour as lock intent: no cookie means nothing to clear.
   if (grantId === undefined) throw redirectToUnlock(url, request.method, false);
 
   let grant: Awaited<ReturnType<typeof touchGrant>>;
@@ -266,7 +411,7 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
     grant = await touchGrant(grantId);
   } catch (error) {
     console.error("Grant check failed; refusing rather than continuing:", error);
-    throw redirectToUnlock(url, request.method, false);
+    throw redirectToUnlock(url, request.method, isLockNowRequest);
   }
 
   if (grant === undefined) throw redirectToUnlock(url, request.method, true);
@@ -291,10 +436,10 @@ export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
  * `hasPasskey: false` (ticket 06) are the two fields with no existing failure
  * default to reuse, so each gets a fresh one on the same principle: `gated:
  * true` is the value that keeps `OpenInstanceBanner` off, and `hasPasskey:
- * false` is the value that keeps the lock-now control and the re-entry effect
- * off — both moot in practice, since `Layout`'s bare-shell branch for this
- * route drops every control regardless of what either field says, but the
- * type this loader returns has to agree with the branch that does read them.
+ * false` is the value that keeps the lock-now control off — moot in
+ * practice, since `Layout`'s bare-shell branch for this route drops every
+ * control regardless of what either field says, but the type this loader
+ * returns has to agree with the branch that does read them.
  */
 const UNLOCK_SCREEN_ROOT_DATA = {
   gated: true,
@@ -381,6 +526,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   // again until a navigation. Never a figure, though — there is no reason to
   // fail toward showing a button that clears a grant which may be exactly
   // what is protecting this render.
+  //
+  // **This answers the chrome's question only** — draw the lock-now control
+  // or not — which is why failing toward `false` is right here. It used to
+  // carry a second field saying whether the read had actually failed, so the
+  // re-entry guard could tell "no passkey" from "could not tell" and take the
+  // cautious branch. That guard no longer asks: a hidden-too-long return
+  // posts the lock without consulting anything this loader believes
+  // (`~/lib/reentry.ts`'s own header), so there is no longer a client-side
+  // decision for an uncertain read to mislead.
   let hasPasskey = false;
   try {
     hasPasskey = await isLocked();
@@ -544,65 +698,85 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // one that may not apply".
   const hasPasskey = rootData?.hasPasskey === true;
 
-  // Named directly in the effect's dependency array below, not stashed in a
-  // ref: both are `useCallback`-memoised on stable deps in react-router
-  // 7.18.2 (`useRevalidator` on `[dataRouterContext.router]`; `useFetcher`'s
-  // own `submit` on `[fetcherKey, submitImpl]`, where `fetcherKey` never
-  // changes here and `submitImpl` is `useSubmit()`'s callback, itself
-  // memoised on the basename, current route id, `router.fetch` and
-  // `router.navigate`) and neither changes for the life of this app, so
-  // there is no identity churn to route around — and even if one did
-  // change, naming it here is correct: a re-subscribe, not a bug.
-  const { submit: submitLock } = useFetcher();
+  // Named directly in the reentry effect's dependency array below, not
+  // stashed in a ref: `useRevalidator` memoises `revalidate` on
+  // `[dataRouterContext.router]` (react-router 7.18.2), which never changes
+  // for the life of this app, so there is no identity churn to route around.
   const { revalidate } = useRevalidator();
 
   /**
-   * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
-   * the whole argument for what each half does and does not promise; this
-   * effect is only the wiring.
+   * **Concealment lived here for five review rounds and is gone.** Every
+   * finding from round two on was the same mechanism wearing different
+   * clothes: HTTP status semantics, commit ordering versus a fetcher's
+   * `.state`, the document unloading mid-POST, an expired gate session
+   * making retry impossible, two concurrent attempts overwriting each
+   * other's `concealment` state, a back-forward-cache restore racing the
+   * notice, cookies shared across tabs. The surface never closed, because
+   * concealment was never something the design asked for — it was a reply
+   * to one review comment, reaching for something the spec's own stated
+   * limit already declines: docs/specs/0019-the-lock.md, "What locking
+   * cannot reach" — *"Deleting the grant stops the next request; it does
+   * not reach into pages already rendered. Another tab of the same browser
+   * keeps the figures on screen until it asks the server for something."*
+   * A notice standing in for the page **is** reaching into a page already
+   * rendered, dressed as a fix for whichever finding was open that round.
+   * Read that heading again before adding anything here that hides `children`
+   * — the next reader who wants to build this back is the reason this
+   * paragraph exists.
    *
-   * **The two halves are gated on different conditions, on purpose.** The
-   * `pageshow` half (`askServer`, wired unconditionally below) only
-   * revalidates — cheap and correct in every state — so it installs
-   * whenever this is not the unlock screen (this function's own comment on
-   * {@link isUnlockScreen} above), full stop. It must **not** also require
-   * `hasPasskey`: that flag is baked into this page at render time, and it
-   * is exactly the value that goes stale — a page rendered while the
-   * household held no passkey installs no listener at all under the old,
-   * single guard, and a passkey enrolled from another browser afterward
-   * would leave a page restored from the back/forward cache with no grant
-   * and no server round trip, the precise gap `pageshow` exists to close.
-   * The `visibilitychange`/`postLock` half stays gated on `hasPasskey`,
-   * passed as `null` to {@link watchReentry} to skip it entirely otherwise:
-   * posting a lock when nothing is enrolled would send the reader on a
-   * pointless `/lock-now` → `/unlock` → `/` round trip for a browser that
-   * was never locked in the first place.
+   * What actually needed to change once concealment was gone is only that
+   * the request `postLock` sends behaves as a request that ends a grant
+   * should — {@link postLockNow}'s own header carries both halves. Neither
+   * needed a scrim, a replacement render, or a state machine watching for
+   * either one to settle.
+   *
+   * **A tab that discovers a passkey it did not know about is deliberately
+   * left alone.** A review round asked for one to post the lock on
+   * discovering that `hasPasskey` had flipped, on the reasoning that its
+   * belief was stale. The case that produces is a *sibling tab of the very
+   * browser that just enrolled*: the ceremony minted that browser's grant,
+   * the cookie is shared across its tabs, and posting here would delete it —
+   * locking the household out of the browser it enrolled from, seconds after
+   * it did. `docs/specs/lock/05-enrolling-and-listing-passkeys.md` names that
+   * outcome as the thing not to do: the browser that enrolled the first
+   * passkey is not locked out by its own success. A different browser has no
+   * grant to share and is already refused by the middleware, which is where
+   * that refusal belongs.
+   */
+  const attemptLock = useCallback((): void => {
+    void postLockNow(revalidate, fetch);
+  }, [revalidate]);
+
+  /**
+   * What a hidden-too-long return with no passkey believed enrolled does,
+   * and what a persisted `pageshow` restore does regardless of that belief
+   * (`~/lib/reentry.ts`'s own header on both): ask the middleware again, and
+   * stop there. Revalidating *is* the answer — it re-runs the root
+   * middleware, which refuses a browser holding no live grant and redirects
+   * it to `/unlock`. Nothing here decides the belief was stale and posts a
+   * lock off the back of it; the paragraph on {@link attemptLock} above says
+   * why that would lock a household out of the browser it just enrolled
+   * from.
+   */
+  const askServer = useCallback((): void => {
+    revalidate();
+  }, [revalidate]);
+
+  /**
+   * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
+   * the whole argument for what each half does and does not promise. There
+   * is nothing for `Layout` to decide: a hidden-too-long return posts the
+   * lock and a persisted restore asks the server, and neither consults what
+   * this render believes about the household. Three rounds of findings came
+   * from handing `watchReentry` a `hasPasskey` belief that this page baked in
+   * at render time; the parameter that carried it is gone, so there is no
+   * longer a shape here for a call site to get wrong.
    */
   useEffect(() => {
     if (isUnlockScreen) return;
 
-    return watchReentry(
-      // A fetcher submission, not `useSubmit`'s navigation mode: react-router
-      // 7.18.2's `startNavigation` unconditionally aborts the one pending
-      // navigation's `AbortController` the instant another navigation
-      // starts (`pendingNavigationController`, in the router core
-      // `react-router` ships), so a reader who taps a link while a
-      // navigation-mode lock post is in flight can cancel `deleteGrant()`
-      // before it runs and land on the page they asked for with their
-      // grant still live. A fetcher's request instead lives in its own
-      // entry in `fetchControllers`, keyed by the fetcher and entirely
-      // untouched by `startNavigation`, so a navigation elsewhere cannot
-      // cancel it — and a redirect a fetcher's action returns is still
-      // picked up by the router (`findRedirect` over the fetcher's own
-      // results) and followed, so the reader still lands on the unlock
-      // screen. The chrome's own "Lock now" **button** stays a real
-      // `<form method="post">` (`LockNowControl`) — it must keep working
-      // with JavaScript off, which is why it is a form and not a submit
-      // call at all; only this automatic, re-entry-triggered post changes.
-      hasPasskey ? () => submitLock(null, { method: "post", action: LOCK_NOW_ACTION }) : null,
-      () => revalidate(),
-    );
-  }, [isUnlockScreen, hasPasskey, submitLock, revalidate]);
+    return watchReentry(attemptLock, askServer);
+  }, [isUnlockScreen, askServer, attemptLock]);
 
   return (
     <html lang="en">

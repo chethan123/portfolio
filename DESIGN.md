@@ -770,7 +770,8 @@ That placement is load-bearing rather than convenient: the policy is seeded to *
 run is a page of dots, and dots whose only cure is three clicks into a configuration area is an app
 that looks broken. `docs/adr/0002-masking-is-a-display-state.md` records the split and the
 deliberately weak guarantee under it — masking defends against being read over the shoulder, and the
-gate in front of the instance (§10) remains the only thing that keeps anyone out.
+gate in front of the instance (§10) keeps a *person* out while the lock
+(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) keeps a *browser* out.
 
 **The Instruments tab will carry real weight**, which is why it isn't planned as just inline
 editing on a table row. It will be the only place that answers "which manual-priced instruments
@@ -823,6 +824,7 @@ routing here, so it is not needed.
 | **TLS** | **The operator's, in front of this stack.** Everything inside the stack speaks plain HTTP and the app never manages certificates; the public hostname and its certificate belong to the house-wide proxy this stack sits behind, and `PUBLIC_ORIGIN` (§10.1) is the `https://` origin it serves. |
 | **PWA requirement** | Service workers require a **secure context** — HTTPS, with `localhost` the only exception. The house proxy's TLS supplies it at `PUBLIC_ORIGIN`, which removed the blocker the PWA slice (§11) faced — the instance installs at `PUBLIC_ORIGIN` and nowhere else. Reaching the box by LAN IP over plain HTTP supplies no secure context, and the gate would refuse that request anyway. |
 | **Auth** | **Outside the app.** Caddy asks a Google sign-in gate about every request before it reaches the app, and the app authenticates nobody (see below). It keeps one honest fact about its own deployment — whether a gate fronts it — and draws a persistent warning banner when nothing does. |
+| **Lock** | **A second boundary, inside the app.** Once the household enrols a passkey, the app's own root middleware refuses every screen to a browser holding no live grant until a WebAuthn assertion checks out (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`). Distinct from Auth above it: the gate decides which *person* may reach this instance; the lock decides which *browser* may read it once admitted. |
 | **Job scheduler** | In-process, inside the app container. One process to deploy, one place to read logs. Trade-off: a restart mid-session misses a poll until the next tick — acceptable at 15-minute granularity. |
 | **Market calendar** | Weekday + `America/New_York` session check plus a small hardcoded NYSE holiday table. A wrongly skipped poll costs nothing; a wrongly attempted one costs one request. |
 | **Timezone** | UTC everywhere in the database. `America/New_York` for market-hours logic, and for any timestamp naming a market instant — the "as of" caption renders in market time with its abbreviation, because these pages are server-rendered and have no browser clock to ask (spec `pricing/06`, which supersedes §6's story 8). Browser-local for everything else. |
@@ -954,8 +956,9 @@ Migrations must be idempotent so a restart is always safe.
 **The rest of the gate's settings are not in that table, because the app reads none of the rest.**
 `PUBLIC_ORIGIN` moved into the table above for exactly that reason: unlike its neighbours, the app
 now derives the lock's WebAuthn relying-party id from it
-(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`), which is its first shared variable
-with the sidecar. Its Google client and its cookie secret genuinely are the gate's alone —
+(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) — another variable shared with the
+sidecar, though not its first: `TZ`, above, already reaches both `app` and `gate` (`compose.yaml`),
+validated and used by each. Its Google client and its cookie secret genuinely are the gate's alone —
 Compose-level variables consumed only by the `gate` service, with no default, and a missing one
 stops `up` the same way a missing `PUBLIC_ORIGIN` does. Who may enter is not a variable at all: a
 file of addresses beside the Compose file, one per line, because it is a list that grows rather
@@ -1059,7 +1062,10 @@ which is why that tab is named for the screens rather than for either preference
 
 The chart's range choice is the third of these display states, and it travels the same way for the
 same reason: the last-picked preset rides a cookie (spec 0008) so the server draws the remembered
-range on first paint. None of the three is a credential, and the app issues no cookie that is one.
+range on first paint. None of the three is a credential. A fourth cookie now is: the lock's own grant
+(ADR-0012), which is why it alone among this stack's cookies is `HttpOnly`, `Secure`, and `__Host-`
+prefixed — it carries a credential rather than a preference, and none of the three display states
+above needed any of that.
 
 **Tokens, defined once:**
 
@@ -1472,3 +1478,26 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     solid line and says nothing — the half of
     [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer,
     filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.
+15. **A browser without a live grant cannot unlock without running the passkey ceremony, once the
+    household holds one.** Ordinary requests never touch the ceremony at all — the root middleware
+    checks only whether this browser already holds a live grant, so one that does keeps reading
+    every protected route regardless of what its browser can run
+    ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md)). The limitation is about
+    getting back in, not about staying in: many in-app WebView browsers offer no *completable*
+    ceremony (`app/lib/unlock-ceremony.ts`'s own hedge), and nothing here decides this with a
+    client-side capability check — it falls out of the server refusing until an assertion arrives,
+    which only a browser with no live grant is ever asked for. The unlock screen names two
+    self-service recoveries first — another browser on this device, or a device that can reach a
+    passkey the household has enrolled — and only after those does it point at the operator:
+    recovery here is the operator deleting every enrolled passkey, which reopens the instance the
+    same way removing the last one always does, never a second way in through the front door.
+16. **The check is not necessarily a biometric, carries no freshness, and is only as strong as
+    whatever unlocks its provider.** WebAuthn verifies the user by whatever means the authenticator
+    accepts, and a device passcode satisfies it exactly as a biometric one does. The assertion also
+    carries no timestamp a server could compare against, so a provider whose vault is already
+    unlocked may return a verified assertion without prompting anyone. A passkey the household
+    enrols may be *eligible* to sync too — Settings marks that capability, never proof a copy has
+    actually been made anywhere — which is the same limit restated:
+    **the lock is only as strong as whatever unlocks the passkey provider on that device**
+    ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md) states all three as
+    properties of the web platform, not of this implementation).

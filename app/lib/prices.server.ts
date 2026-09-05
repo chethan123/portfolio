@@ -46,13 +46,27 @@
  * A past date's row *can* be rewritten, deliberately — only ever with the
  * provider's own price for the day the provider says it belongs to, so a
  * rewrite is idempotent unless the provider itself revises a close: a
- * correction, not corruption.
+ * correction, not corruption. **Bounded to a seven-day window around today's
+ * market date, either side** (spec 0018 §3.1): the upsert is keyed on
+ * `(instrument_id, date)` by `regularMarketTime` alone, so a quote dated
+ * further back is not "the same day, corrected" but a hostile or merely wrong
+ * provider claiming a different one — rewriting a day the poller already
+ * settled — and a quote dated further ahead would plant a close on a day yet
+ * to come, permanent if that day turns out to be a weekend or holiday the
+ * poller never revisits. Outside the window the quote and the observation
+ * still land; only the close is skipped, and logged. A skipped *past* day is
+ * picked up by a later batch only while the instrument is still a candidate
+ * ({@link NO_CLOSE_BY_FIRST_HELD}); a skipped *future* day no batch ever
+ * reaches, that batch's range ending at today. Either way `holding_valued_at`
+ * carries the previous close across the gap, as it does across any day the
+ * market did not trade.
  *
  * Every exported query takes an optional `db`; tests pass a transaction they
  * roll back.
  */
 import { sql } from "kysely";
 
+import { addDays } from "./chart-range.ts";
 import { getDb, getPool, type Database } from "./db.server.ts";
 import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
 import { ProviderUnreachable } from "./price-provider.server.ts";
@@ -107,6 +121,15 @@ const BACKFILL_RETRY_INTERVAL = "1 day";
 const BACKFILL_RANGE_LEAD_DAYS = 7;
 
 /**
+ * How far a quote's own market date may sit from today's, either side, before
+ * {@link writeDailyClose} refuses to write it. Seven for the same reason as
+ * {@link BACKFILL_RANGE_LEAD_DAYS}: it is the lag an honest NAV or a holiday
+ * quote can carry, and a week clears the longest run of non-trading days a US
+ * market has — beyond it a claimed date is not lag, it is wrong.
+ */
+const CLOSE_WINDOW_DAYS = 7;
+
+/**
  * Run a refresh, or decline because one is already running. Beside the
  * refresh rather than in the poller because the poller stopped being the only
  * caller when a person could press a button — two browser tabs is the
@@ -158,7 +181,11 @@ export type RefreshReport = {
   priced: number;
   /** Instruments that were asked for and did not come back. */
   stale: number;
-  /** `price_daily` rows written or rewritten. */
+  /**
+   * `price_daily` rows written or rewritten. Excludes a close the window
+   * refused: a quote still priced and observed, but more than
+   * {@link CLOSE_WINDOW_DAYS} from today's market date, either side.
+   */
   closes: number;
   /**
    * Observations the log did not already hold — the only field separating a
@@ -848,13 +875,27 @@ export async function refreshQuotes(
 
     const pricedIds = new Set<string>();
     let closes = 0;
+    const windowSkipped: string[] = [];
 
     for (const { instrumentId, quote } of matched) {
       await writeQuote(trx, instrumentId, quote);
       await writeQuoteType(trx, instrumentId, quote);
-      await writeDailyClose(trx, instrumentId, quote, marketTimeZone);
+      const wroteClose = await writeDailyClose(trx, instrumentId, quote, marketTimeZone);
       pricedIds.add(instrumentId);
-      closes += 1;
+      if (wroteClose) {
+        closes += 1;
+      } else {
+        // The matched form, not the feed's spelling, here and at the archive
+        // cap's line: it is what the stored symbol looks like, and a provider
+        // answering with newlines around it cannot break an operator's log.
+        windowSkipped.push(matchKey(quote.symbol));
+      }
+    }
+
+    if (windowSkipped.length > 0) {
+      console.warn(
+        `Price close skipped, more than ${CLOSE_WINDOW_DAYS} days from today's market date: ${windowSkipped.join(", ")}`,
+      );
     }
 
     // Everything asked for that did not come back. §6.2: the last known price
@@ -958,18 +999,30 @@ async function writeQuoteType(
  * intraday poll safe — the row is rewritten through the session and settles
  * on the close — and a holiday poll harmless: its quote still carries the
  * previous trading day and rewrites it with the value already there.
+ *
+ * **Refuses to write outside {@link CLOSE_WINDOW_DAYS} of today's market
+ * date, either side** (module header): the decision is made before the
+ * upsert runs, never by clamping what it writes. Returns whether it wrote, so
+ * the caller counts only real writes rather than every attempt.
  */
 async function writeDailyClose(
   db: Kysely<Database>,
   instrumentId: string,
   quote: ProviderQuote,
   marketTimeZone: string,
-): Promise<void> {
+): Promise<boolean> {
+  const date = marketDateOf(quote.asOf, marketTimeZone);
+  const today = marketDateOf(new Date(), marketTimeZone);
+
+  if (date < addDays(today, -CLOSE_WINDOW_DAYS) || date > addDays(today, CLOSE_WINDOW_DAYS)) {
+    return false;
+  }
+
   await db
     .insertInto("price_daily")
     .values({
       instrument_id: instrumentId,
-      date: marketDateOf(quote.asOf, marketTimeZone),
+      date,
       close: quote.price,
     })
     .onConflict((conflict) =>
@@ -978,6 +1031,8 @@ async function writeDailyClose(
         .doUpdateSet({ close: (builder) => builder.ref("excluded.close") }),
     )
     .execute();
+
+  return true;
 }
 
 /**
@@ -1034,6 +1089,16 @@ type ObservationRow = {
 };
 
 /**
+ * The largest serialised payload the log will store, in bytes. An honest
+ * quote entry is 2–4 KB; the observation log keys on `(instrument_id, as_of)`
+ * and inserts where absent, so a worker varying `regularMarketTime` adds a
+ * row per instrument per tick, and uncapped each row could carry the whole of
+ * the client's own body cap into the cluster that shares a filesystem with
+ * the dumps.
+ */
+const ARCHIVE_PAYLOAD_CAP = 32 * 1024;
+
+/**
  * The provider's raw entry as the text the `jsonb` column will parse, or
  * null. Serialised so the value crossing the driver is unambiguously the
  * stored document; ADR-0006 makes `price` the only column anything may
@@ -1042,16 +1107,36 @@ type ObservationRow = {
  * refresh to preserve an audit artifact would invert the priority. `null` is
  * treated as absent — a stored `jsonb` null and a stored nothing would be two
  * spellings of one fact.
+ *
+ * **Also dropped past {@link ARCHIVE_PAYLOAD_CAP}**, measured as
+ * `Buffer.byteLength(json, "utf8")` rather than the string's own `.length`: a
+ * quote's raw entry can carry non-ASCII text — a foreign exchange's company
+ * name, a currency symbol — whose UTF-8 encoding runs longer than its UTF-16
+ * code-unit count, and the cap is about the bytes the row costs on disk, not
+ * the character count. `symbol` is only for the log line the cap trips.
  */
-function archived(payload: unknown): string | null {
+function archived(payload: unknown, symbol: string): string | null {
   if (payload === undefined || payload === null) return null;
 
+  let json: string | null;
   try {
-    return JSON.stringify(payload) ?? null;
+    json = JSON.stringify(payload) ?? null;
   } catch (error) {
     console.warn("Price payload could not be archived; storing the observation without it:", error);
     return null;
   }
+
+  if (json === null) return null;
+
+  const bytes = Buffer.byteLength(json, "utf8");
+  if (bytes > ARCHIVE_PAYLOAD_CAP) {
+    console.warn(
+      `Price payload for ${symbol} is ${bytes} bytes, over the ${ARCHIVE_PAYLOAD_CAP}-byte cap; storing the observation without it`,
+    );
+    return null;
+  }
+
+  return json;
 }
 
 /**
@@ -1076,7 +1161,7 @@ function observationsOf(
       market_date: marketDateOf(quote.asOf, marketTimeZone),
       price: quote.price,
       fetched_at: quote.fetchedAt,
-      payload: archived(quote.payload),
+      payload: archived(quote.payload, matchKey(quote.symbol)),
     });
   }
 

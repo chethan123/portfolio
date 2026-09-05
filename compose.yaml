@@ -276,11 +276,15 @@ services:
       # deliberately unset: the narrowest domain admitting the family admits
       # every other Gmail account on earth.
       OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/allowed-emails.txt
-      # Spelled out, not inherited. SameSite=Lax is the instance's entire CSRF
-      # posture now the app carries no cookie of its own — and the image leaves
-      # SameSite unset. Secure restates a deployment claim: the browser only
-      # meets this instance over the house proxy's TLS. Expiry keeps the
-      # seven-day default, which makes sign-in once per device.
+      # Spelled out, not inherited — the image leaves SameSite unset. SameSite=Lax
+      # is the instance's entire CSRF posture, and it still is: the app's own
+      # lock (ADR-0012, app/lib/lock.server.ts) issues a cookie of its own now,
+      # but that one is SameSite=Lax too, for the identical reason — a `Strict`
+      # grant cookie would be withheld on the gate's own cross-site sign-in
+      # bounce and re-lock every browser on its schedule. Secure restates a
+      # deployment claim: the browser only meets this instance over the house
+      # proxy's TLS. Expiry keeps the seven-day default, which makes sign-in
+      # once per device.
       OAUTH2_PROXY_COOKIE_SAMESITE: lax
       OAUTH2_PROXY_COOKIE_SECURE: "true"
       TZ: ${TZ:-UTC}

@@ -336,6 +336,206 @@ describe("the lock middleware", () => {
   );
 
   it(
+    "clears the grant cookie on a refusal that is itself a POST to /lock-now carrying that browser's own grant, since an outage must not strand a grant the reader asked to end",
+    async () => {
+      // Finding 3: `/lock-now`'s own action already clears the cookie on
+      // every path through it (`lock-now.test.ts`'s own coverage), but an
+      // outage in `isLocked` refuses *here*, before that action ever runs —
+      // the exact case this middleware used to leave the cookie alone for,
+      // on the reasoning (right everywhere else) that a mere read failure
+      // is not proof the grant is gone. A reader who pressed "Lock now"
+      // during the outage, from a browser that still carries its own grant
+      // cookie, has already asked to end this browser's grant; once the
+      // database recovers, an uncleared cookie would admit them again —
+      // precisely the outcome pressing the control was supposed to rule
+      // out. The cookie is seeded here (finding 4) — a genuine same-origin
+      // "Lock now" press always carries it — so this test stays distinct
+      // from the cross-site shape just below, which never does.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, post("/lock-now", {}, `${LOCK_COOKIE}=some-grant-id`), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        expect(response.headers.get("Set-Cookie")).toMatch(/max-age=0/i);
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "leaves the grant cookie alone on a refusal that is a POST to /lock-now during an outage, when the request carries no grant cookie at all — the cross-site forgery shape (finding 4, P1)",
+    async () => {
+      // `SameSite=Lax` withholds `LOCK_COOKIE` from a cross-site form
+      // POST — the browser never sends it — so a request that reaches here
+      // with no cookie at all is exactly what an attacker's page
+      // auto-submitting a form to this instance's own `/lock-now` produces,
+      // indistinguishable by path and method alone from a real "Lock now"
+      // press made during an outage. Treating path-and-method as proof
+      // (the bug) cleared a cookie this request never named; requiring the
+      // cookie closes it without inventing a second CSRF mechanism beside
+      // the framework's own `Origin` check and this app's existing
+      // `SameSite=Lax` posture (ADR-0005).
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, post("/lock-now", {}), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        expect(response.headers.get("Set-Cookie")).toBeNull();
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "leaves the grant cookie alone on a refusal that is a POST to /lock-now with no grant cookie, even while the household is locked and the database is perfectly reachable — the ordinary-operation cross-site shape (finding 4, P1)",
+    withDatabase(async ({ seedPasskey }) => {
+      // The same forgery, without needing an outage to reach it at all: a
+      // locked household refuses any request carrying no grant cookie
+      // regardless of path, and a forged `POST /lock-now` is exactly such a
+      // request. This is the more common shape in practice — no outage
+      // required — and the one a P1 severity actually describes.
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+      let called = false;
+
+      const response = await responseOf(() =>
+        servedThrough(middleware, post("/lock-now", {}), {}, () => {
+          called = true;
+        }),
+      );
+
+      expect(called).toBe(false);
+      expect(response.status).toBeGreaterThanOrEqual(300);
+      expect(response.status).toBeLessThan(400);
+      expect(response.headers.get("Set-Cookie")).toBeNull();
+    }),
+  );
+
+  it(
+    "leaves the grant cookie alone on a refusal from a GET to /lock-now, since a crawler or a pasted link never asked to end anyone's session",
+    async () => {
+      // The method is as much a part of the exception above as the path:
+      // `/lock-now` is action-only, so nothing a reader did produces a `GET`
+      // there — this is a crawler, a pasted URL, or a stray retry. Treating
+      // it as the reader's own request to end their session would expire a
+      // perfectly live grant on a request nobody meant, the moment a
+      // transient outage happened to coincide with one.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, get("/lock-now"), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        // The one difference from the POST case just above: a read that
+        // merely failed to answer is not proof this grant is gone, and
+        // nothing about a stray GET says otherwise either.
+        expect(response.headers.get("Set-Cookie")).toBeNull();
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "clears the grant cookie on a refusal from a POST to a percent-encoded spelling of /lock-now, since the router would match it the same way",
+    async () => {
+      // Finding D: react-router decodes each pathname segment before
+      // matching any route (`decodePath`, react-router 7.18.2), so
+      // `POST /lock%2Dnow` reaches this same action exactly as
+      // `POST /lock-now` does. The middleware's own outage carve-out used to
+      // compare the raw, undecoded pathname, read this as an ordinary path,
+      // and leave the cookie alone — reverting `normalizedPathname` back to
+      // comparing `pathname.toLowerCase()` without decoding first fails this
+      // test the same way it failed the plain-`/lock-now` test above before
+      // finding 3's fix, since `/lock%2dnow` never equals `/lock-now`. The
+      // cookie is seeded here (finding 4) for the same reason it is on that
+      // plain-spelling test: this exercises the encoded-path decoding, not
+      // the cookie requirement, which has its own dedicated tests above.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, post("/lock%2Dnow", {}, `${LOCK_COOKIE}=some-grant-id`), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        expect(response.headers.get("Set-Cookie")).toMatch(/max-age=0/i);
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "refuses without throwing, and leaves the cookie alone, on a path carrying a malformed percent escape",
+    async () => {
+      // Finding D's other half: `decodeURIComponent` throws on a dangling
+      // `%`, and a path predicate the middleware calls on every request must
+      // never propagate that — `decodedPathname`'s own `catch` falls back to
+      // the raw value, matching `decodePath` itself. The raw value here is
+      // `/lock-now%`, which is not `/lock-now` either way, so this is an
+      // ordinary refusal: not treated as `/lock-now` (cookie untouched), and
+      // not a 500 from an uncaught `URIError`.
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      let called = false;
+
+      try {
+        const response = await withDb(unreachable, () =>
+          responseOf(() =>
+            servedThrough(middleware, post("/lock-now%", {}), {}, () => {
+              called = true;
+            }),
+          ),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        expect(response.headers.get("Set-Cookie")).toBeNull();
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
     "invokes next, and lets its stand-in response through, once the browser holds a live grant",
     withDatabase(async ({ seedPasskey, seedUnlockGrant }) => {
       const passkey = await seedPasskey({ publicKey: A_PUBLIC_KEY });

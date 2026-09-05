@@ -10,7 +10,7 @@
  * response a real provider could give can be stated in one line here.
  */
 import { sql } from "kysely";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { refreshQuotes, priceFreshness } from "~/lib/prices.server";
 import type { PriceProvider, ProviderQuote } from "~/lib/price-provider.server";
@@ -72,6 +72,21 @@ const quote = (overrides: Partial<ProviderQuote> & { symbol: string }): Provider
   ...overrides,
 });
 
+/**
+ * Runs `body` with today's market date pinned near the fixtures' own 2026
+ * dates, so the seven-day window (module header) does not refuse the closes
+ * these tests are actually about. The shape `tests/price-backfill.test.ts:
+ * 965-978` uses.
+ */
+async function withClockNear<T>(now: string, body: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date(now) });
+  try {
+    return await body();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("choosing what to fetch", () => {
   it(
     "asks only about instruments priced from a feed",
@@ -127,19 +142,21 @@ describe("what a refresh learned", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      // Twice, with the provider re-stating the same instant both times — which
-      // is exactly what a weekend press gets: Friday's close, again.
-      const first = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
-      const second = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
+      await withClockNear("2026-06-05T21:00:00Z", async () => {
+        // Twice, with the provider re-stating the same instant both times —
+        // which is exactly what a weekend press gets: Friday's close, again.
+        const first = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
+        const second = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
 
-      expect(first.observed).toBe(1);
+        expect(first.observed).toBe(1);
 
-      // Every other count is identical between the two, which is the reason
-      // this field exists: without it the second press claims to have updated a
-      // price it merely re-read.
-      expect(second.priced).toBe(1);
-      expect(second.closes).toBe(1);
-      expect(second.observed).toBe(0);
+        // Every other count is identical between the two, which is the reason
+        // this field exists: without it the second press claims to have
+        // updated a price it merely re-read.
+        expect(second.priced).toBe(1);
+        expect(second.closes).toBe(1);
+        expect(second.observed).toBe(0);
+      });
     }),
   );
 
@@ -171,13 +188,15 @@ describe("storing a price", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      await refreshQuotes(
-        fakeProvider([
-          quote({ symbol: "VTI", price: "271.5000", yieldPct: "1.250000", annualDividendPerShare: "3.3900" }),
-        ]),
-        NEW_YORK,
-        db,
-      );
+      await withClockNear("2026-06-05T21:00:00Z", async () => {
+        await refreshQuotes(
+          fakeProvider([
+            quote({ symbol: "VTI", price: "271.5000", yieldPct: "1.250000", annualDividendPerShare: "3.3900" }),
+          ]),
+          NEW_YORK,
+          db,
+        );
+      });
 
       const stored = await db
         .selectFrom("quote")
@@ -208,10 +227,12 @@ describe("storing a price", () => {
       // 01:30 UTC on the 6th is 21:30 on the 5th in New York — an evening
       // mutual fund NAV. Filed under the 6th it would be overwritten by the
       // 6th's real close and lost.
-      await refreshQuotes(
-        fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
-        NEW_YORK,
-        db,
+      await withClockNear("2026-06-06T12:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
       );
 
       const dates = await db
@@ -230,8 +251,10 @@ describe("storing a price", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const asOf = new Date("2026-06-05T17:00:00Z");
 
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf })]), NEW_YORK, db);
-      await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf })]), NEW_YORK, db);
+      await withClockNear("2026-06-05T18:00:00Z", async () => {
+        await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "270.0000", asOf })]), NEW_YORK, db);
+        await refreshQuotes(fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf })]), NEW_YORK, db);
+      });
 
       const rows = await db
         .selectFrom("price_daily")
@@ -250,10 +273,12 @@ describe("storing a price", () => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "265.0000" });
 
-      await refreshQuotes(
-        fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T20:00:00Z") })]),
-        NEW_YORK,
-        db,
+      await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", price: "271.5000", asOf: new Date("2026-06-05T20:00:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
       );
 
       const rows = await db
@@ -290,6 +315,232 @@ describe("storing a price", () => {
         .execute();
 
       expect(prices.map((row) => row.price)).toEqual(["271.5000", "271.5000"]);
+    }),
+  );
+});
+
+describe("the seven-day window", () => {
+  it(
+    "writes the quote and the observation but no close for a quote eight days before today",
+    withDatabase(async ({ db, seedInstrument, seedDailyClose }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      // The row a live poller would already have settled for that day.
+      await seedDailyClose({ instrument: vti, date: "2026-06-07", close: "265.0000" });
+
+      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([
+            quote({ symbol: "VTI", price: "999.0000", asOf: new Date("2026-06-07T20:00:00Z") }),
+          ]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      expect(report.closes).toBe(0);
+
+      // Byte-identical: the window guard, not a rewrite that happened to
+      // match, is what left it alone.
+      const close = await db
+        .selectFrom("price_daily")
+        .select("close")
+        .where("instrument_id", "=", vti.id)
+        .where("date", "=", "2026-06-07")
+        .executeTakeFirstOrThrow();
+      expect(close.close).toBe("265.0000");
+
+      // The quote and the observation still land — only the close is refused.
+      const quoteRow = await db
+        .selectFrom("quote")
+        .select("price")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+      expect(quoteRow.price).toBe("999.0000");
+
+      const observations = await db
+        .selectFrom("price_observation")
+        .selectAll()
+        .where("instrument_id", "=", vti.id)
+        .execute();
+      expect(observations).toHaveLength(1);
+    }),
+  );
+
+  it(
+    "writes no close for a quote eight days ahead of today either",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-23T20:00:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      expect(report.closes).toBe(0);
+      const closes = await db
+        .selectFrom("price_daily")
+        .selectAll()
+        .where("instrument_id", "=", vti.id)
+        .execute();
+      expect(closes).toEqual([]);
+    }),
+  );
+
+  it(
+    "warns once for the whole refresh, naming every instrument whose close was skipped",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // Three words of the rule, each its own way to get it wrong: *one* line
+      // (not one per instrument), *per refresh* (not on a refresh that skipped
+      // nothing), naming *the instruments* (not just the first).
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedInstrument({ symbol: "VXUS", priceSource: "feed" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await withClockNear("2026-06-15T12:00:00Z", () =>
+          refreshQuotes(
+            fakeProvider([
+              quote({ symbol: "VTI", asOf: new Date("2026-06-01T20:00:00Z") }),
+              quote({ symbol: "VXUS", asOf: new Date("2026-06-01T20:00:00Z") }),
+            ]),
+            NEW_YORK,
+            db,
+          ),
+        );
+
+        const skipped = warn.mock.calls.filter((call) => String(call[0]).includes("close skipped"));
+        expect(skipped).toHaveLength(1);
+        expect(String(skipped[0]?.[0])).toContain("VTI");
+        expect(String(skipped[0]?.[0])).toContain("VXUS");
+      } finally {
+        warn.mockRestore();
+      }
+    }),
+  );
+
+  it(
+    "says nothing about skipped closes on a refresh that skipped none",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await withClockNear("2026-06-05T21:00:00Z", () =>
+          refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db),
+        );
+
+        expect(warn.mock.calls.filter((call) => String(call[0]).includes("close skipped"))).toEqual(
+          [],
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    }),
+  );
+
+  it(
+    "writes the close for a quote exactly seven days ahead of today, the other edge",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The spec calls the window symmetric, so both edges are rules. Without
+      // this the future half is pinned only by an eight-days-ahead case, and
+      // narrowing it to six would pass.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-22T20:00:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      expect(report.closes).toBe(1);
+
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", vti.id)
+        .execute();
+      expect(closes).toEqual([{ date: "2026-06-22" }]);
+    }),
+  );
+
+  it(
+    "measures the window against the market's own date, not the runtime's",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // 02:00 UTC is the previous evening in New York, so the market date and
+      // the UTC date are different days. Both sides of the comparison have to
+      // be spoken in the market's calendar or the whole window slides a day
+      // for every tick in that band.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const report = await withClockNear("2026-06-06T02:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-05-29T20:00:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      // Market today is 2026-06-05, so 2026-05-29 is exactly the past edge and
+      // writes. Read in UTC, today would be 2026-06-06 and this would be eight
+      // days back — refused.
+      expect(report.closes).toBe(1);
+
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", vti.id)
+        .execute();
+      expect(closes).toEqual([{ date: "2026-05-29" }]);
+    }),
+  );
+
+  it(
+    "writes the close for a quote exactly seven days before today, the window's own edge",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-08T20:00:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      expect(report.closes).toBe(1);
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", vti.id)
+        .execute();
+      expect(closes.map((row) => row.date)).toEqual(["2026-06-08"]);
+    }),
+  );
+
+  it(
+    "warns naming the symbol whose close the window refused",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await withClockNear("2026-06-15T12:00:00Z", () =>
+          refreshQuotes(
+            fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-23T20:00:00Z") })]),
+            NEW_YORK,
+            db,
+          ),
+        );
+
+        expect(warn.mock.calls.some((call) => String(call[0]).includes("VTI"))).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
     }),
   );
 });
@@ -359,10 +610,12 @@ describe("a symbol that does not come back", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      const report = await refreshQuotes(
-        fakeProvider([quote({ symbol: "VTI" }), quote({ symbol: "SURPRISE" })]),
-        NEW_YORK,
-        db,
+      const report = await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI" }), quote({ symbol: "SURPRISE" })]),
+          NEW_YORK,
+          db,
+        ),
       );
 
       // The fake hands back both; only the requested one has an instrument to
@@ -767,7 +1020,12 @@ describe("the observation log", () => {
 
   it(
     "rolls back with the quote and the close when a later write in the same refresh fails",
-    withDatabase(async ({ db, seedInstrument }) => {
+    withDatabase(async ({ db, seedInstrument }) =>
+      // The clock matters here even though the window is not the subject: the
+      // fixtures are struck in June, so under a real clock no close would be
+      // written at all and the `price_daily` assertion below would hold
+      // whether or not the transaction rolled back.
+      withClockNear("2026-06-05T21:00:00Z", async () => {
       const good = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedInstrument({ symbol: "BAD", priceSource: "feed" });
 
@@ -806,6 +1064,149 @@ describe("the observation log", () => {
       expect(
         await db.selectFrom("price_daily").select("instrument_id").where("instrument_id", "=", good.id).execute(),
       ).toEqual([]);
+      }),
+    ),
+  );
+});
+
+describe("the archive cap", () => {
+  it(
+    "drops a payload one byte over the cap",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The mirror of the at-cap case. Without it any cap up to the 33 KB the
+      // oversize case uses would pass, and "over 32 KB" would be untrue across
+      // a whole kilobyte.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const envelope = JSON.stringify({ symbol: "VTI", note: "" }).length;
+      const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope + 1) };
+      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBe(32 * 1024 + 1);
+
+      await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, db),
+      );
+
+      const observation = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+      expect(observation.payload).toBeNull();
+    }),
+  );
+
+  it(
+    "archives a payload of exactly the cap, which is not over it",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The rule is "over 32 KB", so the cap itself is the last size that
+      // still lands. Without this, tightening the comparison to `>=` would
+      // silently drop a payload the contract keeps.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const envelope = JSON.stringify({ symbol: "VTI", note: "" }).length;
+      const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope) };
+      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBe(32 * 1024);
+
+      await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, db),
+      );
+
+      const observation = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+      expect(observation.payload).not.toBeNull();
+    }),
+  );
+
+  it(
+    "drops a payload over 32 KB, warning with the symbol, while the quote row still lands",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        // Within the seven-day window, so the only warning possible is the
+        // archive cap's — a stray window-skip warning naming the same symbol
+        // would let this assertion pass for the wrong reason.
+        await withClockNear("2026-06-05T21:00:00Z", () =>
+          refreshQuotes(
+            fakeProvider([
+              quote({ symbol: "VTI", payload: { symbol: "VTI", note: "x".repeat(33 * 1024) } }),
+            ]),
+            NEW_YORK,
+            db,
+          ),
+        );
+
+        const observation = await db
+          .selectFrom("price_observation")
+          .select("payload")
+          .where("instrument_id", "=", vti.id)
+          .executeTakeFirstOrThrow();
+        expect(observation.payload).toBeNull();
+
+        const stored = await db
+          .selectFrom("quote")
+          .select("price")
+          .where("instrument_id", "=", vti.id)
+          .executeTakeFirstOrThrow();
+        expect(stored.price).toBe("100.0000");
+
+        expect(warn.mock.calls.some((call) => String(call[0]).includes("VTI"))).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    }),
+  );
+
+  it(
+    "archives a payload comfortably under the cap",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", payload: { symbol: "VTI", note: "x".repeat(4000) } })]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      const observation = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+
+      expect(observation.payload).toEqual({ symbol: "VTI", note: "x".repeat(4000) });
+    }),
+  );
+
+  it(
+    "drops a multibyte payload whose UTF-16 length sits under the cap but whose UTF-8 bytes sit over it",
+    withDatabase(async ({ db, seedInstrument }) => {
+      const vti = await seedInstrument({ symbol: "FX", priceSource: "feed" });
+
+      // "€" is one UTF-16 code unit (`.length` counts it as 1) and three UTF-8
+      // bytes. 15,000 of them is ~15 KB by `.length` — comfortably under the
+      // 32 KB cap — but ~45 KB by `Buffer.byteLength`, well over it: the case
+      // that pins the cap to bytes rather than the string's own `.length`.
+      const companyName = "€".repeat(15000);
+      const payload = { symbol: "FX", companyName };
+      expect(JSON.stringify(payload).length).toBeLessThan(32 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeGreaterThan(32 * 1024);
+
+      await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(fakeProvider([quote({ symbol: "FX", payload })]), NEW_YORK, db),
+      );
+
+      const observation = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+
+      expect(observation.payload).toBeNull();
     }),
   );
 });

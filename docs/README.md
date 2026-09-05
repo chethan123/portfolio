@@ -75,6 +75,10 @@ one resolved term and one hard decision at a time, which is the intended pace.
   is not a zero. The README states them at the altitude of a module seam for a contributor; the
   guide states them as consequences for a household.
 - **[`operating.md`](operating.md) restates parts of `.env.example`.** Named there, in place.
+- **[`../ARCHITECTURE.md`](../ARCHITECTURE.md) §3.3 restates [`../DESIGN.md`](../DESIGN.md) §10.1's
+  environment variable table**, for a contributor reading the code rather than an operator
+  configuring a deployment. Named there, in place, with `DESIGN.md`'s table given as the one to
+  believe.
 - **[`data-model.md`](data-model.md) retells the migrations' DDL, `DESIGN.md` §2–§8's rules, and
   `ARCHITECTURE.md` §5's schema walk** — entity diagram included — for a reader who may have none of
   them open: someone with only a dump. Named there, in place, with the migrations given as the ones

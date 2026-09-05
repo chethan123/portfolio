@@ -416,9 +416,19 @@ export function removalWarningText(kind: RemovalWarningKind, label: string): str
 // extracts this shape of thing, this one extracted none of it).
 // ---------------------------------------------------------------------------
 
-/** "Synced" or "Bound to a single device", from the stored backup-eligibility flag alone. */
+/**
+ * "Can sync to other devices" or "Bound to a single device", from the stored
+ * backup-eligibility flag alone. `backup_eligible` records only whether the
+ * credential is a *multi-device* one — eligibility, fixed at enrolment
+ * (migration 0012's own comment on the column) — never whether a copy has
+ * actually been made anywhere, which this app does not store. "Synced" would
+ * claim the latter: a multi-device credential nobody has backed up yet would
+ * print as though redundancy already existed, and a household could believe
+ * it survives losing the one device that holds it. This says only what the
+ * stored flag actually supports — a capability, not an accomplished fact.
+ */
 export function syncLabel(backupEligible: boolean): string {
-  return backupEligible ? "Synced" : "Bound to a single device";
+  return backupEligible ? "Can sync to other devices" : "Bound to a single device";
 }
 
 /** The enrolled column's own text — never computed, only rendered ({@link formatDate}'s own rule). */
