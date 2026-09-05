@@ -296,6 +296,18 @@ docker compose exec -T app node -e \
   fail "the ESM half of yahoo-finance2 did not import and construct inside the image"
 printf 'yahoo-finance2 CommonJS copy removed, ESM half loads\n'
 
+# 06's cutover, proved at the source level a container check cannot reach: the
+# app's own module graph no longer imports server/yahoo-client.ts, so its
+# built server bundle should carry no trace of the package that wraps. Grepped
+# against the *built* output rather than the source tree because a comment
+# naming the package (price-provider.server.ts's header keeps it in prose
+# only) is stripped by the build — a source grep would trip on that; a hit
+# surviving into the bundle is a real import.
+log "Checking the app's built bundle carries no trace of yahoo-finance2"
+run_in_image '! grep -rq yahoo-finance2 /app/build/server/' ||
+  fail "yahoo-finance2 is reachable from the app's own built server bundle"
+printf 'app bundle: no yahoo-finance2\n'
+
 for compiler in gcc cc g++ make tsc; do
   run_in_image "! command -v $compiler >/dev/null" || fail "compiler in the runtime image: $compiler"
 done

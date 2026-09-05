@@ -13,6 +13,10 @@
  * reason: they are the only thing that stops a count and an outcome disagreeing
  * years later, and TypeScript cannot enforce a rule Postgres holds.
  */
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import {
@@ -30,17 +34,23 @@ import { makeFixtures } from "./support/fixtures.ts";
 import { createDatabase } from "~/lib/db.server";
 import { ProviderUnreachable } from "~/lib/price-provider.server";
 
-import { yahooPriceProvider } from "~/lib/price-provider.server";
+import { socketProvider } from "~/lib/provider-socket.server";
+import { startWorker } from "../server/price-worker.ts";
 
 import type { Kysely, KyselyPlugin } from "kysely";
 import type { TestContext } from "./support/database.ts";
 import type { Database } from "~/lib/db.server";
-import type {
-  HistoryRange,
-  PriceProvider,
-  ProviderHistory,
-  ProviderQuote,
-} from "~/lib/price-provider.server";
+import type { HistoryRange, PriceProvider, ProviderHistory, ProviderQuote } from "~/lib/price-provider.server";
+import type { YahooClient } from "../server/yahoo-client.ts";
+
+/**
+ * `socketProvider()` reads the socket path through `getConfig()`, which
+ * memoises its first read — set before any test in this file can reach it,
+ * `tests/price-poller.test.ts:37`'s precedent for `DATABASE_URL`. Only one
+ * case below ever calls `socketProvider()`, so one fixed path for the whole
+ * file is enough: that case starts and stops its own worker on it.
+ */
+process.env.PRICE_WORKER_SOCKET = join(tmpdir(), `pb-${randomBytes(4).toString("hex")}.sock`);
 
 afterAll(closeTestDatabase);
 
@@ -734,19 +744,28 @@ describe("what a batch writes to the spine", () => {
       const instrument = await heldFrom(context, { symbol: "OLDCO", asOf: "2024-06-14" });
 
       // The real adapter, not the fake above: the floor lives in
-      // `toProviderHistory`, which only the real adapter runs. The stub plays
-      // `clientCharting`'s role (`tests/price-provider.test.ts:914`) — a
-      // client object now, not a factory, since the adapter takes the client
-      // itself (`app/lib/price-provider.server.ts:768`).
-      const provider = yahooPriceProvider({
+      // `toProviderHistory`, which only the real adapter runs, and
+      // `socketProvider()` runs the identical function on the other side of
+      // the socket (`app/lib/provider-socket.server.ts`'s own header). A real
+      // worker on a real socket rather than a directly-injected client:
+      // `socketProvider()` never takes one — the shape
+      // `tests/price-provider.test.ts`'s "asking the worker for one symbol's
+      // history" also copies.
+      const yahoo: YahooClient = {
         quote: async () => [],
         chart: async () => ({
           meta: { currency: "USD" },
           quotes: [{ date: new Date("1971-01-01T13:30:00Z"), close: 1 }],
         }),
-      });
+      };
+      const worker = await startWorker({ socketPath: process.env.PRICE_WORKER_SOCKET!, yahoo });
 
-      const report = await backfillCloses(provider, NEW_YORK, db);
+      let report: Awaited<ReturnType<typeof backfillCloses>>;
+      try {
+        report = await backfillCloses(socketProvider(), NEW_YORK, db);
+      } finally {
+        await new Promise<void>((resolve) => worker.close(() => resolve()));
+      }
 
       // `no-history` exactly as an empty chart would answer: a pre-range-only
       // response is indistinguishable from none, so the lone bar writes
