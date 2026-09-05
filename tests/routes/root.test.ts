@@ -673,3 +673,111 @@ describe("the lock middleware", () => {
     }),
   );
 });
+
+/**
+ * The middleware listed before the lock: who may *ask*, which the framework
+ * answers for document and single-fetch mutations and never for a resource
+ * route (`crossOriginMutationMiddleware`'s own header cites where each runs).
+ * Every test here runs the whole exported array, as the lock's own tests do,
+ * so a refusal has to survive both middlewares rather than one in isolation.
+ */
+describe("the cross-origin mutation refusal", () => {
+  it("refuses a mutation whose Origin is not this instance, before any database call is made", async () => {
+    // Against an unreachable database, deliberately: the lock's own first act
+    // is `isLocked()`, which would throw here and answer with a redirect. A
+    // 400 is therefore proof the refusal happened ahead of it, which is what
+    // "listed before the lock" has to mean to be worth anything.
+    const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+    let called = false;
+
+    try {
+      const response = await withDb(unreachable, () =>
+        responseOf(() =>
+          servedThrough(middleware, post("/lock-now", {}, undefined, { Origin: "https://evil.test" }), {}, () => {
+            called = true;
+          }),
+        ),
+      );
+
+      expect(response.status).toBe(400);
+      expect(called).toBe(false);
+      expect(response.headers.get("Set-Cookie")).toBeNull();
+    } finally {
+      await unreachable.destroy();
+    }
+  });
+
+  it(
+    "lets a mutation whose Origin names this instance through to the lock",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+
+      // The lock refuses it, which is the point: the refusal is the lock's
+      // redirect and not this middleware's 400, so the request passed.
+      const location = await redirectTo(() =>
+        servedThrough(middleware, post("/lock-now", {}, undefined, { Origin: "http://portfolio.local" })),
+      );
+
+      expect(location).toBe("/unlock");
+    }),
+  );
+
+  it(
+    "lets a mutation carrying no Origin through, the way the framework's own check does",
+    withDatabase(async () => {
+      let called = false;
+      await servedThrough(middleware, post("/masking", {}), {}, () => {
+        called = true;
+      });
+
+      expect(called).toBe(true);
+    }),
+  );
+
+  it(
+    "judges no Origin on a read, so a link followed from anywhere still renders",
+    withDatabase(async () => {
+      const request = get("/holdings");
+      request.headers.set("Origin", "https://evil.test");
+      let called = false;
+
+      await servedThrough(middleware, request, {}, () => {
+        called = true;
+      });
+
+      expect(called).toBe(true);
+    }),
+  );
+
+  it(
+    "refuses the literal Origin: null, which is a value rather than a missing header",
+    withDatabase(async () => {
+      let called = false;
+
+      const response = await responseOf(() =>
+        servedThrough(middleware, post("/lock-now", {}, undefined, { Origin: "null" }), {}, () => {
+          called = true;
+        }),
+      );
+
+      expect(response.status).toBe(400);
+      expect(called).toBe(false);
+    }),
+  );
+
+  it(
+    "refuses an Origin that is not a URL at all",
+    withDatabase(async () => {
+      let called = false;
+
+      const response = await responseOf(() =>
+        servedThrough(middleware, post("/lock-now", {}, undefined, { Origin: "evil.test" }), {}, () => {
+          called = true;
+        }),
+      );
+
+      expect(response.status).toBe(400);
+      expect(called).toBe(false);
+    }),
+  );
+});

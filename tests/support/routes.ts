@@ -129,6 +129,13 @@ export function post(
   path: string,
   fields: Record<string, string | string[]>,
   cookie?: string,
+  // Headers a browser would attach that no other test needs to state.
+  // `Origin` is the one there is now a rule about
+  // (`crossOriginMutationMiddleware`, `app/root.tsx`), and leaving it out is
+  // itself a case that rule decides — so it is an option here rather than a
+  // default, and every builder call that omits it keeps sending no `Origin`
+  // at all.
+  headers?: Record<string, string>,
 ): Request {
   const body = new FormData();
 
@@ -137,10 +144,12 @@ export function post(
     else body.set(name, value);
   }
 
-  return withCookie(
+  const request = withCookie(
     throughRouteHandler(new Request(`http://portfolio.local${path}`, { method: "POST", body })),
     cookie,
   );
+  for (const [name, value] of Object.entries(headers ?? {})) request.headers.set(name, value);
+  return request;
 }
 
 /**

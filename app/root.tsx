@@ -262,16 +262,24 @@ function withNoStore(response: Response): Response {
  * session the victim never asked to end. Requiring the cookie is not a new
  * mechanism: it is the same `SameSite=Lax` posture (ADR-0005,
  * docs/research/2026-09-02-security-and-privacy-audit.md §S5) doing the one
- * thing it already does — never inventing a second CSRF check beside the
- * framework's own `Origin` check. React Router 7.18.2's own
- * `throwIfPotentialCSRFAttack` runs *before* this middleware for every
- * mutation method (`handleDocumentRequest`, ahead of `staticHandler.query`,
- * which is where the middleware pipeline actually runs) and would already
- * refuse a request whose `Origin` mismatches the host with 400 — but a
- * request carrying no `Origin` header at all skips that check entirely
- * (`originDomain` stays `null`), so this middleware's own cookie requirement
- * is the second, independent reason a forged POST cannot clear a grant it
- * does not carry, not merely a restatement of the framework's.
+ * thing it already does — and it is the last of three reasons rather than
+ * the only one.
+ *
+ * The other two are `Origin` checks, and neither is invented here. React
+ * Router 7.18.2's own `throwIfPotentialCSRFAttack` refuses a mismatched
+ * `Origin` with a 400 for document mutations and for single-fetch actions,
+ * ahead of `staticHandler.query`, which is where the middleware pipeline
+ * actually runs. It does not run for a resource route — which `/lock-now`
+ * is — so {@link crossOriginMutationMiddleware} restates the framework's
+ * rule for exactly the routes the framework skips, ahead of this middleware
+ * in the `middleware` array; that function's own header cites where each
+ * one runs and where it does not.
+ *
+ * Neither `Origin` check reaches a request that carries no `Origin` header
+ * at all: the framework leaves `originDomain` `null` and continues, and the
+ * middleware that mirrors it continues too. That request is what the cookie
+ * requirement is for, and it is why the requirement is independent of both
+ * rather than a restatement of either.
  */
 function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Response {
   const target = new URL(UNLOCK_PATH, url);
@@ -284,6 +292,71 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
     clearCookie ? { headers: { "Set-Cookie": clearedLockCookie() } } : undefined,
   );
 }
+
+/**
+ * The mutation methods this app judges an `Origin` for, in the framework's
+ * own spelling: React Router's `validMutationMethods`
+ * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:1345-1350`,
+ * read back through `isMutationMethod` at `:5575-5577`). Written out because
+ * the framework does not export it, and kept to that set rather than a wider
+ * one so `OPTIONS` and `HEAD` are not judged — a preflight carries a
+ * cross-origin `Origin` by definition and mutates nothing.
+ */
+const MUTATION_METHODS: readonly string[] = ["POST", "PUT", "PATCH", "DELETE"];
+
+/**
+ * Who may *ask*, as against which browser may *read* — which is
+ * {@link lockMiddleware}'s question, and the reason this is a separate
+ * function listed before it rather than six lines at the top of that one.
+ *
+ * React Router 7.18.2 runs this check itself, as `throwIfPotentialCSRFAttack`
+ * (`node_modules/react-router/dist/development/chunk-ZA36QIGN.mjs:747-765`),
+ * for single-fetch actions (`:854`) and for document requests whose method is
+ * a mutation (`:1419`) — and not for a resource route, which
+ * `handleResourceRequest` (`:1563-1581`) serves with no such call. `/lock-now`,
+ * `/masking` and `/refresh` are resource routes: action-only, no component,
+ * posted to directly. So the framework's rule stops exactly where this app's
+ * three mutations live, and this restates it there. It is not a second
+ * opinion and invents nothing — the same method set, the same comparison, the
+ * same status.
+ *
+ * **Hosts, and never `PUBLIC_ORIGIN`.** The framework compares
+ * `new URL(origin).host` against `new URL(request.url).host` (`:751`, `:757`),
+ * so behind the proxy this agrees with it on the routes it already covers
+ * rather than disagreeing with it about a scheme or a port. Reading the
+ * configured origin instead would also refuse this suite's own requests,
+ * which address the instance as `http://portfolio.local`
+ * (`tests/support/routes.ts`) while the config is `https://portfolio.local`
+ * (`vitest.config.ts`).
+ *
+ * **No `Origin` continues.** A plain HTML form from this instance sends one;
+ * a request with none is the shape the framework also lets through
+ * (`originDomain` stays `null` at `:751`, and the comparison at `:757` is
+ * never reached). What stands between that request and a cleared grant is the
+ * cookie the refusal path requires — {@link redirectToUnlock}'s own header.
+ *
+ * **`Origin: null` is refused.** It is a real value — a sandboxed frame, a
+ * redirected form post — rather than a missing header, and the framework
+ * refuses it: it keeps the literal string instead of parsing it (`:751`),
+ * finds it unequal to the host and not an allowed origin (`:757-762`), and
+ * answers 400. Here that string is simply unparseable as a URL and lands in
+ * the same refusal, which is the same answer by a shorter road.
+ */
+const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) => {
+  if (!MUTATION_METHODS.includes(request.method.toUpperCase())) return;
+
+  const origin = request.headers.get("Origin");
+  if (origin === null) return;
+
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    throw new Response(null, { status: 400 });
+  }
+
+  if (originHost !== new URL(request.url).host) throw new Response(null, { status: 400 });
+};
 
 /**
  * The lock (docs/adr/0012): a browser holding no valid grant is turned away
@@ -419,7 +492,12 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
   return withNoStore(await next());
 };
 
-export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
+/**
+ * Order is the rule rather than a preference: who may ask is settled before
+ * which browser may read, so a forged mutation is refused without a database
+ * call and without rolling anybody's grant.
+ */
+export const middleware: Route.MiddlewareFunction[] = [crossOriginMutationMiddleware, lockMiddleware];
 
 /**
  * The unlock screen's own answer — never the household's. `Layout` renders no
