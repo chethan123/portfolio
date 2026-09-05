@@ -1,8 +1,10 @@
 /**
  * The price-worker process (spec 0018 §3.2, §3.5): `node:http` on a unix
  * socket, answering three endpoints with the library's raw JSON. Holds no
- * database, no domain logic, no clock reading of its own — transport plus
- * `./yahoo-client.ts`, gated by the pattern in `./symbol-pattern.ts` before
+ * database and no domain logic, and reads the clock only to slide the rate
+ * window below: it interprets no date and no zone, which is why it needs no
+ * `TZ`. Transport plus `./yahoo-client.ts`, gated by the pattern in
+ * `./symbol-pattern.ts` before
  * any URL is built (spec §2.1: the worker's own check is the one that
  * binds, the app's a courtesy). `loadWorkerConfig` (`./config.ts`) is the
  * whole of its configuration: no `DATABASE_URL`, no `PUBLIC_ORIGIN`, nothing
@@ -10,8 +12,12 @@
  *
  * Imports, and only these: `node:http`, `node:fs/promises`, `zod`,
  * `./config.ts`, `./yahoo-client.ts`, `./symbol-pattern.ts` — no `pg`, no
- * Kysely, nothing under `app/`. `npm run build` and a grep of the import
- * lines are the check the ticket names; nothing here should ever need more.
+ * Kysely, nothing under `app/`. `npm run build` does not check this: nothing
+ * under `app/` imports the worker, so the server bundle never carries it —
+ * `grep "Price worker listening on" build/server/index.js` finds nothing.
+ * `npm run typecheck` resolves these imports but would not fail on a new one.
+ * What binds is a grep of the import lines here and the in-image import that
+ * ticket 05's smoke runs; nothing here should ever need more.
  *
  * **Bounds, all of them defensive against the app's own compromise, not
  * against Yahoo:** `maxConnections` 8 and `maxRequestsPerSocket` 1 (so Node
@@ -24,7 +30,8 @@
  * never seen the close. `server.timeout` at 35 s is still the bound worth
  * having, past the 30 s Yahoo watchdog — it catches the connection that has
  * sent its request and gone idle while a handler waits on Yahoo, which the
- * other two no longer touch once the headers have landed; a body read to
+ * other two no longer touch once the request has completed — `requestTimeout`
+ * reaches past the headers to the body's last byte; a body read to
  * 16 KB with the socket destroyed and no status past it.
  *
  * Per-endpoint rate caps — quotes ten calls a minute, history twenty —
@@ -217,22 +224,30 @@ function respondProviderError(res: http.ServerResponse, endpoint: string, error:
   refuse(res, endpoint, isTimeoutError(error) ? 504 : 502, text);
 }
 
-async function handleQuotes(
+/**
+ * The part `handleQuotes` and `handleHistory` used to duplicate verbatim:
+ * the body read (`BodyTooLargeError` and {@link isAbandonedRead} handled
+ * the same way for both endpoints), the JSON parse, the endpoint's own
+ * schema, and the rate check. `undefined` means the caller's work is done —
+ * a response already sent by `refuse`, or, for `BodyTooLargeError` and an
+ * abandoned read, no response at all (module header) — and a genuine bug
+ * still propagates, uncaught, to `handle`'s own catch.
+ */
+async function readAdmittedBody<Schema extends z.ZodType>(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  yahoo: YahooClient,
+  endpoint: string,
+  schema: Schema,
   admit: () => boolean,
-): Promise<void> {
-  const endpoint = "quotes";
-
+): Promise<z.output<Schema> | undefined> {
   let raw: Buffer;
   try {
     raw = await readBody(req, MAX_BODY_BYTES);
   } catch (error) {
-    if (error instanceof BodyTooLargeError) return;
+    if (error instanceof BodyTooLargeError) return undefined;
     if (isAbandonedRead(error)) {
       console.error(`Price worker: ${endpoint} client disconnected before the body completed`);
-      return;
+      return undefined;
     }
     throw error;
   }
@@ -242,22 +257,36 @@ async function handleQuotes(
     body = JSON.parse(raw.toString("utf8"));
   } catch {
     refuse(res, endpoint, 400, "body is not valid JSON");
-    return;
+    return undefined;
   }
 
-  const parsed = quotesBodySchema.safeParse(body);
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
     refuse(res, endpoint, 400, parsed.error.issues[0]?.message ?? "invalid body");
-    return;
+    return undefined;
   }
 
   if (!admit()) {
     refuse(res, endpoint, 429, "rate limited");
-    return;
+    return undefined;
   }
 
+  return parsed.data;
+}
+
+async function handleQuotes(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  yahoo: YahooClient,
+  admit: () => boolean,
+): Promise<void> {
+  const endpoint = "quotes";
+
+  const data = await readAdmittedBody(req, res, endpoint, quotesBodySchema, admit);
+  if (data === undefined) return;
+
   try {
-    const answer = await yahoo.quote(parsed.data.symbols);
+    const answer = await yahoo.quote(data.symbols);
     sendJson(res, 200, answer);
   } catch (error) {
     respondProviderError(res, endpoint, error);
@@ -272,40 +301,12 @@ async function handleHistory(
 ): Promise<void> {
   const endpoint = "history";
 
-  let raw: Buffer;
-  try {
-    raw = await readBody(req, MAX_BODY_BYTES);
-  } catch (error) {
-    if (error instanceof BodyTooLargeError) return;
-    if (isAbandonedRead(error)) {
-      console.error(`Price worker: ${endpoint} client disconnected before the body completed`);
-      return;
-    }
-    throw error;
-  }
-
-  let body: unknown;
-  try {
-    body = JSON.parse(raw.toString("utf8"));
-  } catch {
-    refuse(res, endpoint, 400, "body is not valid JSON");
-    return;
-  }
-
-  const parsed = historyBodySchema.safeParse(body);
-  if (!parsed.success) {
-    refuse(res, endpoint, 400, parsed.error.issues[0]?.message ?? "invalid body");
-    return;
-  }
-
-  if (!admit()) {
-    refuse(res, endpoint, 429, "rate limited");
-    return;
-  }
+  const data = await readAdmittedBody(req, res, endpoint, historyBodySchema, admit);
+  if (data === undefined) return;
 
   try {
-    const answer = await yahoo.chart(parsed.data.symbol, {
-      period1: parsed.data.from,
+    const answer = await yahoo.chart(data.symbol, {
+      period1: data.from,
       interval: "1d",
       events: "split",
     });

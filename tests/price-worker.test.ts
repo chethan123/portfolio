@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { startWorker, type WorkerTimeouts } from "../server/price-worker.ts";
+import { PRODUCTION_TIMEOUTS, startWorker, type WorkerTimeouts } from "../server/price-worker.ts";
 import { createYahooClient, type YahooClient } from "../server/yahoo-client.ts";
 
 /** The entry point itself: the SIGTERM handler belongs to it, not to `startWorker`. */
@@ -35,6 +35,33 @@ async function waitForSocket(path: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`the worker never created ${path}`);
+}
+
+/**
+ * Accumulates a readable stream's text until `predicate` is satisfied, or
+ * gives up loudly with whatever arrived. `waitForSocket` above is the wrong
+ * tool for pinning a log line: the socket file lands (`server.listen`)
+ * before `startWorker`'s own `console.log`, so a case racing the file
+ * instead of the stream could pass on a build that never logs at all.
+ */
+async function waitForStdout(
+  stream: NodeJS.ReadableStream,
+  predicate: (text: string) => boolean,
+  timeoutMs = 5_000,
+): Promise<string> {
+  let text = "";
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`stream never matched within ${timeoutMs}ms; got: ${JSON.stringify(text)}`));
+    }, timeoutMs);
+    stream.on("data", (chunk: Buffer) => {
+      text += chunk.toString("utf8");
+      if (predicate(text)) {
+        clearTimeout(timer);
+        resolve(text);
+      }
+    });
+  });
 }
 
 /** Short on purpose: a unix socket path is 107 usable bytes on Linux. */
@@ -61,6 +88,22 @@ let currentServer: http.Server | undefined;
 let currentSocketPath: string;
 const originalFetch = globalThis.fetch;
 
+/**
+ * `mkdtemp` dirs the entry-point cases below create, so a socket path can
+ * live somewhere `rm(currentSocketPath, ...)` above never reaches — removed
+ * here rather than per-case, since a case that fails before its own cleanup
+ * would otherwise leak the directory, as this file's own history did (117
+ * empty `/tmp/pw-term-*` left behind).
+ */
+const entryPointTempDirs: string[] = [];
+
+/** A fresh `mkdtemp` dir for an entry-point case, tracked above, and a socket path inside it. */
+async function freshEntryPointSocket(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  entryPointTempDirs.push(dir);
+  return join(dir, "w.sock");
+}
+
 beforeEach(() => {
   currentSocketPath = freshSocketPath();
 });
@@ -72,6 +115,9 @@ afterEach(async () => {
     currentServer = undefined;
   }
   await rm(currentSocketPath, { force: true, recursive: true });
+  await Promise.all(
+    entryPointTempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })),
+  );
 });
 
 async function start(
@@ -160,6 +206,14 @@ describe("the three endpoints", () => {
     expect(res.json).toEqual({ ok: true });
     expect(quote).not.toHaveBeenCalled();
     expect(chart).not.toHaveBeenCalled();
+  });
+
+  it("answers every JSON body with content-type: application/json", async () => {
+    await start(fakeYahoo());
+
+    const res = await rawRequest(currentSocketPath, "GET", "/healthz");
+
+    expect(res.headers["content-type"]).toBe("application/json");
   });
 
   it("answers /quotes with the fake's array verbatim, Date values serialised as ISO strings", async () => {
@@ -363,6 +417,23 @@ describe("400: a body or route the worker refuses before any library call", () =
     expect(chart).not.toHaveBeenCalled();
   });
 
+  it("answers 400 for a path that merely starts with /quotes, matching the table and nothing else", async () => {
+    // Spec §3.2 is the table and nothing else — a query string or extra
+    // path text must not fall through to the /quotes handler.
+    const quote = vi.fn(async () => []);
+    await start(fakeYahoo({ quote }));
+
+    const withQuery = await requestJson(currentSocketPath, "POST", "/quotes?x=1", {
+      symbols: ["VTI"],
+    });
+    const suffixed = await requestJson(currentSocketPath, "POST", "/quotesFOO", {
+      symbols: ["VTI"],
+    });
+
+    expect([withQuery.status, suffixed.status]).toEqual([400, 400]);
+    expect(quote).not.toHaveBeenCalled();
+  });
+
   it("answers 400 for a method /healthz does not take", async () => {
     await start(fakeYahoo());
 
@@ -452,6 +523,87 @@ describe("the 16 KB body cap", () => {
     },
     2_000,
   );
+
+  it("answers 200 for the largest honest request — 100 symbols of 15 characters, about 1.9 KB", async () => {
+    // Spec §3.5's own ceiling: 100 symbols, each at `SYMBOL_PATTERN`'s own
+    // 15-character maximum. No existing case sends anything near the cap,
+    // so `16 * 1024` shrinking to a much smaller floor (e.g. `1024`) would
+    // survive every other test while rejecting a perfectly honest request.
+    const symbols = Array.from({ length: 100 }, () => "A".repeat(15));
+    const quote = vi.fn(async () => []);
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols });
+
+    expect(res.status).toBe(200);
+    expect(quote).toHaveBeenCalledWith(symbols);
+  });
+
+  it("answers 200 for a body of exactly 16384 bytes, the cap's own edge", async () => {
+    // 16384 is `MAX_BODY_BYTES` (16 * 1024) in server/price-worker.ts.
+    // `readBody` destroys the socket only once `total` exceeds the limit —
+    // a body landing exactly on it must still be answered. `> limit`
+    // becoming `>= limit` survives every other case here, none of which
+    // sends a body of this exact size.
+    const prefix = '{"symbols":["VTI"],"padding":"';
+    const suffix = '"}';
+    const padLength = 16 * 1024 - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+    const body = `${prefix}${"x".repeat(padLength)}${suffix}`;
+    expect(Buffer.byteLength(body)).toBe(16 * 1024);
+
+    const quote = vi.fn(async () => []);
+    await start(fakeYahoo({ quote }));
+
+    const res = await rawRequest(currentSocketPath, "POST", "/quotes", body);
+
+    expect(res.status).toBe(200);
+    expect(quote).toHaveBeenCalledWith(["VTI"]);
+  });
+
+  it(
+    "logs nothing for an oversized body — the unhandled-request catch is for a genuine bug, not this",
+    async () => {
+      const calls: unknown[][] = [];
+      const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        calls.push(args);
+      });
+
+      const quote = vi.fn(async () => []);
+      await start(fakeYahoo({ quote }), {
+        headersTimeout: 30_000,
+        requestTimeout: 30_000,
+        timeout: 30_000,
+        connectionsCheckingInterval: 50,
+      });
+
+      const body = `{"symbols":["VTI"],"padding":"${"x".repeat(17 * 1024)}"}`;
+
+      await new Promise<void>((resolve, reject) => {
+        const req = http.request(
+          {
+            socketPath: currentSocketPath,
+            agent: false,
+            method: "POST",
+            path: "/quotes",
+            headers: { "content-length": Buffer.byteLength(body) },
+          },
+          (res) => {
+            reject(new Error(`expected the connection to error, got status ${res.statusCode}`));
+          },
+        );
+        req.on("error", () => resolve());
+        req.write(body);
+        req.end();
+      });
+
+      // A moment for a (wrongly logged) unhandled-request stack to land.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      spy.mockRestore();
+
+      expect(calls).toHaveLength(0);
+    },
+    2_000,
+  );
 });
 
 describe("a client that hangs up before its declared body arrives", () => {
@@ -483,9 +635,60 @@ describe("a client that hangs up before its declared body arrives", () => {
     expect(unhandled).toHaveLength(0);
     expect(abandoned).toHaveLength(1);
   });
+
+  it("still logs the unhandled-bug line for a genuine bug, rather than mistaking it for a disconnect", async () => {
+    // A bug unrelated to the peer at all: `readBody`'s own final
+    // `Buffer.concat`, on a body that arrived in full, throwing for a
+    // reason that has nothing to do with the connection.
+    // `isAbandonedRead`'s exact match on `"aborted"` + `ECONNRESET`
+    // (module header) is what tells this apart from a real disconnect —
+    // an error shaped like this one must never satisfy it.
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    const concatSpy = vi.spyOn(Buffer, "concat").mockImplementation(() => {
+      throw new Error("simulated handler bug");
+    });
+
+    await start(fakeYahoo());
+
+    await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] }).catch(() => undefined);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    concatSpy.mockRestore();
+    spy.mockRestore();
+
+    const lines = calls.map((args) => args.map(String).join(" "));
+    const unhandled = lines.filter((line) => line.includes("unhandled request error"));
+    const disconnected = lines.filter((line) => line.includes("client disconnected"));
+
+    expect(unhandled).toHaveLength(1);
+    expect(disconnected).toHaveLength(0);
+  });
 });
 
 describe("per-endpoint rate caps, a sliding sixty-second window", () => {
+  it("does not spend the rate budget on a refused (400) request", async () => {
+    // More refused calls than the ten-call cap, each one refused by the
+    // schema before `admit()` ever runs — a confused app spamming invalid
+    // bodies must not starve the honest refresh that follows.
+    const quote = vi.fn(async () => []);
+    await start(fakeYahoo({ quote }));
+
+    for (let i = 0; i < 15; i++) {
+      const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: [] });
+      expect(res.status).toBe(400);
+    }
+    expect(quote).not.toHaveBeenCalled();
+
+    for (let i = 0; i < 10; i++) {
+      const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+      expect(res.status).toBe(200);
+    }
+    expect(quote).toHaveBeenCalledTimes(10);
+  });
+
   it("answers 429 for the eleventh quotes call within a minute, with no library call", async () => {
     const quote = vi.fn(async () => []);
     await start(fakeYahoo({ quote }));
@@ -523,6 +726,38 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
 
     expect(twentyFirst.status).toBe(429);
     expect(chart).toHaveBeenCalledTimes(20);
+  });
+
+  it("admits an eleventh quotes call once the window has slid a minute past the first", async () => {
+    // Only `Date` is faked — `setTimeout`/`setInterval` stay real, so the
+    // socket round trips below still complete on their own. The limiter
+    // reads only `Date.now()` (server/price-worker.ts's `makeRateLimiter`),
+    // which this patches; `AbortSignal.timeout` is the one fake timers do
+    // not reach, and this path never touches it.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const quote = vi.fn(async () => []);
+      await start(fakeYahoo({ quote }));
+
+      for (let i = 0; i < 10; i++) {
+        const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+        expect(res.status).toBe(200);
+      }
+      const eleventh = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+      expect(eleventh.status).toBe(429);
+
+      // 60_000 is `RATE_LIMIT_WINDOW_MS` in server/price-worker.ts — past the
+      // window the first of the ten calls above was recorded in, so without
+      // eviction the cap spent above is never given back.
+      vi.advanceTimersByTime(60_000);
+
+      const afterWindow = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+      expect(afterWindow.status).toBe(200);
+      expect(quote).toHaveBeenCalledTimes(11);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -614,6 +849,32 @@ describe("mapping a provider failure to a status", () => {
   });
 });
 
+describe("production's own timeout numbers, the deployed denial-of-service bounds", () => {
+  it("pins the four PRODUCTION_TIMEOUTS values, three read back off the server startWorker returns with no timeouts option given", async () => {
+    // Every other case in this file injects TEST_TIMEOUTS (directly, or via
+    // `start`'s own default) — the module header's own numbers otherwise
+    // reach no case at all.
+    expect(PRODUCTION_TIMEOUTS).toEqual({
+      timeout: 35_000,
+      headersTimeout: 5_000,
+      requestTimeout: 5_000,
+      connectionsCheckingInterval: 1_000,
+    });
+
+    // No `timeouts` option: startWorker's own default is PRODUCTION_TIMEOUTS.
+    // Reading three of the four back off the instance pins that the object
+    // above is actually wired in, not merely a constant nothing consumes.
+    // `connectionsCheckingInterval` is a constructor-only option (not one of
+    // the `Server` instance's own properties, module header), so the
+    // `PRODUCTION_TIMEOUTS` assertion above is what covers that one.
+    currentServer = await startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo() });
+
+    expect(currentServer.timeout).toBe(35_000);
+    expect(currentServer.headersTimeout).toBe(5_000);
+    expect(currentServer.requestTimeout).toBe(5_000);
+  });
+});
+
 describe("the socket file and its lifecycle", () => {
   it("unlinks a stale file at the path and listens", async () => {
     writeFileSync(currentSocketPath, "");
@@ -630,6 +891,45 @@ describe("the socket file and its lifecycle", () => {
     await expect(
       startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo(), timeouts: TEST_TIMEOUTS }),
     ).rejects.toMatchObject({ code: "EISDIR", path: currentSocketPath });
+  });
+
+  it("exits 1, naming EISDIR and the path, when the entry point's own listen fails", async () => {
+    // The entry point, not `startWorker`: the `.catch` that logs and calls
+    // `process.exit(1)` is the entry's own, below `import.meta.main`.
+    const socketPath = await freshEntryPointSocket("pw-eisdir-");
+    mkdirSync(socketPath);
+
+    const child = spawn(process.execPath, [WORKER_ENTRY], {
+      env: { ...process.env, PRICE_WORKER_SOCKET: socketPath },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    const stderrChunks: Buffer[] = [];
+    child.stderr!.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+    const code = await new Promise<number | null>((resolve) => {
+      child.once("close", resolve);
+    });
+    const stderr = Buffer.concat(stderrChunks).toString("utf8");
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("EISDIR");
+    expect(stderr).toContain(socketPath);
+  });
+
+  it("logs a startup line naming the socket path", async () => {
+    const socketPath = await freshEntryPointSocket("pw-startup-");
+    const child = spawn(process.execPath, [WORKER_ENTRY], {
+      env: { ...process.env, PRICE_WORKER_SOCKET: socketPath },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+
+    try {
+      const stdout = await waitForStdout(child.stdout!, (text) => text.includes(socketPath));
+      expect(stdout).toContain(`Price worker listening on ${socketPath}`);
+    } finally {
+      child.kill("SIGKILL");
+    }
   });
 
   it("creates the socket file at mode 0660", async () => {
@@ -727,7 +1027,7 @@ describe("the socket file and its lifecycle", () => {
     // waits for every connection: a socket that has sent nothing is not
     // *idle* in Node's sense, so closing only the idle ones leaves exactly
     // the eight a compromised app would hold and the stop becomes a SIGKILL.
-    const socketPath = join(await mkdtemp(join(tmpdir(), "pw-term-")), "w.sock");
+    const socketPath = await freshEntryPointSocket("pw-term-");
     const child = spawn(process.execPath, [WORKER_ENTRY], {
       env: { ...process.env, PRICE_WORKER_SOCKET: socketPath },
       stdio: "ignore",

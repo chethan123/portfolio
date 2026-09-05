@@ -110,9 +110,12 @@ let library: Promise<LibraryInstance> | undefined;
  * **The default export is a class, not a client**: every method also exists
  * on the class as a static that throws (a v2-to-v4 upgrade guard), so
  * calling `quote(...)` on the export type-checks and fails at runtime on
- * every call. `tests/yahoo-client.test.ts` pins this by construction rather
- * than by inspecting the export, which is why it never asserts on the
- * export directly.
+ * every call. `tests/yahoo-client.test.ts` pins it twice: once by
+ * construction, where a client built here reaches a `fetch` fake a bare class
+ * would never have got to, and once on the export itself, asserting the
+ * static throws. The second is why that file imports `yahoo-finance2`
+ * directly — the one exemption ARCHITECTURE.md §4.2's single-site table
+ * makes.
  */
 function sharedLibrary(): Promise<LibraryInstance> {
   library ??= import("yahoo-finance2").then(

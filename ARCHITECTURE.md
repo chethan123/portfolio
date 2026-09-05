@@ -335,14 +335,14 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `server/yahoo-client.ts:118` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `server/yahoo-client.ts:121` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 
 **Owned by a module, upheld by its callers.**
 
 | Invariant | The owner | The obligation |
 |---|---|---|
-| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
+| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
@@ -1546,9 +1546,9 @@ the exemption survives only as long as that file says so.
         └───────────────────────┬────────────────────────────────────────────────────┘
                     ┌───────────┴────────────┐
                     ▼                        ▼
-        yahooPriceProvider()          the tests' fake
-        takes a YahooClient           implements both and nothing else;
-        (price-provider.server.ts:726)   no test reaches the network
+        yahooPriceProvider()           the tests' fake
+        takes a YahooClient            implements both and nothing else;
+        (price-provider.server.ts:727) no test reaches the network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
@@ -1557,11 +1557,13 @@ is the sole importer of the library (ARCHITECTURE.md §4.2's single-site table),
 directly and by this adapter until [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moves the
 app behind the socket. Both methods are required, not optional: a provider that cannot answer history
 is not this application's provider, and an optional method would let a batch be skipped with nothing
-saying so. One test (`tests/yahoo-client.test.ts:44`) pins the static-versus-instance shape the
+saying so. Two tests (`tests/yahoo-client.test.ts:83`, `:105`) pin the static-versus-instance shape the
 client depends on — `yahoo-finance2`'s default export is the `YahooFinance` *class*, whose own static
-`quote`/`chart` type-check and throw the moment either runs, before any network access — by swapping
-in a `fetch` that only records that it was reached: a regression back to the bare class would throw
-first and the fake would never see a call.
+`quote`/`chart` type-check and throw the moment either runs, before any network access. The first
+swaps in a `fetch` that only records that it was reached: a regression back to the bare class would
+throw first and the fake would never see a call. The second asserts the throw where it happens, on
+the export, which is why that file imports the library directly — the one exemption §4.2's
+single-site table makes.
 
 These conversions happen at this boundary and nowhere else:
 

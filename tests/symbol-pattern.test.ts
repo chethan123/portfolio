@@ -28,6 +28,14 @@ describe("what the worker will build a URL from", () => {
     expect(isWellFormedSymbol(symbol)).toBe(true);
   });
 
+  it("accepts a bare .., which only climbs one path segment inside the library's own URL, same host (server/symbol-pattern.ts header)", () => {
+    // Not a hole: dots are in the character class on purpose, and a slash —
+    // the character that would let this cross a host or scheme boundary —
+    // is refused above. This states the fact rather than improving on it;
+    // see the module header for why it is safe.
+    expect(isWellFormedSymbol("..")).toBe(true);
+  });
+
   it.each([
     ["1234567890123456", "sixteen characters, one past the bound"],
     ["", "empty, which has no symbol to fetch"],

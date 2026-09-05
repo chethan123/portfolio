@@ -40,6 +40,45 @@ function chartResponseBody({
   });
 }
 
+/** A minimally valid `quote()` response body for one symbol. */
+function quoteResponseBody({
+  currency = "USD",
+  regularMarketPrice = 250,
+}: { currency?: unknown; regularMarketPrice?: unknown } = {}): string {
+  return JSON.stringify({
+    quoteResponse: {
+      result: [{ symbol: "VTI", quoteType: "ETF", language: "en-US", currency, regularMarketPrice }],
+      error: null,
+    },
+  });
+}
+
+/**
+ * A fake `fetch` for `quote()`'s crumb handshake — the cookie/crumb round
+ * trip `chart()` never makes (module header). The first call is the cookie
+ * leg (`finance.yahoo.com`, answered with a bare `set-cookie`), the second
+ * is `getcrumb` (answered with a crumb string body), and every call from the
+ * third on is handed to `finalResponse`. Every call is recorded so a test
+ * can assert on the request shape and the signal each one carried.
+ */
+function fakeFetchWithCrumbHandshake(finalResponse: () => Response): {
+  calls: Array<{ url: string; init: RequestInit }>;
+  fetch: typeof fetch;
+} {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const fetchFake = (async (url: string | URL, init: RequestInit) => {
+    calls.push({ url: String(url), init });
+    if (calls.length === 1) {
+      return new Response("", { status: 200, headers: { "set-cookie": "A1=abc; Path=/" } });
+    }
+    if (calls.length === 2) {
+      return new Response("test-crumb", { status: 200 });
+    }
+    return finalResponse();
+  }) as typeof fetch;
+  return { calls, fetch: fetchFake };
+}
+
 describe("the shape of the library this client wraps", () => {
   it("constructs an instance rather than calling the class's own broken static", async () => {
     // yahoo-finance2's default export is the `YahooFinance` *class*, and the
@@ -216,6 +255,53 @@ describe("the per-call options built for each request", () => {
     expect(secondSignal).toBeInstanceOf(AbortSignal);
     expect(secondSignal).not.toBe(firstSignal);
     expect(secondSignal?.aborted).toBe(false);
+  });
+});
+
+describe("the quote path the poller calls every tick", () => {
+  // `quote()` needs a crumb, `chart()` above never does, and the crumb is
+  // cached on the shared library's own cookie jar (getCrumb.js's
+  // `crumbState`) for the process's life once fetched — a second `quote()`
+  // call would skip the handshake entirely. Rather than fight that with a
+  // second, independent case (and `vi.resetModules()` does not reliably
+  // rebuild the real `yahoo-finance2` instance the way `vi.doMock` below
+  // does — verified empirically: a second case still hit the cached crumb),
+  // one call, one case, pins both facts the finding names.
+  it("completes the crumb handshake, carries one live signal through all three requests, and passes validateResult: false so a drifted field survives", async () => {
+    // The fixture research note 2026-09-04-price-worker-platform-facts.md
+    // §3.3 exercised live: a currency that is not a string. At the default
+    // (validateResult: true), this throws `FailedYahooValidationError` for
+    // the whole response.
+    const { calls, fetch: fetchFake } = fakeFetchWithCrumbHandshake(
+      () => new Response(quoteResponseBody({ currency: 123, regularMarketPrice: "not-a-number" })),
+    );
+    globalThis.fetch = fetchFake;
+
+    const result = (await createYahooClient().quote(["VTI"])) as Array<{
+      currency: unknown;
+      regularMarketPrice: unknown;
+    }>;
+
+    expect(result[0]?.currency).toBe(123);
+    expect(result[0]?.regularMarketPrice).toBe("not-a-number");
+
+    expect(calls).toHaveLength(3);
+    const [cookieLeg, crumbLeg, mainCall] = calls;
+    if (cookieLeg === undefined || crumbLeg === undefined || mainCall === undefined) {
+      throw new Error("expected three fetch calls");
+    }
+    expect(cookieLeg.url).toBe("https://finance.yahoo.com/quote/AAPL");
+    expect(crumbLeg.url).toBe("https://query1.finance.yahoo.com/v1/test/getcrumb");
+    const mainParams = new URL(mainCall.url).searchParams;
+    expect(mainParams.get("symbols")).toBe("VTI");
+    expect(mainParams.get("crumb")).toBe("test-crumb");
+
+    // One signal, built once per `quote()` call and forwarded to every
+    // fetch it makes — not a fresh one per request, and not the
+    // constructor's one-per-process-life signal either (module header).
+    for (const { init } of calls) expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(crumbLeg.init.signal).toBe(cookieLeg.init.signal);
+    expect(mainCall.init.signal).toBe(cookieLeg.init.signal);
   });
 });
 

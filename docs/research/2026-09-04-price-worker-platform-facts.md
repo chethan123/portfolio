@@ -511,8 +511,12 @@ floor: `headersTimeout: 500` with the interval at 100 ms closed a connection tha
 The original probe below was blind to it: a raw `net.Socket` with no `'data'` listener stays paused
 and never observes the peer's close, so it must `.resume()`. `server.timeout` therefore bounds the
 connection that is idle *mid-request* — after the headers land, while a handler waits on Yahoo —
-not the silent one. Expiry is still *polled* on `connectionsCheckingInterval`
-(`lib/_http_server.js:614-625`), so 5 s deadlines under the default interval bind at 5–35 s.
+not the silent one — and `requestTimeout` reaches past the headers to the body's last byte, so what
+`server.timeout` alone bounds is the connection idle once the *request* is complete (measured on
+24.12.0: headers complete, body partial, `headersTimeout: 0` and `requestTimeout: 500` — closed at
+599 ms). Expiry is still *polled* on `connectionsCheckingInterval` (`lib/_http_server.js`:
+`setupConnectionsTracking` at `:545-556` sets the interval, `checkConnections` at `:680-694` runs
+it), so 5 s deadlines under the default interval bind at 5–35 s.
 **Live (original, un-resumed and therefore unreliable for the first claim)**: a silent connection
 under `headersTimeout: 500` was still open at 3 s with the interval at its default *and* at 100 ms;
 a request line followed by dribbled headers closed at 602 ms with the interval at 50 ms. Keep-alive: `http.globalAgent.keepAlive` is

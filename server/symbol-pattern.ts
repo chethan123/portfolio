@@ -10,6 +10,15 @@
  *
  * No imports: this file is the only copy, shared by a worker whose whole
  * closure is `server/`, `zod` and `yahoo-finance2`.
+ *
+ * A bare `..` passes: dots are in the character class below, and `..` alone
+ * is 1-15 of them. `yahoo-finance2` concatenates the symbol straight onto
+ * `chart`'s URL path — `modules/chart.js`'s
+ * `"https://${YF_QUERY_HOST}/v8/finance/chart/" + symbol` — so this
+ * normalises one path segment up: still the same `${YF_QUERY_HOST}` host,
+ * never a different one, and no scheme change either. No boundary is crossed.
+ * `tests/symbol-pattern.test.ts` states this rather than treating it as a
+ * gap for the pattern to close.
  */
 
 /** 1-15 characters: letters, digits, and the punctuation Yahoo's own tickers use. */
