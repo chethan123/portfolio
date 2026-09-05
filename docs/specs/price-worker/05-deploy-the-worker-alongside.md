@@ -55,7 +55,9 @@ the release that introduces a service and a volume deserves its own upgrade note
       needs no database and no other service, and startup needs nothing to exist but the volume
 - [ ] Environment: nothing at all — no `DATABASE_URL`, no `PGPASSWORD`, no `MARKET_TIMEZONE`, and
       no `TZ` (the worker reads no clock, and the image sets `TZ=UTC`, `Dockerfile:94-96`);
-      `PRICE_WORKER_SOCKET` is left at its default, which is the mount path
+      `PRICE_WORKER_SOCKET` is a development-only knob (spec §3.3) and this compose file passes it
+      to neither `worker` nor `app` — both run the fixed default path, the mount path, as does the
+      healthcheck below
 - [ ] Hardening copied from `app` (`:215-221`): `no-new-privileges`, `cap_drop: ALL`, `read_only`;
       the image's `node` user (uid 1000); no `ports:` — the worker has no TCP listener to publish.
       And bounds `app` does not carry, because this is the container the design expects to be
@@ -103,12 +105,13 @@ the release that introduces a service and a volume deserves its own upgrade note
       release's copy** — the file is the operator's own and moves with no tag (`:962-965`); an image
       from [06](06-the-app-cutover.md) on under the old file runs with no volume and no worker:
       stale prices, `/healthz` green, one "no worker listening at /run/price-worker/worker.sock"
-      line per tick; then check the engine; then `up -d`, which recreates `app` once (its mounts
-      changed) — the brief outage every upgrade already has, not a fault. The note also states the
-      volume convention for whoever edits it next: a changed option string is a new volume name in
-      the release that changes it, never `down -v`. The environment table (`:238`) gains
-      `PRICE_WORKER_SOCKET`, optional, and Monitoring gains the worker's healthcheck beside `:710`
-      with its meaning. Installing (`:84-92`) gains one sentence for the hosts smoke never runs on —
+      line per call site, up to two per tick; then check the engine; then `up -d`, which recreates
+      `app` once (its mounts changed) — the brief outage every upgrade already has, not a fault. The
+      note also states the volume convention for whoever edits it next: a changed option string is a
+      new volume name in the release that changes it, never `down -v`. The environment table
+      (`:238`) gains `PRICE_WORKER_SOCKET`, marked development only — the compose file wires it into
+      neither service — and Monitoring gains the worker's healthcheck beside `:710` with its
+      meaning. Installing (`:84-92`) gains one sentence for the hosts smoke never runs on —
       SELinux-enforcing, `userns-remap`, rootless Docker (research §8.5) — pointing at the
       from-`app` socket check below as the one command to run by hand after `up -d`. The rest of the
       record is

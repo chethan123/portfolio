@@ -31,9 +31,10 @@ volume is already mounted in `app`.
       keep-alive timer fires is an `ECONNRESET` the ledger would record as a provider failure. The
       response is read to a per-kind cap and the request destroyed past it — `quotes` 512 KB (a
       hundred entries are about 400 KB), `history` 2 MiB (a ten-year chart answer is around 300 KB)
-      — then `JSON.parse` of the whole. No handle, no flag: a dead worker costs one connect failure
-      per call site, and the batch abort of [01](01-one-refresh-and-the-batch-abort.md) is what
-      keeps a tick's cost at two of them (spec §3.3)
+      — then `JSON.parse` of the whole. No handle, no flag: a dead worker costs one connect attempt
+      and one log line per call site, never deduplicated, and the batch abort of
+      [01](01-one-refresh-and-the-batch-abort.md) is what keeps a tick's cost at *at most* two of
+      each (spec §3.3)
 - [ ] The outcomes, told apart in this order: a request `error` whose `syscall` is `"connect"` —
       `ENOENT`, `ECONNREFUSED`, `EACCES`, `ENOTDIR`, whatever the code (research §8.8) — →
       `ProviderUnreachable` with the message `no worker listening at <path> (<code>)`, keyed on the
@@ -63,8 +64,10 @@ volume is already mounted in `app`.
       `isMissingHistory` (`:787-793`, now exported) is `{ status: "no-history" }`; a `200` goes
       through `toProviderHistory(body, range, marketTimeZone)`
 - [ ] `socketProbe: ProbeSymbols` ([02](02-the-batched-probe.md)'s type) — `ask("quotes", …)` for
-      the batch, split at a hundred like `getQuotes`, then `probeVerdicts`; any throw is
-      `unavailable` for every symbol; never throws
+      the batch, split at a hundred like `getQuotes`, one `ask` per chunk and each chunk's outcome
+      independent of the others': a completed chunk's symbols go through `probeVerdicts` and keep
+      their verdicts, and only the symbols of a chunk whose `ask` threw become `unavailable`; never
+      throws itself
 - [ ] The module header carries the argument: why a unix socket and not a TCP port on an internal
       network (a bridge is symmetric — the worker would reach `app:3000`); why no handle and no flag
       (a connect failure is immediate, so there is nothing to amortise); why no budget crosses the
@@ -84,6 +87,12 @@ volume is already mounted in `app`.
       seam has two implementations and only one lives in this process, and keeps the package name in
       comments only. Nothing under `app/` imports `server/yahoo-client.ts` any more — `npm run
       build` is the gate
+- [ ] `docs/data-model.md`'s price-refresh bullet and `CLAUDE.md`'s single-site list both call
+      `price-provider.server.ts` "the only importer of the provider library" (`:597-600` and `:85`
+      as this is written); each is rewritten to name `server/yahoo-client.ts`, bringing them
+      level with ARCHITECTURE §4.2's import-site row, already re-pointed by
+      [04](04-the-price-worker-process.md) — the builder re-checks both line numbers before editing,
+      since either document may have moved by the time this ticket lands
 - [ ] `scripts/smoke-test.sh` gains the source-level assertion a container check cannot make: `grep`
       over `/app/build/server/` in the image finds no `yahoo-finance2` — comments are stripped by
       the build, a string literal would trip it. The package stays on disk and the guarantee is the
@@ -103,7 +112,8 @@ volume is already mounted in `app`.
       same single line in `.env.worker`; `node --env-file=.env.worker ./server/price-worker.ts` in a
       second terminal — no database URL, no password, nothing the superuser's `.env` (`:56-60`) has;
       the without-a-worker behaviour (spec §3.8): stored prices only, one "no worker listening" line
-      per refresh, probes `unavailable` at once, instruments created anyway
+      per call site — quotes, and the batch abort too when a backfill candidate exists, so up to two
+      per refresh — probes `unavailable` at once, instruments created anyway
 
 **Tests**
 
@@ -128,7 +138,9 @@ volume is already mounted in `app`.
       rest; 101 symbols are two requests
 - [ ] The probe: `socketProbe` answers `ok`, `non-usd` with the currency, `unavailable` for an
       absent symbol, and `unavailable` for all with no server listening — three symbols, one
-      request; 101 symbols, two
+      request; 101 symbols, two. With 101 symbols split into two chunks, a non-USD refusal in the
+      first chunk and a timeout in the second keeps the first chunk's verdicts — the `non-usd` one
+      included — and marks only the second chunk's symbols `unavailable`
 - [ ] The route, `tests/routes/refresh.test.ts` (new; none exists today) through
       `tests/support/routes.ts`, keeps to what the route owns — the `done`/`busy`/`error` rules are
       [01](01-one-refresh-and-the-batch-abort.md)'s tests: the projection of a `done` report to

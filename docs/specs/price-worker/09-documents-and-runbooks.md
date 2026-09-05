@@ -24,9 +24,10 @@ story, not rewritten.
       moves to a worker container behind a unix socket; why the trade flipped (spec §2.4). §10.1:
       `:913-918` rewritten; the services block (`:874-903`) gains `worker` and `egress-proxy` — and
       `dump`, missing today — and the shared volume; the environment table (`:944-951`) gains
-      `PRICE_WORKER_SOCKET` and the hardening paragraph (`:905-911`) the new services. §6.2 gains
-      the socket paragraph beside the observation log: what crosses it, and that the worker holds no
-      rule; §6.1 (`:416-419`) gains one sentence: two implementations, one in the app. §14 gains the
+      `PRICE_WORKER_SOCKET`, marked development only, and the hardening paragraph (`:905-911`) the
+      new services. §6.2 gains the socket paragraph beside the observation log: what crosses it,
+      and that the worker holds no rule; §6.1 (`:416-419`) gains one sentence: two implementations,
+      one in the app. §14 gains the
       accepted limitations spec §8 names
 - [ ] ARCHITECTURE §2 (`:92-100`): Yahoo is reached from the worker through the proxy; the gate
       needs `www.googleapis.com:443` only; Caddy needs no egress; the context diagram's edge moves.
@@ -74,26 +75,30 @@ story, not rewritten.
 
 - [ ] What runs here (`:28-33`, the services table; `:35-37`, "only `caddy` is reachable from your
       LAN; `app`, `db` and `gate`…"; `:56-59`, "All four drop… Three run as…"; and the verify
-      step's "All four services `running` and `healthy`", `:206`): six services, the worker's and
-      the proxy's uid and bounds, and the shared volume
+      step's "All four services `running` and `healthy`", `:206`): seven services — `db`, `dump`,
+      `app`, `gate`, `caddy`, `worker` and `egress-proxy` — the table gaining a `dump` row missing
+      today alongside the worker's and the proxy's, every "four" corrected to seven, and the shared
+      volume named beside the table
 - [ ] Installing (`:84-92`): the Engine 28.0 and Compose floors with their checks, landed by
       [05](05-deploy-the-worker-alongside.md) and [07](07-the-network-lockdown.md), and 05's
       sentence for the hosts smoke never runs on — SELinux-enforcing, `userns-remap`, rootless
       Docker — pointing at the from-`app` socket check as the one command to run by hand. Running
       against your own Postgres (`:184-197`): `compose.external-db.yaml` — defined and shipped by
       [07](07-the-network-lockdown.md), written up here and not redefined:
-      `COMPOSE_FILE=compose.yaml:compose.external-db.yaml` in `.env`, once; the symptom of
-      forgetting it — `app` crash-looping on `ETIMEDOUT`/`EHOSTUNREACH` to its Postgres, with no
-      message naming the override; and exactly which guarantees remain in that mode: the worker
-      still holds no credential and shares no network with `app` or `gate`; **not** `app`'s
-      no-egress guarantee, that bridge carrying a default route. Nothing about roles: the worker
-      needs none, and "can create tables" stays the whole of what the app's role needs
+      `COMPOSE_FILE=compose.yaml:compose.external-db.yaml` in `.env`, once, `db` and `dump` behind
+      the `bundled-db` profile so neither starts and backups become the operator's own Postgres's
+      job in fact; the symptom of forgetting the override — `app` crash-looping on
+      `ETIMEDOUT`/`EHOSTUNREACH` to its Postgres, with no message naming it; and exactly which
+      guarantees remain in that mode: the worker still holds no credential and shares no network
+      with `app` or `gate`; **not** `app`'s no-egress guarantee, that bridge carrying a default
+      route. Nothing about roles: the worker needs none, and "can create tables" stays the whole of
+      what the app's role needs
 - [ ] Environment variables (`:238`): `POSTGRES_PASSWORD` required; `PGPASSWORD` and the URL rule;
-      generated passwords mandated; `.env` before any compose command; `PRICE_WORKER_SOCKET`
-      optional, re-read. Monitoring: the worker's and the proxy's healthchecks beside `:710`, what
-      each proves; Logs (`:717`): the `Price worker` and `Egress proxy` stems, and under the `Price
-      provider failed` bullet (`:738`) the three signatures a dead worker, a dead proxy and an
-      unreachable Yahoo leave every tick — landed by [06](06-the-app-cutover.md) and
+      generated passwords mandated; `.env` before any compose command; `PRICE_WORKER_SOCKET` marked
+      development only, re-read. Monitoring: the worker's and the proxy's healthchecks beside
+      `:710`, what each proves; Logs (`:717`): the `Price worker` and `Egress proxy` stems, and
+      under the `Price provider failed` bullet (`:738`) the three signatures a dead worker, a dead
+      proxy and an unreachable Yahoo leave every tick — landed by [06](06-the-app-cutover.md) and
       [08](08-the-egress-allowlist.md), re-read as one. "There is no price line in the log"
       (`:761`) keeps its four causes: they are about a refresh that never ran, and a dead worker or
       proxy is a refresh that ran and failed
@@ -105,8 +110,8 @@ story, not rewritten.
       new
 - [ ] Upgrading (`:949`): "replace `compose.yaml` with the release's copy before `up -d`" and its
       symptom (a new image under an old file runs with no volume and no worker: stale prices, health
-      green, one "no worker listening" line per tick), and the rollback note with `DATABASE_URL`
-      back in `.env` — landed by [05](05-deploy-the-worker-alongside.md),
+      green, one "no worker listening" line per call site, up to two per tick), and the rollback
+      note with `DATABASE_URL` back in `.env` — landed by [05](05-deploy-the-worker-alongside.md),
       [07](07-the-network-lockdown.md) and [08](08-the-egress-allowlist.md), and 05's volume
       convention — a changed option string is a new volume name, never `down -v`. Security (`:485`): what the worker can and cannot reach — no
       database, no `app`, no `gate`; the socket and the proxy only — the five hosts and the
@@ -125,7 +130,8 @@ story, not rewritten.
       still references the volume, and `docker volume rm` refuses one in use), `docker volume rm
       portfolio_price-worker-sock`, `docker compose up -d`; the cluster and the dumps are untouched,
       being directories in the checkout. Beside **Refresh now**: with JavaScript off against a slow
-      worker the press can block up to 190 s, and a house proxy that cuts at 60 s shows its own
+      worker the press can block up to `⌈feed instruments / 100⌉ × 15 s + 5 × 35 s` — 190 s up to a
+      hundred feed instruments, more above it — and a house proxy that cuts at 60 s shows its own
       `502`/`504` while the refresh completes behind it — reload rather than press again. "I changed
       the database password" (`:525`): `.env` first, no URL to edit; "I need to restore" (`:553`):
       stop `app` only — the worker may keep running; "`docker compose up` refuses to start" (`:49`):
@@ -144,8 +150,9 @@ story, not rewritten.
       than the app's own provider network work. `app/lib/price-poller.server.ts:2-6` and
       `compose.yaml:1-2` no longer argue against a worker; re-read. PR #220, if still open, is
       re-pointed from spec 0015 to 0018 and ADR-0010. `docs/specs/README.md`: re-check that the
-      0018 row describes what shipped. `docs/data-model.md` is untouched: this slice adds no table
-      and no write path
+      0018 row describes what shipped. `docs/data-model.md` gains no table and no write path — its
+      sole-importer sentence was already brought level with `server/yahoo-client.ts` in
+      [06](06-the-app-cutover.md)
 
 **Gates**
 

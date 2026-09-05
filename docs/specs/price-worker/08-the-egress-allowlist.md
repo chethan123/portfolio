@@ -24,8 +24,10 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
 - [ ] Imports `node:http`, `node:net` and `node:dns` only — its closure is decorrelated from the npm
       tree, which is the reason to write it rather than pull an image. No `zod`, no
       `server/config.ts`, and no environment read at all
-- [ ] Listens on `8888`; handles `CONNECT host:443` and nothing else — any other method, port, an
-      absent host or an IP-literal host is answered `403` and logged
+- [ ] Listens on `8888`; handles `CONNECT host:443` and one exception, `GET /healthz`, answered
+      `200` unconditionally — the healthcheck's own request, proving the server itself answers
+      rather than merely accepts a socket. Every other non-`CONNECT` method or path is `405`; a
+      `CONNECT` to a disallowed port, an absent host or an IP-literal host is `403` and logged
 - [ ] The allowlist is a module constant — `query1.finance.yahoo.com`, `query2.finance.yahoo.com`,
       `finance.yahoo.com`, `guce.yahoo.com`, `consent.yahoo.com` — compared exactly and
       case-insensitively, never as a suffix. `fc.yahoo.com`, which older plans named, is not in
@@ -66,13 +68,17 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       point it at a local listener; a lookup that fails answers `502`, a connect that never
       completes answers `504` at the deadline, each logged once
 - [ ] The destination is resolved with `dns.lookup(host, { all: true, family: 4 })` (injectable for
-      the tests; IPv4 because every bridge has `enable_ipv6: false`) and refused when any answer is
-      loopback, link-local or private — the check written family-agnostic all the same, `::1`,
-      `fe80::/10` and `fc00::/7` included — since a LAN resolver pointing `finance.yahoo.com` at a
-      LAN box (ADR-0005's adversary) must not make the proxy a pivot for a worker that skips
-      certificate checks. The tunnel is the `net.connect` of step (2) to the first address, the
-      buffered record replayed into it, then piped both ways and torn down when either side ends; a
-      tunnel silent for 60 s is torn down
+      the tests; IPv4 because every bridge has `enable_ipv6: false`) and the whole answer refused
+      when any address in it is loopback, link-local or private — the check written family-agnostic
+      all the same, `::1`, `fe80::/10` and `fc00::/7` included — since a LAN resolver pointing
+      `finance.yahoo.com` at a LAN box (ADR-0005's adversary) must not make the proxy a pivot for a
+      worker that skips certificate checks. The tunnel is the `net.connect` of step (2), tried
+      against each address the lookup returned in turn within that one step's 5 s deadline overall —
+      a multi-address answer whose first address refuses a connection must not fail a host whose
+      second address would have answered — the buffered record replayed into whichever address
+      connects, then piped both ways and torn down when either side ends; a tunnel silent for 60 s
+      is torn down. Test: a lookup answering two addresses, the first refused and the second
+      accepting, connects through the second within the one deadline
 - [ ] The concurrency bound is on **accepted sockets, not tunnels** — a hostile worker that opens
       sockets and never sends a valid hello never reaches a tunnel counter, so a cap counted there
       bounds nothing. `server.maxConnections = 8` on the `node:http` server is the bound, and it
@@ -83,7 +89,10 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       idle teardown covering an established tunnel. This is the bound on a worker-driven denial
       (spec §8), and what makes the proxy's own exhaustion a denial of price refresh and nothing
       else. Tests: a ninth socket is not served while eight are held, and a socket that connects
-      and says nothing is gone at the first deadline
+      and says nothing is gone at the first deadline; with eight sockets held, a `GET /healthz` on a
+      ninth gets nothing back within the healthcheck's own timeout — the case that pins why the
+      healthcheck asks for a `200` and not a bare `net.connect`, which the accept queue can complete
+      at the TCP level regardless
 - [ ] One log line per refusal naming the reason and the host(s), and one per upstream failure
       naming the host and the cause, stem `Egress proxy`; none per allowed tunnel, and a connection
       that closes without a request line — the healthcheck's — is not a refusal and is not logged.
@@ -107,7 +116,15 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       *container-logging` (a compromised worker can flood the refusal log), the full hardening, uid
       1000, no `ports:`, the worker's bounds from [05](05-deploy-the-worker-alongside.md) —
       `pids_limit: 64`, the `256m` memory limit in the attribute 05 settled on, `tmpfs:
-      ["/tmp:size=64m"]` — and a healthcheck that `net.connect`s to its own `:8888`
+      ["/tmp:size=64m"]` — and a healthcheck that sends `GET /healthz` over its own `:8888` and
+      requires the `200`, asking the server rather than merely connecting to it, as the worker's own
+      asks its socket: a bare `net.connect` would read healthy with all eight `maxConnections` slots
+      held by stalled tunnels, since the accept queue shakes hands at the TCP level regardless —
+      only a request the HTTP server itself answers proves it is not saturated
+- [ ] `compose.dev.yaml` gains an `egress-proxy` stanza with the same `build`, `image:
+      portfolio-app:dev` and `pull_policy: build` shape [05](05-deploy-the-worker-alongside.md)
+      gives `worker`; without it smoke would pull a GHCR release that lacks `server/egress-proxy.ts`
+      and certify code this ticket did not write
 - [ ] `worker` on `[worker-proxy]` alone, the socket volume still mounted, with `NODE_USE_ENV_PROXY:
       "1"` and `HTTPS_PROXY: http://egress-proxy:8888` — Node 24's `fetch` honours the pair only
       under the flag (research note §5.2, exercised: without it the fetch goes direct), the library
@@ -137,11 +154,12 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
       [07](07-the-network-lockdown.md)'s isolated networks do
 - [ ] `docker compose stop egress-proxy`, then the same `fetch` from `worker` fails within its
       timeout; `start` it again. The network is the property, not the flag
-- [ ] Through the proxy: `CONNECT mail.yahoo.com:443` is refused with `403`, and so is a plain
-      `GET`; a `CONNECT finance.yahoo.com:443` followed by a ClientHello whose server name is
-      `mail.yahoo.com` (a few lines of `node:tls` with `servername`, from `worker`) is answered
-      `200` and then torn down before any byte reaches the edge — the assertion is a TLS-level
-      failure on that socket, never a `403`, which is what the order above buys
+- [ ] Through the proxy: `CONNECT mail.yahoo.com:443` is refused with `403`; `GET /healthz` answers
+      `200`, and a plain `GET` to any other path answers `405`; a `CONNECT finance.yahoo.com:443`
+      followed by a ClientHello whose server name is `mail.yahoo.com` (a few lines of `node:tls`
+      with `servername`, from `worker`) is answered `200` and then torn down before any byte
+      reaches the edge — the assertion is a TLS-level failure on that socket, never a `403`, which
+      is what the order above buys
 
 **Docs**
 

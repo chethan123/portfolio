@@ -57,8 +57,9 @@ line and each is reviewed alone.
       (`:306-316`) is not charged for a dead worker
 - [ ] The composition's catch (`:688-702`) branches on `error.cause instanceof ProviderUnreachable`:
       one `console.warn` carrying the cause's text, and *not* "the quotes it ran beside are
-      unaffected" — false when the quotes failed on the same cause a second earlier, and two error
-      lines per tick for one event. Every other cause logs as today
+      unaffected" — false whenever the quotes call hit the same dead worker: one connect attempt and
+      one log line per call site, quotes and the batch abort, at most two of each in one tick for
+      the one underlying event, never deduplicated. Every other cause logs as today
 
 **Tests**
 

@@ -35,12 +35,18 @@ asked nothing of `.env` — and the one whose upgrade touches the database.
       otherwise break every install whose `DATABASE_URL` names a LAN or remote Postgres: on internal
       networks only, `app` has no route to that host at all and crash-loops on the first
       connection. The override is one plain bridge, `external-db: { enable_ipv6: false }`, attached
-      to `app` and to nothing else — the worker needs no database route, holding no credential, and
-      `dump` stays off it, since on a bring-your-own install backups are the operator's Postgres's
-      problem (`docs/operating.md:195-197`). It says plainly what that mode gives up, in the file's
-      own header and in the docs: **the no-egress guarantee for `app` is off**, because that bridge
-      carries a default route and requirement 1 is exactly what it relaxes; what remains is
-      requirement 3 by construction — the worker holds no credential to read anything with — and
+      to `app` and to nothing else — the worker needs no database route, holding no credential — and
+      a Compose profile, `profiles: ["bundled-db"]` on `db` and `dump` (sequences append across
+      compose files, so the base file need not change), so neither starts with this override loaded
+      and no profile named: `dump`'s `DATABASE_URL` is the same shared variable `app`'s now points
+      elsewhere, and `scripts/dump-loop.sh:90-97` refuses any host but `db`, so left running it
+      would crash-loop under its own `restart: on-failure`. Backups on a bring-your-own install
+      become the operator's Postgres's problem in fact, not merely by the docs' say-so
+      (`docs/operating.md:195-197`), `dump` never starting to contest it. It says plainly what that
+      mode gives up otherwise, in the file's own header and in the docs: **the no-egress guarantee
+      for `app` is off**, because that bridge carries a default route and requirement 1 is exactly
+      what it relaxes; what remains is requirement 3 by construction — the worker holds no
+      credential to read anything with — and
       requirement 5, the worker still sharing no network with `app` or `gate`. Such installs set
       `COMPOSE_FILE=compose.yaml:compose.external-db.yaml` in `.env`, once — Compose reads it from
       the project's `.env`, and `scripts/smoke-test.sh:26` is the repo's own precedent, with `:20-25`
@@ -101,9 +107,11 @@ asked nothing of `.env` — and the one whose upgrade touches the database.
       fetches Yahoo itself from an isolated network and logs `Price provider failed` every tick with
       `/healthz` green — roll `compose.yaml` back with the image, or re-upgrade. Rolling the compose
       file back needs `DATABASE_URL=postgres://portfolio:<the generated password>@db:5432/portfolio`
-      back in `.env` (or the role's password reset to `portfolio` first), since the old file's
-      default URL carries the old password — and that is the moment the password is back in a URL.
-      An old image ignores the worker and its volume; nothing this slice added is in the database
+      back in `.env` — the one documented path, the generated password carried into the URL. Never
+      the role's password reset to the old file's hardcoded default: that would undo this ticket's
+      whole point to save a rollback one step. That is the moment the password is back in a URL, not
+      the moment it goes weak. An old image ignores the worker and its volume; nothing this slice
+      added is in the database
 - [ ] `:308-319`'s rotation recipe and `docs/runbook.md:525-552` lose the URL half: `.env` first,
       then the role, then `up -d`
 
@@ -112,6 +120,11 @@ asked nothing of `.env` — and the one whose upgrade touches the database.
 - [ ] Export a throwaway `POSTGRES_PASSWORD` before the refusal check (`:108-116`) and add the
       mirror refusal for it: Compose reports only the first missing variable, in file order, and
       `db` comes before `gate`, so without the export the gate check would name the wrong variable
+- [ ] Under `compose.external-db.yaml` (`COMPOSE_FILE=compose.yaml:compose.external-db.yaml`, no
+      `COMPOSE_PROFILES` naming `bundled-db`): `docker compose up -d` then `docker compose ps db
+      dump` shows neither container created — the profile gate holds, so this mode never depends on
+      the bundled Postgres coming up healthy, and `dump` never gets the chance to crash-loop against
+      an external host it refuses
 - [ ] From `app` (`node -e fetch` under `AbortSignal.timeout(5_000)` — with no route the embedded
       resolver answers `SERVFAIL` only after trying the host's upstreams), `db` and **`dump`**
       (busybox `wget -T 5`): a request to a public host fails; `timeout 5 nslookup example.com`

@@ -43,7 +43,7 @@ is a fact about its filing, not about today. Two deliberate exceptions:
 | [0015](0015-chart-series-assembly.md) | One series assembly behind both chart surfaces, and the coverage rule off the routes |
 | [0016](0016-session-series-running-total.md) | The 1D line as a running total over the session's observations, same rows in tens of milliseconds |
 | [0017](0017-price-backfill.md) | The price spine backfilled from the feed's own history — gap-triggered, on every refresh, inserted where absent, never over a live close (ADR-0011) |
-| [0018](0018-price-worker.md) | The price worker: the fetch moved to an egress-isolated container reached over a unix socket, the app keeping every rule, every write and the scheduler (ADR-0010; proposed) |
+| [0018](0018-price-worker.md) | The price worker: the fetch moved to an egress-isolated container reached over a unix socket, the app keeping every rule, every write and the scheduler (ADR-0010) |
 | [0019](0019-the-lock.md) | The lock: a browser past the gate is shown nothing until a passkey is checked, refused in one middleware and lifted by a grant that idles out (ADR-0012; proposed) |
 
 ## The ticket directories

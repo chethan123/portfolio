@@ -6,9 +6,9 @@
 > to serve the refresh that ADR shapes, and that shape is what rules the old plan out. §2.5 records
 > the owner's decision on the channel between app and worker, taken on 2026-09-04.
 
-**Status:** proposed · **Slice directory:** [`price-worker/`](price-worker/) · **ADR:** 0010
-(reserved for this slice; unwritten — ticket [09](price-worker/09-documents-and-runbooks.md) writes
-it)
+**Status:** approved 2026-09-04 (§2.5 decided by the owner; the merge of the rework is the
+approval) · **Slice directory:** [`price-worker/`](price-worker/) · **ADR:** 0010 (reserved for
+this slice; unwritten — ticket [09](price-worker/09-documents-and-runbooks.md) writes it)
 
 ---
 
@@ -323,14 +323,16 @@ deliberately abandon at 15 s a call the worker keeps running — and has charged
 slow quote is stale prices either way; probe, because a cold worker's first probe pays a three-fetch
 crumb handshake, and the verdict a short budget would lose is `non-usd`, the one a person acts on.
 A budget gates how long the app waits and nothing else — never the worker's own fetch (§3.5).
-**Stateless**: no handle, no unreachability flag; a dead worker costs one connect failure per call
-site, milliseconds, and with the batch abort of §3.1 a tick against a dead worker costs the quotes'
-failure and the first history candidate's, nothing ledgered. Symbols failing the pattern are dropped
+**Stateless**: no handle, no unreachability flag; a dead worker costs one connect attempt and one
+log line per call site, milliseconds, never deduplicated — so with the batch abort of §3.1 a tick
+against a dead worker costs at most two of each, the quotes' and the first history candidate's,
+nothing ledgered either time. Symbols failing the pattern are dropped
 before the call with one `console.warn` naming them; more than a hundred are split at the worker's
 bound into consecutive asks; an empty list after dropping is an empty answer and no call. The socket
-path is configuration: `PRICE_WORKER_SOCKET` joins `configSchema`, optional, defaulting to
-`/run/price-worker/worker.sock` — `server/config.ts` stays the only reader of `process.env`, and a
-developer's `.env` can point it under `/tmp` (§3.8).
+path is configuration, but a development-only knob: `PRICE_WORKER_SOCKET` joins `configSchema`,
+optional, defaulting to `/run/price-worker/worker.sock` — `server/config.ts` stays the only reader
+of `process.env`. Compose passes it to neither `app` nor `worker` in deployment, so both and the
+healthcheck run the fixed default path; a developer's `.env` can point it under `/tmp` (§3.8).
 
 `socketProvider(): PriceProvider` — `getQuotes(symbols)` is `ask("quotes", { symbols })`, then each
 entry through `toProviderQuote`, skipping `CurrencyRefused` exactly as the adapter does
@@ -353,9 +355,10 @@ at …" for a dead worker, distinct from Yahoo failing, and the composition's ba
 three outcomes (`app/routes/refresh.ts:21-33`) and the freshness component's sentences
 (`app/components/price-freshness.tsx:74-102`) are untouched: the dead-worker distinction is the
 operator's, in `docker compose ps` and the worker's log. A JS-off press against an alive-but-slow
-worker can block for the sum of the budgets, 15 s plus five times 35 s — 190 s, past the 60 s at
-which most house proxies cut a request and show their own `502`/`504` while the refresh completes
-behind them (ticket 09's runbook says so); today it is unbounded.
+worker can block for the sum of the budgets — `⌈feed instruments / 100⌉ × 15 s + 5 × 35 s`, 190 s up
+to a hundred feed instruments and more above it as the quotes chunks add up — past the 60 s at which
+most house proxies cut a request and show their own `502`/`504` while the refresh completes behind
+them (ticket 09's runbook says so); today it is unbounded.
 
 ### 3.4 The prefactor (tickets 01–03, on the existing Yahoo adapter)
 
@@ -505,8 +508,10 @@ worker's only link to the stack, and a volume carries no route.
 One install does not fit the lists: `DATABASE_URL` may name a LAN or remote Postgres, and `app` on
 internal networks only has no route to it, so the release that lands the topology also lands
 `compose.external-db.yaml` (ticket 07) — a single plain bridge, `external-db`, attached to `app`
-and to nothing else; the worker needs no database route, holding no credential, and `dump` stays
-off it, an outside Postgres being backed up by its own operator (`docs/operating.md:195-197`). That
+and to nothing else; the worker needs no database route, holding no credential, and the override
+puts `db` and `dump` behind a Compose profile so neither starts — `dump-loop.sh` refuses any host
+but `db` and would crash-loop against the operator's own Postgres — making an outside Postgres
+backed up by its own operator a fact, not just advice (`docs/operating.md:195-197`). That
 mode is a stated relaxation: requirement 1 is **off for `app`**, whose bridge now carries a default
 route, and what remains is requirement 3 by construction and requirement 5, `worker` still sharing
 no network with `app` or `gate`. Such an install sets
@@ -580,9 +585,10 @@ Development: `npm run dev` is unchanged; `.env` gains `PRICE_WORKER_SOCKET=/tmp/
 and a second terminal runs `node --env-file=.env.worker ./server/price-worker.ts` with `.env.worker`
 holding that one line — nothing the superuser's `.env` has. Ticket 06 lands the recipe: from it a
 checkout without a worker has stored prices only, a refresh that logs "no worker listening at
-/tmp/portfolio-worker.sock", and ingest probes `unavailable` at once with the instruments created
-anyway. **No in-process fallback mode** — a second code path would keep the Yahoo import reachable
-from the app and give the property an off switch.
+/tmp/portfolio-worker.sock" once per call site — up to twice, quotes and the batch abort — and
+ingest probes `unavailable` at once with the instruments created anyway. **No in-process fallback
+mode** — a second code path would keep the Yahoo import reachable from the app and give the
+property an off switch.
 
 Tests: nothing in this slice needs a committing handle. The worker's tests and the app side's speak
 to a real server on a temporary socket path with a fake client and never touch the database; the
@@ -600,8 +606,8 @@ and healthy; 06 is the single release where the app stops fetching, and 07 the o
 its route. There is no commit from which a deploy has no price refresh.
 
 Every ticket carries `ready-for-agent`, in the vocabulary of `docs/agents/triage-labels.md` (`:9`):
-§2.5 is answered, so no ticket waits on a decision any more. The spec's own status stays `proposed`
-until the owner approves this rewrite.
+§2.5 is answered and this document is approved by the merge that lands this rework, so every ticket
+is ready for an agent to pick up and none waits on a decision any more.
 
 | # | Ticket | Blocked by |
 |---|---|---|
@@ -631,9 +637,10 @@ until the owner approves this rewrite.
   No service but `app` and `worker` mounts `price-worker-sock`, and `docker inspect` shows a pids
   limit and a memory limit on `worker` and, after 08, on `egress-proxy`.
 - **Refresh now** round-trips through the socket on every screen that carries it, JavaScript off
-  included (blocks, then redirects). Against a dead worker it reports `providerFailed`, the log
-  carries the "no worker listening" text once, the press costs a connect failure — immediate, never
-  a grace — and `price_backfill` gains no row.
+  included (blocks, then redirects). Against a dead worker it reports `providerFailed`: one connect
+  attempt and one "no worker listening" line per call site — quotes, and the batch abort when a
+  backfill candidate exists — at most two of each in the one tick, nothing ledgered, each failure
+  immediate and never a grace, and `price_backfill` gains no row.
 - At ingest a non-USD symbol still refuses with nothing written, an unavailable one is still created
   anyway, and a dead worker costs one connect failure per submission (at most the 10 s budget when
   the worker is alive but slow), not one per symbol — and nothing at all for a manual-only

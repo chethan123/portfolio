@@ -73,16 +73,19 @@ hostile worker, all are pure domain rules with fixture-shaped tests, and none sh
 
 **The archive cap** (`app/lib/prices.server.ts`)
 
-- [ ] `archived()` (`:1015-1024`) answers `null` for a payload whose serialised form is over 32 KB —
-      `ARCHIVE_PAYLOAD_CAP`, beside the function, with the reasoning: an honest quote entry is
-      2–4 KB; the observation log keys on `(instrument_id, as_of)` and inserts where absent
-      (`:1072`), so a worker varying `regularMarketTime` adds a row per instrument per tick, and
-      uncapped each row could carry the client's whole body cap into the cluster that shares a
-      filesystem with the dumps. One `console.warn` naming the symbol and the size, in the shape of
-      the function's serialise-failure line (`:1021`); `null` is "treated as absent" by the
-      function's own contract and the column is nullable
-      (`migrations/0009_price_observation.sql:64`), so the quote and the observation still land,
-      without the document
+- [ ] `archived()` (`:1015-1024`) answers `null` for a payload whose serialised form is over 32 KB,
+      measured as `Buffer.byteLength(json, "utf8")` rather than the string's own `.length` — a
+      quote's raw entry can carry non-ASCII text (a foreign exchange's company name, a currency
+      symbol) whose UTF-8 encoding runs longer than its UTF-16 code-unit count, and the cap is about
+      the bytes the row costs on disk, not the character count. `ARCHIVE_PAYLOAD_CAP`, beside the
+      function, with the reasoning: an honest quote entry is 2–4 KB; the observation log keys on
+      `(instrument_id, as_of)` and inserts where absent (`:1072`), so a worker varying
+      `regularMarketTime` adds a row per instrument per tick, and uncapped each row could carry the
+      client's whole body cap into the cluster that shares a filesystem with the dumps. One
+      `console.warn` naming the symbol and the size, in the shape of the function's
+      serialise-failure line (`:1021`); `null` is "treated as absent" by the function's own contract
+      and the column is nullable (`migrations/0009_price_observation.sql:64`), so the quote and the
+      observation still land, without the document
 
 **Tests**
 
@@ -102,12 +105,16 @@ hostile worker, all are pure domain rules with fixture-shaped tests, and none sh
       bar before the range is not written
 - [ ] `tests/price-backfill.test.ts`, "what a batch writes to the spine" (`:611`): the real adapter
       over a client stub (`tests/price-provider.test.ts:704-786` is the shape) whose chart carries a
-      single bar dated 1971 for an instrument first held in 2024 writes no `price_daily` row,
-      ledgers the attempt `nothing_to_write`, and leaves the instrument in the gap list — the bar
-      does not close the gap
+      single bar dated 1971 for an instrument first held in 2024 writes no `price_daily` row. The
+      floor drops that lone bar before `range.from`, so `toProviderHistory` returns `no-history`
+      exactly as an empty chart would (`price-provider.server.ts:562-575`) — a pre-range-only
+      answer is indistinguishable from none — and the ledger records `no_history`, leaving the
+      instrument in the gap list; the bar does not close the gap
 - [ ] `tests/refresh-quotes.test.ts`: a fake quote whose raw entry serialises to 33 KB lands its
       `quote` row and an observation whose `payload` is `null`, with the warning naming the symbol;
-      one at 4 KB archives the document
+      one at 4 KB archives the document; a multibyte entry whose `.length` sits under the cap but
+      whose UTF-8 byte length sits over it — three-byte characters padding a company name — is
+      archived as `null` too, the case that pins `Buffer.byteLength` over the string's own `.length`
 
 **Gates**
 
