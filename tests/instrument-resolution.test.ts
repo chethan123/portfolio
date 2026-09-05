@@ -428,6 +428,121 @@ describe("resolveAll — the USD probe", () => {
   );
 
   it(
+    "writes each created instrument the quote type its own symbol was answered with",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The write side of the same pairing. `quote_type` is the one place the
+      // provider's own vocabulary reaches a screen — it splits stocks from
+      // funds in unrealized gains — so a verdict read off the wrong plan
+      // misfiles an instrument with no error anywhere. Serially each plan
+      // read a cache its own call had filled; batched they share one map.
+      const classification = await seedClassification();
+      const probe: ProbeSymbols = async () =>
+        new Map([
+          ["VTI", { status: "ok", quoteType: "ETF" }],
+          ["MSFT", { status: "ok", quoteType: "EQUITY" }],
+        ]);
+
+      const answerFor = (symbol: string) =>
+        createFields({
+          symbol,
+          name: `${symbol} holding`,
+          classificationId: classification.id,
+          newClassificationName: "",
+          newClassificationAssetClass: "",
+        });
+
+      const resolved = await resolveAll(
+        [
+          { raw: "VTI", fields: answerFor("VTI") },
+          { raw: "MSFT", fields: answerFor("MSFT") },
+        ],
+        { probe },
+        db,
+      );
+
+      const rows = await db
+        .selectFrom("instrument")
+        .select(["symbol", "quote_type"])
+        .where(
+          "id",
+          "in",
+          resolved.map((alias) => alias.instrumentId),
+        )
+        .orderBy("symbol")
+        .execute();
+
+      expect(rows).toEqual([
+        { symbol: "MSFT", quote_type: "EQUITY" },
+        { symbol: "VTI", quote_type: "ETF" },
+      ]);
+    }),
+  );
+
+  it(
+    "refuses a lower-case symbol the probe answered non-USD for",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The probe is asked in one spelling and read back in another only if
+      // the two sites disagree. A symbol is stored as typed (any case), so
+      // asking for `VTI` and reading `vti` would lose the refusal silently
+      // and create an instrument this instance cannot hold.
+      const classification = await seedClassification();
+      const probe: ProbeSymbols = async (symbols) =>
+        new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
+
+      const refusal = await refusalOf(() =>
+        resolveAll(
+          [
+            {
+              raw: "vwrl",
+              fields: createFields({
+                symbol: "vwrl",
+                name: "Vanguard FTSE All-World",
+                classificationId: classification.id,
+                newClassificationName: "",
+                newClassificationAssetClass: "",
+              }),
+            },
+          ],
+          { probe },
+          db,
+        ),
+      );
+
+      expect(refusal.fieldErrors["symbol-0"]).toContain("quoted in GBP");
+    }),
+  );
+
+  it(
+    "never probes a manual instrument, even one carrying a symbol",
+    withDatabase(async ({ db, seedClassification }) => {
+      // A manual instrument may carry a ticker for the person's own reference
+      // while its price is typed in. It is not feed-priced, so its currency is
+      // not the feed's to refuse — and the guard that says so is now written
+      // at two sites, the collection and the read, either of which would mask
+      // the other's loss.
+      const classification = await seedClassification();
+
+      await resolveAll(
+        [
+          {
+            raw: "VWRL",
+            fields: createFields({
+              symbol: "VWRL",
+              name: "Vanguard FTSE All-World",
+              priceSource: "manual",
+              classificationId: classification.id,
+              newClassificationName: "",
+              newClassificationAssetClass: "",
+            }),
+          },
+        ],
+        { probe: forbiddenProbe },
+        db,
+      );
+    }),
+  );
+
+  it(
     "probes three tickers named by six strings in one call carrying three symbols, landing each verdict on the right plans",
     withDatabase(async ({ db, seedClassification }) => {
       // Two strings per ticker — a mispairing here would either double the

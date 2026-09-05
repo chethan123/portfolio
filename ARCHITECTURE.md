@@ -805,7 +805,7 @@ Three rules follow, and the codebase holds all three:
   two deliberate exceptions, and both are narrow enough to state: `format.ts:203` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
   and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
-  and `price-provider.server.ts:172` floats a yield or a per-share dividend rate only to decide
+  and `price-provider.server.ts:233` floats a yield or a per-share dividend rate only to decide
   whether the column it is bound for can hold it, returning the original string when it fits and
   null when it does not.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
@@ -1548,7 +1548,7 @@ the exemption survives only as long as that file says so.
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
         the only importer in app/     implements both and nothing else;
-        (price-provider.server:705)   no test reaches the network
+        (price-provider.server:759)   no test reaches the network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
@@ -1556,7 +1556,7 @@ makes that tolerable is that swapping it is a day's work — which is only true 
 the sole thing the write path imports. Both methods are required, not optional: a provider that
 cannot answer history is not this application's provider, and an optional method would let a batch be
 skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:812`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:933`), deliberately, to pin the static-versus-instance shape the
 adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
 client hands back.
 
