@@ -196,18 +196,43 @@ function clientDataJSON(type: "webauthn.create" | "webauthn.get", challenge: str
  * has no signature to invalidate, so no private key is needed for a
  * credential this file's fixture never has to *assert* as. A test that
  * needs the new credential to later sign an assertion still has to use the
- * default identity, since that is the only one with a private key here.
+ * default identity, since that is the only one with a private key here. A
+ * `credentialId` override has to be *canonical* base64url — text that
+ * survives a decode and re-encode unchanged — because the id inside
+ * `authData` is derived from it by decoding, and `completeRegistration` now
+ * refuses a registration whose attested id and reported id disagree. A
+ * browser's own id is canonical by construction; a hand-written literal is
+ * not, unless its length is a multiple of four less than one.
+ *
+ * Two options exist only to produce answers a real authenticator should
+ * never send, because the library does not refuse them and the domain module
+ * now does. `attestedCredentialId` sets the id *inside* `authData`
+ * independently of `id`/`rawId`, which is the pair the library compares —
+ * zero bytes, 1024 bytes, or simply a different id from the one the client
+ * reported. `transports` is typed `unknown` and replaces the module constant
+ * wholesale, so a test can send the string, the number or the `null` a
+ * broken client might; only that one field is cast on the way out, so
+ * TypeScript goes on checking the other seven structurally against
+ * `RegistrationResponseJSON` rather than accepting the whole literal on an
+ * `as`.
  */
 export function registrationResponse(
   challenge: string,
-  options?: { rpID?: string; credentialId?: string; publicKey?: Uint8Array },
+  options?: {
+    rpID?: string;
+    credentialId?: string;
+    publicKey?: Uint8Array;
+    attestedCredentialId?: Uint8Array;
+    transports?: unknown;
+  },
 ): RegistrationResponseJSON {
   const responseCredentialId = options?.credentialId ?? credentialId;
   const responseCredentialIdBytes = isoBase64URL.toBuffer(responseCredentialId);
   const responsePublicKey = options?.publicKey ?? publicKey;
+  const attestedId = options?.attestedCredentialId ?? responseCredentialIdBytes;
 
   const authData = authenticatorData(REGISTRATION_FLAGS, 0, {
-    attestedCredentialData: attestedCredentialData(responseCredentialIdBytes, responsePublicKey),
+    attestedCredentialData: attestedCredentialData(attestedId, responsePublicKey),
     rpID: options?.rpID,
   });
   const attestationObject = encodeCBOR(
@@ -218,13 +243,19 @@ export function registrationResponse(
     ]),
   );
 
+  // `"transports" in options` rather than `??`, so a test can send an
+  // explicitly absent one — a real and legitimate answer — as distinct from
+  // not asking for an override at all.
+  const responseTransports: unknown =
+    options !== undefined && "transports" in options ? options.transports : transports;
+
   return {
     id: responseCredentialId,
     rawId: responseCredentialId,
     response: {
       clientDataJSON: base64url(clientDataJSON("webauthn.create", challenge)),
       attestationObject: base64url(attestationObject),
-      transports,
+      transports: responseTransports as string[] | undefined,
     },
     clientExtensionResults: {},
     type: "public-key",

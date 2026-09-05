@@ -855,7 +855,7 @@ describe("enrolling", () => {
       // public key needs no private key to register successfully here.
       const completed = await completeRegistration(
         registrationResponse(options.challenge, {
-          credentialId: "second-device",
+          credentialId: "second-devic",
           publicKey: unrelatedPublicKeyCose(),
         }),
         db,
@@ -1095,6 +1095,117 @@ describe("removing", () => {
 });
 
 /**
+ * What a registration is allowed to *store*. The library forwards two values
+ * from the client without judging them — `transports` verbatim, and the
+ * attested credential id at whatever length the authenticator claimed — so
+ * these drive `completeRegistration` with answers no honest authenticator
+ * sends and assert both the refusal and that nothing landed.
+ */
+describe("what a registration may store", () => {
+  async function beginRegistration(db: Kysely<Database>): Promise<string> {
+    const { options } = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
+    return options.challenge;
+  }
+
+  it.each([
+    ["a string where a list belongs", "internal,hybrid"],
+    ["a number", 7],
+    ["an explicit null rather than an absent field", null],
+    ["an object", {}],
+    ["an entry that is the empty string", [""]],
+    ["an entry carrying the separator the reader splits on", ["a,b"]],
+    ["an entry longer than any transport is", ["a".repeat(40)]],
+    ["more entries than any authenticator has", Array.from({ length: 20_000 }, () => "internal")],
+  ])("refuses a registration whose reported transports are %s", (_case, hostile) =>
+    withDatabase(async ({ db }) => {
+      const challenge = await beginRegistration(db);
+
+      const refusal = await refusalOf(() =>
+        completeRegistration(registrationResponse(challenge, { transports: hostile }), db),
+      );
+      expect(refusal).toBeInstanceOf(ValidationError);
+      expect(refusal.fieldErrors.form).toMatch(/listed how it can be reached/);
+
+      expect(await db.selectFrom("passkey").select("credential_id").execute()).toHaveLength(0);
+    })(),
+  );
+
+  it(
+    "stores a registration that reported no transports at all, which is a real answer",
+    withDatabase(async ({ db }) => {
+      const challenge = await beginRegistration(db);
+
+      const { passkey } = await completeRegistration(
+        registrationResponse(challenge, { transports: undefined }),
+        db,
+      );
+
+      expect(passkey.credentialId).toBe(credentialId);
+      const [row] = await db.selectFrom("passkey").select("transports").execute();
+      // `null`, never `''` — the value migration 0012's own comment says the
+      // writer must never produce.
+      expect(row?.transports).toBeNull();
+    }),
+  );
+
+  it(
+    "refuses a registration whose authenticator attested a credential id of no bytes at all",
+    withDatabase(async ({ db }) => {
+      const challenge = await beginRegistration(db);
+
+      const refusal = await refusalOf(() =>
+        completeRegistration(
+          registrationResponse(challenge, { attestedCredentialId: new Uint8Array(0) }),
+          db,
+        ),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/an identifier of a length/);
+
+      // The one that mattered: a stored `""` would ride in every browser's
+      // `allowCredentials` from the next unlock onwards.
+      expect(await db.selectFrom("passkey").select("credential_id").execute()).toHaveLength(0);
+    }),
+  );
+
+  it(
+    "refuses a registration whose attested credential id is past the specification's ceiling",
+    withDatabase(async ({ db }) => {
+      const challenge = await beginRegistration(db);
+
+      const refusal = await refusalOf(() =>
+        completeRegistration(
+          registrationResponse(challenge, { attestedCredentialId: new Uint8Array(1024) }),
+          db,
+        ),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/an identifier of a length/);
+
+      expect(await db.selectFrom("passkey").select("credential_id").execute()).toHaveLength(0);
+    }),
+  );
+
+  it(
+    "refuses a registration whose attested credential id is not the one its own response named",
+    withDatabase(async ({ db }) => {
+      const challenge = await beginRegistration(db);
+
+      // The library compares `id` to `rawId` and neither of them to the
+      // attested bytes, so this passes verification and would be stored under
+      // an id no browser will ever send back.
+      const refusal = await refusalOf(() =>
+        completeRegistration(
+          registrationResponse(challenge, { attestedCredentialId: new Uint8Array([9, 9, 9, 9]) }),
+          db,
+        ),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/two different things/);
+
+      expect(await db.selectFrom("passkey").select("credential_id").execute()).toHaveLength(0);
+    }),
+  );
+});
+
+/**
  * A WebAuthn response is client-submitted JSON, so every exported function
  * that takes one accepts `unknown` and narrows the outer shape it actually
  * dereferences (the id, the client data) before reading it — CLAUDE.md's
@@ -1199,6 +1310,7 @@ describe("hostile responses", () => {
     }),
   );
 });
+
 
 /**
  * One browser, one live grant. Every verified assertion mints one, so before

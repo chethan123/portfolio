@@ -1099,7 +1099,7 @@ describe("enrolling the first passkey", () => {
             intent: "completeRegistration",
             response: JSON.stringify(
               registrationResponse(begun.options.challenge, {
-                credentialId: "second-device",
+                credentialId: "second-devic",
                 // A well-formed public key nobody signs for, not a four-byte
                 // stand-in: a malformed one makes this call refuse before it
                 // ever reaches the rule this test is named for, passing for
