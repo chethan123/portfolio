@@ -35,11 +35,12 @@
  * a perfectly healthy app.
  */
 import { getConfig } from "../../server/config.ts";
-import { getDb } from "./db.server.ts";
 import { isMarketOpen } from "./market-hours.ts";
-import { refreshPrices, withRefreshLock, type BackfillReport } from "./prices.server.ts";
 import { yahooPriceProvider, type PriceProvider } from "./price-provider.server.ts";
+import { runRefresh } from "./refresh.server.ts";
 import { readRefreshCadence } from "./settings.server.ts";
+
+import type { BackfillReport } from "./prices.server.ts";
 
 /**
  * Where the timer is kept: a `Symbol.for` slot on `globalThis`, because a
@@ -122,29 +123,26 @@ async function tick(state: PollerState, quotesRegardless: boolean): Promise<void
     });
     if (minutes !== state.minutes) retime(state, minutes);
 
-    // `null` when another caller — the other container, or a pressed Refresh
-    // — is already doing it. Not an error: the prices are fresh either way.
-    await withRefreshLock(async () => {
-      const report = await refreshPrices(
-        state.provider,
-        config.MARKET_TIMEZONE,
-        { quotes },
-        getDb(),
-      );
-
+    // `runRefresh` owns the lock and the catch around `refreshPrices` itself
+    // (issue #159): `busy` (another caller — the other container, or a
+    // pressed Refresh — is already doing it) and `error` (the database or the
+    // lock; `runRefresh` has already logged its own line) need nothing further
+    // here. Only a `done` run has a report to log.
+    const run = await runRefresh({ quotes }, state.provider);
+    if (run.status === "done") {
       // One line per attempt at quotes, always: "prices stopped updating" must
       // be answerable from `docker compose logs` alone, and a log that only
       // speaks on failure cannot tell a healthy quiet loop from a dead one.
       // Stale > 0 logs as a warning — the line an operator is looking for.
-      if (report.quotes !== null) {
-        const quoted = report.quotes;
+      if (run.report.quotes !== null) {
+        const quoted = run.report.quotes;
         const summary = `Price refresh: ${quoted.priced} of ${quoted.requested} priced, ${quoted.stale} stale, ${quoted.closes} closes written, ${quoted.observed} new.`;
         if (quoted.stale > 0) console.warn(summary);
         else console.info(summary);
       }
 
-      logBackfill(report.backfill);
-    });
+      logBackfill(run.report.backfill);
+    }
   } catch (error) {
     console.error("Price refresh failed; last known prices are kept:", error);
   } finally {

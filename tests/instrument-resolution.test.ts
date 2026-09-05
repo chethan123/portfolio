@@ -24,39 +24,43 @@ import {
 
 import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
-import type { ProbeSymbol } from "~/lib/price-provider.server";
+import type { ProbeSymbols } from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
 
 /**
- * A probe that answers `ok` and counts how often it was asked.
+ * A probe that answers `ok` for every symbol asked and counts the calls —
+ * each call carries every symbol it was asked in one go, so "probed once per
+ * created feed instrument" is checked on the call list, not a call count.
  *
  * `quoteType` is what the provider would have said, because the created row
  * stores it (§4.4) — a stub answering null here would pass while telling the
  * screen every instrument is unclassifiable.
  */
-function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbol; calls: string[] } {
-  const calls: string[] = [];
+function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbols; calls: string[][] } {
+  const calls: string[][] = [];
   return {
     calls,
-    probe: async (symbol) => {
-      calls.push(symbol);
-      return { status: "ok", quoteType };
+    probe: async (symbols) => {
+      calls.push(symbols);
+      return new Map(symbols.map((symbol) => [symbol, { status: "ok", quoteType } as const]));
     },
   };
 }
 
-/** A probe whose provider is having a bad day, whatever the symbol. */
-const unavailableProbe: ProbeSymbol = async () => ({ status: "unavailable" });
+/** A probe whose provider is having a bad day, whatever the symbols. */
+const unavailableProbe: ProbeSymbols = async (symbols) =>
+  new Map(symbols.map((symbol) => [symbol, { status: "unavailable" } as const]));
 
 /** A probe that quotes every symbol in the given currency. */
 const foreignProbe =
-  (currency: string): ProbeSymbol =>
-  async () => ({ status: "non-usd", currency });
+  (currency: string): ProbeSymbols =>
+  async (symbols) =>
+    new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency } as const]));
 
 /** A probe that must never be reached — pointing at existing, manual creates. */
-const forbiddenProbe: ProbeSymbol = async (symbol) => {
-  throw new Error(`The probe was called for ${symbol}, and this path must not probe.`);
+const forbiddenProbe: ProbeSymbols = async (symbols) => {
+  throw new Error(`The probe was called for ${symbols.join(", ")}, and this path must not probe.`);
 };
 
 /** A complete, valid "create" answer; override per test. */
@@ -218,7 +222,7 @@ describe("resolveAll — creating an instrument", () => {
       expect(alias.instrument_id).toBe(instrument.id);
       expect(resolved).toEqual([{ raw: "VXUS", instrumentId: instrument.id }]);
 
-      expect(calls).toEqual(["VXUS"]);
+      expect(calls).toEqual([["VXUS"]]);
     }),
   );
 
@@ -420,6 +424,291 @@ describe("resolveAll — the USD probe", () => {
       expect(instrument.price_source).toBe("feed");
 
       await expect(unresolvedStrings(["VXUS"], db)).resolves.toEqual([]);
+    }),
+  );
+
+  it(
+    "writes each created instrument the quote type its own symbol was answered with",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The write side of the same pairing. `quote_type` is the one place the
+      // provider's own vocabulary reaches a screen — it splits stocks from
+      // funds in unrealized gains — so a verdict read off the wrong plan
+      // misfiles an instrument with no error anywhere. Serially each plan
+      // read a cache its own call had filled; batched they share one map.
+      const classification = await seedClassification();
+      const probe: ProbeSymbols = async () =>
+        new Map([
+          ["VTI", { status: "ok", quoteType: "ETF" }],
+          ["MSFT", { status: "ok", quoteType: "EQUITY" }],
+        ]);
+
+      const answerFor = (symbol: string) =>
+        createFields({
+          symbol,
+          name: `${symbol} holding`,
+          classificationId: classification.id,
+          newClassificationName: "",
+          newClassificationAssetClass: "",
+        });
+
+      const resolved = await resolveAll(
+        [
+          { raw: "VTI", fields: answerFor("VTI") },
+          { raw: "MSFT", fields: answerFor("MSFT") },
+        ],
+        { probe },
+        db,
+      );
+
+      const rows = await db
+        .selectFrom("instrument")
+        .select(["symbol", "quote_type"])
+        .where(
+          "id",
+          "in",
+          resolved.map((alias) => alias.instrumentId),
+        )
+        .orderBy("symbol")
+        .execute();
+
+      expect(rows).toEqual([
+        { symbol: "MSFT", quote_type: "EQUITY" },
+        { symbol: "VTI", quote_type: "ETF" },
+      ]);
+    }),
+  );
+
+  it(
+    "refuses a lower-case symbol the probe answered non-USD for",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The probe is asked in one spelling and read back in another only if
+      // the two sites disagree. A symbol is stored as typed (any case), so
+      // asking for `VTI` and reading `vti` would lose the refusal silently
+      // and create an instrument this instance cannot hold.
+      const classification = await seedClassification();
+      const probe: ProbeSymbols = async (symbols) =>
+        new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
+
+      const refusal = await refusalOf(() =>
+        resolveAll(
+          [
+            {
+              raw: "vwrl",
+              fields: createFields({
+                symbol: "vwrl",
+                name: "Vanguard FTSE All-World",
+                classificationId: classification.id,
+                newClassificationName: "",
+                newClassificationAssetClass: "",
+              }),
+            },
+          ],
+          { probe },
+          db,
+        ),
+      );
+
+      expect(refusal.fieldErrors["symbol-0"]).toContain("quoted in GBP");
+    }),
+  );
+
+  it(
+    "refuses only the feed plan when a manual plan names the same refused ticker",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The guard that keeps a manual instrument out of the feed's currency
+      // rule is written twice — once where symbols are collected, once where
+      // verdicts are read — and each site's loss hides the other's. A probe
+      // that must never be called catches the collection site only: lose the
+      // read site instead and the symbol is never asked about, so the stub
+      // never fires while the refusal lands on a plan it does not govern.
+      const classification = await seedClassification();
+      const probe: ProbeSymbols = async (symbols) =>
+        new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
+
+      const answerFor = (priceSource: "feed" | "manual") =>
+        createFields({
+          symbol: "VWRL",
+          name: `Vanguard FTSE All-World (${priceSource})`,
+          priceSource,
+          classificationId: classification.id,
+          newClassificationName: "",
+          newClassificationAssetClass: "",
+        });
+
+      const refusal = await refusalOf(() =>
+        resolveAll(
+          [
+            { raw: "VWRL FEED", fields: answerFor("feed") },
+            { raw: "VWRL MANUAL", fields: answerFor("manual") },
+          ],
+          { probe },
+          db,
+        ),
+      );
+
+      expect(Object.keys(refusal.fieldErrors)).toEqual(["symbol-0"]);
+    }),
+  );
+
+  it(
+    "never probes a manual instrument, even one carrying a symbol",
+    withDatabase(async ({ db, seedClassification }) => {
+      // A manual instrument may carry a ticker for the person's own reference
+      // while its price is typed in. It is not feed-priced, so its currency is
+      // not the feed's to refuse — and the guard that says so is now written
+      // at two sites, the collection and the read, either of which would mask
+      // the other's loss.
+      const classification = await seedClassification();
+
+      await resolveAll(
+        [
+          {
+            raw: "VWRL",
+            fields: createFields({
+              symbol: "VWRL",
+              name: "Vanguard FTSE All-World",
+              priceSource: "manual",
+              classificationId: classification.id,
+              newClassificationName: "",
+              newClassificationAssetClass: "",
+            }),
+          },
+        ],
+        { probe: forbiddenProbe },
+        db,
+      );
+    }),
+  );
+
+  it(
+    "probes three tickers named by six strings in one call carrying three symbols, landing each verdict on the right plans",
+    withDatabase(async ({ db, seedClassification }) => {
+      // Two strings per ticker — a mispairing here would either double the
+      // call or land a verdict meant for one ticker onto another's plans.
+      const classification = await seedClassification();
+      const calls: string[][] = [];
+      const probe: ProbeSymbols = async (symbols) => {
+        calls.push(symbols);
+        return new Map([
+          ["VTI", { status: "ok", quoteType: "ETF" }],
+          ["VWRL", { status: "non-usd", currency: "GBP" }],
+          ["ZZZZ", { status: "unavailable" }],
+        ]);
+      };
+
+      const answerFor = (symbol: string, label: string) =>
+        createFields({
+          symbol,
+          name: `${symbol} fund ${label}`,
+          classificationId: classification.id,
+          newClassificationName: "",
+          newClassificationAssetClass: "",
+        });
+
+      const refusal = await refusalOf(() =>
+        resolveAll(
+          [
+            { raw: "VTI A", fields: answerFor("VTI", "A") },
+            { raw: "VTI B", fields: answerFor("VTI", "B") },
+            { raw: "VWRL A", fields: answerFor("VWRL", "A") },
+            { raw: "VWRL B", fields: answerFor("VWRL", "B") },
+            { raw: "ZZZZ A", fields: answerFor("ZZZZ", "A") },
+            { raw: "ZZZZ B", fields: answerFor("ZZZZ", "B") },
+          ],
+          { probe },
+          db,
+        ),
+      );
+
+      // One call, three distinct symbols — not six, and not three calls.
+      expect(calls).toEqual([["VTI", "VWRL", "ZZZZ"]]);
+
+      // Only the two strings naming the refused ticker are refused; the ok
+      // and unavailable tickers' strings are untouched by it.
+      expect(Object.keys(refusal.fieldErrors)).toEqual(["symbol-2", "symbol-3"]);
+      expect(refusal.fieldErrors["symbol-2"]).toBe(
+        "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
+      );
+      expect(refusal.fieldErrors["symbol-3"]).toBe(
+        "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
+      );
+    }),
+  );
+
+  it(
+    "creates the instrument when the probe answered nothing about its symbol",
+    withDatabase(async ({ db, seedClassification }) => {
+      // A probe may answer about fewer symbols than it was asked. Over the
+      // socket that is not hypothetical: a symbol failing the worker's own
+      // pattern check is dropped before the call and comes back absent. An
+      // absent verdict has to read as `unavailable` — created now, priced or
+      // marked stale by the next refresh — because reading it as a refusal
+      // would block a statement over a symbol nobody judged.
+      const classification = await seedClassification();
+      const silentProbe: ProbeSymbols = async () => new Map();
+
+      const resolved = await resolveAll(
+        [
+          {
+            raw: "VTI",
+            fields: createFields({
+              symbol: "VTI",
+              name: "Vanguard Total Stock Market ETF",
+              priceSource: "feed",
+              classificationId: classification.id,
+              newClassificationName: "",
+              newClassificationAssetClass: "",
+            }),
+          },
+        ],
+        { probe: silentProbe },
+        db,
+      );
+
+      const instrument = await db
+        .selectFrom("instrument")
+        .select(["symbol", "quote_type"])
+        .where("id", "=", resolved[0]!.instrumentId)
+        .executeTakeFirstOrThrow();
+
+      expect(instrument.symbol).toBe("VTI");
+      expect(instrument.quote_type).toBeNull();
+    }),
+  );
+
+  it(
+    "resolves a manual-only submission with a probe stub that was never called",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The call counter is the assertion, not the created row's absence of
+      // one: a manual-only submission — the common case — must make no
+      // provider call at all, because over the socket a zero-symbol ask is a
+      // round trip the worker refuses anyway.
+      const classification = await seedClassification();
+      const calls: string[][] = [];
+      const probe: ProbeSymbols = async (symbols) => {
+        calls.push(symbols);
+        return new Map();
+      };
+
+      await resolveAll(
+        [
+          {
+            raw: "VANG TARGET RET 2045",
+            fields: createFields({
+              symbol: "",
+              name: "Vanguard Target Retirement 2045 Trust II",
+              priceSource: "manual",
+              classificationId: classification.id,
+              newClassificationName: "",
+              newClassificationAssetClass: "",
+            }),
+          },
+        ],
+        { probe },
+        db,
+      );
+
+      expect(calls).toHaveLength(0);
     }),
   );
 });

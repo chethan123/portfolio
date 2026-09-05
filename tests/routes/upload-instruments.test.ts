@@ -81,20 +81,25 @@ describe("the stale-form guard", () => {
       // The page was drawn when VTI and VXUS were both unresolved. While it sat
       // open, another draft resolved VTI — so the screen's index 0 is now VXUS,
       // and the answer typed for VTI would land on it.
-      await resolveAll([
-        {
-          raw: "VTI",
-          fields: {
-            kind: "create",
-            symbol: "VTI",
-            name: "Vanguard Total Stock Market",
-            priceSource: "manual",
-            classificationId: "__new__",
-            newClassificationName: "US equity",
-            newClassificationAssetClass: "equity",
+      await resolveAll(
+        [
+          {
+            raw: "VTI",
+            fields: {
+              kind: "create",
+              symbol: "VTI",
+              name: "Vanguard Total Stock Market",
+              priceSource: "manual",
+              classificationId: "__new__",
+              newClassificationName: "US equity",
+              newClassificationAssetClass: "equity",
+            },
           },
-        },
-      ]);
+        ],
+        // Manual, so the probe must never actually be reached — a stub
+        // answering an empty map is enough to satisfy the required param.
+        { probe: async () => new Map() },
+      );
 
       const outcome = await outcomeOf(() =>
         action(
@@ -159,20 +164,25 @@ describe("a step with nothing left to ask", () => {
       // that resolved everything a moment ago.
       const draftId = await stageDraft(ctx, ["Symbol,Quantity", "VTI,100"].join("\n"));
 
-      await resolveAll([
-        {
-          raw: "VTI",
-          fields: {
-            kind: "create",
-            symbol: "VTI",
-            name: "Vanguard Total Stock Market",
-            priceSource: "manual",
-            classificationId: "__new__",
-            newClassificationName: "US equity",
-            newClassificationAssetClass: "equity",
+      await resolveAll(
+        [
+          {
+            raw: "VTI",
+            fields: {
+              kind: "create",
+              symbol: "VTI",
+              name: "Vanguard Total Stock Market",
+              priceSource: "manual",
+              classificationId: "__new__",
+              newClassificationName: "US equity",
+              newClassificationAssetClass: "equity",
+            },
           },
-        },
-      ]);
+        ],
+        // Manual, so the probe must never actually be reached — a stub
+        // answering an empty map is enough to satisfy the required param.
+        { probe: async () => new Map() },
+      );
 
       expect(
         await redirectTo(() => loader(args(get(`/upload/${draftId}/instruments`), { draftId }))),

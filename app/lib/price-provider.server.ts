@@ -162,6 +162,23 @@ export type PriceProvider = {
 };
 
 /**
+ * The provider process could not be reached at all — not a rate limit, not a
+ * shape change, not an unknown symbol, every one of which the caller already
+ * has an answer for (ledgered per attempt, or an absent quote). This means
+ * there was no answer to have. `backfillCloses` treats it specially because of
+ * what it would otherwise cost: a socket-backed provider (a later slice)
+ * restarts independently of this process, so "unreachable right now" is a
+ * deploy-time event rather than the endpoint's own trouble, and ledgering it
+ * per candidate would defer up to a batch's worth of instruments a full day
+ * each for a worker that came back a minute later. The Yahoo adapter never
+ * throws it — nothing here can tell "the library failed" from "the process
+ * behind it is gone," so it exists for the provider that can.
+ */
+export class ProviderUnreachable extends Error {
+  override readonly name = "ProviderUnreachable";
+}
+
+/**
  * A quote in a currency we cannot hold. §6.1 puts this guard at instrument
  * resolution; it is enforced here too because the failure it prevents is the
  * worst available — no error anywhere, GBP quietly summed into a USD net
@@ -577,11 +594,12 @@ export function toProviderHistory(
 
 /**
  * The one `yahoo-finance2` instance this process uses. A fresh instance per
- * call redoes the library's cookie/crumb handshake — `probeSymbol`'s
- * per-symbol loop became a burst of handshakes, exactly what an unofficial
- * endpoint rate-limits — and reset its per-instance "shown once" notices, so
- * the survey banner logged on every tick. Memoized as a promise so two calls
- * racing before the import resolves still share one client.
+ * call redoes the library's cookie/crumb handshake — the backfill's
+ * per-symbol `getDailyCloses` loop would become a burst of handshakes,
+ * exactly what an unofficial endpoint rate-limits — and reset its
+ * per-instance "shown once" notices, so the survey banner logged on every
+ * tick. Memoized as a promise so two calls racing before the import resolves
+ * still share one client.
  */
 let client: Promise<YahooClient> | undefined;
 
@@ -643,54 +661,107 @@ export type SymbolProbe =
   | { status: "unavailable" };
 
 /**
- * The probe as the resolution step receives it — just the symbol, so a test
- * stub is one async arrow. The client parameter is this module's business.
+ * The probe as the resolution step receives it — every symbol at once,
+ * keyed by the symbol as asked, so a test stub is one async arrow. The
+ * client parameter is this module's business. Over the socket ([06]) each
+ * serial probe would be a round trip; batched, one call answers every
+ * symbol an upload creates.
  */
-export type ProbeSymbol = (symbol: string) => Promise<SymbolProbe>;
+export type ProbeSymbols = (symbols: string[]) => Promise<Map<string, SymbolProbe>>;
 
 /**
- * Does this symbol quote, and in a currency we can hold? The creation-time
- * half of the guard (§6.1 puts it at instrument resolution). `getQuotes`
+ * Do these symbols quote, and in a currency we can hold? The verdict logic
+ * behind {@link probeSymbols} and the socket probe ([06]) alike — pure, so
+ * both can share it without either owning the client call.
+ *
+ * Built on the raw entries and not on `getQuotes`, because that seam
+ * collapses a refusal into an absence by design (§6.1's reasoning, restated
+ * at {@link probeSymbols}) — the probe needs the refusal named. A non-array
+ * `raw` answers every symbol `unavailable`, the same as Yahoo dropping a
+ * symbol it never heard of.
+ *
+ * A quote lands on the asked symbol whose {@link matchKey} equals
+ * `matchKey(quote.symbol)` — `refreshQuotes`'s own matching rule
+ * (`prices.server.ts`'s `bySymbol`/`matched`) — never on whichever symbol
+ * happened to be asked first; a `CurrencyRefused` lands the same way, on the
+ * symbol the error names. A symbol no entry claims, or whose only entry
+ * parsed to no usable price, is `unavailable`: a provider failure must not
+ * block creation, because the next refresh marks the instrument stale
+ * anyway.
+ */
+export function probeVerdicts(
+  symbols: string[],
+  raw: unknown,
+  fetchedAt: Date,
+): Map<string, SymbolProbe> {
+  // Each entry read once, under its own match key. Not-an-array equals empty:
+  // Yahoo drops unknown symbols entirely, so absence is the ordinary spelling
+  // of "never heard of it".
+  const answers: Array<{ key: string; verdict: SymbolProbe }> = [];
+
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    try {
+      const quote = toProviderQuote(entry, fetchedAt);
+      if (quote === null) continue;
+
+      answers.push({
+        key: matchKey(quote.symbol),
+        verdict: { status: "ok", quoteType: quote.quoteType },
+      });
+    } catch (error) {
+      if (!(error instanceof CurrencyRefused)) throw error;
+
+      answers.push({
+        key: matchKey(error.symbol),
+        verdict: { status: "non-usd", currency: error.currency },
+      });
+    }
+  }
+
+  // Then one verdict per symbol *asked*, which is what the caller looks up.
+  // Driven from the asked list rather than from the answers, so two spellings
+  // of one ticker — `vti` on one row, `VTI` on another — both get the answer
+  // the feed gave, as they did when each was probed on its own.
+  const verdicts = new Map<string, SymbolProbe>();
+  for (const symbol of symbols) {
+    const answer = answers.find(({ key }) => key === matchKey(symbol));
+    verdicts.set(symbol, answer?.verdict ?? { status: "unavailable" });
+  }
+
+  return verdicts;
+}
+
+/**
+ * Do these symbols quote, and in a currency we can hold? The creation-time
+ * half of the guard (§6.1 puts it at instrument resolution), one
+ * `quote(symbols)` call answered through {@link probeVerdicts}. `getQuotes`
  * cannot serve it: there a refusal becomes an absent quote, since a refresh
  * must not lose ninety-nine prices over one foreign listing — but here the
- * caller is a person creating one instrument, and "absent" would collapse the
+ * caller is a person creating instruments, and "absent" would collapse the
  * distinction they can act on (a refused currency) into the one they cannot
- * (a provider's bad day). So non-USD comes back named; everything else —
- * unknown symbol, thrown client, malformed payload — is one answer,
- * `unavailable`, never a throw: a provider failure must not block creation,
- * because the next refresh marks the instrument stale anyway. The currency
- * rule lives in {@link toProviderQuote}; the probe only translates its
- * verdict. `client` is injectable: no test touches the network.
+ * (a provider's bad day). So non-USD comes back named per symbol; everything
+ * else — an unknown symbol, a thrown client, a malformed payload — is
+ * `unavailable` for every symbol asked, never a throw: a provider failure
+ * must not block creation, because the next refresh marks every instrument
+ * stale anyway. `client` is injectable: no test touches the network.
  */
-export async function probeSymbol(
-  symbol: string,
+export async function probeSymbols(
+  symbols: string[],
   // The quote half only, so a stub stays one async arrow returning one method.
   client: () => Promise<QuoteClient> = yahooClient,
-): Promise<SymbolProbe> {
+): Promise<Map<string, SymbolProbe>> {
   try {
     const provider = await client();
     const fetchedAt = new Date();
-    const raw = await provider.quote([symbol]);
-
-    // Not-an-array equals empty: Yahoo drops unknown symbols entirely, so
-    // absence is the ordinary spelling of "never heard of it".
-    for (const entry of Array.isArray(raw) ? raw : []) {
-      try {
-        const quote = toProviderQuote(entry, fetchedAt);
-        if (quote !== null) return { status: "ok", quoteType: quote.quoteType };
-      } catch (error) {
-        if (error instanceof CurrencyRefused) {
-          return { status: "non-usd", currency: error.currency };
-        }
-        throw error;
-      }
-    }
+    const raw = await provider.quote(symbols);
+    return probeVerdicts(symbols, raw, fetchedAt);
   } catch {
     // Deliberately everything: whatever the provider did, the caller's
-    // actionable answer is the same — create the instrument.
+    // actionable answer is the same for every symbol asked — create anyway.
+    const verdicts = new Map<string, SymbolProbe>();
+    for (const symbol of symbols) verdicts.set(symbol, { status: "unavailable" });
+    return verdicts;
   }
-
-  return { status: "unavailable" };
 }
 
 /**

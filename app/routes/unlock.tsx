@@ -45,8 +45,9 @@
  * *no textual trace* is checking the wrong thing and will cry wolf. Say so
  * again if this file is ever changed to import it any other way.
  *
- * **A retry re-fetches options exactly when the last attempt never reached
- * the server, never when it might have spent one.** `lock.server.ts`'s own
+ * **Options are re-fetched exactly when the last attempt never reached the
+ * server, never when it might have spent one — and the re-fetch starts the
+ * moment that becomes true, not on the next press.** `lock.server.ts`'s own
  * header explains why a stale challenge cannot simply be resubmitted: it is
  * spent the moment the server reads it, whether or not what followed
  * verified, so a second try against the same one answers "already used" —
@@ -57,9 +58,19 @@
  * post-action revalidation already freshened `loaderData.options` either
  * way; a dismissed prompt or a ceremony that never produced an assertion
  * leaves `phase` at "dismissed"/"failed" instead — the two cases that never
- * spent anything and left the options page loaded with genuinely stale ones
- * — and *that* is what a fresh press calls `useRevalidator` for
- * ({@link shouldRevalidateBeforeRetry}).
+ * spent anything and left the options page loaded with genuinely stale ones.
+ * `runCeremony` calls `useRevalidator`'s `revalidate` itself, right there,
+ * the instant it sets `phase` to one of those two ({@link
+ * shouldRevalidateBeforeRetry}) — never the click handler that starts the
+ * *next* attempt. A version that instead waited for that next press to call
+ * `revalidate` and only then ran the ceremony would call
+ * `navigator.credentials.get()` after the click that started the wait, once
+ * the network round trip finished — outside the very user activation that
+ * click granted, on any loader, database or network slower than WebKit's
+ * transient-activation window. The prompt then never even opens; the
+ * `NotAllowedError` that produces is indistinguishable from a dismissal
+ * (this file's next paragraph) and reads as one, so the reader is told they
+ * cancelled a check they were never shown.
  *
  * **A dismissed prompt and a ceremony that timed out are not distinguished**,
  * on purpose — `unlock-ceremony.ts`'s header found that both surface as the
@@ -286,10 +297,28 @@ function visibleRefusal(
 }
 
 /**
- * Whether a fresh press must refresh `loaderData.options` before running the
- * ceremony again. `"idle"` means the options already in hand are fresh — see
- * this file's own header on why a dismissed or failed attempt is the only
- * case that leaves them genuinely stale.
+ * Whether settling into `phase` leaves `loaderData.options` stale and so
+ * must trigger a background refresh — called from {@link runCeremony} the
+ * moment an outcome settles into `"dismissed"` or `"failed"`, never from a
+ * later button press.
+ *
+ * **Why the refresh cannot wait for the next press.** WebKit requires each
+ * `navigator.credentials.get()` call to sit inside its own user activation
+ * (this file's own header, and `docs/specs/0019-the-lock.md`'s "two
+ * deliberate taps, not one"); a click handler that started the revalidation
+ * itself and then waited on it to resolve before running the ceremony would
+ * spend that very click's activation waiting on a network round trip, and a
+ * slow loader, a slow database, or a slow network leaves
+ * `navigator.credentials.get()` called *after* the activation the click
+ * granted has already lapsed — rejected with no prompt ever shown, and that
+ * `NotAllowedError` then reads as a second dismissal the reader never
+ * produced. Starting the refresh here, as soon as the previous attempt is
+ * known to have left the options stale, means it has every idle moment
+ * between attempts — the reader reading the failure, deciding to retry,
+ * moving a finger — to finish before the *next* press's own activation ever
+ * has to wait on it. `"idle"` means the options already in hand are fresh —
+ * see this file's own header on why a dismissed or failed attempt is the
+ * only case that leaves them genuinely stale.
  */
 function shouldRevalidateBeforeRetry(phase: Phase): boolean {
   return phase !== "idle";
@@ -330,6 +359,21 @@ function shouldRunCeremony(
  * hazard and, as a side effect, also blocked this same resolution whenever
  * the effect's own dependencies changed mid-ceremony, which is the bug that
  * finding actually named).
+ *
+ * **`revalidate` is called from here, not from the next press.** A dismissed
+ * or failed outcome is exactly the case {@link shouldRevalidateBeforeRetry}
+ * says leaves `loaderData.options` stale — and this is the moment that
+ * becomes true, so the refresh starts immediately, while whatever idle time
+ * passes before the reader presses Unlock again is free. A caller that instead
+ * waited for that next press to call `revalidate` and only *then* awaited it
+ * would run the ceremony's `navigator.credentials.get()` after the click that
+ * started the wait, outside the very user activation that click granted
+ * (`shouldRevalidateBeforeRetry`'s own header) — a slow loader turns an
+ * honest retry into a `NotAllowedError` no prompt ever produced, mislabelled
+ * as a second dismissal. Never called on the `"ok"` branch: a successful
+ * `submit` already carries its own automatic post-action revalidation, and a
+ * second, redundant one here would spend a load on options nothing is going
+ * to read.
  */
 async function runCeremony(
   optionsJSON: Parameters<typeof requestAssertion>[0],
@@ -337,6 +381,7 @@ async function runCeremony(
   submit: ReturnType<typeof useSubmit>,
   setPhase: (phase: Phase) => void,
   setClientMessage: (message: string | null) => void,
+  revalidate: () => void,
 ): Promise<void> {
   const outcome = await requestAssertion(optionsJSON);
 
@@ -346,13 +391,10 @@ async function runCeremony(
     return;
   }
 
-  if (outcome.status === "dismissed") {
-    setPhase("dismissed");
-    return;
-  }
-
-  setClientMessage(outcome.message);
-  setPhase("failed");
+  const settledPhase: Phase = outcome.status === "dismissed" ? "dismissed" : "failed";
+  if (outcome.status === "failed") setClientMessage(outcome.message);
+  setPhase(settledPhase);
+  if (shouldRevalidateBeforeRetry(settledPhase)) revalidate();
 }
 
 export default function Unlock({ loaderData, actionData }: Route.ComponentProps) {
@@ -392,15 +434,21 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
     if (!shouldRunCeremony(phase, revalidator.state, ceremonyStarted.current)) return;
     ceremonyStarted.current = true;
 
-    void runCeremony(options, redirectTo, submit, setPhase, setClientMessage);
-  }, [phase, revalidator.state, options, redirectTo, submit]);
+    void runCeremony(options, redirectTo, submit, setPhase, setClientMessage, revalidator.revalidate);
+  }, [phase, revalidator.state, revalidator.revalidate, options, redirectTo, submit]);
 
+  // Never calls `revalidator.revalidate()` itself (finding: a retry run
+  // outside its own user activation) — that already happened, if it needed
+  // to, the moment the previous attempt settled into "dismissed" or "failed"
+  // (`runCeremony`'s own header). All this does is start a fresh press; by
+  // the time it runs, `loaderData.options` is either already fresh or the
+  // effect above's `revalidator.state === "idle"` guard waits for it to
+  // become so, exactly as it always has.
   function handleUnlock() {
     if (phase === "confirming") return;
     ceremonyStarted.current = false;
     setClientMessage(null);
     setPhase("confirming");
-    if (shouldRevalidateBeforeRetry(phase)) revalidator.revalidate();
   }
 
   const refusal = visibleRefusal(phase, actionData?.formError ?? null, clientMessage);
