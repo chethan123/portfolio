@@ -182,11 +182,13 @@ export async function action({ request }: Route.ActionArgs) {
   try {
     // The grant this browser already carries, superseded by the one this
     // assertion is about to mint rather than left live beside it
-    // (`lock.server.ts`'s {@link mintGrant}). A browser reaches this screen
-    // holding a live cookie whenever it followed a stale `redirectTo` or
-    // raced its own re-entry post. `undefined` is the database seam's own
-    // default: routes never pass one.
-    const grant = await verifyUnlock(response, undefined, readLockCookie(request));
+    // (`lock.server.ts`'s `mintGrant`). A browser reaches this screen holding
+    // a live cookie whenever it followed a stale `redirectTo` or raced its
+    // own re-entry post. Named rather than inlined so the third positional
+    // says what it is; `undefined` is the database seam's own default, which
+    // routes never pass.
+    const supersedes = readLockCookie(request);
+    const grant = await verifyUnlock(response, undefined, supersedes);
 
     return redirect(safeReturn(fields.redirectTo), {
       headers: { "Set-Cookie": lockCookie(grant.id) },

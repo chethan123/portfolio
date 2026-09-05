@@ -1111,6 +1111,95 @@ describe("removing", () => {
  * every entry point narrows before it dereferences rather than only the
  * one most directly tested.
  */
+describe("hostile responses", () => {
+  it(
+    "refuses an empty object rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() => verifyUnlock({}, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a null response field rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() => verifyUnlock({ id: credentialId, response: null }, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a response missing its id rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() =>
+        verifyUnlock({ response: { clientDataJSON: "e30" } }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a clientDataJSON that is not valid base64url rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() =>
+        verifyUnlock({ id: credentialId, response: { clientDataJSON: "@@@ not base64url @@@" } }, db),
+      );
+      // The outer-shape check above passes it through as a string; it is
+      // `decodeChallenge`'s own pre-existing try/catch, unaffected by this
+      // narrowing, that turns the decode failure into this refusal.
+      expect(refusal.fieldErrors.form).toMatch(/client data could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a clientDataJSON that decodes to something other than JSON rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const notJson = Buffer.from("not json at all").toString("base64url");
+      const refusal = await refusalOf(() =>
+        verifyUnlock({ id: credentialId, response: { clientDataJSON: notJson } }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/client data could not be read/);
+    }),
+  );
+
+  it(
+    "refuses an empty object rather than throwing when completing a registration",
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(() => completeRegistration({}, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses an empty object rather than throwing when its assertion authorises an enrolment",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() => beginEnrolment("New device", { assertion: {} }, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses an empty object rather than throwing when its assertion authorises a removal, writing nothing",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() =>
+        removePasskey(credentialId, { assertion: {}, confirmRemoval: "true" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+
+      expect(
+        await db.selectFrom("passkey").select("credential_id").where("credential_id", "=", credentialId).execute(),
+      ).toHaveLength(1);
+    }),
+  );
+});
+
 /**
  * One browser, one live grant. Every verified assertion mints one, so before
  * this rule an unlock, an enrolment confirm and a removal left three live
@@ -1208,95 +1297,6 @@ describe("one live grant per browser", () => {
       expect(await readGrant(grant.id, db)).toBeDefined();
       const live = await db.selectFrom("unlock_grant").select("id").execute();
       expect(live.map((row) => row.id)).toEqual([grant.id]);
-    }),
-  );
-});
-
-describe("hostile responses", () => {
-  it(
-    "refuses an empty object rather than throwing when unlocking",
-    withDatabase(async ({ db, seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const refusal = await refusalOf(() => verifyUnlock({}, db));
-      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
-    }),
-  );
-
-  it(
-    "refuses a null response field rather than throwing when unlocking",
-    withDatabase(async ({ db, seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const refusal = await refusalOf(() => verifyUnlock({ id: credentialId, response: null }, db));
-      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
-    }),
-  );
-
-  it(
-    "refuses a response missing its id rather than throwing when unlocking",
-    withDatabase(async ({ db, seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const refusal = await refusalOf(() =>
-        verifyUnlock({ response: { clientDataJSON: "e30" } }, db),
-      );
-      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
-    }),
-  );
-
-  it(
-    "refuses a clientDataJSON that is not valid base64url rather than throwing when unlocking",
-    withDatabase(async ({ db, seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const refusal = await refusalOf(() =>
-        verifyUnlock({ id: credentialId, response: { clientDataJSON: "@@@ not base64url @@@" } }, db),
-      );
-      // The outer-shape check above passes it through as a string; it is
-      // `decodeChallenge`'s own pre-existing try/catch, unaffected by this
-      // narrowing, that turns the decode failure into this refusal.
-      expect(refusal.fieldErrors.form).toMatch(/client data could not be read/);
-    }),
-  );
-
-  it(
-    "refuses a clientDataJSON that decodes to something other than JSON rather than throwing when unlocking",
-    withDatabase(async ({ db, seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const notJson = Buffer.from("not json at all").toString("base64url");
-      const refusal = await refusalOf(() =>
-        verifyUnlock({ id: credentialId, response: { clientDataJSON: notJson } }, db),
-      );
-      expect(refusal.fieldErrors.form).toMatch(/client data could not be read/);
-    }),
-  );
-
-  it(
-    "refuses an empty object rather than throwing when completing a registration",
-    withDatabase(async ({ db }) => {
-      const refusal = await refusalOf(() => completeRegistration({}, db));
-      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
-    }),
-  );
-
-  it(
-    "refuses an empty object rather than throwing when its assertion authorises an enrolment",
-    withDatabase(async ({ db, seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const refusal = await refusalOf(() => beginEnrolment("New device", { assertion: {} }, db));
-      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
-    }),
-  );
-
-  it(
-    "refuses an empty object rather than throwing when its assertion authorises a removal, writing nothing",
-    withDatabase(async ({ db, seedPasskey }) => {
-      await seedFixturePasskey(seedPasskey);
-      const refusal = await refusalOf(() =>
-        removePasskey(credentialId, { assertion: {}, confirmRemoval: "true" }, db),
-      );
-      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
-
-      expect(
-        await db.selectFrom("passkey").select("credential_id").where("credential_id", "=", credentialId).execute(),
-      ).toHaveLength(1);
     }),
   );
 });

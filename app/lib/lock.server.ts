@@ -40,6 +40,12 @@
  * promise). Expiry is enforced again on read, which is the authoritative
  * check.
  *
+ * **One browser, one live grant.** Every verified assertion mints one, and
+ * mints it in place of whatever the same request's cookie already named, so
+ * a browser holds at most one live row at a time and "Lock now" ends all of
+ * what it holds. {@link mintGrant} owns the rule and
+ * {@link verifyScopedAssertion} owns its one exception.
+ *
  * **A failed ceremony spends its challenge.** {@link takeChallenge} marks an
  * entry spent the moment it is read, whether or not what follows verifies —
  * deliberate, since handing the same challenge back for a second guess is
@@ -296,9 +302,22 @@ function isForeignKeyViolation(error: unknown, constraint: string): boolean {
  * **`supersedes` is the row this browser is trading in**, so that verifying
  * again replaces its grant rather than adding a second live one. It must
  * come from the request's own `LOCK_COOKIE` and from nowhere else — never a
- * form field: a browser may only ever end a grant it can already prove it
- * holds, and a value a page could choose would let any unlocked reader end
- * any grant whose id they had learned.
+ * form field, which a page could choose. That rule is a discipline rather
+ * than a check: nothing here confirms the id belongs to the caller, and
+ * nothing could — under ADR-0012 the id *is* the whole credential, so naming
+ * a grant and holding it are the same act, and `/lock-now` already ends one
+ * on the strength of the cookie alone. What keeps a page from aiming this at
+ * somebody else is `HttpOnly` and `SameSite=Lax` on the cookie, not this
+ * function.
+ *
+ * **The delete before the insert has a cost, and it is the accepted one.** A
+ * caller that refuses *after* this returns — {@link removePasskey} finding
+ * its target already gone, say — leaves the browser holding a cookie whose
+ * row is deleted, so a refused action locks it where it used to stay
+ * unlocked. That is the same direction every other failure here takes: no
+ * live grant rather than two. It also changes what "Start again" means on
+ * the messages that follow such a refusal — unlock again, rather than retry
+ * the step.
  *
  * **The passkey this credits can vanish after the caller last checked it.**
  * `verifyScopedAssertion` reads the row, verifies the assertion, and only

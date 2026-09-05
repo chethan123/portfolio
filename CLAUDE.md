@@ -99,9 +99,9 @@ concluding a grep found a violation):
 the chart plots. The only deletes in the app are narrow, named cases — a person owning no accounts,
 an instrument that lost an alias race, a passkey a family member removes (`removePasskey`,
 `app/lib/lock.server.ts`) — plus rows that are scaffolding rather than history: `upload_draft` rows
-(swept at 24h, consumed at commit) and `unlock_grant` rows (swept once past their idle window,
-deleted outright by the explicit "Lock now" control, `app/routes/lock-now.ts`, and cascaded away
-with the passkey that minted them). Accounts are *closed* (`closed_at`), never removed.
+(swept at 24h, consumed at commit) and `unlock_grant` rows (swept once past their idle window, superseded when the browser
+holding one verifies another assertion, deleted outright by the explicit "Lock now" control,
+`app/routes/lock-now.ts`, and cascaded away with the passkey that minted them). Accounts are *closed* (`closed_at`), never removed.
 
 **`app/routes.ts` is hand-written route configuration, not file-based routing.** Dropping a file
 into `app/routes/` does nothing until an entry is added there — the most common wasted hour in this
