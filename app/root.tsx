@@ -89,7 +89,31 @@ function normalizedPathname(pathname: string): string {
   return stripped === "" ? "/" : stripped;
 }
 
-/** Every response the lock middleware lets through carries this. */
+/**
+ * Every response the lock middleware lets through carries this — and it is
+ * worth being exact about what that buys, because it is less than this slice
+ * originally claimed.
+ *
+ * Firefox and Safari both refuse a `no-store` document entry to their
+ * back/forward caches outright, so there the header genuinely does stop a
+ * restore handing a rendered page back with no request. **Chrome does not.**
+ * `CacheControlNoStoreEnterBackForwardCache` has been enabled by default
+ * since 2025; Chrome shortens such an entry's life to three minutes and
+ * evicts it when *this browser's* cookies change, unconditionally for an
+ * `HttpOnly` one. That covers this browser locking itself. It does not cover
+ * the case the lock exists for — a passkey or a grant removed from another
+ * device, where nothing about this cookie jar changes and no eviction fires.
+ * Chromium's own explainer for the feature says so in as many words ("sites
+ * may log users out on the server side and clients may be unaware of this")
+ * and names the answer: re-check on `pageshow` when `event.persisted`.
+ *
+ * That guard is ticket 06's, beside the re-entry trigger it already owns.
+ * The header stays because it is free and it is the whole answer in two
+ * engines of three; what changes is that no document here may go on saying
+ * it is the answer in all of them. ADR-0012's statement of the limit — the
+ * lock ends the reading, not every pixel already drawn — was right, and this
+ * is that limit with its edges drawn where they actually fall.
+ */
 function withNoStore(response: Response): Response {
   response.headers.set("Cache-Control", "no-store");
   return response;

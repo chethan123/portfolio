@@ -193,11 +193,16 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
  * a passkey will not run outside a secure context anyway, so the attributes
  * cost this feature nothing.
  *
- * **Whether a `Secure` cookie actually survives the dev loop's plain-http
- * localhost is unverified.** Some browsers carve out `localhost` as a
- * secure-enough origin for `Secure` cookies and some do not, and this has not
- * actually been tried in a running browser — say so plainly rather than
- * claim it works on the strength of an argument alone.
+ * **The dev loop's plain-http localhost was tried, not argued.** Chromium
+ * 141 accepts, stores and returns this cookie over `http://localhost` and
+ * over `http://127.0.0.1` alike — both are potentially-trustworthy origins,
+ * so `Secure` is not the bar there that it is elsewhere. The control run
+ * says the observation is real rather than an artefact: the same cookie with
+ * the prefix and *without* `Secure` is refused outright, as the prefix's own
+ * rules require. Firefox and WebKit were not available to try and are
+ * therefore still unknown; Firefox has historically been stricter about
+ * loopback addresses that are not literally `localhost`, so `127.0.0.1` is
+ * the case to re-check first if the dev loop ever misbehaves there.
  */
 export const LOCK_COOKIE = "__Host-unlock_grant";
 
