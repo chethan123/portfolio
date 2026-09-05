@@ -1022,7 +1022,7 @@ sequenceDiagram
     IR->>IR: validate ALL, collect field-level refusals
     Note right of IR: Nothing is written unless everything<br/>passes: a refusal must re-render the<br/>same list of questions it was asked.
     alt creating a feed instrument
-        IR->>Y: probeSymbols(every new feed symbol)
+        IR->>Y: socketProbe(every new feed symbol, over the worker's socket)
         Y-->>IR: per symbol: ok{quoteType} | non-usd{currency} | unavailable
         Note right of IR: non-usd REFUSES creation.<br/>unavailable does NOT block — the next<br/>refresh marks it stale like any symbol.
     end

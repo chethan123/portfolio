@@ -320,6 +320,18 @@ and JSON-parsed. Its outcomes, in the order they are told apart:
 - The body cap throws a plain error naming it; any status but `200` throws a plain error carrying
   the answer's `error` text, so the ledger records what Yahoo said, or what the worker refused;
   `200` is the parsed body.
+- **Added on building [ticket 06](price-worker/06-the-app-cutover.md): a sixth outcome, and the
+  budget above does not cover it.** If the worker dies *after* its response headers and *before*
+  the declared body completes, Node emits neither `error` nor `end` on that request, and the abort
+  cannot rescue a request already closed — measured on 24.12.0: a five-hundred-millisecond budget
+  still pending at three seconds, the only events `res data`, `res aborted`, `req close` and an
+  unlistened `res error`. It matters more than a stuck call, because the refresh holds a Postgres
+  advisory lock while it waits: every later refresh would answer `busy` until the process
+  restarted, and the worker's own memory limit (ticket 05) is what makes the death reachable on a
+  large answer. So the request's `close` is a backstop that rejects if nothing else has settled,
+  which is safe because `end` precedes `close` on every successful answer, one write or two
+  hundred. The text this replaces — that the budget bounds the whole exchange — was true of the
+  design and not of the platform.
 
 Budgets are per call, by kind — **quotes 15 s, history 35 s, probe 10 s**. History runs past the
 worker's 30 s watchdog so the app reads the worker's `504` and its reason rather than its own abort
@@ -680,7 +692,10 @@ first" notes, the restore path with the worker running, the from-`app` socket ch
 never runs on, and the log signatures of a dead worker, a dead proxy and an unreachable Yahoo under
 the `Price provider failed` stem; `docs/runbook.md` and `docs/developing.md` the crash-loop entries,
 the `.env.worker` recipe and the without-a-worker behaviour; `README.md`, `server/db.ts`'s pool
-comment and the poller's header follow. `docs/data-model.md` is untouched: this slice adds no table.
+comment and the poller's header follow. ~~`docs/data-model.md` is untouched: this slice adds no
+table.~~ **Corrected on building [ticket 06](price-worker/06-the-app-cutover.md):** it adds no
+table, but its price-refresh bullet named this module as the library's only importer, and ticket 06
+moves that. The bullet is rewritten there.
 
 ## 7. Out of scope
 

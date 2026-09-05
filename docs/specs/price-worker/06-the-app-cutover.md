@@ -37,7 +37,7 @@ the inline numbers, and open the line before editing near it.
 | `CLAUDE.md:85` | `:88` | the single-site bullet; `:85` is blank |
 | `docs/operating.md:738` | `:921` | the `Price provider failed` bullet under Logs; `:738` is inside the lock section |
 | `docs/operating.md:761` | `:949` | the "There is no price line in the log" heading; `:761` is mid-paragraph in the lock section |
-| `docs/developing.md:331` | `:334` | the `## Recipes` heading; `:331` is a `---` rule |
+| `docs/developing.md:331` | `:334` | the `## Recipes` heading; `:331` is blank and `:332` is the `---` rule |
 | `docs/developing.md:564-571` | `:568-578` | the paragraph on what reads `.env`; the Vite claim itself is at `:571` |
 | `server/config.ts:150-153` | `:281-287` | `getConfig()`'s lazy memoisation; `:150-153` is the `AUTH_GATE`/`PORT` schema |
 | `app/routes/refresh.ts:45-47` | `:40-42` | the navigate-redirect branch — **the file is 45 lines long, so `:46-47` do not exist** |

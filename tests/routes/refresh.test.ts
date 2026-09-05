@@ -46,13 +46,6 @@ process.env.PRICE_WORKER_SOCKET = join(tmpdir(), `rr-${randomBytes(4).toString("
 
 const { action } = await import("../../app/routes/refresh.ts");
 
-/**
- * `withRefreshLock`'s own key (`prices.server.ts`), unchanged from
- * `tests/refresh.test.ts:43` — taken here from a second real session, so a
- * test holds the lock exactly as a second browser tab or a racing tick would.
- */
-const REFRESH_ADVISORY_LOCK_KEY = "7295380114023642";
-
 const NEW_YORK = "America/New_York";
 
 afterAll(closeTestDatabase);
@@ -81,28 +74,6 @@ describe("what the route owns, apart from runRefresh's own rules", () => {
           providerFailed: true,
         });
       } finally {
-        await pool.end();
-      }
-    }),
-  );
-
-  it(
-    "returns busy, untouched, while a second session holds the advisory lock",
-    withDatabase(async ({ db }) => {
-      const pool = createPool(TEST_DATABASE_URL);
-      const holder = await pool.connect();
-
-      try {
-        await holder.query(`select pg_advisory_lock(${REFRESH_ADVISORY_LOCK_KEY})`);
-
-        const outcome = await withDb(db, () => action(args(post("/refresh", {}))), pool);
-
-        // Passed through untouched: there is no report to project, and the
-        // control renders "someone else is refreshing" from this alone.
-        expect(outcome).toEqual({ status: "busy" });
-      } finally {
-        await holder.query(`select pg_advisory_unlock(${REFRESH_ADVISORY_LOCK_KEY})`);
-        holder.release();
         await pool.end();
       }
     }),

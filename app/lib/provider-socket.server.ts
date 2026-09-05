@@ -107,9 +107,33 @@ const BODY_CAP_BYTES: Record<AskKind, number> = {
 const BATCH_SIZE = 100;
 
 /**
+ * `${message}` cut here, mirroring the worker's own `ERROR_TEXT_LIMIT`
+ * (`server/price-worker.ts`) — undici's own errors nest the real reason in
+ * `cause`, so a message this long is already unusual on the writing side and
+ * doubly so once it has crossed the wire and back.
+ */
+const ERROR_TEXT_LIMIT = 1000;
+
+/**
+ * A non-`200` response's `error` field, made safe for `console.error` and
+ * `price_backfill.error` (a `text` column nothing prunes) the same way the
+ * worker makes its own log line safe — control characters collapsed to a
+ * space, the whole cut to {@link ERROR_TEXT_LIMIT}. The worker's own
+ * `logSafe`/`ERROR_TEXT_LIMIT` reasons that `JSON.stringify` already escapes
+ * these on the wire, which is true right up until this module `JSON.parse`s
+ * the body back — the first code to do that, and so the first place this
+ * reading side needs the same guard the worker's writing side already has.
+ */
+function scrubProviderReason(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, ERROR_TEXT_LIMIT);
+}
+
+/**
  * One call to the worker: `POST /${kind}` over the unix socket, the body
- * JSON, the answer JSON, one `AbortSignal.timeout` bounding the whole
- * exchange. No retry and nothing remembered between calls (module header).
+ * JSON, the answer JSON. `AbortSignal.timeout` bounds the exchange only
+ * while the socket is still open — it cannot rescue a request the peer has
+ * already closed, which is why outcome 6 below exists. No retry and nothing
+ * remembered between calls (module header).
  *
  * `getConfig()` is read here, inside the call, never at module scope — a
  * test sets `PRICE_WORKER_SOCKET` before its first call reaches this
@@ -132,10 +156,28 @@ const BATCH_SIZE = 100;
  *  3. The body cap spent mid-response is a plain `Error` naming it, the
  *     request destroyed with no further read.
  *  4. A status other than `200` is a plain `Error` carrying the body's own
- *     `error` text, or the bare status when the body carries none.
+ *     `error` text — scrubbed and capped ({@link scrubProviderReason}) before
+ *     it reaches an `Error.message`, since it can be a forged or
+ *     upstream-supplied string, not only the worker's own — or the bare
+ *     status when the body carries none.
  *  5. `200` is the parsed body, whatever shape it is — the caller's own Zod
  *     is the only gate past this, exactly as it was for the client this
- *     replaces.
+ *     replaces. A non-empty body that fails to parse as JSON at all, `200` or
+ *     not, is a plain `Error` instead of a silent `undefined` — swallowing it
+ *     would read back as an empty quotes batch or a `no-history` answer,
+ *     neither of which is true.
+ *  6. The peer destroying the connection after the response headers arrive
+ *     but before the declared body completes raises neither `error` nor
+ *     `end` — the worker dying mid-answer (an OOM kill, a restart, a bare
+ *     `SIGKILL`) looks exactly like this, and by the time it happens the
+ *     request is already closed, past any rescue the budget could offer.
+ *     `req`'s own `close` event still fires — Node's own signal that the
+ *     request is finished, one way or another — so it is the backstop: a
+ *     plain `Error` naming the kind, settled only if nothing has settled
+ *     already. On the success path `res`'s `end` always fires before `req`'s
+ *     `close` (verified directly against this Node for both a one-write
+ *     answer and one written in 200 chunks), so this can never race ahead of
+ *     a good answer and reject it.
  */
 export async function ask(
   kind: AskKind,
@@ -185,11 +227,28 @@ export async function ask(
         res.on("end", () => {
           settle(() => {
             const text = Buffer.concat(chunks).toString("utf8");
+
+            // Empty is not malformed: a raw `clientError` response line
+            // (`server/price-worker.ts`'s own, past the parser entirely) has
+            // no body at all, and the `String(res.statusCode)` fallback below
+            // is exactly the right answer for that. A *non-empty* body that
+            // fails to parse is different — a bug or a compromise, never an
+            // expected shape — and swallowing it here would make a `200`
+            // report empty quotes with nothing logged, or an unparseable
+            // history answer read back as `no-history`, `price-provider
+            // .server.ts`'s own "a lie the ledger repeats."
             let parsed: unknown;
-            try {
-              parsed = text.length > 0 ? JSON.parse(text) : undefined;
-            } catch {
+            if (text.length === 0) {
               parsed = undefined;
+            } else {
+              try {
+                parsed = JSON.parse(text);
+              } catch (error) {
+                reject(
+                  new Error(`${kind} response from the worker was not valid JSON`, { cause: error }),
+                );
+                return;
+              }
             }
 
             if (res.statusCode !== 200) {
@@ -197,7 +256,19 @@ export async function ask(
                 typeof parsed === "object" &&
                 parsed !== null &&
                 typeof (parsed as { error?: unknown }).error === "string"
-                  ? (parsed as { error: string }).error
+                  ? // Scrubbed and capped here, on the READING side: the
+                    // worker scrubs and caps what it logs (`server/price
+                    // -worker.ts`'s own `logSafe`/`ERROR_TEXT_LIMIT`) on the
+                    // assumption that `JSON.stringify` already escapes every
+                    // control character on the wire — true until something
+                    // `JSON.parse`s the body back, which is exactly what this
+                    // line does. Unscrubbed, a forged or upstream-supplied
+                    // `error` field carrying a raw newline would print as
+                    // several physical lines under the very `Price worker:`
+                    // stem `docs/operating.md` tells the operator to grep,
+                    // once it reaches `console.error` (`prices.server.ts`) or
+                    // `price_backfill.error`, a column nothing prunes.
+                    scrubProviderReason((parsed as { error: string }).error)
                   : String(res.statusCode);
               reject(new Error(reason));
               return;
@@ -234,6 +305,17 @@ export async function ask(
       }
 
       settle(() => reject(error));
+    });
+
+    // Backstop for outcome 6 (function header): the peer can destroy the
+    // socket after the response headers land and before the declared body
+    // completes, and Node then emits neither `res.on("error")` nor
+    // `res.on("end")` — nothing above ever fires, and without this the
+    // promise hangs forever. `close` always fires once the request is done,
+    // settled or not, so this is a no-op on every path that already settled
+    // (the `settled` guard) and the one path that rescues a mid-answer death.
+    req.on("close", () => {
+      settle(() => reject(new Error(`the worker's connection closed before the ${kind} answer completed`)));
     });
 
     req.end(payload);
