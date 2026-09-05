@@ -30,6 +30,8 @@ import { makeFixtures } from "./support/fixtures.ts";
 import { createDatabase } from "~/lib/db.server";
 import { ProviderUnreachable } from "~/lib/price-provider.server";
 
+import { yahooPriceProvider } from "~/lib/price-provider.server";
+
 import type { Kysely, KyselyPlugin } from "kysely";
 import type { TestContext } from "./support/database.ts";
 import type { Database } from "~/lib/db.server";
@@ -558,7 +560,7 @@ const history = (closes: Array<[string, string]>): ProviderHistory => ({
  * private fields; and a JavaScript throw rather than a row the constraint
  * refuses, because under `withDatabase` the test body is one transaction that
  * `inTransaction` joins — a Postgres refusal would abort it and nothing after
- * could be observed (`refresh-quotes.test.ts:768-777` is the precedent).
+ * could be observed (`refresh-quotes.test.ts:1022-1049` is the precedent).
  *
  * `price_backfill` is the intercept point because only the batch inserts one:
  * `refreshQuotes` writes `price_daily` through the same handle, so a wrapper
@@ -722,6 +724,41 @@ describe("what a batch writes to the spine", () => {
       // would state a close that never happened, where carry-forward already
       // answers those dates honestly.
       expect(rows.map((row) => row.date)).toEqual(["2024-06-10", "2024-06-11", "2024-06-12"]);
+    }),
+  );
+
+  it(
+    "drops a lone bar dated before range.from rather than letting it close the gap for good",
+    withDatabase(async (context) => {
+      const { db } = context;
+      const instrument = await heldFrom(context, { symbol: "OLDCO", asOf: "2024-06-14" });
+
+      // The real adapter, not the fake above: the floor lives in
+      // `toProviderHistory`, which only the real adapter runs. The stub plays
+      // `clientCharting`'s role (`tests/price-provider.test.ts:909`).
+      const provider = yahooPriceProvider(async () => ({
+        quote: async () => [],
+        chart: async () => ({
+          meta: { currency: "USD" },
+          quotes: [{ date: new Date("1971-01-01T13:30:00Z"), close: 1 }],
+        }),
+      }));
+
+      const report = await backfillCloses(provider, NEW_YORK, db);
+
+      // `no-history` exactly as an empty chart would answer: a pre-range-only
+      // response is indistinguishable from none, so the lone bar writes
+      // nothing.
+      expect(
+        await db.selectFrom("price_daily").selectAll().where("instrument_id", "=", instrument.id).execute(),
+      ).toEqual([]);
+      expect(report.outcomes.no_history).toBe(1);
+
+      // The ledger says `no_history`, but the coverage gap is real and never
+      // closes: the instrument stays on the list a person reads at
+      // Settings → Prices.
+      const gaps = await backfillGaps(db);
+      expect(gaps.map((gap) => gap.id)).toContain(instrument.id);
     }),
   );
 });
@@ -1133,12 +1170,21 @@ describe("a refresh, which is quotes and then one batch", () => {
 
       const provider = fakeProvider(() => history([["2024-06-10", "250.0000"]]), [quote("VTI")]);
 
-      const report = await refreshPrices(
-        provider,
-        NEW_YORK,
-        { quotes: true },
-        refusingInsertInto(db, "price_backfill"),
-      );
+      // Within the seven-day window of the quote's own `asOf` (module
+      // header): otherwise today's real clock would refuse the quote's
+      // close, which is not what this test is about.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-05T21:00:00Z") });
+      let report;
+      try {
+        report = await refreshPrices(
+          provider,
+          NEW_YORK,
+          { quotes: true },
+          refusingInsertInto(db, "price_backfill"),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
 
       // The quotes committed before the batch ran, and the button renders an
       // error as "the figures above are unchanged" — which would be false.

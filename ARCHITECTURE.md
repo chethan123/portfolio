@@ -341,7 +341,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:637` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:678` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 | Enforcing the lock | `app/root.tsx`'s `middleware` export — `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it — the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
 
@@ -365,7 +365,7 @@ grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:1179` (`priceFreshness`) selects from `holding_valued` — not to value anything,
+- `prices.server.ts:1264` (`priceFreshness`) selects from `holding_valued` — not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -842,7 +842,7 @@ Three rules follow, and the codebase holds all three:
   two deliberate exceptions, and both are narrow enough to state: `format.ts:203` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
   and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
-  and `price-provider.server.ts:250` floats a yield or a per-share dividend rate only to decide
+  and `price-provider.server.ts:269` floats a yield or a per-share dividend rate only to decide
   whether the column it is bound for can hold it, returning the original string when it fits and
   null when it does not.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
@@ -1551,7 +1551,10 @@ transaction (§9). The check is therefore load-bearing rather than defensive.
 
 A past `price_daily` row *can* be rewritten, and that is not a violation: it is only ever rewritten
 with the provider's own price for the day that provider says it belongs to, so a rewrite is idempotent
-unless the provider itself revises a close — which is a correction, not corruption.
+unless the provider itself revises a close — which is a correction, not corruption. Bounded, since
+spec 0018 §3.1, to seven days either side of today's market date: past that a claimed date is not
+a correction but a different day asserted. A past day so skipped is filled later only while the
+instrument is still a backfill candidate; a future one is beyond any batch, whose range ends today.
 
 ### 7.4 Observability
 
@@ -1594,7 +1597,7 @@ makes that tolerable is that swapping it is a day's work — which is only true 
 the sole thing the write path imports. Both methods are required, not optional: a provider that
 cannot answer history is not this application's provider, and an optional method would let a batch be
 skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:933`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:1015`), deliberately, to pin the static-versus-instance shape the
 adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
 client hands back.
 

@@ -51,6 +51,37 @@ describe("reading a price", () => {
     expect(quoteFor({ symbol: "DELISTED", currency: "USD" })).toBeNull();
   });
 
+  it("drops a price at the ceiling rather than clamping it", () => {
+    // `quote.price` is numeric(20, 4) — sixteen integer digits is the first
+    // figure it cannot hold, and an overflow would abort the refresh
+    // transaction for every instrument, not just this one. Dropped, not
+    // clamped: the quote comes back absent and the symbol goes stale exactly
+    // as it does when no price arrives at all.
+    expect(quoteFor({ symbol: "GARBAGE", regularMarketPrice: 1e16 })).toBeNull();
+  });
+
+  it("refuses a foreign currency even when the price is over the ceiling", () => {
+    // The two guards meet on one quote, and their order decides what a person
+    // creating the instrument is told. Dropped for its size first, the quote
+    // comes back absent, `probeVerdicts` reads that as `unavailable`, and the
+    // resolver creates the instrument — where `non-usd` refuses it. Spec 0018
+    // §1 lists that refusal among the things this slice does not change.
+    expect(() =>
+      toProviderQuote(
+        { symbol: "VWRL.L", currency: "GBP", regularMarketPrice: 10 ** 16 },
+        FETCHED_AT,
+      ),
+    ).toThrow(CurrencyRefused);
+  });
+
+  it("keeps a price that sits just below the ceiling", () => {
+    // The ceiling bounds what cannot be stored and nothing else — a guard
+    // that rounded honest data away would be the more expensive bug.
+    const quote = quoteFor({ symbol: "WIDE", regularMarketPrice: 9999999999999998 });
+
+    expect(quote?.price).toBe("9999999999999998.0000");
+  });
+
   it("declines a payload it does not recognise", () => {
     expect(quoteFor({ nothing: "useful" })).toBeNull();
   });
@@ -571,6 +602,57 @@ describe("reading a day of history", () => {
     );
 
     expect(closes).toEqual([{ date: "2024-06-11", close: "10.0000" }]);
+  });
+
+  it("drops a bar before the range's start and keeps the day inside it", () => {
+    // The mirror of the `until` cut. `writeBackfilledCloses` inserts where
+    // absent, so a bar dated before `range.from` would land as a row and take
+    // the instrument out of the candidate set for good — the gap predicate
+    // is satisfied by any row at or before first-held.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-05-31", 10), bar("2024-06-07", 11)] }, {
+        from: "2024-06-01",
+        until: "2024-12-31",
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-07", close: "11.0000" }]);
+  });
+
+  it("keeps a bar dated exactly at the range's start", () => {
+    // `range.from` is first-held minus the seven-day lead, and the lead exists
+    // because the bar that closes a gap may be the deepest one in the range —
+    // first-held on a Monday after a holiday run puts it at or near `from`
+    // exactly. An exclusive floor would drop it, leaving the gap open while
+    // the ledger recorded a fill: the very failure the floor exists to stop.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-06-01", 9), bar("2024-06-07", 11)] }, {
+        from: "2024-06-01",
+        until: "2024-12-31",
+      }),
+    );
+
+    expect(closes).toEqual([
+      { date: "2024-06-01", close: "9.0000" },
+      { date: "2024-06-07", close: "11.0000" },
+    ]);
+  });
+
+  it("judges a bar against its market date, not the instant's UTC date", () => {
+    // 01:00Z on 2024-06-01 is the evening of 2024-05-31 in New York, so the
+    // bar belongs to a day before the range starts. Comparing the instant's
+    // UTC date instead would keep it — the same zone confusion the quote
+    // path's window guard has to avoid, on the other side of the seam.
+    // Written out rather than through `bar`, which stamps its own session
+    // open: the whole point is an instant at an hour `bar` cannot express.
+    const closes = closesOf(
+      historyOf({ quotes: [{ date: new Date("2024-06-01T01:00:00Z"), close: 9 }, bar("2024-06-07", 11)] }, {
+        from: "2024-06-01",
+        until: "2024-12-31",
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-07", close: "11.0000" }]);
   });
 
   it("skips a bar with no close rather than writing a row for it", () => {
