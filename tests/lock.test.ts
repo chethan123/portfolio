@@ -377,6 +377,20 @@ describe("grants", () => {
       expect(await readGrant(grant.id, db)).toBeUndefined();
     }),
   );
+
+  it(
+    "deletes only the one grant it is given, leaving a second browser's own grant live — ticket 06's 'Lock now' must never lock the whole household",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
+      const thisOne = await seedUnlockGrant({ passkeyId: passkey.credentialId });
+      const anotherBrowser = await seedUnlockGrant({ passkeyId: passkey.credentialId });
+
+      await deleteGrant(thisOne.id, db);
+
+      expect(await readGrant(thisOne.id, db)).toBeUndefined();
+      expect(await readGrant(anotherBrowser.id, db)).toBeDefined();
+    }),
+  );
 });
 
 /**
@@ -599,9 +613,53 @@ describe("unlocking", () => {
       }
 
       // Evicted, not merely unspent: a spent-or-expired refusal would be the
-      // wrong sentence here and would mean the cap did not actually apply.
+      // wrong sentence here and would mean the cap did not actually apply —
+      // this is the "unlock" purpose's own budget (finding 2's partition),
+      // exercised in isolation from the other three.
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(first.challenge), db));
       expect(refusal.fieldErrors.form).toMatch(/never issued/);
+    }),
+    20_000,
+  );
+
+  it(
+    "a flood of unlock challenges cannot evict a live enrol challenge (finding 2's partition)",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const enrol = await enrolmentAssertionOptions(db);
+
+      // The one purpose an un-granted browser can reach at all, flooded past
+      // its own budget — the exact repro finding 2 describes against
+      // `/unlock` itself, minted straight against the domain module here.
+      for (let i = 0; i < 501; i++) {
+        await unlockOptions(db);
+      }
+
+      // Not evicted: the enrol challenge minted before the flood still
+      // verifies, rather than refusing "never issued" for a confirmation
+      // that really was issued.
+      const { grant } = await beginEnrolment("Second phone", { assertion: assertionResponse(enrol.challenge) }, db);
+      expect(grant).toBeDefined();
+    }),
+    20_000,
+  );
+
+  it(
+    "a flood of unlock challenges cannot evict a live remove challenge (finding 2's partition)",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const remove = await removalAssertionOptions(credentialId, db);
+
+      for (let i = 0; i < 501; i++) {
+        await unlockOptions(db);
+      }
+
+      const { grant } = await removePasskey(
+        credentialId,
+        { assertion: assertionResponse(remove.challenge), confirmRemoval: "true" },
+        db,
+      );
+      expect(grant).toBeDefined();
     }),
     20_000,
   );
@@ -679,7 +737,7 @@ describe("enrolling", () => {
   it(
     "lets a request with no grant enrol before any passkey exists, and refuses once one does",
     withDatabase(async ({ db }) => {
-      const begun = await beginEnrolment("Kitchen iPad", undefined, db);
+      const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
       expect(begun.grant).toBeUndefined();
 
       const completed = await completeRegistration(registrationResponse(begun.options.challenge), db);
@@ -689,7 +747,7 @@ describe("enrolling", () => {
       expect(completed.grant).toBeDefined();
       expect(await isLocked(db)).toBe(true);
 
-      const refusal = await refusalOf(() => beginEnrolment("Second phone", undefined, db));
+      const refusal = await refusalOf(() => beginEnrolment("Second phone", { assertion: undefined, acknowledgement: "true" }, db));
       expect(refusal.fieldErrors.form).toMatch(/fresh confirmation/);
     }),
   );
@@ -697,7 +755,7 @@ describe("enrolling", () => {
   it(
     "issues a registration challenge that decodes to a full 32 bytes",
     withDatabase(async ({ db }) => {
-      const { options } = await beginEnrolment("Kitchen iPad", undefined, db);
+      const { options } = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
       expect(decodedByteLength(options.challenge)).toBe(32);
     }),
   );
@@ -705,7 +763,7 @@ describe("enrolling", () => {
   it(
     "asks for a platform authenticator, required verification and no attestation",
     withDatabase(async ({ db }) => {
-      const { options } = await beginEnrolment("Kitchen iPad", undefined, db);
+      const { options } = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
       expect(options.authenticatorSelection?.authenticatorAttachment).toBe("platform");
       expect(options.authenticatorSelection?.userVerification).toBe("required");
       expect(options.attestation).toBe("none");
@@ -715,9 +773,58 @@ describe("enrolling", () => {
   it(
     "refuses an empty label without minting or storing anything",
     withDatabase(async ({ db }) => {
-      const refusal = await refusalOf(() => beginEnrolment("", undefined, db));
+      const refusal = await refusalOf(() => beginEnrolment("", { assertion: undefined, acknowledgement: "true" }, db));
       expect(refusal).toBeInstanceOf(ValidationError);
       expect(await isLocked(db)).toBe(false);
+    }),
+  );
+
+  it(
+    "refuses a label carrying a NUL byte before any ceremony could run (finding 3)",
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(() => beginEnrolment("Kitchen\u0000iPad", { assertion: undefined, acknowledgement: "true" }, db));
+      expect(refusal).toBeInstanceOf(ValidationError);
+      // Refused at this end of the ceremony, not after `completeRegistration`'s
+      // own insert — the browser never even creates a credential.
+      expect(await isLocked(db)).toBe(false);
+    }),
+  );
+
+  it(
+    "refuses a label carrying a newline",
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(() => beginEnrolment("Kitchen\niPad", { assertion: undefined, acknowledgement: "true" }, db));
+      expect(refusal).toBeInstanceOf(ValidationError);
+    }),
+  );
+
+  it(
+    "refuses a label carrying a lone surrogate",
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(() => beginEnrolment("Kitchen\uD800iPad", { assertion: undefined, acknowledgement: "true" }, db));
+      expect(refusal).toBeInstanceOf(ValidationError);
+    }),
+  );
+
+  it(
+    "refuses the household's first passkey without the acknowledgement ticked (finding 11)",
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(() => beginEnrolment("Kitchen iPad", { assertion: undefined }, db));
+      expect(refusal).toBeInstanceOf(ValidationError);
+      expect(refusal.fieldErrors.form).toMatch(/tick that acknowledgement/);
+      expect(await isLocked(db)).toBe(false);
+    }),
+  );
+
+  it(
+    "ignores the acknowledgement once the household already holds a passkey — enrolling a second changes nothing for anybody",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const assertionOptions = await enrolmentAssertionOptions(db);
+      const assertion = assertionResponse(assertionOptions.challenge);
+
+      const { options } = await beginEnrolment("Laptop", { assertion: assertion }, db);
+      expect(options.challenge).toBeTruthy();
     }),
   );
 
@@ -728,7 +835,7 @@ describe("enrolling", () => {
       const assertionOptions = await enrolmentAssertionOptions(db);
       const assertion = assertionResponse(assertionOptions.challenge);
 
-      const { options, grant } = await beginEnrolment("Laptop", assertion, db);
+      const { options, grant } = await beginEnrolment("Laptop", { assertion: assertion }, db);
 
       expect(options.excludeCredentials?.map((c) => c.id)).toEqual([credentialId]);
       if (grant === undefined) throw new Error("expected the verified assertion to mint a grant");
@@ -741,7 +848,7 @@ describe("enrolling", () => {
     withDatabase(async ({ db, seedPasskey }) => {
       await seedFixturePasskey(seedPasskey);
       const assertionOptions = await enrolmentAssertionOptions(db);
-      const { options } = await beginEnrolment("Laptop", assertionResponse(assertionOptions.challenge), db);
+      const { options } = await beginEnrolment("Laptop", { assertion: assertionResponse(assertionOptions.challenge) }, db);
 
       // A distinct credential id from the one proving the assertion above —
       // "none" attestation carries no signature, so a second, unrelated
@@ -763,7 +870,7 @@ describe("enrolling", () => {
   it(
     "records backup eligibility from what verification actually reported",
     withDatabase(async ({ db }) => {
-      const begun = await beginEnrolment("Kitchen iPad", undefined, db);
+      const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
       await completeRegistration(registrationResponse(begun.options.challenge), db);
 
       const [row] = await listPasskeys(db);
@@ -780,7 +887,7 @@ describe("enrolling", () => {
     withDatabase(async ({ db, seedPasskey }) => {
       await seedFixturePasskey(seedPasskey);
       const assertionOptions = await enrolmentAssertionOptions(db);
-      const { options } = await beginEnrolment("Laptop", assertionResponse(assertionOptions.challenge), db);
+      const { options } = await beginEnrolment("Laptop", { assertion: assertionResponse(assertionOptions.challenge) }, db);
 
       const refusal = await refusalOf(() =>
         completeRegistration(registrationResponse(options.challenge), db),
@@ -799,7 +906,7 @@ describe("enrolling", () => {
   it(
     "refuses a bootstrap registration once another passkey landed while it was in flight",
     withDatabase(async ({ db, seedPasskey }) => {
-      const begun = await beginEnrolment("Kitchen iPad", undefined, db);
+      const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
 
       // Simulates a second bootstrap enrolment committing in between —
       // ticket 01's `passkey_bootstrap_idx` is what closes the genuinely
@@ -830,7 +937,7 @@ describe("enrolling", () => {
       const unlockOpts = await unlockOptions(db);
       const scopedToUnlock = assertionResponse(unlockOpts.challenge);
 
-      const refusal = await refusalOf(() => beginEnrolment("Laptop", scopedToUnlock, db));
+      const refusal = await refusalOf(() => beginEnrolment("Laptop", { assertion: scopedToUnlock }, db));
       expect(refusal.fieldErrors.form).toMatch(/not issued for this action/);
     }),
   );
@@ -864,7 +971,7 @@ describe("enrolling", () => {
   it(
     "refuses a registration verified against a wrong expected origin",
     withDatabase(async ({ db }) => {
-      const begun = await beginEnrolment("Kitchen iPad", undefined, db);
+      const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
 
       mockPublicOrigin(DIFFERENT_PORT_ORIGIN);
       const refusal = await refusalOf(() =>
@@ -877,7 +984,7 @@ describe("enrolling", () => {
   it(
     "refuses a registration whose relying-party id does not match this instance, storing nothing",
     withDatabase(async ({ db }) => {
-      const begun = await beginEnrolment("Kitchen iPad", undefined, db);
+      const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
 
       const refusal = await refusalOf(() =>
         completeRegistration(registrationResponse(begun.options.challenge, { rpID: "attacker.example.com" }), db),
@@ -1072,7 +1179,7 @@ describe("hostile responses", () => {
     "refuses an empty object rather than throwing when its assertion authorises an enrolment",
     withDatabase(async ({ db, seedPasskey }) => {
       await seedFixturePasskey(seedPasskey);
-      const refusal = await refusalOf(() => beginEnrolment("New device", {}, db));
+      const refusal = await refusalOf(() => beginEnrolment("New device", { assertion: {} }, db));
       expect(refusal.fieldErrors.form).toMatch(/could not be read/);
     }),
   );
@@ -1148,8 +1255,8 @@ describe("duplicate credential id", () => {
       let bodyFailed = false;
 
       try {
-        const beginA = await beginEnrolment("Device A", undefined, trxA);
-        const beginB = await beginEnrolment("Device B", undefined, trxB);
+        const beginA = await beginEnrolment("Device A", { assertion: undefined, acknowledgement: "true" }, trxA);
+        const beginB = await beginEnrolment("Device B", { assertion: undefined, acknowledgement: "true" }, trxB);
 
         // A's bootstrap registration lands, uncommitted — a tentative row
         // whose fate B cannot yet know.

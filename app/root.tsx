@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   Link,
   Links,
@@ -7,7 +8,9 @@ import {
   Scripts,
   ScrollRestoration,
   redirect,
+  useFetcher,
   useLocation,
+  useRevalidator,
   useRouteError,
   useRouteLoaderData,
 } from "react-router";
@@ -22,14 +25,16 @@ import {
   SettingsIcon,
   UploadIcon,
 } from "~/components/icons";
+import { LockNowControl } from "~/components/lock-now-control";
 import { MaskingToggle } from "~/components/masking-toggle";
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
-import { RETURN_PARAM } from "~/lib/lock";
+import { LOCK_NOW_ACTION, RETURN_PARAM, UNLOCK_PATH } from "~/lib/lock";
 import { clearedLockCookie, isLocked, readLockCookie, touchGrant } from "~/lib/lock.server";
 import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
 import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { startPricePoller } from "~/lib/price-poller.server";
+import { watchReentry } from "~/lib/reentry";
 import { readMaskingPolicy } from "~/lib/settings.server";
 import { getConfig } from "../server/config.ts";
 
@@ -66,7 +71,7 @@ import "./app.css";
  * see {@link lockMiddleware}'s own header for the two cases this array
  * cannot name because they never reach it at all.
  */
-export const LOCK_EXEMPT_PATHS: readonly string[] = ["/unlock", "/healthz"];
+export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
 
 /**
  * Normalises a pathname the way the router itself matches route paths,
@@ -90,13 +95,34 @@ function normalizedPathname(pathname: string): string {
 }
 
 /**
+ * Whether `pathname` is the unlock screen — used by the loader below to skip
+ * reads a browser holding no grant has no business triggering, and by
+ * `Layout` to skip the chrome around it. Deliberately its own check rather
+ * than a lookup into {@link LOCK_EXEMPT_PATHS}: that array answers "does the
+ * lock middleware guard this path", which `/healthz` is also on and which
+ * neither of these two questions is — `Layout`'s own header already makes
+ * this argument for the chrome; the loader's reads are a third question that
+ * only happens to share today's answer, not a reason to fold three questions
+ * into one array.
+ */
+function isUnlockPath(pathname: string): boolean {
+  return normalizedPathname(pathname) === UNLOCK_PATH;
+}
+
+/**
  * Every response the lock middleware lets through carries this — and it is
  * worth being exact about what that buys, because it is less than this slice
  * originally claimed.
  *
- * Firefox and Safari both refuse a `no-store` document entry to their
- * back/forward caches outright, so there the header genuinely does stop a
- * restore handing a rendered page back with no request. **Chrome does not.**
+ * Firefox refuses a `no-store` document entry to its back/forward cache
+ * outright, regardless of protocol. Safari/WebKit's refusal is narrower than
+ * that: `Source/WebCore/history/BackForwardCache.cpp` guards it on
+ * `document->url().protocolIs("https")`, so the identical response over
+ * plain HTTP — `http://localhost` included — is left eligible for its cache.
+ * This app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost`/
+ * `127.0.0.1` (`server/config.ts`), so in production Safari does refuse the
+ * cache too; it is the plain-HTTP development loop where it does not.
+ * **Chrome admits such a page regardless of protocol.**
  * `CacheControlNoStoreEnterBackForwardCache` has been enabled by default
  * since 2025; Chrome shortens such an entry's life to three minutes and
  * evicts it when *this browser's* cookies change, unconditionally for an
@@ -139,7 +165,7 @@ function withNoStore(response: Response): Response {
  * grant is actually gone.
  */
 function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Response {
-  const target = new URL("/unlock", url);
+  const target = new URL(UNLOCK_PATH, url);
   if (method === "GET" || method === "HEAD") {
     target.searchParams.set(RETURN_PARAM, `${url.pathname}${url.search}`);
   }
@@ -251,6 +277,34 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
 export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
 
 /**
+ * The unlock screen's own answer — never the household's. `Layout` renders no
+ * chrome for this route (its own header explains why), but React Router
+ * serialises whatever this loader returns regardless of what `Layout` goes on
+ * to do with it, so removing the chrome hid the *consumers* of `gated` and
+ * `firstRun` without touching the hydration payload a browser holding no
+ * grant can still read out of the page source. Each field here is this same
+ * loader's own existing fail-safe default for "the read did not happen" —
+ * `firstRun: null` (no step to nag about), `masked: true` and
+ * `maskingPolicy: "masked"` (of the two ways to be wrong, a page of dots
+ * cannot expose anything) — chosen again for the same reason: none of them
+ * hands a proven-nothing browser a fact about the household. `gated: true` and
+ * `hasPasskey: false` (ticket 06) are the two fields with no existing failure
+ * default to reuse, so each gets a fresh one on the same principle: `gated:
+ * true` is the value that keeps `OpenInstanceBanner` off, and `hasPasskey:
+ * false` is the value that keeps the lock-now control and the re-entry effect
+ * off — both moot in practice, since `Layout`'s bare-shell branch for this
+ * route drops every control regardless of what either field says, but the
+ * type this loader returns has to agree with the branch that does read them.
+ */
+const UNLOCK_SCREEN_ROOT_DATA = {
+  gated: true,
+  firstRun: null as FirstRunStep,
+  masked: true,
+  maskingPolicy: "masked" as MaskingPolicy,
+  hasPasskey: false,
+};
+
+/**
  * What the shell around every page needs: whether anything guards the
  * instance, whether it is set up yet, and whether this browser is masked.
  *
@@ -263,6 +317,19 @@ export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
  * after hydration would produce (story 30). The policy read fails to
  * *masked*: of the two ways to be wrong with the database down, a page of
  * dots cannot expose anything.
+ *
+ * **The unlock screen gets none of this.** `isUnlockPath` below is checked
+ * after starting the price poller and before any other read: a browser
+ * holding no grant can reach only this one route, and can hammer it, so
+ * skipping `firstRunStep` and the masking-policy read here is a saved
+ * database round trip on exactly the request an un-granted browser controls
+ * — not only a data-shape decision. `startPricePoller()` runs first and
+ * unconditionally regardless of that branch: it is the *only* server-side
+ * path every render passes through while an instance is locked and nobody
+ * has unlocked it yet, since every other route's loader is refused before it
+ * ever runs (the middleware above throws before calling `next()`); skipping
+ * it here would mean prices never refresh for a household that has not yet
+ * unlocked anything today.
  */
 export async function loader({ request }: Route.LoaderArgs) {
   // The quote refresh loop (§6.2), started here because root's loader is the
@@ -270,6 +337,9 @@ export async function loader({ request }: Route.LoaderArgs) {
   // under `react-router-serve`). Idempotent, not awaited, cannot throw:
   // polling must never be able to fail a page render.
   startPricePoller();
+
+  const url = new URL(request.url);
+  if (isUnlockPath(url.pathname)) return UNLOCK_SCREEN_ROOT_DATA;
 
   let firstRun: FirstRunStep = null;
 
@@ -292,9 +362,41 @@ export async function loader({ request }: Route.LoaderArgs) {
     console.error("Masking policy read failed; masking this render:", error);
   }
 
+  // Whether the household holds a passkey at all (ticket 06) — the same
+  // question the lock middleware above already asked to let this loader run
+  // at all, asked again here rather than reused: react-router 7.18.2 does
+  // let a value travel from a middleware to the loader behind it
+  // (`createContext`/`RouterContextProvider`, both plain exports, not
+  // `unstable_`), so the second read is not forced by the framework. It
+  // stays because of the test harness instead — `tests/support/routes.ts`'s
+  // `args()` calls a loader directly, without running middleware, so a
+  // context-fed loader could not be tested that way; moving this to
+  // `createContext` would push these assertions into `servedThrough`-style
+  // tests instead. Fails toward *not* drawing the control: unlike the
+  // middleware, this is not the boundary — hiding a control on a database
+  // hiccup costs a family member one screen's worth of chrome and, with it,
+  // the re-entry effect below that gates on the same flag: a page rendered
+  // while this read throws carries no visibility trigger and no `pageshow`
+  // re-check for its whole lifetime, since the effect's deps do not change
+  // again until a navigation. Never a figure, though — there is no reason to
+  // fail toward showing a button that clears a grant which may be exactly
+  // what is protecting this render.
+  let hasPasskey = false;
+  try {
+    hasPasskey = await isLocked();
+  } catch (error) {
+    console.error("Lock check failed; hiding the lock-now control rather than guessing:", error);
+  }
+
   // Read here rather than in the banner, because a component cannot: the value
   // is an environment variable and the browser has no environment.
-  return { gated: getConfig().AUTH_GATE === "external", firstRun, masked, maskingPolicy };
+  return {
+    gated: getConfig().AUTH_GATE === "external",
+    firstRun,
+    masked,
+    maskingPolicy,
+    hasPasskey,
+  };
 }
 
 /**
@@ -387,6 +489,121 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const firstRun =
     rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
+  /**
+   * The one screen rendered before any grant is proven — `LOCK_EXEMPT_PATHS`
+   * above is what lets the middleware serve it at all, and the chrome around
+   * it assumes the opposite of that: the nav rail links to Holdings,
+   * Analysis and Income; Upload assumes an account already exists to receive
+   * a statement; the masking toggle writes `document.cookie` *before* any
+   * network round trip, which on this screen would be a browser that has
+   * proved nothing genuinely changing persistent state and then bouncing;
+   * the first-run prompt and the open-instance banner both read off setup
+   * state — which of three configurations the household is in, whether
+   * anything guards the instance at all — that a browser holding no grant
+   * has no business learning (finding 3). Fifteen interactive elements, all
+   * dead ends, one of them worse than dead.
+   *
+   * **Hiding the chrome is not what keeps that setup state unread.** This
+   * branch only decides what renders; `rootData` for this route is the
+   * loader's own neutral `UNLOCK_SCREEN_ROOT_DATA` (the loader's own header),
+   * so the fact that `firstRun` and the banner's `gated` go unused here is a
+   * second, redundant guard rather than the one thing standing between a
+   * proven-nothing browser and the hydration payload.
+   *
+   * Checked through {@link isUnlockPath} rather than reusing
+   * `LOCK_EXEMPT_PATHS` itself: `/healthz` is on that list too and never
+   * reaches `Layout` at all — it renders no component — so "the lock does
+   * not guard this path" and "this path gets no chrome" are two different
+   * questions that only happen to share an answer for `/unlock` today;
+   * folding them into one array would make a future exemption's chrome a
+   * coincidence of that array rather than a decision someone made.
+   *
+   * Placed here, in `Layout`, rather than inside `unlock.tsx`'s own
+   * component — the existing precedent one paragraph up, suppressing the
+   * first-run prompt under `/settings`, draws the same line: the chrome is
+   * assembled in exactly one place for every route, and a route earns its
+   * way out of a piece of it here rather than rendering past a shell it was
+   * handed. It also pre-empts ticket 06's lock-now control, which is drawn
+   * "in both places `MaskingToggle` is rendered" and only while the instance
+   * is locked at all — both of which are true of this screen, and a stray
+   * copy of `MaskingToggle` here would have carried it along for free,
+   * offering to lock a browser that is already locked and, worse, discarding
+   * the return address ticket 03 encoded to get the reader back to it.
+   */
+  const isUnlockScreen = isUnlockPath(pathname);
+
+  // Whether the household holds a passkey at all — not `CONTEXT.md`'s
+  // `Locked`, which is a fact about one browser at one moment, the opposite
+  // of what gates the control below: a browser rendering this chrome may
+  // itself be perfectly unlocked, and the household holding a passkey is
+  // exactly the condition that makes an instance lock at all. `undefined`
+  // reads as `false` here for the same reason `firstRun` above tolerates a
+  // data-less error boundary: neither a browser mid-navigation nor one
+  // rendering an error page has a passkey count to show one way or the
+  // other, and "no control" is the fail-safe answer to that gap, not "show
+  // one that may not apply".
+  const hasPasskey = rootData?.hasPasskey === true;
+
+  // Named directly in the effect's dependency array below, not stashed in a
+  // ref: both are `useCallback`-memoised on stable deps in react-router
+  // 7.18.2 (`useRevalidator` on `[dataRouterContext.router]`; `useFetcher`'s
+  // own `submit` on `[fetcherKey, submitImpl]`, where `fetcherKey` never
+  // changes here and `submitImpl` is `useSubmit()`'s callback, itself
+  // memoised on the basename, current route id, `router.fetch` and
+  // `router.navigate`) and neither changes for the life of this app, so
+  // there is no identity churn to route around — and even if one did
+  // change, naming it here is correct: a re-subscribe, not a bug.
+  const { submit: submitLock } = useFetcher();
+  const { revalidate } = useRevalidator();
+
+  /**
+   * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
+   * the whole argument for what each half does and does not promise; this
+   * effect is only the wiring.
+   *
+   * **The two halves are gated on different conditions, on purpose.** The
+   * `pageshow` half (`askServer`, wired unconditionally below) only
+   * revalidates — cheap and correct in every state — so it installs
+   * whenever this is not the unlock screen (this function's own comment on
+   * {@link isUnlockScreen} above), full stop. It must **not** also require
+   * `hasPasskey`: that flag is baked into this page at render time, and it
+   * is exactly the value that goes stale — a page rendered while the
+   * household held no passkey installs no listener at all under the old,
+   * single guard, and a passkey enrolled from another browser afterward
+   * would leave a page restored from the back/forward cache with no grant
+   * and no server round trip, the precise gap `pageshow` exists to close.
+   * The `visibilitychange`/`postLock` half stays gated on `hasPasskey`,
+   * passed as `null` to {@link watchReentry} to skip it entirely otherwise:
+   * posting a lock when nothing is enrolled would send the reader on a
+   * pointless `/lock-now` → `/unlock` → `/` round trip for a browser that
+   * was never locked in the first place.
+   */
+  useEffect(() => {
+    if (isUnlockScreen) return;
+
+    return watchReentry(
+      // A fetcher submission, not `useSubmit`'s navigation mode: react-router
+      // 7.18.2's `startNavigation` unconditionally aborts the one pending
+      // navigation's `AbortController` the instant another navigation
+      // starts (`pendingNavigationController`, in the router core
+      // `react-router` ships), so a reader who taps a link while a
+      // navigation-mode lock post is in flight can cancel `deleteGrant()`
+      // before it runs and land on the page they asked for with their
+      // grant still live. A fetcher's request instead lives in its own
+      // entry in `fetchControllers`, keyed by the fetcher and entirely
+      // untouched by `startNavigation`, so a navigation elsewhere cannot
+      // cancel it — and a redirect a fetcher's action returns is still
+      // picked up by the router (`findRedirect` over the fetcher's own
+      // results) and followed, so the reader still lands on the unlock
+      // screen. The chrome's own "Lock now" **button** stays a real
+      // `<form method="post">` (`LockNowControl`) — it must keep working
+      // with JavaScript off, which is why it is a form and not a submit
+      // call at all; only this automatic, re-entry-triggered post changes.
+      hasPasskey ? () => submitLock(null, { method: "post", action: LOCK_NOW_ACTION }) : null,
+      () => revalidate(),
+    );
+  }, [isUnlockScreen, hasPasskey, submitLock, revalidate]);
+
   return (
     <html lang="en">
       <head>
@@ -403,56 +620,72 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
-        <div className="app">
-          <nav className="app-rail" aria-label="Primary">
-            <Brand search={owners} />
-            <ul className="app-nav">
-              <NavItems items={NAVIGATION} search={owners} />
-            </ul>
-            <ul className="app-nav app-nav--footer">
-              <NavItems items={FOOTER_NAVIGATION} />
-            </ul>
-            {/* In the rail's foot beside Settings rather than in its nav list:
-                it is a control, not a destination, and a `<li>` among the links
-                would announce it as one. */}
-            <MaskingToggle className="app-rail-masking" />
-
-            <Link className="button app-rail-action" to="/upload">
-              <UploadIcon />
-              Upload statement
-            </Link>
-          </nav>
-
-          <div className="app-canvas">
-            {/* Below 1024px the rail is gone, so the bar carries the mark and
-             * the one action the rail's foot would have held. */}
-            <header className="app-topbar">
-              <Brand search={owners} />
-              <div className="app-topbar-actions">
-                <MaskingToggle />
-                <Link className="button" to="/upload">
-                  <UploadIcon />
-                  Upload
-                </Link>
-              </div>
-            </header>
-
-            {rootData?.gated === false ? <OpenInstanceBanner /> : null}
-            <main className="app-main">
-              {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
-              {children}
-            </main>
+        {isUnlockScreen ? (
+          // The bare shell: no nav, no toggles, no upload button, no
+          // first-run prompt, no banner — see this function's own comment
+          // above. `.app`/`.app-main` are reused rather than new classes
+          // invented for one screen, so this gets the same centred column
+          // and padding every other page's content sits in without pulling
+          // in a single rail- or topbar-specific rule.
+          <div className="app">
+            <main className="app-main">{children}</main>
           </div>
+        ) : (
+          <div className="app">
+            <nav className="app-rail" aria-label="Primary">
+              <Brand search={owners} />
+              <ul className="app-nav">
+                <NavItems items={NAVIGATION} search={owners} />
+              </ul>
+              <ul className="app-nav app-nav--footer">
+                <NavItems items={FOOTER_NAVIGATION} />
+              </ul>
+              {/* In the rail's foot beside Settings rather than in its nav list:
+                  it is a control, not a destination, and a `<li>` among the links
+                  would announce it as one. */}
+              <MaskingToggle className="app-rail-masking" />
+              {/* Beside masking, never mistakable for it (ticket 06): drawn
+                  only while the household holds a passkey at all. */}
+              {hasPasskey ? <LockNowControl className="app-rail-lock" /> : null}
 
-          {/* The phone's nav: a bottom bar, which is what every mobile mock
-           * does — no drawer and no hamburger anywhere in the set (§13.1). */}
-          <nav className="app-bottomnav" aria-label="Primary">
-            <ul className="app-nav">
-              <NavItems items={NAVIGATION} search={owners} />
-              <NavItems items={FOOTER_NAVIGATION} />
-            </ul>
-          </nav>
-        </div>
+              <Link className="button app-rail-action" to="/upload">
+                <UploadIcon />
+                Upload statement
+              </Link>
+            </nav>
+
+            <div className="app-canvas">
+              {/* Below 1024px the rail is gone, so the bar carries the mark and
+               * the one action the rail's foot would have held. */}
+              <header className="app-topbar">
+                <Brand search={owners} />
+                <div className="app-topbar-actions">
+                  <MaskingToggle />
+                  {hasPasskey ? <LockNowControl /> : null}
+                  <Link className="button" to="/upload">
+                    <UploadIcon />
+                    <span>Upload</span>
+                  </Link>
+                </div>
+              </header>
+
+              {rootData?.gated === false ? <OpenInstanceBanner /> : null}
+              <main className="app-main">
+                {firstRun ? <FirstRunPrompt step={firstRun} /> : null}
+                {children}
+              </main>
+            </div>
+
+            {/* The phone's nav: a bottom bar, which is what every mobile mock
+             * does — no drawer and no hamburger anywhere in the set (§13.1). */}
+            <nav className="app-bottomnav" aria-label="Primary">
+              <ul className="app-nav">
+                <NavItems items={NAVIGATION} search={owners} />
+                <NavItems items={FOOTER_NAVIGATION} />
+              </ul>
+            </nav>
+          </div>
+        )}
         <ScrollRestoration />
         <Scripts />
         {/* The worker exists for its offline page alone and stores nothing on

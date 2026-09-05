@@ -35,6 +35,16 @@ export type RootData = {
    * one.
    */
   masked?: boolean;
+  /**
+   * Whether the household holds a passkey at all (ticket 06) — a household
+   * fact, not `CONTEXT.md`'s `Locked` (a fact about one browser); it gates
+   * the "Lock now" control and the reentry guard beside it. Optional for the
+   * same reason `masked` is: every test written before the lock existed
+   * passes root data without it, and `undefined` reads as "no passkey" the
+   * same way `Layout` itself treats it, so none of them start asserting a
+   * control they never seeded a passkey for.
+   */
+  hasPasskey?: boolean;
 };
 
 /**

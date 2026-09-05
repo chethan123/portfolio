@@ -341,7 +341,7 @@ healthcheck run the fixed default path; a developer's `.env` can point it under 
 
 `socketProvider(): PriceProvider` — `getQuotes(symbols)` is `ask("quotes", { symbols })`, then each
 entry through `toProviderQuote`, skipping `CurrencyRefused` exactly as the adapter does
-(`:719-731`); a body that is not an array is an empty answer, `probeSymbol`'s rule (`:677`).
+(`:719-731`); a body that is not an array is an empty answer, `probeVerdicts`'s rule (`:680`).
 `getDailyCloses(symbol, range, tz)` is `ask("history", { symbol: matchKey(symbol), from: range.from
 })` — `matchKey` (`:756`) and `period1`-only (`:748-755`) stay app-side because the worker must not
 import `app/lib`; a refusal matching `isMissingHistory`'s stems (`:787-793`, made exportable) is

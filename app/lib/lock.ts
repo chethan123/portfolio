@@ -27,6 +27,11 @@
  * name. `RETURN_PARAM` and the two window constants stay here because
  * ticket 04's screen and ticket 06's script genuinely read them in the
  * browser.
+ *
+ * **`LOCK_NOW_ACTION` and `UNLOCK_PATH` join them for the same reason
+ * `masking.ts` names `MASKING_ACTION` once**: each is a route two or more
+ * files independently have to agree on, and a string typed out twice is a
+ * route rename either one could silently miss.
  */
 
 /** How long an unlock grant lives while idle, in milliseconds. Fifteen minutes. */
@@ -37,6 +42,18 @@ export const IDLE_WINDOW_MS = 15 * 60 * 1000;
  * action rather than merely navigating, in milliseconds. Sixty seconds.
  */
 export const REENTRY_GRACE_MS = 60 * 1000;
+
+/**
+ * How long a passkey's label may be — `lock.server.ts`'s own bound
+ * (`requiredText("A label", LABEL_MAX_LENGTH)`), stated here rather than
+ * there for the reason every other constant in this file already is:
+ * Settings → Passkeys' `<input>` needs the identical number for its own
+ * `maxLength`, in browser-reachable component code, and a value import of a
+ * `.server` module from there ships that module's server code into the
+ * client bundle or breaks the build (CLAUDE.md's bundle-boundary rule) — the
+ * exact failure `npm run build` catches if this ever moves back.
+ */
+export const LABEL_MAX_LENGTH = 60;
 
 /**
  * `passkey.transports`, split back into a list — `null` reads as none
@@ -72,3 +89,19 @@ export function joinTransports(transports: readonly string[] | undefined): strin
  * which query key that is.
  */
 export const RETURN_PARAM = "redirectTo";
+
+/**
+ * Where the chrome's "Lock now" control and the reentry guard's own post
+ * (`~/lib/reentry.ts`) both target. See this file's own header for why it
+ * lives here rather than beside either poster.
+ */
+export const LOCK_NOW_ACTION = "/lock-now";
+
+/**
+ * The unlock screen's own path — named once rather than typed out at each of
+ * its four call sites: `app/root.tsx`'s `LOCK_EXEMPT_PATHS`, `redirectToUnlock`
+ * and `isUnlockPath`, and `app/routes/lock-now.ts`'s own redirect once the
+ * grant is gone. The same argument this file's header makes for
+ * `LOCK_NOW_ACTION` applied to the string actually left typed out four times.
+ */
+export const UNLOCK_PATH = "/unlock";

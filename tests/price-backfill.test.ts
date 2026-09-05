@@ -28,6 +28,7 @@ import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/da
 import { makeFixtures } from "./support/fixtures.ts";
 
 import { createDatabase } from "~/lib/db.server";
+import { ProviderUnreachable } from "~/lib/price-provider.server";
 
 import { yahooPriceProvider } from "~/lib/price-provider.server";
 
@@ -734,7 +735,7 @@ describe("what a batch writes to the spine", () => {
 
       // The real adapter, not the fake above: the floor lives in
       // `toProviderHistory`, which only the real adapter runs. The stub plays
-      // `clientCharting`'s role (`tests/price-provider.test.ts:788`).
+      // `clientCharting`'s role (`tests/price-provider.test.ts:909`).
       const provider = yahooPriceProvider(async () => ({
         quote: async () => [],
         chart: async () => ({
@@ -916,7 +917,7 @@ describe("what a batch asks for", () => {
       // evening in New York — the case a UTC truncation would get wrong, and
       // the reason the end goes through `marketDateOf` rather than `toISOString`.
       // Only `Date`: `pg` times its connect attempts with `setTimeout`, and the
-      // connection this runs on is a real one (`price-poller.test.ts:141-149`).
+      // connection this runs on is a real one (`price-poller.test.ts:156-163`).
       vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-05T02:00:00Z") });
       try {
         await backfillCloses(provider, NEW_YORK, db);
@@ -1214,6 +1215,67 @@ describe("a refresh, which is quotes and then one batch", () => {
       // The attempt that was interrupted leaves no ledger row and is simply
       // next time's candidate.
       expect(await db.selectFrom("price_backfill").selectAll().execute()).toEqual([]);
+    }),
+  );
+
+  it(
+    "aborts the batch without ledgering anything for or after the unreachable candidate, and warns once",
+    withDatabase(async (context) => {
+      const { db, seedAccount, seedInstrument, seedPositionSet } = context;
+      const account = await seedAccount();
+      const first = await seedInstrument({ symbol: "FIRST", priceSource: "feed" });
+      const second = await seedInstrument({ symbol: "SECOND", priceSource: "feed" });
+      const third = await seedInstrument({ symbol: "THIRD", priceSource: "feed" });
+
+      // Deepest gap first, so the batch works them in this order and the
+      // provider dies on the one in the middle.
+      await seedPositionSet({
+        account,
+        asOf: "2024-01-31",
+        holdings: [{ instrument: first, quantity: "1.00000000" }],
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2024-02-29",
+        holdings: [{ instrument: second, quantity: "1.00000000" }],
+      });
+      await seedPositionSet({
+        account,
+        asOf: "2024-03-29",
+        holdings: [{ instrument: third, quantity: "1.00000000" }],
+      });
+
+      const provider = fakeProvider((symbol) => {
+        if (symbol === "SECOND") throw new ProviderUnreachable("connect ECONNREFUSED");
+        return history([["2024-01-25", "10.0000"]]);
+      });
+
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        const report = await refreshPrices(provider, NEW_YORK, { quotes: false }, db);
+
+        // The batch stopped on the second candidate: one attempt counted, and
+        // the retry clock is not charged for the third, which was never asked.
+        expect(report.backfill.batchFailed).toBe(true);
+        expect(report.backfill.attempted).toBe(1);
+        expect(report.backfill.outcomes.filled).toBe(1);
+        expect(provider.asked.map((asked) => asked.symbol)).toEqual(["FIRST", "SECOND"]);
+
+        const ledger = await db.selectFrom("price_backfill").select("instrument_id").execute();
+        expect(ledger).toEqual([{ instrument_id: first.id }]);
+
+        // One warning, naming the cause — and not the composition's ordinary
+        // "the quotes it ran beside are unaffected" line, which would be false
+        // here whenever the quotes call hit the same dead worker.
+        expect(error).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.join(" "))).toContain("connect ECONNREFUSED");
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+      }
     }),
   );
 });

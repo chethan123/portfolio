@@ -18,6 +18,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
 import { args, get, post, redirectTo, responseOf, servedThrough } from "../support/routes.ts";
+import { saveMaskingPolicy } from "~/lib/settings.server";
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
@@ -77,6 +78,12 @@ describe("the shell's loader", () => {
       // this is the one that cannot put a household's balances on a screen
       // (spec 0007).
       expect(data.masked).toBe(true);
+
+      // The lock-now control's own read (ticket 06) has a different duty:
+      // failing this shut costs a family member one control on the chrome,
+      // never a figure, so the fail-safe answer here is "no control" rather
+      // than "show one that clears a grant which may not exist".
+      expect(data.hasPasskey).toBe(false);
     } finally {
       await unreachable.destroy();
     }
@@ -90,6 +97,104 @@ describe("the shell's loader", () => {
       await seedPerson();
 
       expect((await loader(args(get("/")))).firstRun).toBe("accounts");
+    }),
+  );
+
+  it(
+    "reports hasPasskey once the household holds a passkey, so the lock-now control has something to do",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: new Uint8Array([1, 1, 1]) });
+
+      expect((await loader(args(get("/")))).hasPasskey).toBe(true);
+    }),
+  );
+
+  it(
+    "reports no passkey while the household holds none at all",
+    withDatabase(async () => {
+      expect((await loader(args(get("/")))).hasPasskey).toBe(false);
+    }),
+  );
+});
+
+describe("the shell's loader on /unlock — the household's setup state must not reach the hydration payload", () => {
+  /**
+   * React Router serialises whatever this function returns, whatever
+   * `Layout` goes on to render with it — so the object this asserts against
+   * *is* the payload, not a proxy for it. A markup assertion would pass
+   * whether or not this fix existed, since `Layout` never prints any of
+   * these fields for `/unlock` either way (this file's own header on
+   * `isUnlockPath`) — which is exactly the gap the finding this test pins
+   * named: hiding the chrome hid the consumers, not the data.
+   */
+  it(
+    "answers gated, firstRun, masked, maskingPolicy and hasPasskey with fixed neutral values, never the household's real ones",
+    withDatabase(async ({ db, seedPasskey, seedPerson }) => {
+      // Real state that would answer differently for every field below, had
+      // this loader read any of it for `/unlock`: a person with no account
+      // yet answers "accounts" for `/`, AUTH_GATE defaults to "none" in this
+      // suite (vitest.config.ts), which answers `gated: false` for `/`, and a
+      // seeded passkey answers `hasPasskey: true` for `/`.
+      await seedPerson();
+      await seedPasskey({ publicKey: new Uint8Array([2, 2, 2]) });
+      await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
+
+      const real = await loader(args(get("/")));
+      expect(real).toMatchObject({
+        gated: false,
+        firstRun: "accounts",
+        masked: false,
+        maskingPolicy: "unmasked",
+        hasPasskey: true,
+      });
+
+      const unlockScreen = await loader(args(get("/unlock")));
+      expect(unlockScreen).toEqual({
+        gated: true,
+        firstRun: null,
+        masked: true,
+        maskingPolicy: "masked",
+        hasPasskey: false,
+      });
+    }),
+  );
+
+  it(
+    "answers the same neutral values even when the database cannot be reached at all",
+    async () => {
+      const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
+      try {
+        const data = await withDb(unreachable, () => loader(args(get("/unlock"))));
+        expect(data).toEqual({
+          gated: true,
+          firstRun: null,
+          masked: true,
+          maskingPolicy: "masked",
+          hasPasskey: false,
+        });
+      } finally {
+        await unreachable.destroy();
+      }
+    },
+  );
+
+  it(
+    "still starts the price poller on a request to /unlock — the one route every render passes through before anyone has unlocked anything",
+    withDatabase(async () => {
+      // `SLOT` is a `Symbol.for` registry key (`price-poller.server.ts`'s own
+      // header on why), so it names the identical global from here without
+      // importing anything internal, and without ever forcing a real tick —
+      // `requestRefresh()` would reach the live Yahoo provider by default,
+      // which a test must not do. Undefined until something starts the
+      // poller; `afterEach(stopPricePoller)` above deletes it again after
+      // every test in this file, this one included.
+      const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
+      const host = globalThis as unknown as Record<symbol, unknown>;
+      expect(host[POLLER_SLOT]).toBeUndefined();
+
+      await loader(args(get("/unlock")));
+
+      expect(host[POLLER_SLOT]).toBeDefined();
     }),
   );
 });

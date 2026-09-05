@@ -33,8 +33,12 @@
  * `upload_draft`) removes what is already dead, but dead entries are not
  * the only way this map grows: a household's *live* entries are bounded
  * only by request rate unless something else caps them, which is what
- * {@link MAX_LIVE_CHALLENGES} is for. Expiry is enforced again on read,
- * which is the authoritative check.
+ * {@link MAX_LIVE_CHALLENGES_PER_PURPOSE} is for — one budget per purpose,
+ * not one shared across all four, so a flood minting the one purpose an
+ * un-granted browser can reach can never evict a different purpose's
+ * challenge (that budget's own header says why, and what it does not
+ * promise). Expiry is enforced again on read, which is the authoritative
+ * check.
  *
  * **A failed ceremony spends its challenge.** {@link takeChallenge} marks an
  * entry spent the moment it is read, whether or not what follows verifies —
@@ -100,7 +104,7 @@ import { getConfig } from "../../server/config.ts";
 import { readCookie } from "./cookies.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError, parseInput, requiredText } from "./input.server.ts";
-import { IDLE_WINDOW_MS, joinTransports, splitTransports } from "./lock.ts";
+import { IDLE_WINDOW_MS, LABEL_MAX_LENGTH, joinTransports, splitTransports } from "./lock.ts";
 
 /** The household's own name, shown to a password manager as the relying party. */
 const RP_NAME = "Portfolio Tracker";
@@ -457,17 +461,42 @@ type AssertionScope = { kind: "unlock" } | { kind: "enrol" } | { kind: "remove";
  */
 const CHALLENGE_TTL_MS = 2 * 60 * 1000;
 
+/** Every kind a challenge can be minted for — {@link ChallengePurpose} without its per-target fields. */
+type ChallengeKind = ChallengePurpose["kind"];
+
+/** Every {@link ChallengeKind}, so the partition below can sweep each in turn. */
+const CHALLENGE_KINDS: readonly ChallengeKind[] = ["unlock", "enrol", "remove", "register"];
+
 /**
- * The most live challenges this map ever holds at once. A household
- * legitimately minting a challenge is one family member opening one screen
- * — a handful at a time, at most; 500 is not a number any real household
- * gets near. It bounds what a browser flooding `unlockOptions` can grow the
- * map to — the one route reachable by any browser past the gate that has
- * *not* yet unlocked, since ticket 03's middleware does not gate it — so
- * per-mint cost, and so total cost on the one Node process serving the
- * whole household, stays bounded no matter how long a flood runs.
+ * The most live challenges *one purpose* ever holds at once — a budget
+ * partitioned by {@link ChallengeKind}, not one shared across all four. An
+ * un-granted browser can reach exactly one of them: ticket 03's middleware
+ * exempts `/unlock` itself, so `unlockOptions` is the one mint reachable by a
+ * browser holding no grant at all. The household's actual recovery paths —
+ * enrolling another passkey and removing a lost one, both behind the lock —
+ * mint only `enrol`/`remove`/`register` challenges. A single shared budget
+ * with oldest-first eviction let a flood of the one anonymous kind evict the
+ * other three, which is exactly backwards: it let a browser this slice does
+ * not trust yet evict the confirmation a browser it already trusts was
+ * relying on. Partitioning makes that impossible by construction — eviction
+ * below only ever removes an entry of the very kind that is over its own
+ * budget, never another's.
+ *
+ * A household legitimately minting a challenge is one family member opening
+ * one screen — a handful at a time, at most; 500 is not a number any real
+ * household gets near, for any one purpose. **This bounds memory, not
+ * availability, and says so plainly**: a flood that keeps minting one kind's
+ * challenges denies *that kind* for as long as it runs — once its own budget
+ * is full, every fresh mint evicts whatever same-kind challenge came before
+ * it, a legitimate family member's in-flight one included. That is the
+ * honest residual of a single-process, in-memory challenge store; rate
+ * limiting — the fix for a flood itself, rather than for what a flood can
+ * reach — is out of scope for this slice by name (spec 0019's "Out of
+ * Scope"). What partitioning buys is narrower and real: the flood stays
+ * confined to the one door it is reachable through, and never reaches the
+ * two recovery paths sitting behind the lock.
  */
-const MAX_LIVE_CHALLENGES = 500;
+const MAX_LIVE_CHALLENGES_PER_PURPOSE = 500;
 
 type ChallengeEntry = { purpose: ChallengePurpose; expiresAt: number; spent: boolean };
 
@@ -477,28 +506,59 @@ type ChallengeEntry = { purpose: ChallengePurpose; expiresAt: number; spent: boo
  * indistinguishable from one *never issued*, and those refuse with
  * different sentences. A spent entry still leaves the map on the next
  * mint's sweep, once its own TTL passes.
+ *
+ * One `Map` rather than one per {@link ChallengeKind}: expiry sweeping reads
+ * every entry regardless of kind, so a single map keeps that walk to one
+ * pass; only eviction — {@link evictOldestOfKind} below — needs to reason
+ * about one kind at a time, and it does that by filtering this same map
+ * rather than by splitting it.
  */
 const challenges = new Map<string, ChallengeEntry>();
 
 /**
- * Drop everything past its expiry, then — if live entries alone still
- * exceed {@link MAX_LIVE_CHALLENGES} — evict the oldest until they don't.
- * Called from {@link mintChallenge} only — no `setInterval`: a timer would
- * hold the process open for a value nothing else needs between requests,
- * and minting is a moment every ceremony already passes through, exactly as
- * `createDraft`'s sweep of `upload_draft` reads the clock at the one moment
- * it is guaranteed to be asked to. `Map` preserves insertion order, so the
- * first key is the oldest — cheap to find and to drop.
+ * Evict the oldest live entries of exactly one `kind` until that kind alone
+ * is back at {@link MAX_LIVE_CHALLENGES_PER_PURPOSE} — an entry of any other
+ * kind is never even considered, which is the whole of what partitioning the
+ * budget means. `Map` preserves insertion order, so the first matching entry
+ * found while walking it is that kind's oldest; cheap enough, since eviction
+ * only ever runs once a kind is over its own budget, not on every mint.
+ */
+function evictOldestOfKind(kind: ChallengeKind): void {
+  let live = 0;
+  for (const entry of challenges.values()) {
+    if (entry.purpose.kind === kind) live++;
+  }
+
+  while (live > MAX_LIVE_CHALLENGES_PER_PURPOSE) {
+    let oldest: string | undefined;
+    for (const [text, entry] of challenges) {
+      if (entry.purpose.kind === kind) {
+        oldest = text;
+        break;
+      }
+    }
+    if (oldest === undefined) break;
+    challenges.delete(oldest);
+    live--;
+  }
+}
+
+/**
+ * Drop everything past its expiry, then enforce {@link
+ * MAX_LIVE_CHALLENGES_PER_PURPOSE} one {@link ChallengeKind} at a time via
+ * {@link evictOldestOfKind}. Called from {@link mintChallenge} only — no
+ * `setInterval`: a timer would hold the process open for a value nothing
+ * else needs between requests, and minting is a moment every ceremony
+ * already passes through, exactly as `createDraft`'s sweep of `upload_draft`
+ * reads the clock at the one moment it is guaranteed to be asked to.
  */
 function sweepChallenges(now: number): void {
   for (const [text, entry] of challenges) {
     if (entry.expiresAt <= now) challenges.delete(text);
   }
 
-  while (challenges.size > MAX_LIVE_CHALLENGES) {
-    const oldest = challenges.keys().next().value;
-    if (oldest === undefined) break;
-    challenges.delete(oldest);
+  for (const kind of CHALLENGE_KINDS) {
+    evictOldestOfKind(kind);
   }
 }
 
@@ -629,11 +689,33 @@ async function allowCredentialList(
   return rows.map((row) => ({ id: row.credential_id, transports: splitTransports(row.transports) }));
 }
 
+/**
+ * A `PublicKeyCredentialRequestOptionsJSON` this module actually hands out —
+ * narrower than the library's own declared return type by exactly one
+ * property, and truthfully so: {@link authenticationOptionsFor} below never
+ * passes an `extensions` option to `generateAuthenticationOptions`, so the
+ * value it returns never carries that key at all. Declaring the narrower
+ * type here, once, is what lets every consumer of {@link unlockOptions},
+ * {@link enrolmentAssertionOptions} and {@link removalAssertionOptions} — the
+ * unlock screen today, ticket 05's two option builders once they exist — read
+ * `.options` straight into `startAuthentication` with no assertion of their
+ * own. The alternative this replaces was a wide `as
+ * PublicKeyCredentialRequestOptionsJSON` at each such call site, forced by a
+ * typegen quirk unrelated to any of them: react-router's wire-type
+ * serialisation rewrites a loader's `ArrayBuffer`-typed properties, and the
+ * library's own type nests exactly one, `AuthenticationExtensionsClientInputs`
+ * → `prf.eval.first: BufferSource`, deep inside the very `extensions` this
+ * type asserts away. Fixed at the one place the value is actually produced,
+ * the assertion is scoped to the one property it is really about, rather
+ * than blanketing the whole object the way a client-side assertion had to.
+ */
+type UnlockOptions = PublicKeyCredentialRequestOptionsJSON & { extensions?: undefined };
+
 async function authenticationOptionsFor(
   purpose: ChallengePurpose & AssertionScope,
   db: Kysely<Database>,
   expected: RelyingPartyExpectation,
-): Promise<PublicKeyCredentialRequestOptionsJSON> {
+): Promise<UnlockOptions> {
   // Handing every credential id to a browser that has not unlocked is
   // accepted, not hidden: everyone the gate admitted is a family member, and
   // this is what makes a never-enrolled browser locked rather than exempt
@@ -642,25 +724,29 @@ async function authenticationOptionsFor(
   const allowCredentials = await allowCredentialList(db);
   const { bytes } = mintChallenge(purpose);
 
-  return generateAuthenticationOptions({
+  const options = await generateAuthenticationOptions({
     rpID: expected.rpID,
     userVerification: "required",
     challenge: bytes,
     allowCredentials,
   });
+
+  // The one assertion {@link UnlockOptions}'s own header promises: nothing
+  // above ever sets `extensions`, so the library's wider declared return
+  // type is honestly narrower here, in the one value this function actually
+  // produces.
+  return options as UnlockOptions;
 }
 
 /** Options for the unlock screen's one action (spec 0019). */
-export async function unlockOptions(
-  db: Kysely<Database> = getDb(),
-): Promise<PublicKeyCredentialRequestOptionsJSON> {
+export async function unlockOptions(db: Kysely<Database> = getDb()): Promise<UnlockOptions> {
   return authenticationOptionsFor({ kind: "unlock" }, db, expectedRelyingParty());
 }
 
 /** Options for the "prove yourself" step before enrolling another passkey. */
 export async function enrolmentAssertionOptions(
   db: Kysely<Database> = getDb(),
-): Promise<PublicKeyCredentialRequestOptionsJSON> {
+): Promise<UnlockOptions> {
   return authenticationOptionsFor({ kind: "enrol" }, db, expectedRelyingParty());
 }
 
@@ -668,7 +754,7 @@ export async function enrolmentAssertionOptions(
 export async function removalAssertionOptions(
   credentialId: string,
   db: Kysely<Database> = getDb(),
-): Promise<PublicKeyCredentialRequestOptionsJSON> {
+): Promise<UnlockOptions> {
   return authenticationOptionsFor({ kind: "remove", credentialId }, db, expectedRelyingParty());
 }
 
@@ -785,16 +871,31 @@ export async function verifyUnlock(
 // Enrolling
 // ---------------------------------------------------------------------------
 
+/**
+ * A `PublicKeyCredentialCreationOptionsJSON` this module actually hands
+ * out — narrower than the library's own declared return type by exactly one
+ * property, the registration twin of {@link UnlockOptions} above and for
+ * the identical reason: {@link registrationOptionsFor} never passes
+ * `extensions` to `generateRegistrationOptions`, so the value it returns
+ * never carries that key at all. Fixed here, once, at the one place the
+ * value is produced — the same move that type makes for the assertion
+ * options — so that Settings → Passkeys (the one route that hands this to a
+ * browser) derives its own type from {@link beginEnrolment}'s return rather
+ * than importing `@simplewebauthn/server` a second time for a type this
+ * module already narrows correctly.
+ */
+export type RegistrationOptions = PublicKeyCredentialCreationOptionsJSON & { extensions?: undefined };
+
 async function registrationOptionsFor(
   label: string,
   bootstrap: boolean,
   db: Kysely<Database>,
   expected: RelyingPartyExpectation,
-): Promise<PublicKeyCredentialCreationOptionsJSON> {
+): Promise<RegistrationOptions> {
   const excludeCredentials = await allowCredentialList(db);
   const { bytes } = mintChallenge({ kind: "register", label, bootstrap });
 
-  return generateRegistrationOptions({
+  const options = await generateRegistrationOptions({
     rpName: RP_NAME,
     rpID: expected.rpID,
     // The name is the label the person typed, so their password manager
@@ -815,9 +916,49 @@ async function registrationOptionsFor(
     // across different devices and providers is what this household needs.
     excludeCredentials,
   });
+
+  // The one assertion {@link RegistrationOptions}'s own header promises:
+  // nothing above ever sets `extensions`, so the library's wider declared
+  // return type is honestly narrower here, in the one value this function
+  // actually produces.
+  return options as RegistrationOptions;
 }
 
-const labelInput = z.object({ label: requiredText("A label", 60) });
+/**
+ * A label, bounded and trimmed by {@link requiredText} — plus what that
+ * shared helper does not itself refuse. A control character (a NUL byte
+ * among them) or a newline stored in this column is rendered verbatim in
+ * Settings, and a lone surrogate is a value `JSON.stringify`'s own escaping
+ * cannot make round-trip; either one reaches here only after the browser has
+ * *already* created a real credential in the family member's own password
+ * manager (this function refuses before that, {@link completeRegistration}'s
+ * insert refuses only after), which is exactly why the refusal belongs at
+ * this end of the ceremony and not the other.
+ */
+const NO_CONTROL_CHARACTERS_MESSAGE =
+  "A label cannot carry a line break or another control character.";
+const NOT_WELL_FORMED_MESSAGE = "A label cannot carry an incomplete character.";
+
+const labelInput = z.object({
+  label: requiredText("A label", LABEL_MAX_LENGTH)
+    .refine((value) => !/[\p{Cc}]/u.test(value), { message: NO_CONTROL_CHARACTERS_MESSAGE })
+    .refine((value) => value.isWellFormed(), { message: NOT_WELL_FORMED_MESSAGE }),
+});
+
+/**
+ * What {@link beginEnrolment} refuses the household's first passkey with when
+ * `acknowledgement` is not the literal `"true"` — ticket 05's own rule that
+ * the warning shown before that enrolment "is a statement the person must
+ * pass", enforced here rather than left to a client-side `disabled` attribute
+ * a direct POST can simply skip. This is not a second authorisation path for
+ * the *write* — the bootstrap case still needs no assertion, exactly as
+ * spec 0019 says, because there is still nothing to authorise against — it is
+ * the same kind of courtesy gate {@link removePasskey}'s own `confirmRemoval`
+ * already is: a plain "was this actually shown" check, never a credential.
+ */
+const FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE =
+  "Enrolling the household's first passkey locks every other browser immediately — tick " +
+  "that acknowledgement first.";
 
 /**
  * Begin enrolling a passkey: the very first, with nothing to prove, or
@@ -830,6 +971,10 @@ const labelInput = z.object({ label: requiredText("A label", 60) });
  * {@link completeRegistration}'s conditional insert, and the *concurrent*
  * half by migration 0012's `passkey_bootstrap_idx` — neither is enough
  * alone, and that migration's comment on the index is explicit about why.
+ * That same bootstrap case also requires `acknowledgement` to be exactly
+ * `"true"` — see {@link FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE}. Ignored once
+ * the household holds a passkey: the warning this guards is shown only for
+ * the first one, and enrolling a second changes nothing for anybody.
  *
  * Every later enrolment needs `assertion`, verified as scoped to `"enrol"`
  * — which also mints a grant, the same as any verified assertion. The
@@ -838,9 +983,10 @@ const labelInput = z.object({ label: requiredText("A label", 60) });
  */
 export async function beginEnrolment(
   label: string,
-  assertion: unknown,
+  input: { assertion: unknown; acknowledgement?: string },
   db: Kysely<Database> = getDb(),
-): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; grant: UnlockGrant | undefined }> {
+): Promise<{ options: RegistrationOptions; grant: UnlockGrant | undefined }> {
+  const { assertion, acknowledgement } = input;
   const { label: validLabel } = parseInput(labelInput, { label });
 
   const locked = await isLocked(db);
@@ -854,6 +1000,8 @@ export async function beginEnrolment(
       );
     }
     grant = await verifyScopedAssertion(narrowAssertion(assertion), { kind: "enrol" }, db);
+  } else if (acknowledgement !== "true") {
+    throw ValidationError.form(FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE);
   }
 
   const options = await registrationOptionsFor(validLabel, /* bootstrap */ !locked, db, expectedRelyingParty());

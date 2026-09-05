@@ -49,7 +49,25 @@ export default [
     // How the screens open untouched — the masking policy today, §12's theme
     // choice when it lands (spec 0007).
     route("display", "routes/settings/display.tsx"),
+    // The lock's own Settings screen (docs/adr/0012, spec 0019, ticket 05):
+    // list, enrol, remove. Beside Display — it carries no amount, so masking
+    // does not touch it.
+    route("passkeys", "routes/settings/passkeys.tsx"),
   ]),
+
+  // The screen a browser holding no valid grant is shown (docs/adr/0012,
+  // ticket 04) — `LOCK_EXEMPT_PATHS` in app/root.tsx names this exact path so
+  // the lock's own middleware never refuses it. Grouped here, beside the
+  // other routes the lock's own machinery depends on, rather than in nav
+  // order: nobody clicks their way here, the middleware redirects them.
+  route("unlock", "routes/unlock.tsx"),
+
+  // "Lock now" (ticket 06, docs/adr/0012). No UI — the chrome's control and
+  // the reentry guard's own automatic post (`~/lib/reentry.ts`) both target
+  // this, so a press (or the guard, standing in for one) works with
+  // JavaScript off where the control itself is concerned. Grouped beside
+  // `unlock` for the reason above: the lock's own machinery, not nav order.
+  route("lock-now", "routes/lock-now.ts"),
 
   // The masking toggle's writer (spec 0007). No UI — the chrome's control
   // posts here so the toggle works with JavaScript off.
