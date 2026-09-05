@@ -117,9 +117,13 @@ second, unlocked way in.
   the split gains a row.
 - **The grant cookie is `Secure` and `__Host-` prefixed**, where masking's is neither. Masking's
   cookie is deliberately unprefixed and insecure because it carries a preference and an instance
-  genuinely reached over plain http must still get it; this one carries a credential, and WebAuthn
-  will not run outside a secure context anyway, so the attributes cost nothing and the prefix is
-  free.
+  genuinely reached over plain http must still get it; this one carries the id of an unlock row, and
+  WebAuthn will not run outside a secure context anyway, so the attributes cost nothing and the
+  prefix is free.
+- **A live grant is a bearer token**, and the honest limit of one is stated where the row is defined
+  (`migrations/0012_lock.sql`, [`../data-model.md`](../data-model.md)): a copied cookie is as good as
+  the original until the row ends — by its idle window, by the explicit lock action, or with the
+  passkey that minted it.
 - **A browser without a live grant cannot unlock without running the ceremony** once a passkey
   exists — many in-app WebView browsers offer no *completable* ceremony (`app/lib/unlock-ceremony.ts`'s
   own hedge, which this document matches rather than overstating). A browser that already holds one

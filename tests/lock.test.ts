@@ -271,9 +271,9 @@ describe("transports encoding", () => {
 
 describe("the grant cookie", () => {
   // Pinned the way masking's is pinned (tests/masking.test.ts) — the same
-  // kind of test, not the same values: this cookie carries a credential
-  // rather than a preference, so it parts company with masking's on exactly
-  // the two attributes that matter for that (ticket 03).
+  // kind of test, not the same values: this cookie carries the id of a live
+  // unlock rather than a preference, so it parts company with masking's on
+  // exactly the two attributes that matter for that (ticket 03).
   it("carries Secure, HttpOnly and the __Host- prefix, unlike masking's cookie", () => {
     const cookie = lockCookie("a-grant-id");
     expect(cookie).toMatch(/;\s*secure\b/i);
