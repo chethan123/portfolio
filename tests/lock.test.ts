@@ -12,22 +12,28 @@
  * signature outright, which is that file's own rule and would pass a test
  * for the wrong reason.
  *
- * Two tests below (`describe("duplicate credential id"`, `describe("counter
- * concurrency"`) drive genuine cross-connection races against the real test
- * database rather than `withDatabase`'s single rolled-back transaction —
- * the same reason `tests/lock-schema.test.ts` does for `passkey_bootstrap_idx`.
- * Each cleans up its own committed rows at both ends, the way that file
- * does, because both share `tests/support/webauthn.ts`'s one signable
- * credential id with every `withDatabase` test in this file.
+ * Three tests below (`describe("duplicate credential id"`, `describe("counter
+ * concurrency"`, `describe("passkey removed mid-verification"`) drive genuine
+ * cross-connection races against the real test database rather than
+ * `withDatabase`'s single rolled-back transaction — the same reason
+ * `tests/lock-schema.test.ts` does for `passkey_bootstrap_idx`. Each cleans
+ * up its own committed rows at both ends, the way that file does, because
+ * all three share `tests/support/webauthn.ts`'s one signable credential id
+ * with every `withDatabase` test in this file. Each also synchronises
+ * through {@link waitUntilBlocked} — polling real, observable database state
+ * rather than a fixed delay — so the interleaving it pins is not a guess
+ * about timing that a loaded runner can guess wrong.
  */
 import { generateKeyPairSync } from "node:crypto";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { sql, type Kysely } from "kysely";
+
 import { isoCBOR } from "@simplewebauthn/server/helpers";
 import type { AuthenticationResponseJSON, VerifiedAuthenticationResponse } from "@simplewebauthn/server";
 
-import { createDatabase } from "~/lib/db.server";
+import { createDatabase, type Database } from "~/lib/db.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
 import { IDLE_WINDOW_MS, joinTransports, splitTransports } from "~/lib/lock";
 
@@ -903,6 +909,151 @@ describe("removing", () => {
   );
 });
 
+/**
+ * A WebAuthn response is client-submitted JSON, so every exported function
+ * that takes one accepts `unknown` and narrows the outer shape it actually
+ * dereferences (the id, the client data) before reading it — CLAUDE.md's
+ * "Zod at the boundaries only, in the domain module". Each hostile shape
+ * below dereferenced straight into a `TypeError` before that narrowing
+ * existed: a `{}` or a null `response` has no `.response.clientDataJSON` to
+ * read, and a missing `id` reached the database as `undefined`. Every one
+ * of these must be a refusal, never a throw.
+ *
+ * `verifyUnlock` carries all four shapes, since every exported entry point
+ * narrows through the same two functions (`narrowAssertion`,
+ * `narrowRegistration`) in `lock.server.ts`; `completeRegistration`,
+ * `beginEnrolment` and `removePasskey` each carry one, confirming that
+ * every entry point narrows before it dereferences rather than only the
+ * one most directly tested.
+ */
+describe("hostile responses", () => {
+  it(
+    "refuses an empty object rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() => verifyUnlock({}, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a null response field rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() => verifyUnlock({ id: credentialId, response: null }, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a response missing its id rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() =>
+        verifyUnlock({ response: { clientDataJSON: "e30" } }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a clientDataJSON that is not valid base64url rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() =>
+        verifyUnlock({ id: credentialId, response: { clientDataJSON: "@@@ not base64url @@@" } }, db),
+      );
+      // The outer-shape check above passes it through as a string; it is
+      // `decodeChallenge`'s own pre-existing try/catch, unaffected by this
+      // narrowing, that turns the decode failure into this refusal.
+      expect(refusal.fieldErrors.form).toMatch(/client data could not be read/);
+    }),
+  );
+
+  it(
+    "refuses a clientDataJSON that decodes to something other than JSON rather than throwing when unlocking",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const notJson = Buffer.from("not json at all").toString("base64url");
+      const refusal = await refusalOf(() =>
+        verifyUnlock({ id: credentialId, response: { clientDataJSON: notJson } }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/client data could not be read/);
+    }),
+  );
+
+  it(
+    "refuses an empty object rather than throwing when completing a registration",
+    withDatabase(async ({ db }) => {
+      const refusal = await refusalOf(() => completeRegistration({}, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses an empty object rather than throwing when its assertion authorises an enrolment",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() => beginEnrolment("New device", {}, db));
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+    }),
+  );
+
+  it(
+    "refuses an empty object rather than throwing when its assertion authorises a removal, writing nothing",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const refusal = await refusalOf(() =>
+        removePasskey(credentialId, { assertion: {}, confirmRemoval: "true" }, db),
+      );
+      expect(refusal.fieldErrors.form).toMatch(/could not be read/);
+
+      expect(
+        await db.selectFrom("passkey").select("credential_id").where("credential_id", "=", credentialId).execute(),
+      ).toHaveLength(1);
+    }),
+  );
+});
+
+/**
+ * Poll real, observable database state — never a fixed delay — until
+ * `pid`'s own backend is genuinely waiting on a lock. The two-connection
+ * races below need to know transaction B has actually reached its blocking
+ * statement before transaction A resolves the race by committing; a fixed
+ * sleep only guesses that a wait was long enough, and a loaded CI runner is
+ * exactly where that guess reads wrong. Bounded so a genuine deadlock or a
+ * broken assumption fails loudly here rather than hanging the suite.
+ */
+async function waitUntilBlocked(
+  watcher: Kysely<Database>,
+  pid: number,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await sql<{ blocked: boolean }>`
+      select exists (
+        select 1 from pg_stat_activity where pid = ${pid} and wait_event_type = 'Lock'
+      ) as blocked
+    `.execute(watcher);
+    if (result.rows[0]?.blocked === true) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for backend ${pid} to block on a lock — ` +
+          "either the race this test drives no longer contends on the row it expects to, " +
+          "or something is genuinely stuck.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/** The Postgres backend pid a given Kysely handle is running on. */
+async function backendPid(handle: Kysely<Database>): Promise<number> {
+  const result = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(handle);
+  return result.rows[0]!.pid;
+}
+
 describe("duplicate credential id", () => {
   it(
     "refuses a duplicate credential id reaching completeRegistration from two connections at once",
@@ -994,6 +1145,9 @@ describe("counter concurrency", () => {
       try {
         const optionsA = await unlockOptions(trxA);
         const optionsB = await unlockOptions(trxB);
+        // B's own connection, watched below so this test knows — rather than
+        // guesses — the moment its UPDATE actually blocks.
+        const pidB = await backendPid(trxB);
 
         // A verifies against the committed counter (0), signs a higher one,
         // and its write lands — uncommitted — inside trxA.
@@ -1006,12 +1160,14 @@ describe("counter concurrency", () => {
         const blocked = verifyUnlock(assertionResponse(optionsB.challenge, { counter: 3 }), trxB);
         blocked.catch(() => {});
 
-        // Gives B's own read and its update time to actually reach Postgres
-        // and block on A's still-uncommitted row before A resolves that
-        // race by committing — without it, whether B's own stale-or-fresh
-        // read wins is a race against driver dispatch speed, not the
-        // property this test is pinning.
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // Waits on B's own backend genuinely blocking on A's still-uncommitted
+        // row, polled through `database` — a third connection, neither A nor
+        // B — before A resolves that race by committing. A fixed delay here
+        // only guesses that B's read and its update had time to reach
+        // Postgres and block; on a loaded runner that guess is exactly what
+        // reads wrong, exercising a different interleaving than the one this
+        // test is pinning and failing for the wrong reason (or not at all).
+        await waitUntilBlocked(database, pidB);
         await trxA.commit().execute();
         // Once unblocked, Postgres re-evaluates `greatest(passkey.counter, 3)`
         // against A's now-committed row (READ COMMITTED's own rule for a
@@ -1028,6 +1184,85 @@ describe("counter concurrency", () => {
         // The property `greatest(...)` exists for: dropping it in favour of
         // an unconditional write would leave this at "3".
         expect(row.counter).toBe("9");
+      } catch (error) {
+        bodyFailed = true;
+        throw error;
+      } finally {
+        if (!trxA.isCommitted && !trxA.isRolledBack) await trxA.rollback().execute().catch(() => {});
+        if (!trxB.isCommitted && !trxB.isRolledBack) await trxB.rollback().execute().catch(() => {});
+
+        let cleanupError: unknown;
+        try {
+          await database.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
+        } catch (error) {
+          cleanupError = error;
+        }
+        if (cleanupError !== undefined && !bodyFailed) throw cleanupError;
+      }
+    },
+    20_000,
+  );
+});
+
+describe("passkey removed mid-verification", () => {
+  it(
+    "refuses with a printable message, not the raw foreign-key violation, when a concurrent removal wins the race",
+    async () => {
+      const database = await testDatabase();
+
+      await database.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
+      await database
+        .insertInto("passkey")
+        .values({
+          credential_id: credentialId,
+          public_key: Buffer.from(publicKey),
+          counter: 0,
+          transports: joinTransports(transports),
+          backup_eligible: backupEligible,
+          label: "Race",
+          bootstrap: false,
+        })
+        .execute();
+
+      const trxA = await database.startTransaction().execute();
+      const trxB = await database.startTransaction().execute();
+      let bodyFailed = false;
+
+      try {
+        const optionsB = await unlockOptions(trxB);
+        // B's own connection, watched below so this test knows — rather
+        // than guesses — the moment its counter update actually blocks.
+        const pidB = await backendPid(trxB);
+
+        // A removes the very passkey B is about to verify against,
+        // uncommitted — a tentative deletion B cannot yet know about.
+        await trxA.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
+
+        // B's assertion verifies against the row's pre-delete snapshot
+        // (READ COMMITTED takes it fresh per statement, and A has not
+        // committed yet), so the verifier itself succeeds; B's own counter
+        // UPDATE is what blocks, wanting the same row A's delete already
+        // holds a lock on.
+        const blocked = verifyUnlock(assertionResponse(optionsB.challenge), trxB);
+        blocked.catch(() => {});
+
+        await waitUntilBlocked(database, pidB);
+        await trxA.commit().execute();
+
+        // Unblocked, B's UPDATE re-evaluates against A's now-committed
+        // delete and simply matches zero rows — Postgres raises nothing for
+        // an update that matches nothing. It is `mintGrant`'s own insert
+        // that discovers the passkey is gone (its header explains why
+        // catching that violation there, rather than re-checking a row
+        // count on the update, is what closes this race regardless of
+        // exactly when the concurrent removal lands) — a refusal, never
+        // the raw `unlock_grant_passkey_id_fkey` violation escaping as a
+        // 500.
+        const refusal = await refusalOf(() => blocked);
+        expect(refusal.fieldErrors.form).toMatch(/removed while this confirmation/);
+
+        const grants = await database.selectFrom("unlock_grant").select("id").execute();
+        expect(grants).toHaveLength(0);
       } catch (error) {
         bodyFailed = true;
         throw error;
