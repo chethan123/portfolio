@@ -880,7 +880,7 @@ describe("what a batch asks for", () => {
       // evening in New York — the case a UTC truncation would get wrong, and
       // the reason the end goes through `marketDateOf` rather than `toISOString`.
       // Only `Date`: `pg` times its connect attempts with `setTimeout`, and the
-      // connection this runs on is a real one (`price-poller.test.ts:141-149`).
+      // connection this runs on is a real one (`price-poller.test.ts:156-163`).
       vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-05T02:00:00Z") });
       try {
         await backfillCloses(provider, NEW_YORK, db);

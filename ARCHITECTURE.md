@@ -805,7 +805,7 @@ Three rules follow, and the codebase holds all three:
   two deliberate exceptions, and both are narrow enough to state: `format.ts:203` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
   and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
-  and `price-provider.server.ts:172` floats a yield or a per-share dividend rate only to decide
+  and `price-provider.server.ts:250` floats a yield or a per-share dividend rate only to decide
   whether the column it is bound for can hold it, returning the original string when it fits and
   null when it does not.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
