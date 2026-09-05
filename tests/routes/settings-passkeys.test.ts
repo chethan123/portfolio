@@ -70,12 +70,15 @@ const {
   lastUsedText,
   loader,
   lockedByOtherRow,
+  ALREADY_REGISTERED_MESSAGE,
   NO_CEREMONY_MESSAGE,
+  NOSCRIPT_MESSAGE,
   REGISTRATION_OPTIONS_EXPIRED_MESSAGE,
   registrationOptionsExpired,
   removalConfirmDisabled,
   removalWarningKind,
   removalWarningText,
+  resetEnrolment,
   runConfirmCeremony,
   runRemovalCeremony,
   syncLabel,
@@ -1582,6 +1585,56 @@ describe("vocabulary — CONTEXT.md's Passkey entry rules these out, and this sc
       for (const word of ["biometric", "fingerprint", "face", "device credential", "enrolled device"]) {
         expect(markup).not.toContain(word);
       }
+    }),
+  );
+});
+
+describe("starting the enrolment panel over", () => {
+  it("clears the note, the phase and both halves of the registration options together", () => {
+    const calls: Record<string, unknown> = {};
+
+    resetEnrolment(
+      (note) => (calls.note = note),
+      (phase) => (calls.phase = phase),
+      (options) => (calls.options = options),
+      (mintedAt) => (calls.mintedAt = mintedAt),
+    );
+
+    // All four, because leaving `registrationOptions` behind is exactly what
+    // keeps the create button up over a ceremony that cannot succeed, and
+    // leaving `registrationMintedAt` behind is what makes the next attempt
+    // measure its TTL from the wrong instant.
+    expect(calls).toEqual({ note: null, phase: "idle", options: null, mintedAt: null });
+  });
+
+  it("carries a note through when a caller has one to leave on the screen", () => {
+    let note: string | null = "untouched";
+
+    resetEnrolment(
+      (next) => (note = next),
+      () => {},
+      () => {},
+      () => {},
+      ALREADY_REGISTERED_MESSAGE,
+    );
+
+    expect(note).toBe(ALREADY_REGISTERED_MESSAGE);
+  });
+});
+
+describe("the screen with scripting off", () => {
+  it(
+    "says why enrolling and removing are inert, rather than leaving a reader pressing a button that is",
+    withDatabase(async () => {
+      const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
+
+      // Real HTML rather than a React branch, so it is in the server render
+      // itself — which is the only place a browser with scripting off will
+      // ever see it. The whole sentence, as `tests/routes/unlock.test.ts`
+      // asserts its own: a fragment would hold with the message rewritten to
+      // say something else entirely.
+      expect(markup).toContain("<noscript>");
+      expect(markup).toContain(NOSCRIPT_MESSAGE);
     }),
   );
 });
