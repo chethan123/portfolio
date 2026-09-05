@@ -54,8 +54,12 @@
  * settled — and a quote dated further ahead would plant a close on a day yet
  * to come, permanent if that day turns out to be a weekend or holiday the
  * poller never revisits. Outside the window the quote and the observation
- * still land; only the close is skipped, logged, and left to the backfill,
- * which is ledgered and split-aware.
+ * still land; only the close is skipped, and logged. It is not left to the
+ * backfill: that batch selects instruments with no close at or before
+ * first-held ({@link NO_CLOSE_BY_FIRST_HELD}), so a day skipped inside a
+ * spine that already reaches back does not make its instrument a candidate.
+ * The day simply stays absent, and `holding_valued_at` carries the previous
+ * close forward across it exactly as it does across a non-trading day.
  *
  * Every exported query takes an optional `db`; tests pass a transaction they
  * roll back.
@@ -850,7 +854,9 @@ export async function refreshQuotes(
       if (wroteClose) {
         closes += 1;
       } else {
-        windowSkipped.push(quote.symbol);
+        // The matched form, not the feed's spelling: it is what the stored
+        // symbol looks like, and it cannot carry newlines into the line.
+        windowSkipped.push(matchKey(quote.symbol));
       }
     }
 

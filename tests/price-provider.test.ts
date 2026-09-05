@@ -484,6 +484,25 @@ describe("reading a day of history", () => {
     expect(closes).toEqual([{ date: "2024-06-07", close: "11.0000" }]);
   });
 
+  it("keeps a bar dated exactly at the range's start", () => {
+    // `range.from` is first-held minus the seven-day lead, and the lead exists
+    // because the bar that closes a gap may be the deepest one in the range —
+    // first-held on a Monday after a holiday run puts it at or near `from`
+    // exactly. An exclusive floor would drop it, leaving the gap open while
+    // the ledger recorded a fill: the very failure the floor exists to stop.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-06-01", 9), bar("2024-06-07", 11)] }, {
+        from: "2024-06-01",
+        until: "2024-12-31",
+      }),
+    );
+
+    expect(closes).toEqual([
+      { date: "2024-06-01", close: "9.0000" },
+      { date: "2024-06-07", close: "11.0000" },
+    ]);
+  });
+
   it("skips a bar with no close rather than writing a row for it", () => {
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-06-07", null), bar("2024-06-10", 12)] }),

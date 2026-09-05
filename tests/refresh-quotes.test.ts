@@ -390,6 +390,64 @@ describe("the seven-day window", () => {
   );
 
   it(
+    "writes the close for a quote exactly seven days ahead of today, the other edge",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The spec calls the window symmetric, so both edges are rules. Without
+      // this the future half is pinned only by an eight-days-ahead case, and
+      // narrowing it to six would pass.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const report = await withClockNear("2026-06-15T12:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-22T20:00:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      expect(report.closes).toBe(1);
+
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", vti.id)
+        .execute();
+      expect(closes).toEqual([{ date: "2026-06-22" }]);
+    }),
+  );
+
+  it(
+    "measures the window against the market's own date, not the runtime's",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // 02:00 UTC is the previous evening in New York, so the market date and
+      // the UTC date are different days. Both sides of the comparison have to
+      // be spoken in the market's calendar or the whole window slides a day
+      // for every tick in that band.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+
+      const report = await withClockNear("2026-06-06T02:00:00Z", () =>
+        refreshQuotes(
+          fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-05-29T20:00:00Z") })]),
+          NEW_YORK,
+          db,
+        ),
+      );
+
+      // Market today is 2026-06-05, so 2026-05-29 is exactly the past edge and
+      // writes. Read in UTC, today would be 2026-06-06 and this would be eight
+      // days back — refused.
+      expect(report.closes).toBe(1);
+
+      const closes = await db
+        .selectFrom("price_daily")
+        .select("date")
+        .where("instrument_id", "=", vti.id)
+        .execute();
+      expect(closes).toEqual([{ date: "2026-05-29" }]);
+    }),
+  );
+
+  it(
     "writes the close for a quote exactly seven days before today, the window's own edge",
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
@@ -960,6 +1018,30 @@ describe("the observation log", () => {
 });
 
 describe("the archive cap", () => {
+  it(
+    "archives a payload of exactly the cap, which is not over it",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The rule is "over 32 KB", so the cap itself is the last size that
+      // still lands. Without this, tightening the comparison to `>=` would
+      // silently drop a payload the contract keeps.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const envelope = JSON.stringify({ symbol: "VTI", note: "" }).length;
+      const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope) };
+      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBe(32 * 1024);
+
+      await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, db),
+      );
+
+      const observation = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+      expect(observation.payload).not.toBeNull();
+    }),
+  );
+
   it(
     "drops a payload over 32 KB, warning with the symbol, while the quote row still lands",
     withDatabase(async ({ db, seedInstrument }) => {

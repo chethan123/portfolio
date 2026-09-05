@@ -197,8 +197,13 @@ carries their lines and tests:
   `regularMarketTime`, so a hostile quote rewrites any past day's close and a future one plants a
   close on a day to come — permanent when that day is a weekend or holiday the poller never
   overwrites; ADR-0011's immutability covers only the backfill writer. The quote and the observation
-  still land, and the day is left to the backfill, which is ledgered and split-aware. Seven because
-  that is the lag an honest NAV or holiday quote can carry, and it is `BACKFILL_RANGE_LEAD_DAYS`.
+  still land, and the day is left ~~to the backfill, which is ledgered and split-aware~~ **absent**
+  — **corrected while building [03](price-worker/03-the-three-hardening-rules.md):** the batch
+  selects instruments with *no close at or before first-held*, so a day skipped inside a spine that
+  already reaches back does not make its instrument a candidate and the backfill never revisits it.
+  `holding_valued_at` carries the previous close across it, as it does across any non-trading day.
+  Seven because that is the lag an honest NAV or holiday quote can carry, and it is
+  `BACKFILL_RANGE_LEAD_DAYS`.
   `writeDailyClose` reports whether it wrote, so `RefreshReport.closes` excludes a skipped write.
 - **`toProviderHistory` drops a bar dated before `range.from`**, as it drops one at or past
   `range.until` — today the only cut. `writeBackfilledCloses` inserts where absent, so one hostile
