@@ -51,6 +51,23 @@ describe("where a press may send the browser", () => {
     expect(safeReturn("https://evil.test/holdings")).toBe("/");
   });
 
+  // The origin check alone passes every one of these: the parser collapses the
+  // leading `..` before it appends the next empty segment, so each resolves to
+  // `http://return.invalid//evil.test` — our origin, and a pathname a browser
+  // reads as a host.
+  it.each([
+    "/..//evil.test",
+    "/%2e%2e//evil.test",
+    "/.//evil.test",
+    "/a/..//evil.test",
+    "/..\\/evil.test",
+  ])(
+    "refuses a destination that resolves to this origin and still serialises as a scheme-relative URL: %s",
+    (to) => {
+      expect(safeReturn(to)).toBe("/");
+    },
+  );
+
   it("answers with the Overview for a missing or unparseable destination", () => {
     expect(safeReturn(null)).toBe("/");
     expect(safeReturn("")).toBe("/");

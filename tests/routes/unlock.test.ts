@@ -282,6 +282,25 @@ describe("unlocking", () => {
   );
 
   it(
+    "sends a verified browser to the Overview rather than off-site when the return path resolves here but serialises scheme-relative",
+    withDatabase(async ({ seedPasskey }) => {
+      // The moment that makes this worth a route test: the family member has
+      // just passed the ceremony, so whatever `Location` says is where they
+      // land. `/..//evil.test` resolves to this origin with a pathname of
+      // `//evil.test`, which a browser reads as `https://evil.test/`.
+      await seedFixturePasskey(seedPasskey);
+      const { options } = expectScreenData(await loader(args(get("/unlock"))));
+      const response = assertionResponse(options.challenge);
+
+      const outcome = await action(
+        args(post("/unlock", { assertion: JSON.stringify(response), redirectTo: "/..//evil.test" })),
+      );
+
+      expect((outcome as Response).headers.get("Location")).toBe("/");
+    }),
+  );
+
+  it(
     "a refused assertion sets no cookie and mints no grant",
     withDatabase(async ({ db }) => {
       // A challenge this instance never minted — refused by `takeChallenge`
