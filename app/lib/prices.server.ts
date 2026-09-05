@@ -55,6 +55,7 @@ import { sql } from "kysely";
 
 import { getDb, getPool, type Database } from "./db.server.ts";
 import { marketDateOf, marketStampOf, type IsoDate } from "./market-hours.ts";
+import { ProviderUnreachable } from "./price-provider.server.ts";
 import type {
   HistoryRange,
   PriceProvider,
@@ -534,12 +535,18 @@ const emptyBackfillReport = (): BackfillReport => ({
  * finish before the next tick is simply resumed by it — the candidate read is
  * re-asked every time and answers with whatever is still open.
  *
- * **A provider failure for one instrument is not a failure of the batch**: it
- * is ledgered with its text and the next symbol is tried, because the next
- * symbol may be fine. **A database failure is**, and is deliberately not caught
- * here — the instrument being written is what would fail again, and the
- * composition above catches it so the batch cannot falsify what the quotes
- * already committed.
+ * **An ordinary provider failure for one instrument is not a failure of the
+ * batch**: it is ledgered with its text and the next symbol is tried, because
+ * the next symbol may be fine. **A database failure is**, and is deliberately
+ * not caught here — the instrument being written is what would fail again,
+ * and the composition above catches it so the batch cannot falsify what the
+ * quotes already committed. **`ProviderUnreachable` is a third case, closer to
+ * the database than to an ordinary failure**: it escapes this function's catch
+ * unchanged rather than being ledgered, so the composition's catch wraps it
+ * once, in one `BackfillBatchFailed`, rather than being wrapped twice — and
+ * the attempt in flight and everything after it cost no candidate a day's
+ * retry skip for what is really one dead worker (`price-provider.server.ts`,
+ * price-worker spec §3.1).
  *
  * The range's end is today's market date and is exclusive — the adapter drops
  * every bar filed on or after it, so today's row stays the poller's
@@ -568,6 +575,14 @@ export async function backfillCloses(
       try {
         history = await provider.getDailyCloses(candidate.symbol, range, marketTimeZone);
       } catch (error) {
+        // Escapes unchanged, before anything is ledgered: the provider was
+        // never reached, not merely wrong about this symbol, and every
+        // candidate after this one would fail the identical way for the
+        // identical reason. The outer catch below wraps it once in
+        // `BackfillBatchFailed` — wrapping it here too would nest two of them,
+        // and the composition would log the inner wrapper instead of the cause.
+        if (error instanceof ProviderUnreachable) throw error;
+
         const outcome = BACKFILL_OUTCOMES.providerFailed;
 
         await inTransaction(db, (trx) =>
@@ -651,14 +666,20 @@ export type RefreshPricesReport = {
  * exactly as they wrapped `refreshQuotes`, so the test seam stays a transaction
  * and the lock stays the caller's decision.
  *
- * **The batch cannot falsify what the quotes did.** A database failure inside
- * the batch is caught and logged here rather than propagated, because
- * `app/routes/refresh.ts` turns anything thrown out of the lock into an error
- * outcome, which the control renders as "Refresh failed. The figures above are
- * unchanged." — false the moment `refreshQuotes` has committed its closes. So a
- * press reports its quotes, a tick logs its quotes' line, and the batch's
- * trouble is the batch's own line. The counts are lost with the throw; the
- * ledger holds what each completed attempt did.
+ * **The batch cannot falsify what the quotes did.** An ordinary database
+ * failure inside the batch is caught and logged here rather than propagated,
+ * because `app/lib/refresh.server.ts`'s `runRefresh` turns anything thrown out
+ * of the lock into an error outcome, which the control renders as "Refresh
+ * failed. The figures above are unchanged." — false the moment `refreshQuotes`
+ * has committed its closes. So a press reports its quotes, a tick logs its
+ * quotes' line, and the batch's trouble is the batch's own line. The counts
+ * are lost with the throw; the ledger holds what each completed attempt did.
+ * `ProviderUnreachable` is caught here too, and logged with one `console.warn`
+ * rather than the `console.error` every other cause gets — a dead worker is
+ * not a corrupt batch, and the sentence about the quotes being unaffected
+ * would be false whenever they hit the same dead worker. It keeps the stem,
+ * because that stem is what `docs/operating.md` tells an operator to grep:
+ * a dead worker must not be the one batch failure that line cannot find.
  *
  * A call that asks for no quotes writes no `price_poll` row, by construction:
  * that row is `refreshQuotes`'s, and a poll is an attempt at quotes.
@@ -687,11 +708,21 @@ export async function refreshPrices(
     return { quotes: quotesReport, backfill: await backfillCloses(provider, marketTimeZone, db) };
   } catch (error) {
     const stopped = error instanceof BackfillBatchFailed;
+    const cause = stopped ? error.cause : undefined;
 
-    console.error(
-      "Price backfill batch failed; the quotes it ran beside are unaffected:",
-      stopped ? error.cause : error,
-    );
+    if (cause instanceof ProviderUnreachable) {
+      // Deliberately not "the quotes it ran beside are unaffected" below —
+      // that would be false whenever the quotes call hit the same dead
+      // worker: one connect attempt and one log line per call site, quotes
+      // and the batch abort, at most two of each for the one underlying
+      // event, never deduplicated.
+      console.warn("Price backfill batch failed; the provider was unreachable:", cause.message);
+    } else {
+      console.error(
+        "Price backfill batch failed; the quotes it ran beside are unaffected:",
+        stopped ? error.cause : error,
+      );
+    }
 
     // The counts of whatever committed before it stopped, so the batch's log
     // line describes what happened rather than reporting a batch that did
