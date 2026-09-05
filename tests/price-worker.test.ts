@@ -35,13 +35,13 @@ import { createYahooClient, type YahooClient } from "../server/yahoo-client.ts";
 const WORKER_ENTRY = fileURLToPath(new URL("../server/price-worker.ts", import.meta.url));
 
 /**
- * The one seam this file quietly controls: `startWorker`'s own `await
- * chmod(socketPath, 0o660)`. Defaults to the real implementation — every
- * case in this file except the one below runs against the actual
- * filesystem, `unlink` included, since only `chmod` is ever replaced here.
- * A test that needs the gap between `listen` and `chmod` held open widens
- * it by swapping `impl` for one that awaits a gate the test itself holds,
- * then puts the real one back.
+ * The one seam this file controls: `startWorker`'s own `await
+ * chmod(socketPath, 0o660)`. `undefined` means the real one, so every case
+ * runs against the actual filesystem — `unlink` and the rest included, since
+ * only `chmod` is ever indirected — until a case sets `impl`, and `afterEach`
+ * puts it back whether that case passed, failed or timed out. Two cases need
+ * it: one holds the gap between `listen` and `chmod` open, the other makes the
+ * `chmod` fail. The shape is `tests/routes/lock-now.test.ts:28-49`'s.
  */
 const chmodOverride = vi.hoisted(() => ({
   impl: undefined as ((path: string, mode: number) => Promise<void>) | undefined,
@@ -49,10 +49,10 @@ const chmodOverride = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  chmodOverride.impl = actual.chmod as unknown as (path: string, mode: number) => Promise<void>;
   return {
     ...actual,
-    chmod: (path: string, mode: number) => chmodOverride.impl!(path, mode),
+    chmod: (path: string, mode: number) =>
+      chmodOverride.impl ? chmodOverride.impl(path, mode) : actual.chmod(path, mode),
   };
 });
 
@@ -138,6 +138,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
+  chmodOverride.impl = undefined;
   if (currentServer) {
     await new Promise<void>((resolve) => currentServer!.close(() => resolve()));
     currentServer = undefined;
@@ -1250,28 +1251,27 @@ describe("the socket file and its lifecycle", () => {
     );
   });
 
-  it("has its SIGTERM handler installed by the moment the socket file appears, even while chmod is still pending", async () => {
+  it("installs its SIGTERM handler before the socket is connectable", async () => {
     // The unit-level counterpart to the entry-point case below: that one
-    // proves the handler works end to end; this one proves it is reachable
-    // at all in the instant that matters. The real gap — `listen` succeeds,
-    // the socket starts taking connections through the kernel backlog, and
-    // only then does `chmod` run — only reproduced 5 of 12 starts (module
-    // header), so it is not something to race here. Instead the `chmod`
-    // this file mocks above is gated on a promise this test holds open,
-    // which widens the gap to exactly as long as this test needs it.
-    const listenersBefore = process.listeners("SIGTERM").length;
-
-    const originalChmod = chmodOverride.impl!;
-    let releaseChmod!: () => void;
+    // proves the handler works end to end, this one proves it is there in the
+    // instant that matters. `listen` makes the socket connectable through the
+    // kernel's backlog while `chmod` is still an await away, and that gap is
+    // under two milliseconds wide, so it is gated here rather than raced —
+    // `chmod` waits on a promise this case holds open, widening the gap to
+    // exactly as long as the assertion needs.
+    const before = process.listeners("SIGTERM");
+    let releaseChmod = (): void => {};
     const chmodGate = new Promise<void>((resolve) => {
       releaseChmod = resolve;
     });
-    chmodOverride.impl = async (path, mode) => {
+    // The real `chmod` is not needed once the gate has done its job: this case
+    // asserts on a listener, never on the mode, and `afterEach` removes the
+    // socket either way.
+    chmodOverride.impl = async () => {
       await chmodGate;
-      return originalChmod(path, mode);
     };
 
-    const startPromise = startWorker({
+    const starting = startWorker({
       socketPath: currentSocketPath,
       yahoo: fakeYahoo(),
       timeouts: TEST_TIMEOUTS,
@@ -1280,46 +1280,42 @@ describe("the socket file and its lifecycle", () => {
     try {
       await waitForSocket(currentSocketPath);
 
-      // Vitest and Node install their own SIGTERM listeners, so the only
-      // fact worth relying on is that this call added one, not an absolute
-      // count.
-      expect(process.listeners("SIGTERM").length).toBeGreaterThan(listenersBefore);
+      // The listener it added, not merely a bigger count: this file's cases
+      // each start a server, so the number alone would not say whose.
+      const added = process.listeners("SIGTERM").filter((fn) => !before.includes(fn));
+      expect(added).toHaveLength(1);
     } finally {
-      // Unconditionally, pass or fail: an unreleased gate would hang
-      // `startPromise` (and this test) forever, and restoring the real
-      // `chmod` here rather than only after a pass keeps every later case
-      // on the actual filesystem.
-      chmodOverride.impl = originalChmod;
       releaseChmod();
-      // Handed to the shared `currentServer` so `afterEach`'s own
-      // `close()` removes this run's SIGTERM listener — the same reason
-      // every other case in this file goes through it rather than closing
-      // its own server, and why the count above must be a delta.
-      currentServer = await startPromise;
+      // Through the shared `currentServer`, so `afterEach` closes it and the
+      // `close` handler takes the listener back off — which is the removal
+      // `startWorker` relies on to keep one listener per live server rather
+      // than one per case.
+      currentServer = await starting;
     }
   });
 
   it("takes its SIGTERM handler back off and closes the server when chmod fails", async () => {
     // The one failure path with a live server behind it: `listen` has already
     // succeeded, so unlike a failed `listen` there is something still bound to
-    // the socket. Leaving it is not merely untidy — the socket stays
-    // connectable at whatever the umask gave it, which is exactly what the
-    // `chmod` that just failed exists to prevent.
-    const listenersBefore = process.listeners("SIGTERM").length;
-    const originalChmod = chmodOverride.impl!;
+    // the path. Left alone it keeps answering on a socket the caller was told
+    // it never got — and, since `connect` on a unix socket wants *write*
+    // permission, one the `chmod` that just failed had not yet opened to the
+    // group, so `app` cannot reach it and nothing but this teardown will.
+    const before = process.listeners("SIGTERM");
     chmodOverride.impl = () =>
       Promise.reject(Object.assign(new Error("chmod failed"), { code: "ENOENT" }));
 
-    try {
-      await expect(
-        startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo(), timeouts: TEST_TIMEOUTS }),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo(), timeouts: TEST_TIMEOUTS }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
-      expect(process.listeners("SIGTERM").length).toBe(listenersBefore);
-      await expect(rawRequest(currentSocketPath, "GET", "/healthz")).rejects.toThrow();
-    } finally {
-      chmodOverride.impl = originalChmod;
-    }
+    expect(process.listeners("SIGTERM").filter((fn) => !before.includes(fn))).toHaveLength(0);
+    // `close()` unlinks the path, so the socket is not merely refusing —
+    // it is gone, and `ENOENT` is what says the teardown ran rather than the
+    // server simply having stopped accepting.
+    await expect(rawRequest(currentSocketPath, "GET", "/healthz")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("exits on SIGTERM even while every connection it admits is held open", async () => {
