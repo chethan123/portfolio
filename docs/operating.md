@@ -883,8 +883,9 @@ restart rule above still holds: nothing here recreates `worker` on this failing,
 in `docker compose ps` is where you look, not something Compose resolves for you.
 
 **Its resource bounds are argued in `compose.yaml` and watched nowhere.** `worker` runs under
-`pids_limit: 64` and `mem_limit: 256m` — comfortable day to day, the process idling around 89 MiB
-RSS with 11 threads — but hitting either is a plain `SIGKILL`: the worker logs nothing on the way
+`pids_limit: 64` and `mem_limit: 256m` — comfortable for what it does, which is hold one HTTP
+connection at a time and wait on Yahoo — but hitting either is a plain `SIGKILL`: the worker logs
+nothing on the way
 out, the container exits `137`, `restart: unless-stopped` brings it back, and it answers its own
 healthcheck again before anyone looks. An OOM loop and a healthy worker are the identical row in
 `docker compose ps`. The one tell is in the logs: `Price worker listening on …` is written once per
