@@ -82,15 +82,27 @@ irreversible act to sit than a flag on a routine command.
 
 ## Installing
 
-**Host requirements.** Docker Engine with the Compose v2 plugin — `docker compose`, two words, not
-the older `docker-compose` script; any v2 is new enough, since resolving a volume's `device:`
-relative to the Compose file has worked since 1.27.4. Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image
+**Host requirements.** Docker Engine 28.0 or newer, with the Compose v2 plugin — `docker compose`,
+two words, not the older `docker-compose` script; resolving a volume's `device:` relative to the
+Compose file has worked since Compose 1.27.4, well under this floor. The floor is declared as of this
+release, where `worker` brings the first non-default network, even though nothing here yet wires the
+kernel isolation that needs it — the network-lockdown release does, with a `gateway_mode_ipv4` option
+that Engine 26 ignores silently, leaving a host address reachable on the bridge, and Engine 27
+refuses outright. Check with `docker version --format '{{.Server.Version}}'`; below `28.0`, upgrade
+the Engine package before that release lands, not because this one needs it — nothing here fails on
+an older Engine yet. Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image
 is pulled, and to `quay.io`, because the gate image is. A Google account for each family member, and
 one Google Cloud project to hold the OAuth client. `linux/amd64` and `linux/arm64` are both
 published, so a Raspberry Pi or an ARM NAS needs nothing special. There is no build step and
 therefore no build-memory requirement — that is the whole point of publishing the image, and it is
 what makes a small NAS or VPS a reasonable host.
+
 Node itself is a requirement for *working on* this, not for running it.
+
+**The worker socket's cross-container permissions are proven nowhere in this repo's CI**, because
+its runner is none of these: an SELinux-enforcing host, `userns-remap`, or rootless Docker can each
+leave them different from what this stack assumes. [Verify it actually worked](#verify-it-actually-worked)
+has the one-time check to run yourself, right after your first `up -d`.
 
 **Bringing it up is one command, and it belongs to the README:**
 [Running an instance](../README.md#running-an-instance). It is deliberately not repeated here — that
@@ -204,15 +216,37 @@ docker compose ps
 curl -i http://localhost/healthz
 ```
 
-All four services `running` and `healthy` — `caddy`'s own check requests `/healthz` through its full
+`db`, `app`, `worker`, `gate` and `caddy` all `running` and `healthy` — and `dump` too unless
+you set `DUMP_ENABLED=false`, which is meant to read as `Exited (0)` rather than as another
+healthy row. `caddy`'s own check requests `/healthz` through its full
 proxy path to `app`, so a healthy `caddy` means the hop works and not merely that the process is up.
-And `/healthz` answering `200` with exactly:
+Look for `worker` by name: nothing depends on it, so a command or a compose file that leaves it out
+starts everything else correctly and simply never starts it — no error, no unhealthy row, an *absent*
+one instead, the row nobody counts. And `/healthz` answering `200` with exactly:
 
 ```json
 {"status":"ok","database":true,"migrations":"current","pendingMigrations":[]}
 ```
 
 Any other body on that endpoint means something, and [Monitoring](#monitoring) says what.
+
+That still proves nothing about `worker` — the `/healthz` above is `app`'s own and never crosses the
+socket. Prove that hop too, once, right after this `up -d` and again after any change to the host's
+engine or container runtime: an SELinux-enforcing host, `userns-remap`, or rootless Docker can each
+leave the worker's socket permissions different from what this stack assumes, and none of it is
+proven anywhere in this repo's CI, because its runner is none of those.
+
+```sh
+docker compose exec -T app node -e "
+const r=require('node:http').request({socketPath:'/run/price-worker/worker.sock',path:'/healthz',agent:false,timeout:5000},res=>process.exit(res.statusCode===200?0:1));r.on('error',()=>process.exit(1));r.on('timeout',()=>{r.destroy();process.exit(1)});r.end()
+"
+echo $?
+```
+
+`0` means `app` reached `worker` over the shared socket end to end; anything else — including a
+silent hang, which the `timeout` above turns into a `1` within five seconds instead of blocking
+forever, the same guard `worker`'s own healthcheck in `compose.yaml` carries — see
+[Monitoring](#monitoring).
 
 `/healthz` is the one path the gate does not challenge, so a `200` there proves nothing about
 sign-in. Check the front door separately:
@@ -256,6 +290,7 @@ happens to need it.
 | `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`** — see below. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
+| `PRICE_WORKER_SOCKET` | No | `/run/price-worker/worker.sock` | Where the app dials the price worker and where the worker listens. **Development only** — `compose.yaml` sets it for neither `worker` nor `app`, so both run this same fixed default, meeting at the mount inside the shared `price-worker-sock` volume. Set it only for a checkout running the worker outside Compose, under `/tmp`. |
 
 **One variable this table used to carry is gone.** How often quotes are refreshed is the
 household's dial rather than the deployment's, so it moved into the application: set it at
@@ -837,12 +872,37 @@ that is wedged but still running stays unhealthy, stays in service, and stays th
 `docker compose restart app` is a manual step. Whatever you point at `/healthz` therefore has to be
 able to *act*, not only to alert — or you have to be the one who acts.
 
+### The worker's own healthcheck
+
+`worker` carries a healthcheck of the same shape as `app`'s — `node -e`, no shell, on an interval —
+reached over `/run/price-worker/worker.sock` instead of a port, since the container publishes none.
+Its `/healthz` consults nothing: it answers `200` the moment the process is accepting requests,
+before it has made a single call to Yahoo. So "unhealthy" here means exactly that and nothing wider
+— the worker is not accepting requests on its socket, ordinarily the process gone or wedged — never
+"Yahoo is failing," which is a different thing entirely and shows up instead as stale prices and
+`app`'s own `Price provider failed` line, with `worker` reporting healthy the whole time. And the
+restart rule above still holds: nothing here recreates `worker` on this failing, so an unhealthy row
+in `docker compose ps` is where you look, not something Compose resolves for you.
+
+**Its resource bounds are argued in `compose.yaml` and watched nowhere.** `worker` runs under
+`pids_limit: 64` and `mem_limit: 256m` — comfortable for what it does, which is hold one HTTP
+connection at a time and wait on Yahoo. The two fail differently. Reaching the *memory* limit is a
+plain `SIGKILL`: the worker logs nothing on the way out, the container exits `137`,
+`restart: unless-stopped` brings it back, and it answers its own healthcheck again before anyone
+looks — an OOM loop and a healthy worker are the identical row in `docker compose ps`. Reaching the
+*process* limit kills nothing: the kernel simply refuses the next thread or process, so the worker
+stays up, keeps answering `/healthz` — which starts no threads — and fails the work instead. The one tell is in the logs: `Price worker listening on …` is written once per
+process start, so seeing it more than once is the process having started more than once — see
+[Logs](#logs).
+
 ### Logs
 
 `docker compose logs -f app` is the entire pipeline; there is no metrics endpoint, no tracing and no
-log shipping. `docker compose logs -f gate` is the second half of it, and the only place a refused
-sign-in is recorded at all — the application no longer sees one. The stems below are for grepping
-and may drift — the code owns the wording:
+log shipping. `docker compose logs -f worker` is a second stream worth watching even though nothing
+calls it yet: the restart-loop tell above shows up nowhere else. `docker compose logs -f gate` is the
+second half of the pipeline proper, and the only place a refused sign-in is recorded at all — the
+application no longer sees one. The stems below are for grepping and may drift — the code owns the
+wording:
 
 - **One line per HTTP request** from the server's built-in request logger: method, path, status,
   duration. Note that the container healthchecks — the app's own and Caddy's — hit `/healthz` every
@@ -869,6 +929,11 @@ and may drift — the code owns the wording:
 - **Startup**, in order: the configuration check, one line per migration file (applied or skipped),
   then a `Migrations OK` line. A failure names the offending file and the Postgres error, and the
   server is never started — stem `Migrations`.
+
+`worker`'s own log has one stem, `Price worker` — one line per non-`200` answer over the socket,
+naming the endpoint, the status and the reason, and nothing at all for a successful call, so a
+healthy worker between restarts is silent. The one line it cannot avoid writing is `Price worker
+listening on …`, once at startup — the restart-loop tell from above, if it repeats.
 
 And in `gate`'s log, which is a different program with a different vocabulary:
 
@@ -1086,6 +1151,41 @@ checkout of this repository is not needed to run or upgrade an instance — only
 `Caddyfile`, `scripts/dump-loop.sh`, your `.env`, your `allowed-emails.txt` and the
 `volumes/db/data` and `volumes/dumps` directories beside them.
 
+**A release that adds a service or a volume needs `compose.yaml` replaced too, not just the image
+pulled — this one does, adding `worker` and the `price-worker-sock` volume that carries prices to
+it.** `compose.yaml` is one of the files above that `pull_policy: always` never touches, so bring
+the new one in yourself, in this order: replace `compose.yaml` with this repository's copy at the
+release's tag — there is no GitHub Release and no attached file to fetch instead, only the git tag CI
+built the pushed image tags from
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)'s `publish` job); confirm the engine
+next — `docker version --format '{{.Server.Version}}'` at or above `28.0`, the floor this release
+declares. Nothing in *this* release fails on an older Engine — the floor is a warning for the
+network-lockdown release, not a requirement of this one — so a check below `28.0` today means
+schedule the Engine upgrade before that release, not stop here. Then `docker compose up -d`, which
+recreates `app` once, because its mounts changed — the brief outage every upgrade already has, not a
+fault — and brings `worker` up alongside it for the first time. Run
+[the socket check](#verify-it-actually-worked) again afterwards: a host whose engine or container
+runtime changed since the old instance was last verified is exactly the case that check exists to
+catch, and nothing else here will.
+
+Skip it, and this release alone will not tell you: `app` still fetches its own prices exactly as it
+does today, and `worker` simply idles unused. The cost lands the moment a later release, the one
+that has `app` dial the worker instead of fetching for itself, starts under this same old file: no
+volume and no worker, prices going stale while `/healthz` keeps answering green — a missing price
+provider was never a health signal — and the only sign in the log is one `no worker listening at
+/run/price-worker/worker.sock` line per call site, up to two per tick.
+
+**A changed `driver_opts` line means a new volume name, never `docker compose down -v`.** Compose
+reuses a name-matched volume untouched, so editing `price-worker-sock`'s tmpfs options in some
+future release would change nothing on an already-running instance until that volume is removed by
+hand — the release making the change has to rename the volume instead, the way `db-store` itself was
+named to dodge exactly this
+([Moving an instance that predates the local path](#moving-an-instance-that-predates-the-local-path)
+has that history). `docker compose down -v` is not that removal. It takes `db-store`'s volume
+*record* down too — not the database, which lives at `./volumes/db/data` and survives regardless,
+same as [above](#what-runs-here) — so it neither renames `price-worker-sock` nor loses anything; it
+is simply the wrong command for this.
+
 **An instance that predates the dump service needs three things before its next `up`**: that script
 in place, `mkdir -p ./volumes/dumps`, and `DUMP_UID`/`DUMP_GID` in `.env` set to the account that
 owns it (`id -u`, `id -g`). Missing any of them stops `docker compose up -d` naming what is
@@ -1098,9 +1198,14 @@ be running when the new image starts can stall the instance for the length of th
 
 ```sh
 docker compose stop dump
-docker compose up -d app caddy gate
+docker compose up -d app caddy gate worker
 docker compose start dump
 ```
+
+`worker` has no `depends_on` tying it to anything else, so an explicit service list that leaves it
+off is not a partial upgrade — it never starts it at all, and looks exactly like success: everything
+named comes up healthy, and the missing service is an *absent* row in `docker compose ps`, not an
+unhealthy one, which is the row this recipe would otherwise leave nobody checking for.
 
 **This does not upgrade the gate.** `gate` is pinned to an exact release with no variable in front
 of it, so `docker compose up -d` recreates the container on the same image forever. Moving it is
@@ -1137,6 +1242,14 @@ not harder.
 the dump and the tag you wrote down are the first two lines above, and why "take a backup before
 upgrading" is not a formality here. Pin the old version with `APP_VERSION` in `.env` and restore the
 dump; either one alone leaves you worse off than before.
+
+**A pin below this release needs one more step: `docker compose stop worker` too.** `worker` shares
+`app`'s tag, and an image from before ticket 04 has no `server/price-worker.ts` for that entrypoint
+to run — `restart: unless-stopped` then restarts a `Cannot find module` crash forever, a loop that
+never resolves itself. The rollback above is the obvious way into it, but the likelier one is
+simpler: an operator who already pins an older `APP_VERSION` and only now adopts this release's
+`compose.yaml`, meeting `worker` for the first time as a crash loop rather than as the idle service
+this document otherwise describes.
 
 ### Moving an instance that predates the local path
 
@@ -1254,9 +1367,12 @@ and `max-file: "3"`, meaning the logs for each container will not exceed roughly
 A per-service `logging` block overrides whatever the operator sets as the daemon default (such as
 journald or `local`).
 
-**No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. On a
-machine that runs only this, that is the right default. On a shared host it means one runaway query
-can take the box; `deploy.resources.limits` is where you would add them.
+**Almost no resource limits are set** — no CPU limit anywhere, and no memory or process limit on
+any service but `worker`, which carries `mem_limit: 256m` and `pids_limit: 64` because it is the
+one container the design expects to be compromised. On a machine that runs only this, that is the
+right default. On a shared host it means one runaway query can still take the box; the flat
+`mem_limit` and `pids_limit` keys `worker` uses are where you would add them, and
+`docker compose up` honours those without a swarm.
 
 **The design target is a target, not a measurement.**
 [`ARCHITECTURE.md` §10](../ARCHITECTURE.md#10-performance-and-scale-envelope) states it — one

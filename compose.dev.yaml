@@ -20,6 +20,22 @@ services:
     # Overrides compose.yaml's `always`, which would try to pull this local-only tag.
     pull_policy: build
 
+  # Same tag as `app` above, built from the same checkout: without this,
+  # smoke would pull the released image, which lacks server/price-worker.ts,
+  # and certify stale code. compose.yaml's `volumes:` and `networks:` for
+  # `worker` survive the merge untouched because this override declares
+  # neither — not because sequences merge by appending. `volumes` (like
+  # `ports`, `secrets`, `configs`) is a compose-spec "unique resource" keyed
+  # by target, not a plain sequence: an override entry at the same target
+  # REPLACES the base one rather than appending beside it. Verified: the
+  # merged render still carries `price-worker-sock:/run/price-worker`.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: portfolio-app:dev
+    pull_policy: build
+
   # CI asserts the dump container reaches `healthy` inside a smoke test that
   # lasts minutes, not hours: production's 5-minute interval and 15-minute
   # start period would still read `starting` when the run ends. The check

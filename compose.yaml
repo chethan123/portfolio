@@ -1,8 +1,9 @@
-# The whole deployment — DESIGN.md §10.1. The price poller runs in-process in
-# `app` (no worker for it: two images, two deployments, two logs). The one
-# scheduled service is `dump`, argued in ADR-0009 — a dump that stops when the
-# app is down is worthless, and `pg_dump` belongs to the database's image.
-# `caddy` is the ingress front door and the only service that publishes a port;
+# The whole deployment — DESIGN.md §10.1. The price poller still runs
+# in-process in `app`; `worker` is the same image, reached over a socket in a
+# shared volume, and holds no credential of its own. The one scheduled
+# service is `dump`, argued in ADR-0009 — a dump that stops when the app is
+# down is worthless, and `pg_dump` belongs to the database's image. `caddy`
+# is the ingress front door and the only service that publishes a port;
 # everything else exists only on the compose network.
 #
 # `docker compose up -d` deliberately does NOT produce a working instance with
@@ -17,13 +18,21 @@
 # `db-store` volume at the bottom explains why that one has to pre-exist and be
 # empty) and the directory the nightly dump lands in, which belongs to the
 # operator rather than to a container, and is why `dump` runs as their uid.
-# Every other setting has a working default.
+# Every other setting, the worker's included, has a working default.
 #
 # Privilege posture, every service: cap_drop ALL + no-new-privileges +
 # read-only rootfs; unprivileged uid pinned everywhere but `gate` (root argued
 # there). Both cap_adds were proved by a start failure without them.
 # scripts/smoke-test.sh asserts all of it — nothing else would notice a
 # container quietly regaining root.
+#
+# Docker Engine 28.0 is the floor from this release — check with `docker
+# version --format '{{.Server.Version}}'`. Declared here, where `worker`
+# brings the first non-default network, though not load-bearing until the
+# network-lockdown release wires the isolated ones: 26 ignores
+# `gateway_mode_ipv4` silently and leaves a host address reachable on the
+# bridge; 27 refuses the option outright. scripts/smoke-test.sh checks this
+# first, so a runner too old reads as "engine too old", not as a topology bug.
 
 name: portfolio
 
@@ -219,6 +228,12 @@ services:
     # No `ports:`, same as `db` — only `caddy` faces outside; the app is
     # reached at `app:${PORT}`. Writes nothing to its own filesystem;
     # `read_only` enforces that rather than merely intending it.
+    volumes:
+      # The worker's socket lives here. This ticket only mounts it — nothing
+      # calls it yet, `app` still fetches prices in-process — so the cutover
+      # in ticket 06 changes no compose line, only code. `:ro`: the volume is
+      # `worker`'s one writable path, not `app`'s (research §8.3).
+      - price-worker-sock:/run/price-worker:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -236,6 +251,65 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # The internet-facing half of spec 0018: `yahoo-finance2` behind a unix
+  # socket, same image as `app` with its `CMD` replaced by the worker
+  # entrypoint. Nothing calls the socket yet — `app` above still fetches
+  # in-process — so it listens, idles, and reports healthy until ticket 06's
+  # cutover.
+  worker:
+    image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
+    pull_policy: always
+    # Also drops the image `CMD`: neither the migration step nor
+    # `react-router-serve` runs here, only the worker.
+    entrypoint: ["node", "./server/price-worker.ts"]
+    restart: unless-stopped
+    logging: *container-logging
+    # No `depends_on`: no database, no other service — startup needs nothing
+    # to exist but the volume below, and Compose creates that itself.
+    #
+    # No `environment:` at all: no `DATABASE_URL`, no `PGPASSWORD`, no
+    # `MARKET_TIMEZONE`, and no `TZ` — the worker reads no clock, and the
+    # image already sets `TZ=UTC` (Dockerfile:94-96). `PRICE_WORKER_SOCKET`
+    # is a development-only knob (spec 0018 §3.3); this file wires it into
+    # neither service, so both `worker` and `app` run the fixed default path
+    # the healthcheck below also uses.
+    volumes:
+      - price-worker-sock:/run/price-worker
+    networks:
+      - egress-worker
+    # Hardening copied from `app` above: no-new-privileges, cap_drop: ALL,
+    # read_only; the image's `node` user (uid 1000, no `user:` line needed);
+    # no `ports:` — the worker has no TCP listener to publish. Plus the
+    # bounds `app` does not carry: this is the container the design expects
+    # to be compromised, and nothing today stops a fork bomb, a memory
+    # balloon, or a `dd` into an unsized `/tmp` from driving the host into
+    # the OOM killer, whose usual victim is Postgres.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    pids_limit: 64
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:size=64m
+    healthcheck:
+      # GET /healthz over the socket, run as the container's own uid — the
+      # right party to prove the socket's permissions (research §8.10).
+      # Nothing restarts an unhealthy container; this is for a human reading
+      # `docker compose ps`. "unhealthy" here means the worker is not
+      # accepting requests on its socket — never "Yahoo is failing": a Yahoo
+      # outage still answers `/healthz` fine.
+      test:
+        - CMD
+        - node
+        - -e
+        - "const r=require('http').request({socketPath:'/run/price-worker/worker.sock',path:'/healthz',agent:false,timeout:5000},res=>process.exit(res.statusCode===200?0:1));r.on('error',()=>process.exit(1));r.on('timeout',()=>{r.destroy();process.exit(1)});r.end()"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   gate:
     # oauth2-proxy: the forward-auth sidecar `caddy` asks before any request
@@ -413,3 +487,52 @@ volumes:
       # fails the mount naming the path, rather than quietly starting an
       # instance whose data goes somewhere else.
       device: ./volumes/db/data
+
+  # A tmpfs, not `local`'s bind form like `db-store` above: the socket file is
+  # the only content this ever holds, and it must not outlive the host — a
+  # data volume here would be a lie about what's worth keeping.
+  #
+  # `uid=1000,gid=1000` because `app` and `worker` both run as the image's
+  # `node` user (research §8.4), so the socket the worker creates at `0660`
+  # inside this `0770` directory is connectable by uid 1000 or gid 1000 — and
+  # by root regardless, through `CAP_DAC_OVERRIDE` (research §8.5). The mode
+  # is not the fence: `app`'s mount is `:ro` (line 236), so it cannot `chmod`
+  # the directory or unlink the socket — a read-only mount refuses both with
+  # `EROFS` before any ownership check runs. The fence is still the mount
+  # set: only `app` and `worker` mount this volume at all, which
+  # scripts/smoke-test.sh asserts.
+  #
+  # `size=1m`: a socket needs no blocks, and a *data*-full tmpfs would not
+  # stop `bind()` anyway — the failure modes that do are spent inodes
+  # (`nr_inodes` defaults from RAM, not from `size`) or a directory squatting
+  # the path (research §8.8). Either is a refresh outage recovered by
+  # recreating the volume, never a data loss.
+  #
+  # `driver_opts` are read once, at creation, and a name-matched volume is
+  # reused untouched (research §8.2) — so, exactly as for `db-store` above, a
+  # release that changes the `o:` string below changes this volume's *name*,
+  # never `docker compose down -v`, which would take `db-store`'s record with
+  # it too.
+  price-worker-sock:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=1m,uid=1000,gid=1000,mode=0770"
+
+networks:
+  # `enable_ipv6: false` written, not left to the daemon's default. `worker`
+  # is the only service on it — no other service gets a `networks:` key in
+  # this release, so `db`, `dump`, `app`, `gate` and `caddy` all stay exactly
+  # where they are, on the implicit `default` bridge, until the
+  # network-lockdown release moves everyone off it. `worker` therefore shares
+  # no network with `app`, `gate` or `db`: unreachable from them by name and
+  # by IP *on the compose network* — the volume above is its only link there,
+  # and scripts/smoke-test.sh asserts exactly that. Not isolated outright:
+  # research §1.5 says any container with a route to the host reaches
+  # Caddy's published `:80`, so `worker` always reaches `app` too, over the
+  # host and through the gate, the same path a LAN browser uses. Do not read
+  # this comment as ruling `worker` out as a source of requests to `app` —
+  # closing that path is the network-lockdown release's job.
+  egress-worker:
+    enable_ipv6: false
