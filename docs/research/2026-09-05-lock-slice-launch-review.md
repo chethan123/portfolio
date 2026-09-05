@@ -529,15 +529,28 @@ five are the launch conditions; "re-verify" names what has to be looked at again
 
 ## 8. What was verified against the running app
 
-_In progress at the time of this commit._ The drive runs headless Chromium (Playwright 1.62,
-CDP `WebAuthn.addVirtualAuthenticator`) against the dev server and a migrated Postgres, walking
-the guide's "Doing it" steps verbatim, a sibling tab, a fresh browser's refusal and unlock, a copied
-cookie, "Lock now", the 30- and 61-second re-entry cases under a fake clock, the pre-enrolment tab,
-the open-household return, a same-provider second passkey, both removal variants, the label limit
-and the direct-POST refusals. Its first pass captured the open overview, the empty Passkeys screen,
-both chrome layouts with the control, the unlock screen and the post-unlock landing; the full log,
-with every verbatim string and status, lands here with the script under `harness/` in the commit
-that follows this one.
+Headless Chromium (Playwright 1.62, a CDP virtual authenticator: ctap2, internal transport,
+resident key, user verification) against the Vite dev server and a migrated `portfolio_dev` on
+Postgres 16. The script and the run's log are in [`harness/`](2026-09-05-lock-slice-launch-review/harness/).
+Everything under the fake clock — `Date.now`, `performance.now` and `document.visibilityState`
+overridden by an init script, `visibilitychange` dispatched by hand — is the real `watchReentry`,
+the real `/lock-now`, the real middleware and a real database. Observed, verbatim where a string
+matters:
+
+| Step | Observed |
+|---|---|
+| S1 open household | `GET /` 200 renders the overview. Settings → Passkeys: empty note "No passkey is enrolled — this instance is not locked, and anyone who reaches it sees every figure. Enrolling one locks every other browser in the household."; panel "Add a passkey"; input labelled "Label", `maxlength="60"`; "Continue" disabled initially, after a label alone, after the tick alone, enabled after both; no Lock now control anywhere; the masking toggle reads "Show amounts". |
+| S2 first enrolment per the guide | After Continue: button reads exactly `Create the passkey named "Alex's phone"`, label input disabled. After the ceremony the row sits above the form: "Alex's phone · Enrolled 5 Sep 2026 · Last used never · Bound to a single device"; the one-passkey nudge prints; cookie `__Host-unlock_grant` present, 43 characters, `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, session-lived; `passkey` 1, `unlock_grant` 1. Lock now now present in the rail at 1280px and as an icon in the top bar at 400px. |
+| S3 sibling tab | Same context, `/holdings` → 200, not redirected. |
+| S4 fresh browser, no cookie | `GET /` → `/unlock?redirectTo=%2F`; screen: "Locked", "This browser is locked. Unlocking uses a passkey — this device's own provider, or another device this browser offers.", one button "Unlock". Probes: `/holdings` 302 → `/unlock?redirectTo=%2Fholdings`; `/holdings.data`, `/_root.data`, `/.data` → 202 single-fetch redirects; `/__manifest` 204; `/unlock`, `/Unlock`, `/unlock/`, `/UNLOCK//` → the unlock screen; `/unlock%2F..%2Fholdings` → 404; `/healthz` 200 with no cookie; `/settings/passkeys` and `GET /lock-now` → refused to `/unlock`; `POST /lock-now` with no cookie → 302 `/unlock` and **no `Set-Cookie`**. `redirectTo=//evil.test` and `/\evil.test` are refused (the `/..//` spelling of F1 was not in this probe list; it was reproduced separately). |
+| S5 unlock in the fresh browser | Credential copied into its authenticator; Unlock → lands on `/`; cookie set; `unlock_grant` 2; the row now reads "Last used 5 Sep 2026". |
+| S6 copied cookie | A third context with no authenticator and the first browser's cookie value → `GET /` 200, the overview. A copied live cookie works, as the design says it must. |
+| S7 Lock now | Click → `POST /lock-now.data` 202 (a single-fetch redirect) → `/unlock`; `unlock_grant` 2 → 1; the cookie is gone from the context; `GET /` → `/unlock?redirectTo=%2F`; the context holding the copied cookie is refused too — one row, deleted once. |
+| S8 re-entry, unlocked browser | Hidden, 30 s of skew, shown: no `/lock-now` request, grant intact, still on `/`. Hidden, a further 61 s, shown: `POST /lock-now` 302, `unlock_grant` → 0, page navigated to `/unlock?redirectTo=%2F`. |
+| S9 the pre-enrolment tab | Household emptied; tab D1 rendered on the open household; tab D2 of the same context enrols "Tab two" (grant minted); D1 hidden, 61 s, shown → `POST /lock-now`, `unlock_grant` → 0, D1 on `/unlock`; D2's next navigation → `/unlock?redirectTo=%2Fholdings`. The case #237 fixed, observed; and its cost — the enrolling tab locked out of the grant it just minted, one prompt away from back in — observed with it. |
+| S10 open household over the grace | Household emptied; hidden, 61 s, shown → `POST /lock-now` 302 → `/unlock` 302 → `/` 200; final URL `/`, rendering, no loop. |
+| S11 second passkey, same provider | Note above the button: "First, confirm it is you with a passkey already enrolled — adding one is held to the same rule as removing one."; after the confirm assertion the button reads `Create the passkey named "Second"`; the same authenticator refuses creation and the screen prints **"The authenticator was previously registered"** (F12, the library's sentence). After the confirm step alone, `unlock_grant` went 1 → 2 with `passkey` still 1 — F4, live. |
+| S12–S14 | **Did not run.** Chromium's virtual-authenticator environment allows one internal authenticator per context and the script tried to add a second for the genuinely-second passkey. Removal's three variants and its cookie matrix are pinned by `tests/routes/settings-passkeys.test.ts` (90 tests) and were run directly by the authorisation reviewer; the 60/61-character label boundary and the three direct-POST refusals were reproduced by that reviewer against the domain module; `/unlock` while already unlocked is pinned by `tests/routes/unlock.test.ts`. A real-browser pass over removal remains worth doing with a second context whose authenticator holds only the second credential. |
 
 ## 9. What could not be checked, and what it would take
 
