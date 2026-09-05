@@ -1184,12 +1184,12 @@ fault — and brings `worker` up alongside it for the first time. Run
 runtime changed since the old instance was last verified is exactly the case that check exists to
 catch, and nothing else here will.
 
-Skip it, and this release alone will not tell you: `app` still fetches its own prices exactly as it
-does today, and `worker` simply idles unused. The cost lands the moment a later release, the one
-that has `app` dial the worker instead of fetching for itself, starts under this same old file: no
-volume and no worker, prices going stale while `/healthz` keeps answering green — a missing price
-provider was never a health signal — and the only sign in the log is one `no worker listening at
-/run/price-worker/worker.sock` line per call site, up to two per tick.
+Skip it, and the release that introduced the worker will not tell you: `app` still fetched its own
+prices then, and `worker` simply idled unused. **That grace is over as of this release**, the one
+that has `app` dial the worker instead of fetching for itself. Start it under the old file and
+there is no volume and no worker: prices go stale while `/healthz` keeps answering green — a
+missing price provider was never a health signal — and the only sign in the log is one
+`no worker listening at /run/price-worker/worker.sock` line per call site, up to two per tick.
 
 **A changed `driver_opts` line means a new volume name, never `docker compose down -v`.** Compose
 reuses a name-matched volume untouched, so editing `price-worker-sock`'s tmpfs options in some

@@ -65,7 +65,7 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
 
 **The module** (`app/lib/provider-socket.server.ts`, new)
 
-- [ ] `ask(kind, body, { budgetMs } = …)` with the production budgets as defaults, so a test passes
+- [x] `ask(kind, body, { budgetMs } = …)` with the production budgets as defaults, so a test passes
       200 ms instead of sleeping through real ones (`tests/price-poller.test.ts:139-149` documents
       why fake timers are not the answer). One `http.request({ socketPath:
       getConfig().PRICE_WORKER_SOCKET, method: "POST", path: "/" + kind, headers: { "content-type":
@@ -80,7 +80,7 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
       and one log line per call site, never deduplicated, and the batch abort of
       [01](01-one-refresh-and-the-batch-abort.md) is what keeps a tick's cost at *at most* two of
       each (spec §3.3)
-- [ ] The outcomes, told apart in this order: a request `error` whose `syscall` is `"connect"` —
+- [x] The outcomes, told apart in this order: a request `error` whose `syscall` is `"connect"` —
       `ENOENT`, `ECONNREFUSED`, `EACCES`, `ENOTDIR`, whatever the code (research §8.8) — →
       `ProviderUnreachable` with the message `no worker listening at <path> (<code>)`, keyed on the
       syscall and not on a code list because a permission fault is persistent and is exactly "no
@@ -97,29 +97,29 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
       at 30 s would always win by transit time), `probe` 10 s (a cold worker's first probe pays a
       three-fetch crumb handshake, and the verdict a short budget loses is `non-usd`, the one a
       person acts on)
-- [ ] Symbols failing `isWellFormedSymbol` (`server/symbol-pattern.ts`, imported the way
+- [x] Symbols failing `isWellFormedSymbol` (`server/symbol-pattern.ts`, imported the way
       `app/lib/db.server.ts:17` imports `server/db.ts`) are dropped before the call with one
       `console.warn` naming them, on every refresh — no memo; more than 100 symbols split into
       consecutive asks with the answers concatenated; an empty list after dropping is an empty
       answer and no call
-- [ ] `socketProvider(): PriceProvider` — `getQuotes`: a body that is not an array is `[]`; each
+- [x] `socketProvider(): PriceProvider` — `getQuotes`: a body that is not an array is `[]`; each
       entry through `toProviderQuote`, `CurrencyRefused` logged and skipped exactly as
       `yahooPriceProvider` did (`price-provider.server.ts:719-731`). `getDailyCloses`:
       `ask("history", { symbol: matchKey(symbol), from: range.from })`; a refusal whose text matches
       `isMissingHistory` (`:787-793`, now exported) is `{ status: "no-history" }`; a `200` goes
       through `toProviderHistory(body, range, marketTimeZone)`
-- [ ] `socketProbe: ProbeSymbols` ([02](02-the-batched-probe.md)'s type) — `ask("quotes", …)` for
+- [x] `socketProbe: ProbeSymbols` ([02](02-the-batched-probe.md)'s type) — `ask("quotes", …)` for
       the batch, split at a hundred like `getQuotes`, one `ask` per chunk and each chunk's outcome
       independent of the others': a completed chunk's symbols go through `probeVerdicts` and keep
       their verdicts, and only the symbols of a chunk whose `ask` threw become `unavailable`; never
       throws itself
-- [ ] `socketProbe` writes one `console.warn` when a chunk's ask fails and every symbol in it comes
+- [x] `socketProbe` writes one `console.warn` when a chunk's ask fails and every symbol in it comes
       back `unavailable`. [02](02-the-batched-probe.md) made that failure batch-wide where it used
       to cost one symbol its guard — a submission's whole currency check is skipped and the only
       trace is instruments that are never priced. `refreshQuotes` logs its equivalent
       (`Price provider failed`); this path logs nothing today. The stem belongs in
       `docs/operating.md`'s list, which [09](09-documents-and-runbooks.md) writes
-- [ ] The module header carries the argument: why a unix socket and not a TCP port on an internal
+- [x] The module header carries the argument: why a unix socket and not a TCP port on an internal
       network (a bridge is symmetric — the worker would reach `app:3000`); why no handle and no flag
       (a connect failure is immediate, so there is nothing to amortise); why no budget crosses the
       socket (the worker's watchdog is its own, spec §3.5); and that the app never reads the volume
@@ -129,30 +129,30 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
 
 **The callers**
 
-- [ ] `runRefresh`'s default becomes `socketProvider()`, `startPricePoller`'s the same (one instance
+- [x] `runRefresh`'s default becomes `socketProvider()`, `startPricePoller`'s the same (one instance
       for the process, as today); `app/routes/upload/instruments.tsx:104-106` passes `{ probe:
       socketProbe }`. `socketProvider()` must not throw when it is *built* — only when it is
       called: it is `runRefresh`'s default parameter, evaluated before that function's `try`, so a
       constructor that threw would escape "never throws" into the route's error boundary and
       replace the page the control promises to leave standing. Nothing in §3.3 asks it to do
       anything at construction, so this is a constraint to keep rather than work to do
-- [ ] `app/lib/price-provider.server.ts` loses `yahooPriceProvider` and `probeSymbols` and keeps the
+- [x] `app/lib/price-provider.server.ts` loses `yahooPriceProvider` and `probeSymbols` and keeps the
       types, the schemas, `toProviderQuote`, `toProviderHistory`, `probeVerdicts`,
       `CurrencyRefused`, `ProviderUnreachable` and `isMissingHistory`; its header (`:1-12`) says the
       seam has two implementations and only one lives in this process, and keeps the package name in
       comments only. Nothing under `app/` imports `server/yahoo-client.ts` any more — `npm run
       build` is the gate
-- [ ] `docs/data-model.md`'s price-refresh bullet and `CLAUDE.md`'s single-site list both call
+- [x] `docs/data-model.md`'s price-refresh bullet and `CLAUDE.md`'s single-site list both call
       `price-provider.server.ts` "the only importer of the provider library" (`:597-600` and `:85`
       as this is written); each is rewritten to name `server/yahoo-client.ts`, bringing them
       level with ARCHITECTURE §4.2's import-site row, already re-pointed by
       [04](04-the-price-worker-process.md) — the builder re-checks both line numbers before editing,
       since either document may have moved by the time this ticket lands
-- [ ] `scripts/smoke-test.sh` gains the source-level assertion a container check cannot make: `grep`
+- [x] `scripts/smoke-test.sh` gains the source-level assertion a container check cannot make: `grep`
       over `/app/build/server/` in the image finds no `yahoo-finance2` — comments are stripped by
       the build, a string literal would trip it. The package stays on disk and the guarantee is the
       network; this proves the graph
-- [ ] `docs/operating.md:738`'s `Price provider failed` bullet under Logs — not `:761`'s "There is
+- [x] `docs/operating.md:738`'s `Price provider failed` bullet under Logs — not `:761`'s "There is
       no price line in the log" list, whose four causes are a refresh that never ran, while a dead
       worker writes a `Price provider failed` line *every tick* — gains the worker-not-listening
       signature: dead, restarting, or absent because `compose.yaml` was never replaced and the
@@ -161,7 +161,7 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
       compose ps` shows `worker` unhealthy, restarting or missing. The upgrade note repeats
       [05](05-deploy-the-worker-alongside.md)'s compose-file rule and its symptom. The full record
       is [09](09-documents-and-runbooks.md)'s
-- [ ] The developer's recipe, under Recipes (`docs/developing.md:331`), because from this ticket
+- [x] The developer's recipe, under Recipes (`docs/developing.md:331`), because from this ticket
       `npm run dev` has no refresh and every probe is `unavailable` without it:
       `PRICE_WORKER_SOCKET=/tmp/portfolio-worker.sock` in `.env` (Vite reads it, `:564-571`) and the
       same single line in `.env.worker`; `node --env-file=.env.worker ./server/price-worker.ts` in a
@@ -172,7 +172,7 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
 
 **Tests**
 
-- [ ] `tests/provider-socket.test.ts` (new), no database for the transport cases:
+- [x] `tests/provider-socket.test.ts` (new), no database for the transport cases:
       `process.env.PRICE_WORKER_SOCKET` set to a path under `os.tmpdir()` **before the first call of
       `getConfig()`** — imports are hoisted, and the precedent (`tests/price-poller.test.ts:37`, for
       `DATABASE_URL`) works because `getConfig` reads lazily and memoises (`server/config.ts:150-153`),
@@ -191,18 +191,18 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
       named `TimeoutError`; a `429` throws; a `200` history body over 2 MiB throws, and a quotes
       body over 512 KB; a symbol with a slash is dropped and logged and the request carries the
       rest; 101 symbols are two requests
-- [ ] The probe: `socketProbe` answers `ok`, `non-usd` with the currency, `unavailable` for an
+- [x] The probe: `socketProbe` answers `ok`, `non-usd` with the currency, `unavailable` for an
       absent symbol, and `unavailable` for all with no server listening — three symbols, one
       request; 101 symbols, two. With 101 symbols split into two chunks, a non-USD refusal in the
       first chunk and a timeout in the second keeps the first chunk's verdicts — the `non-usd` one
       included — and marks only the second chunk's symbols `unavailable`
-- [ ] The route, `tests/routes/refresh.test.ts` (new; none exists today) through
+- [x] The route, `tests/routes/refresh.test.ts` (new; none exists today) through
       `tests/support/routes.ts`, keeps to what the route owns — the `done`/`busy`/`error` rules are
       [01](01-one-refresh-and-the-batch-abort.md)'s tests: the projection of a `done` report to
       `RefreshOutcome`, and the JavaScript-off branch redirecting (`refresh.ts:45-47`), with
       `request.headers.set("Sec-Fetch-Mode", "navigate")` on the request `post()` returns, as
       `withCookie` does (`tests/support/routes.ts:31-34`) — `post()` takes no headers
-- [ ] The round trip, in the same file, **inside `withDatabase`** — no committing handle, because
+- [x] The round trip, in the same file, **inside `withDatabase`** — no committing handle, because
       the transport is not the database (`tests/price-backfill.test.ts:1080-1084` is the shape):
       `refreshPrices(socketProvider(), …)` against the real server and a fake client answering a
       quote entry with a `Date` `regularMarketTime` and a chart with `Date` bars and one split — a
@@ -212,4 +212,4 @@ turns out to be wrong for a given case, stop and say so rather than deleting the
 
 **Gates**
 
-- [ ] `npm run typecheck`, `npm test`, `npm run build`, `scripts/smoke-test.sh` green
+- [x] `npm run typecheck`, `npm test`, `npm run build`, `scripts/smoke-test.sh` green
