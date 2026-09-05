@@ -53,7 +53,10 @@ report a synced passkey, and whether removing a passkey ends its grants or leave
       inserts each take their own snapshot, each sees an empty table, and both land; and a unique
       index can only say *at most one row carries the flag*, never *the table was empty*. Without both,
       the second browser finishes after the first and gains a passkey without the fresh assertion the
-      rule requires
+      rule requires. What the pair closes is those two interleavings and not a third: it does not
+      serialise a bootstrap insert against an *ordinary* one, which an earlier request had already
+      decided was ordinary. That window is one statement wide under autocommit and is stated rather
+      than closed (spec 0020, ticket 09; migration 0012's own comment carries the argument)
 - [ ] `unlock_grant` holds its id as a random token from a cryptographic source, text, not a sequence.
       The initial migration's convention is `bigint generated always as identity`, and departing from
       it is the point rather than an oversight: this id travels in a cookie and is the whole of the

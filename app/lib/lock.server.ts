@@ -1133,7 +1133,8 @@ const FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE =
  * here, not the whole security boundary: the *committed* half is closed by
  * {@link completeRegistration}'s conditional insert, and the *concurrent*
  * half by migration 0012's `passkey_bootstrap_idx` — neither is enough
- * alone, and that migration's comment on the index is explicit about why.
+ * alone, and that migration's comment on the index is explicit about why,
+ * and about the one interleaving the pair still leaves open.
  * That same bootstrap case also requires `acknowledgement` to be exactly
  * `"true"` — see {@link FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE}. Ignored once
  * the household holds a passkey: the warning this guards is shown only for
@@ -1263,7 +1264,13 @@ const CREDENTIAL_ID_MISMATCH_MESSAGE =
  * partial unique index on `passkey.bootstrap` closes the other half — two
  * such statements each seeing an empty table under READ COMMITTED — and its
  * unique-violation surfaces here as a refusal, never a 500. Neither half is
- * sufficient alone (migration 0012's comment on `passkey_bootstrap_idx`).
+ * sufficient alone, and the two together still leave one interleaving open:
+ * a bootstrap insert racing an *ordinary* one, which was decided to be
+ * ordinary by an earlier request that saw the passkey authorising it and
+ * carries no predicate of its own. Migration 0012's comment on
+ * `passkey_bootstrap_idx` sets out what the pair does and does not
+ * guarantee, how narrow that window is, and why neither way of closing it
+ * was taken; this is not the place to repeat it.
  *
  * **A duplicate credential id is always a printable refusal, however it
  * arrives.** Both the bootstrap and the non-bootstrap path let the unique
