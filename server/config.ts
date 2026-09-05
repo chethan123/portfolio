@@ -20,6 +20,17 @@ const isValidTimeZone = (value: string): boolean => {
   }
 };
 
+/**
+ * A relying-party id may not be an IP address (WebAuthn Level 3 §5.1.3), only
+ * a domain string. `URL` normalises odd spellings before this ever runs —
+ * `https://0x7f.1` arrives with `hostname` already resolved to `127.0.0.1`,
+ * and an IPv6 literal's brackets survive into `hostname` too — so testing the
+ * parsed hostname catches both spellings that testing the raw string would miss.
+ */
+const IPV4_HOSTNAME = /^\d{1,3}(\.\d{1,3}){3}$/;
+const isIpAddress = (hostname: string): boolean =>
+  hostname.startsWith("[") || IPV4_HOSTNAME.test(hostname);
+
 const timeZone = z.string().refine(isValidTimeZone, {
   message: "must be an IANA time zone name, for example 'America/New_York'",
 });
@@ -46,6 +57,74 @@ const configSchema = z.object({
     }, {
       message:
         "must be a Postgres connection URL, for example 'postgres://user:pass@db:5432/portfolio'",
+    }),
+
+  /**
+   * The `https://` origin the house-wide proxy serves this instance at. No
+   * default: there is nothing sensible to guess. Until now a Compose-level
+   * value only `gate` read, building its Google redirect from it; the lock
+   * (docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md) derives its
+   * relying-party id from the same value, which is the app's first variable
+   * shared with the sidecar. Three refinements, because they fail for
+   * different reasons: a wrong scheme or host is silent until somebody
+   * cannot enrol a passkey, a wrong path is silent until the gate's own
+   * redirect breaks, and a non-canonical spelling of an otherwise-correct
+   * origin is silent until every unlock and every enrolment refuses in
+   * production — `@simplewebauthn/server` compares origins with a raw
+   * `!==` against this string, and the browser will always send the
+   * canonical form. A transform here could fix the app and still leave the
+   * gate broken: `compose.yaml` builds its callback by concatenating this
+   * value with `/oauth2/callback` at the Compose level, where no fix in
+   * this file could reach — a trailing slash would still produce a
+   * doubled-up path Google never registered. One variable has to mean one
+   * thing to both services, so a non-canonical spelling is refused rather
+   * than canonicalised.
+   */
+  PUBLIC_ORIGIN: z
+    .string()
+    .min(1, { message: "is required" })
+    .refine((value) => {
+      try {
+        const { protocol, hostname } = new URL(value);
+        if (isIpAddress(hostname)) return false;
+        if (protocol === "https:") return true;
+        // Secure Contexts' carve-out, not WebAuthn's: `localhost` is a valid
+        // domain string under either scheme, but only `http:` gets the pass,
+        // for the dev loop.
+        return protocol === "http:" && hostname === "localhost";
+      } catch {
+        return false;
+      }
+    }, {
+      message:
+        "must be an https:// origin whose host is a domain name, never an IP address, for " +
+        "example 'https://portfolio.example.com' ('http://localhost' is accepted for the dev loop)",
+    })
+    .refine((value) => {
+      try {
+        const { pathname, search, hash, username, password } = new URL(value);
+        return pathname === "/" && !search && !hash && !username && !password;
+      } catch {
+        return false;
+      }
+    }, {
+      message:
+        "must be a bare origin — no path, query, fragment or credentials — for example " +
+        "'https://portfolio.example.com', not '.../oauth2/callback'",
+    })
+    .refine((value) => {
+      try {
+        return new URL(value).origin === value;
+      } catch {
+        return false;
+      }
+    }, {
+      message:
+        "must already be its own canonical origin, spelled exactly as `new URL(value).origin` " +
+        "would render it — lower-case, no trailing slash, no default port written out, no stray " +
+        "whitespace. 'https://portfolio.example.com' is canonical; " +
+        "'https://portfolio.example.com/', 'HTTPS://Portfolio.Example.COM' and " +
+        "'https://portfolio.example.com:443' all look right and are all refused",
     }),
 
   /**

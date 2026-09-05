@@ -45,6 +45,10 @@ jobs:
         run: npm run migrate
         env:
           DATABASE_URL: postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test
+          # server/migrate.ts calls loadConfig, which validates the whole
+          # schema — a second required key with no default fails this step
+          # exactly as a missing DATABASE_URL would.
+          PUBLIC_ORIGIN: https://portfolio.example.com
 
       - name: Test
         run: npm test

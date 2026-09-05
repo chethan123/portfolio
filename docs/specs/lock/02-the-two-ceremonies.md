@@ -139,9 +139,14 @@ the way.
       locked at that moment, so there is nothing to bypass and anyone the gate admitted already sees
       every figure
 - [ ] That zero-passkey window is a check-then-act, and it is closed by the insert rather than by the
-      check: two browsers reading zero may both enrol, which is harmless, and the write decides the
-      order. The window on the other side — after the last passkey is removed — is the design, and
-      reaching it now requires an assertion, so it can no longer be walked into from a borrowed phone
+      check: a registration begun while the household held none is refused if a passkey landed in the
+      meantime, however long the browser sat between the two steps. Letting it through is not
+      harmless — at the moment it began, that browser could already see every figure, so it gained
+      nothing then; what it would gain is **persistence**, a passkey that survives the household
+      turning the lock on, which is the exact conversion the fresh-assertion rule exists to prevent,
+      arriving through the one door that rule leaves open by design. The window on the other side —
+      after the last passkey is removed — is the design, and reaching it now requires an assertion, so
+      it can no longer be walked into from a borrowed phone
 - [ ] Removal also requires its acknowledgement here rather than on the screen, the way `closeAccount`
       requires its confirmation — a destructive write a replayed POST can reach silently was never
       acknowledged at all

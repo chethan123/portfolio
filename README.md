@@ -530,8 +530,10 @@ change loop, the recipes and the traps. The short version:
 ```sh
 npm install
 docker compose -f compose.test.yaml up -d --wait     # a Postgres to develop against
-DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm run migrate
-DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm run dev
+DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test \
+  PUBLIC_ORIGIN=http://localhost:5173 npm run migrate
+DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test \
+  PUBLIC_ORIGIN=http://localhost:5173 npm run dev
 
 npm run typecheck      # the runtime strips types without checking them
 npm run build
@@ -660,7 +662,8 @@ server against a half-migrated schema.
 
 ```sh
 docker compose -f compose.test.yaml up -d --wait
-DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm run migrate
+DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test \
+  PUBLIC_ORIGIN=http://localhost:5173 npm run migrate
 ```
 
 ### Adding a migration

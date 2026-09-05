@@ -19,6 +19,7 @@
   "dependencies": {
     "@react-router/node": "^7.18.2",
     "@react-router/serve": "^7.18.2",
+    "@simplewebauthn/server": "14.0.0",
     "isbot": "^5.2.1",
     "kysely": "^0.29.5",
     "pg": "^8.23.0",

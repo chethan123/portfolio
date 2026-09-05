@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { ConfigError, loadConfig } from "../server/config.ts";
 
-const MINIMAL = { DATABASE_URL: "postgres://portfolio:portfolio@db:5432/portfolio" };
+const MINIMAL = {
+  DATABASE_URL: "postgres://portfolio:portfolio@db:5432/portfolio",
+  PUBLIC_ORIGIN: "https://portfolio.example.com",
+};
 
 /** Every assertion here is about what an operator sees when they get it wrong. */
 describe("configuration validation", () => {
@@ -23,6 +26,80 @@ describe("configuration validation", () => {
     } catch (error) {
       expect((error as ConfigError).message).toContain("DATABASE_URL");
     }
+  });
+
+  it("names PUBLIC_ORIGIN when it is absent, same as DATABASE_URL", () => {
+    try {
+      loadConfig({ DATABASE_URL: MINIMAL.DATABASE_URL });
+      expect.unreachable("expected loadConfig to reject a missing PUBLIC_ORIGIN");
+    } catch (error) {
+      expect((error as ConfigError).message).toContain("PUBLIC_ORIGIN");
+    }
+  });
+
+  it("refuses a spelling of PUBLIC_ORIGIN that looks right but is not already canonical", () => {
+    // The canonical spelling is the baseline the four below are held against.
+    expect(
+      loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://portfolio.example.com" }).PUBLIC_ORIGIN,
+    ).toBe("https://portfolio.example.com");
+
+    // Each of these parses cleanly as a URL — the only thing that has ever
+    // validated this value before — but none is the exact string the browser
+    // sends, or the string the gate concatenates its callback from, so each
+    // has to be refused by name rather than silently canonicalised.
+    const nonCanonical = [
+      "https://portfolio.example.com/", // trailing slash
+      "HTTPS://Portfolio.Example.COM", // upper case
+      "https://portfolio.example.com:443", // the default port written out
+      "https://portfolio.example.com\n", // a stray newline from a .env file
+    ];
+
+    for (const value of nonCanonical) {
+      try {
+        loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: value });
+        expect.unreachable(`expected loadConfig to refuse ${JSON.stringify(value)}`);
+      } catch (error) {
+        const { message } = error as ConfigError;
+        expect(message).toContain("PUBLIC_ORIGIN");
+        expect(message).toMatch(/canonical/);
+      }
+    }
+  });
+
+  it("refuses a plain http origin that is not localhost", () => {
+    // The Secure Contexts carve-out is `localhost`-shaped, not scheme-shaped:
+    // nothing else gets to skip TLS.
+    expect(() =>
+      loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "http://portfolio.example.com" }),
+    ).toThrow(/PUBLIC_ORIGIN/);
+  });
+
+  it("accepts http://localhost, with or without a port, for the dev loop", () => {
+    expect(loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "http://localhost" }).PUBLIC_ORIGIN).toBe(
+      "http://localhost",
+    );
+    expect(loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "http://localhost:5173" }).PUBLIC_ORIGIN).toBe(
+      "http://localhost:5173",
+    );
+  });
+
+  it("refuses an IP-address host, which the specification forbids as a relying-party id", () => {
+    expect(() => loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://127.0.0.1" })).toThrow(
+      /PUBLIC_ORIGIN/,
+    );
+    expect(() => loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://[::1]" })).toThrow(
+      /PUBLIC_ORIGIN/,
+    );
+  });
+
+  it("refuses a value carrying a path", () => {
+    // compose.yaml builds the gate's own redirect as PUBLIC_ORIGIN +
+    // "/oauth2/callback"; a value that already carries a path would make that
+    // concatenation a URL Google never registered, and it is not a valid
+    // WebAuthn expected origin either.
+    expect(() =>
+      loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://portfolio.example.com/oauth2/callback" }),
+    ).toThrow(/PUBLIC_ORIGIN/);
   });
 
   it("names every offending variable at once rather than one per restart", () => {
