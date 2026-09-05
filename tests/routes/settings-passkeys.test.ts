@@ -76,6 +76,8 @@ const {
   removalConfirmDisabled,
   removalWarningKind,
   removalWarningText,
+  resetEnrolment,
+  NOSCRIPT_MESSAGE,
   runConfirmCeremony,
   runRemovalCeremony,
   syncLabel,
@@ -1596,6 +1598,55 @@ describe("vocabulary — CONTEXT.md's Passkey entry rules these out, and this sc
       for (const word of ["biometric", "fingerprint", "face", "device credential", "enrolled device"]) {
         expect(markup).not.toContain(word);
       }
+    }),
+  );
+});
+
+describe("starting the enrolment panel over", () => {
+  it("clears the note, the phase and both halves of the registration options together", () => {
+    const calls: Record<string, unknown> = {};
+
+    resetEnrolment(
+      (note) => (calls.note = note),
+      (phase) => (calls.phase = phase),
+      (options) => (calls.options = options),
+      (mintedAt) => (calls.mintedAt = mintedAt),
+    );
+
+    // All four, because leaving `registrationOptions` behind is exactly what
+    // keeps the create button up over a ceremony that cannot succeed, and
+    // leaving `registrationMintedAt` behind is what makes the next attempt
+    // measure its TTL from the wrong instant.
+    expect(calls).toEqual({ note: null, phase: "idle", options: null, mintedAt: null });
+  });
+
+  it("carries a note through when a caller has one to leave on the screen", () => {
+    let note: string | null = "untouched";
+
+    resetEnrolment(
+      (next) => (note = next),
+      () => {},
+      () => {},
+      () => {},
+      "This provider already holds a passkey for this app and will not make a second.",
+    );
+
+    expect(note).toContain("already holds a passkey");
+  });
+});
+
+describe("the screen with scripting off", () => {
+  it(
+    "says why every control on it is inert, rather than leaving a reader pressing one",
+    withDatabase(async () => {
+      const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
+
+      // Real HTML rather than a React branch, so it is in the server render
+      // itself — which is the only place a browser with scripting off will
+      // ever see it.
+      expect(markup).toContain("<noscript>");
+      expect(markup).toContain("scripting turned off");
+      expect(NOSCRIPT_MESSAGE).toContain("Turn scripting on");
     }),
   );
 });
