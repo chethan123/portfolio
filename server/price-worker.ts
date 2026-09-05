@@ -451,13 +451,17 @@ async function unlinkIfExists(path: string): Promise<void> {
 
 /**
  * Starts the worker and returns the listening server — the test seam, and
- * the entry's one call below. Before `listen`: a stale file is unlinked
- * (`EADDRINUSE` otherwise, research §8.8); then `listen`; then
+ * the entry's one call below. In order: a stale file is unlinked
+ * (`EADDRINUSE` otherwise, research §8.8); the `SIGTERM` handler is
+ * registered, before anything can be connected to; then `listen`; then
  * `chmod(socketPath, 0o660)` — `listen` creates the file at `0777 & ~umask`
  * (`0755` under the image's `022`) and takes no mode of its own (research
- * §8.6). A failed unlink or listen rejects the returned promise with the
- * raw error — its `code` and the path are already in `.message` — so the
- * caller below is the one place that logs and exits.
+ * §8.6), and since `connect(2)` wants write permission, that mode admits
+ * only the worker until this `chmod` opens it to the group. Any of the
+ * three failing rejects with the raw error — its `code` and the path are
+ * already in `.message` — so the caller below is the one place that logs and
+ * exits; the two that fail after the handler is registered take it back off
+ * on their way out, and the `chmod` one closes the server it is leaving.
  */
 export async function startWorker(options: StartWorkerOptions): Promise<http.Server> {
   const { socketPath, yahoo } = options;
@@ -500,16 +504,6 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   // (module header, {@link onClientError}'s own).
   server.on("clientError", onClientError);
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-
-  await chmod(socketPath, 0o660);
-
   // Node is PID 1 under the compose `entrypoint` and ignores a signal it has
   // no handler for — without this, every stop is Docker's 10 s wait plus
   // `SIGKILL`, and a stale socket file (spec §3.2). `close()` removes the
@@ -518,6 +512,21 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   // test in `tests/price-worker.test.ts` starts a fresh server, and a
   // listener left on the shared `process` object per server would exceed
   // Node's default max within one test file.
+  //
+  // Registered *before* `listen`, which is the whole point of where it sits.
+  // The socket file appears — and accepts connections through the kernel's
+  // backlog — the instant `listen` succeeds, while the `chmod` below is
+  // another turn of the loop away. A `SIGTERM` arriving in that gap used to
+  // find no handler at all and take Node's default disposition: the process
+  // died by signal with the socket file still on disk, which is exactly the
+  // stop this handler exists to prevent. The gap is real but narrow — `listen`
+  // returning to `chmod` resolving measured under two milliseconds — so it is
+  // a race, not a certainty: spawning the entry point and signalling it the
+  // instant the socket file appeared, five of twelve starts died by signal
+  // before the move and none of twelve after, every one of the five leaving
+  // the file behind. The case pinning it in `tests/price-worker.test.ts` gates
+  // the `chmod` open rather than racing that window, which is why it fails
+  // every run instead of five times in twelve.
   const onSigterm = (): void => {
     // Every connection, not just the idle ones. `close()` waits for all of
     // them, and a socket that has never sent a byte is not *idle* in Node's
@@ -534,6 +543,40 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   server.once("close", () => {
     process.removeListener("SIGTERM", onSigterm);
   });
+
+  await new Promise<void>((resolve, reject) => {
+    const onListenError = (error: Error): void => {
+      // Nothing to close and nothing to stop: take the listener back off the
+      // shared `process` object rather than leaving one per failed start.
+      process.removeListener("SIGTERM", onSigterm);
+      reject(error);
+    };
+    server.once("error", onListenError);
+    server.listen(socketPath, () => {
+      // Named, so this takes off the one listener this promise added and
+      // leaves any other alone.
+      server.removeListener("error", onListenError);
+      resolve();
+    });
+  });
+
+  try {
+    await chmod(socketPath, 0o660);
+  } catch (error) {
+    // The other failure path with a listener to take back — and the only one
+    // with a live server behind it, `listen` having already succeeded. What
+    // is left behind is not an over-open socket: `connect(2)` on a unix
+    // socket wants *write* permission, so the `0755` `listen` leaves under
+    // the image's umask admits nobody but the worker, and this `chmod` is
+    // what opens it to the group. Left alone it is worse than useless — a
+    // server still bound to a path the caller was told it never got, that
+    // `app` cannot reach and nothing will now widen. `close()` unlinks the
+    // path on its way out.
+    process.removeListener("SIGTERM", onSigterm);
+    server.closeAllConnections();
+    server.close();
+    throw error;
+  }
 
   console.log(`Price worker listening on ${socketPath}`);
 
