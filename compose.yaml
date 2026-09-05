@@ -202,6 +202,13 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
+      # One variable, two services — deliberately, not by accident. `gate`
+      # builds its Google redirect from this same value below; the app
+      # derives the lock's relying-party id from it (docs/adr/0012). Fail-
+      # closed like `gate`'s own required settings: a missing value names
+      # itself before any container starts, rather than the app crash-looping
+      # behind a Caddy that is already refusing everything.
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?missing PUBLIC_ORIGIN — see .env.example, the entry beside DATABASE_URL, not the gate section}"
       # A fact in this file, not a switch: `gate` fronts the app, so the app
       # must not draw its unprotected-instance banner. It still authenticates
       # nobody — `server/config.ts` has the argument.
@@ -251,7 +258,7 @@ services:
       # Google redirects the *browser* here: the origin the house proxy serves,
       # never a compose-network address — and character-for-character the
       # redirect URI registered on the OAuth client, or Google refuses.
-      OAUTH2_PROXY_REDIRECT_URL: "${PUBLIC_ORIGIN:?missing PUBLIC_ORIGIN — see the gate section of .env.example}/oauth2/callback"
+      OAUTH2_PROXY_REDIRECT_URL: "${PUBLIC_ORIGIN:?missing PUBLIC_ORIGIN — see .env.example, the entry beside DATABASE_URL, not the gate section}/oauth2/callback"
       # The default 127.0.0.1:4180 is unreachable from `caddy` inside a container.
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       # Believe Caddy's X-Forwarded-* headers — without it the sidecar builds

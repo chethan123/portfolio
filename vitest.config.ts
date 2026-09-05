@@ -12,14 +12,25 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    // A loader calls `getConfig()`, which refuses without a `DATABASE_URL`.
-    // Tests never connect through it — `withDatabase` puts a transaction in
-    // async storage — so this points at the suite's own throwaway Postgres to
-    // keep the one demanded variable truthful rather than invented.
+    // A loader calls `getConfig()`, which refuses without a `DATABASE_URL` —
+    // and now without `PUBLIC_ORIGIN` too, a second required key with no
+    // default, so every test reaching `getConfig()` (a route loader, a
+    // domain module) fails without both. Tests never connect through
+    // DATABASE_URL — `withDatabase` puts a transaction in async storage — so
+    // it points at the suite's own throwaway Postgres to keep the demanded
+    // variable truthful rather than invented. PUBLIC_ORIGIN agrees with the
+    // suite on only the host: `tests/support/routes.ts`'s request builders
+    // already address this instance as `portfolio.local`. The scheme
+    // deliberately does not match — the builders address it as
+    // `http://portfolio.local` and predate the lock, while this is
+    // `https://` because a real WebAuthn ceremony will not run outside a
+    // secure context, and `localhost` is the only exception `server/config.ts`
+    // carves out for `http://`.
     env: {
       DATABASE_URL:
         process.env.TEST_DATABASE_URL ??
         "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test",
+      PUBLIC_ORIGIN: "https://portfolio.local",
     },
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     // Integration tests share one Postgres; keep them off each other's toes.

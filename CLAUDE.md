@@ -35,7 +35,7 @@ npx vitest run tests/config.test.ts -t "names the missing variable"   # one test
 
 npm run typecheck    # react-router typegen + tsc; the runtime strips types WITHOUT checking them
 npm run build        # the only thing that exercises the router plugin, bundling, and .server boundaries
-npm run migrate      # DATABASE_URL=… npm run migrate; or node --env-file=.env ./server/migrate.ts
+npm run migrate      # DATABASE_URL=… PUBLIC_ORIGIN=… npm run migrate; or node --env-file=.env ./server/migrate.ts
 npm run db:types     # regenerate app/lib/database.generated.ts from the LIVE database
 npm run dev          # needs an already-migrated database; it does NOT run migrations
 ```
@@ -47,13 +47,16 @@ Traps:
 - `npm run dev` starts fine with no database and fails on the first request — config is read lazily.
 - `npm run dev`/`build` read `.env` (via Vite); anything run directly under Node
   (`server/*.ts`, `scripts/*.ts`) needs `--env-file=.env` or the variable in the environment.
+- **Two variables have no default and nothing starts without them**: `DATABASE_URL` and
+  `PUBLIC_ORIGIN` — the latter is the origin the lock derives its relying-party id from, and
+  `http://localhost:5173` is what the dev loop wants.
 - There is **no lint script, no formatter, no pre-commit hook** — on purpose. Style means matching
   the file you are editing. `typecheck`, `test`, and `build` are the gates.
 
 ### Adding a migration
 
 1. `migrations/NNNN_name.sql`, zero-padded — filename order (plain string compare) is apply order.
-2. Apply it: `DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test npm run migrate`
+2. Apply it: `DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test PUBLIC_ORIGIN=http://localhost:5173 npm run migrate`
 3. **`npm run db:types` and commit the regenerated file.** Skipping it fails nothing locally —
    queries stay typed against the old schema — but CI's `db:types -- --verify` rejects it.
    Never hand-edit `app/lib/database.generated.ts`.

@@ -14,6 +14,7 @@ import type { Kysely } from "kysely";
 import type { Pool, PoolClient } from "pg";
 
 import type { Database } from "~/lib/db.server";
+import { joinTransports } from "~/lib/lock";
 import type { BackfillOutcome } from "~/lib/prices.server";
 import type { AccountKind, AssetClass, TaxTreatment } from "~/lib/valuation.server";
 
@@ -600,11 +601,10 @@ export function makeFixtures(db: Kysely<Database>): Fixtures {
         credential_id: credentialId,
         public_key: Buffer.from(publicKey),
         counter,
-        // An empty array is the library's "no transports reported", exactly
-        // as omitting the option is — `[].join(",")` would otherwise store
-        // `''`, and `''.split(',')` reads back as one bogus transport rather
-        // than none (the migration's `transports` comment states the rule).
-        transports: transports === undefined || transports.length === 0 ? null : transports.join(","),
+        // `app/lib/lock.ts`'s writer, shared with `lock.server.ts` so the
+        // encoding rule is written once (the migration's `transports`
+        // comment states the rule itself).
+        transports: joinTransports(transports),
         backup_eligible: backupEligible,
         label,
         bootstrap,
