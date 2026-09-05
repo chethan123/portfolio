@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import {
   Link,
   Links,
@@ -33,7 +33,7 @@ import { clearedLockCookie, isLocked, readLockCookie, touchGrant } from "~/lib/l
 import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
 import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { startPricePoller } from "~/lib/price-poller.server";
-import { watchReentry } from "~/lib/reentry";
+import { postLockNow, watchReentry } from "~/lib/reentry";
 import { readMaskingPolicy } from "~/lib/settings.server";
 import { getConfig } from "../server/config.ts";
 
@@ -743,111 +743,61 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { revalidate } = useRevalidator();
 
   /**
-   * Whether this browser's own reading is currently concealed, and why.
-   * `"concealed"` while the automatic lock post or the re-check it triggers
-   * is in flight; `"failed"` once a `/lock-now` POST could not even reach
-   * this instance, so the reader has a name for the wait and a way to retry
-   * rather than a blank notice with nothing to do about it. `Layout`'s
-   * render below shows the notice *instead of* the chrome and `children`
-   * while this is anything but `"revealed"`, never over them — a review of
-   * this ticket found concealment built as a scrim over the page rather
-   * than as a replacement for it, in two ways at once: a 72%-opaque
-   * background a reader could still read balances through, and the
-   * chart-range control's own native `popover`, which paints in the
-   * browser's top layer above any `z-index` and which `inert` makes
-   * unresponsive without ever closing. Neither survives not being rendered
-   * at all — there is nothing behind this notice to see through and no
-   * popover left mounted to escape above it.
+   * **Concealment lived here for five review rounds and is gone.** Every
+   * finding from round two on was the same mechanism wearing different
+   * clothes: HTTP status semantics, commit ordering versus a fetcher's
+   * `.state`, the document unloading mid-POST, an expired gate session
+   * making retry impossible, two concurrent attempts overwriting each
+   * other's `concealment` state, a back-forward-cache restore racing the
+   * notice, cookies shared across tabs. The surface never closed, because
+   * concealment was never something the design asked for — it was a reply
+   * to one review comment, reaching for something the spec's own stated
+   * limit already declines: docs/specs/0019-the-lock.md, "What locking
+   * cannot reach" — *"Deleting the grant stops the next request; it does
+   * not reach into pages already rendered. Another tab of the same browser
+   * keeps the figures on screen until it asks the server for something."*
+   * A notice standing in for the page **is** reaching into a page already
+   * rendered, dressed as a fix for whichever finding was open that round.
+   * Read that heading again before adding anything here that hides `children`
+   * — the next reader who wants to build this back is the reason this
+   * paragraph exists.
    *
-   * **Findings 1-3: there is no settle detection left to get wrong.** The
-   * previous design watched `useFetcher`'s and `useRevalidator`'s own
-   * `.state` across renders, waiting for each to read `"idle"` again — but
-   * both publish their first move away from `"idle"` through React's own
-   * `startTransition` (`router.fetch`/`router.revalidate`, neither passes
-   * `flushSync`), so a render could commit an `"idle"` reading before either
-   * operation had genuinely started. A fast response, or a delayed
-   * transition, never produced the one `"idle"`-then-away-then-`"idle"`
-   * sequence that detection required, and the notice stayed up forever.
-   * Worse, an outright network failure — the fetcher's own entry removed
-   * before its request ever reached the server — read back as an ordinary
-   * `"idle"` fetcher too, the identical shape a genuine settle produces: a
-   * POST that never reached this instance was read as one that had already
-   * succeeded, revalidation started, the still-live grant was extended the
-   * moment connectivity returned, and the page was revealed without ever
-   * having been locked. {@link attemptLock} below replaces all of that with
-   * the one signal that is not racy: the `Promise` the POST itself returns.
-   * Awaiting it directly, rather than polling a rendered `.state`, is not
-   * subject to `startTransition` at all — a resolved or rejected `fetch()`
-   * promise is exactly what happened, never a stale reading from before the
-   * request began.
+   * What actually needed to change once concealment was gone is only that
+   * the request `postLock` sends behaves as a request that ends a grant
+   * should — {@link postLockNow}'s own header carries both halves. Neither
+   * needed a scrim, a replacement render, or a state machine watching for
+   * either one to settle.
    *
-   * **Concealment ends only when the page goes away.** A successful POST's
-   * response is followed to `/unlock` by the browser itself (`fetch`'s own
-   * default redirect handling); react-router's own client-side state does
-   * not know that happened until the follow-up `revalidate()` call
-   * ({@link attemptLock}, and the `askServer` action below) re-asks the
-   * middleware and either finds this browser refused — a redirect to
-   * `/unlock`, which `isUnlockScreen` below then renders — or finds it still
-   * holds a live grant, a fresh, reconfirmed render of the very page this
-   * was concealing. Either answer is safe to reveal, because both come from
-   * asking the middleware again rather than from trusting the POST alone.
-   * If the POST cannot even reach this instance, `revalidate()` is never
-   * called at all — the notice stays up, and that is the correct failure
-   * for a lock rather than a bug: a browser that could not reach the app to
-   * lock itself must not go on showing balances.
-   *
-   * **The uncertain (no-passkey-believed) branch conceals too, now.** It
-   * used to call `revalidate` bare, with nothing hiding the page while that
-   * round trip ran — the tab showed balances for the whole of it. Both
-   * branches below conceal before asking anything, for the same reason.
-   *
-   * **Still immune to the race the previous design's own comment named.** A
-   * browser's Back/Forward controls, a swipe-back gesture, or a history
-   * keyboard shortcut can start a POP navigation while concealed, and none
-   * of them are taps this page could ever have disabled — such a POP still
-   * runs the root middleware and can in principle read a grant before
-   * `/lock-now`'s own delete lands. Full replacement means that raced
-   * render is never shown regardless (`children` is not part of what the
-   * notice branch draws), and the `revalidate()` this state always ends on
-   * asks the middleware again for whatever route is actually current at
-   * that instant, POP-won race or not, before concealment ever clears.
-   */
-  const [concealment, setConcealment] = useState<"revealed" | "concealed" | "failed">("revealed");
-
-  /**
-   * Attempt the automatic lock post, and hand back to `watchReentry` (or a
-   * reader pressing "Try again" in the failure notice below) something to
-   * call again. A plain `fetch()`, not `useFetcher()`'s `submit` — two
-   * reasons together. First, `fetch()`'s own promise rejects on a genuine
-   * network failure and resolves on everything else, exactly the
-   * distinction {@link concealment}'s own header needs and a fetcher's
-   * `.state` cannot give reliably (that header's own account of findings 1
-   * and 2). Second, a fetcher's request is at least immune to being
-   * cancelled by a navigation (`fetchControllers`, untouched by
-   * `startNavigation`'s abort of the pending navigation) — but a raw
-   * `fetch()` is immune to that same cancellation for a stronger reason: it
-   * carries no relationship to react-router's navigation machinery at all,
-   * so no POP navigation racing in behind it can touch it either way. The
-   * chrome's own "Lock now" **button** stays a real `<form method="post">`
-   * (`LockNowControl`) — it must keep working with JavaScript off, which is
-   * why it is a form and not a submit call at all; only this automatic,
-   * re-entry-triggered post, and its own retry, use `fetch` directly.
-   *
-   * `credentials: "same-origin"` stated rather than relied on as the
-   * default: `LOCK_NOW_ACTION` is same-origin by construction, so this only
-   * documents the assumption the grant cookie's own delivery depends on.
-   *
-   * Once the POST resolves, `revalidate()` is what actually updates this
-   * browser's own view of the world — see {@link concealment}'s own header
-   * for why revealing only after that call resolves, rather than after the
-   * POST alone, is what closes findings 1 through 3 together.
+   * **A tab that discovers a passkey it did not know about is deliberately
+   * left alone.** A review round asked for one to post the lock on
+   * discovering that `hasPasskey` had flipped, on the reasoning that its
+   * belief was stale. The case that produces is a *sibling tab of the very
+   * browser that just enrolled*: the ceremony minted that browser's grant,
+   * the cookie is shared across its tabs, and posting here would delete it —
+   * locking the household out of the browser it enrolled from, seconds after
+   * it did. `docs/specs/lock/05-enrolling-and-listing-passkeys.md` names that
+   * outcome as the thing not to do: the browser that enrolled the first
+   * passkey is not locked out by its own success. A different browser has no
+   * grant to share and is already refused by the middleware, which is where
+   * that refusal belongs.
    */
   const attemptLock = useCallback((): void => {
-    setConcealment("concealed");
-    fetch(LOCK_NOW_ACTION, { method: "POST", credentials: "same-origin" })
-      .then(() => revalidate())
-      .then(() => setConcealment("revealed"))
-      .catch(() => setConcealment("failed"));
+    void postLockNow(revalidate, fetch);
+  }, [revalidate]);
+
+  /**
+   * What a hidden-too-long return with no passkey believed enrolled does,
+   * and what a persisted `pageshow` restore does regardless of that belief
+   * (`~/lib/reentry.ts`'s own header on both): ask the middleware again, and
+   * stop there. Revalidating *is* the answer — it re-runs the root
+   * middleware, which refuses a browser holding no live grant and redirects
+   * it to `/unlock`. Nothing here decides the belief was stale and posts a
+   * lock off the back of it; the paragraph on {@link attemptLock} above says
+   * why that would lock a household out of the browser it just enrolled
+   * from.
+   */
+  const askServer = useCallback((): void => {
+    revalidate();
   }, [revalidate]);
 
   /**
@@ -869,22 +819,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
     return watchReentry(
       assumePasskeyForReentry(hasPasskey, passkeyCheckFailed),
-      {
-        // Nothing this browser's own post could protect *as far as this
-        // render knows* — but that belief is exactly what can be stale
-        // (`~/lib/reentry.ts`'s own header). Concealing before asking closes
-        // the balances-for-a-whole-round-trip half of findings 1 through 3;
-        // asking at all is the cheap, always-correct fallback that trusts
-        // the middleware's live answer over this render's own.
-        askServer: () => {
-          setConcealment("concealed");
-          revalidate().then(() => setConcealment("revealed"));
-        },
-        postLock: attemptLock,
-      },
-      () => revalidate(),
+      { askServer, postLock: attemptLock },
+      askServer,
     );
-  }, [isUnlockScreen, hasPasskey, passkeyCheckFailed, revalidate, attemptLock]);
+  }, [isUnlockScreen, hasPasskey, passkeyCheckFailed, askServer, attemptLock]);
 
   return (
     <html lang="en">
@@ -898,44 +836,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
             by default — behind the gate that turns install into a silent
             sign-in redirect (docs/specs/0012). */}
         <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
-        {/* Finding 5: the route's own `meta` keeps publishing its title —
-            `account.tsx` and `settings/account.tsx` carry the account name
-            in theirs — while the body below is replaced, which would leave a
-            private name readable in the tab and window chrome for as long as
-            concealment lasts. A neutral title stands in instead; `<Meta/>`
-            returns the moment concealment ends. */}
-        {concealment === "revealed" ? <Meta /> : <title>Portfolio</title>}
+        <Meta />
         <Links />
       </head>
       <body>
-        {concealment !== "revealed" ? (
-          // The automatic lock's replacement render — instead of the chrome
-          // and `children` below, never over them: `concealment`'s own
-          // header says why. `.app`/`.app-main` reused exactly as the bare
-          // shell just below reuses them, so this gets the same centred
-          // column every other page sits in, plus one modifier (`app.css`)
-          // to centre this on an otherwise empty screen. One line, one
-          // control, nothing else — there is nothing here for a reader to
-          // decide beyond whether to retry a POST that never landed.
-          <div className="app">
-            <main className="app-main app-lock-notice">
-              {concealment === "failed" ? (
-                <>
-                  <p role="alert" aria-live="assertive">
-                    Couldn&rsquo;t reach this app to finish locking the browser.
-                  </p>
-                  <button type="button" className="button" onClick={attemptLock}>
-                    Try again
-                  </button>
-                </>
-              ) : (
-                <p role="alert" aria-live="assertive">
-                  Locking this browser…
-                </p>
-              )}
-            </main>
-          </div>
-        ) : isUnlockScreen ? (
+        {isUnlockScreen ? (
           // The bare shell: no nav, no toggles, no upload button, no
           // first-run prompt, no banner — see this function's own comment
           // above. `.app`/`.app-main` are reused rather than new classes

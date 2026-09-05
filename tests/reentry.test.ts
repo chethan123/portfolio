@@ -46,12 +46,19 @@
  * left in its signature at all, is what closes that gap — the old call
  * shape does not typecheck against this one, so a reverted call site fails
  * `npm run typecheck` before any test ever runs.
+ * **`postLockNow`, added when concealment was removed.** Five review rounds
+ * spent on a mechanism that hid the page while `/lock-now` was in flight
+ * found nothing wrong with the *lock* this app specifies — every finding was
+ * about the *rendering* invented on top of it (`app/root.tsx`'s own header on
+ * why that is gone). Two survived because they are about the request rather
+ * than the page: a `fetch` resolves for a 502 as readily as for success, and
+ * one without `keepalive` dies with the document that started it.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { assumePasskeyForReentry } from "../app/root.tsx";
-import { REENTRY_GRACE_MS } from "~/lib/lock";
-import { shouldPostLock, watchReentry } from "~/lib/reentry";
+import { LOCK_NOW_ACTION, REENTRY_GRACE_MS } from "~/lib/lock";
+import { postLockNow, shouldPostLock, watchReentry } from "~/lib/reentry";
 
 describe("shouldPostLock", () => {
   it("never posts when this browser has not been hidden since it loaded", () => {
@@ -456,4 +463,49 @@ describe("assumePasskeyForReentry", () => {
     expect(assumePasskeyForReentry(true, false)).toBe(true);
     expect(assumePasskeyForReentry(true, true)).toBe(true);
   });
+});
+
+describe("postLockNow", () => {
+  it("posts to LOCK_NOW_ACTION with keepalive, and revalidates, once the response says the lock happened (finding 3's own request shape)", async () => {
+    const revalidate = vi.fn();
+    const doFetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+
+    await postLockNow(revalidate, doFetch);
+
+    expect(doFetch).toHaveBeenCalledWith(LOCK_NOW_ACTION, {
+      method: "POST",
+      credentials: "same-origin",
+      keepalive: true,
+    });
+    expect(revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it(
+    "does not revalidate when the response answers with an HTTP failure, even though fetch itself resolved (finding 1)",
+    async () => {
+      // A 502 or 503 from a proxy in front of this instance is exactly what
+      // `fetch` resolves with — never a rejection — so reverting this to
+      // `.then(() => revalidate())` (treating "the promise resolved" as "the
+      // lock happened") would call `revalidate` here too, extending a grant
+      // that was never actually deleted.
+      const revalidate = vi.fn();
+      const doFetch = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+
+      await postLockNow(revalidate, doFetch);
+
+      expect(revalidate).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "does not revalidate when the post itself rejects — a network failure, or the document unloading mid-flight without keepalive",
+    async () => {
+      const revalidate = vi.fn();
+      const doFetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+      await postLockNow(revalidate, doFetch);
+
+      expect(revalidate).not.toHaveBeenCalled();
+    },
+  );
 });

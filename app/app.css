@@ -493,36 +493,6 @@ a {
   background: var(--surface-emphasis);
 }
 
-/* The reentry guard's automatic-lock notice (`app/root.tsx`'s `locking`
- * state). Used to be a scrim over the chrome with a z-index high enough to
- * beat the rail and the phone's bottom nav — concealment built as a scrim
- * over the page rather than a replacement for it, in two ways at once: a
- * 72%-opaque background a reader could still read balances through, and no
- * z-index a native `popover` respects regardless, since it paints in the
- * browser's own top layer above every one of them. `app/root.tsx` now
- * renders this *instead of* the chrome and
- * `children`, never over them, so there is nothing left here to out-stack —
- * no scrim opacity, no z-index, no popover left mounted to escape above it.
- * `.app-main` already centres a column and pads it (shared with `/unlock`'s
- * own bare shell); this modifier only adds enough to also centre one line
- * vertically on what is otherwise an empty screen. */
-.app-lock-notice {
-  min-height: 100vh;
-  align-items: center;
-  justify-content: center;
-}
-
-.app-lock-notice p {
-  margin: 0;
-  padding: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-lg);
-  background: var(--panel);
-  color: var(--on-surface);
-  font-size: 14px;
-  font-weight: 600;
-  box-shadow: var(--shadow-card);
-}
-
 .app-canvas {
   margin-left: var(--rail);
 }

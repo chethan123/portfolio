@@ -93,7 +93,7 @@
  * exactly what ADR-0012 already states it as: the lock ends the reading, not
  * every pixel already on screen.
  */
-import { REENTRY_GRACE_MS } from "./lock.ts";
+import { LOCK_NOW_ACTION, REENTRY_GRACE_MS } from "./lock.ts";
 
 /** The two clock readings taken together at the instant a tab goes hidden. */
 type HiddenAt = { wallMs: number; monoMs: number };
@@ -146,6 +146,74 @@ function readClocks(): HiddenAt {
  * `assumedPasskey` parameter doc).
  */
 export type ReentryActions = { postLock: () => void; askServer: () => void };
+
+/**
+ * What actually posting the automatic lock does — the whole of
+ * {@link watchReentry}'s own `postLock`, once a hidden-too-long return
+ * decides this browser's grant should end. POST {@link LOCK_NOW_ACTION},
+ * treat only a response that actually says the lock happened as success,
+ * and only then run `revalidate` — never on the strength of the POST having
+ * merely resolved.
+ *
+ * A review round proposed concealing the page while this settled, rather
+ * than reading what the POST actually returns. That is not what settles it,
+ * and nothing here conceals anything: spec 0019 ("What locking cannot
+ * reach") is explicit that deleting the grant stops the next request and
+ * does not reach into pages already rendered. Checking the response is the
+ * whole fix.
+ *
+ * **`fetch` resolves for an HTTP failure exactly as it does for a genuine
+ * success.** A 502 or 503 from a proxy in front of this instance is not a
+ * rejected promise; treating "the promise resolved" alone as "the lock
+ * happened" would continue exactly as if `/lock-now`'s own action had
+ * actually run and deleted the grant. `response.ok` — 200-299, where the
+ * redirect this action returns lands once `fetch`'s own default
+ * redirect-following reaches `/unlock` — is the one answer here that
+ * actually means the grant is gone; anything else must not go on to
+ * revalidate as though it were, because a still-live grant would only be
+ * extended by that call, never ended.
+ *
+ * **`keepalive: true`.** A plain `fetch` is aborted the instant its own
+ * document unloads — exactly the moment this call matters most: the grace
+ * has already elapsed, and a reader who returns only to immediately
+ * navigate away leaves an un-kept-alive POST cut off mid-flight, its grant
+ * never deleted. `keepalive` is the browser's own contract for a request
+ * that must outlive the document, at a body-size cost this POST is nowhere
+ * near paying — `lock-now.ts`'s own action reads no body at all.
+ *
+ * `doFetch` is a parameter, never the module-scope global, so a test can
+ * hand this a fake response or a rejection without touching
+ * `globalThis.fetch` — this file's own no-jsdom rule (AGENTS.md) applies to
+ * this function exactly as it does to {@link watchReentry} below.
+ */
+export async function postLockNow(
+  revalidate: () => void | Promise<unknown>,
+  doFetch: (input: string, init: RequestInit) => Promise<Response>,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await doFetch(LOCK_NOW_ACTION, {
+      method: "POST",
+      credentials: "same-origin",
+      keepalive: true,
+    });
+  } catch (error) {
+    console.error(
+      "Lock post could not reach this instance; the grant rides out its own idle window instead:",
+      error,
+    );
+    return;
+  }
+
+  if (!response.ok) {
+    console.error(
+      `Lock post answered with ${response.status}; not treating that as the grant having been deleted.`,
+    );
+    return;
+  }
+
+  await revalidate();
+}
 
 /**
  * Wires this file's signals onto `document` and `window`, and hands back the
