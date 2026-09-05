@@ -686,10 +686,15 @@ describe("unlocking", () => {
         verifyUnlock(assertionResponse(options.challenge, { rpID: "attacker.example.com" }), db),
       );
       expect(refusal).toBeInstanceOf(ValidationError);
-      // The generic sentence, and this is where the counter branch is told
-      // apart from every other failure the library *throws*: match it on
-      // `instanceof Error` alone and this refusal starts telling a household
-      // their passkey may have been copied.
+      // The generic sentence, and the one test that catches the counter match
+      // being loosened: match on `instanceof Error` alone and this refusal
+      // starts telling a household their passkey may have been copied. It is
+      // the only such guard here, and not the sharpest available — a response
+      // signed with the user-verification bit clear throws from *inside*
+      // `verifyAuthenticationResponse`, six lines above the counter check
+      // rather than thirty-three — but producing one needs a `flags` option
+      // on `assertionResponse` that ticket 02 adds; this is what exists
+      // today.
       expect(refusal.fieldErrors.form).toBe("This passkey could not be verified. Try again.");
     }),
   );
