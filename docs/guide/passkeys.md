@@ -27,6 +27,12 @@ created. The screen tells you this before you finish, and it is not a warning to
 that instant, every other phone and laptop in the house is locked, and will ask to be unlocked the
 next time anyone opens it. Only the browser doing the enrolling is spared.
 
+One thing it does not do is wipe a screen somebody is already looking at. A phone left open on the
+overview keeps showing those figures until it asks for something new — tapping through to another
+screen, or pulling to refresh, is what turns it into the unlock screen. If you want a particular
+screen gone *right now*, press **Lock now** on that device; enrolling from somewhere else is not the
+way to clear it.
+
 Enrolling that very first passkey skips only one thing every later one needs: checking in with a
 passkey you already have, first — there is nothing yet to check yourself against. It still takes two
 presses of its own. The first asks for nothing more than a label and ticking that you understand what

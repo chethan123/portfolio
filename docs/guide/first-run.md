@@ -94,9 +94,10 @@ it signed in through Google, is refused every screen until it proves itself with
 check. Signing in again does not clear it, and unlocking one browser does nothing for any other.
 
 A brand-new instance holds no passkey at all, so none of this applies yet. The moment somebody
-enrols the first one, though, every *other* browser in the household is locked immediately — not
-just the one doing the enrolling. See [Passkeys and the lock](passkeys.md) for what that means and
-how to get a locked browser back in.
+enrols the first one, though, every *other* browser in the household is locked — not just the one
+doing the enrolling — from the very next thing each of them asks the server for. See
+[Passkeys and the lock](passkeys.md) for what that means, what it does not reach, and how to get a
+locked browser back in.
 
 ## Light and dark
 

@@ -706,13 +706,21 @@ locked whenever the household holds at least one passkey, and open whenever it h
 brand-new instance holds none, so every family member the gate admits sees every figure, exactly as
 it always has — nothing here changes what a fresh install looks like.
 
-### Enrolling the first one locks everyone else, on the spot
+### Enrolling the first one locks everyone else, from their very next request
 
 The moment anyone enrols the household's first passkey, every *other* browser in the household is
-locked immediately — not on its next visit to Settings, not after some delay, but from that request
-onward. The browser doing the enrolling is the one exception; it stays unlocked. The enrolment screen
-says this before it lets anyone finish, and it is worth saying to the household yourself before you
-press it, not after.
+locked — not on its next visit to Settings, not after some delay, but from the next request it makes.
+The browser doing the enrolling is the one exception; it stays unlocked. The enrolment screen says so
+before it lets anyone finish, and it is worth saying to the household yourself before you press it,
+not after.
+
+What it cannot do is reach into a screen somebody is already looking at. Deleting a grant stops the
+next request; it does not repaint a page already drawn, so a browser sitting on a rendered screen
+keeps those figures until it asks the server for something. Protected responses carry
+`Cache-Control: no-store` so a Back gesture has to ask, but the guarantee is worth stating as what it
+is: the lock ends the reading, not every pixel already on screen. Somebody who wants a particular
+screen gone *now* should press **Lock now** on that browser rather than expect an enrolment
+elsewhere to blank it.
 
 That first enrolment needs no passkey check of its own — there is nothing yet to check against, and
 anyone the gate has already admitted is already seeing every figure at that moment. Every enrolment
