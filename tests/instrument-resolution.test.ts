@@ -483,6 +483,47 @@ describe("resolveAll — the USD probe", () => {
   );
 
   it(
+    "creates the instrument when the probe answered nothing about its symbol",
+    withDatabase(async ({ db, seedClassification }) => {
+      // A probe may answer about fewer symbols than it was asked. Over the
+      // socket that is not hypothetical: a symbol failing the worker's own
+      // pattern check is dropped before the call and comes back absent. An
+      // absent verdict has to read as `unavailable` — created now, priced or
+      // marked stale by the next refresh — because reading it as a refusal
+      // would block a statement over a symbol nobody judged.
+      const classification = await seedClassification();
+      const silentProbe: ProbeSymbols = async () => new Map();
+
+      const resolved = await resolveAll(
+        [
+          {
+            raw: "VTI",
+            fields: createFields({
+              symbol: "VTI",
+              name: "Vanguard Total Stock Market ETF",
+              priceSource: "feed",
+              classificationId: classification.id,
+              newClassificationName: "",
+              newClassificationAssetClass: "",
+            }),
+          },
+        ],
+        { probe: silentProbe },
+        db,
+      );
+
+      const instrument = await db
+        .selectFrom("instrument")
+        .select(["symbol", "quote_type"])
+        .where("id", "=", resolved[0]!.instrumentId)
+        .executeTakeFirstOrThrow();
+
+      expect(instrument.symbol).toBe("VTI");
+      expect(instrument.quote_type).toBeNull();
+    }),
+  );
+
+  it(
     "resolves a manual-only submission with a probe stub that was never called",
     withDatabase(async ({ db, seedClassification }) => {
       // The call counter is the assertion, not the created row's absence of

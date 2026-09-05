@@ -332,6 +332,37 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
     expect(verdicts).toEqual(new Map([["VOD.L", { status: "non-usd", currency: "GBP" }]]));
   });
 
+  it("leaves a symbol unavailable when the only entry names a ticker nobody asked about", () => {
+    // The rule batching newly needs: serially the feed could only answer
+    // about the symbol in front of it, so any usable entry was that symbol's.
+    // One answer must not be spent on whichever symbol was asked first, or a
+    // refusal lands on an instrument the feed never spoke about.
+    const verdicts = probeVerdicts(
+      ["VTI", "VWRL"],
+      [{ symbol: "ZZZ", regularMarketPrice: 1, currency: "GBp" }],
+      FETCHED_AT,
+    );
+
+    expect(verdicts).toEqual(
+      new Map([
+        ["VTI", { status: "unavailable" }],
+        ["VWRL", { status: "unavailable" }],
+      ]),
+    );
+  });
+
+  it("matches an entry whose own spelling differs in case from the symbol asked", () => {
+    // The other half of the rule: the match key is taken on *both* sides, so
+    // the feed echoing its own casing still answers the symbol we asked.
+    const verdicts = probeVerdicts(
+      ["VTI"],
+      [{ symbol: "vti", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" }],
+      FETCHED_AT,
+    );
+
+    expect(verdicts).toEqual(new Map([["VTI", { status: "ok", quoteType: "ETF" }]]));
+  });
+
   it("answers unavailable for a symbol no entry claims", () => {
     const verdicts = probeVerdicts(["MISTYPED"], [], FETCHED_AT);
 
@@ -339,7 +370,11 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("answers unavailable for every symbol asked when the payload is not even a list", () => {
-    const verdicts = probeVerdicts(["VTI", "VXUS"], "not an array", FETCHED_AT);
+    // An object, not a string: a string is iterable, so `for…of` walks its
+    // characters and the guard this case exists for never runs. `{}` is what
+    // a JSON body decoding to the wrong shape actually looks like, and
+    // iterating one throws.
+    const verdicts = probeVerdicts(["VTI", "VXUS"], { quotes: [] }, FETCHED_AT);
 
     expect(verdicts).toEqual(
       new Map([
@@ -425,7 +460,7 @@ describe("probing symbols at creation time", () => {
   it("answers unavailable for a payload that is not even a list", async () => {
     // An unofficial endpoint can change shape under us. A payload the schema
     // has never seen is a provider failure, not a reason to refuse creation.
-    const verdicts = await probeSymbols(["VTI"], clientAnswering(async () => "not an array"));
+    const verdicts = await probeSymbols(["VTI"], clientAnswering(async () => ({ quotes: [] })));
 
     expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
   });

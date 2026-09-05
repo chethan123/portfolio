@@ -68,6 +68,12 @@ volume is already mounted in `app`.
       independent of the others': a completed chunk's symbols go through `probeVerdicts` and keep
       their verdicts, and only the symbols of a chunk whose `ask` threw become `unavailable`; never
       throws itself
+- [ ] `socketProbe` writes one `console.warn` when a chunk's ask fails and every symbol in it comes
+      back `unavailable`. [02](02-the-batched-probe.md) made that failure batch-wide where it used
+      to cost one symbol its guard — a submission's whole currency check is skipped and the only
+      trace is instruments that are never priced. `refreshQuotes` logs its equivalent
+      (`Price provider failed`); this path logs nothing today. The stem belongs in
+      `docs/operating.md`'s list, which [09](09-documents-and-runbooks.md) writes
 - [ ] The module header carries the argument: why a unix socket and not a TCP port on an internal
       network (a bridge is symmetric — the worker would reach `app:3000`); why no handle and no flag
       (a connect failure is immediate, so there is nothing to amortise); why no budget crosses the
