@@ -83,7 +83,21 @@ Amounts start hidden on a browser nobody has answered for: each shows a run of d
 dates and the shape of the chart stay readable. Press **Show amounts** in the navigation to reveal
 them on this browser; hiding them again is the same control. What a fresh browser opens showing is
 a household choice at [Settings → Display](settings.md#display). It is a defence against being read
-over your shoulder, not a lock — the sign-in above is the only thing that keeps anyone out.
+over your shoulder, not a lock — the sign-in above keeps a person out, and the lock keeps a browser
+out.
+
+## If a browser asks you to unlock
+
+Masking is not the only thing that can stand between an open screen and a closed one. Once anybody
+in the household has enrolled a passkey — from Settings → Passkeys — every browser, however recently
+it signed in through Google, is refused every screen until it proves itself with its own passkey
+check. Signing in again does not clear it, and unlocking one browser does nothing for any other.
+
+A brand-new instance holds no passkey at all, so none of this applies yet. The moment somebody
+enrols the first one, though, every *other* browser in the household is locked — not just the one
+doing the enrolling — from the very next thing each of them asks the server for. See
+[Passkeys and the lock](passkeys.md) for what that means, what it does not reach, and how to get a
+locked browser back in.
 
 ## Light and dark
 

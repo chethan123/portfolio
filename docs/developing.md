@@ -32,7 +32,8 @@ rather than a checkout, it is not here — see the closing line.
 
 **The trap first, because you will hit it otherwise.** `npm run dev` starts Vite happily with no
 database and no error. Nothing goes wrong until the first page request, which returns 500 and renders
-an error page naming `DATABASE_URL` as missing. Configuration is parsed lazily — `getConfig()` in
+an error page naming `DATABASE_URL` as missing — or `PUBLIC_ORIGIN`, which trips the identical trap
+if that is the one left unset. Configuration is parsed lazily — `getConfig()` in
 [`../server/config.ts`](../server/config.ts) reads and caches `process.env` on first use — so a boot
 with no configuration is not a boot that fails. The dev server starting means nothing.
 

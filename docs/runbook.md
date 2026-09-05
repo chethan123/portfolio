@@ -103,12 +103,18 @@ docker compose run --rm --no-deps \
 docker compose up -d app
 ```
 
-Two things about the validator:
+About the validator:
 
 - It reports **every** problem it can see in one pass, so fix the whole list before retrying.
-- An empty value is treated as unset and falls back to the default. The gate's own variables are
+- An empty value is treated as unset and falls back to the default. The gate's own credentials are
   not its business at all — those stop Compose before a container exists
   ([`docker compose up` refuses to start anything](#docker-compose-up-refuses-to-start-anything)).
+- **`PUBLIC_ORIGIN` is the one most likely to name itself here.** The app checks it as strictly as
+  a passkey check needs — an IP-address host, a path or query string, or merely a differently
+  spelled version of the same origin (a trailing slash, a different case, an explicit `:443`) are
+  each refused by name, even though the value is not empty and clears Compose's own check. Copying
+  the address straight out of a browser's own bar is the usual way a trailing slash gets in. See
+  [Environment variables](operating.md#environment-variables) for the exact shape it wants.
 
 If it is `gate` rather than `app` that is restarting, its log names the reason and `cookie_secret`
 is the usual one — the value must decode to 16, 24 or 32 bytes:
@@ -117,7 +123,8 @@ is the usual one — the value must decode to 16, 24 or 32 bytes:
 docker compose logs --tail=100 gate
 ```
 
-Why: [Environment variables](operating.md#environment-variables), [Security](operating.md#security).
+Why: [Environment variables](operating.md#environment-variables), [Security](operating.md#security),
+[The lock](operating.md#the-lock).
 
 ---
 
@@ -503,6 +510,59 @@ refusals means.
 
 ---
 
+## Every browser is locked and no passkey can be reached
+
+**Confirm.** Every browser shows the unlock screen — including ones that were already signed in
+through Google — and nobody in the household can complete a passkey check: every device that held
+one is lost, broken, or otherwise out of reach.
+
+```sh
+docker compose exec db psql -U portfolio -d portfolio \
+  -c "select credential_id, label, enrolled_at, last_used_at from passkey order by enrolled_at"
+```
+
+**If you removed the bundled `db` service and point at your own Postgres**
+([Running against your own Postgres](operating.md#running-against-your-own-postgres)), there is no
+`db` container to exec into — run the identical SQL through your own database's own administrative
+connection instead. `DATABASE_URL` lives in `.env`, which Compose reads and the invoking shell does
+not (docs/developing.md's "Which files Vite reads") — `psql "$DATABASE_URL"` typed as-is reaches an
+empty string and connects nowhere. From the repository root, on the host running Compose, read it
+out of `.env` directly:
+
+```sh
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" \
+  -c "select credential_id, label, enrolled_at, last_used_at from passkey order by enrolled_at"
+```
+
+Running this from somewhere else entirely — a laptop that is not the Compose host — has no `.env` to
+read; paste the same connection string you set as `DATABASE_URL` there in its place instead.
+
+One row per enrolled passkey, either way. An empty result means the instance is not actually locked
+at all — go to [Nobody can sign in](#nobody-can-sign-in) instead.
+
+**Do.** Stop `app`, delete every row, then start `app` again — in that order, because the order is
+the point. There is no token, no recovery code and no second path in through the front door — this is
+the one way back, and it returns the instance to the same state a fresh install starts in: unlocked,
+with anyone the gate admits free to enrol a passkey again.
+
+```sh
+docker compose stop app
+
+docker compose exec db psql -U portfolio -d portfolio -c "delete from passkey"
+# or, against your own Postgres:
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" -c "delete from passkey"
+
+docker compose start app
+```
+
+`unlock_grant.passkey_id` references `passkey` `on delete cascade`, so the delete also removes every
+browser's current grant along with the passkey that minted it — nothing is left half-cleared.
+
+Why, including why the order above is stop-delete-start and not delete-then-restart:
+[The lock](operating.md#the-lock).
+
+---
+
 ## Somebody wants to sign out
 
 **Do.** Send them to `PUBLIC_ORIGIN` + `/oauth2/sign_out` in the browser they want cleared.
@@ -595,7 +655,15 @@ Then: install Docker, clone, copy `.env` and `allowed-emails.txt` into place,
 If the public origin changes with the machine, `PUBLIC_ORIGIN` and the redirect URI registered on
 the Google OAuth client both have to change with it, or nobody can sign in.
 
-Why: [Installing](operating.md#installing), [Backups](operating.md#backups).
+**If the household holds any passkeys, a hostname change locks the instance with none that work.**
+Delete every passkey as part of the move (the command is in
+[Every browser is locked and no passkey can be reached](#every-browser-is-locked-and-no-passkey-can-be-reached)),
+before or right after you bring the new machine up, and have the household enrol again once it is
+serving the new hostname. Moving without doing that does not merely orphan the old passkeys — it
+leaves the new instance locked, with nothing that can unlock it.
+
+Why: [Installing](operating.md#installing), [Backups](operating.md#backups),
+[The lock](operating.md#the-lock).
 
 ---
 
@@ -642,9 +710,9 @@ Why: [Upgrading](operating.md#upgrading), [Restoring](operating.md#restoring).
 - Migrations fail closed: a failure rolls that file back whole and the server refuses to start, so a
   half-applied schema is not a thing that exists.
 - Almost nothing in the application deletes anything: an account is closed rather than deleted, and
-  a correction is a new record rather than an overwrite. The one real delete is removing a person
-  who owns no accounts. What looks like missing data is usually a screen filtered to a date or an
-  account.
+  a correction is a new record rather than an overwrite. The real deletes are removing a person who
+  owns no accounts, and removing a passkey — including every one at once, [above](#every-browser-is-locked-and-no-passkey-can-be-reached).
+  What looks like missing data is usually a screen filtered to a date or an account.
 - An in-progress upload draft is not data. Drafts are swept after 24 hours, and only when the next
   upload starts.
 
