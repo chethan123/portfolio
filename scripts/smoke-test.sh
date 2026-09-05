@@ -68,7 +68,7 @@ empty_dumps_dir() {
 
 cleanup() {
   log "Tearing down"
-  docker compose logs --no-color app db caddy gate dump 2>&1 | tail -80 || true
+  docker compose logs --no-color app db caddy gate dump worker 2>&1 | tail -80 || true
   docker compose down -v --remove-orphans || true
   empty_db_dir || true
   empty_dumps_dir || true
@@ -79,15 +79,16 @@ cleanup() {
 trap cleanup EXIT
 
 wait_for_healthy() {
+  local service="${1:-app}"
   local deadline=$((SECONDS + TIMEOUT_SECONDS))
   while ((SECONDS < deadline)); do
-    case "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q app)" 2>/dev/null || true)" in
+    case "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q "$service")" 2>/dev/null || true)" in
       healthy) return 0 ;;
-      unhealthy) fail "app healthcheck reported unhealthy" ;;
+      unhealthy) fail "${service} healthcheck reported unhealthy" ;;
     esac
     sleep 3
   done
-  fail "app did not become healthy within ${TIMEOUT_SECONDS}s"
+  fail "${service} did not become healthy within ${TIMEOUT_SECONDS}s"
 }
 
 expect_status() {
@@ -99,6 +100,22 @@ expect_status() {
   [[ "$actual" == "$expected" ]] || fail "GET /healthz returned ${actual}, expected ${expected}"
   printf 'GET /healthz -> %s\n' "$actual"
 }
+
+# --- The Docker Engine floor ---------------------------------------------------
+# First, before anything else touches Compose: 07's isolated networks are what
+# make 28.0 load-bearing (26 ignores `gateway_mode_ipv4` silently and keeps a
+# host address on the bridge, 27 refuses it), but the floor is declared here,
+# one release earlier, so an operator meets the check before that matters. A
+# CI runner-image regression (`.github/workflows/ci.yml:142-149`) then reads
+# as "engine too old", not as a topology bug several checks downstream.
+log "Checking the Docker Engine floor"
+engine_version="$(docker version --format '{{.Server.Version}}')" ||
+  fail "could not read the Docker Engine version"
+engine_major="${engine_version%%.*}"
+[[ "$engine_major" =~ ^[0-9]+$ ]] ||
+  fail "could not parse a major version from Docker Engine ${engine_version}"
+((engine_major >= 28)) || fail "Docker Engine ${engine_version} is below the 28.0 floor"
+printf 'Docker Engine %s\n' "$engine_version"
 
 # --- The stack refuses to start half-protected --------------------------------
 # Unconfigured, compose must stop rather than bring up an ungated instance.
@@ -152,6 +169,13 @@ docker compose up -d --build
 log "Waiting for the app healthcheck"
 wait_for_healthy
 expect_status 200
+
+# Proves the worker listens *in the built image*: an incomplete Dockerfile
+# copy set (server/yahoo-client.ts, server/symbol-pattern.ts,
+# server/price-worker.ts) dies on first import, and nothing else would catch
+# it. `worker` has no `depends_on` and starts with the same `up -d --build`.
+log "Waiting for the worker healthcheck"
+wait_for_healthy worker
 
 # --- Migrations ran before the server started ---------------------------------
 # /healthz is non-200 while any on-disk migration is unrecorded, so the 200
@@ -227,9 +251,14 @@ migration_count="$(run_in_image 'ls /app/migrations/*.sql 2>/dev/null | wc -l' |
 [[ "$migration_count" -gt 0 ]] || fail "the runtime image contains no migration .sql files"
 printf 'migration .sql files in the image: %s\n' "$migration_count"
 
-run_in_image 'test -f /app/server/migrate.ts' ||
-  fail "the migration runner is missing from the runtime image"
-printf 'migration runner in the image\n'
+# The migration runner and the three modules 04 added for the price-worker
+# process — the same "did the Dockerfile copy set make the cut" question,
+# asked per file rather than inferred from the worker healthcheck alone.
+for path in /app/server/migrate.ts /app/server/yahoo-client.ts \
+  /app/server/symbol-pattern.ts /app/server/price-worker.ts; do
+  run_in_image "test -f $path" || fail "missing from the runtime image: $path"
+done
+printf 'migration runner and price-worker modules in the image\n'
 
 for pkg in vitest vite typescript @react-router/dev @types/react; do
   run_in_image "test ! -e /app/node_modules/$pkg" || fail "dev dependency in the runtime image: $pkg"
@@ -283,6 +312,10 @@ printf 'db port not published\n'
 
 [[ "$(published_ports app)" != *HostPort* ]] || fail "the app port is published to the host"
 printf 'app port not published\n'
+
+# The worker has no TCP listener to publish — only the socket.
+[[ "$(published_ports worker)" != *HostPort* ]] || fail "the worker port is published to the host"
+printf 'worker port not published\n'
 
 # The gate believes X-Forwarded-* from whatever reaches it, so a published
 # port here would let a caller walk past the gate asserting its own identity.
@@ -342,6 +375,7 @@ expect_caps() {
 expect_caps app "" 0000000000000000
 expect_caps db "" 0000000000000000
 expect_caps dump "" 0000000000000000
+expect_caps worker "" 0000000000000000
 # Exec, not binding: /usr/bin/caddy carries file capability
 # cap_net_bind_service=ep and the kernel refuses to exec it from an empty
 # bounding set — compose.yaml has the transcript.
@@ -362,7 +396,7 @@ expect_no_new_privileges() {
   printf '%s: no-new-privileges, NoNewPrivs=%s at PID 1\n' "$service" "$applied"
 }
 
-for service in app db caddy gate dump; do
+for service in app db caddy gate dump worker; do
   expect_no_new_privileges "$service"
 done
 
@@ -377,6 +411,7 @@ expect_uid() {
 }
 
 expect_uid app 1000
+expect_uid worker 1000
 expect_uid db 70
 expect_uid caddy 65532
 expect_uid gate 0
@@ -398,9 +433,113 @@ expect_read_only_root() {
   printf '%s: / is read-only\n' "$service"
 }
 
-for service in app db caddy gate dump; do
+for service in app db caddy gate dump worker; do
   expect_read_only_root "$service"
 done
+
+# --- The worker's volume fence, bounds and socket ------------------------------
+# What proves the fence design (research note §8.5): the mount set, not the
+# socket's mode, is what keeps a compromised sidecar from touching the
+# worker's socket — only app and worker may mount price-worker-sock at all.
+log "Checking the price-worker-sock volume fence"
+for service in db dump gate caddy; do
+  mount_names="$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' \
+    "$(docker compose ps -q "$service")")" ||
+    fail "could not inspect ${service}'s mounts"
+  [[ "$mount_names" != *"price-worker-sock"* ]] ||
+    fail "${service} mounts price-worker-sock, which only app and worker may: ${mount_names}"
+done
+printf 'db, dump, gate, caddy do not mount price-worker-sock\n'
+
+log "Checking the worker's resource bounds"
+resource_line="$(docker inspect -f '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' \
+  "$(docker compose ps -q worker)")" || fail "could not inspect the worker's resource limits"
+worker_pids="${resource_line%% *}"
+worker_mem="${resource_line##* }"
+[[ "$worker_pids" =~ ^[0-9]+$ && "$worker_pids" -gt 0 ]] ||
+  fail "worker PidsLimit is '${worker_pids}', expected a positive number"
+[[ "$worker_mem" =~ ^[0-9]+$ && "$worker_mem" -gt 0 ]] ||
+  fail "worker Memory is '${worker_mem}', expected a positive number"
+printf 'worker: PidsLimit=%s Memory=%s\n' "$worker_pids" "$worker_mem"
+
+# The one positive assertion the channel allows: from app, over the shared
+# socket, at the mount path both sides agree on — the proof that the volume,
+# the uids and the mode line up, not just that each holds in isolation.
+log "Checking app reaches the worker's /healthz over the shared socket"
+docker compose exec -T app node -e '
+  const http = require("node:http");
+  const req = http.request({
+    socketPath: "/run/price-worker/worker.sock",
+    path: "/healthz",
+    method: "GET",
+    agent: false,
+  }, (res) => { res.resume(); process.exit(res.statusCode === 200 ? 0 : 1); });
+  req.on("error", () => process.exit(1));
+  req.setTimeout(5000, () => { req.destroy(); process.exit(1); });
+  req.end();
+' || fail "app could not GET /healthz over /run/price-worker/worker.sock"
+printf 'app: GET /healthz over the socket -> 200\n'
+
+# A bind mount does not change the fstype reported for the underlying
+# filesystem, so tmpfs survives into the container's own /proc/mounts.
+log "Checking the worker's mount of /run/price-worker is tmpfs"
+mounts_line="$(docker compose exec -T worker grep ' /run/price-worker ' /proc/mounts)" ||
+  fail "worker's /proc/mounts has no entry for /run/price-worker"
+[[ "$mounts_line" == *" tmpfs "* ]] ||
+  fail "/run/price-worker is not tmpfs in worker: ${mounts_line}"
+printf 'worker: %s\n' "$mounts_line"
+
+# --- The worker shares no network with app, gate or db ------------------------
+# egress-worker is worker's only network; app, gate and db stay on the
+# implicit default bridge until 07. A connect to an unroutable address waits
+# on the kernel's default (minutes), so every attempt carries its own 3s
+# timeout — and never `ping`, since NET_RAW is dropped (cap_drop: ALL).
+log "Checking the worker cannot reach app, gate or db"
+
+container_ip() {
+  docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+    "$(docker compose ps -q "$1")"
+}
+
+unreachable_from_worker() {
+  local host="$1" port="$2" desc="$3"
+  docker compose exec -T worker node -e '
+    const net = require("node:net");
+    const [host, port] = process.argv.slice(1);
+    const socket = net.connect({ host, port: Number(port) });
+    let done = false;
+    const finish = (code) => {
+      if (done) return;
+      done = true;
+      socket.destroy();
+      process.exit(code);
+    };
+    socket.setTimeout(3000);
+    socket.once("connect", () => finish(1));
+    socket.once("timeout", () => finish(0));
+    socket.once("error", () => finish(0));
+  ' "$host" "$port" ||
+    fail "worker reached ${desc} (${host}:${port}) — network isolation broken"
+  printf 'worker cannot reach %s (%s:%s)\n' "$desc" "$host" "$port"
+}
+
+app_ip="$(container_ip app)"
+gate_ip="$(container_ip gate)"
+db_ip="$(container_ip db)"
+[[ -n "$app_ip" && -n "$gate_ip" && -n "$db_ip" ]] ||
+  fail "could not resolve a container IP: app=${app_ip:-?} gate=${gate_ip:-?} db=${db_ip:-?}"
+
+unreachable_from_worker app 3000 "app by name"
+unreachable_from_worker "$app_ip" 3000 "app by IP"
+unreachable_from_worker gate 4180 "gate by name"
+unreachable_from_worker "$gate_ip" 4180 "gate by IP"
+unreachable_from_worker db 5432 "db by name"
+unreachable_from_worker "$db_ip" 5432 "db by IP"
+
+# DNS still works — until 08's allowlist.
+docker compose exec -T worker timeout 5 nslookup example.com >/dev/null ||
+  fail "worker cannot resolve DNS (nslookup example.com)"
+printf 'worker: DNS still resolves\n'
 
 # The capability's effect, not its declaration: read as the sidecar's own uid
 # from the same ro bind mount — on a non-root runner, the 0600 file above.

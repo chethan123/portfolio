@@ -90,7 +90,20 @@ one Google Cloud project to hold the OAuth client. `linux/amd64` and `linux/arm6
 published, so a Raspberry Pi or an ARM NAS needs nothing special. There is no build step and
 therefore no build-memory requirement — that is the whole point of publishing the image, and it is
 what makes a small NAS or VPS a reasonable host.
-Node itself is a requirement for *working on* this, not for running it.
+Node itself is a requirement for *working on* this, not for running it. Not proven anywhere in this
+repo's CI, because its runner is none of these: an SELinux-enforcing host, `userns-remap`, or rootless
+Docker can each leave the worker's socket permissions different from what this stack assumes — check
+it yourself, once, right after `up -d`:
+
+```sh
+docker compose exec -T app node -e "
+require('node:http').request({socketPath:'/run/price-worker/worker.sock',path:'/healthz',agent:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1)).end()
+"
+echo $?
+```
+
+`0` means `app` reached `worker` over the shared socket end to end; anything else, see
+[Monitoring](#monitoring).
 
 **Bringing it up is one command, and it belongs to the README:**
 [Running an instance](../README.md#running-an-instance). It is deliberately not repeated here — that
@@ -256,6 +269,7 @@ happens to need it.
 | `MAX_UPLOAD_MB` | No | `10` | The most a statement upload may carry, in whole mebibytes, minimum 1. A brokerage CSV is tens of kilobytes, so the cap bounds an accident, not real use. **Not wired through `compose.yaml`** — see below. |
 | `MARKET_TIMEZONE` | No | `America/New_York` | IANA zone for deciding whether the market is open, and for reading which trading day a quote belongs to — so it picks the date a daily close is filed under. No effect on how timestamps are stored, which is UTC. |
 | `TZ` | No | `UTC` | Container clock. The database stores UTC whatever this says, so this only affects how the app's own log lines read. Leaving it at `UTC` is recommended. |
+| `PRICE_WORKER_SOCKET` | No | `/run/price-worker/worker.sock` | Where the app dials the price worker and where the worker listens. **Development only** — `compose.yaml` sets it for neither `worker` nor `app`, so both run this same fixed default, meeting at the mount inside the shared `price-worker-sock` volume. Set it only for a checkout running the worker outside Compose, under `/tmp`. |
 
 **One variable this table used to carry is gone.** How often quotes are refreshed is the
 household's dial rather than the deployment's, so it moved into the application: set it at
@@ -837,6 +851,18 @@ that is wedged but still running stays unhealthy, stays in service, and stays th
 `docker compose restart app` is a manual step. Whatever you point at `/healthz` therefore has to be
 able to *act*, not only to alert — or you have to be the one who acts.
 
+### The worker's own healthcheck
+
+`worker` carries a healthcheck of the same shape as `app`'s — `node -e`, no shell, on an interval —
+reached over `/run/price-worker/worker.sock` instead of a port, since the container publishes none.
+Its `/healthz` consults nothing: it answers `200` the moment the process is accepting requests,
+before it has made a single call to Yahoo. So "unhealthy" here means exactly that and nothing wider
+— the worker is not accepting requests on its socket, ordinarily the process gone or wedged — never
+"Yahoo is failing," which is a different thing entirely and shows up instead as stale prices and
+`app`'s own `Price provider failed` line, with `worker` reporting healthy the whole time. And the
+restart rule above still holds: nothing here recreates `worker` on this failing, so an unhealthy row
+in `docker compose ps` is where you look, not something Compose resolves for you.
+
 ### Logs
 
 `docker compose logs -f app` is the entire pipeline; there is no metrics endpoint, no tracing and no
@@ -1085,6 +1111,31 @@ container; with the default floating `APP_VERSION=1` that is the newest `v1.x.y`
 checkout of this repository is not needed to run or upgrade an instance — only `compose.yaml`,
 `Caddyfile`, `scripts/dump-loop.sh`, your `.env`, your `allowed-emails.txt` and the
 `volumes/db/data` and `volumes/dumps` directories beside them.
+
+**A release that adds a service or a volume needs `compose.yaml` replaced too, not just the image
+pulled — this one does, adding `worker` and the `price-worker-sock` volume that carries prices to
+it.** `compose.yaml` is one of the files above that `pull_policy: always` never touches, so bring
+the new one in yourself, in this order: replace `compose.yaml` with the copy shipped alongside the
+release; confirm the engine next — `docker version --format '{{.Server.Version}}'` at or above
+`28.0`, the floor this release declares; then `docker compose up -d`, which recreates `app` once,
+because its mounts changed — the brief outage every upgrade already has, not a fault — and brings
+`worker` up alongside it for the first time.
+
+Skip it, and this release alone will not tell you: `app` still fetches its own prices exactly as it
+does today, and `worker` simply idles unused. The cost lands the moment a later release, the one
+that has `app` dial the worker instead of fetching for itself, starts under this same old file: no
+volume and no worker, prices going stale while `/healthz` keeps answering green — a missing price
+provider was never a health signal — and the only sign in the log is one `no worker listening at
+/run/price-worker/worker.sock` line per call site, up to two per tick.
+
+**A changed `driver_opts` line means a new volume name, never `docker compose down -v`.** Compose
+reuses a name-matched volume untouched, so editing `price-worker-sock`'s tmpfs options in some
+future release would change nothing on an already-running instance until that volume is removed by
+hand — the release making the change has to rename the volume instead, the way `db-store` itself was
+named to dodge exactly this
+([Moving an instance that predates the local path](#moving-an-instance-that-predates-the-local-path)
+has that history). `docker compose down -v` is not that removal — on this instance it takes
+`db-store`'s volume record, the database, down with it too.
 
 **An instance that predates the dump service needs three things before its next `up`**: that script
 in place, `mkdir -p ./volumes/dumps`, and `DUMP_UID`/`DUMP_GID` in `.env` set to the account that

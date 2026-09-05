@@ -19,6 +19,36 @@ the release that introduces a service and a volume deserves its own upgrade note
 
 **Status:** ready-for-agent
 
+**Corrected — the citations, not the argument.** Eleven `file:line` references below were written
+against the tree this ticket was planned on. Tickets 03 and 04 landed between then and now, and the
+lock slice landed alongside them; nothing this ticket asks for changed, but the addresses did. Every
+number below was re-read on `main` at the commit this was built from, not recomputed, and the
+current line is given beside the one in the text. Where a range is named, both ends were opened.
+
+| Written as | Actually at | What is there |
+|---|---|---|
+| `compose.yaml:377` | `:388` | the top-level `volumes:` key |
+| `compose.yaml:378-394` | `:389-405` | `db-store`'s comment block, the form to copy |
+| `compose.yaml:392-394` | `:403-405` | the reused-name hazard those three lines guard |
+| `compose.yaml:215-221` | `:222-226` | `app`'s `security_opt` / `cap_drop` / `read_only` |
+| `compose.yaml:223-227` | `:230-234` | `app`'s own `node -e` healthcheck `test:` |
+| `.github/workflows/ci.yml:138-145` | `:142-149` | the `smoke` job, `runs-on: ubuntu-latest` at `:144` |
+| `docs/operating.md:949` | `:1072` | the `## Upgrading` heading |
+| `docs/operating.md:962-965` | `:1085-1087` | "a checkout … is not needed to run or upgrade an instance" |
+| `docs/operating.md:238` | `:239` | the `## Environment variables` heading; its table body is `:251-258` |
+| `docs/operating.md:710` | `:833` | `### An unhealthy container is not restarted`, the Monitoring anchor |
+| `docs/operating.md:84-92` | `:85-93` | the **Host requirements** paragraph |
+
+Everything cited in `scripts/smoke-test.sh` and `compose.dev.yaml` was re-read and is unchanged, as
+is `Dockerfile:94-96` and every `§` reference into the spec and the research note.
+
+**One thing the ticket left to the builder is settled.** It says the builder verifies whether this
+repository's Compose honours `mem_limit` or `deploy.resources.limits.memory` without swarm. Both
+are honoured: `docker compose up` applies each to the same `HostConfig`, and setting the two to
+*different* values is a hard load error rather than a precedence rule, so exactly one may be
+written. The flat keys are what this ticket writes — `mem_limit: 256m` and `pids_limit: 64` — since
+this stack never runs under `docker stack deploy`, which is the only thing the nested form buys.
+
 **The volume** (`compose.yaml`, the `volumes:` block at `:377`)
 
 - [ ] `price-worker-sock`: `driver: local` with `driver_opts: { type: tmpfs, device: tmpfs, o:
@@ -43,7 +73,13 @@ the release that introduces a service and a volume deserves its own upgrade note
       ([09](09-documents-and-runbooks.md)'s runbook entry), never a data loss
 - [ ] Mounted at `/run/price-worker` in `worker` and in `app` — `app` from this ticket, so the
       cutover changes no compose line. `read_only: true` stays on both: the volume is the one
-      writable path either needs for this (research §8.3)
+      writable path either needs for this (research §8.3). **Tightened beyond this box:** `app`
+      mounts it `:ro`, because `app` only ever *connects* and a writable mount would let a
+      compromised one unlink the socket or plant its own — the adversary §2.5 names. Connecting
+      through a read-only mount was measured rather than assumed: a `200` came back over a socket
+      reached through an `mount -o remount,ro,bind` path, because `connect(2)` is checked against
+      the inode's mode and `MS_RDONLY` only bars operations that modify the filesystem. The
+      worker's own mount stays writable; it has to create the socket
 
 **The service** (`compose.yaml`)
 
