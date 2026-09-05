@@ -10,18 +10,32 @@
  * `.resume()` right after connecting, or it would falsely look like the
  * server never closed it.
  */
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startWorker, type WorkerTimeouts } from "../server/price-worker.ts";
 import { createYahooClient, type YahooClient } from "../server/yahoo-client.ts";
+
+/** The entry point itself: the SIGTERM handler belongs to it, not to `startWorker`. */
+const WORKER_ENTRY = fileURLToPath(new URL("../server/price-worker.ts", import.meta.url));
+
+/** Wait until the worker has created its socket, or give up loudly. */
+async function waitForSocket(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (existsSync(path)) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`the worker never created ${path}`);
+}
 
 /** Short on purpose: a unix socket path is 107 usable bytes on Linux. */
 function freshSocketPath(): string {
@@ -255,6 +269,41 @@ describe("400: a body or route the worker refuses before any library call", () =
     expect(res.status).toBe(400);
   });
 
+  it("answers 400 for a method the route does not take, on a path that has one", async () => {
+    // `GET /quotes` above answers 400 either way — an empty body is not JSON —
+    // so it cannot tell the method guard from the schema. These can: each is
+    // a path the table has, under a method it does not, with a body that
+    // would otherwise parse.
+    const quote = vi.fn(async () => []);
+    const chart = vi.fn(async () => ({}));
+    await start(fakeYahoo({ quote, chart }));
+
+    const quotes = await rawRequest(currentSocketPath, "GET", "/quotes", '{"symbols":["VTI"]}');
+    const history = await rawRequest(
+      currentSocketPath,
+      "GET",
+      "/history",
+      '{"symbol":"VTI","from":"2024-06-01"}',
+    );
+    const healthz = await rawRequest(currentSocketPath, "POST", "/healthz");
+
+    expect([quotes.status, history.status, healthz.status]).toEqual([400, 400, 400]);
+    expect(quote).not.toHaveBeenCalled();
+    expect(chart).not.toHaveBeenCalled();
+  });
+
+  it("cuts an unknown route's text rather than echoing the whole URL", async () => {
+    // The one refusal with no rate cap above it, and a URL can carry up to
+    // Node's whole header allowance. Echoed whole it is a free way to fill
+    // the log the operator reads.
+    await start(fakeYahoo());
+
+    const res = await rawRequest(currentSocketPath, "POST", `/${"x".repeat(8 * 1024)}`);
+
+    expect(res.status).toBe(400);
+    expect(res.text.length).toBeLessThan(2 * 1024);
+  });
+
   it("answers 400 for POST /other", async () => {
     await start(fakeYahoo());
 
@@ -448,7 +497,10 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a connection whose headers never complete within headersTimeout plus one checking interval", async () => {
-    await start(fakeYahoo());
+    // `server.timeout` pinned far out of reach, the mirror of what the silent
+    // case above does for the header deadlines: both mechanisms can satisfy
+    // this bound, and a case two things can answer pins neither.
+    await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000 });
 
     const socket = await connectSocket(currentSocketPath);
     socket.resume();
@@ -460,6 +512,42 @@ describe("the socket file and its lifecycle", () => {
     expect(Date.now() - startedAt).toBeLessThan(
       TEST_TIMEOUTS.headersTimeout + TEST_TIMEOUTS.connectionsCheckingInterval + 1000,
     );
+  });
+
+  it("exits on SIGTERM even while every connection it admits is held open", async () => {
+    // The entry point, not `startWorker`, because the handler is the entry's.
+    // A stop has to finish inside Docker's ten-second grace, and `close()`
+    // waits for every connection: a socket that has sent nothing is not
+    // *idle* in Node's sense, so closing only the idle ones leaves exactly
+    // the eight a compromised app would hold and the stop becomes a SIGKILL.
+    const socketPath = join(await mkdtemp(join(tmpdir(), "pw-term-")), "w.sock");
+    const child = spawn(process.execPath, [WORKER_ENTRY], {
+      env: { ...process.env, PRICE_WORKER_SOCKET: socketPath },
+      stdio: "ignore",
+    });
+
+    try {
+      await waitForSocket(socketPath);
+
+      const held = await Promise.all(
+        Array.from({ length: 8 }, () => connectSocket(socketPath)),
+      );
+      held.forEach((socket) => socket.resume());
+
+      const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+      child.kill("SIGTERM");
+
+      const code = await Promise.race([
+        exited,
+        new Promise<"still running">((resolve) => setTimeout(() => resolve("still running"), 5_000)),
+      ]);
+
+      expect(code).toBe(0);
+      expect(existsSync(socketPath)).toBe(false);
+      held.forEach((socket) => socket.destroy());
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+    }
   });
 
   it("answers only the first of two requests written on one connection, with Connection: close", async () => {

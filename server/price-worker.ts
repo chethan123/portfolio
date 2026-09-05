@@ -314,7 +314,16 @@ async function handle(
     return;
   }
 
-  refuse(res, "unknown", 400, `no route for ${String(method)} ${String(url)}`);
+  // Cut like every other refusal text: a URL is bounded only by Node's 16 KB
+  // header cap, and this route has no rate cap to spend, so an unbounded echo
+  // would let anything that can reach the socket flush the log ring the
+  // operator reads the worker's own trouble from.
+  refuse(
+    res,
+    "unknown",
+    400,
+    `no route for ${String(method)} ${String(url)}`.slice(0, ERROR_TEXT_LIMIT),
+  );
 }
 
 async function unlinkIfExists(path: string): Promise<void> {
@@ -392,6 +401,15 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   // listener left on the shared `process` object per server would exceed
   // Node's default max within one test file.
   const onSigterm = (): void => {
+    // Every connection, not just the idle ones. `close()` waits for all of
+    // them, and a socket that has never sent a byte is not *idle* in Node's
+    // sense — it has no request to be between — so `closeIdleConnections()`
+    // leaves exactly the eight a compromised app would hold, and the wait
+    // outlasts Docker's ten-second grace: the stop degrades into the
+    // `SIGKILL` this handler exists to avoid. A request in flight is lost
+    // with them, which is the same answer a stopped worker gives anyway —
+    // the app reads it as a provider failure and keeps the last price.
+    server.closeAllConnections();
     server.close(() => process.exit(0));
   };
   process.on("SIGTERM", onSigterm);

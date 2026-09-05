@@ -78,6 +78,31 @@ describe("the shape of the library this client wraps", () => {
   });
 });
 
+describe("the deadline every call carries", () => {
+  it("defaults to thirty seconds, the number the spec fixes and no caller may change", async () => {
+    // The default is what production uses — the worker, the adapter and the
+    // probe all call `createYahooClient()` with no argument — so the number
+    // itself needs a case. Read off the signal the call forwards rather than
+    // waited out.
+    const seen: Array<AbortSignal | undefined> = [];
+    globalThis.fetch = (async (_url: string | URL, init: RequestInit) => {
+      seen.push(init?.signal ?? undefined);
+      throw new Error("stop here");
+    }) as typeof fetch;
+
+    await createYahooClient()
+      .chart("VTI", REQUEST)
+      .catch(() => {});
+
+    const signal = seen[0];
+    expect(signal).toBeInstanceOf(AbortSignal);
+    // `AbortSignal.timeout` keeps its deadline private, so the observable is
+    // that it has not fired: a one-millisecond default would abort by now.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(signal?.aborted).toBe(false);
+  });
+});
+
 describe("the request a chart call forwards", () => {
   it("sends period1, interval and events in the query, and a signal in the third argument", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
