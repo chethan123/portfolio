@@ -76,8 +76,10 @@ a closed account still counts on every date before it closed, so its owner is st
 The refusal names each account in the way. Change the owner on those accounts, then remove the
 person.
 
-Nothing in this application deletes anything, so this is the shape of most "no" answers here: an
-account is closed rather than deleted, a correction is a new record rather than an overwrite.
+Almost nothing in this application deletes anything, so this is the shape of most "no" answers here:
+an account is closed rather than deleted, a correction is a new record rather than an overwrite. What
+does delete, immediately and with no undo: removing a person once they own nothing at all, and
+removing a passkey on Settings → Passkeys — see [Passkeys and the lock](passkeys.md).
 
 ## The review screen wants a sentence ticked
 
