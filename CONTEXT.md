@@ -148,10 +148,10 @@ last passkey is the only way to turn it off.
 _Avoid_: signed out, timed out, app lock, screen lock, privacy mode.
 
 **Passkey**:
-A key the household has enrolled so that a browser can be unlocked, held by whichever provider the
-family member chose when creating it — the device's own, or a password manager. The instance keeps
-only its public half, and never sees the check that guards it. Not a device: one passkey may sync to
-every device in a vault, and one device may hold several.
+A credential the household has enrolled so that a browser can be unlocked, held by whichever
+provider the family member chose when creating it — the device's own, or a password manager. The
+instance keeps only its public half, and never sees the check that guards it. Not a device: one
+passkey may sync to every device in a vault, and one device may hold several.
 _Avoid_: biometric, fingerprint, face, device credential, enrolled device, key.
 
 ### Whose money a screen is showing
