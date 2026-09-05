@@ -20,8 +20,13 @@ What is not there, so you do not go looking for it:
   keeps. Nothing in the app adds you to it.
 - **No account each, inside the app.** Everyone who gets in sees the same screens and can change the
   same things — see [People and accounts](people-and-accounts.md#add-the-people).
-- **No sign-out control.** Closing the tab does not sign you out. If a phone is lost or a device
-  should stop getting in, tell whoever runs the instance — that is done from outside the app.
+- **No sign-out control.** Closing the tab does not sign you out. If a phone is lost, and the
+  household has enrolled passkeys, revoke that phone's from Settings → Passkeys on any browser that
+  is still unlocked — see [Removing a passkey](passkeys.md#removing-a-passkey). Any browser that
+  got in with that passkey is locked again straight away; one that was let in by approving on a
+  different device is locked by the clock instead, within fifteen minutes. Whoever runs the
+  instance is the recovery only when no passkey can be reached at all, and stopping an address
+  getting in through the front door is still theirs to do, from outside the app.
 
 **If sign-in finishes and you get an error instead of the app**, you signed in with an address that
 is not on the list. There is nothing to retry: ask whoever runs the instance to add the address you
