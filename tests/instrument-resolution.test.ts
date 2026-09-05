@@ -513,6 +513,44 @@ describe("resolveAll — the USD probe", () => {
   );
 
   it(
+    "refuses only the feed plan when a manual plan names the same refused ticker",
+    withDatabase(async ({ db, seedClassification }) => {
+      // The guard that keeps a manual instrument out of the feed's currency
+      // rule is written twice — once where symbols are collected, once where
+      // verdicts are read — and each site's loss hides the other's. A probe
+      // that must never be called catches the collection site only: lose the
+      // read site instead and the symbol is never asked about, so the stub
+      // never fires while the refusal lands on a plan it does not govern.
+      const classification = await seedClassification();
+      const probe: ProbeSymbols = async (symbols) =>
+        new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
+
+      const answerFor = (priceSource: "feed" | "manual") =>
+        createFields({
+          symbol: "VWRL",
+          name: `Vanguard FTSE All-World (${priceSource})`,
+          priceSource,
+          classificationId: classification.id,
+          newClassificationName: "",
+          newClassificationAssetClass: "",
+        });
+
+      const refusal = await refusalOf(() =>
+        resolveAll(
+          [
+            { raw: "VWRL FEED", fields: answerFor("feed") },
+            { raw: "VWRL MANUAL", fields: answerFor("manual") },
+          ],
+          { probe },
+          db,
+        ),
+      );
+
+      expect(Object.keys(refusal.fieldErrors)).toEqual(["symbol-0"]);
+    }),
+  );
+
+  it(
     "never probes a manual instrument, even one carrying a symbol",
     withDatabase(async ({ db, seedClassification }) => {
       // A manual instrument may carry a ticker for the person's own reference
