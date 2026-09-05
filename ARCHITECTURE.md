@@ -335,7 +335,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:619` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:654` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 
 **Owned by a module, upheld by its callers.**
@@ -358,7 +358,7 @@ grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:1148` (`priceFreshness`) selects from `holding_valued` — not to value anything,
+- `prices.server.ts:1226` (`priceFreshness`) selects from `holding_valued` — not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -1556,7 +1556,7 @@ makes that tolerable is that swapping it is a day's work — which is only true 
 the sole thing the write path imports. Both methods are required, not optional: a provider that
 cannot answer history is not this application's provider, and an optional method would let a batch be
 skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:812`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:844`), deliberately, to pin the static-versus-instance shape the
 adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
 client hands back.
 

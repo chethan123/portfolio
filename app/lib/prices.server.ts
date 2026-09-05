@@ -176,7 +176,11 @@ export type RefreshReport = {
   priced: number;
   /** Instruments that were asked for and did not come back. */
   stale: number;
-  /** `price_daily` rows written or rewritten. */
+  /**
+   * `price_daily` rows written or rewritten. Excludes a close the window
+   * refused: a quote still priced and observed, but more than
+   * {@link CLOSE_WINDOW_DAYS} from today's market date, either side.
+   */
   closes: number;
   /**
    * Observations the log did not already hold — the only field separating a
@@ -1047,6 +1051,16 @@ type ObservationRow = {
 };
 
 /**
+ * The largest serialised payload the log will store, in bytes. An honest
+ * quote entry is 2–4 KB; the observation log keys on `(instrument_id, as_of)`
+ * and inserts where absent, so a worker varying `regularMarketTime` adds a
+ * row per instrument per tick, and uncapped each row could carry the whole of
+ * the client's own body cap into the cluster that shares a filesystem with
+ * the dumps.
+ */
+const ARCHIVE_PAYLOAD_CAP = 32 * 1024;
+
+/**
  * The provider's raw entry as the text the `jsonb` column will parse, or
  * null. Serialised so the value crossing the driver is unambiguously the
  * stored document; ADR-0006 makes `price` the only column anything may
@@ -1055,16 +1069,36 @@ type ObservationRow = {
  * refresh to preserve an audit artifact would invert the priority. `null` is
  * treated as absent — a stored `jsonb` null and a stored nothing would be two
  * spellings of one fact.
+ *
+ * **Also dropped past {@link ARCHIVE_PAYLOAD_CAP}**, measured as
+ * `Buffer.byteLength(json, "utf8")` rather than the string's own `.length`: a
+ * quote's raw entry can carry non-ASCII text — a foreign exchange's company
+ * name, a currency symbol — whose UTF-8 encoding runs longer than its UTF-16
+ * code-unit count, and the cap is about the bytes the row costs on disk, not
+ * the character count. `symbol` is only for the log line the cap trips.
  */
-function archived(payload: unknown): string | null {
+function archived(payload: unknown, symbol: string): string | null {
   if (payload === undefined || payload === null) return null;
 
+  let json: string | null;
   try {
-    return JSON.stringify(payload) ?? null;
+    json = JSON.stringify(payload) ?? null;
   } catch (error) {
     console.warn("Price payload could not be archived; storing the observation without it:", error);
     return null;
   }
+
+  if (json === null) return null;
+
+  const bytes = Buffer.byteLength(json, "utf8");
+  if (bytes > ARCHIVE_PAYLOAD_CAP) {
+    console.warn(
+      `Price payload for ${symbol} is ${bytes} bytes, over the ${ARCHIVE_PAYLOAD_CAP}-byte cap; storing the observation without it`,
+    );
+    return null;
+  }
+
+  return json;
 }
 
 /**
@@ -1089,7 +1123,7 @@ function observationsOf(
       market_date: marketDateOf(quote.asOf, marketTimeZone),
       price: quote.price,
       fetched_at: quote.fetchedAt,
-      payload: archived(quote.payload),
+      payload: archived(quote.payload, quote.symbol),
     });
   }
 

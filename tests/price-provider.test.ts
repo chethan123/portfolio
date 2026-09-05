@@ -50,6 +50,23 @@ describe("reading a price", () => {
     expect(quoteFor({ symbol: "DELISTED", currency: "USD" })).toBeNull();
   });
 
+  it("drops a price at the ceiling rather than clamping it", () => {
+    // `quote.price` is numeric(20, 4) — sixteen integer digits is the first
+    // figure it cannot hold, and an overflow would abort the refresh
+    // transaction for every instrument, not just this one. Dropped, not
+    // clamped: the quote comes back absent and the symbol goes stale exactly
+    // as it does when no price arrives at all.
+    expect(quoteFor({ symbol: "GARBAGE", regularMarketPrice: 1e16 })).toBeNull();
+  });
+
+  it("keeps a price that sits just below the ceiling", () => {
+    // The ceiling bounds what cannot be stored and nothing else — a guard
+    // that rounded honest data away would be the more expensive bug.
+    const quote = quoteFor({ symbol: "WIDE", regularMarketPrice: 9999999999999998 });
+
+    expect(quote?.price).toBe("9999999999999998.0000");
+  });
+
   it("declines a payload it does not recognise", () => {
     expect(quoteFor({ nothing: "useful" })).toBeNull();
   });
@@ -450,6 +467,21 @@ describe("reading a day of history", () => {
     );
 
     expect(closes).toEqual([{ date: "2024-06-11", close: "10.0000" }]);
+  });
+
+  it("drops a bar before the range's start and keeps the day inside it", () => {
+    // The mirror of the `until` cut. `writeBackfilledCloses` inserts where
+    // absent, so a bar dated before `range.from` would land as a row and take
+    // the instrument out of the candidate set for good — the gap predicate
+    // is satisfied by any row at or before first-held.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-05-31", 10), bar("2024-06-07", 11)] }, {
+        from: "2024-06-01",
+        until: "2024-12-31",
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-07", close: "11.0000" }]);
   });
 
   it("skips a bar with no close rather than writing a row for it", () => {
