@@ -424,22 +424,25 @@ it draws the panels Analysis already had.
 ## Running an instance
 
 ```sh
-cp .env.example .env                                # fill in the gate settings
+cp .env.example .env                                # fill in the gate settings and POSTGRES_PASSWORD
 cp allowed-emails.example.txt allowed-emails.txt    # one family address per line
 mkdir -p ./volumes/db/data                          # the database lives here
 docker compose up -d
 ```
 
 **Setup is fail-closed: nothing starts until it is done.** Create a Google OAuth client, put its
-credentials in `.env`, and list the family's addresses in `allowed-emails.txt`. Leave any of that
-out — or the empty database directory the third line makes — and `docker compose up` stops before a
-container runs, naming what is missing, rather than bringing up an instance anyone who can reach it can read. The
-walkthrough, console to first sign-in, is [`docs/google-sign-in.md`](docs/google-sign-in.md); the
-variables it fills in are the gate section of [`.env.example`](.env.example).
+credentials in `.env`, generate a `POSTGRES_PASSWORD` there too (`openssl rand -hex 32`), and list
+the family's addresses in `allowed-emails.txt`. Leave any of that out — or the empty database
+directory the third line makes — and `docker compose up` stops before a container runs, naming what
+is missing, rather than bringing up an instance anyone who can reach it can read. The walkthrough,
+console to first sign-in, is [`docs/google-sign-in.md`](docs/google-sign-in.md); the variables it
+fills in are the gate section of [`.env.example`](.env.example).
 
-Everything else still has a working default. The app image is pulled from GitHub Container
-Registry — published for `linux/amd64` and `linux/arm64`, so a Raspberry Pi or an ARM NAS needs
-nothing special, and there is no build step to find memory for. Postgres comes up, the app waits for
+Beyond the gate credentials and `POSTGRES_PASSWORD`, every setting has a working default,
+`DATABASE_URL` included: Compose points it at the bundled `db` service unless you say otherwise. The
+app image is pulled from GitHub Container Registry — published for `linux/amd64` and `linux/arm64`,
+so a Raspberry Pi or an ARM NAS needs nothing special, and there is no build step to find memory
+for. Postgres comes up, the app waits for
 it to report healthy and applies the schema, and a bundled Caddy container fronts it on port 80.
 There is no migration to run by hand — migrations are idempotent, so restarting the container is
 always safe.

@@ -1,6 +1,8 @@
 # The whole deployment — DESIGN.md §10.1. The price poller still runs
-# in-process in `app`; `worker` is the same image, reached over a socket in a
-# shared volume, and holds no credential of its own. The one scheduled
+# in-process in `app`, but since ticket 06's cutover it no longer calls Yahoo
+# itself: it dials `worker` — the same image, reached over a socket in a
+# shared volume, and holding no credential of its own — for every price
+# fetch. The one scheduled
 # service is `dump`, argued in ADR-0009 — a dump that stops when the app is
 # down is worthless, and `pg_dump` belongs to the database's image. `caddy`
 # is the ingress front door and the only service that publishes a port;
@@ -18,7 +20,9 @@
 # `db-store` volume at the bottom explains why that one has to pre-exist and be
 # empty) and the directory the nightly dump lands in, which belongs to the
 # operator rather than to a container, and is why `dump` runs as their uid.
-# Every other setting, the worker's included, has a working default.
+# Every other setting, the worker's included, has a working default —
+# `POSTGRES_PASSWORD` now joins the gate's variables in having none,
+# deliberately and for the same reason (`db`, below).
 #
 # Privilege posture, every service: cap_drop ALL + no-new-privileges +
 # read-only rootfs; unprivileged uid pinned everywhere but `gate` (root argued
@@ -26,13 +30,37 @@
 # scripts/smoke-test.sh asserts all of it — nothing else would notice a
 # container quietly regaining root.
 #
-# Docker Engine 28.0 is the floor from this release — check with `docker
-# version --format '{{.Server.Version}}'`. Declared here, where `worker`
-# brings the first non-default network, though not load-bearing until the
-# network-lockdown release wires the isolated ones: 26 ignores
-# `gateway_mode_ipv4` silently and leaves a host address reachable on the
-# bridge; 27 refuses the option outright. scripts/smoke-test.sh checks this
-# first, so a runner too old reads as "engine too old", not as a topology bug.
+# Docker Engine 28.0 is the floor, declared at the release before this one
+# where `worker` brought the first non-default network, and load-bearing from
+# this release on, now that `backend`, `caddy-app` and `caddy-gate` below are
+# the first *isolated* ones — check with `docker version --format
+# '{{.Server.Version}}'`: 26 ignores `gateway_mode_ipv4` silently and leaves a
+# host address reachable on the bridge; 27 refuses the option outright.
+# Docker Compose 2.31.0 or newer is the second floor, beside it — but not, in
+# this release, a load-bearing one: `up` only recreates a network whose
+# definition drifted when it can compare against a config hash it recorded on
+# the live one, and nothing here asks it to. `egress-worker` is the one
+# network this release carries over from before it, and its definition is
+# byte-identical to ticket 05's — nothing to drift. The other five are
+# created from nothing: an existing install's implicit `default` bridge is
+# *removed* here, not redefined into `internal`. So no network in this
+# release makes the plain-bridge-to-`internal` transition this floor is
+# about, on an operator's box or in CI — an older Compose reconciles nothing
+# and reports success correctly either way. The floor stays declared anyway,
+# because it is cheap and it will bite the first release that does turn a
+# live network `internal`, at which point an old Compose would leave it plain
+# and still report success — which is why docs/operating.md, Installing puts
+# `docker compose version --short` beside the Engine check rather than
+# leaving it to CI. Until that release, say plainly that it does not bite
+# today, so an operator on a NAS is not sent to upgrade a plugin they do not
+# yet need. That is the opposite of the Engine floor above, which IS
+# load-bearing today: without it the isolation this file declares silently
+# does not take, on a fresh network exactly as on an existing one.
+# scripts/smoke-test.sh checks the Engine floor and not this one: CI creates
+# every network from nothing, so the reconciler's recreate path this floor
+# guards never runs there either, in this release or the next. A runner
+# below the Engine floor reads as "too old" here, not as a topology bug
+# several checks downstream.
 
 name: portfolio
 
@@ -62,10 +90,13 @@ services:
     # to postgres on every boot.
     user: "70:70"
     environment:
-      # Reachable only on the Compose network — no published port, so these
-      # credentials never face the LAN. Change them = change DATABASE_URL too.
+      # Reachable only on the Compose network — no published port, so this
+      # password never faces the LAN. It no longer lives in DATABASE_URL:
+      # change it here, then with `alter role` on the running server (docs/
+      # operating.md, Upgrading) — `PGPASSWORD` on `app` and `dump` below
+      # picks up the new value unchanged, no compose edit needed there.
       POSTGRES_USER: portfolio
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD — see docs/operating.md, Upgrading}"
       POSTGRES_DB: portfolio
       # Storage is UTC regardless; this makes logs and `now()` defaults agree.
       TZ: UTC
@@ -80,6 +111,8 @@ services:
       # The cluster — ./volumes/db/data on the host, via the bound name below.
       # Still the single backup target (DESIGN.md §10, `pg_dump`).
       - db-store:/var/lib/postgresql/data
+    networks:
+      - backend
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -132,7 +165,10 @@ services:
     # share bind-mount rights (see `caddy` below).
     user: "${DUMP_UID:?set DUMP_UID to the account owning ./volumes/dumps — `id -u`}:${DUMP_GID:?set DUMP_GID to that account's group — `id -g`}"
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
+      # No password in the URL any more — PGPASSWORD below carries it, read by
+      # libpq (and so by pg_dump) whenever the URL's own password is absent.
+      DATABASE_URL: ${DATABASE_URL:-postgres://portfolio@db:5432/portfolio}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
       # Recorded beside each dump, so the archive says which image wrote it —
       # the half of a rollback that a dump alone cannot tell you.
       APP_VERSION: ${APP_VERSION:-1}
@@ -168,6 +204,8 @@ services:
         target: /dumps
         bind:
           create_host_path: false
+    networks:
+      - backend
     # No ports, no egress, and nothing written outside the bind above.
     security_opt:
       - no-new-privileges:true
@@ -207,10 +245,17 @@ services:
     logging: *container-logging
     depends_on:
       db:
-        # A cold boot must not fail on a startup race.
+        # A cold boot must not fail on a startup race. `required: false`
+        # belongs in compose.external-db.yaml, not here: the bundled install
+        # this file describes on its own needs `db` to exist and reach
+        # healthy, full stop — that override is the one install where a
+        # reference to a service Compose profiled out has to still render.
         condition: service_healthy
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://portfolio:portfolio@db:5432/portfolio}
+      DATABASE_URL: ${DATABASE_URL:-postgres://portfolio@db:5432/portfolio}
+      # No password in the URL any more — read instead as PGPASSWORD by
+      # libpq (research note §4.1), same as `dump` above.
+      PGPASSWORD: ${POSTGRES_PASSWORD}
       # One variable, two services — deliberately, not by accident. `gate`
       # builds its Google redirect from this same value below; the app
       # derives the lock's relying-party id from it (docs/adr/0012). Fail-
@@ -229,11 +274,24 @@ services:
     # reached at `app:${PORT}`. Writes nothing to its own filesystem;
     # `read_only` enforces that rather than merely intending it.
     volumes:
-      # The worker's socket lives here. This ticket only mounts it — nothing
-      # calls it yet, `app` still fetches prices in-process — so the cutover
-      # in ticket 06 changes no compose line, only code. `:ro`: the volume is
-      # `worker`'s one writable path, not `app`'s (research §8.3).
+      # The worker's socket: since ticket 06's cutover, `app` dials it for
+      # every price fetch (app/lib/provider-socket.server.ts) instead of
+      # calling Yahoo in-process. `:ro`: the volume is `worker`'s one
+      # writable path, not `app`'s (research §8.3).
       - price-worker-sock:/run/price-worker:ro
+    # `backend` to reach `db`; `caddy-app` because that, not the default
+    # bridge, is now the only path `caddy` has to it. Neither carries a
+    # default route, so `app` has no route off these networks at IP level —
+    # forwarding needs `CAP_NET_ADMIN`, and `cap_drop: ALL` denies it, which
+    # is the part of requirement 1 this file actually closes. It is not the
+    # whole claim: spec 0018 §2.1 and §8 name the relay that remains — a
+    # compromised `app` still reaches `caddy` on `caddy-app`, and `caddy`
+    # proxies `/oauth2/*` to `gate`, which has egress — an application-layer
+    # path, known rather than closed. compose.external-db.yaml adds a third
+    # network, `external-db`, to installs that need one.
+    networks:
+      - backend
+      - caddy-app
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -254,9 +312,11 @@ services:
 
   # The internet-facing half of spec 0018: `yahoo-finance2` behind a unix
   # socket, same image as `app` with its `CMD` replaced by the worker
-  # entrypoint. Nothing calls the socket yet — `app` above still fetches
-  # in-process — so it listens, idles, and reports healthy until ticket 06's
-  # cutover.
+  # entrypoint. Since ticket 06's cutover `app` above dials this socket for
+  # every price fetch instead of calling Yahoo in-process; no other container
+  # fetches a price. Not the only one with a route out, though — `gate` has
+  # one too, on `egress-gate`, for its token exchange with Google, and its
+  # own comment below says so.
   worker:
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
     pull_policy: always
@@ -373,6 +433,19 @@ services:
         read_only: true
         bind:
           create_host_path: false
+    # `caddy-gate` to be reached by `caddy`; `egress-gate` for the one call
+    # this sidecar makes outbound, the token exchange against
+    # `www.googleapis.com` (`accounts.google.com` is the browser's own
+    # redirect, never a connection from this container). Neither network
+    # reaches `app`, `db` or `worker`. `egress-gate` is a plain bridge, so
+    # the residual is the same one the worker's own comment states plainly:
+    # unrestricted egress and, through the bridge's gateway, a route to the
+    # host and so to every host service bound on `0.0.0.0` — worth naming
+    # here because this is the container that runs as root and is the one
+    # thing in the stack that faces Google.
+    networks:
+      - caddy-gate
+      - egress-gate
     # No `ports:` — here enforcement, not tidiness (see REVERSE_PROXY above).
     # Read-only like `app`: no state on disk, failing loudly if that changes.
     # It DOES run as root, unlike `app`: the published image sets no USER, and
@@ -430,6 +503,14 @@ services:
       - "80:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    # `caddy-app` to reach `app`, `caddy-gate` to consult `gate` on every
+    # request (forward_auth, Caddyfile), `ingress` to carry the published
+    # port. Caddy makes no outbound call of its own — no `tls`, no ACME, a
+    # bare `:8080` site (Caddyfile:27) — so `ingress` needs nothing else.
+    networks:
+      - caddy-app
+      - caddy-gate
+      - ingress
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -496,7 +577,7 @@ volumes:
   # `node` user (research §8.4), so the socket the worker creates at `0660`
   # inside this `0770` directory is connectable by uid 1000 or gid 1000 — and
   # by root regardless, through `CAP_DAC_OVERRIDE` (research §8.5). The mode
-  # is not the fence: `app`'s mount is `:ro` (line 236), so it cannot `chmod`
+  # is not the fence: `app`'s mount is `:ro` (line 281), so it cannot `chmod`
   # the directory or unlink the socket — a read-only mount refuses both with
   # `EROFS` before any ownership check runs. The fence is still the mount
   # set: only `app` and `worker` mount this volume at all, which
@@ -521,18 +602,68 @@ volumes:
       o: "size=1m,uid=1000,gid=1000,mode=0770"
 
 networks:
-  # `enable_ipv6: false` written, not left to the daemon's default. `worker`
-  # is the only service on it — no other service gets a `networks:` key in
-  # this release, so `db`, `dump`, `app`, `gate` and `caddy` all stay exactly
-  # where they are, on the implicit `default` bridge, until the
-  # network-lockdown release moves everyone off it. `worker` therefore shares
-  # no network with `app`, `gate` or `db`: unreachable from them by name and
-  # by IP *on the compose network* — the volume above is its only link there,
-  # and scripts/smoke-test.sh asserts exactly that. Not isolated outright:
-  # research §1.5 says any container with a route to the host reaches
-  # Caddy's published `:80`, so `worker` always reaches `app` too, over the
-  # host and through the gate, the same path a LAN browser uses. Do not read
-  # this comment as ruling `worker` out as a source of requests to `app` —
-  # closing that path is the network-lockdown release's job.
+  # Every service above carries an explicit `networks:` list now; none is
+  # left on the implicit `default` bridge. `enable_ipv6: false` is written on
+  # all six rather than left to the daemon's default, which an unset value
+  # would hand off install to install.
+  #
+  # `backend`, `caddy-app` and `caddy-gate` are `internal: true`: no default
+  # route, and the daemon drops traffic forwarded to or from any other
+  # network. Each also carries `gateway_mode_ipv4: isolated`, which closes
+  # the escape an internal bridge otherwise still keeps: without it, every
+  # container on the network gets an address on the host and can reach it —
+  # a route to whatever else the house binds on `0.0.0.0`, a reverse proxy,
+  # SSH, a resolver on `:53` — isolated or not. Docker Engine 28.0 is needed
+  # for `gateway_mode_ipv4: isolated` to take effect at all, fresh network or
+  # existing one alike — 26 ignores the option silently, 27 refuses it
+  # outright. Docker Compose 2.31.0 or newer is the separate floor for an
+  # *existing* plain bridge specifically: only that Compose recreates one
+  # whose definition drifted, rather than leaving it plain (the header above
+  # has the argument for both, and why this release does not yet need the
+  # second one).
+  #
+  # `backend` is `db` and `dump`'s only network, and `app`'s first — the
+  # database reaches nothing, by construction rather than by firewall rule.
+  # `caddy-app` and `caddy-gate` are kept apart on purpose, never one network
+  # carrying both `app` and `gate`: it closes the direct `gate:4180` path a
+  # shared network would otherwise give `app` — the container this design
+  # distrusts most. It does not make the Caddyfile's `trusted_proxies`
+  # invariant true on its own: `trusted_proxies static private_ranges`
+  # (Caddyfile:19) believes any private address, and `app`'s own bridge
+  # address is private, so `app` can still forge `X-Forwarded-*` *through*
+  # Caddy. The split's real gain is narrower — removing the direct route to
+  # `gate` — and that is the only claim made for it.
+  #
+  # `egress-worker`, `egress-gate` and `ingress` are plain bridges: carrying
+  # a default route is the point of the first two, and the third is only
+  # where the published port lives. `worker` keeps `egress-worker`'s name
+  # from ticket 05 rather than move to a fresh one, so the network an
+  # existing install already has survives this upgrade rather than being
+  # replaced; it is `worker`'s only network, so `worker` shares no network
+  # at all with `app`, `gate` or `db` — unreachable from each by name and by
+  # IP, both asserted in scripts/smoke-test.sh. Not isolated outright: any
+  # container with a route to the host still reaches the host's *published*
+  # ports, so `worker` still reaches Caddy's `:80` — the app only through
+  # the gate, never `app:3000` or `gate:4180` directly — until ticket 08
+  # closes that path too.
+  backend:
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  caddy-app:
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  caddy-gate:
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
   egress-worker:
+    enable_ipv6: false
+  egress-gate:
+    enable_ipv6: false
+  ingress:
     enable_ipv6: false

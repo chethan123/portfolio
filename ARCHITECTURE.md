@@ -254,7 +254,9 @@ here, in place, with DESIGN.md's table given as the one to believe.
 
 More variables exist that the application never reads, all Compose-level and none of them validated
 by `server/config.ts`, which never sees them. **`POSTGRES_PASSWORD`** is consumed by the `db`
-service and must be kept in sync with the credentials inside `DATABASE_URL`. **`APP_VERSION`**
+service directly, and by `app` and `dump` as `PGPASSWORD` — it no longer lives inside `DATABASE_URL`
+at all, so there is nothing there left to keep in sync; changing it on a running instance means
+changing the role to match (`docs/operating.md`, Upgrading), not editing a URL. **`APP_VERSION`**
 selects the published image tag the `app` service runs, defaulting to the floating major. **The
 rest of the gate's settings are not in the table above, because the app reads none of the rest** —
 its Google client id and secret and its cookie encryption key genuinely are the gate's alone:
