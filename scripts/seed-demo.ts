@@ -20,6 +20,19 @@
  * the script exits non-zero having written nothing. No `--force` — this must
  * never be a way to lose a real portfolio.
  *
+ * **Deliberately unlocked.** This script writes no `passkey` row, so
+ * `isLocked()` is false on everything it seeds and a developer following
+ * docs/developing.md's "Seeing it with real-shaped data" reaches every
+ * screen with nothing to unlock. `scripts/capture-screenshots.ts` plants its
+ * own passkey and grant directly against a database this script has already
+ * seeded — it is the one caller with a story for why an assertion never has
+ * to happen (that script's own header on `mintCaptureGrant`), which this
+ * script does not have: a placeholder credential here would satisfy
+ * `isLocked()` while no authenticator anywhere held its private half, so
+ * nobody could ever unlock it. `passkey` and `unlock_grant` stay in the
+ * WIPE list below regardless, so a re-seed clears whatever a previous
+ * capture run planted.
+ *
  * Money is generated as JS numbers and leaves as decimal strings at column
  * scale. Not a violation of DESIGN.md §4.1: invented figures, not measured
  * ones, and every *reported* total is computed in SQL, in `numeric`, by the
@@ -717,7 +730,9 @@ const PRISTINE_PROBE = `
     (select count(*) from quote q join instrument i on i.id = q.instrument_id
        where i.symbol is distinct from 'USD')                                  as quotes,
     (select count(*) from price_observation)                                   as observations,
-    (select count(*) from price_poll)                                          as polls
+    (select count(*) from price_poll)                                          as polls,
+    (select count(*) from passkey)                                             as passkeys,
+    (select count(*) from unlock_grant)                                        as "unlock grants"
 `;
 
 class RefusedError extends Error {
@@ -754,12 +769,28 @@ async function assertSafeToSeed(client: PoolClient): Promise<boolean> {
 
 /**
  * Everything this script has ever written, removed in dependency order:
- * `position_set` first (cascades holdings, releases the RESTRICTs on account
- * and instrument), `classification` last (instruments hold it back). `USD`,
- * its `Cash` classification, its quote and its load-bearing 1970 close belong
- * to the initial migration and survive.
+ * `unlock_grant` before `passkey` — `unlock_grant.passkey_id` references
+ * `passkey.credential_id`, and this list stays a plain dependency order
+ * throughout rather than leaning on that foreign key's `on delete cascade` to
+ * cover for it — then `position_set` (cascades holdings, releases the
+ * RESTRICTs on account and instrument), `classification` last (instruments
+ * hold it back). `USD`, its `Cash` classification, its quote and its
+ * load-bearing 1970 close belong to the initial migration and survive.
+ *
+ * `passkey` and `unlock_grant` stay in this list even though this script
+ * writes neither: `capture-screenshots.ts` plants a passkey and mints a
+ * grant directly against a database this script has already seeded (that
+ * script's own header explains the licence), so a re-seed that skipped them
+ * would leave a previous capture run's placeholder credential in place —
+ * tripping `passkey_bootstrap_idx` (migration 0012's one-live-bootstrap-row
+ * rule) the next time a capture plants its own — or a grant naming a passkey
+ * this wipe is about to delete anyway. Clearing both here is what keeps a
+ * re-seed handing back the plain, unlocked household this script promises,
+ * whatever a previous capture run left behind.
  */
 const WIPE = [
+  `delete from unlock_grant`,
+  `delete from passkey`,
   `delete from position_set`,
   `delete from account`,
   `delete from person`,

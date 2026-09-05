@@ -162,10 +162,10 @@ the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way
   picker beside it reaches the same no-JavaScript result through a native popover.
 
 - **It is noise reduction, never privacy.** Anyone may set it, clear it, and set it to anybody; the
-  gate at the front door is the only thing that keeps anyone out, and every family member sees
-  everything. It is never derived from who signed in — the app deliberately holds no mapping from a
-  sign-in to an owner, and inventing one so that a screen could open on "you" is the short step to
-  "and this is *your* data" that a household of shared money does not want taken.
+  gate at the front door keeps a *person* out and the lock keeps a *browser* out, and every family
+  member sees everything. It is never derived from who signed in — the app deliberately holds no
+  mapping from a sign-in to an owner, and inventing one so that a screen could open on "you" is the
+  short step to "and this is *your* data" that a household of shared money does not want taken.
 - **The URL is the whole of it.** `?owner=1&owner=3` and nothing else: no cookie, no stored setting.
   Closing the tab forgets it because there is nothing left to remember it, and pasting the address
   to the other person in the household shows them the same reading — which a cookie could never do.
@@ -327,6 +327,22 @@ Nothing here deletes anything. An account is *closed*, which stops it counting t
 worth while it keeps counting on every date before it closed; a person who still owns accounts
 cannot be removed, and the refusal names them.
 
+### Settings — passkeys and the lock
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-passkeys-dark.png">
+  <img alt="Settings: one enrolled passkey, with its label, enrolment date, last use and whether it can sync to other devices, above the add-a-passkey form" src="docs/screenshots/settings-passkeys-light.png">
+</picture>
+
+Enrolling the household's first passkey turns on a second boundary, inside the app: every other
+browser, however recently it signed in through Google, is refused every screen until it holds its
+own live grant — minted by a fresh passkey check, never by signing in again. Enrolling any later
+passkey, and removing one, needs that same fresh check; an already-unlocked browser is not enough on
+its own.
+
+Removing the household's last enrolled passkey turns the lock back off, the same way a fresh
+instance already is: nobody is locked out by a lock nobody can still satisfy.
+
 ### Masking — reading the portfolio in public
 
 <picture>
@@ -350,8 +366,8 @@ not be one. Settings → Display chooses what a browser opens in — masked ever
 time, or however that browser was last left — and a browser nobody has answered for opens masked.
 
 **It is not a lock.** The amounts are still in the page; masking defends against being read over
-someone's shoulder, and the sign-in gate in front of the instance is the only thing that keeps
-anyone out.
+someone's shoulder, and the sign-in gate in front of the instance keeps a *person* out while the
+lock keeps a *browser* out.
 
 ### On a phone
 
@@ -473,10 +489,14 @@ through; anything unvouched-for is handed to Google's own account chooser and co
 the address that signed in is on the operator's list. The sidecar's own interstitial page is
 skipped, so the only sign-in screen anyone in the household ever sees is Google's.
 
-The app therefore has no password, no login page and no session cookie of its own, and it makes no
-authorization decision at all: the list is the whole of it, and everyone admitted sees and can do
-everything. The verified address arrives on every request as a header the app deliberately ignores —
-attribution for a later feature, never permission.
+The app therefore has no password and no login page of its own, and it makes no *per-person*
+authorization decision: the list is the whole of who may enter, and everyone admitted sees and can
+do everything. It does hold one cookie now, though — the lock's: once the household enrols a passkey, a
+browser holding no live grant is shown nothing until an assertion checks out, which is a fact about
+that one browser at that one moment and never an identity the app is keeping (masking, further down,
+is a different control answering a different question). The verified address arrives on every
+request as a header the app deliberately ignores — attribution for a later feature, never
+permission.
 
 Enforcement lives in this stack rather than in whatever proxy terminates TLS in front of it, because
 a device on the same LAN can dial this box's published port and land on the bundled Caddy directly.

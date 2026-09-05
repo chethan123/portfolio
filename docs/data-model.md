@@ -56,6 +56,7 @@ erDiagram
     instrument ||--o{ price_daily : "closed at (CASCADE)"
     instrument ||--o{ price_backfill : "history fetched for (CASCADE)"
     instrument ||--o{ price_observation : "observed at (CASCADE)"
+    passkey ||--o{ unlock_grant : "grants (CASCADE)"
 
     person {
         bigint id PK
@@ -145,6 +146,23 @@ erDiagram
         boolean had_first_sightings "nullable"
         timestamptz created_at
     }
+    passkey {
+        text credential_id PK
+        bytea public_key
+        bigint counter "0-4294967295, the signature counter"
+        text transports "nullable — comma-joined, never the empty string"
+        boolean backup_eligible "eligible for backup, not that a copy exists"
+        text label
+        boolean bootstrap "at most one live row — passkey_bootstrap_idx"
+        timestamptz enrolled_at
+        timestamptz last_used_at "nullable — any verified assertion against it, not only unlock"
+    }
+    unlock_grant {
+        text id PK "length(id) >= 32"
+        text passkey_id FK
+        timestamptz granted_at
+        timestamptz expires_at "rolling idle expiry"
+    }
 ```
 
 The remaining tables stand alone, referencing nothing:
@@ -168,7 +186,10 @@ and hold everywhere:
   exactly once, in SQL.
 - **Surrogate keys are `bigint generated always as identity`.** They are monotonic, which is what
   makes "tie-break by id descending" mean "the later insert wins"; a UUID would make that
-  tie-break arbitrary.
+  tie-break arbitrary. **One deliberate exception:** `unlock_grant.id` (§4.8) is application-generated
+  random text, not an identity column, because that id travels in a cookie and is the whole of the
+  cookie's security — a sequential one would hand a bearer token an attacker could simply count
+  through. It is the only surrogate key in this schema this rule does not describe.
 - **Enumerated columns are `CHECK` constraints, never `CREATE TYPE` enums.** Altering a check is a
   small operation; the value sets are expected to grow.
 - **Timestamps are `timestamptz`**, stored in UTC regardless of the container clock. Statement and
@@ -467,6 +488,59 @@ before anything else.
 | `filename` | `text` | no | primary key; the applied migration file |
 | `applied_at` | `timestamptz` | no | default `now()` |
 
+### 4.8 The lock: `passkey`, `unlock_grant`
+
+A browser past the gate is refused every screen until a passkey is checked
+([ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md); `CONTEXT.md`'s `Locked`). `passkey`
+is the household's own enrolled credentials; `unlock_grant` is a minted unlock grant, addressed by an
+opaque id a cookie carries — the row is the authority, and the cookie carries no claim of its own. Not
+one row per browser: minting is unconditional, so a browser that loses its cookie and unlocks again
+leaves its old row live beside the new one, and a copied cookie lets two browsers use the same row.
+
+**`passkey`** — the public half of each enrolled credential, kept until a person removes it. The
+instance is locked whenever at least one row exists here and stops the moment none do.
+
+| Column | Type | Nullable | Meaning |
+|---|---|---|---|
+| `credential_id` | `text` | no | primary key; exactly as the library returns it, never re-encoded on the way in or out |
+| `public_key` | `bytea` | no | the credential's public key |
+| `counter` | `bigint` | no | default `0`; CHECK `counter >= 0 and counter <= 4294967295` — the signature counter, a 32-bit unsigned value by specification |
+| `transports` | `text` | yes | comma-joined transport hints reported at registration; null means none reported (never the empty string) |
+| `backup_eligible` | `boolean` | no | eligibility for backup, fixed at enrolment and never re-read — that the credential *can* sync, never that a copy already exists |
+| `label` | `text` | no | human-readable, typed at enrolment, so Settings has something to print that is not a hash |
+| `bootstrap` | `boolean` | no | default `false`; set only by the one enrolment that carried no assertion, because the household held no passkey yet |
+| `enrolled_at` | `timestamptz` | no | default `now()` |
+| `last_used_at` | `timestamptz` | yes | null until this passkey first authorises anything: `verifyScopedAssertion` (`app/lib/lock.server.ts`) writes it on **every** verified assertion, not only an unlock — including the "prove yourself" assertion that authorises enrolling another passkey or removing one |
+
+Constraint: `passkey_bootstrap_idx` — a unique partial index on `(bootstrap) where bootstrap`, so at
+most one live row ever carries the flag. It closes only the *concurrent* half of "the household's
+first passkey needs no authorisation": the *committed* half is closed by the application's own
+conditional insert, and neither is sufficient alone (migration 0012's own comment on the index has
+the full argument).
+
+**`unlock_grant`** — a minted unlock grant, addressed by its own opaque id. Minted two ways: by a
+verified assertion against an already-enrolled passkey (an unlock, or the "prove yourself" step that
+authorises enrolling another passkey or removing one), or — for the household's very first passkey
+only — by that passkey's own successful registration, with no existing passkey to assert against
+yet; minting a grant there is what keeps the enrolling browser from being locked out by its own
+redirect back.
+
+| Column | Type | Nullable | Meaning |
+|---|---|---|---|
+| `id` | `text` | no | primary key; CHECK `length(id) >= 32` — a cryptographically random token, never a sequential one, since it travels in a cookie and is the whole of the cookie's security |
+| `passkey_id` | `text` → `passkey` | no | `ON DELETE CASCADE` — removing a passkey ends its grants with it |
+| `granted_at` | `timestamptz` | no | default `now()` |
+| `expires_at` | `timestamptz` | no | the rolling idle expiry, pushed forward by a request that uses the grant only once the window is already more than half spent (`touchGrant`'s own throttle — a request early in the window leaves it alone); deliberately unconstrained against `granted_at`, so a test can seed a row already past its expiry |
+
+Index: `unlock_grant_expires_at_idx` on `(expires_at)` — what the sweep reads, matching
+`upload_draft_created_at_idx`'s precedent.
+
+**Neither table is history.** Both are scaffolding, on the same footing as `upload_draft`, and both
+may be deleted from freely — where `position_set`, `holding` and the rest of the household's record
+may not. `passkey` rows are deleted the moment a person removes one, cascading away that passkey's
+own grants; `unlock_grant` rows are additionally swept once past their own expiry and deleted
+outright by an explicit lock.
+
 ## 5. Derived objects: how the schema is read
 
 The valuation rules live in SQL, defined once, so no two screens can compute a different answer for
@@ -603,10 +677,12 @@ flowchart LR
   again, inserting only days the spine does not already hold, and one `price_backfill` row per
   instrument attempted.
 - **Deletes are rare and enumerable.** From the application: a `person` owning no accounts, an
-  `instrument` that lost an alias race, and swept or consumed `upload_draft` rows. From a `psql`
-  session only: a bad upload's `position_set` — the design's undo, holdings cascading — which no
-  screen offers yet ([`importing-history.md`](importing-history.md) carries the statement). Nothing
-  else is ever deleted; accounts close via `closed_at`.
+  `instrument` that lost an alias race, a `passkey` a person removes (cascading its own
+  `unlock_grant` rows away with it), and swept, consumed or explicitly-cleared scaffolding —
+  `upload_draft` rows and `unlock_grant` rows alike (§4.8). From a `psql` session only: a bad
+  upload's `position_set` — the design's undo, holdings cascading — which no screen offers yet
+  ([`importing-history.md`](importing-history.md) carries the statement). Nothing else is ever
+  deleted; accounts close via `closed_at`.
 - **Never updated**: `position_set`, `holding`, `price_observation`, and `manual_networth` rows
   are append-only facts, and a `price_daily` row is only ever rewritten with the provider's own
   price for its day — a finished day changes only if the provider revises its close. Overwritten

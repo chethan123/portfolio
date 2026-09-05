@@ -59,7 +59,8 @@ seconds ago.
 **A passkey the household enrols may be synced.** Backup eligibility is visible to us — the BE and
 BS flags in the authenticator data — but refusing backup-eligible passkeys would exclude iCloud
 Keychain and Google Password Manager, which is where a phone's own passkey goes. So they are
-accepted, recorded, and shown as such in Settings. The honest statement of the guarantee is that
+accepted and recorded, and Settings marks the eligibility — never proof a copy has actually been
+made anywhere. The honest statement of the guarantee is that
 **the lock is only as strong as whatever unlocks the passkey provider on that device.**
 
 ## Considered options
@@ -111,17 +112,24 @@ second, unlocked way in.
 - **The app reads the instance's public origin for the first time.** `PUBLIC_ORIGIN` exists today as
   a Compose-level variable the gate consumes, and DESIGN.md §10.1 says plainly that the app never
   reads the gate's settings. The relying-party id has to come from somewhere stable, so the app
-  gains its first shared variable with the sidecar, and the environment table that records the split
-  gains a row.
+  gains another variable shared with the sidecar — not its first: `compose.yaml` already passes
+  `TZ` to both, and the app validates and uses that one too — and the environment table that records
+  the split gains a row.
 - **The grant cookie is `Secure` and `__Host-` prefixed**, where masking's is neither. Masking's
   cookie is deliberately unprefixed and insecure because it carries a preference and an instance
   genuinely reached over plain http must still get it; this one carries a credential, and WebAuthn
   will not run outside a secure context anyway, so the attributes cost nothing and the prefix is
   free.
-- **A browser that cannot run the ceremony cannot read this instance** once a passkey exists — an
-  in-app WebView browser has no WebAuthn at all. This is not enforced by a capability check, which
-  the client would control; it falls out of the server refusing until an assertion arrives.
-  Recovery is the operator's, not the front door's.
+- **A browser without a live grant cannot unlock without running the ceremony** once a passkey
+  exists — many in-app WebView browsers offer no *completable* ceremony (`app/lib/unlock-ceremony.ts`'s
+  own hedge, which this document matches rather than overstating). A browser that already holds one
+  is unaffected: the middleware checks only whether a live grant exists, never whether this browser
+  could complete the ceremony again, so this limit is about getting back in rather than about staying
+  in. It is not enforced by a capability check, which the client would control; it falls out of the
+  server refusing until an assertion arrives, which only a browser with no live grant is ever asked
+  for. The unlock screen names two self-service recoveries first — another browser on this device, or
+  a device that can reach a passkey the household has enrolled — and only after those does it point
+  at the operator.
 - **The relying-party id is the instance's public hostname** and cannot be an IP address. Changing
   the hostname orphans every enrolled passkey, and every family member enrols again.
 - **A runtime dependency arrives** in a repository that prunes them deliberately. Verifying a

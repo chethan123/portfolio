@@ -66,7 +66,7 @@ export default function SettingsIndex() {
             </dt>
             <dd>
               What can unlock a browser once the household holds one — enrol another, see which
-              are synced, and remove one that is lost for good.
+              can sync to a family member's other devices, and remove one that is lost for good.
             </dd>
 
             <dt>Classifications, Instruments and History</dt>

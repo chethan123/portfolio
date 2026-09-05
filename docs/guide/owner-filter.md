@@ -59,7 +59,7 @@ The whole of the filter is in the address bar, as `?owner=3` or `?owner=1&owner=
 
 **Everyone sees everything.** Anyone can set the filter, clear it, and set it to anybody. It narrows
 what is *shown*; it decides nothing about what may be *seen*. The Google sign-in at the front door
-is the only thing that keeps anyone out.
+keeps a person out, and the lock keeps a browser out.
 
 It is also never chosen for you. The app does not know which person you are — a person here is a
 name on an account and nothing else, with no e-mail and no login attached — so a screen never opens

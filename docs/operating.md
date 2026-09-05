@@ -13,6 +13,7 @@ file is how the instance is meant to be run.
 - [Reverse proxy and TLS](#reverse-proxy-and-tls)
 - [Installing on a phone](#installing-on-a-phone)
 - [Security](#security)
+- [The lock](#the-lock)
 - [Monitoring](#monitoring)
 - [Backups](#backups)
 - [Restoring](#restoring)
@@ -265,20 +266,56 @@ on any figure screen spends a request at any hour either way). An environment th
 `PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
 once on that screen after upgrading.
 
-**The gate's own settings are Compose-level too, and they are the required ones.** `GATE_CLIENT_ID`,
-`GATE_CLIENT_SECRET`, `GATE_COOKIE_SECRET` and `PUBLIC_ORIGIN` configure the `gate` service; the
-application never sees any of them. They have no defaults on purpose, and `compose.yaml`
-interpolates them with `${VAR:?}`, so `docker compose up` stops on the first one that is unset *or
-empty* and names it — before a container exists, which is why the message is Compose's rather than
-the startup validator's. Two of them have specific shapes:
+**The gate's own settings are Compose-level, and gate-only.** `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`
+and `GATE_COOKIE_SECRET` configure the `gate` service alone — the application never sees any of
+them. Each has no default on purpose, and `compose.yaml` interpolates each with `${VAR:?}`, so
+`docker compose up` stops on the first one that is unset *or empty* and names it — before a
+container exists, which is why the message is Compose's rather than the startup validator's at this
+stage.
 
 - `GATE_COOKIE_SECRET` must decode to exactly 16, 24 or 32 bytes; the gate builds an AES cipher from
   it and refuses to start otherwise, naming `cookie_secret` in its log. Generate one with
   `openssl rand -base64 32 | tr -- '+/' '-_'`. Rotating it is
   [the blunt revocation lever](#revocation-and-the-levers-you-have).
-- `PUBLIC_ORIGIN` is the `https://` origin your house proxy serves, no trailing slash. The gate
-  builds its Google redirect URL as `PUBLIC_ORIGIN` + `/oauth2/callback`, which must match what is
-  registered on the OAuth client exactly ([One-time Google setup](#one-time-google-setup)).
+
+**`PUBLIC_ORIGIN` is not gate-only: the application reads it now too** — [the lock](#the-lock)
+derives from it the one identity a passkey check has to run against, which makes it another setting
+shared with the sidecar rather than owned by it alone — not the first: `compose.yaml` already passes
+`TZ` to both `app` and `gate`, and the app validates and uses that one too. It carries the same
+no-default,
+`${VAR:?}` treatment as the settings above, so `docker compose up` stops on it too if it is unset or
+empty. The gate still builds its Google redirect URL as `PUBLIC_ORIGIN` + `/oauth2/callback`, which
+must match what is registered on the OAuth client exactly ([One-time Google setup](#one-time-google-setup)) —
+that half is unchanged.
+What is new is that the application's own startup validator checks the same value a second time,
+stricter than Compose's "present and non-empty," and a value that clears Compose's bar can still
+fail this one:
+
+- the scheme has to be `https://` — `http://localhost` is the one exception, for the dev loop;
+- the host cannot be an IP address, only a domain name;
+- it has to be a bare origin: no path, no query string, no fragment — never
+  `.../oauth2/callback`, the whole redirect rather than the origin it is built from;
+- and it has to already be spelled canonically: no trailing slash, no differing case, no default
+  port spelled out. `https://portfolio.example.com` passes; `https://portfolio.example.com/` and
+  `https://Portfolio.Example.com:443` name the identical origin and are refused anyway.
+
+The last one is the one worth knowing about before it surprises you. A passkey check compares this
+value against what the browser actually sent, as plain text — neither side is renormalised first —
+so a spelling that is merely *equivalent* is still a mismatch there, and the honest alternative to
+refusing it up front would be every unlock and every enrolment failing quietly once the instance is
+in production. Copying the address straight out of a browser's own address bar is exactly how a
+trailing slash gets in; strip it before it goes in `.env`.
+
+**Changing this value to a different hostname does more than move the gate's redirect.** The lock's
+relying-party id is derived from it too — the bare hostname, via `expectedRelyingParty` in
+[`app/lib/lock.server.ts`](../app/lib/lock.server.ts) — so every passkey enrolled against the old
+hostname stops verifying the moment the new one is served, whether or not the database that still
+lists it came along for the move. If the household holds any passkeys, moving to a new hostname is
+not only this variable and the registered redirect: remove every enrolled passkey as part of the
+move (the command is in
+[the runbook](runbook.md#every-browser-is-locked-and-no-passkey-can-be-reached)), then have the
+household enrol again once the new hostname is serving. Skipping that does not merely orphan the old
+passkeys — it leaves the instance locked, with none that can unlock it.
 
 **Two more that Compose reads and the application never sees.** `POSTGRES_PASSWORD` is the `db`
 service's password, covered under [Running against your own Postgres](#running-against-your-own-postgres).
@@ -544,9 +581,12 @@ than a weekly ritual, because the renewal bounces through Google without showing
 There is no server-side session store, so there is nothing to revoke a single cookie against; see
 [the levers below](#revocation-and-the-levers-you-have).
 
-**There is no CSRF token anywhere.** `SameSite=Lax` on the gate's cookie is the whole of it, and now
-that the app carries no cookie of its own it is the entire posture — which is why `compose.yaml`
-pins the attribute rather than inheriting it. Against a signed-in household that covers the ordinary
+**There is no CSRF token anywhere.** `SameSite=Lax` is the whole of the posture. The app issues a
+cookie of its own now too — [the lock](#the-lock)'s grant — so the posture no longer rests on the
+app carrying none; it rests instead on that cookie carrying `SameSite=Lax` too, for the same reason
+the gate's does. `compose.yaml` still pins the gate's own cookie to it; the app's is set the same way
+in its own code (`lockCookie`, `app/lib/lock.server.ts`) rather than by `compose.yaml`, since this
+cookie is the app's to attach, not the gate's. Against a signed-in household that covers the ordinary
 cross-site form post.
 
 **No security headers are set at all.** No CSP, no HSTS, no `X-Frame-Options`, no
@@ -647,6 +687,89 @@ the deployed case only. It is not true under `react-router dev`, which should ne
 recommendation, and [ADR-0005](adr/0005-auth-is-a-forward-auth-gate.md) rejects it for this threat
 model: a VPN onto the LAN does nothing about an adversary already on that LAN. Run one if you want
 remote access without publishing a port — but run it as well as the gate, never instead of it.
+
+---
+
+## The lock
+
+Once the household enrols a passkey — from Settings → Passkeys, inside the app itself — every
+browser the gate has already admitted is additionally refused every screen until a passkey check
+unlocks it.
+[ADR-0012](adr/0012-a-browser-past-the-gate-is-shown-nothing.md) is the design record and
+[the family guide](guide/passkeys.md) covers it in the household's own words. This section is what
+it means for you.
+
+### A fresh instance is not locked
+
+There is no lock until somebody turns it on, and there is no separate switch: **the instance is
+locked whenever the household holds at least one passkey, and open whenever it holds none.** A
+brand-new instance holds none, so every family member the gate admits sees every figure, exactly as
+it always has — nothing here changes what a fresh install looks like.
+
+### Enrolling the first one locks everyone else, from their very next request
+
+The moment anyone enrols the household's first passkey, every *other* browser in the household is
+locked — not on its next visit to Settings, not after some delay, but from the next request it makes.
+The browser doing the enrolling is the one exception; it stays unlocked. The enrolment screen says so
+before it lets anyone finish, and it is worth saying to the household yourself before you press it,
+not after.
+
+What it cannot do is reach into a screen somebody is already looking at. Deleting a grant stops the
+next request; it does not repaint a page already drawn, so a browser sitting on a rendered screen
+keeps those figures until it asks the server for something. Protected responses carry
+`Cache-Control: no-store` so a Back gesture has to ask, but the guarantee is worth stating as what it
+is: the lock ends the reading, not every pixel already on screen. Somebody who wants a particular
+screen gone *now* should press **Lock now** on that browser rather than expect an enrolment
+elsewhere to blank it.
+
+That first enrolment needs no passkey check of its own — there is nothing yet to check against, and
+anyone the gate has already admitted is already seeing every figure at that moment. Every enrolment
+after the first, and every removal, does require one: a fresh check right there, not merely an
+already-unlocked browser, because an unlocked browser is exactly what the threat this exists for
+hands an adversary.
+
+### If every passkey the household holds becomes unreachable
+
+A household down to one passkey has no lever narrower than yours if that one becomes unreachable.
+Removing a passkey needs a fresh check from a reachable enrolled passkey — even the very one being
+removed, which is exactly how removing a household's last passkey turns the lock off — so what
+strands a household is not the removal rule but the passkey itself going missing: lost, broken, or
+otherwise out of reach, with nothing else enrolled to check in with. Encourage a second passkey the
+moment the first is enrolled, for exactly this reason.
+
+**Recovering is deleting every enrolled passkey**, which is the one thing that lifts the lock without
+a check — and it is deliberately the only thing. There is no token, no recovery code and no way in
+through the front door: doing it means reaching into the database directly, the same shell
+[ADR-0005](adr/0005-auth-is-a-forward-auth-gate.md) already names as this instance's break-glass. See
+[the runbook](runbook.md#every-browser-is-locked-and-no-passkey-can-be-reached) for the command. Once
+every passkey is gone the instance reads exactly as though none was ever enrolled — unlocked, with
+anyone the gate admits free to enrol again — because that is what "holds no passkey" already means;
+there is no third state.
+
+**The delete alone does not close a ceremony already in flight — stopping `app` before you delete does.**
+A registration challenge lives in the app's own process memory, not in the database, for two minutes
+after it is minted (`CHALLENGE_TTL_MS` in [`app/lib/lock.server.ts`](../app/lib/lock.server.ts)); a
+browser that had already reached the "Create the passkey" step keeps that challenge live until either
+it completes or the two minutes pass, and `app` is the only thing that can complete it. Delete first
+and only stop-and-restart `app` afterward, and there is a live gap between the delete committing and
+the stop taking hold: a registration that finishes inside that gap writes a passkey — because the
+challenge was minted while the household still held one, the server accepts the completed ceremony as
+an ordinary later enrolment rather than a first one, with no check required — and the instance is
+locked again within seconds of you having cleared it, having made the restart do nothing. Stop `app`
+first instead: with it down, nothing can complete a registration no matter how long the delete takes,
+so there is no such gap left to race.
+
+### `PUBLIC_ORIGIN` is stricter now than "must be set"
+
+The application validates it, not only the gate, and refuses to start on anything less than an exact
+canonical `https://` origin — see [Environment variables](#environment-variables) for the shape it
+wants and why. If the container is refusing to start over it, [the runbook](runbook.md#the-app-container-keeps-restarting)
+has the command that confirms it.
+
+**Planning to move this instance to a new hostname?** Read
+[the `PUBLIC_ORIGIN` entry in Environment variables](#environment-variables) before you do — the
+lock's identity is derived from this value too, and a hostname change orphans every passkey the
+household holds unless you remove them as part of the move.
 
 ---
 

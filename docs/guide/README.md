@@ -34,6 +34,8 @@ Come back to these when you want to know what something on a screen means.
   it.
 - **[Settings](settings.md)** — people, accounts, closing an account, the tax rate, and how
   amounts start hidden.
+- **[Passkeys and the lock](passkeys.md)** — what it means for a browser to be locked, and how to
+  get one back in.
 - **[Reading a screen as one owner](owner-filter.md)** — narrowing all four money screens to one
   owner, and what changes when you do.
 
@@ -48,9 +50,10 @@ Come back to these when you want to know what something on a screen means.
 
 ## Two things to expect
 
-**Nothing here deletes anything.** An account is *closed*, not removed. A correction records a new
-figure rather than replacing the old one. Your net worth in March does not change because you fixed
-something in August.
+**Almost nothing here deletes anything.** An account is *closed*, not removed. A correction records
+a new figure rather than replacing the old one. Your net worth in March does not change because you
+fixed something in August. What does delete, immediately and with no undo: removing a person once
+they own nothing at all, and removing a passkey — see [Passkeys and the lock](passkeys.md).
 
 **A number is withheld rather than guessed.** Where a holding cannot be priced it is left out of the
 total and the screen says how much of the portfolio the total covers. A dash never means zero.

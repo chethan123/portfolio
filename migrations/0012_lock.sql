@@ -79,7 +79,10 @@ create table passkey (
 
   enrolled_at     timestamptz not null default now(),
 
-  -- Null until the first unlock.
+  -- Null until the first verified assertion, and stamped by every one after:
+  -- unlocking, and the confirmations that authorise enrolling and removing.
+  -- Not "last unlocked" — a passkey that has only ever authorised a removal
+  -- carries a time here without having unlocked anything.
   last_used_at    timestamptz
 );
 
