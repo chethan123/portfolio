@@ -11,7 +11,12 @@ One document: [Price worker platform facts](./2026-09-04-price-worker-platform-f
 Docker, PostgreSQL 17, `yahoo-finance2`, `pg`, Node 24, oauth2-proxy and Caddy behaviour the
 price-worker slice rests on, gathered against `5e21ab7` and, where it could be, executed against a
 live PostgreSQL 17.10. It is the evidence under [spec 0018](../specs/0018-price-worker.md), which is
-authoritative for the design itself.
+authoritative for the design itself; its PostgreSQL facts served the table-shaped channel 0018's
+§2.5 set aside on 2026-09-04, and stand as the record of what it would have cost.
+Its §8, added the same day, carries the unix socket's and the tmpfs volume's facts under the channel
+that replaced the table: the mount option string, who can connect, the mode Node creates a socket
+at, the stale-file `EADDRINUSE`, the three connect errors, and what `node:http`'s timeouts do and
+do not close.
 
 ### The three things worth knowing without reading further
 
@@ -48,6 +53,38 @@ are egress-blocked from the research sandbox — `docs.docker.com`, `www.postgre
 that generate those pages, and are cited that way. There is no Docker daemon in that sandbox, so
 nothing in the Docker section was executed. §7 lists what could not be checked and must not be
 treated as settled.
+
+## 2026-09-02 — Security and privacy audit
+
+One document: [Security and privacy audit](./2026-09-02-security-and-privacy-audit.md) — every
+route, the deployment files, the dependency tree and the data flows read for backdoors, exfiltration
+and deployment risk, against `7d6ba5d`. First issued as pull request #219; the corrections its
+review produced are folded in, with two findings the review added.
+
+### The three things worth knowing without reading further
+
+1. **No backdoor, no hidden exfiltration, one small defect.** Runtime egress in application code is
+   the Yahoo pricing client and nothing else; no dynamic execution, no XSS, every SQL value bound.
+   The defect is a dot-segment bypass in `safeReturn` that yields a protocol-relative redirect,
+   reachable only same-origin and a two-line fix (S12).
+
+2. **Most of the risk is deployment posture that is already a recorded decision.** No
+   authorisation in the app (ADR-0005), plaintext dumps (ADR-0009), a floating image tag, symbols
+   to Yahoo. The audit cites each record rather than rediscovering it, and rates the known default
+   database password on a flat network (S3) as the item worth doing first — the network split is
+   spec 0018's design already.
+
+3. **Two claims the first draft got wrong, corrected.** React Router already rejects a
+   mismatched-`Origin` mutation with 400, so CSRF is informational, not Medium (S5); and the
+   pricing client can reach the npm registry on a malformed Yahoo response, so "Yahoo only" was
+   false until `versionCheck: false` is set (S7).
+
+### Status
+
+Findings only; nothing applied. The code fixes it names — `safeReturn`, `versionCheck`, the
+`.gitignore` and `.dockerignore` rules, the tracked leftovers, the dump credential in argv — are
+each a small pull request of their own, and the network split and required password are spec 0018.
+
 
 ## 2026-09-01 — Why the Overview takes eleven seconds with 1D selected
 

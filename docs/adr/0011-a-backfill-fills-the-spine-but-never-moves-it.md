@@ -14,7 +14,7 @@ ADR is numbered 0011 because 0010 is reserved by spec 0015's header for an ADR n
 paragraph above, under "In-process", under "Mailbox-shaped, for the worker" and in "The outbound
 surface grows" — is the price-worker proposal that was never indexed and is deleted with 0018; by
 number, 0015 is now `0015-chart-series-assembly.md`. 0018 builds that worker as a remote provider
-behind one table and inherits the second call exactly as foreseen below; ADR-0010 stays reserved
+behind a unix socket and inherits the second call exactly as foreseen below; ADR-0010 stays reserved
 for it. Nothing else here is rewritten.
 
 ## What changed the mind
