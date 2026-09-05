@@ -239,6 +239,16 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
  * not this one's. A middleware step may throw a `Response` instead of
  * returning one — `outcomeOf`/`responseOf` above are what unwrap that.
  *
+ * **`onNext`, for a middleware whose whole point is refusing before `next()`
+ * runs** (the lock, `app/root.tsx`'s `middleware`). Asserting "the markup
+ * contains no figure" against a refusal that renders nothing passes
+ * unconditionally — the vacuous test that boundary exists to forbid — so a
+ * caller proving a refusal passes a callback here and asserts it was never
+ * invoked, rather than inspecting the response `next()` would have produced.
+ * Optional and side-effect-only, so every existing caller — which reads the
+ * response `chartRangeMiddleware` decorated and has no reason to care whether
+ * `next` ran, since it always does — is unaffected.
+ *
  * **One thing this does not reproduce.** `callRouteHandler`'s rebuild is a
  * loader/action-only step — the pipeline calls middleware with the request as
  * it arrived, before `throughRouteHandler` above would ever touch it — so
@@ -256,6 +266,7 @@ export async function servedThrough(
   middleware: readonly unknown[],
   request: Request,
   params: Record<string, string> = {},
+  onNext?: () => void,
 ): Promise<Response> {
   const served = new Response("the page");
   let response: Response = served;
@@ -264,7 +275,10 @@ export async function servedThrough(
     const run = step as (args: never, next: () => Promise<unknown>) => Promise<unknown>;
     response = (await run(
       { request, params, context: new RouterContextProvider(), url: new URL(request.url), pattern: "/" } as never,
-      async () => served,
+      async () => {
+        onNext?.();
+        return served;
+      },
     )) as Response;
   }
 

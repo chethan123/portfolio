@@ -6,6 +6,7 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  redirect,
   useLocation,
   useRouteError,
   useRouteLoaderData,
@@ -24,6 +25,8 @@ import {
 import { MaskingToggle } from "~/components/masking-toggle";
 import { OpenInstanceBanner } from "~/components/open-instance-banner";
 import { firstRunStep, type FirstRunStep } from "~/lib/first-run.server";
+import { clearedLockCookie, readLockCookie, RETURN_PARAM } from "~/lib/lock";
+import { extendGrant, isLocked, readGrant } from "~/lib/lock.server";
 import { readMaskingCookie, resolveMasked, type MaskingPolicy } from "~/lib/masking";
 import { ownerSearch, readOwnerFilter } from "~/lib/owner-filter";
 import { startPricePoller } from "~/lib/price-poller.server";
@@ -35,15 +38,135 @@ import type { Route } from "./+types/root";
 import "./app.css";
 
 /*
- * The gate used to be wired here as root middleware; nothing replaces it —
- * authentication happens in front, so a request reaching this process is
- * already admitted. One thing rides in on every request, recorded only here:
- * the gate attaches the verified address as `X-Auth-Request-Email`, and the
- * app reads it nowhere, deliberately. Attribution, never permission
- * (CONTEXT.md): every family member sees and can do everything. A later
- * feature may read it to record *who* did a thing; none may read it to
- * decide *whether* they may.
+ * The gate used to be wired here as root middleware. It no longer stands
+ * alone: `middleware` below is the lock (docs/adr/0012), the first rule that
+ * has run here since. It answers a different question — which *browser* may
+ * read, never which *person* may enter — and does not touch what this
+ * paragraph is actually about. One thing still rides in on every request,
+ * recorded only here: the gate attaches the verified address as
+ * `X-Auth-Request-Email`, and the app reads it nowhere, deliberately.
+ * Attribution, never permission (CONTEXT.md): every family member sees and
+ * can do everything. A later feature may read it to record *who* did a
+ * thing; none may read it to decide *whether* they may.
  */
+
+/**
+ * The two router paths the lock does not guard: the unlock screen itself —
+ * refusing it would refuse the one screen that lifts the refusal — and the
+ * health endpoint, which the gate in front already exempts for the same
+ * reason (`healthz.ts`'s own header). Nothing else needs a line here: the
+ * service worker, the manifest and the icons are static files under
+ * `public/` that never reach this router, so no middleware runs for them at
+ * all. Written as data and pinned by a test that fails the moment this array
+ * grows, so a third exemption is a decision someone makes rather than a line
+ * someone adds.
+ */
+export const LOCK_EXEMPT_PATHS: readonly string[] = ["/unlock", "/healthz"];
+
+/** Every response the lock middleware lets through carries this. */
+function withNoStore(response: Response): Response {
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
+/**
+ * Where a refused request is sent, carrying its own address back as
+ * {@link RETURN_PARAM}'s one encoded value (`lock.ts`'s own comment on that
+ * constant says why it has to be one parameter rather than the query the
+ * browser was actually on). `clearCookie` is true only when a grant lookup
+ * came back definitively empty — never on a mere read failure, which is not
+ * proof the cookie's grant is actually gone.
+ */
+function redirectToUnlock(url: URL, clearCookie: boolean): Response {
+  const target = new URL("/unlock", url);
+  target.searchParams.set(RETURN_PARAM, `${url.pathname}${url.search}`);
+
+  return redirect(
+    `${target.pathname}${target.search}`,
+    clearCookie ? { headers: { "Set-Cookie": clearedLockCookie() } } : undefined,
+  );
+}
+
+/**
+ * The lock (docs/adr/0012): a browser holding no valid grant is turned away
+ * *before* `next()` is called, so no loader runs and the figures are never
+ * fetched — deliberately not `chart-range.ts`'s `chartRangeMiddleware` shape,
+ * the only other middleware here, which awaits `next()` and only decorates
+ * what comes back. This one refuses by throwing a redirect `Response`,
+ * matching how every route in this app already signals one (`tests/support/
+ * routes.ts`'s own doc comment) — there is no markup to grep for on a
+ * refusal, only proof that {@link isLocked}, {@link readGrant} and
+ * {@link extendGrant} decided it, which is what `next` never being invoked
+ * pins.
+ *
+ * **With no passkey enrolled, this calls `next()` unconditionally** —
+ * `isLocked()` answers `false` and every request passes straight through, so
+ * shipping this changes nothing a family member can see on an instance that
+ * has never enrolled one.
+ *
+ * **Fails closed.** A thrown `isLocked`/`readGrant`/`extendGrant` is not the
+ * same answer as "no passkey", and is never folded into that branch: the
+ * loader below catches around `firstRunStep`, which is right for a
+ * first-run hint that may fail open, and wrong for a boundary — a boundary
+ * that opens the moment Postgres hiccups is not a boundary. Every such
+ * failure refuses here too, but clears no cookie: a read that merely failed
+ * to answer is not proof the grant it names is actually gone.
+ *
+ * **A live grant is extended by the request that used it** — `extendGrant`
+ * itself skips the write unless less than half the idle window remains, so
+ * this is not an unconditional write on every document and data request.
+ */
+async function lockMiddleware(
+  { request }: { request: Request },
+  next: () => Promise<unknown>,
+): Promise<Response> {
+  const url = new URL(request.url);
+
+  if (LOCK_EXEMPT_PATHS.includes(url.pathname)) {
+    return withNoStore((await next()) as Response);
+  }
+
+  let locked: boolean;
+  try {
+    locked = await isLocked();
+  } catch (error) {
+    console.error("Lock check failed; refusing rather than continuing:", error);
+    throw redirectToUnlock(url, false);
+  }
+
+  if (!locked) return withNoStore((await next()) as Response);
+
+  const grantId = readLockCookie(request);
+  if (grantId === undefined) throw redirectToUnlock(url, false);
+
+  let grant: Awaited<ReturnType<typeof readGrant>>;
+  try {
+    grant = await readGrant(grantId);
+  } catch (error) {
+    console.error("Grant lookup failed; refusing rather than continuing:", error);
+    throw redirectToUnlock(url, false);
+  }
+
+  if (grant === undefined) throw redirectToUnlock(url, true);
+
+  try {
+    await extendGrant(grant.id);
+  } catch (error) {
+    console.error("Extending the grant failed; refusing rather than continuing:", error);
+    throw redirectToUnlock(url, false);
+  }
+
+  return withNoStore((await next()) as Response);
+}
+
+/**
+ * Untyped against the generated `Route.MiddlewareFunction` at its own
+ * declaration, for `chart-range.ts`'s own reason: it and this file's
+ * generated type disagree on `next`'s return type and are not mutually
+ * assignable, and loose typing satisfies both structurally at the one place
+ * that actually matters — this assignment.
+ */
+export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
 
 /**
  * What the shell around every page needs: whether anything guards the

@@ -29,7 +29,16 @@ import type { AuthenticationResponseJSON, VerifiedAuthenticationResponse } from 
 
 import { createDatabase } from "~/lib/db.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
-import { IDLE_WINDOW_MS, joinTransports, splitTransports } from "~/lib/lock";
+import {
+  IDLE_WINDOW_MS,
+  LOCK_COOKIE,
+  RETURN_PARAM,
+  clearedLockCookie,
+  joinTransports,
+  lockCookie,
+  readLockCookie,
+  splitTransports,
+} from "~/lib/lock";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import type { Fixtures } from "./support/fixtures.ts";
@@ -252,6 +261,59 @@ describe("transports encoding", () => {
   it("round-trips a real transport list", () => {
     const joined = joinTransports(["internal", "hybrid"]);
     expect(splitTransports(joined)).toEqual(["internal", "hybrid"]);
+  });
+});
+
+describe("the grant cookie", () => {
+  // Pinned the way masking's is pinned (tests/masking.test.ts) — the same
+  // kind of test, not the same values: this cookie carries a credential
+  // rather than a preference, so it parts company with masking's on exactly
+  // the two attributes that matter for that (ticket 03).
+  it("carries Secure, HttpOnly and the __Host- prefix, unlike masking's cookie", () => {
+    const cookie = lockCookie("a-grant-id");
+    expect(cookie).toMatch(/;\s*secure\b/i);
+    expect(cookie).toMatch(/;\s*httponly\b/i);
+    expect(LOCK_COOKIE.startsWith("__Host-")).toBe(true);
+    expect(cookie.startsWith(`${LOCK_COOKIE}=a-grant-id`)).toBe(true);
+  });
+
+  it("is SameSite=Lax, never Strict, because the gate's own sign-in bounce is a top-level cross-site return", () => {
+    // `Strict` would withhold this cookie on that very navigation and
+    // re-lock every browser the moment the gate's own cookie merely
+    // refreshed — a random-looking bug rather than anything this feature
+    // did (ADR-0012's own reasoning, restated as a test rather than only a
+    // comment).
+    expect(lockCookie("a-grant-id")).toMatch(/samesite=lax/i);
+  });
+
+  it("is scoped to the whole app", () => {
+    expect(lockCookie("a-grant-id")).toContain("Path=/");
+  });
+
+  it("expires immediately when cleared, carrying the same Secure and Path attributes a __Host- cookie needs to actually clear", () => {
+    const cleared = clearedLockCookie();
+    expect(cleared).toMatch(/max-age=0/i);
+    expect(cleared).toMatch(/;\s*secure\b/i);
+    expect(cleared).toContain("Path=/");
+  });
+});
+
+describe("the unlock screen's return parameter", () => {
+  it("is a stable name shared between the middleware that sets it and the screen that reads it back", () => {
+    expect(RETURN_PARAM).toBe("redirectTo");
+  });
+});
+
+describe("reading the grant cookie off a request", () => {
+  const requestWith = (cookie: string): Request =>
+    new Request("http://portfolio.local/", { headers: { Cookie: cookie } });
+
+  it("finds its own value among the others a browser sends", () => {
+    expect(readLockCookie(requestWith(`_oauth2_proxy=abc; ${LOCK_COOKIE}=grant-1`))).toBe("grant-1");
+  });
+
+  it("is undefined when the browser sent no cookies at all", () => {
+    expect(readLockCookie(new Request("http://portfolio.local/"))).toBeUndefined();
   });
 });
 
