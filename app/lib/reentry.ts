@@ -20,9 +20,10 @@
  * thing here that is not a suggestion. And if a browser never fires
  * `visibilitychange` at all because it was suspended before it could, the
  * grant simply rides out its own idle window instead — at most fifteen
- * minutes from the last request that rolled it, and as little as seven and a
- * half, since `touchGrant` rolls only under half a window;
- * nothing about this file staying silent leaves a browser unlocked forever.
+ * minutes after the last request that rolled it, which is as little as seven
+ * and a half after the last request of any kind, since `touchGrant` rolls
+ * only when under half the window remains; nothing about this file staying
+ * silent leaves a browser unlocked forever.
  *
  * **The `pageshow` half answers a narrower, uglier gap than a timer ever
  * could.** Chrome has admitted a `Cache-Control: no-store` document to its
@@ -86,8 +87,8 @@
  *
  * **What none of this reaches.** A grant deleted by this file, by the
  * explicit control, or by the ordinary idle window — at most fifteen minutes
- * from the last request that rolled it — ends the
- * *next* request — it does not reach into a page already drawn. A second tab
+ * after the last request that rolled it — ends the *next* request; it does
+ * not reach into a page already drawn. A second tab
  * of this same browser, open on a different screen, keeps its rendered
  * figures on screen until it next asks the server for anything; this file
  * has no way to reach across tabs and no reason to try. The guarantee stays
@@ -167,10 +168,12 @@ function readClocks(): HiddenAt {
  * call, never ended.
  *
  * It is a signal rather than a proof, and the difference is worth stating:
- * *any* 2xx satisfies it, and a captive portal answering 200 with its own
- * HTML does — as would the gate's sign-in page, were the provider button not
- * skipped. Nothing observable here tells that apart from this instance's own
- * answer, and the idle window is what covers the case where it cannot.
+ * *any* 2xx satisfies it, and the gate's own sign-in page would — it is
+ * same-origin and answers 200 with HTML — were the provider button not
+ * skipped (`compose.yaml`, `OAUTH2_PROXY_SKIP_PROVIDER_BUTTON`). Something
+ * intercepting a plain-http dev origin could do the same. Nothing observable
+ * here tells either apart from this instance's own answer, and the idle
+ * window is what covers the case where it cannot.
  *
  * **`keepalive: true`.** A plain `fetch` is aborted the instant its own
  * document unloads — exactly the moment this call matters most: the grace

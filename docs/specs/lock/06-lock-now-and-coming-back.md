@@ -71,8 +71,8 @@ a thing you know you are about to do, and one tap beforehand beats any timer.
       redirected past
 - [ ] The screenshots are deferred to ticket 07's single capture pass, not retaken here: the capture
       path (`scripts/capture-screenshots.ts`, `scripts/seed-demo.ts`) seeded no passkey at all, so
-      `isLocked()` is false throughout capture and neither chrome layout this ticket changes ever
-      renders the control. Making it render needs a seeded passkey *and* a live grant plus the cookie
+      `isLocked()` was false throughout capture and neither chrome layout this ticket changes ever
+      rendered the control. Making it render needed a seeded passkey *and* a live grant plus the cookie
       on the capture browser — one change to the capture scripts that serves tickets 05 and 06
       together, rather than three tickets fighting over the same PNGs. (What shipped does it in
       `capture-screenshots.ts` alone, and ticket 07's own box carries the why.)

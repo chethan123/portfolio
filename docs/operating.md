@@ -615,8 +615,8 @@ lifetime is the seven-day default — which is what makes signing in a once-per-
 than a weekly ritual, because the renewal bounces through Google without showing anyone a screen.
 The *gate* keeps no server-side session store, so there is nothing to revoke one of its cookies
 against; see [the levers below](#revocation-and-the-levers-you-have). The lock's own grants are a
-different matter — those are rows, revocable one at a time, and [The lock](#the-lock) below says
-how.
+different matter — those are rows, and removing the passkey that minted them takes them with it;
+[The lock](#the-lock) below and the runbook's own entries say how.
 
 **There is no CSRF token anywhere.** `SameSite=Lax` is the whole of the posture. The app issues a
 cookie of its own now too — [the lock](#the-lock)'s grant — so the posture no longer rests on the

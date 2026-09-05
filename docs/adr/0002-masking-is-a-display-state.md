@@ -60,7 +60,7 @@ in this stack deliberately not `HttpOnly` — the chart-range preference (`app/l
 set the same way, and for the same reason: it too carries a preference rather than a credential. What
 actually singles masking's out is the two writers this paragraph opened with: client script sets it
 directly, where the chart-range cookie is only ever written by the server. What changed here is only
-that the gate's is no longer the sole credential-bearing cookie it is being compared against.]
+that the gate's is no longer the only cookie here that carries more than a preference.]
 
 ## Considered options
 

@@ -692,9 +692,10 @@ instrument that lost an alias race (`instrument-resolution.server.ts:639`) are t
 application deletes reaching that half, there is no account delete and no position-set delete
 anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
 about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
-both routinely: removing a passkey (`lock.server.ts:1270`'s `removePasskey`), the explicit "Lock
-now" control (`app/routes/lock-now.ts`, through `lock.server.ts:431`'s `deleteGrant`), and the
-expired-grant sweep every grant mint runs first (`lock.server.ts:314`) each issue a real `DELETE`
+both routinely: removing a passkey (`removePasskey`), the explicit "Lock
+now" control (`app/routes/lock-now.ts`, through `deleteGrant`), and the
+expired-grant sweep every grant mint runs first (`mintGrant`) — all three in
+`app/lib/lock.server.ts` — each issue a real `DELETE`
 from a route. The cascade this table adds is what then carries a passkey removal into ending that
 passkey's own grants with it — a further delete the application never states as its own statement.
 

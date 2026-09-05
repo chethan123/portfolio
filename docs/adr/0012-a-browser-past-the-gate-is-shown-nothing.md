@@ -120,12 +120,10 @@ second, unlocked way in.
   genuinely reached over plain http must still get it; this one carries the id of a live unlock, and
   WebAuthn will not run outside a secure context anyway, so the attributes cost nothing and the
   prefix is free.
-- **A live grant is a bearer token, and nothing here pretends otherwise.** The row is the authority
-  and the cookie names it, so a copy of that cookie is as good as the original until the row ends —
-  by its idle window, by "Lock now", or with the passkey that minted it. That is the cost of having
-  no per-request proof, and it is why the guide tells a family member to hand a phone over locked.
-  `HttpOnly` and `SameSite=Lax` are what keep a page from reading or sending it; nothing keeps
-  somebody who already has the device's cookie jar from using it.
+- **A live grant is a bearer token**, and the honest limit of one is stated where the row is defined
+  (`migrations/0012_lock.sql`, [`../data-model.md`](../data-model.md)): a copied cookie is as good as
+  the original until the row ends — by its idle window, by "Lock now", or with the passkey that
+  minted it.
 - **A browser without a live grant cannot unlock without running the ceremony** once a passkey
   exists — many in-app WebView browsers offer no *completable* ceremony (`app/lib/unlock-ceremony.ts`'s
   own hedge, which this document matches rather than overstating). A browser that already holds one

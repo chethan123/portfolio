@@ -359,20 +359,21 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
  * a rendered 404 — app chrome only, since the root loader does not run
  * either, so no figure is on it — rather than the unlock screen, and that
  * response carries no `no-store` of its own. Separately, exempting
- * `/healthz` also exempts its single-fetch (`.data`) form — and that is not
- * harmless in the way an earlier version of this comment claimed. The health
- * route holds no household data, but a `.data` request runs *every* matched
- * loader, this file's own included, and the root loader's neutral branch
- * fires only for `/unlock` — so a browser holding no grant can read `gated`,
- * `firstRun`, `masked`, `maskingPolicy` and `hasPasskey` off `/healthz.data`,
- * which are exactly the fields the loader's own header says a proven-nothing
- * browser has no business learning. **Kept deliberately, decided 2026-09-05**
- * (spec 0020's "Decisions"): the request sits behind the gate, so the reader
- * is a signed-in family member; the fields are setup state and never a
- * figure; and a second rule for the exemption's shape costs more than it
- * buys. In production the Caddyfile's `handle /healthz` is exact, so
- * `/healthz.data` does not reach this exemption at all. Recorded with its
- * reason so the next reader does not "fix" it. Neither this nor the
+ * `/healthz` also exempts its single-fetch (`.data`) form, and that is not the
+ * nothing it looks like. The health route holds no household data, but a
+ * `.data` request runs *every* matched loader, this file's own included, and
+ * the root loader's neutral branch fires only for `/unlock` — so a browser
+ * holding no grant can read `gated`, `firstRun`, `masked`, `maskingPolicy`
+ * and `hasPasskey` off `/healthz.data`, which are exactly the fields
+ * {@link UNLOCK_SCREEN_ROOT_DATA}'s own header says a proven-nothing browser
+ * has no business learning. **Kept deliberately, decided 2026-09-05**
+ * (spec 0020's "Decisions"): the fields are setup state and never a figure,
+ * and a second rule for the exemption's shape costs more than it buys. In
+ * production the Caddyfile's `handle /healthz` is an exact path matcher, so
+ * `/healthz.data` does not match it — it falls to the catch-all `handle`
+ * and is challenged by `forward_auth` like everything else, which is what
+ * makes this reader a signed-in family member rather than anybody at all.
+ * Recorded with its reason so the next reader does not "fix" it. Neither this nor the
  * unmatched-path case above is worth code; both are worth saying, so this
  * header's account of what the lock covers stays honest about where it
  * stops.
@@ -534,12 +535,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   // middleware, this is not the boundary — hiding a control on a database
   // hiccup costs a family member one screen's worth of chrome and nothing
   // more: the re-entry effect below does *not* gate on this flag — it
-  // installs both listeners on every page regardless of what this render
-  // believes about the household, which is the whole point of the parameter
-  // that used to carry that belief being gone. Never a figure, though —
-  // there is no reason to
-  // fail toward showing a button that clears a grant which may be exactly
-  // what is protecting this render.
+  // installs both listeners on every page but the unlock screen, whatever
+  // this render believes about the household, which is the whole point of
+  // the parameter that used to carry that belief being gone. Never a figure,
+  // though — there is no reason to fail toward showing a button that clears
+  // a grant which may be exactly what is protecting this render.
   //
   // **This answers the chrome's question only** — draw the lock-now control
   // or not — which is why failing toward `false` is right here. It used to

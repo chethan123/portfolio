@@ -115,12 +115,13 @@ false the moment this slice lands. Grep for the quoted phrase rather than trusti
       `isLocked()` was false throughout and the lock-now control could not render in either chrome
       position, in any shot, no matter how the rest of the set was retaken. **What shipped closes that
       gap in one script rather than two**, and the record should say so: `scripts/seed-demo.ts`
-      deliberately seeds none (its own header says why — the demo household is the *unlocked* one, and
-      a passkey nobody can sign for would be a row a developer then has to delete), and
+      deliberately seeds none, and its own header says why: a placeholder credential there would
+      satisfy `isLocked()` while no authenticator anywhere held its private half, so nobody could ever
+      unlock it — every developer following `docs/developing.md` shut out, not a row to tidy up.
       `scripts/capture-screenshots.ts` plants a placeholder passkey itself, mints a grant against it and
       sets the `__Host-unlock_grant` cookie on the capture browser (`ensureCapturePasskey`,
-      `mintCaptureGrant`). The outcome this box asked for is met; the two-script route it named is not
-      the route taken. With that
+      `mintCaptureGrant`, `setGrantCookie`). The outcome this box asked for is met; the two-script route
+      it named is not the route taken. With that
       done, this ticket checks the whole set, ticket 06's control included — `docs/README.md` and
       `docs/developing.md` both say a change to a screen is not finished until they are, and this slice
       changes the chrome, adds a Settings tab and adds a screen

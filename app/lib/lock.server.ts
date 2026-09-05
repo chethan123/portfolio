@@ -191,9 +191,9 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
  * `__Host-` prefixed because this one carries the id of a live unlock, where
  * masking's cookie deliberately carries neither prefix nor `Secure` (its own
  * header): a passkey will not run outside a secure context anyway, so the
- * attributes cost this feature nothing. Never "a credential" — `CONTEXT.md`
- * gives that word to the passkey itself, and what this carries is an opaque
- * id with no claim of its own (`migrations/0012_lock.sql`).
+ * attributes cost this feature nothing. Not the passkey, and not a stand-in
+ * for one: what this carries is an opaque id with no claim of its own
+ * (`migrations/0012_lock.sql`).
  *
  * **The dev loop's plain-http localhost was tried, not argued.** Chromium
  * 141 accepts, stores and returns this cookie over `http://localhost` and

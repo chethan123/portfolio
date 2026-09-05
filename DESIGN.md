@@ -837,9 +837,10 @@ routing here, so it is not needed.
 family member in with Google and admits only the addresses on the allowlist; a request that reaches
 the app has already been admitted, so the app carries no sign-in page and no password of its own.
 Nor does it carry a session in the sense that phrase usually means: the lock's grant (ADR-0012) is a
-fact about one browser at one moment and about nothing else — it names no person, carries no claim
-of its own, and answers only whether *this* browser has proven a passkey recently enough. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this
-stack rather than in the operator's proxy, and `docs/operating.md` is where an operator runs it.
+fact about one browser at one moment and about nothing else — it names no person, its cookie carries
+no claim of its own, and it answers only whether *this* browser has proven a passkey recently
+enough. `docs/adr/0005-auth-is-a-forward-auth-gate.md` records why enforcement sits in this stack
+rather than in the operator's proxy, and `docs/operating.md` is where an operator runs it.
 
 **That is per-person at the door and nowhere behind it.** The gate knows which family member is
 acting and forwards the verified address on every request; the app reads it nowhere. It is
@@ -1064,7 +1065,7 @@ which is why that tab is named for the screens rather than for either preference
 
 The chart's range choice is the third of these display states, and it travels the same way for the
 same reason: the last-picked preset rides a cookie (spec 0008) so the server draws the remembered
-range on first paint. None of the three is a credential. A fourth cookie now is: the lock's own grant
+range on first paint. None of the three grants anything. A fourth cookie now does: the lock's own grant
 (ADR-0012), which is why it alone among this stack's cookies is `HttpOnly`, `Secure`, and `__Host-`
 prefixed — it carries an opaque id naming one browser's unlock rather than a preference, and none of
 the three display states above needed any of that. Not a passkey: `CONTEXT.md` gives that word to
