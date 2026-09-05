@@ -1548,7 +1548,7 @@ the exemption survives only as long as that file says so.
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
         the only importer in app/     implements both and nothing else;
-        (price-provider.server:705)   no test reaches the network
+        (price-provider.server:722)   no test reaches the network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What

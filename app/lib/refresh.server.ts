@@ -124,9 +124,10 @@ export async function runRefresh(
 
 /**
  * `runRefresh({ quotes: true })`'s report, projected the way the "Refresh
- * now" control renders it — the route's own mapping (`refresh.ts:74-81`),
- * moved unchanged. Takes the narrowed overload's answer, not the general
- * `RefreshRun`, so there is no null `report.quotes` to invent an outcome for.
+ * now" control renders it — the mapping `app/routes/refresh.ts` held before
+ * this module existed, moved unchanged rather than rewritten. Takes the
+ * narrowed overload's answer, not the general `RefreshRun`, so there is no
+ * null `report.quotes` to invent an outcome for.
  */
 export function outcomeOf(run: RunWithQuotes): RefreshOutcome {
   if (run.status !== "done") return run;

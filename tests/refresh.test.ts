@@ -68,13 +68,16 @@ function brokenQuotesProvider(): PriceProvider {
   };
 }
 
+/** The instant every fake quote is struck at, so a seeded observation can collide with it. */
+const QUOTED_AT = new Date("2026-06-05T20:00:00Z");
+
 const quote = (symbol: string): ProviderQuote => ({
   symbol,
   price: "100.0000",
   quoteType: "ETF",
   yieldPct: null,
   annualDividendPerShare: null,
-  asOf: new Date("2026-06-05T20:00:00Z"),
+  asOf: QUOTED_AT,
   fetchedAt: new Date("2026-06-05T20:00:05Z"),
 });
 
@@ -104,32 +107,77 @@ describe("a run that takes the lock", () => {
 
   it(
     "projects a done run's quotes into the outcome the control renders",
-    withDatabase(async ({ db, seedInstrument }) => {
-      // The mapping the route used to hold (`app/routes/refresh.ts` before
-      // this module), over a real report rather than a hand-built one: a
-      // field crossed here shows the household the wrong figure, and the
-      // route has no assertion of its own until [06] gives it one.
-      // Two instruments and one quote, so every count in the outcome is a
-      // different number: with all five equal, a projection that crossed two
-      // fields would read correctly and the case would prove nothing.
-      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      await seedInstrument({ symbol: "VXUS", priceSource: "feed" });
+    withDatabase(async ({ db, seedInstrument, seedObservation }) => {
+      // Five instruments, three quoted, two of those already observed at the
+      // instant the quote carries: `requested` 5, `priced` 3, `stale` 2,
+      // `observed` 1. Every count a different number on purpose — with any
+      // two equal, a projection that crossed them would read correctly and
+      // this case would prove nothing. The route has no assertion of its own
+      // until [06], so a field crossed here reaches the household unchecked.
+      const quoted = [
+        await seedInstrument({ symbol: "VTI", priceSource: "feed" }),
+        await seedInstrument({ symbol: "VXUS", priceSource: "feed" }),
+        await seedInstrument({ symbol: "BND", priceSource: "feed" }),
+      ];
+      await seedInstrument({ symbol: "VNQ", priceSource: "feed" });
+      await seedInstrument({ symbol: "VTV", priceSource: "feed" });
+
+      for (const instrument of quoted.slice(0, 2)) {
+        await seedObservation({ instrument, asOf: QUOTED_AT, price: "100.0000" });
+      }
+
       const pool = createPool(TEST_DATABASE_URL);
 
       try {
         const outcome = await withDb(
           db,
-          async () => outcomeOf(await runRefresh({ quotes: true }, fakeProvider([quote("VTI")]))),
+          async () =>
+            outcomeOf(
+              await runRefresh(
+                { quotes: true },
+                fakeProvider(quoted.map((instrument) => quote(instrument.symbol!))),
+              ),
+            ),
           pool,
         );
 
         expect(outcome).toEqual({
           status: "done",
-          requested: 2,
-          priced: 1,
-          stale: 1,
+          requested: 5,
+          priced: 3,
+          stale: 2,
           observed: 1,
           providerFailed: false,
+        });
+      } finally {
+        await pool.end();
+      }
+    }),
+  );
+
+  it(
+    "projects a provider failure as a done outcome that says so",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The other half of the projection: `providerFailed` is the one field
+      // no count can stand in for, and the control renders it as its own
+      // sentence.
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const pool = createPool(TEST_DATABASE_URL);
+
+      try {
+        const outcome = await withDb(
+          db,
+          async () => outcomeOf(await runRefresh({ quotes: true }, brokenQuotesProvider())),
+          pool,
+        );
+
+        expect(outcome).toEqual({
+          status: "done",
+          requested: 1,
+          priced: 0,
+          stale: 1,
+          observed: 0,
+          providerFailed: true,
         });
       } finally {
         await pool.end();
