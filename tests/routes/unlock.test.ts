@@ -282,6 +282,38 @@ describe("unlocking", () => {
   );
 
   it(
+    "supersedes the grant the browser arrived carrying, rather than leaving a second one live",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      // A browser reaches this screen still holding a live cookie whenever it
+      // followed a stale `redirectTo` or raced its own re-entry post. The
+      // route hands that cookie down as `supersedes`, so what it carries next
+      // is the only row it has.
+      const passkey = await seedFixturePasskey(seedPasskey);
+      const prior = await seedUnlockGrant({ passkeyId: passkey.credentialId });
+
+      const { options } = expectScreenData(await loader(args(get("/unlock"))));
+      const response = assertionResponse(options.challenge);
+
+      const outcome = await action(
+        args(
+          post(
+            "/unlock",
+            { assertion: JSON.stringify(response), redirectTo: "/" },
+            `${LOCK_COOKIE}=${prior.id}`,
+          ),
+        ),
+      );
+
+      const setCookie = (outcome as Response).headers.get("Set-Cookie") ?? "";
+      const minted = setCookie.slice(`${LOCK_COOKIE}=`.length).split(";")[0];
+      expect(minted).not.toBe(prior.id);
+
+      const live = await db.selectFrom("unlock_grant").select("id").execute();
+      expect(live.map((row) => row.id)).toEqual([minted]);
+    }),
+  );
+
+  it(
     "a refused assertion sets no cookie and mints no grant",
     withDatabase(async ({ db }) => {
       // A challenge this instance never minted — refused by `takeChallenge`

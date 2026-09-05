@@ -180,7 +180,13 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   try {
-    const grant = await verifyUnlock(response);
+    // The grant this browser already carries, superseded by the one this
+    // assertion is about to mint rather than left live beside it
+    // (`lock.server.ts`'s {@link mintGrant}). A browser reaches this screen
+    // holding a live cookie whenever it followed a stale `redirectTo` or
+    // raced its own re-entry post. `undefined` is the database seam's own
+    // default: routes never pass one.
+    const grant = await verifyUnlock(response, undefined, readLockCookie(request));
 
     return redirect(safeReturn(fields.redirectTo), {
       headers: { "Set-Cookie": lockCookie(grant.id) },
