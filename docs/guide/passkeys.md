@@ -99,8 +99,10 @@ this feature exists to close off.
 
 Neither of those needs you to do anything, and neither is a fault if it catches you off guard the
 first few times — it is the lock doing its job while you were not looking, not a random failure. **Lock
-now**, beside **Show amounts** in the navigation, is the one you control directly: press it and this
-browser locks immediately, without waiting on either clock. Handing your phone to someone, even for a
+now**, beside **Show amounts** in the navigation, is the one you control directly, and it does not wait
+on either clock — but pressing it is itself a request to the app, the same as the automatic checks
+above, so on a slow connection, or with none at all, whatever was already on the screen can stay up a
+moment longer than you would expect before it actually locks. Handing your phone to someone, even for a
 minute, is exactly when to press it first.
 
 ## Removing a passkey

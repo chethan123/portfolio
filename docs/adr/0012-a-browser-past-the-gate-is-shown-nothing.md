@@ -59,7 +59,8 @@ seconds ago.
 **A passkey the household enrols may be synced.** Backup eligibility is visible to us — the BE and
 BS flags in the authenticator data — but refusing backup-eligible passkeys would exclude iCloud
 Keychain and Google Password Manager, which is where a phone's own passkey goes. So they are
-accepted, recorded, and shown as such in Settings. The honest statement of the guarantee is that
+accepted and recorded, and Settings marks the eligibility — never proof a copy has actually been
+made anywhere. The honest statement of the guarantee is that
 **the lock is only as strong as whatever unlocks the passkey provider on that device.**
 
 ## Considered options

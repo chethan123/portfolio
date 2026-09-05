@@ -1491,7 +1491,8 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     accepts, and a device passcode satisfies it exactly as a biometric one does. The assertion also
     carries no timestamp a server could compare against, so a provider whose vault is already
     unlocked may return a verified assertion without prompting anyone. A passkey the household
-    enrols may be synced too — shown as such in Settings — which is the same limit restated:
+    enrols may be *eligible* to sync too — Settings marks that capability, never proof a copy has
+    actually been made anywhere — which is the same limit restated:
     **the lock is only as strong as whatever unlocks the passkey provider on that device**
     ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md) states all three as
     properties of the web platform, not of this implementation).

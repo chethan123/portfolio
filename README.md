@@ -473,9 +473,9 @@ through; anything unvouched-for is handed to Google's own account chooser and co
 the address that signed in is on the operator's list. The sidecar's own interstitial page is
 skipped, so the only sign-in screen anyone in the household ever sees is Google's.
 
-The app therefore has no password and no login page of its own, and it makes no authorization
-decision at all: the list is the whole of who may enter, and everyone admitted sees and can do
-everything. It does hold one cookie now, though — the lock's: once the household enrols a passkey, a
+The app therefore has no password and no login page of its own, and it makes no *per-person*
+authorization decision: the list is the whole of who may enter, and everyone admitted sees and can
+do everything. It does hold one cookie now, though — the lock's: once the household enrols a passkey, a
 browser holding no live grant is shown nothing until an assertion checks out, which is a fact about
 that one browser at that one moment and never an identity the app is keeping (masking, further down,
 is a different control answering a different question). The verified address arrives on every

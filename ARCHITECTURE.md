@@ -654,7 +654,7 @@ erDiagram
         text id PK "32 bytes of randomness — the cookie carries this and claims nothing"
         text passkey_id FK "on delete cascade"
         timestamptz granted_at
-        timestamptz expires_at "rolling idle expiry, extended by the requests that use it"
+        timestamptz expires_at "rolling idle expiry, pushed out only once the window is more than half spent"
     }
 ```
 

@@ -266,23 +266,25 @@ on any figure screen spends a request at any hour either way). An environment th
 `PRICE_POLL_INTERVAL_MINUTES` is ignored without error — if you had tuned it, re-enter the value
 once on that screen after upgrading.
 
-**The gate's own settings are Compose-level, and three of the four configure the `gate` service
-alone.** `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET` and `GATE_COOKIE_SECRET` — the application never
-sees any of the three. All four variables named in this paragraph have no defaults on purpose, and
-`compose.yaml` interpolates all four with `${VAR:?}`, so `docker compose up` stops on the first one
-that is unset *or empty* and names it — before a container exists, which is why the message is
-Compose's rather than the startup validator's at this stage.
+**The gate's own settings are Compose-level, and gate-only.** `GATE_CLIENT_ID`, `GATE_CLIENT_SECRET`
+and `GATE_COOKIE_SECRET` configure the `gate` service alone — the application never sees any of
+them. Each has no default on purpose, and `compose.yaml` interpolates each with `${VAR:?}`, so
+`docker compose up` stops on the first one that is unset *or empty* and names it — before a
+container exists, which is why the message is Compose's rather than the startup validator's at this
+stage.
 
 - `GATE_COOKIE_SECRET` must decode to exactly 16, 24 or 32 bytes; the gate builds an AES cipher from
   it and refuses to start otherwise, naming `cookie_secret` in its log. Generate one with
   `openssl rand -base64 32 | tr -- '+/' '-_'`. Rotating it is
   [the blunt revocation lever](#revocation-and-the-levers-you-have).
 
-**`PUBLIC_ORIGIN` is the fourth, and the application reads it now too** — [the lock](#the-lock)
-derives from it the one identity a passkey check has to run against, which is the app's first
-setting shared with the sidecar rather than owned by it alone. The gate still builds its Google
-redirect URL as `PUBLIC_ORIGIN` + `/oauth2/callback`, which must match what is registered on the
-OAuth client exactly ([One-time Google setup](#one-time-google-setup)) — that half is unchanged.
+**`PUBLIC_ORIGIN` is not gate-only: the application reads it now too** — [the lock](#the-lock)
+derives from it the one identity a passkey check has to run against, which makes it the app's first
+setting shared with the sidecar rather than owned by it alone. It carries the same no-default,
+`${VAR:?}` treatment as the settings above, so `docker compose up` stops on it too if it is unset or
+empty. The gate still builds its Google redirect URL as `PUBLIC_ORIGIN` + `/oauth2/callback`, which
+must match what is registered on the OAuth client exactly ([One-time Google setup](#one-time-google-setup)) —
+that half is unchanged.
 What is new is that the application's own startup validator checks the same value a second time,
 stricter than Compose's "present and non-empty," and a value that clears Compose's bar can still
 fail this one:
@@ -732,16 +734,18 @@ every passkey is gone the instance reads exactly as though none was ever enrolle
 anyone the gate admits free to enrol again — because that is what "holds no passkey" already means;
 there is no third state.
 
-**The delete alone does not close a ceremony already in flight.** A registration challenge lives in
-the app's own process memory, not in the database, for two minutes after it is minted
-(`CHALLENGE_TTL_MS` in [`app/lib/lock.server.ts`](../app/lib/lock.server.ts)); a browser that had
-already reached the "Create the passkey" step before you deleted every row can still complete that
-ceremony afterward, within that window. Because the challenge was minted while the household still
-held a passkey, the server accepts the completed ceremony as an ordinary later enrolment rather than
-a first one, writes the passkey with no check required, and the instance is locked again within
-seconds of you having cleared it. Restart `app` right after the delete to drop that in-memory map
-along with every other pending ceremony; short of a restart, the two minutes have to actually pass,
-untouched, before the instance is safely clear.
+**The delete alone does not close a ceremony already in flight — stopping `app` before you delete does.**
+A registration challenge lives in the app's own process memory, not in the database, for two minutes
+after it is minted (`CHALLENGE_TTL_MS` in [`app/lib/lock.server.ts`](../app/lib/lock.server.ts)); a
+browser that had already reached the "Create the passkey" step keeps that challenge live until either
+it completes or the two minutes pass, and `app` is the only thing that can complete it. Delete first
+and only stop-and-restart `app` afterward, and there is a live gap between the delete committing and
+the stop taking hold: a registration that finishes inside that gap writes a passkey — because the
+challenge was minted while the household still held one, the server accepts the completed ceremony as
+an ordinary later enrolment rather than a first one, with no check required — and the instance is
+locked again within seconds of you having cleared it, having made the restart do nothing. Stop `app`
+first instead: with it down, nothing can complete a registration no matter how long the delete takes,
+so there is no such gap left to race.
 
 ### `PUBLIC_ORIGIN` is stricter now than "must be set"
 

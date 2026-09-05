@@ -662,8 +662,6 @@ If the public origin changes with the machine, `PUBLIC_ORIGIN` and the redirect 
 the Google OAuth client both have to change with it, or nobody can sign in.
 
 **If the household holds any passkeys, a hostname change locks the instance with none that work.**
-The passkey check runs against `PUBLIC_ORIGIN`'s own hostname, not only the gate's redirect — so a
-passkey enrolled against the old hostname stops verifying under the new one, restored intact or not.
 Delete every passkey as part of the move (the command is in
 [Every browser is locked and no passkey can be reached](#every-browser-is-locked-and-no-passkey-can-be-reached)),
 before or right after you bring the new machine up, and have the household enrol again once it is

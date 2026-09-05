@@ -524,7 +524,7 @@ the full argument).
 | `id` | `text` | no | primary key; CHECK `length(id) >= 32` — a cryptographically random token, never a sequential one, since it travels in a cookie and is the whole of the cookie's security |
 | `passkey_id` | `text` → `passkey` | no | `ON DELETE CASCADE` — removing a passkey ends its grants with it |
 | `granted_at` | `timestamptz` | no | default `now()` |
-| `expires_at` | `timestamptz` | no | the rolling idle expiry, extended by the request that uses it; deliberately unconstrained against `granted_at`, so a test can seed a row already past its expiry |
+| `expires_at` | `timestamptz` | no | the rolling idle expiry, pushed forward by a request that uses the grant only once the window is already more than half spent (`touchGrant`'s own throttle — a request early in the window leaves it alone); deliberately unconstrained against `granted_at`, so a test can seed a row already past its expiry |
 
 Index: `unlock_grant_expires_at_idx` on `(expires_at)` — what the sweep reads, matching
 `upload_draft_created_at_idx`'s precedent.

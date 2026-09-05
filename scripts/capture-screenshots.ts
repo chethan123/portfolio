@@ -198,28 +198,45 @@ const CAPTURE_GRANT_LIFETIME_MS = 6 * 60 * 60 * 1000;
  * a platform passkey backed by a phone's own account is the common case
  * this household would actually be shown, not the exception.
  *
- * **Idempotent, reading before writing.** A second capture run against the
- * same seeded database (no re-seed between the two) finds the first run's
- * row already in place and returns its id rather than trying to insert a
- * second `bootstrap: true` row on top of it — `passkey_bootstrap_idx`
- * (migration 0012's one-live-bootstrap-row rule) would refuse that outright.
- * `seed-demo.ts`'s own `WIPE` list still clears this row on the next
- * re-seed, so a stale placeholder never survives past the household it was
- * planted for.
+ * **Idempotent, reading before writing — and only ever for its own row.** A second capture run
+ * against the same seeded database (no re-seed between the two) finds the first run's row
+ * already in place, by this exact {@link CAPTURE_PLACEHOLDER_CREDENTIAL_ID}, and returns it
+ * rather than trying to insert a second `bootstrap: true` row on top of it —
+ * `passkey_bootstrap_idx` (migration 0012's one-live-bootstrap-row rule) would refuse that
+ * outright. **Any other passkey already present refuses rather than being adopted** (finding 3):
+ * a developer who seeds the demo, enrols a real passkey while testing against it, then captures
+ * without reseeding must not get their own label and rows written into the committed
+ * screenshots. `seed-demo.ts`'s own `WIPE` list still clears this row on the next re-seed, so a
+ * stale placeholder never survives past the household it was planted for.
  */
+const CAPTURE_PLACEHOLDER_CREDENTIAL_ID = "demo-placeholder-credential-id";
+
 async function ensureCapturePasskey(pool: Pool): Promise<string> {
   const { rows } = await pool.query<{ credential_id: string }>(
-    `select credential_id from passkey order by enrolled_at, credential_id limit 1`,
+    `select credential_id from passkey where credential_id = $1`,
+    [CAPTURE_PLACEHOLDER_CREDENTIAL_ID],
   );
   const existing = rows[0];
   if (existing !== undefined) return existing.credential_id;
+
+  const { rows: other } = await pool.query<{ credential_id: string }>(
+    `select credential_id from passkey limit 1`,
+  );
+  if (other[0] !== undefined) {
+    throw new Error(
+      "This database already holds a passkey that is not the capture placeholder — probably " +
+        "enrolled by hand while testing against the seeded demo. Re-seed before capturing, so " +
+        "the shots show only the placeholder, never a real passkey's own label:\n" +
+        "  node --env-file=<file> ./scripts/seed-demo.ts",
+    );
+  }
 
   const { rows: inserted } = await pool.query<{ credential_id: string }>(
     `insert into passkey (credential_id, public_key, backup_eligible, label, bootstrap)
      values ($1, $2, $3, $4, true)
      returning credential_id`,
     [
-      "demo-placeholder-credential-id",
+      CAPTURE_PLACEHOLDER_CREDENTIAL_ID,
       Buffer.from("demo placeholder public key — never verified"),
       true,
       "Alex's Phone",
