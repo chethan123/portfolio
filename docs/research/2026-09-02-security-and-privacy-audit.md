@@ -151,8 +151,8 @@ variable again: change the password inside the database first (`alter role portf
 the gate's secrets, and `operating.md:849-863` is right that it must survive a rebuild. Split
 Compose into a frontend network for `caddy`, `gate` and `app` and a backend one for `app`, `dump`
 and `db`. That topology, and a required `POSTGRES_PASSWORD`, are already designed in spec 0018
-(`docs/specs/0018-price-worker.md` §3.7; ticket
-`docs/specs/price-worker/08-the-network-lockdown.md`, which also moves the credential out of the URL
+(`docs/specs/0018-price-worker.md` §3.6; ticket
+`docs/specs/price-worker/07-the-network-lockdown.md`, which also moves the credential out of the URL
 into `PGPASSWORD`), so this is a case for landing that slice, not a new proposal. Until it lands,
 pass the dump credential through `PGPASSWORD` or the split `PG*` variables rather than argv.
 
@@ -263,15 +263,15 @@ a validation failure, sees the address and the timing of that failure and never 
 the registry URL is fixed. Tickers alone reveal interests and uncommon holdings. The path carries no
 quantities, values, people, account names or numbers, CSV content or credentials. `yahoo-finance2`
 uses an unofficial endpoint and is itself a trust boundary. The disclosure is recorded as a residual
-risk in spec 0018 (`docs/specs/0018-price-worker.md:858-863`) and stated to the operator at
-`docs/operating.md:606-613`.
+risk in spec 0018 (`docs/specs/0018-price-worker.md` §8, "What the worker and Yahoo learn") and
+stated to the operator at `docs/operating.md:606-613`.
 
 **Avoidance.** Pass `versionCheck: false` where the client is constructed: one line, and the npm
 destination is gone. If disclosing symbols to Yahoo is unacceptable, the shipped answer is thin.
 `manual` pricing at import only records `price_source` and leaves the holding unpriced, and the
 instrument and manual-price screens are later slices (`app/routes/settings/index.tsx:64-67`,
 `DESIGN.md:740-741`); blocking egress at the network after testing is the effective control today,
-and spec 0018's egress-isolated worker (§3.7, with the allowlist in §3.8) is the designed one. Treat
+and spec 0018's egress-isolated worker (§3.6, with the allowlist in §3.7) is the designed one. Treat
 container logs as household data when choosing where they go.
 
 ### S8 — Privacy decision: original statements and dumps are sensitive plaintext at rest
@@ -437,10 +437,11 @@ was not re-tested; "Error disclosure" was measured in the exploratory report
   service worker's pass-through, the fixed `import("yahoo-finance2")`, or a loopback health probe.
   The conditional npm-registry call lives inside the library (S7).
 - **No dynamic execution in first-party code.** No `eval`, `new Function`, `vm` or child process in
-  `app/`, `server/` or `public/`; shell runs only in the entrypoint and in scripts the image does not
-  carry (`Dockerfile:67`). The dependency tree has one known site: Zod 4 compiles object validators
-  with `new Function` unless `jitless` is set (`node_modules/zod/v4/core/schemas.js:970-987`, probe
-  at `util.js:146-148`), from schema shapes the code owns, never from input.
+  `app/`, `server/` or `public/`; shell runs only in the entrypoint and in scripts the image does
+  not carry (`Dockerfile:67`). The dependency tree has one known site: Zod 4 compiles object
+  validators with `new Function` unless `jitless` is set
+  (`node_modules/zod/v4/core/schemas.js:970-987`, probe at `util.js:146-148`), from schema shapes
+  the code owns, never from input.
 - **No secret logging.** Every `console.*` site prints fixed wording plus an error or a path;
   `ConfigError` names variables, never values (`server/config.ts:133-139`); the demo seed redacts
   URL passwords. Symbols and query strings do reach the logs (S7), and the dump credential reaches
