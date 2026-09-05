@@ -18,6 +18,51 @@ volume is already mounted in `app`.
 
 **Status:** ready-for-agent
 
+**Corrected — the citations, and one piece of work the list does not count.**
+
+Five releases landed between this ticket being written and being built, and ticket 05 in particular
+inserted a whole subsection into `docs/operating.md`, which pushed everything after it down by
+roughly two hundred lines. Of the eighteen `file:line` references below, five still point where
+they claim. **Seven point at unrelated content entirely** — not merely a few lines off — and a
+search-and-replace anchored on one of those would either do nothing or edit the wrong paragraph.
+Every number here was re-read on `main` at the commit this was built from. Use this table, never
+the inline numbers, and open the line before editing near it.
+
+| Written as | Actually at | What is really there |
+|---|---|---|
+| `price-provider.server.ts:719-731` | `:786-792` | the `CurrencyRefused` catch and its `console.warn`, inside `yahooPriceProvider`'s `getQuotes` (`:719-731` is inside `probeVerdicts`) |
+| `price-provider.server.ts:787-793` | `:845-848` | `isMissingHistory` — and it is **not exported** today, which the ticket is right about even though its line was wrong |
+| `app/routes/upload/instruments.tsx:104-106` | `:107` | the `{ probe: probeSymbols }` argument; `:104` is the tail of a comment |
+| `docs/data-model.md:597-600` | `:671-673` | the price-refresh bullet; `:597-600` is §5.3 `holding_valued_at`, a different subsystem |
+| `CLAUDE.md:85` | `:88` | the single-site bullet; `:85` is blank |
+| `docs/operating.md:738` | `:921` | the `Price provider failed` bullet under Logs; `:738` is inside the lock section |
+| `docs/operating.md:761` | `:949` | the "There is no price line in the log" heading; `:761` is mid-paragraph in the lock section |
+| `docs/developing.md:331` | `:334` | the `## Recipes` heading; `:331` is a `---` rule |
+| `docs/developing.md:564-571` | `:568-578` | the paragraph on what reads `.env`; the Vite claim itself is at `:571` |
+| `server/config.ts:150-153` | `:281-287` | `getConfig()`'s lazy memoisation; `:150-153` is the `AUTH_GATE`/`PORT` schema |
+| `app/routes/refresh.ts:45-47` | `:40-42` | the navigate-redirect branch — **the file is 45 lines long, so `:46-47` do not exist** |
+| `tests/price-backfill.test.ts:1080-1084` | `:1088-1090` | the `withDatabase`-wrapped case that is the shape to copy; `:1080-1084` is a helper inside the same block |
+| `price-provider.server.ts:1-12` | header runs to `:62` | a fair locator for the opening prose, but only the importer claim in the first dozen lines is this ticket's to rewrite — the split-convention argument below it stays |
+
+Still correct as written: `tests/price-poller.test.ts:139-149` and `:37`, `app/lib/db.server.ts:17`,
+`tests/support/routes.ts:31-34`, `docs/developing.md:56-60`.
+
+**The uncounted work.** Removing `yahooPriceProvider` and `probeSymbols` breaks two test files the
+checklist never names, at compile time:
+
+- `tests/price-provider.test.ts` — two whole `describe` blocks are built on them: the probe cases
+  (`:419-577`) and `"asking the client for one symbol's history"` (`:912-995`).
+- `tests/price-backfill.test.ts` — imports `yahooPriceProvider` at `:33` and calls it at `:741`,
+  with a comment saying it deliberately wants *the real adapter, not the fake*, because the
+  pre-range floor lives in `toProviderHistory` and only the real adapter runs it.
+
+That second one is not an accident to delete: the case exists to pin ticket 03's floor. The
+assumption this is built on, stated rather than hidden — **`socketProvider()` runs the same
+`toProviderHistory`**, because this ticket moves only the client-facing half and leaves every
+conversion function where it is. So both files migrate to `socketProvider()` against a real
+`startWorker` with a fake client, which is the shape acceptance item 17 already describes. If that
+turns out to be wrong for a given case, stop and say so rather than deleting the case.
+
 **The module** (`app/lib/provider-socket.server.ts`, new)
 
 - [ ] `ask(kind, body, { budgetMs } = …)` with the production budgets as defaults, so a test passes
