@@ -25,6 +25,12 @@ import { describe, expect, it, vi } from "vitest";
 
 const startRegistration = vi.hoisted(() => vi.fn());
 
+// Deliberately partial: this file drives one function, and the package's
+// other two exports (`browserSupportsWebAuthn`, `startAuthentication`) are
+// destructured inside `try` blocks, so a future test here calling
+// `supportsPasskeys` or `requestAssertion` would get a quiet `false` or
+// `{status: "failed"}` rather than a loud failure. Add them here before
+// adding such a test.
 vi.mock("@simplewebauthn/browser", () => ({ startRegistration }));
 
 const { requestRegistration } = await import("~/lib/unlock-ceremony");
@@ -35,7 +41,7 @@ const OPTIONS = {
   rp: { name: "Portfolio Tracker", id: "portfolio.local" },
   user: { id: "dXNlcg", name: "Alex's phone", displayName: "Alex's phone" },
   pubKeyCredParams: [],
-} as unknown as Parameters<typeof requestRegistration>[0];
+} satisfies Parameters<typeof requestRegistration>[0];
 
 function thrown(name: string, message: string): Error {
   const error = new Error(message);

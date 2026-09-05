@@ -536,9 +536,14 @@ export const ALREADY_REGISTERED_MESSAGE =
 
 /**
  * Shown only inside `<noscript>`: enrolling and removing are both event
- * handlers, so with scripting off every control on this screen is inert
+ * handlers, so with scripting off this screen's own controls are inert
  * rather than missing, and a reader is owed the reason rather than left
  * pressing one. Names the fix first, as `unlock.tsx`'s own does.
+ *
+ * Scoped to those two deliberately. The chrome's Lock now on this same page
+ * is a real form post and goes on working without scripting — its own header
+ * says that is the point — so a sentence about *every* control here would be
+ * false.
  */
 export const NOSCRIPT_MESSAGE =
   "This browser has scripting turned off, and enrolling or removing a passkey needs it. " +
@@ -778,28 +783,21 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
       return;
     }
 
-    if (outcome.status === "alreadyRegistered") {
-      // Unlike the other two this is not worth retrying — the same provider
-      // will refuse again — so the panel goes back to the start rather than
-      // waiting on a press that cannot succeed.
-      resetEnrolment(
-        setNote,
-        setPhase,
-        setRegistrationOptions,
-        setRegistrationMintedAt,
-        ALREADY_REGISTERED_MESSAGE,
-      );
-      return;
-    }
-
-    // Neither ever reached the server, so nothing was spent: staying ready
-    // to create lets a retry reuse the very same registration challenge
-    // rather than reconfirming identity from scratch.
+    // None of the three ever reached the server, so nothing was spent:
+    // staying ready to create lets a retry reuse the very same registration
+    // challenge rather than reconfirming identity from scratch. That matters
+    // most for the already-registered case, whose own sentence tells the
+    // reader to try a different provider — the refusal came from the
+    // authenticator they picked, not from these options, so a second attempt
+    // through a different one succeeds against this same challenge. **Start
+    // over** is the exit for a reader who does not want to.
     setPhase("readyToCreate");
     setNote(
       outcome.status === "dismissed"
         ? "That passkey creation did not complete. Nothing has changed — press Create passkey to try again."
-        : outcome.message,
+        : outcome.status === "alreadyRegistered"
+          ? ALREADY_REGISTERED_MESSAGE
+          : outcome.message,
     );
   }
 
@@ -871,16 +869,6 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
           </p>
         ) : null}
 
-        {/* Real HTML, not a React branch, for the same reason `unlock.tsx`'s
-            is: this is only ever shown by a browser actually running with
-            scripting off, which is the one case `supported` above can never
-            observe — `supportsPasskeys` never runs without it. Both halves of
-            enrolling are event handlers, so with scripting off the buttons
-            below are inert rather than absent. */}
-        <noscript>
-          <p className="empty-note">{NOSCRIPT_MESSAGE}</p>
-        </noscript>
-
         {!canUseAPasskey ? (
           <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>
         ) : readyToCreate ? (
@@ -928,6 +916,22 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
             Continue
           </button>
         )}
+
+        {/* Real HTML, not a React branch, for the same reason `unlock.tsx`'s
+            is: this is only ever shown by a browser actually running with
+            scripting off, which is the one case `supported` above can never
+            observe — `supportsPasskeys` never runs without it. Enrolling and
+            removing are both event handlers, so with scripting off this
+            screen's own controls are inert rather than absent; the chrome's
+            Lock now is a real form post and still works.
+            **Last, as `unlock.tsx`'s is.** `.panel-form`'s sibling rules
+            (`app/app.css`) zero a button's top margin when it *directly*
+            follows a full-line member, and an element standing between them
+            — even a `display: none` one — stops that matching and reopens
+            the 24px drop the rule exists to close. */}
+        <noscript>
+          <p className="empty-note">{NOSCRIPT_MESSAGE}</p>
+        </noscript>
       </div>
     </section>
   );

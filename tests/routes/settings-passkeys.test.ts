@@ -70,14 +70,15 @@ const {
   lastUsedText,
   loader,
   lockedByOtherRow,
+  ALREADY_REGISTERED_MESSAGE,
   NO_CEREMONY_MESSAGE,
+  NOSCRIPT_MESSAGE,
   REGISTRATION_OPTIONS_EXPIRED_MESSAGE,
   registrationOptionsExpired,
   removalConfirmDisabled,
   removalWarningKind,
   removalWarningText,
   resetEnrolment,
-  NOSCRIPT_MESSAGE,
   runConfirmCeremony,
   runRemovalCeremony,
   syncLabel,
@@ -1628,25 +1629,26 @@ describe("starting the enrolment panel over", () => {
       () => {},
       () => {},
       () => {},
-      "This provider already holds a passkey for this app and will not make a second.",
+      ALREADY_REGISTERED_MESSAGE,
     );
 
-    expect(note).toContain("already holds a passkey");
+    expect(note).toBe(ALREADY_REGISTERED_MESSAGE);
   });
 });
 
 describe("the screen with scripting off", () => {
   it(
-    "says why every control on it is inert, rather than leaving a reader pressing one",
+    "says why enrolling and removing are inert, rather than leaving a reader pressing a button that is",
     withDatabase(async () => {
       const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
 
       // Real HTML rather than a React branch, so it is in the server render
       // itself — which is the only place a browser with scripting off will
-      // ever see it.
+      // ever see it. The whole sentence, as `tests/routes/unlock.test.ts`
+      // asserts its own: a fragment would hold with the message rewritten to
+      // say something else entirely.
       expect(markup).toContain("<noscript>");
-      expect(markup).toContain("scripting turned off");
-      expect(NOSCRIPT_MESSAGE).toContain("Turn scripting on");
+      expect(markup).toContain(NOSCRIPT_MESSAGE);
     }),
   );
 });
