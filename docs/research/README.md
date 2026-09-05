@@ -5,6 +5,31 @@ Investigation output. **Nothing here is an approved slice** — approved work li
 These documents exist so the reasoning behind a recommendation can be checked, and so a rejected
 option is not rediscovered later.
 
+## 2026-09-05 — The lock slice, reviewed before launch
+
+One document: [The lock slice, reviewed before launch](./2026-09-05-lock-slice-launch-review.md) —
+a launch review of spec 0019's seven tickets against `main` at `1ffdc6e`, made by ten adversarial
+review passes (two per area, briefed apart), a drive of the running app in Chromium through a
+virtual authenticator, mutation testing of the suite, and the repository's own GitHub review
+records. Its §7 is the remediation plan, one pull request per item; its §9 says what no sandbox
+could check. The script the drive ran is beside it under `harness/`.
+
+### The three things worth knowing without reading further
+
+1. **Nothing gets past the refusal or mints a grant without a verified assertion** — but the
+   suite would not notice if it did. Flipping `future.v8_middleware` removes the lock with every
+   test green; so does deleting either half of the first-enrolment race protection; so does gating
+   the re-entry listener on the stale belief that three review rounds fought. The verdict is ship
+   with conditions, and the conditions are mostly tests.
+2. **The unlock screen is an open redirect.** `safeReturn` accepts `/..//evil.test` because the
+   URL parser collapses the `..` before it sees the empty segment; the family member who follows
+   such a link is sent off-site the moment the passkey ceremony succeeds. The bug is older than
+   the lock; the lock put it at the moment of authentication.
+3. **The family guide describes screens the code does not draw.** The walkthrough's "most often"
+   failure lands the reader on the unlock screen, not on a message; "press Lock now" names a
+   control that is absent on the page in question; cross-device unlock is promised without the
+   condition the browsers put on it. The one document a household reads is the one to fix first.
+
 ## 2026-09-04 — Platform facts under the price worker
 
 One document: [Price worker platform facts](./2026-09-04-price-worker-platform-facts.md) — the
