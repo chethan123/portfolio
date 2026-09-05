@@ -19,7 +19,8 @@ and the stale prose out of `tests/reentry.test.ts` while it is there.
 Its own ticket because it adds and never changes: a reviewer reads each test against the rule it
 claims to pin and asks whether the mutation the review made would now go red.
 
-**Blocked by:** Nothing. Tickets 08 and 11(c)'s former contents wait for this one.
+**Blocked by:** Nothing. Ticket 08 waits for this one; the review's test-file clean-up, once a
+third pull request under ticket 11, is this ticket's last section.
 
 **Status:** ready-for-agent
 
@@ -106,8 +107,10 @@ claims to pin and asks whether the mutation the review made would now go red.
 **`tests/reentry.test.ts`, while here**
 
 - [ ] The test at `:226-263` differs from the one at `:209-224` only by asserting that
-      `onPersistedRestore` was not called, which `:317-330` already pins; it names an enrolment
-      scenario it does not exercise. Delete it
+      `onPersistedRestore` was not called on a hidden-too-long return, and it names an enrolment
+      scenario it does not exercise. Move that one assertion into `:209-224` (nothing else pins
+      it — `:317-330` pins the converse, a persisted restore calling `onPersistedRestore`), then
+      delete `:226-263`
 - [ ] `askServer` is declared at `:320` and asserted not-called at `:328` without ever being handed
       to `watchReentry`. Delete both lines
 - [ ] The header (`:2-9`) and the "What moved here" paragraph (`:29-41`) describe an

@@ -69,11 +69,11 @@ after them is what keeps the grep list below true.
       *discovering* a passkey) and which is not (a return after the grace)
 - [ ] `app/components/lock-now-control.tsx:9-10`: `rootData.locked` is `hasPasskey`, and the
       re-entry guard no longer gates on it
-- [ ] `app/lib/reentry.ts:265-271`, `postLockNow`'s header: `response.ok` "is the one answer here
+- [ ] `app/lib/reentry.ts:155-164`, `postLockNow`'s header: `response.ok` "is the one answer here
       that actually means the grant is gone" — any 2xx satisfies it (a captive portal's page, the
       gate's sign-in page if the provider button were not skipped). Say it is the best signal a
       fetch has, and what it does not prove
-- [ ] `app/lib/reentry.ts:352-359`, the comment on seeding `hiddenAt` from the mount state: it
+- [ ] `app/lib/reentry.ts:245-253`, the comment on seeding `hiddenAt` from the mount state: it
       already names "opened in a background tab"; extend it with the decision (spec 0020: kept, it
       fails toward locking) and the cost (one prompt on the first look at a tab opened without
       switching to it). No twin paragraph in the module header

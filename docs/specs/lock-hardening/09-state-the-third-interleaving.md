@@ -66,7 +66,7 @@ header.
 
 **Verification**
 
-1. `grep -n "neither is enough alone\|Neither is enough alone\|neither of them is enough"
+1. `grep -n "neither is enough alone\|Neither is enough alone\|Neither half is sufficient alone"
    migrations/0012_lock.sql app/lib/lock.server.ts docs/specs/lock/01-*.md` — each hit sits beside
    the corrected sentence, or is gone.
 2. `npm run typecheck`, `npm run build`, `npm test` — unchanged counts (the migration's SQL is

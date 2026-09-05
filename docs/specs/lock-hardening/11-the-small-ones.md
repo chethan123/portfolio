@@ -8,7 +8,8 @@ requests by what they touch so each still typechecks, builds and tests alone. Ea
 with its finding; none needs an argument of its own. (The test-file clean-up the review also
 listed is ticket 02's, which is already in that file.)
 
-**Blocked by:** (a) nothing; (b) [11(a)](#b-the-domain-module--applibllockserverts-applibllockts),
+**Blocked by:** (a) [05](05-say-what-the-family-will-see.md), which writes the interim guide
+sentence (a) removes and edits the `<strong>` beside the button (a) adds a control to; (b) (a),
 which edits the one import line in `passkeys.tsx` that (b) also touches.
 
 **Status:** ready-for-agent
@@ -34,11 +35,15 @@ which edits the one import line in `passkeys.tsx` that (b) also touches.
 - [ ] F15 — `<noscript>` on the Passkeys screen, in `unlock.tsx:506-508`'s shape: with scripting
       off, neither ceremony can run, and the message says so and names the recoveries
 - [ ] The guide sentence ticket 05 left ("reloading the page is how to start over") is removed here
+- [ ] `app/lib/unlock-ceremony.ts:50-56`, the header paragraph saying an `InvalidStateError`
+      "falls to the same generic `failed` branch": rewritten, since it no longer does
 - [ ] Tests: the mapped outcome needs a real `requestRegistration` with a stubbed thrower —
       `vi.mock("@simplewebauthn/browser")` whose `startRegistration` throws an error shaped like
       the wrapper's (`name: "InvalidStateError"`) — since `tests/unlock-ceremony-boundary.test.ts`
-      only greps file layout and both route tests mock the whole seam
-      (`tests/routes/unlock.test.ts:41-60`); say so in the test's header. The reset function as a
+      only greps file layout and both route tests mock `requestAssertion` and `supportsPasskeys`
+      over `importOriginal` and never drive `requestRegistration`
+      (`tests/routes/unlock.test.ts:41-44`, `tests/routes/settings-passkeys.test.ts:58-60`); say
+      so in the test's header. The reset function as a
       pure-function test in `tests/routes/settings-passkeys.test.ts` following that file's pattern;
       the `<noscript>` fragment by `toContain`
 

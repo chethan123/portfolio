@@ -239,8 +239,8 @@ marked.
    no tap, as the guide's own later section says.
 3. `docs/guide/passkeys.md:136-138` — "on a slow connection, or with none at all, whatever was
    already on the screen can stay up longer than you would expect, until it does." There is no
-   "until it does": a failed or non-2xx post logs and returns (`app/lib/reentry.ts:297-310`),
-   `hiddenAt` is consumed (`:370`), nothing retries, and continued use keeps rolling the grant.
+   "until it does": a failed or non-2xx post logs and returns (`app/lib/reentry.ts:190-203`),
+   `hiddenAt` is consumed (`:263`), nothing retries, and continued use keeps rolling the grant.
 4. `docs/guide/passkeys.md:143-144` — "**Lock now**, beside **Show amounts** in the navigation".
    The neighbour reads "Hide amounts" whenever amounts are shown
    (`app/components/masking-toggle.tsx:49`), and below 1024px both controls' text is clipped to an
@@ -285,7 +285,7 @@ marked.
     verified in this review). The consequence is bounded — a same-*site* sibling origin can force
     a lock, since `Lax` sends the cookie on a same-site POST — but the comment offers the check as
     the second of two reasons and it is not there.
-11. `app/lib/reentry.ts:265-271` — `response.ok` "is the one answer here that actually means the
+11. `app/lib/reentry.ts:155-164` — `response.ok` "is the one answer here that actually means the
     grant is gone". Any 2xx satisfies it; a captive portal's 200 HTML does (reproduced by the
     mechanics reviewer), as would the gate's sign-in page if the provider button were not skipped.
 12. `docs/specs/lock/07:117-118` and `06:72-77` require `scripts/seed-demo.ts` to seed a passkey;
@@ -308,7 +308,7 @@ marked.
   was"; the exposure is at most one idle window once per seven days per device; no document says
   the trigger is defeated this way. Reasoned from source; a real gate was not available.
 - **F10 — a tab opened in the background locks the whole browser the first time it is shown.**
-  `watchReentry` seeds `hiddenAt` from `document.visibilityState` at mount (`app/lib/reentry.ts:360`),
+  `watchReentry` seeds `hiddenAt` from `document.visibilityState` at mount (`app/lib/reentry.ts:253`),
   so a Cmd-click that hydrates a hidden tab starts the clock; switching to it two minutes later
   posts the lock and both tabs are refused. Reproduced by the mechanics reviewer against the
   stand-in. Ticket 06 and the guide describe a *return*; this tab never left. This is the cost

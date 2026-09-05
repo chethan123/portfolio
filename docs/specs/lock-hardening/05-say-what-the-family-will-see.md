@@ -16,8 +16,8 @@ sentences into a different wrong sentence. A reviewer reads each new sentence be
 describes.
 
 **Blocked by:** [07](07-hedge-cross-device-and-walk-it.md), which edits the one guide paragraph
-this ticket leaves alone and is the smaller change — it lands first, this rebases. Tickets 08 and
-11(a) wait for this one.
+this ticket leaves alone and is the smaller change — it lands first, this branches after it.
+Tickets 08 and 11(a) wait for this one.
 
 **Status:** ready-for-agent
 
@@ -48,7 +48,7 @@ this ticket leaves alone and is the smaller change — it lands first, this reba
       section that says stepping away for a minute locks it: both are true, say so once
 - [ ] "When it locks itself", the sentence ending "until it does" (`:136-138`): there is no
       "until". If the request to lock cannot reach the app — no connection, a proxy error — nothing
-      retries (`app/lib/reentry.ts:297-310`); the screen stays as it was until the next tap, and a
+      retries (`app/lib/reentry.ts:190-203`); the screen stays as it was until the next tap, and a
       browser in use keeps its grant alive. Say that the lock is a request, that a failed request
       is not retried, and that the idle expiry is the guarantee underneath (seven and a half to
       fifteen minutes with no request)

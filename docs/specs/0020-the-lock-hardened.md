@@ -141,11 +141,13 @@ pretending a DOM-less suite proves it.
 - [`lock-hardening/10-refuse-a-cross-origin-post.md`](lock-hardening/10-refuse-a-cross-origin-post.md)
 - [`lock-hardening/11-the-small-ones.md`](lock-hardening/11-the-small-ones.md)
 
-**Blocked-by graph**, so several can run at once. Start on nothing: 01, 02, 03, 04, 07, 10, 11(a).
+**Blocked-by graph**, so several can run at once. Start on nothing: 01, 02, 03, 04, 07, 10.
 Then: 05 after 07 (07 edits one guide paragraph; 05 edits the rest, and is larger); 06 after 03
 (adjacent lines in `verifyScopedAssertion`); 09 after 04 (both edit `completeRegistration`'s
-header); 08 after 02, 05, 10 and 11(a) (comments in `root.tsx` that 02 and 10 touch, the guide 05
-and 11(a) touch); 11(b) after 11(a) (one import line in `passkeys.tsx`). Six tickets edit
-`app/lib/lock.server.ts` and five edit `tests/lock.test.ts`; those edits are additive and in
-different regions, and a ticket branching from the latest `main` after its blockers merge will not
-conflict.
+header); 11(a) after 05 (05 writes the interim guide sentence 11(a) removes, and 07 — before 05 —
+edits the `<strong>` in the same JSX block 11(a) adds a control to); 11(b) after 11(a) (one import
+line in `passkeys.tsx`); 08 after 02, 05, 10 and 11(a) (comments in `root.tsx` that 02 and 10
+touch, the guide 05 and 11(a) touch). The remaining pairs that edit one file do so in different
+regions — 03 and 07 in `passkeys.tsx` (the action versus the acknowledgement JSX); six tickets in
+`app/lib/lock.server.ts` and five in `tests/lock.test.ts`, all additive — and a ticket branching
+from the latest `main` after its blockers merge will not conflict.
