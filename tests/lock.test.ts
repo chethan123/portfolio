@@ -889,6 +889,43 @@ describe("the challenge map's housekeeping", () => {
       expect(refusal.fieldErrors.form).not.toMatch(/never issued/);
     }),
   );
+
+  it(
+    "still answers a replayed confirmation with already-used once its purpose has filled its budget",
+    withDatabase(async ({ db }) => {
+      // The other half of the same rule, and the one a single budget got
+      // wrong in the opposite direction: keeping a spent entry is only worth
+      // anything if the next five hundred mints do not reclaim it. They have
+      // their own budget, so they do not.
+      const { challenge } = await unlockOptions(db);
+      await refusalOf(() => verifyUnlock(assertionResponse(challenge), db));
+
+      for (let i = 0; i < MAX_LIVE_CHALLENGES_PER_PURPOSE; i++) await unlockOptions(db);
+
+      const refusal = await refusalOf(() => verifyUnlock(assertionResponse(challenge), db));
+      expect(refusal.fieldErrors.form).toMatch(/already been used/);
+    }),
+  );
+
+  it(
+    "still answers an expired confirmation with expired once its purpose has filled its budget",
+    withDatabase(async ({ db }) => {
+      const base = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(base);
+
+      try {
+        const { challenge } = await unlockOptions(db);
+        clock.mockReturnValue(base + CHALLENGE_TTL_MS + 1_000);
+
+        for (let i = 0; i < MAX_LIVE_CHALLENGES_PER_PURPOSE; i++) await unlockOptions(db);
+
+        const refusal = await refusalOf(() => verifyUnlock(assertionResponse(challenge), db));
+        expect(refusal.fieldErrors.form).toMatch(/has expired/);
+      } finally {
+        clock.mockRestore();
+      }
+    }),
+  );
 });
 
 describe("enrolling", () => {

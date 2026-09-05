@@ -561,45 +561,53 @@ type ChallengeEntry = { purpose: ChallengePurpose; expiresAt: number; spent: boo
 const challenges = new Map<string, ChallengeEntry>();
 
 /**
- * Evict the oldest live entries of exactly one `kind` until that kind alone
- * is back at {@link MAX_LIVE_CHALLENGES_PER_PURPOSE} — an entry of any other
+ * Whether an entry could still be spent by anybody. A spent or expired one
+ * cannot: it is kept only so {@link takeChallenge} can say *which* of the two
+ * happened rather than falling back on "never issued", which is the more
+ * alarming answer and the wrong one.
+ */
+function isUsable(entry: ChallengeEntry, now: number): boolean {
+  return !entry.spent && entry.expiresAt > now;
+}
+
+/**
+ * Hold one `kind` to {@link MAX_LIVE_CHALLENGES_PER_PURPOSE} *usable* entries
+ * and, separately, to the same number of dead ones. An entry of any other
  * kind is never even considered, which is the whole of what partitioning the
- * budget means. `Map` preserves insertion order, so the first matching entry
- * found while walking it is that kind's oldest; cheap enough, since eviction
- * only ever runs once a kind is over its own budget, not on every mint.
+ * budget means; `Map` preserves insertion order, so the first match found
+ * while walking it is that kind's oldest.
+ *
+ * **Two budgets rather than one, and the second is what makes the first
+ * safe.** Counting a dead entry against the live budget let a flood of
+ * spend-and-retry cycles evict the confirmation somebody was in the middle
+ * of — the live one displaced by a tombstone nobody can use. But simply
+ * excluding the dead from the count bounds nothing: within one window a
+ * flood would grow the map without limit. So the dead are counted too, in
+ * their own budget, and the map stays bounded at twice what it was while a
+ * live challenge is never evicted while a dead one of its kind remains.
+ *
+ * Eviction only ever runs once a kind is over one of its budgets, never on
+ * every mint.
  */
 function evictOldestOfKind(kind: ChallengeKind, now: number): void {
-  let held = 0;
-  for (const entry of challenges.values()) {
-    if (entry.purpose.kind === kind) held++;
-  }
-
-  while (held > MAX_LIVE_CHALLENGES_PER_PURPOSE) {
-    // **A spent or expired entry goes first, always.** The budget bounds the
-    // map, so every entry of the kind counts toward it — but which one is
-    // dropped is a separate question, and dropping a *usable* challenge
-    // while a dead one sits beside it is how a flood of spend-and-retry
-    // cycles evicted the confirmation somebody was in the middle of. Nobody
-    // can use a spent or expired entry; it is only being kept so
-    // {@link takeChallenge} can say which of the two happened.
-    let victim: string | undefined;
-    for (const [text, entry] of challenges) {
-      if (entry.purpose.kind === kind && (entry.spent || entry.expiresAt <= now)) {
-        victim = text;
-        break;
-      }
+  for (const usable of [true, false]) {
+    let held = 0;
+    for (const entry of challenges.values()) {
+      if (entry.purpose.kind === kind && isUsable(entry, now) === usable) held++;
     }
-    if (victim === undefined) {
+
+    while (held > MAX_LIVE_CHALLENGES_PER_PURPOSE) {
+      let oldest: string | undefined;
       for (const [text, entry] of challenges) {
-        if (entry.purpose.kind === kind) {
-          victim = text;
+        if (entry.purpose.kind === kind && isUsable(entry, now) === usable) {
+          oldest = text;
           break;
         }
       }
+      if (oldest === undefined) break;
+      challenges.delete(oldest);
+      held--;
     }
-    if (victim === undefined) break;
-    challenges.delete(victim);
-    held--;
   }
 }
 
