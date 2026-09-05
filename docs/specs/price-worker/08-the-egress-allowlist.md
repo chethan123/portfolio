@@ -19,6 +19,105 @@ server name the proxy matched to the `CONNECT` host, and has no resolver at all.
 
 **Status:** ready-for-agent
 
+**Corrected — the citations, the allowlist, and a log line the code cannot write.**
+
+Seven releases landed between this ticket being written and being built, and the last of them
+rewrote both files it cites most. Of its eleven `file:line` references, two still point where they
+claim. The five into `scripts/smoke-test.sh` are all simultaneously correct at `2a4a268`, and the
+three into `docs/operating.md` at `1058d64` — so the ticket is describing real assertions and real
+sections, two releases back. Every number below was re-read on the tree this was built from.
+
+| Written as | Actually at | What is really there |
+|---|---|---|
+| `scripts/smoke-test.sh:342-350` | `:481-490` | the `expect_caps` per-service loop; `:342-350` is now a migration-count assertion |
+| `scripts/smoke-test.sh:365-367` | `:505-507` | the `expect_no_new_privileges` loop; `:365-367` is the pruned-dependency loop |
+| `scripts/smoke-test.sh:379-385` | `:519-526` | the `expect_uid` loop; `:379-385` is the `yahoo-finance2` CommonJS-copy check |
+| `scripts/smoke-test.sh:401-403` | `:542-544` | the `expect_read_only_root` loop; `:401-403` is the bundle grep |
+| `docs/operating.md:485` | `:603` | `## Security`; `:485` is a Caddy-TLS bullet |
+| `docs/operating.md:738` | `:1019` | the `Price provider failed` bullet, under `### Logs` (`:996`) |
+| `docs/operating.md:761` | `:1057` | `### "There is no price line in the log" has four causes` |
+| `Dockerfile:104-110` | `:102-114` | the `COPY --chown=node:node` block; the file list ends at `:113` and the destination at `:114`, so a new file is added at `:113`, not `:110` |
+
+Still correct as written: `scripts/smoke-test.sh:71` and `ARCHITECTURE.md:92-100`.
+
+**The allowlist is right about `fc.yahoo.com` and incomplete about everything else.**
+
+`yahoo-finance2` 4.0.2 is what is installed (`package.json`, the lock's pinned tarball, and the
+package's own manifest agree), and `fc.yahoo.com` appears **nowhere** in it — the ticket is right to
+drop it. Two corrections to the rest:
+
+- **A sixth host reaches the network: `registry.npmjs.org`.** The library's version check fetches
+  `https://registry.npmjs.org/yahoo-finance2/latest` and it is **on by default**. The only reason it
+  never fires here is `server/yahoo-client.ts:123` constructing with `versionCheck: false`, which
+  that file's own header already explains. Do not add it to the allowlist — add the coupling to the
+  allowlist's comment, because the next person to flip that option gets a `403` from the proxy with
+  nothing to connect it to.
+- **`guce.yahoo.com` and `consent.yahoo.com` are not facts about 4.0.2.** Neither is ever a literal
+  URL in the library: `consent.yahoo.com` appears once in a comment, `guce.yahoo.com` in a comment
+  and a commented-out warning. The consent flow follows whatever `Location` Yahoo returns, up to
+  five hops, and the only host constraint anywhere is a `/guce.yahoo/` match on the **first** hop.
+  So those two entries are a snapshot of Yahoo's live redirect chain, not a property of the pinned
+  library, and the header must say so rather than calling the whole list "a fact about the pinned
+  library". What breaks when Yahoo moves one is unchanged, and the ticket has that right.
+
+Confirmed as written: `chart()` needs no crumb, and `query1` is genuinely not swappable — it is
+hardcoded in the crumb path and in `fundamentalsTimeSeries`, bypassing `YF_QUERY_HOST`.
+
+**The documented log signature cannot be emitted.** The Docs bullet has an operator grep for
+`fetch failed: Proxy response (502)`. Measured against the real error and this repository's own
+`providerErrorText` (`server/price-worker.ts:286-303`): undici puts that string at
+`cause.cause.message`, while `cause.code` is the **number** `0` and `cause.message` is
+`"Request was cancelled."`. `providerErrorText` takes `cause.code` only when it is a string, else
+`cause.message`, and never walks deeper — so the line an operator actually sees is
+`fetch failed: Request was cancelled.`, which names nothing. The same rule drops the hostname from
+`ENOTFOUND egress-proxy`, logging `fetch failed: ENOTFOUND`.
+
+Documenting a string the code cannot produce is not an option, so **this ticket widens
+`providerErrorText` by one level** and writes the doc to what it then emits, verified by running it
+rather than by reading it. That is a correction to ticket 04's code and it is in scope here,
+because this ticket's own Docs item cannot otherwise be satisfied truthfully.
+
+**The smoke assertions this ticket breaks without saying so.**
+
+- **`scripts/smoke-test.sh:819-851` fails the run before it reaches its own probe.** The residual
+  assertion added by [07](07-the-network-lockdown.md) — that `worker` still reaches
+  `egress-worker`'s gateway — begins with `docker network inspect … portfolio_egress-worker`, and on
+  a network this ticket removes that exits non-zero straight into `fail`. Delete the block. Its
+  replacement is one word: add `worker-proxy` to the isolated-network loop at `:727`, which already
+  asserts both halves this ticket asks for — an empty IPAM `Gateway` and no `inet` on the host
+  bridge. That flip is what the residual was planted for, and 07's comment at `:824-827` says so.
+- **`:814-817` asserts `nslookup example.com` from `worker` succeeds.** This ticket says it now
+  fails, so the assertion is **inverted**, not deleted.
+- **`:712`'s `for service in app db dump; do expect_no_egress`** should gain `worker`. After this
+  ticket the worker has no default route, and `/proc/net/route` carrying no `00000000` is a
+  stronger proof the topology flipped than the DNS check the ticket asks for. It is free.
+- **`:551`'s socket-volume fence enumerates services by name** (`db dump gate caddy`), so
+  `egress-proxy` escapes it unless added.
+- **`:572-584`'s worker bounds are inline, not a helper.** "As 05 asserts for `worker`" means
+  extracting one; the ticket presents it as free.
+
+**Two more the ticket does not account for.**
+
+- **The Compose floor is already pinned at 2.31.0**, with better provenance than the ticket's
+  "present at v2.35, absent at v2.30" — so there is nothing for the builder to pin. But
+  `docs/operating.md:107` argues the floor is *not* load-bearing precisely because "`egress-worker`
+  is the only network here that predates it, and this release leaves that one byte-identical". This
+  ticket deletes that network. That paragraph has to be rewritten, and its conclusion may change.
+- **The SNI smoke assertion cannot run where Yahoo is unreachable.** The ticket's own ordering
+  resolves and connects upstream at step (2), before the `200` at step (3) — so on a runner that
+  cannot reach Yahoo, `CONNECT finance.yahoo.com:443` is answered `502` at step (2) and the teardown
+  the assertion is about never happens. The ticket marks only the *first* Yahoo item skippable. Mark
+  this one too, with the same notice, and keep the `403`, the `405`, the `/healthz` `200` and the
+  stopped-proxy case as the controls that need no egress.
+
+**One measured correction to a test shape.** The concurrency item asks for a ninth socket that "is
+not served" and a `/healthz` that "gets nothing back within the healthcheck's own timeout". With
+eight sockets held, socket nine is **accepted and closed cleanly in about two milliseconds**, with
+no error and no timeout — `maxConnections` closes it, it does not stall it. The rationale the item
+gives is exactly right, and it is why the healthcheck must be a `GET /healthz` rather than a bare
+`net.connect`, which completes at the TCP level regardless. Only the assertion shape is wrong:
+write it to a clean close, not to a timeout.
+
 **The proxy** (`server/egress-proxy.ts`, new; `tests/egress-proxy.test.ts`, new)
 
 - [ ] Imports `node:http`, `node:net` and `node:dns` only — its closure is decorrelated from the npm
