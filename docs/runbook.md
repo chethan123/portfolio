@@ -103,11 +103,11 @@ docker compose run --rm --no-deps \
 docker compose up -d app
 ```
 
-Three things about the validator:
+About the validator:
 
 - It reports **every** problem it can see in one pass, so fix the whole list before retrying.
-- An empty value is treated as unset and falls back to the default. The gate's own three
-  credentials are not its business at all — those stop Compose before a container exists
+- An empty value is treated as unset and falls back to the default. The gate's own credentials are
+  not its business at all — those stop Compose before a container exists
   ([`docker compose up` refuses to start anything](#docker-compose-up-refuses-to-start-anything)).
 - **`PUBLIC_ORIGIN` is the one most likely to name itself here.** The app checks it as strictly as
   a passkey check needs — an IP-address host, a path or query string, or merely a differently
@@ -558,14 +558,8 @@ docker compose start app
 `unlock_grant.passkey_id` references `passkey` `on delete cascade`, so the delete also removes every
 browser's current grant along with the passkey that minted it — nothing is left half-cleared.
 
-**Stopping `app` before the delete, not restarting it after, is what actually closes the window.**
-`app` is the only thing that can complete a registration, so while it is down nothing can enrol a
-passkey no matter how long the delete takes. Deleting first and restarting after leaves a live gap
-between the delete committing and the restart taking hold — a registration that finishes inside that
-gap writes a passkey that survives the restart and re-locks the instance, having made the restart do
-nothing. Stopping first means there is no such gap left to race.
-
-Why: [The lock](operating.md#the-lock).
+Why, including why the order above is stop-delete-start and not delete-then-restart:
+[The lock](operating.md#the-lock).
 
 ---
 

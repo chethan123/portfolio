@@ -44,10 +44,13 @@ Manager, whatever your family already uses — and a vault like that can hand th
 every device signed into it. Set one up on your phone, and a tablet or laptop signed into the same
 account may be able to answer for it too, with nothing separate to create there.
 
-The other way round holds as well: one single device can hold more than one passkey, if more than
-one person has set theirs up there, or if you made a second one on it on purpose. Settings →
-Passkeys lists each one the household holds, and marks whether it is the kind that *can* be handed to
-your other devices that way, or whether it is tied to the one device that made it.
+The other way round is narrower than it sounds: a single device can hold more than one passkey, but
+usually only when a different provider makes the second one, or a separate authenticator sits
+alongside the device's own vault. Asking the same vault for a second passkey for this app usually
+does not work — it already recognises this app from the first and refuses to create another, rather
+than quietly making a second. Settings → Passkeys lists each one the household holds, and marks
+whether it is the kind that *can* be handed to your other devices that way, or whether it is tied to
+the one device that made it.
 
 **That mark is not proof a second copy exists anywhere.** It says the provider holding this passkey
 is capable of syncing it, not that it actually has — a passkey made on a device you never signed

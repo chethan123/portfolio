@@ -327,6 +327,22 @@ Nothing here deletes anything. An account is *closed*, which stops it counting t
 worth while it keeps counting on every date before it closed; a person who still owns accounts
 cannot be removed, and the refusal names them.
 
+### Settings — passkeys and the lock
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-passkeys-dark.png">
+  <img alt="Settings: one enrolled passkey, with its label, enrolment date, last use and whether it can sync to other devices, above the add-a-passkey form" src="docs/screenshots/settings-passkeys-light.png">
+</picture>
+
+Enrolling the household's first passkey turns on a second boundary, inside the app: every other
+browser, however recently it signed in through Google, is refused every screen until it holds its
+own live grant — minted by a fresh passkey check, never by signing in again. Enrolling any later
+passkey, and removing one, needs that same fresh check; an already-unlocked browser is not enough on
+its own.
+
+Removing the household's last enrolled passkey turns the lock back off, the same way a fresh
+instance already is: nobody is locked out by a lock nobody can still satisfy.
+
 ### Masking — reading the portfolio in public
 
 <picture>

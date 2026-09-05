@@ -70,7 +70,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 
 import { loadConfig } from "../server/config.ts";
 import { createPool } from "../server/db.ts";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 /** Where the application under capture is serving. */
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:5173";
@@ -203,26 +203,35 @@ const CAPTURE_GRANT_LIFETIME_MS = 6 * 60 * 60 * 1000;
  * already in place, by this exact {@link CAPTURE_PLACEHOLDER_CREDENTIAL_ID}, and returns it
  * rather than trying to insert a second `bootstrap: true` row on top of it —
  * `passkey_bootstrap_idx` (migration 0012's one-live-bootstrap-row rule) would refuse that
- * outright. **Any other passkey already present refuses rather than being adopted** (finding 3):
- * a developer who seeds the demo, enrols a real passkey while testing against it, then captures
- * without reseeding must not get their own label and rows written into the committed
- * screenshots. `seed-demo.ts`'s own `WIPE` list still clears this row on the next re-seed, so a
- * stale placeholder never survives past the household it was planted for.
+ * outright. **Any other passkey already present refuses rather than being adopted** (finding 3),
+ * whether it sits alone or *beside* the placeholder — {@link ensureCapturePasskey}'s own comment
+ * is why this has to read the whole table before answering either question: a developer who
+ * seeds the demo, enrols a real passkey while testing against it, then captures without reseeding
+ * must not get their own label and rows written into the committed screenshots. `seed-demo.ts`'s
+ * own `WIPE` list still clears this row on the next re-seed, so a stale placeholder never survives
+ * past the household it was planted for.
  */
-const CAPTURE_PLACEHOLDER_CREDENTIAL_ID = "demo-placeholder-credential-id";
+export const CAPTURE_PLACEHOLDER_CREDENTIAL_ID = "demo-placeholder-credential-id";
 
-async function ensureCapturePasskey(pool: Pool): Promise<string> {
-  const { rows } = await pool.query<{ credential_id: string }>(
-    `select credential_id from passkey where credential_id = $1`,
-    [CAPTURE_PLACEHOLDER_CREDENTIAL_ID],
-  );
-  const existing = rows[0];
-  if (existing !== undefined) return existing.credential_id;
+/**
+ * Exported for `tests/scripts/capture-screenshots.test.ts` — the coexistence
+ * case this function refuses (finding 1) is worth a database-backed test, not
+ * only the comment above promising it. Nothing else in this file wants an
+ * export: everywhere else calls this from within the same module.
+ */
+export async function ensureCapturePasskey(pool: Pool | PoolClient): Promise<string> {
+  // The whole table, read once, classified before anything returns or writes
+  // — a query scoped to the placeholder's own id alone (the previous shape
+  // here) could find it and return early without ever looking for anything
+  // else, which is exactly how a database holding *both* the placeholder and
+  // a developer's own enrolled passkey used to slip past this function: the
+  // early return never reached the "other" check below it. Reading every row
+  // first and classifying the whole set closes that — a coexisting real
+  // passkey refuses regardless of whether the placeholder is present too.
+  const { rows } = await pool.query<{ credential_id: string }>(`select credential_id from passkey`);
 
-  const { rows: other } = await pool.query<{ credential_id: string }>(
-    `select credential_id from passkey limit 1`,
-  );
-  if (other[0] !== undefined) {
+  const other = rows.find((row) => row.credential_id !== CAPTURE_PLACEHOLDER_CREDENTIAL_ID);
+  if (other !== undefined) {
     throw new Error(
       "This database already holds a passkey that is not the capture placeholder — probably " +
         "enrolled by hand while testing against the seeded demo. Re-seed before capturing, so " +
@@ -230,6 +239,9 @@ async function ensureCapturePasskey(pool: Pool): Promise<string> {
         "  node --env-file=<file> ./scripts/seed-demo.ts",
     );
   }
+
+  const existing = rows.find((row) => row.credential_id === CAPTURE_PLACEHOLDER_CREDENTIAL_ID);
+  if (existing !== undefined) return existing.credential_id;
 
   const { rows: inserted } = await pool.query<{ credential_id: string }>(
     `insert into passkey (credential_id, public_key, backup_eligible, label, bootstrap)
@@ -814,4 +826,13 @@ async function main(): Promise<void> {
   console.log("\nDone.");
 }
 
-await main();
+// Guarded, not a bare `await main()`: `tests/scripts/capture-screenshots.test.ts`
+// imports `ensureCapturePasskey` from this same module, and every module this
+// process loads runs its top level — an unguarded call would launch a real
+// browser and demand a served instance on every test run, for a script the
+// test has no reason to run at all. `import.meta.main` is true only for the
+// module Node was actually invoked on, never for one merely imported by
+// another, which is exactly the distinction this needs.
+if (import.meta.main) {
+  await main();
+}

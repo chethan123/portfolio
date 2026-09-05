@@ -105,10 +105,10 @@ Settings; there is no control that does it. If you close one by mistake, add it 
 against the new one.
 
 **Almost nothing in this application deletes anything.** An account is closed rather than removed,
-and a balance or a statement is corrected by recording another one rather than overwriting it. Two
-things really do delete, immediately and with no undo: removing a person, once they own nothing at
-all, and removing a passkey on [Settings → Passkeys](#passkeys) — see [Passkeys and the
-lock](passkeys.md) for what that does to whatever it was unlocking.
+and a balance or a statement is corrected by recording another one rather than overwriting it. What
+does delete, immediately and with no undo: removing a person, once they own nothing at all, and
+removing a passkey on [Settings → Passkeys](#passkeys) — see [Passkeys and the lock](passkeys.md)
+for what that does to whatever it was unlocking.
 
 ## Tax
 
@@ -157,6 +157,8 @@ chart and every percentage stay readable. It is not a lock: the amounts are stil
 the sign-in at the front door keeps a person out while the lock keeps a browser out.
 
 ## Passkeys
+
+![Each enrolled passkey, with its label, when it was enrolled and last used, and whether it can sync to other devices](images/settings-passkeys.png)
 
 What can unlock a browser, once the household holds one. Enrol another, see which can sync to other
 devices, and remove one that is gone for good — the full explanation, in the household's own words

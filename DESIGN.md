@@ -956,8 +956,9 @@ Migrations must be idempotent so a restart is always safe.
 **The rest of the gate's settings are not in that table, because the app reads none of the rest.**
 `PUBLIC_ORIGIN` moved into the table above for exactly that reason: unlike its neighbours, the app
 now derives the lock's WebAuthn relying-party id from it
-(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`), which is its first shared variable
-with the sidecar. Its Google client and its cookie secret genuinely are the gate's alone —
+(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) — another variable shared with the
+sidecar, though not its first: `TZ`, above, already reaches both `app` and `gate` (`compose.yaml`),
+validated and used by each. Its Google client and its cookie secret genuinely are the gate's alone —
 Compose-level variables consumed only by the `gate` service, with no default, and a missing one
 stops `up` the same way a missing `PUBLIC_ORIGIN` does. Who may enter is not a variable at all: a
 file of addresses beside the Compose file, one per line, because it is a list that grows rather
@@ -1477,12 +1478,16 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     solid line and says nothing — the half of
     [issue #83](https://github.com/chethan123/portfolio/issues/83) the backfill does not answer,
     filed as [issue #216](https://github.com/chethan123/portfolio/issues/216) and still owed.
-15. **A browser that cannot run the passkey ceremony cannot read this instance, once the household
-    holds one.** Many in-app WebView browsers offer no *completable* ceremony
-    (`app/lib/unlock-ceremony.ts`'s own hedge), and nothing here decides this with a client-side
-    capability check — it falls out of the server refusing until an assertion arrives
-    ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md)). The unlock screen names
-    two self-service recoveries first — another browser on this device, or a device that can reach a
+15. **A browser without a live grant cannot unlock without running the passkey ceremony, once the
+    household holds one.** Ordinary requests never touch the ceremony at all — the root middleware
+    checks only whether this browser already holds a live grant, so one that does keeps reading
+    every protected route regardless of what its browser can run
+    ([ADR-0012](docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md)). The limitation is about
+    getting back in, not about staying in: many in-app WebView browsers offer no *completable*
+    ceremony (`app/lib/unlock-ceremony.ts`'s own hedge), and nothing here decides this with a
+    client-side capability check — it falls out of the server refusing until an assertion arrives,
+    which only a browser with no live grant is ever asked for. The unlock screen names two
+    self-service recoveries first — another browser on this device, or a device that can reach a
     passkey the household has enrolled — and only after those does it point at the operator:
     recovery here is the operator deleting every enrolled passkey, which reopens the instance the
     same way removing the last one always does, never a second way in through the front door.

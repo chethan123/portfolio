@@ -279,8 +279,10 @@ stage.
   [the blunt revocation lever](#revocation-and-the-levers-you-have).
 
 **`PUBLIC_ORIGIN` is not gate-only: the application reads it now too** — [the lock](#the-lock)
-derives from it the one identity a passkey check has to run against, which makes it the app's first
-setting shared with the sidecar rather than owned by it alone. It carries the same no-default,
+derives from it the one identity a passkey check has to run against, which makes it another setting
+shared with the sidecar rather than owned by it alone — not the first: `compose.yaml` already passes
+`TZ` to both `app` and `gate`, and the app validates and uses that one too. It carries the same
+no-default,
 `${VAR:?}` treatment as the settings above, so `docker compose up` stops on it too if it is unset or
 empty. The gate still builds its Google redirect URL as `PUBLIC_ORIGIN` + `/oauth2/callback`, which
 must match what is registered on the OAuth client exactly ([One-time Google setup](#one-time-google-setup)) —

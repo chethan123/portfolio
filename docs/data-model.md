@@ -517,7 +517,11 @@ first passkey needs no authorisation": the *committed* half is closed by the app
 conditional insert, and neither is sufficient alone (migration 0012's own comment on the index has
 the full argument).
 
-**`unlock_grant`** — one browser's current unlock, minted by a verified assertion.
+**`unlock_grant`** — one browser's current unlock. Minted two ways: by a verified assertion against
+an already-enrolled passkey (an unlock, or the "prove yourself" step that authorises enrolling
+another passkey or removing one), or — for the household's very first passkey only — by that
+passkey's own successful registration, with no existing passkey to assert against yet; minting a
+grant there is what keeps the enrolling browser from being locked out by its own redirect back.
 
 | Column | Type | Nullable | Meaning |
 |---|---|---|---|

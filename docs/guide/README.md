@@ -52,9 +52,8 @@ Come back to these when you want to know what something on a screen means.
 
 **Almost nothing here deletes anything.** An account is *closed*, not removed. A correction records
 a new figure rather than replacing the old one. Your net worth in March does not change because you
-fixed something in August. Two things really do delete, immediately and with no undo: removing a
-person once they own nothing at all, and removing a passkey — see [Passkeys and the
-lock](passkeys.md).
+fixed something in August. What does delete, immediately and with no undo: removing a person once
+they own nothing at all, and removing a passkey — see [Passkeys and the lock](passkeys.md).
 
 **A number is withheld rather than guessed.** Where a holding cannot be priced it is left out of the
 total and the screen says how much of the portfolio the total covers. A dash never means zero.
