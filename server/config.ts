@@ -43,6 +43,14 @@ const integerFromString = (label: string) =>
     })
     .transform((value) => Number.parseInt(value.trim(), 10));
 
+/**
+ * The unix socket the price worker listens on and the app dials (spec 0018
+ * §3.2). One default, shared by {@link configSchema} and
+ * {@link workerConfigSchema}: both processes have to agree on where the
+ * socket is without either hard-coding the other's copy.
+ */
+export const DEFAULT_PRICE_WORKER_SOCKET = "/run/price-worker/worker.sock";
+
 const configSchema = z.object({
   /** Postgres connection string. No default: there is nothing sensible to guess. */
   DATABASE_URL: z
@@ -170,9 +178,32 @@ const configSchema = z.object({
 
   /** Container clock. The database stores UTC whatever this says. */
   TZ: timeZone.default("UTC"),
+
+  /**
+   * Where the price worker listens, and where the app's own calls dial
+   * (spec 0018 §3.2, §3.3). Read here too — not only by
+   * {@link loadWorkerConfig} — so the app's side of the socket comes through
+   * the same `getConfig()` every other setting does; `server/config.ts`
+   * stays the only reader of `process.env` (ARCHITECTURE.md §4.2).
+   */
+  PRICE_WORKER_SOCKET: z.string().min(1).default(DEFAULT_PRICE_WORKER_SOCKET),
 });
 
 export type Config = z.infer<typeof configSchema>;
+
+/**
+ * The worker's own schema: one key, the same default as {@link configSchema}'s
+ * `PRICE_WORKER_SOCKET`. No `DATABASE_URL`, no `PUBLIC_ORIGIN` — the worker
+ * never sees either, and one present in its environment is ignored rather
+ * than validated. No `TZ`: the worker reads no clock, `period1` is the
+ * library's own to parse, and the runtime reads `TZ` itself (`UTC` in the
+ * image, `Dockerfile:94-96`).
+ */
+const workerConfigSchema = z.object({
+  PRICE_WORKER_SOCKET: z.string().min(1).default(DEFAULT_PRICE_WORKER_SOCKET),
+});
+
+export type WorkerConfig = z.infer<typeof workerConfigSchema>;
 
 /** Thrown by {@link loadConfig}; `message` already names every bad variable. */
 export class ConfigError extends Error {
@@ -193,20 +224,23 @@ export class ConfigError extends Error {
 }
 
 /**
- * Validate an environment. Pure: it neither reads `process.env` nor exits.
- *
- * @throws {ConfigError} naming every offending variable.
+ * The empty-as-unset treatment, shared by every schema this module loads:
+ * `FOO=` in a .env file or an unsubstituted Compose variable should not read
+ * as "configured to empty". Also the single place that turns a failed
+ * `safeParse` into a {@link ConfigError} naming every offending variable at
+ * once, so a misconfigured deploy does not fix one variable per restart.
  */
-export function loadConfig(env: Record<string, string | undefined>): Config {
-  // Treat an empty string the same as unset: `FOO=` in a .env file or an
-  // unsubstituted Compose variable should not read as "configured to empty".
+function parseEnv<Schema extends z.ZodObject>(
+  schema: Schema,
+  env: Record<string, string | undefined>,
+): z.infer<Schema> {
   const present: Record<string, string> = {};
-  for (const key of Object.keys(configSchema.shape)) {
+  for (const key of Object.keys(schema.shape)) {
     const value = env[key];
     if (value !== undefined && value !== "") present[key] = value;
   }
 
-  const result = configSchema.safeParse(present);
+  const result = schema.safeParse(present);
 
   if (!result.success) {
     const problems = result.error.issues.map((issue) => {
@@ -220,7 +254,28 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     throw new ConfigError(problems);
   }
 
-  return result.data;
+  return result.data as z.infer<Schema>;
+}
+
+/**
+ * Validate an environment. Pure: it neither reads `process.env` nor exits.
+ *
+ * @throws {ConfigError} naming every offending variable.
+ */
+export function loadConfig(env: Record<string, string | undefined>): Config {
+  return parseEnv(configSchema, env);
+}
+
+/**
+ * The worker's whole configuration (spec 0018 §3.5): one key, the same
+ * empty-as-unset treatment and the same {@link ConfigError} as
+ * {@link loadConfig} — proof, as much as an assertion, that the worker
+ * starts with an environment holding nothing but a socket path.
+ *
+ * @throws {ConfigError} naming the offending variable.
+ */
+export function loadWorkerConfig(env: Record<string, string | undefined>): WorkerConfig {
+  return parseEnv(workerConfigSchema, env);
 }
 
 let cached: Config | undefined;

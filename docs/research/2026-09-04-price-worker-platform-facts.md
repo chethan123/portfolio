@@ -499,15 +499,27 @@ accepted and closed at once, and a client on the socket sees `EPIPE`/close, not 
 (**live**). Defaults, **live**: `requestTimeout` 300 000, `headersTimeout` 60 000,
 `keepAliveTimeout` 5 000 plus `keepAliveTimeoutBuffer` 1 000 (added v24.6.0),
 `connectionsCheckingInterval` **30 000**, `maxRequestsPerSocket` 0, `maxConnections` and
-`server.timeout` unset. Two facts the numbers hide. `headersTimeout` and `requestTimeout` expire only
+`server.timeout` unset. Two facts the numbers hide. ~~`headersTimeout` and `requestTimeout` expire only
 a connection that has sent at least one request byte — `src/node_http_parser.cc` adds a parser to
 the checked list at `on_message_begin` (`:739-744`) and `Expired` walks only that list
 (`:1253-1275`) — so a connection that sends nothing is never touched by them, and only
-`server.timeout` (socket inactivity; `setTimeout` destroys by default) closes it; and expiry is
-*polled* on `connectionsCheckingInterval` (`lib/_http_server.js:614-625`), so 5 s deadlines under the
-default interval bind at 5–35 s. **Live**: a silent connection under `headersTimeout: 500` was still
-open at 3 s with the interval at its default *and* at 100 ms; a request line followed by dribbled
-headers closed at 602 ms with the interval at 50 ms. Keep-alive: `http.globalAgent.keepAlive` is
+`server.timeout` (socket inactivity; `setTimeout` destroys by default) closes it~~ — **corrected
+2026-09-05, while building [ticket 04](../specs/price-worker/04-the-price-worker-process.md): a
+byte-less connection *is* expired by `headersTimeout`.** Re-run on **24.12.0**, the repo's `engines`
+floor: `headersTimeout: 500` with the interval at 100 ms closed a connection that sent nothing at
+**505 ms**, and the worker's production numbers (5 000 / 5 000 / 1 000) closed one at **5 007 ms**.
+The original probe below was blind to it: a raw `net.Socket` with no `'data'` listener stays paused
+and never observes the peer's close, so it must `.resume()`. `server.timeout` therefore bounds the
+connection that is idle *mid-request* — after the headers land, while a handler waits on Yahoo —
+not the silent one — and `requestTimeout` reaches past the headers to the body's last byte, so what
+`server.timeout` alone bounds is the connection idle once the *request* is complete (measured on
+24.12.0: headers complete, body partial, `headersTimeout: 0` and `requestTimeout: 500` — closed at
+599 ms). Expiry is still *polled* on `connectionsCheckingInterval` (`lib/_http_server.js`:
+`setupConnectionsTracking` at `:545-556` sets the interval, `checkConnections` at `:680-694` runs
+it), so 5 s deadlines under the default interval bind at 5–35 s.
+**Live (original, un-resumed and therefore unreliable for the first claim)**: a silent connection
+under `headersTimeout: 500` was still open at 3 s with the interval at its default *and* at 100 ms;
+a request line followed by dribbled headers closed at 602 ms with the interval at 50 ms. Keep-alive: `http.globalAgent.keepAlive` is
 `true` (Node ≥ 19) and the agent pools by `socketPath` — two sequential requests reused one
 connection and the answer said `Connection: keep-alive`; `agent: false` gave `Connection: close`
 and a second connection (**live**); `maxRequestsPerSocket = 1` makes the server answer

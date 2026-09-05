@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { ConfigError, loadConfig } from "../server/config.ts";
+import { ConfigError, loadConfig, loadWorkerConfig } from "../server/config.ts";
+
+/**
+ * The documented default (spec 0018 §3.2, `.env.example`), spelled out
+ * literally rather than imported: comparing against the module's own
+ * exported constant would make a changed default invisible to these tests.
+ */
+const DEFAULT_PRICE_WORKER_SOCKET = "/run/price-worker/worker.sock";
 
 const MINIMAL = {
   DATABASE_URL: "postgres://portfolio:portfolio@db:5432/portfolio",
@@ -161,5 +168,44 @@ describe("configuration validation", () => {
     // An unsubstituted Compose variable or a bare `PORT=` in a .env file.
     expect(loadConfig({ ...MINIMAL, PORT: "" }).PORT).toBe(3000);
     expect(loadConfig({ ...MINIMAL, AUTH_GATE: "" }).AUTH_GATE).toBe("none");
+  });
+
+  it("carries the price worker's socket path at its documented default", () => {
+    expect(loadConfig(MINIMAL).PRICE_WORKER_SOCKET).toBe(DEFAULT_PRICE_WORKER_SOCKET);
+  });
+
+  it("takes an override for the price worker's socket path", () => {
+    expect(
+      loadConfig({ ...MINIMAL, PRICE_WORKER_SOCKET: "/tmp/w.sock" }).PRICE_WORKER_SOCKET,
+    ).toBe("/tmp/w.sock");
+  });
+});
+
+/**
+ * The worker's own schema (spec 0018 §3.5): one key, and the point of the
+ * first case is what it does *not* need — `loadWorkerConfig({})` throwing
+ * nothing is the assertion that the worker starts with no database and no
+ * origin, unlike {@link loadConfig}'s empty-environment case above.
+ */
+describe("the price worker's configuration", () => {
+  it("answers the default socket path for an empty environment, needing neither database nor origin", () => {
+    expect(loadWorkerConfig({}).PRICE_WORKER_SOCKET).toBe(DEFAULT_PRICE_WORKER_SOCKET);
+  });
+
+  it("takes an override for the socket path, and ignores everything else in the environment", () => {
+    const config = loadWorkerConfig({
+      PRICE_WORKER_SOCKET: "/tmp/w.sock",
+      // Present, but not this schema's business: a `DATABASE_URL` reaching
+      // the worker is ignored rather than validated (module header).
+      DATABASE_URL: "not a postgres url at all",
+    });
+
+    expect(config.PRICE_WORKER_SOCKET).toBe("/tmp/w.sock");
+  });
+
+  it("treats an empty PRICE_WORKER_SOCKET as unset, same as loadConfig's settings", () => {
+    expect(loadWorkerConfig({ PRICE_WORKER_SOCKET: "" }).PRICE_WORKER_SOCKET).toBe(
+      DEFAULT_PRICE_WORKER_SOCKET,
+    );
   });
 });

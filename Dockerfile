@@ -100,13 +100,17 @@ COPY --from=build --chown=node:node /app/build ./build
 COPY --from=build --chown=node:node /app/package.json ./package.json
 
 # Operational scripts run under Node's type stripping, no build step
-# (DESIGN.md §9): config gate, the shared pool construction site, migrations.
+# (DESIGN.md §9): config gate, the shared pool construction site, migrations,
+# and the price worker's own closure (spec 0018 §3.5) — no `app/` reaches it.
 COPY --chown=node:node \
   server/config.ts \
   server/validate-config.ts \
   server/db.ts \
   server/migrations.ts \
   server/migrate.ts \
+  server/yahoo-client.ts \
+  server/symbol-pattern.ts \
+  server/price-worker.ts \
   ./server/
 
 # The `.sql` files ship with the image and the entrypoint applies them —

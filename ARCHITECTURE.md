@@ -341,7 +341,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:678` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `server/yahoo-client.ts:121` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 | Enforcing the lock | `app/root.tsx`'s `middleware` export — `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it — the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
 
@@ -349,7 +349,7 @@ grep. They come in three tiers.
 
 | Invariant | The owner | The obligation |
 |---|---|---|
-| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
+| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
@@ -1587,19 +1587,24 @@ with the `Caddyfile`'s own exemption left in place, would lock monitoring out.
         └───────────────────────┬────────────────────────────────────────────────────┘
                     ┌───────────┴────────────┐
                     ▼                        ▼
-        yahooPriceProvider()          the tests' fake
-        the only importer in app/     implements both and nothing else;
-        (price-provider.server:776)   no test reaches the network
+        yahooPriceProvider()           the tests' fake
+        takes a YahooClient            implements both and nothing else;
+        (price-provider.server.ts:768) no test reaches the network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
-makes that tolerable is that swapping it is a day's work — which is only true while this interface is
-the sole thing the write path imports. Both methods are required, not optional: a provider that
-cannot answer history is not this application's provider, and an optional method would let a batch be
-skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:1015`), deliberately, to pin the static-versus-instance shape the
-adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
-client hands back.
+makes that tolerable is that swapping it is a day's work — which is only true while `server/yahoo-client.ts`
+is the sole importer of the library (ARCHITECTURE.md §4.2's single-site table), used by the worker
+directly and by this adapter until [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moves the
+app behind the socket. Both methods are required, not optional: a provider that cannot answer history
+is not this application's provider, and an optional method would let a batch be skipped with nothing
+saying so. Two tests (`tests/yahoo-client.test.ts:83`, `:105`) pin the static-versus-instance shape the
+client depends on — `yahoo-finance2`'s default export is the `YahooFinance` *class*, whose own static
+`quote`/`chart` type-check and throw the moment either runs, before any network access. The first
+swaps in a `fetch` that only records that it was reached: a regression back to the bare class would
+throw first and the fake would never see a call. The second asserts the throw where it happens, on
+the export, which is why that file imports the library directly — the one exemption §4.2's
+single-site table makes.
 
 These conversions happen at this boundary and nowhere else:
 
@@ -2052,6 +2057,9 @@ still live in the current code:
 | `migrations.ts` | Discovery, ledger, advisory lock, per-file transactions |
 | `migrate.ts` | The CLI the entrypoint runs |
 | `validate-config.ts` | The startup gate — fails fast, naming every bad variable |
+| `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). Nothing calls it yet — the app still reaches the provider in its own process through `app/lib/price-provider.server.ts`, until ticket 06 of that spec moves it behind the socket |
+| `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/` |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Only the worker imports it today; the app's own check is a length limit (`instrument-resolution.server.ts:314`) until ticket 06, and spec 0018 §2.1 is why that is tolerable — the worker's check is the one that binds, the app's a courtesy |
 
 ### `app/lib/` — domain (`.server`) and pure
 
@@ -2063,7 +2071,7 @@ still live in the current code:
 | `instrument-resolution.server.ts` | First sightings, and the writes that remember a resolution forever |
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill — its candidate query, its batch, its ledger, and the composition every refresh runs |
-| `price-provider.server.ts` | **The only importer of `yahoo-finance2`.** The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe |
+| `price-provider.server.ts` | The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe. The library itself is reached through `server/yahoo-client.ts`, its only importer |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |

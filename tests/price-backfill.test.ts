@@ -735,14 +735,16 @@ describe("what a batch writes to the spine", () => {
 
       // The real adapter, not the fake above: the floor lives in
       // `toProviderHistory`, which only the real adapter runs. The stub plays
-      // `clientCharting`'s role (`tests/price-provider.test.ts:909`).
-      const provider = yahooPriceProvider(async () => ({
+      // `clientCharting`'s role (`tests/price-provider.test.ts:914`) — a
+      // client object now, not a factory, since the adapter takes the client
+      // itself (`app/lib/price-provider.server.ts:768`).
+      const provider = yahooPriceProvider({
         quote: async () => [],
         chart: async () => ({
           meta: { currency: "USD" },
           quotes: [{ date: new Date("1971-01-01T13:30:00Z"), close: 1 }],
         }),
-      }));
+      });
 
       const report = await backfillCloses(provider, NEW_YORK, db);
 
