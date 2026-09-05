@@ -686,26 +686,47 @@ describe("unlocking", () => {
         verifyUnlock(assertionResponse(options.challenge, { rpID: "attacker.example.com" }), db),
       );
       expect(refusal).toBeInstanceOf(ValidationError);
+      // The generic sentence, and this is where the counter branch is told
+      // apart from every other failure the library *throws*: match it on
+      // `instanceof Error` alone and this refusal starts telling a household
+      // their passkey may have been copied.
+      expect(refusal.fieldErrors.form).toBe("This passkey could not be verified. Try again.");
     }),
   );
 
   it(
-    "refuses a bumped stored counter as a signature-counter regression, and logs the cause",
+    "names a signature-counter regression rather than asking the family to try again, and writes nothing",
     withDatabase(async ({ db, seedPasskey }) => {
       await seedFixturePasskey(seedPasskey, /* counter */ 1);
       const options = await unlockOptions(db);
 
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(options.challenge), db));
       expect(refusal).toBeInstanceOf(ValidationError);
+      // A counter that went backwards is the one signal WebAuthn gives a
+      // household it can act on. "Try again" reads as a transient failure
+      // they will retry until the idle window passes.
+      expect(refusal.fieldErrors.form).toBe(
+        "This passkey's counter went backwards, which can mean a copy of it exists somewhere. " +
+          "The check was refused. Remove this passkey from Settings → Passkeys and enrol it again.",
+      );
 
-      // The family-facing message stays generic (they cannot act on the
-      // difference); the operator's own log names the ceremony and carries
-      // the library's real cause, rather than the failure being logged and
-      // ignored (ticket 02's own rule for a counter regression specifically).
+      // The operator's own log still names the ceremony and carries the
+      // library's real cause, rather than the failure being logged and
+      // ignored.
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("assertion (unlock)"),
         expect.anything(),
       );
+
+      // Nothing written, the same as the wrong-key refusal below.
+      const row = await db
+        .selectFrom("passkey")
+        .select(["counter", "last_used_at"])
+        .where("credential_id", "=", credentialId)
+        .executeTakeFirstOrThrow();
+      expect(row.counter).toBe("1");
+      expect(row.last_used_at).toBeNull();
+      expect(await db.selectFrom("unlock_grant").select("id").execute()).toHaveLength(0);
     }),
   );
 
@@ -715,9 +736,14 @@ describe("unlocking", () => {
       await seedPasskey({ publicKey: unrelatedPublicKeyCose(), credentialId, transports });
       const options = await unlockOptions(db);
 
-      await expect(verifyUnlock(assertionResponse(options.challenge), db)).rejects.toThrow(
-        ValidationError,
-      );
+      const refusal = await refusalOf(() => verifyUnlock(assertionResponse(options.challenge), db));
+      expect(refusal).toBeInstanceOf(ValidationError);
+      // The generic sentence. Note where this one comes from: a wrong public
+      // key makes `verifySignature` answer false rather than throw, so this
+      // refusal is the `!verified.verified` branch and never passes the
+      // catch at all. The relying-party test above is the one that pins the
+      // counter branch's own reach.
+      expect(refusal.fieldErrors.form).toBe("This passkey could not be verified. Try again.");
 
       const row = await db
         .selectFrom("passkey")

@@ -767,8 +767,9 @@ export async function removalAssertionOptions(
  * platform authenticator reporting a constant zero is not treated as a
  * clone; a regression makes it throw, surfaced here as a refusal — logged
  * with the underlying cause and which ceremony it was, never silently
- * ignored — rather than restated: the library owns that comparison, and
- * this only observes what it decided. `requireUserVerification` is left at
+ * ignored, and answered with its own sentence rather than the generic one
+ * ({@link isCounterRegression}) — rather than restated: the library owns
+ * that comparison, and this only observes what it decided. `requireUserVerification` is left at
  * the library's own default (`true`) rather than restated.
  *
  * On success: the stored counter moves forward only (`greatest`, one
@@ -792,6 +793,38 @@ export async function removalAssertionOptions(
  * row count here, is what closes the race regardless of exactly when the
  * concurrent removal lands.
  */
+/**
+ * The one refusal the family can act on, told apart from every other
+ * verification failure by the library's own message.
+ *
+ * `verifyAuthenticationResponse` throws at
+ * `node_modules/@simplewebauthn/server/esm/authentication/verifyAuthenticationResponse.js:182-188`
+ * when `(counter > 0 || credential.counter > 0) && counter <= credential.counter`,
+ * with a message that begins `Response counter value`. Matched on that
+ * prefix rather than on `instanceof Error` alone, which every other failure
+ * in that function also satisfies — a loose match would relabel a wrong
+ * public key, a wrong relying-party id and a missing user verification as
+ * clones, which is the one mistake worth more than the message is.
+ *
+ * **It is judged before the signature is checked** (`:192`), so a forged
+ * response carrying a low counter reaches this branch too. The sentence
+ * below therefore says the counter went backwards and what that can mean,
+ * and never that the passkey *was* copied — which is all this instance
+ * knows, and all a household can act on either way.
+ */
+function isCounterRegression(cause: unknown): boolean {
+  return cause instanceof Error && cause.message.startsWith("Response counter value");
+}
+
+/**
+ * Deliberately not "cloned", "copied device" or any of the words
+ * `CONTEXT.md`'s `Passkey` and `Locked` entries rule out: it names what
+ * happened, what it can mean, and the one thing to do about it.
+ */
+const COUNTER_WENT_BACKWARDS_MESSAGE =
+  "This passkey's counter went backwards, which can mean a copy of it exists somewhere. " +
+  "The check was refused. Remove this passkey from Settings → Passkeys and enrol it again.";
+
 async function verifyScopedAssertion(
   response: AuthenticationResponseJSON,
   expected: AssertionScope,
@@ -835,6 +868,7 @@ async function verifyScopedAssertion(
     });
   } catch (cause) {
     console.error(`Passkey assertion (${expected.kind}) failed to verify:`, cause);
+    if (isCounterRegression(cause)) throw ValidationError.form(COUNTER_WENT_BACKWARDS_MESSAGE);
     throw ValidationError.form("This passkey could not be verified. Try again.");
   }
 
