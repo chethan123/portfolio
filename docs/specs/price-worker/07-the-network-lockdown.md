@@ -20,6 +20,85 @@ asked nothing of `.env` — and the one whose upgrade touches the database.
 
 **Status:** ready-for-agent
 
+**Corrected — the citations, and four pieces of work the checklist does not count.**
+
+Six releases landed between this ticket being written and being built, and two of them inserted
+whole subsections into `docs/operating.md`, pushing everything after them down by two hundred lines
+and more. Of the twenty-nine `file:line` references below, eleven still point where they claim.
+**Twelve point at unrelated content entirely** — a different subsystem, a different recipe, a blank
+line — and a search-and-replace anchored on one of those would edit the wrong paragraph and leave
+the right one standing. Every number here was re-read on `main` at the commit this was built from
+(`30ea392`). Use this table, never the inline numbers, and open the line before editing near it.
+
+| Written as | Actually at | What is really there |
+|---|---|---|
+| `docs/operating.md:195-197` | `:208-210` | "backups become your Postgres's problem"; `:195-197` is the pointer to the variables table and the *Running against your own Postgres* heading |
+| `docs/operating.md:84-92` | `:85-93` | the **Host requirements** paragraph — and the quoted phrase **"any v2 is new enough" is not in the tree at all**: it states a number, `Compose 1.27.4` (`:87`) |
+| `compose.yaml:59` | `:68` | `POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}`; `:59` is inside the `user: "70:70"` argument |
+| `compose.yaml:204` | `:213` | `app`'s `DATABASE_URL:` default |
+| `compose.yaml:126` | `:135` | `dump`'s `DATABASE_URL:` default; `:126` is inside `dump`'s `depends_on` |
+| `.env.example:104` | `:118` | `#POSTGRES_PASSWORD=portfolio`; `:104` is the `TZ` comment |
+| `compose.yaml:20` | `:21` | "Every other setting, the worker's included, has a working default" |
+| `compose.yaml:57` | `:66` | "credentials never face the LAN. Change them = change DATABASE_URL too"; `:57` is `logging: *container-logging` |
+| `docs/runbook.md:586` | `:645-646` | the `.env`-carrying checklist, under *I need to move to another machine*; `:586` is the blank line under a different heading |
+| `docs/operating.md:176` | `:188-189` | "every setting has a working default except `DATABASE_URL`" — the sentence wraps, so a grep for it on one line finds nothing; `:176` is a `chown` command |
+| `docs/operating.md:1063` | `:1315` | "make sure `DATABASE_URL` agrees", in the Postgres major-upgrade section; `:1063` is a `POSTGRES_PASSWORD` recoverability bullet under Backups |
+| `docs/operating.md:949` | `:1153` | `## Upgrading`; `:949` is the worker's log-stem bullet under Monitoring. (Ticket 05 already corrected this once, 949→1072; three more releases moved it again) |
+| `docs/operating.md:308-319` | `:383-391` | the `POSTGRES_PASSWORD` rotation recipe and its `alter role` block (`:390`); `:308-319` is the gate's own Compose-level settings — a different subsystem |
+| `docs/runbook.md:525-552` | `:590-604` | the rotation recipe under *I changed the database password and nothing connects*; `:525-552` is the passkey-wipe recovery |
+| `scripts/smoke-test.sh:108-116` | `:120-133` | the refusal check (`config --quiet` at `:126-129`, the variable-name assertion at `:130-132`); `:108-116` is the tail of the Engine-floor check |
+| `compose.yaml:33` | `:55` | `db`'s `image: *postgres-image`; `:33` is a header comment about `gateway_mode_ipv4` |
+| `compose.yaml:105` | `:114` | `dump`'s `image: *postgres-image`; `:105` is blank |
+| `scripts/smoke-test.sh:265-268` | `:290-298` | the in-container `yahoo-finance2` ESM import check; `:265-268` is the tail of the dev-dependency loop — see the first uncounted item below |
+
+Still correct as written: `scripts/dump-loop.sh:90-97`, `:95-97`, `:204` and `:262`;
+`scripts/smoke-test.sh:20-25` and `:26`; `Caddyfile:27`, `:31-33`, `:39-49` and `:81`;
+`.env.example:23`.
+
+Every number in that table is as of the commit this ticket was addressed to. This ticket's own diff
+moves some of them again — `## Upgrading` ends up lower once the numbered sequence is in — so once
+the work has landed, read the tree rather than the table.
+
+**The uncounted work.**
+
+- **Half of item 18 is already done.** `scripts/smoke-test.sh:295-297` already runs the
+  `yahoo-finance2` ESM import check in `worker`, moved there by [06](06-the-app-cutover.md) with a
+  comment at `:290-294` saying why. Nothing to move; confirm and tick. The other half — 06's bundle
+  grep at `:307-310` staying — is the real content of the item.
+- **Item 9 names four locations and there is a fifth.** `.env.example:117` reads "Change it =
+  change `DATABASE_URL`'s password to match", directly above the `POSTGRES_PASSWORD` line item 7
+  rewrites. It needs the same treatment as the four, and it is the one an operator reads while
+  doing exactly what this ticket changes. Item 9 covers it.
+- **`compose.yaml:523-536`'s network comment is superseded, not extended.** It argues that `worker`
+  is the only service with a `networks:` key and that everything else "stays exactly where it is,
+  on the implicit `default` bridge, until the network-lockdown release moves everyone off it". This
+  is that release. Rewrite the block; do not append the six networks under a comment that denies
+  they exist. `scripts/smoke-test.sh:544-548` carries the same claim in the same words ("app, gate
+  and db stay on the implicit default bridge until 07") and goes false with it — the assertions
+  under it stay correct, only the prose is wrong.
+- **Two comments beside the lines this ticket edits are already false.** `compose.yaml:232-234`
+  ("nothing calls it yet, `app` still fetches prices in-process — so the cutover in ticket 06
+  changes no compose line, only code") and `:255-259` ("Nothing calls the socket yet … until ticket
+  06's cutover"). 06 landed. This ticket edits `app`'s environment block a few lines below the
+  first and `worker`'s `networks:` key a few lines below the second, so leaving them is a choice,
+  not an oversight. Fix them in passing.
+
+**Checked and needing nothing.** `container_ip` and `probe_all_ips`
+(`scripts/smoke-test.sh:557-560`, `:594-601`) were written for the topology this ticket brings:
+the `{{range}}` template already emits a trailing space per address and `probe_all_ips` already
+word-splits and probes each one, so a service on two networks is probed twice rather than once
+against two glued addresses. That fix landed in `94c32e4`; this ticket adds no smoke code for it.
+
+**Two citations outside this ticket that this ticket's work invalidates**, recorded here because
+the next person to follow them is building from them: spec §3.6
+(`docs/specs/0018-price-worker.md:527`) cites `compose.yaml:257-260` for the sidecar's
+`X-Forwarded-*` invariant, which actually lives at `Caddyfile:19` (`trusted_proxies static
+private_ranges`) — `:257-260` is the worker service's intro comment. And both
+`docs/specs/0018-price-worker.md:567` and
+[09](09-documents-and-runbooks.md)'s own line 36 cite `ARCHITECTURE.md:345` for the env-reader row
+that this ticket's `PGPASSWORD` work is what updates; `:345` is the *Writing a price* row and
+*Reading the environment* is at `:352`.
+
 **Topology** (`compose.yaml`)
 
 - [ ] The networks exactly as spec §3.6: `backend`, `caddy-app` and `caddy-gate` internal with
