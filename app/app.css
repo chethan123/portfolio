@@ -449,15 +449,26 @@ a {
   margin: 0 var(--space-lg) var(--space-lg);
 }
 
-/* The masking toggle (spec 0007), drawn as a nav item so the rail's foot
- * reads as one column — a second filled button would compete with Upload.
- * Full width and left-aligned because the label changes length between its
- * two states, and a centred control would shift its own glyph on press. */
-.app-rail-masking {
+/* The masking toggle (spec 0007) and "Lock now" (ticket 06) sit in the same
+ * column at the rail's foot, each with its own right margin rather than the
+ * rail's — one rule for both, since the margin is identical either way. */
+.app-rail-masking,
+.app-rail-lock {
   margin-inline: 0 var(--space-lg);
 }
 
-.masking-toggle {
+/* The shape both controls share, drawn as a nav item so the rail's foot
+ * reads as one column — a second filled button would compete with Upload.
+ * Full width and left-aligned because masking's label changes length
+ * between its two states, and a centred control would shift its own glyph
+ * on press; "Lock now" only ever has the one label but keeps the same
+ * shape rather than a special case. Two selectors on one rule, not one
+ * shared class: each control keeps a class name a test can target on its
+ * own (`lock-now-control.test.tsx`, `masking-toggle.test.tsx`), and this is
+ * what CSS already offers for "identical rule, two names" without asking
+ * either control to give up its own. */
+.masking-toggle,
+.lock-now-control {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -476,7 +487,8 @@ a {
   transition: color 150ms, background-color 150ms;
 }
 
-.masking-toggle:hover {
+.masking-toggle:hover,
+.lock-now-control:hover {
   color: var(--on-surface);
   background: var(--surface-emphasis);
 }
@@ -538,8 +550,9 @@ a {
     border-bottom: 0;
   }
 
-  /* The bar carries two controls below 1024px, so they need a row of their
-   * own — the bar itself is still justifying brand against actions. */
+  /* The bar carries three controls below 1024px — masking, "Lock now" and
+   * Upload — so they need a row of their own — the bar itself is still
+   * justifying brand against actions. */
   .app-topbar-actions {
     display: flex;
     align-items: center;
@@ -548,11 +561,15 @@ a {
 
   /* On the phone the label goes; the glyph stays, and the accessible name
    * comes off the label still in the markup, not an attribute free to drift.
-   * A DELIBERATE DUPLICATION of `.visually-hidden` (named as docs/README.md
-   * asks): the label is visible in the rail and hidden in the bar — a
-   * viewport question, not a markup one, and plain CSS cannot borrow a rule
-   * inside a media query. If `.visually-hidden` changes, change this too. */
-  .app-topbar .masking-toggle {
+   * One rule for both controls, not two — masking and "Lock now" want the
+   * identical phone-width treatment, so they share it the same way they
+   * share their base shape above. A DELIBERATE DUPLICATION of
+   * `.visually-hidden` (named as docs/README.md asks): the label is visible
+   * in the rail and hidden in the bar — a viewport question, not a markup
+   * one, and plain CSS cannot borrow a rule inside a media query. If
+   * `.visually-hidden` changes, change this too. */
+  .app-topbar .masking-toggle,
+  .app-topbar .lock-now-control {
     width: auto;
     padding: var(--space-sm);
     border-left: 0;
@@ -560,7 +577,8 @@ a {
     background: var(--surface-emphasis);
   }
 
-  .app-topbar .masking-toggle span {
+  .app-topbar .masking-toggle span,
+  .app-topbar .lock-now-control span {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -569,6 +587,35 @@ a {
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
+  }
+
+  /* Upload joins them below 420px, because the third control is what stops
+   * the bar fitting. Measured at 360x780 with a passkey enrolled: the brand
+   * is ~135px, `.app-topbar-actions` is 48 + 12 + 48 + 12 + 108 = 228, and
+   * the bar's own `padding-inline` is 32 — 395 into a 360px viewport, so
+   * `document.body.scrollWidth` came back 379 and the page scrolled
+   * sideways, with the mark colliding with the first glyph and Upload
+   * clipped by the screen edge. As a glyph it is 48, which brings the row to
+   * 168 and the total to 335. The brand is what cannot give here, and a
+   * smaller gap would only put three 48px targets closer together. 420px
+   * rather than a device width: 360, 375 and 390 are all real phones and all
+   * need it. Same DELIBERATE DUPLICATION of `.visually-hidden` as the rule
+   * above, for the same reason — change it there, change it here. */
+  @media (max-width: 419px) {
+    .app-topbar .button {
+      padding: var(--space-sm);
+    }
+
+    .app-topbar .button span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
   }
 
   .app-bottomnav {

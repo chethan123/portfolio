@@ -377,6 +377,20 @@ describe("grants", () => {
       expect(await readGrant(grant.id, db)).toBeUndefined();
     }),
   );
+
+  it(
+    "deletes only the one grant it is given, leaving a second browser's own grant live — ticket 06's 'Lock now' must never lock the whole household",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
+      const thisOne = await seedUnlockGrant({ passkeyId: passkey.credentialId });
+      const anotherBrowser = await seedUnlockGrant({ passkeyId: passkey.credentialId });
+
+      await deleteGrant(thisOne.id, db);
+
+      expect(await readGrant(thisOne.id, db)).toBeUndefined();
+      expect(await readGrant(anotherBrowser.id, db)).toBeDefined();
+    }),
+  );
 });
 
 /**

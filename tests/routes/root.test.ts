@@ -78,6 +78,12 @@ describe("the shell's loader", () => {
       // this is the one that cannot put a household's balances on a screen
       // (spec 0007).
       expect(data.masked).toBe(true);
+
+      // The lock-now control's own read (ticket 06) has a different duty:
+      // failing this shut costs a family member one control on the chrome,
+      // never a figure, so the fail-safe answer here is "no control" rather
+      // than "show one that clears a grant which may not exist".
+      expect(data.hasPasskey).toBe(false);
     } finally {
       await unreachable.destroy();
     }
@@ -93,6 +99,22 @@ describe("the shell's loader", () => {
       expect((await loader(args(get("/")))).firstRun).toBe("accounts");
     }),
   );
+
+  it(
+    "reports hasPasskey once the household holds a passkey, so the lock-now control has something to do",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: new Uint8Array([1, 1, 1]) });
+
+      expect((await loader(args(get("/")))).hasPasskey).toBe(true);
+    }),
+  );
+
+  it(
+    "reports no passkey while the household holds none at all",
+    withDatabase(async () => {
+      expect((await loader(args(get("/")))).hasPasskey).toBe(false);
+    }),
+  );
 });
 
 describe("the shell's loader on /unlock — the household's setup state must not reach the hydration payload", () => {
@@ -106,20 +128,34 @@ describe("the shell's loader on /unlock — the household's setup state must not
    * named: hiding the chrome hid the consumers, not the data.
    */
   it(
-    "answers gated, firstRun, masked and maskingPolicy with fixed neutral values, never the household's real ones",
-    withDatabase(async ({ db, seedPerson }) => {
+    "answers gated, firstRun, masked, maskingPolicy and hasPasskey with fixed neutral values, never the household's real ones",
+    withDatabase(async ({ db, seedPasskey, seedPerson }) => {
       // Real state that would answer differently for every field below, had
       // this loader read any of it for `/unlock`: a person with no account
-      // yet answers "accounts" for `/`, and AUTH_GATE defaults to "none" in
-      // this suite (vitest.config.ts), which answers `gated: false` for `/`.
+      // yet answers "accounts" for `/`, AUTH_GATE defaults to "none" in this
+      // suite (vitest.config.ts), which answers `gated: false` for `/`, and a
+      // seeded passkey answers `hasPasskey: true` for `/`.
       await seedPerson();
+      await seedPasskey({ publicKey: new Uint8Array([2, 2, 2]) });
       await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
 
       const real = await loader(args(get("/")));
-      expect(real).toMatchObject({ gated: false, firstRun: "accounts", masked: false, maskingPolicy: "unmasked" });
+      expect(real).toMatchObject({
+        gated: false,
+        firstRun: "accounts",
+        masked: false,
+        maskingPolicy: "unmasked",
+        hasPasskey: true,
+      });
 
       const unlockScreen = await loader(args(get("/unlock")));
-      expect(unlockScreen).toEqual({ gated: true, firstRun: null, masked: true, maskingPolicy: "masked" });
+      expect(unlockScreen).toEqual({
+        gated: true,
+        firstRun: null,
+        masked: true,
+        maskingPolicy: "masked",
+        hasPasskey: false,
+      });
     }),
   );
 
@@ -129,7 +165,13 @@ describe("the shell's loader on /unlock — the household's setup state must not
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       try {
         const data = await withDb(unreachable, () => loader(args(get("/unlock"))));
-        expect(data).toEqual({ gated: true, firstRun: null, masked: true, maskingPolicy: "masked" });
+        expect(data).toEqual({
+          gated: true,
+          firstRun: null,
+          masked: true,
+          maskingPolicy: "masked",
+          hasPasskey: false,
+        });
       } finally {
         await unreachable.destroy();
       }

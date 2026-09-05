@@ -58,6 +58,13 @@ export default [
   // order: nobody clicks their way here, the middleware redirects them.
   route("unlock", "routes/unlock.tsx"),
 
+  // "Lock now" (ticket 06, docs/adr/0012). No UI — the chrome's control and
+  // the reentry guard's own automatic post (`~/lib/reentry.ts`) both target
+  // this, so a press (or the guard, standing in for one) works with
+  // JavaScript off where the control itself is concerned. Grouped beside
+  // `unlock` for the reason above: the lock's own machinery, not nav order.
+  route("lock-now", "routes/lock-now.ts"),
+
   // The masking toggle's writer (spec 0007). No UI — the chrome's control
   // posts here so the toggle works with JavaScript off.
   route("masking", "routes/masking.ts"),
