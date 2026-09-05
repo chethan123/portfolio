@@ -2016,9 +2016,9 @@ still live in the current code:
 | `migrations.ts` | Discovery, ledger, advisory lock, per-file transactions |
 | `migrate.ts` | The CLI the entrypoint runs |
 | `validate-config.ts` | The startup gate — fails fast, naming every bad variable |
-| `price-worker.ts` | The worker process: an HTTP server on a unix socket and the only thing that reaches the provider at run time. It holds no database credential and opens no TCP listener (spec 0018 §2.5) |
+| `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). Nothing calls it yet — the app still reaches the provider in its own process through `app/lib/price-provider.server.ts`, until ticket 06 of that spec moves it behind the socket |
 | `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/` |
-| `symbol-pattern.ts` | The one copy of the symbol pattern and its string guard, so both sides of the socket refuse the same spellings without either importing the other's schema |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Only the worker imports it today; the app's own check is a length limit (`instrument-resolution.server.ts:314`) until ticket 06, and spec 0018 §2.1 is why that is tolerable — the worker's check is the one that binds, the app's a courtesy |
 
 ### `app/lib/` — domain (`.server`) and pure
 

@@ -19,6 +19,7 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Duplex } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -191,6 +192,23 @@ function connectSocket(socketPath: string): Promise<net.Socket> {
     const socket = net.connect({ path: socketPath });
     socket.once("connect", () => resolve(socket));
     socket.once("error", reject);
+  });
+}
+
+/**
+ * Accumulates raw bytes off a socket Node itself answers on (a `clientError`
+ * refusal is a hand-written response line, not JSON through `sendJson`) and
+ * resolves with everything received once the peer closes — which every
+ * `clientError` refusal does, `Connection: close` or not, since the handler
+ * always destroys the socket after (module header's own `onClientError`).
+ */
+function readRawUntilClose(socket: net.Socket): Promise<string> {
+  return new Promise((resolve) => {
+    let data = "";
+    socket.on("data", (chunk: Buffer) => {
+      data += chunk.toString("utf8");
+    });
+    socket.once("close", () => resolve(data));
   });
 }
 
@@ -477,6 +495,110 @@ describe("400: a body or route the worker refuses before any library call", () =
   });
 });
 
+describe("refusals Node answers itself, before the request callback ever runs", () => {
+  // Node's own `clientError` default (node:http's `socketOnError`) writes
+  // these three statuses itself and logs nothing — attaching any listener
+  // (module header's own `onClientError`) takes over both jobs at once, for
+  // every parser error, not only these three.
+  it("still answers 400 for a malformed request line, and now logs it", async () => {
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    await start(fakeYahoo());
+
+    const socket = await connectSocket(currentSocketPath);
+    socket.resume();
+    const rawResponse = readRawUntilClose(socket);
+    socket.write("NOTAMETHOD /quotes GARBAGE\r\n\r\n");
+    const raw = await rawResponse;
+    spy.mockRestore();
+
+    expect(raw).toMatch(/^HTTP\/1\.1 400 /);
+    expect(calls).toEqual([
+      [expect.stringMatching(/^Price worker: \(no endpoint — request never parsed\) 400 /)],
+    ]);
+  });
+
+  it("still answers 431 for a header block over Node's own cap, and now logs it", async () => {
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    await start(fakeYahoo());
+
+    const socket = await connectSocket(currentSocketPath);
+    socket.resume();
+    const rawResponse = readRawUntilClose(socket);
+    // Comfortably past Node's own default 16 KB header cap.
+    socket.write(`GET /healthz HTTP/1.1\r\nHost: x\r\nX-Big: ${"x".repeat(20 * 1024)}\r\n\r\n`);
+    const raw = await rawResponse;
+    spy.mockRestore();
+
+    expect(raw).toMatch(/^HTTP\/1\.1 431 /);
+    expect(calls).toEqual([
+      [
+        expect.stringMatching(
+          /^Price worker: \(no endpoint — request never parsed\) 431 HPE_HEADER_OVERFLOW$/,
+        ),
+      ],
+    ]);
+  });
+
+  it("still answers 408 for a client that never finishes its headers, and now logs it", async () => {
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    // `server.timeout` pinned far out of reach — otherwise, at TEST_TIMEOUTS'
+    // own default (200 ms, only 50 ms past headersTimeout), the two race
+    // under load and a socket.timeout win destroys the connection with no
+    // response at all, exactly like the analogous case below.
+    await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000 });
+
+    const socket = await connectSocket(currentSocketPath);
+    socket.resume();
+    const rawResponse = readRawUntilClose(socket);
+    socket.write("GET /healthz HTTP/1.1\r\n"); // no terminating blank line — headers never complete
+    const raw = await rawResponse;
+    spy.mockRestore();
+
+    expect(raw).toMatch(/^HTTP\/1\.1 408 /);
+    expect(calls).toEqual([
+      [
+        expect.stringMatching(
+          /^Price worker: \(no endpoint — request never parsed\) 408 ERR_HTTP_REQUEST_TIMEOUT$/,
+        ),
+      ],
+    ]);
+  });
+
+  it("stays silent for a bare connection reset — nothing was ever received to refuse", async () => {
+    // A genuine mid-parse ECONNRESET is not reproducible over a unix socket
+    // from a Node client (no `resetAndDestroy` for this handle type), so
+    // this drives the real listener the server registered with a synthetic
+    // event — exactly the shape node:http's own `socketOnError` passes: an
+    // error and the raw socket, not a status to answer with.
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    const server = await start(fakeYahoo());
+
+    const write = vi.fn();
+    const destroy = vi.fn();
+    const fakeSocket = { writable: false, write, destroy } as unknown as Duplex;
+    const err = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+
+    server.emit("clientError", err, fakeSocket);
+    spy.mockRestore();
+
+    expect(calls).toHaveLength(0);
+    expect(write).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the 16 KB body cap", () => {
   it(
     "destroys the socket past the cap, with no status and no library call",
@@ -729,12 +851,14 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
   });
 
   it("admits an eleventh quotes call once the window has slid a minute past the first", async () => {
-    // Only `Date` is faked — `setTimeout`/`setInterval` stay real, so the
-    // socket round trips below still complete on their own. The limiter
-    // reads only `Date.now()` (server/price-worker.ts's `makeRateLimiter`),
+    // Only `performance` is faked — `setTimeout`/`setInterval` stay real, so
+    // the socket round trips below still complete on their own (verified
+    // empirically on vitest 4.1.11: `toFake: ["performance"]` alone leaves a
+    // real `setTimeout` firing on wall-clock time). The limiter reads only
+    // `performance.now()` (server/price-worker.ts's `makeRateLimiter`),
     // which this patches; `AbortSignal.timeout` is the one fake timers do
     // not reach, and this path never touches it.
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["performance"] });
     try {
       const quote = vi.fn(async () => []);
       await start(fakeYahoo({ quote }));
@@ -749,6 +873,45 @@ describe("per-endpoint rate caps, a sliding sixty-second window", () => {
       // 60_000 is `RATE_LIMIT_WINDOW_MS` in server/price-worker.ts — past the
       // window the first of the ten calls above was recorded in, so without
       // eviction the cap spent above is never given back.
+      vi.advanceTimersByTime(60_000);
+
+      const afterWindow = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+      expect(afterWindow.status).toBe(200);
+      expect(quote).toHaveBeenCalledTimes(11);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps sliding the window when the wall clock steps backward — a restored snapshot, an NTP correction", async () => {
+    // Both faked: `Date` to drive the backward step itself, `performance`
+    // because that is what the limiter now reads
+    // (server/price-worker.ts's `makeRateLimiter`) and what this proves
+    // stays unaffected by the `Date` manipulation below — a `Date.now()`
+    // limiter would see every recorded call land in the future relative to
+    // a `now` that just moved behind them, so `now - calls[0]` goes
+    // negative and nothing is ever evicted until wall time claws back past
+    // the old timestamp plus the whole window.
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const quote = vi.fn(async () => []);
+      await start(fakeYahoo({ quote }));
+
+      for (let i = 0; i < 10; i++) {
+        const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+        expect(res.status).toBe(200);
+      }
+      const eleventh = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+      expect(eleventh.status).toBe(429);
+
+      // The wall clock steps backward by an hour, `Date.now()` alone —
+      // `performance.now()` is untouched by this call.
+      vi.setSystemTime(new Date(Date.now() - 60 * 60_000));
+
+      // 60_000 is RATE_LIMIT_WINDOW_MS in server/price-worker.ts — elapsed
+      // monotonic time past the window the first of the ten calls above was
+      // recorded in, despite the wall clock now reading an hour earlier.
       vi.advanceTimersByTime(60_000);
 
       const afterWindow = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
@@ -846,6 +1009,45 @@ describe("mapping a provider failure to a status", () => {
     const error = (res.json as { error: string }).error;
     expect(error).toBe(`fetch failed: ${longCauseMessage}`.slice(0, 1000));
     expect(error).toHaveLength(1000);
+  });
+
+  it("logs a provider error's CR/LF as one physical line, a forged log-line prefix rendered inert", async () => {
+    // Yahoo answers a non-JSON HTTP error with the response body used
+    // verbatim as the thrown error's message (yahoo-finance2) — an upstream
+    // failure a compromised or misbehaving provider controls entirely. This
+    // one embeds a line that would otherwise open with the module's own log
+    // stem, `Price worker: quotes 200 forged-ok`, as if a healthy 200 had
+    // been logged (module header: a 200 never is).
+    const forgedLine = "Price worker: quotes 200 forged-ok";
+    const quote = vi.fn(async () => {
+      throw new Error(`bad upstream body\r\n${forgedLine}\nmore\rtabs\there`);
+    });
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+    spy.mockRestore();
+
+    expect(res.status).toBe(502);
+    // The response body is untouched: JSON.stringify already escapes CR/LF,
+    // so the real newlines/carriage returns/tab below are the literal
+    // two-character escapes, not physical breaks, in the bytes on the wire.
+    expect(res.text).toBe(
+      `{"error":"bad upstream body\\r\\n${forgedLine}\\nmore\\rtabs\\there"}`,
+    );
+
+    expect(calls).toHaveLength(1);
+    const [line] = calls[0]!.map(String);
+    // One physical line: no bare CR or LF survives into what actually
+    // reaches the terminal/file — a real split on either would be > 1.
+    expect(line!.split(/\r\n|\r|\n/)).toHaveLength(1);
+    // The forged line no longer starts a line of its own — it is buried
+    // mid-line behind the real stem, exactly the injection this fix closes.
+    expect(line!.startsWith(forgedLine)).toBe(false);
+    expect(line).toBe(`Price worker: quotes 502 bad upstream body  ${forgedLine} more tabs here`);
   });
 });
 

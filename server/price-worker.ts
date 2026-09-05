@@ -1,9 +1,12 @@
 /**
  * The price-worker process (spec 0018 §3.2, §3.5): `node:http` on a unix
  * socket, answering three endpoints with the library's raw JSON. Holds no
- * database and no domain logic, and reads the clock only to slide the rate
- * window below: it interprets no date and no zone, which is why it needs no
- * `TZ`. Transport plus `./yahoo-client.ts`, gated by the pattern in
+ * database and no domain logic, and reads no wall clock at all: the rate
+ * window below slides on `performance.now()`'s monotonic clock rather than
+ * `Date.now()`, immune to a step backward (a restored snapshot, an NTP
+ * correction) that would otherwise freeze it open, and it is also why the
+ * worker needs no `TZ` — it interprets no date and no zone. Transport plus
+ * `./yahoo-client.ts`, gated by the pattern in
  * `./symbol-pattern.ts` before
  * any URL is built (spec §2.1: the worker's own check is the one that
  * binds, the app's a courtesy). `loadWorkerConfig` (`./config.ts`) is the
@@ -161,10 +164,82 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(payload);
 }
 
+/**
+ * CR, LF and every other control character collapsed to a single space —
+ * for the log line only. A provider failure's `reason` can be Yahoo's own
+ * HTTP error body used verbatim as the thrown error's message
+ * (`providerErrorText`), and `ERROR_TEXT_LIMIT` caps its length but does
+ * nothing about its content: left alone, one upstream failure could write
+ * many physical lines to the file an operator reads to find trouble, one of
+ * them free to start with this module's own `Price worker` stem. The
+ * response body needs no equivalent — it goes through `sendJson`'s own
+ * `JSON.stringify`, which already escapes every one of these — so this
+ * touches only what reaches `console.error`, never `reason` itself.
+ */
+function logSafe(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f]/g, " ");
+}
+
 /** Every non-`200` answer: logged once, stem `Price worker`, then sent. */
 function refuse(res: http.ServerResponse, endpoint: string, status: number, reason: string): void {
-  console.error(`Price worker: ${endpoint} ${status} ${reason}`);
+  console.error(`Price worker: ${endpoint} ${status} ${logSafe(reason)}`);
   sendJson(res, status, { error: reason });
+}
+
+/**
+ * The status and raw response line Node's own default `clientError` handling
+ * (`node:http`'s `socketOnError`) answers with for each parser error code —
+ * verified against Node 24.12.0's own `lib/_http_server.js`. `default`
+ * covers every other parse error the HTTP parser throws (a malformed
+ * request line among them), which is also what Node's own `default` case
+ * answers.
+ */
+function clientErrorResponse(code: string | undefined): { status: number; line: string } {
+  switch (code) {
+    case "HPE_HEADER_OVERFLOW":
+      return {
+        status: 431,
+        line: "HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n",
+      };
+    case "HPE_CHUNK_EXTENSIONS_OVERFLOW":
+      return { status: 413, line: "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n" };
+    case "ERR_HTTP_REQUEST_TIMEOUT":
+      return { status: 408, line: "HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n" };
+    default:
+      return { status: 400, line: "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n" };
+  }
+}
+
+/**
+ * Attaching any `clientError` listener replaces Node's own default handling
+ * of it entirely — for every error the parser throws, not only the three
+ * spec names (a malformed request line, an oversized header block, a client
+ * that never finishes its headers) — so this reproduces that default
+ * exactly rather than inventing a narrower one: the same status by the same
+ * mapping ({@link clientErrorResponse}), the same response line, the socket
+ * destroyed after. There is no endpoint to name — the request never
+ * parsed — so the log line says that rather than inventing one.
+ *
+ * The one case Node's own default also leaves unanswered is a socket no
+ * longer writable when the event fires — `this.writable` is Node's own
+ * guard, reproduced here — which is what a bare `ECONNRESET` looks like:
+ * nothing was ever received to refuse, so nothing is logged, or a
+ * compromised app gets exactly the log flood this contract exists to
+ * prevent. `err.code` is checked too, defensively, in case a future Node
+ * ever reports one for a socket this function still sees as writable.
+ */
+function onClientError(
+  error: Error,
+  socket: { writable: boolean; write: (data: string) => void; destroy: (error?: Error) => void },
+): void {
+  const err = error as NodeJS.ErrnoException;
+  if (err.code !== "ECONNRESET" && socket.writable) {
+    const { status, line } = clientErrorResponse(err.code);
+    socket.write(line);
+    const reason = logSafe(err.code ?? err.message).slice(0, ERROR_TEXT_LIMIT);
+    console.error(`Price worker: (no endpoint — request never parsed) ${status} ${reason}`);
+  }
+  socket.destroy(err);
 }
 
 /**
@@ -173,12 +248,21 @@ function refuse(res: http.ServerResponse, endpoint: string, status: number, reas
  * production, a fresh process) never share state with a previous run.
  * Sliding rather than fixed-window: the eleventh call *within the last
  * sixty seconds*, not the eleventh since some fixed clock boundary.
+ *
+ * A duration is not a wall-clock question, so this ages entries by
+ * `performance.now()` rather than `Date.now()`: monotonic, immune to a
+ * step in either direction. A restored VM snapshot or an NTP correction
+ * that moves `Date` backward used to make `now - calls[0]` negative, and
+ * with it never true — no entry was ever evicted until wall time climbed
+ * back past the old timestamp plus the whole window, freezing every
+ * endpoint's cap at whatever it held for as long as that backward gap
+ * lasted, with `/healthz` staying green throughout.
  */
 function makeRateLimiter(limit: number): () => boolean {
   const calls: number[] = [];
 
   return function admit(): boolean {
-    const now = Date.now();
+    const now = performance.now();
     while (calls.length > 0 && now - calls[0]! >= RATE_LIMIT_WINDOW_MS) calls.shift();
     if (calls.length >= limit) return false;
     calls.push(now);
@@ -409,6 +493,12 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   server.maxConnections = 8;
   server.maxRequestsPerSocket = 1;
   server.timeout = timeouts.timeout;
+  // Node answers a malformed request line, an oversized header block, and a
+  // client that never finishes its headers itself — the header/request
+  // deadlines above included, since `ERR_HTTP_REQUEST_TIMEOUT` arrives
+  // through this same event — but only while nothing is listening for it
+  // (module header, {@link onClientError}'s own).
+  server.on("clientError", onClientError);
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
