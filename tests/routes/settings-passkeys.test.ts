@@ -62,12 +62,17 @@ vi.mock("~/lib/unlock-ceremony", async (importOriginal) => {
 
 const {
   action,
+  applyRemoveResult,
   applyRemovalOptionsResult,
   default: Passkeys,
+  enrolBusy,
   enrolledText,
   lastUsedText,
   loader,
+  lockedByOtherRow,
   NO_CEREMONY_MESSAGE,
+  REGISTRATION_OPTIONS_EXPIRED_MESSAGE,
+  registrationOptionsExpired,
   removalConfirmDisabled,
   removalWarningKind,
   removalWarningText,
@@ -395,6 +400,66 @@ describe(
   },
 );
 
+describe("registrationOptionsExpired — the stale-registration-options guard", () => {
+  it("is not expired the instant options are minted", () => {
+    expect(registrationOptionsExpired(1_000, 1_000)).toBe(false);
+  });
+
+  it("is not expired just under the two-minute TTL lock.server.ts's own CHALLENGE_TTL_MS grants", () => {
+    expect(registrationOptionsExpired(0, 2 * 60 * 1000 - 1)).toBe(false);
+  });
+
+  it("is expired at exactly the two-minute mark", () => {
+    expect(registrationOptionsExpired(0, 2 * 60 * 1000)).toBe(true);
+  });
+
+  it(
+    // The case the finding names: a dismissed creation deliberately keeps its
+    // options (`runCreate`'s own header), so the reader can sit on the
+    // Create step for as long as they like before pressing it again.
+    "stays expired well past the TTL, the case a dismissed creation followed by a long pause produces",
+    () => {
+      expect(registrationOptionsExpired(0, 5 * 60 * 1000)).toBe(true);
+    },
+  );
+});
+
+describe("enrolBusy — the Add-a-passkey panel's own disabled check, including the revalidator", () => {
+  it("is busy while a fresh confirm press is running", () => {
+    expect(enrolBusy("confirming", "idle", "idle")).toBe(true);
+  });
+
+  it("is busy while the beginEnrolment/completeRegistration fetcher is in flight", () => {
+    expect(enrolBusy("idle", "submitting", "idle")).toBe(true);
+  });
+
+  it(
+    // The pin: before this fix, a dismissed or failed confirm started
+    // `loaderData.enrolOptions` revalidating (`runConfirmCeremony`'s own
+    // header) while `phase` had already reset to "idle" — leaving Confirm
+    // pressable during exactly the window a press must not be accepted.
+    "is busy while a dismissed or failed confirm's own revalidation is still settling, even though phase itself is idle",
+    () => {
+      expect(enrolBusy("idle", "idle", "loading")).toBe(true);
+      expect(enrolBusy("idle", "idle", "submitting")).toBe(true);
+    },
+  );
+
+  it("is not busy once idle across the phase, the fetcher and the revalidator", () => {
+    expect(enrolBusy("idle", "idle", "idle")).toBe(false);
+  });
+
+  it("stays pressable in readyToCreate — the Create button's own busy check is this same one, not a different variable", () => {
+    expect(enrolBusy("readyToCreate", "idle", "idle")).toBe(false);
+  });
+});
+
+describe("REGISTRATION_OPTIONS_EXPIRED_MESSAGE — printed once handleCreatePasskey refuses to call WebAuthn on a stale challenge", () => {
+  it("tells the reader to start again, rather than describing the failure in server terms alone", () => {
+    expect(REGISTRATION_OPTIONS_EXPIRED_MESSAGE).toMatch(/start again/i);
+  });
+});
+
 describe("applyRemovalOptionsResult — landing a row's own options-fetch never runs a ceremony", () => {
   const FAKE_OPTIONS = { challenge: "fixture-challenge" } as Awaited<ReturnType<typeof enrolmentAssertionOptions>>;
 
@@ -463,6 +528,76 @@ describe("applyRemovalOptionsResult — landing a row's own options-fetch never 
   });
 });
 
+describe(
+  "applyRemoveResult — the server-rejection twin of applyRemovalOptionsResult, for a row's own landed removal",
+  () => {
+    it("clears the note once the removal itself succeeds, and asks for nothing further", () => {
+      const setNote = vi.fn();
+      const refetchOptions = vi.fn();
+
+      applyRemoveResult({ intent: "remove", ok: true, credentialId: "abc" }, setNote, refetchOptions);
+
+      expect(setNote).toHaveBeenCalledWith(null);
+      expect(refetchOptions).not.toHaveBeenCalled();
+    });
+
+    it(
+      // The pin: before this fix, a removal the *server* refused left this
+      // row's stale options in place — every later Confirm removal press
+      // reused a challenge `lock.server.ts` had already marked spent the
+      // moment it was read, and could never succeed again.
+      "notes the server's own refusal and re-mints this row's options, because the challenge behind it is already spent",
+      () => {
+        const setNote = vi.fn();
+        const refetchOptions = vi.fn();
+
+        applyRemoveResult(
+          { intent: "remove", ok: false, formError: "This passkey is no longer enrolled.", credentialId: "abc" },
+          setNote,
+          refetchOptions,
+        );
+
+        expect(setNote).toHaveBeenCalledWith("This passkey is no longer enrolled.");
+        expect(refetchOptions).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("ignores a result meant for a different intent entirely", () => {
+      const setNote = vi.fn();
+      const refetchOptions = vi.fn();
+
+      applyRemoveResult(
+        { intent: "removalOptions", ok: true, credentialId: "abc", options: {} as never },
+        setNote,
+        refetchOptions,
+      );
+
+      expect(setNote).not.toHaveBeenCalled();
+      expect(refetchOptions).not.toHaveBeenCalled();
+    });
+  },
+);
+
+describe("lockedByOtherRow — the page-level removal lock a row's own busy check folds in", () => {
+  it("locks a row while a different row's removal is in flight", () => {
+    expect(lockedByOtherRow("other-credential", "this-credential")).toBe(true);
+  });
+
+  it("leaves a row unlocked when no removal is in flight anywhere on the page", () => {
+    expect(lockedByOtherRow(null, "this-credential")).toBe(false);
+  });
+
+  it(
+    // A row's own in-flight removal is already covered by its own
+    // `confirming`/`fetcher.state` — this only ever adds the case those two
+    // cannot see: a *different* row's removal.
+    "leaves a row unlocked for its own in-flight removal",
+    () => {
+      expect(lockedByOtherRow("this-credential", "this-credential")).toBe(false);
+    },
+  );
+});
+
 describe("removalConfirmDisabled — a row's own Confirm removal button, disabled while press 1's fetch is still in flight", () => {
   it.for([{ state: "loading" }, { state: "submitting" }] as const)(
     "stays disabled while this row's own options-fetch is $state, even once acknowledged",
@@ -491,15 +626,24 @@ describe("runRemovalCeremony — the removal's own ceremony, run directly off it
     vi.mocked(requestAssertion).mockReset();
   });
 
-  it("submits the remove intent with the signed assertion and the removal acknowledgement once the ceremony succeeds", async () => {
+  it("submits the remove intent with the signed assertion and the removal acknowledgement once the ceremony succeeds, leaving the page-level lock in place", async () => {
     const response = assertionResponse("fixture-challenge");
     vi.mocked(requestAssertion).mockResolvedValue({ status: "ok", response });
     const submit = vi.fn().mockResolvedValue(undefined);
     const setNote = vi.fn();
     const setConfirming = vi.fn();
     const refetchOptions = vi.fn();
+    const releaseLock = vi.fn();
 
-    await runRemovalCeremony(FAKE_OPTIONS, "target-credential", submit as never, setNote, setConfirming, refetchOptions);
+    await runRemovalCeremony(
+      FAKE_OPTIONS,
+      "target-credential",
+      submit as never,
+      setNote,
+      setConfirming,
+      refetchOptions,
+      releaseLock,
+    );
 
     expect(refetchOptions).not.toHaveBeenCalled();
     expect(submit).toHaveBeenCalledWith(
@@ -513,37 +657,64 @@ describe("runRemovalCeremony — the removal's own ceremony, run directly off it
     );
     expect(setConfirming).toHaveBeenCalledWith(false);
     expect(setNote).not.toHaveBeenCalled();
+    // The lock survives until this row's own submission actually lands
+    // (the concurrent-removal lock) — releasing it here, before the response
+    // is even in flight, is exactly what would let a second row's removal
+    // race it.
+    expect(releaseLock).not.toHaveBeenCalled();
   });
 
-  it("notes a dismissed prompt, submits nothing, and re-mints this row's options so a later press meets a live challenge", async () => {
+  it("notes a dismissed prompt, submits nothing, re-mints this row's options, and releases the page-level lock", async () => {
     vi.mocked(requestAssertion).mockResolvedValue({ status: "dismissed" });
     const submit = vi.fn();
     const setNote = vi.fn();
     const setConfirming = vi.fn();
     const refetchOptions = vi.fn();
+    const releaseLock = vi.fn();
 
-    await runRemovalCeremony(FAKE_OPTIONS, "target-credential", submit as never, setNote, setConfirming, refetchOptions);
+    await runRemovalCeremony(
+      FAKE_OPTIONS,
+      "target-credential",
+      submit as never,
+      setNote,
+      setConfirming,
+      refetchOptions,
+      releaseLock,
+    );
 
     expect(submit).not.toHaveBeenCalled();
     expect(setNote).toHaveBeenCalledWith(expect.stringContaining("did not complete"));
     expect(setConfirming).toHaveBeenCalledWith(false);
     // The challenge is unspent but not immortal — two minutes, `lock.server.ts`.
     expect(refetchOptions).toHaveBeenCalledTimes(1);
+    // No `remove` submission is ever going to land for this press, so nothing
+    // else would ever release the lock this same press set.
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("carries a failed ceremony's own message, submits nothing, and re-mints this row's options", async () => {
+  it("carries a failed ceremony's own message, submits nothing, re-mints this row's options, and releases the page-level lock", async () => {
     vi.mocked(requestAssertion).mockResolvedValue({ status: "failed", message: "No authenticator found." });
     const submit = vi.fn();
     const setNote = vi.fn();
     const setConfirming = vi.fn();
     const refetchOptions = vi.fn();
+    const releaseLock = vi.fn();
 
-    await runRemovalCeremony(FAKE_OPTIONS, "target-credential", submit as never, setNote, setConfirming, refetchOptions);
+    await runRemovalCeremony(
+      FAKE_OPTIONS,
+      "target-credential",
+      submit as never,
+      setNote,
+      setConfirming,
+      refetchOptions,
+      releaseLock,
+    );
 
     expect(submit).not.toHaveBeenCalled();
     expect(setNote).toHaveBeenCalledWith("No authenticator found.");
     expect(setConfirming).toHaveBeenCalledWith(false);
     expect(refetchOptions).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1289,6 +1460,27 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
 
       expect(markup).toContain("Synced");
       expect(markup).toContain("Bound to a single device");
+    }),
+  );
+
+  it(
+    // The browser-local date fix's first paint: the server has no browser
+    // zone to correct to, so the enrolled/last-used columns render inside a
+    // `<time>` element carrying the raw instant and `formatDate`'s own
+    // UTC-pinned text — identical to what the client's own hydration render
+    // produces before its effect ever runs, so nothing here can mismatch.
+    "renders each date inside a <time> element carrying the raw instant, with formatDate's own UTC text as the first paint",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({
+        publicKey: BYSTANDER_PUBLIC_KEY,
+        label: "Kitchen iPad",
+        lastUsedAt: new Date("2026-03-14T12:00:00Z"),
+      });
+
+      const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
+
+      expect(markup).toContain('dateTime="2026-03-14T12:00:00.000Z"');
+      expect(markup).toContain(">14 Mar 2026<");
     }),
   );
 

@@ -102,7 +102,7 @@
 import { useEffect, useRef, useState } from "react";
 import { data, useFetcher, useRevalidator } from "react-router";
 
-import { formatDate } from "~/lib/format";
+import { formatDate, formatDateLocal } from "~/lib/format";
 import { NotFoundError, ValidationError, formFields } from "~/lib/input.server";
 import { LABEL_MAX_LENGTH } from "~/lib/lock";
 import {
@@ -431,6 +431,39 @@ export function lastUsedText(lastUsedAt: Date | null): string {
   return lastUsedAt === null ? "never" : formatDate(lastUsedAt);
 }
 
+/**
+ * An enrolled or last-used instant, corrected to the browser's own timezone
+ * after hydration (the browser-local date fix) — the first *and only* caller of {@link
+ * formatDateLocal}. First paint renders `initialText` — `enrolledText` or
+ * `lastUsedText`'s own `formatDate` call, identical on the server and on this
+ * component's own hydration render, so nothing here can mismatch the markup
+ * the server actually sent. Only once mounted does the effect reach for the
+ * browser's own zone, which a server render has none of.
+ *
+ * **Unlike masking, which this pattern must never touch** (`app/root.tsx`'s
+ * own header: "the first paint must be correct — a page that drew the
+ * amounts and then hid them is the one failure this feature cannot have"), a
+ * calendar date reading one day off for a paint or two is a cosmetic slip,
+ * not an exposure. That difference is the whole reason this component is
+ * allowed to exist where a masked-figure equivalent could not:
+ * `suppressHydrationWarning` covers only the text node the effect goes on to
+ * replace, and the replacement is a correction a reader can act on ("oh, it
+ * was actually the 4th"), never a fact laid bare that should have stayed hidden.
+ */
+function LocalDate({ instant, initialText }: { instant: Date; initialText: string }) {
+  const [text, setText] = useState(initialText);
+
+  useEffect(() => {
+    setText(formatDateLocal(instant));
+  }, [instant]);
+
+  return (
+    <time dateTime={instant.toISOString()} suppressHydrationWarning>
+      {text}
+    </time>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Enrolling
 // ---------------------------------------------------------------------------
@@ -449,6 +482,36 @@ export function lastUsedText(lastUsedAt: Date | null): string {
  * the first passkey is two taps too).
  */
 type EnrolPhase = "idle" | "confirming" | "busy" | "readyToCreate";
+
+/**
+ * How long registration options stay usable before `requestRegistration`
+ * must not be handed them at all (the stale-registration-options guard) — matching `lock.server.ts`'s
+ * own `CHALLENGE_TTL_MS`, restated rather than imported: that constant is a
+ * `.server.ts` export, and reaching it from code this component runs in the
+ * browser would ship server code past the bundle boundary CLAUDE.md draws,
+ * the identical reason `unlock-ceremony.ts`'s own ceremony imports are all
+ * dynamic. Past this, the ceremony still runs — the authenticator creates a
+ * real credential in the family member's own password manager — and only
+ * *then* does the server refuse the stale challenge behind it, leaving an
+ * orphaned passkey nobody asked for. Checking first is what keeps that from
+ * ever happening rather than merely reporting it afterwards.
+ */
+const REGISTRATION_OPTIONS_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Whether registration options minted at `mintedAt` are too stale at `now`
+ * to call `requestRegistration` with (the stale-registration-options guard) — pulled out of the click
+ * handler for the same reason `removalConfirmDisabled` is: a decision this
+ * suite can drive directly, with no browser and no two real minutes to wait
+ * out.
+ */
+export function registrationOptionsExpired(mintedAt: number, now: number): boolean {
+  return now - mintedAt >= REGISTRATION_OPTIONS_TTL_MS;
+}
+
+/** Shown when the Create step sat long enough for its own options to expire (the stale-registration-options guard) — never silent, and never a passkey prompt run against a challenge that can no longer succeed. */
+export const REGISTRATION_OPTIONS_EXPIRED_MESSAGE =
+  "That took too long, so the registration challenge behind it has expired. Start again.";
 
 /** Recoveries a family member can actually act on — never "the operator" (`CONTEXT.md`'s `Gate`/`Allowlist`, finding 10; `unlock.tsx`'s own precedent). */
 export const NO_CEREMONY_MESSAGE =
@@ -511,6 +574,30 @@ export async function runConfirmCeremony(
   if (shouldRevalidateBeforeRetry(outcome.status === "dismissed" ? "dismissed" : "failed")) revalidate();
 }
 
+/**
+ * Whether this panel's Label/Confirm/Continue controls must stay disabled
+ * (the revalidator-busy fix) — this file's own analogue of `removalConfirmDisabled` above,
+ * pulled out for the identical reason: `EnrolPanel` is not exported, so the
+ * decision has to be if this suite is ever to drive it without a browser.
+ * `revalidatorState` matters for the same reason it does on `/unlock`'s own
+ * `UnlockControl`: a dismissed or failed confirm starts `loaderData.
+ * enrolOptions` refreshing without moving `phase` off `"idle"`
+ * (`runConfirmCeremony`'s own header), and a press accepted during that
+ * window would run `requestAssertion` only once this same effect's guard
+ * lets it — after waiting on the very network round trip that press's own
+ * click just started, spending its activation on the wait rather than the
+ * check. Never `"readyToCreate"`: that phase is exactly when the Create
+ * button must stay pressable, waiting on the tap that runs
+ * `requestRegistration`.
+ */
+export function enrolBusy(
+  phase: EnrolPhase,
+  fetcherState: "idle" | "loading" | "submitting",
+  revalidatorState: "idle" | "loading" | "submitting",
+): boolean {
+  return phase === "confirming" || phase === "busy" || fetcherState !== "idle" || revalidatorState !== "idle";
+}
+
 function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
   const fetcher = useFetcher<ActionData>();
   const revalidator = useRevalidator();
@@ -519,14 +606,17 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
   const [phase, setPhase] = useState<EnrolPhase>("idle");
   const [note, setNote] = useState<string | null>(null);
   const [registrationOptions, setRegistrationOptions] = useState<RegistrationOptions | null>(null);
+  // When `registrationOptions` was minted (the stale-registration-options guard) — `Date.now()`, read
+  // only client-side, at the same moment `setRegistrationOptions` lands
+  // below. `null` exactly when `registrationOptions` is: there is nothing to
+  // go stale before there is anything to spend.
+  const [registrationMintedAt, setRegistrationMintedAt] = useState<number | null>(null);
   // Guards the confirm-ceremony effect below against firing twice for one
   // press — reset only when a fresh press starts a new one, the same shape
   // `unlock.tsx`'s own `ceremonyStarted` ref guards.
   const confirmCeremonyStarted = useRef(false);
 
-  // Never "readyToCreate": that phase is exactly when the Create button must
-  // stay pressable, waiting on the tap that runs `requestRegistration`.
-  const busy = phase === "confirming" || phase === "busy" || fetcher.state !== "idle";
+  const busy = enrolBusy(phase, fetcher.state, revalidator.state);
 
   // React to the beginEnrolment/completeRegistration submission's own
   // answer once it settles — never by reading `fetcher.data` right after
@@ -542,12 +632,17 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
       setNote(result.formError);
       setPhase("idle");
       setRegistrationOptions(null);
+      setRegistrationMintedAt(null);
       return;
     }
 
     if (result.intent === "beginEnrolment") {
       setNote(null);
       setRegistrationOptions(result.options);
+      // Read only client-side (the stale-registration-options guard) — a server timestamp would be one
+      // more clock to keep in sync for no benefit, since the only clock this
+      // check ever compares it against is this same browser's own `Date.now()`.
+      setRegistrationMintedAt(Date.now());
       // A second, separate press runs the creation ceremony, whether or not
       // this is the household's first passkey (this file's own header on
       // why the first is two taps too) — never auto-run from here.
@@ -561,6 +656,7 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
     setLabel("");
     setWarningAcknowledged(false);
     setRegistrationOptions(null);
+    setRegistrationMintedAt(null);
     setNote(null);
     setPhase("idle");
   }, [fetcher.state, fetcher.data]);
@@ -601,9 +697,27 @@ function EnrolPanel({ hasPasskeys, supported, enrolOptions }: EnrolPanelProps) {
   // Runs `requestRegistration` directly off this press's own gesture — no
   // `await` ahead of it — for both the first passkey and every later one:
   // `registrationOptions` already carries a fresh challenge either way, from
-  // whichever submission most recently landed on "readyToCreate".
+  // whichever submission most recently landed on "readyToCreate". Checking
+  // `registrationOptionsExpired` first (the stale-registration-options guard) never spends an activation
+  // on a network round trip — `Date.now()` is synchronous — so a valid press
+  // still reaches `requestRegistration` with nothing awaited ahead of it.
   function handleCreatePasskey() {
-    if (registrationOptions === null) return;
+    if (registrationOptions === null || registrationMintedAt === null) return;
+
+    if (registrationOptionsExpired(registrationMintedAt, Date.now())) {
+      // Never calls WebAuthn at all: past the TTL the assertion the server
+      // eventually sees is certain to be refused, and by then the
+      // authenticator has already created a real credential in the family
+      // member's own password manager to produce it — an orphaned passkey
+      // nobody asked for. Resetting the whole flow, not just this step, is
+      // what stops a second press from meeting the identical stale options.
+      setPhase("idle");
+      setRegistrationOptions(null);
+      setRegistrationMintedAt(null);
+      setNote(REGISTRATION_OPTIONS_EXPIRED_MESSAGE);
+      return;
+    }
+
     setNote(null);
     setPhase("busy");
     void runCreate(registrationOptions);
@@ -765,6 +879,51 @@ export function applyRemovalOptionsResult(
 }
 
 /**
+ * What landing this row's own removal submission does to its state — the
+ * server-rejection twin of {@link applyRemovalOptionsResult} above (finding
+ * 3). A removal the *server* refuses has already spent the challenge that
+ * authorised it: `lock.server.ts` marks a challenge spent the moment it
+ * reads it, whether or not what followed verified (this file's own header).
+ * `runRemovalCeremony`'s own dismissed/failed branch already re-mints
+ * `removalOptions` for the case the ceremony never reached the server at
+ * all; this is the other half, for the request that *did* reach it and came
+ * back refused — without this, every later Confirm removal press on this row
+ * would retry against a challenge that can never succeed, and the row would
+ * stay stuck until the page reloaded.
+ */
+export function applyRemoveResult(
+  result: ActionData,
+  setNote: (note: string | null) => void,
+  refetchOptions: () => void,
+): void {
+  if (result.intent !== "remove") return;
+
+  if (!result.ok) {
+    setNote(result.formError);
+    refetchOptions();
+    return;
+  }
+
+  setNote(null);
+}
+
+/**
+ * Whether this row's own controls must stay locked because a *different*
+ * row's removal is currently in flight (the concurrent-removal lock). Each row used to derive
+ * `busy` only from its own fetcher, so two expanded rows could submit
+ * removals at once; each removal's response carries a `Set-Cookie`, and the
+ * later-arriving one can name a grant the other removal has since cascaded
+ * away, leaving this browser's cookie naming something already gone. `null`
+ * (nothing removing anywhere) and this row's own id both read as "not
+ * locked" — a row's own in-flight removal is already covered by its own
+ * `confirming`/`fetcher.state` (this file's own `PasskeyRow` header); this
+ * only ever adds the case those two cannot see: someone else's.
+ */
+export function lockedByOtherRow(activeRemovalId: string | null, credentialId: string): boolean {
+  return activeRemovalId !== null && activeRemovalId !== credentialId;
+}
+
+/**
  * Whether "Confirm removal" must stay disabled — this row's own analogue of
  * `unlock.tsx`'s `UnlockControl` disabled check, restated because a row's
  * options come from its own per-credential fetch (`removalAssertionOptions`
@@ -796,6 +955,16 @@ export function removalConfirmDisabled(
  * reaches the server at all), so a second Confirm removal press can retry
  * against the very same options with the identical no-network-wait
  * guarantee, rather than this row needing to revalidate anything before it can.
+ *
+ * **`releaseLock` fires only on the branch that never reaches the server**
+ * (the concurrent-removal lock). The page-level removal lock (`lockedByOtherRow`) is set the
+ * moment this press starts and must come back off once no submission is
+ * ever going to land — a dismissed or failed ceremony produces no `remove`
+ * intent for `PasskeyRow`'s own settle-effect to release it from, so this is
+ * the one place left that can. The `"ok"` branch calls it from nowhere:
+ * the lock has to survive until that submission's own response actually
+ * lands, which is exactly what would let two removals race in the first
+ * place if released here instead.
  */
 export async function runRemovalCeremony(
   optionsJSON: AssertionOptions,
@@ -804,6 +973,7 @@ export async function runRemovalCeremony(
   setNote: (note: string | null) => void,
   setConfirming: (confirming: boolean) => void,
   refetchOptions: () => void,
+  releaseLock: () => void,
 ): Promise<void> {
   const outcome = await requestAssertion(optionsJSON);
   setConfirming(false);
@@ -824,6 +994,7 @@ export async function runRemovalCeremony(
     // the shape `unlock.tsx`'s own `runCeremony` rejects for putting a round
     // trip inside the activation that press granted.
     refetchOptions();
+    releaseLock();
     return;
   }
 
@@ -840,10 +1011,17 @@ function PasskeyRow({
   passkey,
   warningKind,
   supported,
+  activeRemovalId,
+  setActiveRemovalId,
 }: {
   passkey: Passkey;
   warningKind: RemovalWarningKind;
   supported: boolean | null;
+  // Lifted to `Passkeys` (the concurrent-removal lock): the page's one shared lock across every
+  // row's own removal, not state this row could keep to itself. See
+  // {@link lockedByOtherRow}'s own header for the race this closes.
+  activeRemovalId: string | null;
+  setActiveRemovalId: (credentialId: string | null) => void;
 }) {
   const fetcher = useFetcher<ActionData>();
   const optionsFetcher = useFetcher<ActionData>();
@@ -860,12 +1038,20 @@ function PasskeyRow({
   // stop a double-run, unlike the confirm-identity ceremony: this is a plain
   // click handler, and disabling the button while this is true is enough.
   const [confirming, setConfirming] = useState(false);
-  const busy = fetcher.state !== "idle" || confirming || supported === false;
+  const busy =
+    fetcher.state !== "idle" ||
+    confirming ||
+    supported === false ||
+    lockedByOtherRow(activeRemovalId, passkey.credentialId);
 
   useEffect(() => {
     if (fetcher.state !== "idle" || fetcher.data === undefined) return;
-    if (fetcher.data.intent !== "remove") return;
-    setNote(fetcher.data.ok ? null : fetcher.data.formError);
+    applyRemoveResult(fetcher.data, setNote, requestRemovalOptions);
+    // This row's own `fetcher` only ever submits the `remove` intent
+    // (`handleRemove`, `handleConfirmRemoval` below) — `applyRemoveResult`
+    // ignores anything else, but the page-level lock this settle releases is
+    // scoped to *this* row regardless, so there is nothing to gate it on.
+    setActiveRemovalId(null);
   }, [fetcher.state, fetcher.data]);
 
   // Stores this row's own removal options once they land — never runs the
@@ -882,7 +1068,9 @@ function PasskeyRow({
       // No ceremony for a submission the domain module refuses on its own
       // say-so — its own "tick first" message is what should print, not a
       // passkey prompt for nothing (`removePasskey` checks the
-      // acknowledgement before it ever looks for an assertion).
+      // acknowledgement before it ever looks for an assertion). Never reaches
+      // `removePasskey`'s own grant logic, so it carries no `Set-Cookie` and
+      // needs no page-level lock (the concurrent-removal lock).
       void fetcher.submit({ intent: "remove", credentialId: passkey.credentialId }, { method: "post" });
       return;
     }
@@ -916,6 +1104,11 @@ function PasskeyRow({
     if (removalOptions === null) return;
     setNote(null);
     setConfirming(true);
+    // Locks every other row (the concurrent-removal lock) before the assertion this press is
+    // about to run could possibly resolve — `runRemovalCeremony`'s own
+    // dismissed/failed branch releases it directly; the `"ok"` branch leaves
+    // it locked until this row's own fetcher settles, above.
+    setActiveRemovalId(passkey.credentialId);
     void runRemovalCeremony(
       removalOptions,
       passkey.credentialId,
@@ -923,19 +1116,36 @@ function PasskeyRow({
       setNote,
       setConfirming,
       requestRemovalOptions,
+      () => setActiveRemovalId(null),
     );
   }
 
   return (
     <li>
-      <div className="record">
+      {/* `.record-form` alongside `.record` (the row-padding fix): `.record` alone
+          supplies no padding and no wrap — both live on `.record-form`,
+          which every other record row in Settings already wears beside it
+          (`app.css`'s own comment on `.record`, `settings/people.tsx`'s
+          row). Without it the row sat 1px from the panel border and never
+          wrapped its label column at a phone width. */}
+      <div className="record record-form">
         <div>
           <p>
             <strong>{passkey.label}</strong>
           </p>
           <p className="record-note">
-            Enrolled <span className="u-data">{enrolledText(passkey.enrolledAt)}</span> · Last used{" "}
-            <span className="u-data">{lastUsedText(passkey.lastUsedAt)}</span>
+            Enrolled{" "}
+            <span className="u-data">
+              <LocalDate instant={passkey.enrolledAt} initialText={enrolledText(passkey.enrolledAt)} />
+            </span>{" "}
+            · Last used{" "}
+            <span className="u-data">
+              {passkey.lastUsedAt === null ? (
+                "never"
+              ) : (
+                <LocalDate instant={passkey.lastUsedAt} initialText={lastUsedText(passkey.lastUsedAt)} />
+              )}
+            </span>
             {" · "}
             {syncLabel(passkey.backupEligible)}
           </p>
@@ -998,6 +1208,11 @@ export default function Passkeys({ loaderData }: Route.ComponentProps) {
     };
   }, []);
 
+  // The page's one removal lock (the concurrent-removal lock), lifted here rather than kept
+  // per row: `lockedByOtherRow`'s own header says why a row's own fetcher is
+  // not enough on its own to stop two rows racing a `Set-Cookie`.
+  const [activeRemovalId, setActiveRemovalId] = useState<string | null>(null);
+
   return (
     <>
       <header className="page-header">
@@ -1024,6 +1239,8 @@ export default function Passkeys({ loaderData }: Route.ComponentProps) {
                 passkey={passkey}
                 warningKind={removalWarningKind(passkey.credentialId, passkeys.length, ownPasskeyId)}
                 supported={supported}
+                activeRemovalId={activeRemovalId}
+                setActiveRemovalId={setActiveRemovalId}
               />
             ))}
           </ul>

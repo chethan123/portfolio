@@ -6,12 +6,13 @@
  * nines rolling over, a carry that lengthens the number, a carry crossing a
  * thousands boundary. No database; pure string functions.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   compactScale,
   formatCompact,
   formatDate,
+  formatDateLocal,
   formatMoney,
   formatPercent,
   formatSignedMoney,
@@ -175,18 +176,58 @@ describe("toPlotValue", () => {
  * existing test would still pass. Pinned here beside its siblings, matching
  * this file's own house style of asserting an exact string rather than
  * a shape.
+ *
+ * **The pin is for hydration safety, not the household's own rule (finding
+ * 1).** A passkey's enrolled or last-used instant is browser-local per
+ * DESIGN.md's Timezone row — `formatDate`'s UTC-pinned string is only ever
+ * the first, hydration-stable paint `LocalDate` (`app/routes/settings/
+ * passkeys.tsx`) starts from before correcting it client-side. The test
+ * below used to read as though UTC were the whole story for a passkey's
+ * date; it is now the narrower claim that is actually true of this function
+ * alone.
  */
 describe("formatDate", () => {
   it("renders a short calendar date, no leading zero on the day", () => {
     expect(formatDate(new Date("2026-09-05T12:00:00Z"))).toBe("5 Sep 2026");
   });
 
-  it("is pinned to UTC, not the runtime's ambient timezone", () => {
+  it("is pinned to UTC, not the runtime's ambient timezone — the hydration-safe first paint, never the final word on a passkey's own date", () => {
     // Half past midnight UTC on New Year's Day: any zone behind UTC — every
     // zone this application's household could plausibly run in — reads this
     // same instant as the evening of 31 December. A mutation dropping the
     // `timeZone: "UTC"` option (or retargeting it to one of those zones)
-    // prints "31 Dec 2025" here; only the pin prints "1 Jan 2026".
+    // prints "31 Dec 2025" here; only the pin prints "1 Jan 2026". Correcting
+    // that string to the household's own zone is `formatDateLocal`'s job, not
+    // this function's — see the block below.
     expect(formatDate(new Date("2026-01-01T00:30:00Z"))).toBe("1 Jan 2026");
+  });
+});
+
+/**
+ * `formatDate`'s browser-local twin (finding 1): deliberately *not* pinned,
+ * so it can only be pinned here by forcing the ambient zone itself —
+ * `process.env.TZ`, which this Node build re-reads on every
+ * `Intl.DateTimeFormat` construction rather than caching at startup (checked
+ * against the installed Node 24). Restored in `afterEach` so no later file
+ * in the suite inherits a changed clock.
+ */
+describe("formatDateLocal", () => {
+  const originalTZ = process.env.TZ;
+
+  afterEach(() => {
+    process.env.TZ = originalTZ;
+  });
+
+  it("reads whatever zone is actually running, not UTC", () => {
+    process.env.TZ = "America/New_York";
+    // The same half-past-midnight-UTC instant `formatDate`'s own pin reads as
+    // "1 Jan 2026" — New York, being behind UTC, is still the evening before.
+    expect(formatDateLocal(new Date("2026-01-01T00:30:00Z"))).toBe("31 Dec 2025");
+  });
+
+  it("agrees with formatDate whenever the ambient zone happens to already be UTC", () => {
+    process.env.TZ = "UTC";
+    const instant = new Date("2026-09-05T12:00:00Z");
+    expect(formatDateLocal(instant)).toBe(formatDate(instant));
   });
 });

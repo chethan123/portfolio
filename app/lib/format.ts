@@ -9,19 +9,28 @@
  * money happens in SQL, in `numeric` (DESIGN.md §8.2) — a helper here would
  * be an invitation to do it twice.
  *
- * `formatDate` is the one function below that is not about money: a
- * `timestamptz` instant (Settings → Passkeys' enrolled/last-used columns,
- * docs/adr/0012), rendered as a calendar date rather than computed. It still
- * renders and never computes — no arithmetic on the instant, just
- * `Intl.DateTimeFormat` — and it is pinned to UTC for the same reason
+ * `formatDate` and `formatDateLocal` are the two functions below that are not
+ * about money: a `timestamptz` instant (Settings → Passkeys' enrolled/
+ * last-used columns, docs/adr/0012), rendered as a calendar date rather than
+ * computed. Both still render and never compute — no arithmetic on the
+ * instant, just `Intl.DateTimeFormat` — and both are the one place in this
+ * file whose *output* depends on the environment it runs in, since money's
+ * own digits carry no timezone to disagree about in the first place. They
+ * exist as a pair rather than one function because that dependence cuts two
+ * ways: `formatDate` is pinned to UTC for the same reason
  * `settings/accounts.tsx`'s `closedOn` reads a closed date through
- * `toISOString` rather than the ambient locale: a date formatted in whichever
- * zone happens to be running would print one string on the server and a
- * different one after hydration. Every function in this file renders on
- * both server and hydration — that much is not what sets this one apart;
- * `formatDate` is the one whose *output* depends on the environment it runs
- * in unless pinned, since money's own digits carry no timezone to disagree
- * about in the first place.
+ * `toISOString` rather than the ambient locale — a date formatted in
+ * whichever zone happens to be running would print one string on the server
+ * and a different one after hydration — while a passkey's enrolled or
+ * last-used instant is not a market instant and DESIGN.md's Timezone row
+ * wants it browser-local ("Browser-local for everything else"). Reconciling
+ * that needs both: `formatDate` renders the first, hydration-safe paint, and
+ * `formatDateLocal` — deliberately *not* pinned, reading whatever zone is
+ * actually running — is what a `useEffect` calls afterwards to correct it,
+ * once there is an actual browser zone to correct to.
+ * `app/routes/settings/passkeys.tsx`'s `LocalDate` is the one caller, and its
+ * own header says why a passkey's date can afford that brief flash where a
+ * figure could not.
  */
 
 /** A decimal string taken apart. `int` and `frac` are digits only. */
@@ -232,6 +241,28 @@ export function formatDate(instant: Date): string {
   const parts: Record<string, string> = {};
   for (const { type, value } of new Intl.DateTimeFormat("en-US", {
     timeZone: "UTC",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).formatToParts(instant)) {
+    parts[type] = value;
+  }
+
+  return `${parts.day} ${parts.month} ${parts.year}`;
+}
+
+/**
+ * {@link formatDate}'s browser-local twin — the correction, not the first
+ * paint. No `timeZone` option: that omission is the entire function, since
+ * `Intl.DateTimeFormat` reads the ambient zone whenever none is given, and
+ * the ambient zone is the household's own only once this is actually running
+ * in their browser. Called from nowhere during a server render — there the
+ * "ambient" zone is the container's, not any browser's, which is exactly the
+ * mismatch `formatDate`'s own pin exists to avoid.
+ */
+export function formatDateLocal(instant: Date): string {
+  const parts: Record<string, string> = {};
+  for (const { type, value } of new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     month: "short",
     year: "numeric",
