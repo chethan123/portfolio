@@ -120,9 +120,9 @@ what unlocks the browser you started on. Whether that offer appears at all is yo
 and the passkey provider's, not this app's, so it is not something to count on until somebody has
 seen it work here.
 
-If it is not offered, the ways back in are the ones the locked screen itself lists: another browser
-on this device, a device that can reach a passkey the household has enrolled, or asking whoever set
-this app up for your household to help you back in.
+If it is not offered, there are three ways back in: another browser on this device, a device that can
+reach a passkey the household has enrolled, or asking whoever set this app up for your household to
+help you back in.
 
 If the check is dismissed, or it does not finish, nothing has changed and nothing is lost — press
 **Unlock** and try again.

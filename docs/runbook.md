@@ -569,10 +569,9 @@ Why, including why the order above is stop-delete-start and not delete-then-rest
 only this device's own provider — no code to scan, no prompt arriving on a phone that does hold one.
 Another browser on the same device behaves the same way.
 
-**Do.** Nothing here is broken and there is nothing to repair: whether that path is offered is
-decided by the provider that made the household's first passkey, not by this instance. Enrol a
-passkey on this device from a browser that is still unlocked. If no browser in the household is
-still unlocked, this is
+**Do.** From a browser that is still unlocked — usually the one that enrolled the household's first
+passkey — enrol a second passkey using a different provider, then press **Unlock** on the affected
+device again. If no browser is still unlocked, or the second passkey changes nothing, this is
 [Every browser is locked and no passkey can be reached](#every-browser-is-locked-and-no-passkey-can-be-reached)
 above instead.
 
