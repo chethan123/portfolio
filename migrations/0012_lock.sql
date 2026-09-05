@@ -100,9 +100,11 @@ create table passkey (
 -- nothing in this slice reads it, and a column with no reader is a column
 -- that will drift wrong without anyone noticing.
 
--- **Two halves close the household's first enrolment, and neither is enough
--- alone.** This index is one of them, and it is worth being exact about
--- which, because the next author will otherwise take it for the whole rule.
+-- **Two halves close two of the three ways the household's first enrolment
+-- can interleave, and neither is enough alone.** This index is one of them,
+-- and it is worth being exact about which — and about the third, which they
+-- do not close — because the next author will otherwise take the pair for
+-- the whole rule.
 --
 -- The rule ticket 02 enforces is that a passkey may be enrolled with no
 -- assertion only while the household holds none — there is nothing to
@@ -132,6 +134,36 @@ create table passkey (
 -- the half that answers "does the household hold a passkey", and why
 -- removing every passkey genuinely returns the instance to the unlocked,
 -- anyone-may-enrol case the operator's recovery depends on.
+--
+-- *What the pair does not close.* Together they guarantee two things and
+-- not a third: at most one flagged live row, and no bootstrap into a
+-- household that already holds a committed passkey. They do not serialise a
+-- bootstrap insert against an *ordinary* one. Browser A begins an
+-- assertion-authorised enrolment while the household holds X (so A's
+-- registration is not flagged); every passkey is then removed; browser B,
+-- seeing an open household, begins a bootstrap; and the two inserts run at
+-- the same instant. The index compares flagged rows only with each other,
+-- so A's unflagged row is invisible to it, and B's `not exists` cannot see
+-- A's uncommitted tuple — both land, and B holds an assertion-free passkey
+-- in a household A has just locked. Under autocommit that window is one
+-- statement wide, and reaching it takes a gate-admitted family member
+-- holding a `register` challenge minted while the household was locked,
+-- completed inside the two minutes it lives, across the instant every
+-- passkey is removed and another browser bootstraps.
+--
+-- *Two ways to close it, neither taken; the decision is spec 0020's.* A
+-- mirror predicate on the ordinary insert — `where exists (select 1 from
+-- passkey)` — narrows the window to that statement's own duration without
+-- closing it, since A's snapshot can predate X's removal while B's follows
+-- it, and it would refuse the case `app/lib/lock.server.ts`'s
+-- `completeRegistration` header names as fine: A completing after every
+-- passkey was removed, which leaves a credential stranded in A's vault. A
+-- `lock table passkey in share row exclusive mode` before the bootstrap
+-- insert does close it, but only inside an explicit transaction, and this
+-- module deliberately opens none — its writes run on the autocommitting
+-- handle and savepoints stand in only where a caller already holds one
+-- (`guardedAgainstConstraintViolation`'s own header). Both cost more than a
+-- one-statement window is worth.
 create unique index passkey_bootstrap_idx on passkey (bootstrap) where bootstrap;
 
 

@@ -1083,7 +1083,12 @@ const DUPLICATE_PASSKEY_MESSAGE = "This passkey is already enrolled.";
  * partial unique index on `passkey.bootstrap` closes the other half — two
  * such statements each seeing an empty table under READ COMMITTED — and its
  * unique-violation surfaces here as a refusal, never a 500. Neither half is
- * sufficient alone (migration 0012's comment on `passkey_bootstrap_idx`).
+ * sufficient alone, and the two together still leave a third interleaving
+ * open — a bootstrap insert racing an *ordinary* one whose own snapshot
+ * still saw the passkey that authorised it. Migration 0012's comment on
+ * `passkey_bootstrap_idx` sets out what the pair does and does not
+ * guarantee, how narrow that window is, and why neither way of closing it
+ * was taken; this is not the place to repeat it.
  *
  * **A duplicate credential id is always a printable refusal, however it
  * arrives.** Both the bootstrap and the non-bootstrap path let the unique
