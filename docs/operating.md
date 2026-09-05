@@ -216,7 +216,9 @@ docker compose ps
 curl -i http://localhost/healthz
 ```
 
-Every service `running` and `healthy` — `caddy`'s own check requests `/healthz` through its full
+`db`, `app`, `worker`, `gate` and `caddy` all `running` and `healthy` — and `dump` too unless
+you set `DUMP_ENABLED=false`, which is meant to read as `Exited (0)` rather than as another
+healthy row. `caddy`'s own check requests `/healthz` through its full
 proxy path to `app`, so a healthy `caddy` means the hop works and not merely that the process is up.
 Look for `worker` by name: nothing depends on it, so a command or a compose file that leaves it out
 starts everything else correctly and simply never starts it — no error, no unhealthy row, an *absent*
@@ -884,11 +886,12 @@ in `docker compose ps` is where you look, not something Compose resolves for you
 
 **Its resource bounds are argued in `compose.yaml` and watched nowhere.** `worker` runs under
 `pids_limit: 64` and `mem_limit: 256m` — comfortable for what it does, which is hold one HTTP
-connection at a time and wait on Yahoo — but hitting either is a plain `SIGKILL`: the worker logs
-nothing on the way
-out, the container exits `137`, `restart: unless-stopped` brings it back, and it answers its own
-healthcheck again before anyone looks. An OOM loop and a healthy worker are the identical row in
-`docker compose ps`. The one tell is in the logs: `Price worker listening on …` is written once per
+connection at a time and wait on Yahoo. The two fail differently. Reaching the *memory* limit is a
+plain `SIGKILL`: the worker logs nothing on the way out, the container exits `137`,
+`restart: unless-stopped` brings it back, and it answers its own healthcheck again before anyone
+looks — an OOM loop and a healthy worker are the identical row in `docker compose ps`. Reaching the
+*process* limit kills nothing: the kernel simply refuses the next thread or process, so the worker
+stays up, keeps answering `/healthz` — which starts no threads — and fails the work instead. The one tell is in the logs: `Price worker listening on …` is written once per
 process start, so seeing it more than once is the process having started more than once — see
 [Logs](#logs).
 
@@ -1364,9 +1367,12 @@ and `max-file: "3"`, meaning the logs for each container will not exceed roughly
 A per-service `logging` block overrides whatever the operator sets as the daemon default (such as
 journald or `local`).
 
-**No resource limits are set on any service** — no memory limit, no CPU limit, no `pids_limit`. On a
-machine that runs only this, that is the right default. On a shared host it means one runaway query
-can take the box; `deploy.resources.limits` is where you would add them.
+**Almost no resource limits are set** — no CPU limit anywhere, and no memory or process limit on
+any service but `worker`, which carries `mem_limit: 256m` and `pids_limit: 64` because it is the
+one container the design expects to be compromised. On a machine that runs only this, that is the
+right default. On a shared host it means one runaway query can still take the box; the flat
+`mem_limit` and `pids_limit` keys `worker` uses are where you would add them, and
+`docker compose up` honours those without a swarm.
 
 **The design target is a target, not a measurement.**
 [`ARCHITECTURE.md` §10](../ARCHITECTURE.md#10-performance-and-scale-envelope) states it — one
