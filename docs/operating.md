@@ -880,9 +880,15 @@ Its `/healthz` consults nothing: it answers `200` the moment the process is acce
 before it has made a single call to Yahoo. So "unhealthy" here means exactly that and nothing wider
 — the worker is not accepting requests on its socket, ordinarily the process gone or wedged — never
 "Yahoo is failing," which is a different thing entirely and shows up instead as stale prices and
-`app`'s own `Price provider failed` line, with `worker` reporting healthy the whole time. And the
-restart rule above still holds: nothing here recreates `worker` on this failing, so an unhealthy row
-in `docker compose ps` is where you look, not something Compose resolves for you.
+`app`'s own `Price provider failed` line, with `worker` reporting healthy the whole time. Nor does
+`/healthz` spend from either endpoint's own rate budget — the branch above answers before either
+`admitQuotes` or `admitHistory` is ever consulted — so a worker whose ten quotes or twenty history
+calls this minute are already spent keeps answering `200` while every real call over `/quotes` or
+`/history` comes back `429`: the identical all-green, no-prices shape this subsection exists to
+warn about, and post-cutover the one place it shows at all is `app`'s own log, not this healthcheck
+(see [Logs](#logs)). And the restart rule above still holds: nothing here recreates `worker` on this
+failing, so an unhealthy row in `docker compose ps` is where you look, not something Compose
+resolves for you.
 
 **Its resource bounds are argued in `compose.yaml` and watched nowhere.** `worker` runs under
 `pids_limit: 64` and `mem_limit: 256m` — comfortable for what it does, which is hold one HTTP
@@ -919,8 +925,18 @@ wording:
   whose spine covers everything held — so a silence here is usually not a fault. What each attempt
   came to is a `price_backfill` row and a sentence at Settings → Prices.
 - **A provider outage** at error level — stem `Price provider failed` — every selected instrument
-  is marked stale and the last known prices are kept. Other refresh failures (the pool, the
-  advisory lock, the transaction) log `Price refresh failed`, a pressed **Refresh now** included —
+  is marked stale and the last known prices are kept. Since the fetch moved behind the worker's
+  socket, the same stem is also where an unreachable worker shows up: the text reads `no worker
+  listening at /run/price-worker/worker.sock (ENOENT)` for one that is dead, restarting, or never
+  started at all; `(ECONNREFUSED)` names a stale socket file with nothing behind it, `(EACCES)` a
+  permission slip — and `docker compose ps` shows `worker` unhealthy, restarting, or missing
+  outright, the last of those the instance whose `compose.yaml` was never replaced for the release
+  that added `worker` ([Upgrading](#upgrading) has that symptom in full). A worker that answers at
+  all fails through this same stem differently: rate-limited or a Yahoo error, the response body's
+  own text standing in for that sentence, never "no worker listening" — see
+  [the worker's own healthcheck](#the-workers-own-healthcheck) for why a worker in that state still
+  answers `/healthz` with `200`. Other refresh failures (the pool, the advisory lock, the
+  transaction) log `Price refresh failed`, a pressed **Refresh now** included —
   one stem for all of them, the separate `Manual price refresh failed` line having retired with the
   route's own catch. A single symbol refused over its currency logs `Price refused`. None of them
   zeroes anything.
@@ -1168,12 +1184,12 @@ fault — and brings `worker` up alongside it for the first time. Run
 runtime changed since the old instance was last verified is exactly the case that check exists to
 catch, and nothing else here will.
 
-Skip it, and this release alone will not tell you: `app` still fetches its own prices exactly as it
-does today, and `worker` simply idles unused. The cost lands the moment a later release, the one
-that has `app` dial the worker instead of fetching for itself, starts under this same old file: no
-volume and no worker, prices going stale while `/healthz` keeps answering green — a missing price
-provider was never a health signal — and the only sign in the log is one `no worker listening at
-/run/price-worker/worker.sock` line per call site, up to two per tick.
+Skip it, and the release that introduced the worker will not tell you: `app` still fetched its own
+prices then, and `worker` simply idled unused. **That grace is over as of this release**, the one
+that has `app` dial the worker instead of fetching for itself. Start it under the old file and
+there is no volume and no worker: prices go stale while `/healthz` keeps answering green — a
+missing price provider was never a health signal — and the only sign in the log is one
+`no worker listening at /run/price-worker/worker.sock` line per call site, up to two per tick.
 
 **A changed `driver_opts` line means a new volume name, never `docker compose down -v`.** Compose
 reuses a name-matched volume untouched, so editing `price-worker-sock`'s tmpfs options in some

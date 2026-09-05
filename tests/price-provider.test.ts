@@ -11,19 +11,48 @@
  * `yield_pct` produces an Income page where every figure is individually
  * plausible and the total is nonsense, with nothing in the logs.
  */
-import { describe, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CurrencyRefused,
-  probeSymbols,
   probeVerdicts,
   toProviderHistory,
   toProviderQuote,
-  yahooPriceProvider,
   type HistoryRange,
 } from "~/lib/price-provider.server";
+import { socketProbe, socketProvider } from "~/lib/provider-socket.server";
+
+import { startWorker } from "../server/price-worker.ts";
 
 import type { ChartRequest, YahooClient } from "../server/yahoo-client.ts";
+import type http from "node:http";
+
+/**
+ * `socketProvider()`/`socketProbe` read the socket path through
+ * `getConfig()`, which memoises its first read — set before any test in this
+ * file can reach it (`tests/price-poller.test.ts:37`'s precedent for
+ * `DATABASE_URL`). One fixed path for the whole file: every case below
+ * starts and stops its own worker on it, never two at once.
+ */
+const SOCKET_PATH = join(tmpdir(), `pp-${randomBytes(4).toString("hex")}.sock`);
+process.env.PRICE_WORKER_SOCKET = SOCKET_PATH;
+
+let currentServer: http.Server | undefined;
+
+afterEach(async () => {
+  if (currentServer === undefined) return;
+  await new Promise<void>((resolve) => currentServer!.close(() => resolve()));
+  currentServer = undefined;
+});
+
+/** Starts a real worker on {@link SOCKET_PATH} with the given fake Yahoo client. */
+async function start(yahoo: YahooClient): Promise<void> {
+  currentServer = await startWorker({ socketPath: SOCKET_PATH, yahoo });
+}
 
 /** The fetch time, for the fallback path. Fixed so assertions can name it. */
 const FETCHED_AT = new Date("2026-06-05T18:00:00Z");
@@ -418,10 +447,11 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
 
 describe("probing symbols at creation time", () => {
   // The creation-time half of the currency guard (0004, "Resolution, and the
-  // guard that has to run here"). Stubs only: the probe takes the client as a
-  // parameter for exactly this reason, and no test here reaches the network.
-  // `chart` is never called by anything below — it exists only so the fake
-  // satisfies `YahooClient`'s shape (`server/yahoo-client.ts`).
+  // guard that has to run here"). `socketProbe` takes no client of its own —
+  // it dials the worker, so every case here starts a real one on
+  // `SOCKET_PATH` with a fake Yahoo client instead, closed by the shared
+  // `afterEach` above. `chart` is never called by anything below — it exists
+  // only so the fake satisfies `YahooClient`'s shape (`server/yahoo-client.ts`).
   const clientAnswering = (quote: (symbols: string[]) => Promise<unknown>): YahooClient => ({
     quote,
     chart: () => {
@@ -430,12 +460,11 @@ describe("probing symbols at creation time", () => {
   });
 
   it("answers ok for a symbol that resolves in USD", async () => {
-    const verdicts = await probeSymbols(
-      ["VTI"],
-      clientAnswering(async () => [
-        { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" },
-      ]),
+    await start(
+      clientAnswering(async () => [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" }]),
     );
+
+    const verdicts = await socketProbe(["VTI"]);
 
     // Null rather than a guess: this payload never said what the thing is, and
     // the column it feeds is the provider's vocabulary or nothing.
@@ -443,12 +472,13 @@ describe("probing symbols at creation time", () => {
   });
 
   it("carries what the provider calls the instrument, for the row it creates", async () => {
-    const verdicts = await probeSymbols(
-      ["VTI"],
+    await start(
       clientAnswering(async () => [
         { symbol: "VTI", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" },
       ]),
     );
+
+    const verdicts = await socketProbe(["VTI"]);
 
     expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: "ETF" });
   });
@@ -459,12 +489,11 @@ describe("probing symbols at creation time", () => {
     // built on getQuotes, where a refusal becomes an absent quote. The
     // currency arrives as the refresh guard spells it, so the refusal names
     // symbol and currency in the same words.
-    const verdicts = await probeSymbols(
-      ["VOD.L"],
-      clientAnswering(async () => [
-        { symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" },
-      ]),
+    await start(
+      clientAnswering(async () => [{ symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" }]),
     );
+
+    const verdicts = await socketProbe(["VOD.L"]);
 
     expect(verdicts.get("VOD.L")).toEqual({ status: "non-usd", currency: "GBP" });
   });
@@ -474,20 +503,25 @@ describe("probing symbols at creation time", () => {
     // ordinary spelling of "never heard of it". Creation proceeds and the next
     // refresh marks the instrument stale, same as any symbol that stops
     // quoting.
-    const verdicts = await probeSymbols(["MISTYPED"], clientAnswering(async () => []));
+    await start(clientAnswering(async () => []));
+
+    const verdicts = await socketProbe(["MISTYPED"]);
 
     expect(verdicts.get("MISTYPED")).toEqual({ status: "unavailable" });
   });
 
   it("answers unavailable for every symbol asked rather than throwing when the provider fails", async () => {
     // A provider error or timeout must not block creation (0004). The probe
-    // never throws; the caller has no catch to write.
-    const verdicts = await probeSymbols(
-      ["VTI", "VXUS"],
+    // never throws; the caller has no catch to write. Over the socket the
+    // worker answers 502 for the thrown error, and `socketProbe` marks the
+    // whole batch unavailable rather than propagate it.
+    await start(
       clientAnswering(async () => {
         throw new Error("socket hang up");
       }),
     );
+
+    const verdicts = await socketProbe(["VTI", "VXUS"]);
 
     expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
     expect(verdicts.get("VXUS")).toEqual({ status: "unavailable" });
@@ -496,24 +530,24 @@ describe("probing symbols at creation time", () => {
   it("answers unavailable for a payload that is not even a list", async () => {
     // An unofficial endpoint can change shape under us. A payload the schema
     // has never seen is a provider failure, not a reason to refuse creation.
-    const verdicts = await probeSymbols(["VTI"], clientAnswering(async () => ({ quotes: [] })));
+    await start(clientAnswering(async () => ({ quotes: [] })));
+
+    const verdicts = await socketProbe(["VTI"]);
 
     expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
   });
 
   it("answers unavailable for an entry it does not recognise", async () => {
-    const verdicts = await probeSymbols(
-      ["VTI"],
-      clientAnswering(async () => [{ nothing: "useful" }]),
-    );
+    await start(clientAnswering(async () => [{ nothing: "useful" }]));
+
+    const verdicts = await socketProbe(["VTI"]);
 
     expect(verdicts.get("VTI")).toEqual({ status: "unavailable" });
   });
 
   it("costs one call carrying every symbol asked", async () => {
     const calls: string[][] = [];
-    const verdicts = await probeSymbols(
-      ["VTI", "VXUS", "BND"],
+    await start(
       clientAnswering(async (symbols) => {
         calls.push(symbols);
         return [
@@ -523,6 +557,8 @@ describe("probing symbols at creation time", () => {
         ];
       }),
     );
+
+    const verdicts = await socketProbe(["VTI", "VXUS", "BND"]);
 
     expect(calls).toEqual([["VTI", "VXUS", "BND"]]);
     expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
@@ -909,8 +945,12 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
   });
 });
 
-describe("asking the client for one symbol's history", () => {
-  /** A client with both halves, so the provider's type is satisfied honestly. */
+describe("asking the worker for one symbol's history", () => {
+  // `socketProvider()` takes no client of its own — it dials the worker, so
+  // every case here starts a real one on `SOCKET_PATH` with a fake Yahoo
+  // client instead, closed by the shared `afterEach` above. The client is
+  // still shaped the way `yahoo-finance2` is (both methods), so the fake
+  // satisfies `YahooClient` honestly.
   const clientCharting = (
     chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
   ): YahooClient => ({ quote: async () => [], chart });
@@ -918,14 +958,14 @@ describe("asking the client for one symbol's history", () => {
   it("sends one symbol per call, upper-cased, over the range's start", async () => {
     const seen: Array<{ symbol: string; options: ChartRequest }> = [];
 
-    const provider = yahooPriceProvider(
+    await start(
       clientCharting(async (symbol, options) => {
         seen.push({ symbol, options });
         return chartOf({ quotes: [bar("2024-06-07", 10)] });
       }),
     );
 
-    await provider.getDailyCloses(" vti ", RANGE, NEW_YORK);
+    await socketProvider().getDailyCloses(" vti ", RANGE, NEW_YORK);
 
     expect(seen).toEqual([
       {
@@ -938,25 +978,25 @@ describe("asking the client for one symbol's history", () => {
   });
 
   it("answers no-history for the error an unknown or delisted symbol throws", async () => {
-    const provider = yahooPriceProvider(
+    await start(
       clientCharting(async () => {
         throw new Error("No data found, symbol may be delisted");
       }),
     );
 
-    expect(await provider.getDailyCloses("GONE", RANGE, NEW_YORK)).toEqual({
+    expect(await socketProvider().getDailyCloses("GONE", RANGE, NEW_YORK)).toEqual({
       status: "no-history",
     });
   });
 
   it("answers no-history for a period1 before the symbol was listed", async () => {
-    const provider = yahooPriceProvider(
+    await start(
       clientCharting(async () => {
         throw new Error("Data doesn't exist for startDate = 1717718400, endDate = 1719878400");
       }),
     );
 
-    expect(await provider.getDailyCloses("NEW", RANGE, NEW_YORK)).toEqual({
+    expect(await socketProvider().getDailyCloses("NEW", RANGE, NEW_YORK)).toEqual({
       status: "no-history",
     });
   });
@@ -965,30 +1005,33 @@ describe("asking the client for one symbol's history", () => {
     // The library picks the class from Yahoo's own error `code` with the spaces
     // removed, and only "Bad Request" resolves to one it defines — so the "Not
     // Found" a delisted symbol answers arrives as a plain `Error`. This stands
-    // in for the library's class, which its `exports` map does not expose.
+    // in for the library's class, which its `exports` map does not expose —
+    // and over the socket the class is lost regardless: the worker's `502`
+    // carries only the message text, so `isMissingHistory` could not see a
+    // class here even if it tried to.
     class BadRequestError extends Error {
       override readonly name = "BadRequestError";
     }
 
-    const provider = yahooPriceProvider(
+    await start(
       clientCharting(async () => {
         throw new BadRequestError("No data found, symbol may be delisted");
       }),
     );
 
-    expect(await provider.getDailyCloses("GONE", RANGE, NEW_YORK)).toEqual({
+    expect(await socketProvider().getDailyCloses("GONE", RANGE, NEW_YORK)).toEqual({
       status: "no-history",
     });
   });
 
   it("propagates any other failure, because the caller's ledger wants the text", async () => {
-    const provider = yahooPriceProvider(
+    await start(
       clientCharting(async () => {
         throw new Error("429 Too Many Requests");
       }),
     );
 
-    await expect(provider.getDailyCloses("VTI", RANGE, NEW_YORK)).rejects.toThrow(
+    await expect(socketProvider().getDailyCloses("VTI", RANGE, NEW_YORK)).rejects.toThrow(
       "429 Too Many Requests",
     );
   });

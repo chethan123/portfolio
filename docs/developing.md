@@ -391,6 +391,33 @@ Keep the route thin: read the form, hand raw fields to a domain function, render
 route never imports Zod and never states a domain rule
 ([§4.1](../ARCHITECTURE.md#41-one-process-four-layers)).
 
+### Run a price worker alongside `npm run dev`
+
+Since the app cutover, `npm run dev` fetches nothing on its own: `runRefresh`'s default provider and
+the poller's both dial a unix socket, so with nothing listening there every tick logs one "no worker
+listening" line and every currency probe on upload comes back `unavailable`. Point both processes at
+the same path, under `/tmp` rather than the production default under `/run` a checkout has no reason
+to own:
+
+```sh
+printf 'PRICE_WORKER_SOCKET=/tmp/portfolio-worker.sock\n' >> .env      # Vite reads it, see below
+printf 'PRICE_WORKER_SOCKET=/tmp/portfolio-worker.sock\n' > .env.worker
+node --env-file=.env.worker ./server/price-worker.ts                  # a second terminal
+```
+
+`.env.worker` carries that one line and nothing else — no `DATABASE_URL`, no password, none of what
+the superuser's `.env` [above](#getting-a-working-checkout) needs — because the worker's whole
+configuration is that single socket path. Leave it running in its own terminal beside `npm run dev`;
+`Ctrl-C` there stops it the same way it stops the dev server.
+
+None of this is a hard requirement — the app degrades rather than refuses. Run `npm run dev` with no
+worker at all and a refresh has only stored prices to show: one `no worker listening at
+/tmp/portfolio-worker.sock (ENOENT)` line lands per call site (quotes, and the backfill batch too
+when there is a candidate to attempt, so up to two a refresh), a symbol probe on upload comes back
+`unavailable` for everything at once, and the instruments in that upload are created anyway — an
+unreachable provider is not allowed to hold a statement hostage. What it looks like once a worker is
+actually answering is the next recipe.
+
 ### Exercise a backfill locally
 
 The batch only runs when something has a gap. The demo household has exactly one out of the box —

@@ -36,11 +36,12 @@
  */
 import { getConfig } from "../../server/config.ts";
 import { isMarketOpen } from "./market-hours.ts";
-import { yahooPriceProvider, type PriceProvider } from "./price-provider.server.ts";
+import { socketProvider } from "./provider-socket.server.ts";
 import { runRefresh } from "./refresh.server.ts";
 import { readRefreshCadence } from "./settings.server.ts";
 
 import type { BackfillReport } from "./prices.server.ts";
+import type { PriceProvider } from "./price-provider.server.ts";
 
 /**
  * Where the timer is kept: a `Symbol.for` slot on `globalThis`, because a
@@ -186,9 +187,12 @@ function logBackfill(report: BackfillReport): void {
  * container would fetch on every boot, and the first tick is at most one
  * interval away.
  *
- * @param provider injected for the tests; defaults to the live one.
+ * @param provider injected for the tests; defaults to the live one —
+ * `socketProvider()`, evaluated fresh per call the way this default
+ * parameter always is, and which must not throw merely being built
+ * (`provider-socket.server.ts`'s own header).
  */
-export function startPricePoller(provider: PriceProvider = yahooPriceProvider()): void {
+export function startPricePoller(provider: PriceProvider = socketProvider()): void {
   const host = globalThis as PollerHost;
   if (host[SLOT] !== undefined) return;
 
