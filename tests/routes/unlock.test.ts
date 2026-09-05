@@ -543,15 +543,16 @@ describe("runCeremony", () => {
   });
 
   it(
-    "submits the response and returns the button to idle once the ceremony succeeds",
+    "submits the response and returns the button to idle once the ceremony succeeds, without revalidating",
     async () => {
       const response = assertionResponse("fixture-challenge");
       vi.mocked(requestAssertion).mockResolvedValue({ status: "ok", response });
       const submit = vi.fn().mockResolvedValue(undefined);
       const setPhase = vi.fn();
       const setClientMessage = vi.fn();
+      const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/holdings", submit as never, setPhase, setClientMessage);
+      await runCeremony(FAKE_OPTIONS, "/holdings", submit as never, setPhase, setClientMessage, revalidate);
 
       expect(submit).toHaveBeenCalledWith(
         { assertion: JSON.stringify(response), redirectTo: "/holdings" },
@@ -559,38 +560,54 @@ describe("runCeremony", () => {
       );
       expect(setPhase).toHaveBeenCalledWith("idle");
       expect(setClientMessage).not.toHaveBeenCalled();
+      // `submit`'s own promise already carries a post-action revalidation
+      // (this file's own header) — a second one here would be redundant.
+      expect(revalidate).not.toHaveBeenCalled();
     },
   );
 
   it(
-    "moves to dismissed without ever submitting, once the prompt is dismissed",
+    // Finding: a retry used to wait for a *later* button press to call
+    // `revalidator.revalidate()`, which ran the ceremony behind a pending
+    // network round trip and outside that press's own user activation. This
+    // is the pin: `runCeremony` — not a subsequent press — is what calls
+    // `revalidate` the moment it learns the options it just used are now
+    // stale, immediately on this same outcome rather than deferred to
+    // whenever a reader next presses Unlock.
+    "revalidates immediately once a dismissed prompt leaves the options stale, without ever submitting",
     async () => {
       vi.mocked(requestAssertion).mockResolvedValue({ status: "dismissed" });
       const submit = vi.fn();
       const setPhase = vi.fn();
       const setClientMessage = vi.fn();
+      const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage);
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate);
 
       expect(submit).not.toHaveBeenCalled();
       expect(setPhase).toHaveBeenCalledWith("dismissed");
       expect(setClientMessage).not.toHaveBeenCalled();
+      expect(revalidate).toHaveBeenCalled();
     },
   );
 
   it(
-    "carries the ceremony's own message into a failed phase without submitting",
+    // Same pin as the dismissed case above, for the other outcome that
+    // leaves `loaderData.options` stale.
+    "revalidates immediately once a failed ceremony leaves the options stale, carrying its own message without submitting",
     async () => {
       vi.mocked(requestAssertion).mockResolvedValue({ status: "failed", message: "No authenticator found." });
       const submit = vi.fn();
       const setPhase = vi.fn();
       const setClientMessage = vi.fn();
+      const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage);
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate);
 
       expect(submit).not.toHaveBeenCalled();
       expect(setClientMessage).toHaveBeenCalledWith("No authenticator found.");
       expect(setPhase).toHaveBeenCalledWith("failed");
+      expect(revalidate).toHaveBeenCalled();
     },
   );
 });
