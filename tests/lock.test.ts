@@ -1201,6 +1201,107 @@ describe("hostile responses", () => {
 });
 
 /**
+ * One browser, one live grant. Every verified assertion mints one, so before
+ * this rule an unlock, an enrolment confirm and a removal left three live
+ * rows for the same browser and "Lock now" — which deletes only the row the
+ * cookie names — ended one of them. `supersedes` is always the request's own
+ * cookie; these tests hand it down the way the routes do.
+ */
+describe("one live grant per browser", () => {
+  it(
+    "leaves one live grant behind an unlock, an enrolment confirm and a removal made by the same browser",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, credentialId: "bystander" });
+
+      const unlock = await unlockOptions(db);
+      const first = await verifyUnlock(assertionResponse(unlock.challenge), db);
+
+      const enrol = await enrolmentAssertionOptions(db);
+      const begun = await beginEnrolment(
+        "Second phone",
+        { assertion: assertionResponse(enrol.challenge), supersedes: first.id },
+        db,
+      );
+      const second = begun.grant;
+      if (second === undefined) throw new Error("An authorised enrolment must mint a grant.");
+
+      // The signer is the fixture credential and the target is `bystander`,
+      // so this is the ordinary case rather than the exception below.
+      const removal = await removalAssertionOptions("bystander", db);
+      const { grant: third } = await removePasskey(
+        "bystander",
+        {
+          assertion: assertionResponse(removal.challenge),
+          confirmRemoval: "true",
+          supersedes: second.id,
+        },
+        db,
+      );
+
+      expect(await readGrant(first.id, db)).toBeUndefined();
+      expect(await readGrant(second.id, db)).toBeUndefined();
+      expect(await readGrant(third.id, db)).toBeDefined();
+
+      // The whole table, not just the three ids: nothing else may be live
+      // for this household either.
+      const live = await db.selectFrom("unlock_grant").select("id").execute();
+      expect(live.map((row) => row.id)).toEqual([third.id]);
+    }),
+  );
+
+  it(
+    "keeps the prior grant when the removal's signer is the passkey being removed, which is the one grant left",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      // This browser is unlocked under `mine`, a passkey it cannot sign with
+      // here; the vault answers the removal with `target`, the very passkey
+      // being removed, which ADR-0012 allows. Superseding `mine`'s grant too
+      // would leave the browser with nothing live, against what the removal
+      // screen has just promised it.
+      const mine = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, credentialId: "mine" });
+      await seedFixturePasskey(seedPasskey);
+      const prior = await seedUnlockGrant({ passkeyId: mine.credentialId });
+
+      const removal = await removalAssertionOptions(credentialId, db);
+      const { grant: minted } = await removePasskey(
+        credentialId,
+        {
+          assertion: assertionResponse(removal.challenge),
+          confirmRemoval: "true",
+          supersedes: prior.id,
+        },
+        db,
+      );
+
+      expect(await readGrant(prior.id, db)).toBeDefined();
+      // Cascaded away with the passkey that signed for it.
+      expect(await readGrant(minted.id, db)).toBeUndefined();
+
+      const live = await db.selectFrom("unlock_grant").select("id").execute();
+      expect(live.map((row) => row.id)).toEqual([prior.id]);
+    }),
+  );
+
+  it(
+    "mints normally when the cookie names a grant that no longer exists",
+    withDatabase(async ({ db, seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+
+      const unlock = await unlockOptions(db);
+      const grant = await verifyUnlock(
+        assertionResponse(unlock.challenge),
+        db,
+        "a-grant-id-this-instance-never-minted",
+      );
+
+      expect(await readGrant(grant.id, db)).toBeDefined();
+      const live = await db.selectFrom("unlock_grant").select("id").execute();
+      expect(live.map((row) => row.id)).toEqual([grant.id]);
+    }),
+  );
+});
+
+/**
  * Poll real, observable database state — never a fixed delay — until
  * `pid`'s own backend is genuinely waiting on a lock. The two-connection
  * races below need to know transaction B has actually reached its blocking

@@ -40,6 +40,12 @@
  * promise). Expiry is enforced again on read, which is the authoritative
  * check.
  *
+ * **One browser, one live grant.** Every verified assertion mints one, and
+ * mints it in place of whatever the same request's cookie already named, so
+ * a browser holds at most one live row at a time and "Lock now" ends all of
+ * what it holds. {@link mintGrant} owns the rule and
+ * {@link verifyScopedAssertion} owns its one exception.
+ *
  * **A failed ceremony spends its challenge.** {@link takeChallenge} marks an
  * entry spent the moment it is read, whether or not what follows verifies —
  * deliberate, since handing the same challenge back for a second guess is
@@ -293,6 +299,26 @@ function isForeignKeyViolation(error: unknown, constraint: string): boolean {
  * on its own say-so, and this function must not become the one export that
  * does.
  *
+ * **`supersedes` is the row this browser is trading in**, so that verifying
+ * again replaces its grant rather than adding a second live one. It must
+ * come from the request's own `LOCK_COOKIE` and from nowhere else — never a
+ * form field, which a page could choose. That rule is a discipline rather
+ * than a check: nothing here confirms the id belongs to the caller, and
+ * nothing could — under ADR-0012 the id *is* the whole credential, so naming
+ * a grant and holding it are the same act, and `/lock-now` already ends one
+ * on the strength of the cookie alone. What keeps a page from aiming this at
+ * somebody else is `HttpOnly` and `SameSite=Lax` on the cookie, not this
+ * function.
+ *
+ * **The delete before the insert has a cost, and it is the accepted one.** A
+ * caller that refuses *after* this returns — {@link removePasskey} finding
+ * its target already gone, say — leaves the browser holding a cookie whose
+ * row is deleted, so a refused action locks it where it used to stay
+ * unlocked. That is the same direction every other failure here takes: no
+ * live grant rather than two. It also changes what "Start again" means on
+ * the messages that follow such a refusal — unlock again, rather than retry
+ * the step.
+ *
  * **The passkey this credits can vanish after the caller last checked it.**
  * `verifyScopedAssertion` reads the row, verifies the assertion, and only
  * then reaches here — a window wide enough for a concurrent removal to land
@@ -309,9 +335,23 @@ function isForeignKeyViolation(error: unknown, constraint: string): boolean {
  * conceivably a future multi-step route wrapping this call in one —
  * aborted for whatever runs after it.
  */
-async function mintGrant(passkeyId: string, db: Kysely<Database> = getDb()): Promise<UnlockGrant> {
+async function mintGrant(
+  passkeyId: string,
+  db: Kysely<Database> = getDb(),
+  supersedes?: string,
+): Promise<UnlockGrant> {
   const now = new Date();
   await db.deleteFrom("unlock_grant").where("expires_at", "<=", now).execute();
+
+  // Deleted before the insert, never after: a failure between the two leaves
+  // this browser holding no live grant, which is the direction every other
+  // failure in this module already takes. A `supersedes` naming nothing — a
+  // cookie whose row already swept, or one from a browser that never had one
+  // — deletes nothing and is not an error; there is no state to reconcile
+  // either way.
+  if (supersedes !== undefined) {
+    await db.deleteFrom("unlock_grant").where("id", "=", supersedes).execute();
+  }
 
   let row: UnlockGrantRow;
   try {
@@ -777,7 +817,10 @@ export async function removalAssertionOptions(
  * constant zero still gets used), backup eligibility is not re-read, and a
  * grant is minted — every verified assertion mints one, which is exactly
  * what makes a grant insufficient on its own to authorise enrolling or
- * removing (see this module's header).
+ * removing (see this module's header). The grant this request already
+ * carried, if it named one, is superseded in the same call, so a browser
+ * holds at most one live grant at a time; the one exception is argued
+ * beside the call that makes it.
  *
  * Nothing is written before `verified.verified` is checked: a response
  * verified against the wrong public key refuses here, mints no grant, and
@@ -796,6 +839,7 @@ async function verifyScopedAssertion(
   response: AuthenticationResponseJSON,
   expected: AssertionScope,
   db: Kysely<Database>,
+  supersedes?: string,
 ): Promise<UnlockGrant> {
   const rp = expectedRelyingParty();
   const challengeText = decodeChallenge(response.response.clientDataJSON);
@@ -852,19 +896,40 @@ async function verifyScopedAssertion(
     .where("credential_id", "=", passkeyRow.credential_id)
     .execute();
 
-  return mintGrant(passkeyRow.credential_id, db);
+  // **The one case a browser's prior grant is kept.** A removal signed by the
+  // very passkey it removes — a synced vault answering with the target,
+  // which ADR-0012 allows — is about to have the grant minted just below
+  // cascaded away with that passkey. Superseding the prior grant as well
+  // would leave that browser holding zero live rows, and the removal screen
+  // has just told it, in the `safeElsewhere` warning
+  // (`app/routes/settings/passkeys.tsx`), that it "stays unlocked
+  // afterwards". Keeping the prior row in that one case keeps the promise
+  // and still leaves exactly one live grant for the browser: the prior
+  // survives, the minted one is cascaded.
+  const signerIsRemovalTarget =
+    expected.kind === "remove" && expected.credentialId === passkeyRow.credential_id;
+
+  return mintGrant(passkeyRow.credential_id, db, signerIsRemovalTarget ? undefined : supersedes);
 }
 
 /**
  * Verify the unlock screen's assertion. Refuses; on success, mints and
  * returns the grant. `response` is the client's submitted JSON, `unknown`
  * until {@link narrowAssertion} checks it — see that function's header.
+ *
+ * `supersedes` is this request's own cookie, for the browser that reaches
+ * the unlock screen still carrying a live-but-stale grant: verifying
+ * replaces that row rather than leaving it live beside the new one
+ * ({@link mintGrant}). It sits after `db` because `db` is the injected seam
+ * every function here already puts last, and the route that has a cookie to
+ * pass has no database to pass.
  */
 export async function verifyUnlock(
   response: unknown,
   db: Kysely<Database> = getDb(),
+  supersedes?: string,
 ): Promise<UnlockGrant> {
-  return verifyScopedAssertion(narrowAssertion(response), { kind: "unlock" }, db);
+  return verifyScopedAssertion(narrowAssertion(response), { kind: "unlock" }, db, supersedes);
 }
 
 // ---------------------------------------------------------------------------
@@ -977,16 +1042,19 @@ const FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE =
  * the first one, and enrolling a second changes nothing for anybody.
  *
  * Every later enrolment needs `assertion`, verified as scoped to `"enrol"`
- * — which also mints a grant, the same as any verified assertion. The
+ * — which also mints a grant, the same as any verified assertion, and
+ * supersedes the one `input.supersedes` names, so the browser confirming an
+ * enrolment ends with one live grant rather than two ({@link mintGrant}).
+ * `supersedes` is the request's own cookie and never a form field. The
  * registration challenge returned here carries `label`, and is accepted by
  * {@link completeRegistration} only against it.
  */
 export async function beginEnrolment(
   label: string,
-  input: { assertion: unknown; acknowledgement?: string },
+  input: { assertion: unknown; acknowledgement?: string; supersedes?: string },
   db: Kysely<Database> = getDb(),
 ): Promise<{ options: RegistrationOptions; grant: UnlockGrant | undefined }> {
-  const { assertion, acknowledgement } = input;
+  const { assertion, acknowledgement, supersedes } = input;
   const { label: validLabel } = parseInput(labelInput, { label });
 
   const locked = await isLocked(db);
@@ -999,7 +1067,7 @@ export async function beginEnrolment(
           "being unlocked on this browser is not enough on its own.",
       );
     }
-    grant = await verifyScopedAssertion(narrowAssertion(assertion), { kind: "enrol" }, db);
+    grant = await verifyScopedAssertion(narrowAssertion(assertion), { kind: "enrol" }, db, supersedes);
   } else if (acknowledgement !== "true") {
     throw ValidationError.form(FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE);
   }
@@ -1236,10 +1304,16 @@ export async function completeRegistration(
  * just-minted one included, when the target is what authorised this
  * request — through the schema's cascade, which is what locks this browser
  * the moment such a removal succeeds; nothing here needs to special-case it.
+ *
+ * `input.supersedes` is the request's own cookie, and it is the one place
+ * this module declines to supersede: when the signer *is* the target, the
+ * grant just minted is about to be cascaded away, so the prior one is left
+ * alone rather than deleted beside it — {@link verifyScopedAssertion} makes
+ * that call and argues it there.
  */
 export async function removePasskey(
   credentialId: string,
-  input: { assertion: unknown; confirmRemoval?: string },
+  input: { assertion: unknown; confirmRemoval?: string; supersedes?: string },
   db: Kysely<Database> = getDb(),
 ): Promise<{ grant: UnlockGrant }> {
   const existing = await db
@@ -1265,7 +1339,12 @@ export async function removePasskey(
     );
   }
 
-  const grant = await verifyScopedAssertion(narrowAssertion(input.assertion), { kind: "remove", credentialId }, db);
+  const grant = await verifyScopedAssertion(
+    narrowAssertion(input.assertion),
+    { kind: "remove", credentialId },
+    db,
+    input.supersedes,
+  );
 
   const deleted = await db.deleteFrom("passkey").where("credential_id", "=", credentialId).executeTakeFirst();
   if (deleted.numDeletedRows === 0n) {

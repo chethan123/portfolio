@@ -236,6 +236,9 @@ export async function action({ request }: Route.ActionArgs) {
       const { options, grant } = await beginEnrolment(fields.label ?? "", {
         assertion,
         acknowledgement: fields.acknowledged,
+        // This browser's own cookie: confirming an enrolment replaces the
+        // grant it already holds rather than adding a second live one.
+        supersedes: readLockCookie(request),
       });
 
       return data(
@@ -271,6 +274,7 @@ export async function action({ request }: Route.ActionArgs) {
       const { grant } = await removePasskey(fields.credentialId ?? "", {
         assertion,
         confirmRemoval: fields.confirmRemoval,
+        supersedes: priorGrantId,
       });
 
       // The assertion just verified mints `grant`, credited to whichever
@@ -283,6 +287,16 @@ export async function action({ request }: Route.ActionArgs) {
       // delete below runs. So the cookie is decided from what is actually
       // still true once the dust settles, not from which grant this one
       // verification happened to mint.
+      //
+      // One state that shape could once produce is now impossible: a live
+      // prior grant *and* a live minted one at the same time. Passing
+      // `supersedes` means the prior row is deleted whenever the minted one
+      // survives, and kept only when the minted one is about to be cascaded
+      // away with the passkey that signed — so *at most* one of the two
+      // branches below finds something live. Not exactly one: a browser
+      // unlocked under the very passkey it is removing loses both to the same
+      // cascade, which is what the cleared cookie below is for, and what the
+      // test named "locks this browser the moment it succeeds" pins.
       const mintedGrant = await readGrant(grant.id);
       let setCookie: string;
       if (mintedGrant !== undefined) {
