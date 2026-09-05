@@ -54,12 +54,12 @@
  * settled — and a quote dated further ahead would plant a close on a day yet
  * to come, permanent if that day turns out to be a weekend or holiday the
  * poller never revisits. Outside the window the quote and the observation
- * still land; only the close is skipped, and logged. It is not left to the
- * backfill: that batch selects instruments with no close at or before
- * first-held ({@link NO_CLOSE_BY_FIRST_HELD}), so a day skipped inside a
- * spine that already reaches back does not make its instrument a candidate.
- * The day simply stays absent, and `holding_valued_at` carries the previous
- * close forward across it exactly as it does across a non-trading day.
+ * still land; only the close is skipped, and logged. Whether it is ever filled
+ * depends on the instrument: the backfill's candidates are those with no close
+ * at or before first-held ({@link NO_CLOSE_BY_FIRST_HELD}), so a spine still
+ * missing its start picks the day up on a later batch, while one that already
+ * reaches back never becomes a candidate and the day stays absent — carried
+ * across by `holding_valued_at` either way, as any non-trading day is.
  *
  * Every exported query takes an optional `db`; tests pass a transaction they
  * roll back.
@@ -854,8 +854,9 @@ export async function refreshQuotes(
       if (wroteClose) {
         closes += 1;
       } else {
-        // The matched form, not the feed's spelling: it is what the stored
-        // symbol looks like, and it cannot carry newlines into the line.
+        // The matched form, not the feed's spelling, here and at the archive
+        // cap's line: it is what the stored symbol looks like, and a provider
+        // answering with newlines around it cannot break an operator's log.
         windowSkipped.push(matchKey(quote.symbol));
       }
     }
@@ -1129,7 +1130,7 @@ function observationsOf(
       market_date: marketDateOf(quote.asOf, marketTimeZone),
       price: quote.price,
       fetched_at: quote.fetchedAt,
-      payload: archived(quote.payload, quote.symbol),
+      payload: archived(quote.payload, matchKey(quote.symbol)),
     });
   }
 

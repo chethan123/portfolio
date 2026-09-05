@@ -559,7 +559,7 @@ const history = (closes: Array<[string, string]>): ProviderHistory => ({
  * private fields; and a JavaScript throw rather than a row the constraint
  * refuses, because under `withDatabase` the test body is one transaction that
  * `inTransaction` joins — a Postgres refusal would abort it and nothing after
- * could be observed (`refresh-quotes.test.ts:768-777` is the precedent).
+ * could be observed (`refresh-quotes.test.ts:1022-1049` is the precedent).
  *
  * `price_backfill` is the intercept point because only the batch inserts one:
  * `refreshQuotes` writes `price_daily` through the same handle, so a wrapper
@@ -734,7 +734,7 @@ describe("what a batch writes to the spine", () => {
 
       // The real adapter, not the fake above: the floor lives in
       // `toProviderHistory`, which only the real adapter runs. The stub plays
-      // `clientCharting`'s role (`tests/price-provider.test.ts:757-830`).
+      // `clientCharting`'s role (`tests/price-provider.test.ts:774`).
       const provider = yahooPriceProvider(async () => ({
         quote: async () => [],
         chart: async () => ({

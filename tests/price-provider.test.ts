@@ -508,8 +508,10 @@ describe("reading a day of history", () => {
     // bar belongs to a day before the range starts. Comparing the instant's
     // UTC date instead would keep it — the same zone confusion the quote
     // path's window guard has to avoid, on the other side of the seam.
+    // Written out rather than through `bar`, which stamps its own session
+    // open: the whole point is an instant at an hour `bar` cannot express.
     const closes = closesOf(
-      historyOf({ quotes: [bar("2024-06-01T01:00:00Z", 9), bar("2024-06-07", 11)] }, {
+      historyOf({ quotes: [{ date: new Date("2024-06-01T01:00:00Z"), close: 9 }, bar("2024-06-07", 11)] }, {
         from: "2024-06-01",
         until: "2024-12-31",
       }),

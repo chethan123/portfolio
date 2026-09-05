@@ -358,7 +358,7 @@ grep. They come in three tiers.
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:1232` (`priceFreshness`) selects from `holding_valued` — not to value anything,
+- `prices.server.ts:1233` (`priceFreshness`) selects from `holding_valued` — not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -1516,8 +1516,8 @@ A past `price_daily` row *can* be rewritten, and that is not a violation: it is 
 with the provider's own price for the day that provider says it belongs to, so a rewrite is idempotent
 unless the provider itself revises a close — which is a correction, not corruption. Bounded, since
 spec 0018 §3.1, to seven days either side of today's market date: past that a claimed date is not
-a correction but a different day asserted, and the day simply stays absent — the backfill cannot
-reach it, and `holding_valued_at` carries the previous close across it as across any closed day.
+a correction but a different day asserted. Whether that day is filled later depends on the
+instrument: only one whose spine does not yet reach its own first-held date is a backfill candidate.
 
 ### 7.4 Observability
 
@@ -1559,7 +1559,7 @@ makes that tolerable is that swapping it is a day's work — which is only true 
 the sole thing the write path imports. Both methods are required, not optional: a provider that
 cannot answer history is not this application's provider, and an optional method would let a batch be
 skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:863`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:880`), deliberately, to pin the static-versus-instance shape the
 adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
 client hands back.
 
