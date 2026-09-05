@@ -1,10 +1,12 @@
 /**
  * The one place a cookie is read off a request's `Cookie` header by hand.
  * Extracted from `masking.ts`'s original `readMaskingCookie` (spec 0007) so
- * the lock's grant cookie (ticket 03, `lock.ts`) reuses the exact same
- * matching rule instead of becoming a third hand-rolled parser —
- * `chart-range.ts`'s `readRangeCookie` is already the second, restated by
- * hand rather than shared; this file is where that stops.
+ * every cookie this app reads shares the exact same matching rule instead of
+ * each restating its own hand-rolled parser: `chart-range.ts`'s
+ * `readRangeCookie` was the second (ticket 03's review is what caught it
+ * still hand-rolling the loop this file replaces), and the lock's grant
+ * cookie (ticket 03, `lock.server.ts`) is the third, reusing this from the
+ * start rather than needing to be caught.
  *
  * Matched on the whole cookie name, never a substring: `unmasked=1` ends in
  * `masked=1`, and a looser match would silently read a different cookie's

@@ -16,6 +16,7 @@
  * splitting them is how they drift. Unlike masking's session-scoped policy,
  * this is a remembered convenience with no reason to forget itself.
  */
+import { readCookie } from "./cookies.ts";
 import type { IsoDate } from "./valuation.server.ts";
 
 /** Every option the segmented control offers, in display order. */
@@ -443,24 +444,15 @@ export function decodeRangeCookieValue(
 }
 
 /**
- * What this browser last chose, or undefined. Parsed by hand like
- * `readMaskingCookie`, matched on the whole name so a cookie merely ending in
- * this one is never mistaken for it.
+ * What this browser last chose, or undefined. Matched on the whole cookie
+ * name through `cookies.ts`'s shared `readCookie` — this file used to
+ * hand-roll the same loop a second time, which is exactly the drift that
+ * module's header exists to stop — decoding the one thing `readCookie`
+ * deliberately leaves alone: the value.
  */
 export function readRangeCookie(request: Request): string | undefined {
-  const header = request.headers.get("Cookie");
-  if (header === null) return undefined;
-
-  for (const pair of header.split(";")) {
-    const separator = pair.indexOf("=");
-    if (separator === -1) continue;
-
-    if (pair.slice(0, separator).trim() === RANGE_COOKIE) {
-      return decodeURIComponent(pair.slice(separator + 1).trim());
-    }
-  }
-
-  return undefined;
+  const value = readCookie(request, RANGE_COOKIE);
+  return value === undefined ? undefined : decodeURIComponent(value);
 }
 
 /** What a request asked for, and whether it asked explicitly. */

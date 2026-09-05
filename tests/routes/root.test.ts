@@ -14,18 +14,37 @@
  * `onNext` parameter), never on inspecting a response a refusal never
  * produced — the vacuous shape ticket 03 is written to forbid.
  */
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-
-import { LOCK_COOKIE } from "~/lib/lock";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
-import { args, get, redirectTo, responseOf, servedThrough } from "../support/routes.ts";
+import { args, get, post, redirectTo, responseOf, servedThrough } from "../support/routes.ts";
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
+/**
+ * A seam onto `touchGrant`, mocked so one test can make the *grant* check
+ * itself fail independently of the *lock* check (`isLocked`) — the two
+ * database reads this middleware makes, which a single unreachable-database
+ * URL cannot fail one at a time, since the first one reached (`isLocked`)
+ * would already refuse. `undefined` (every test but one) defers to the real
+ * function; the one test that sets `impl` restores it in a `finally`.
+ */
+const touchGrantOverride = vi.hoisted(() => ({
+  impl: undefined as ((id: string, db?: unknown) => Promise<unknown>) | undefined,
+}));
+
+vi.mock("~/lib/lock.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/lock.server")>();
+  return {
+    ...actual,
+    touchGrant: (...callArgs: Parameters<typeof actual.touchGrant>) =>
+      touchGrantOverride.impl ? touchGrantOverride.impl(...callArgs) : actual.touchGrant(...callArgs),
+  };
+});
+
 const { LOCK_EXEMPT_PATHS, loader, middleware } = await import("../../app/root.tsx");
 const { createDatabase, withDb } = await import("~/lib/db.server");
-const { readGrant } = await import("~/lib/lock.server");
+const { LOCK_COOKIE, readGrant } = await import("~/lib/lock.server");
 const { stopPricePoller } = await import("~/lib/price-poller.server");
 
 /** Refused immediately, which is how "the database is down" arrives here. */
@@ -136,6 +155,20 @@ describe("the lock middleware", () => {
     }),
   );
 
+  it(
+    "sends a refused POST to / with no return address, since a GET cannot replay a form post",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+
+      // `/masking` exports an action only — exactly the route this rule
+      // exists for: a return address built from its pathname would send an
+      // unlocked reader to `GET /masking`, a 400.
+      const location = await redirectTo(() => servedThrough(middleware, post("/masking", {})));
+
+      expect(location).toBe("/unlock");
+    }),
+  );
+
   it("refuses rather than continues when the lock check itself cannot reach the database", async () => {
     const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
     let called = false;
@@ -164,7 +197,41 @@ describe("the lock middleware", () => {
   });
 
   it(
-    "renders exactly as it does today once the browser holds a live grant",
+    "refuses rather than continues when the grant check itself cannot reach the database",
+    withDatabase(async ({ seedPasskey }) => {
+      // Distinct from the previous test: `isLocked` answers normally here (a
+      // real, seeded passkey against the real test database) and only the
+      // *second* read — the grant check `touchGrant` used to split across
+      // `readGrant` then `extendGrant`, now one call — fails. A single
+      // unreachable database cannot isolate this: `isLocked` is the first
+      // read this middleware makes, and it would refuse first.
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+      let called = false;
+      touchGrantOverride.impl = async () => {
+        throw new Error("connection reset mid-query");
+      };
+
+      try {
+        const response = await responseOf(() =>
+          servedThrough(middleware, get("/holdings", `${LOCK_COOKIE}=some-grant-id`), {}, () => {
+            called = true;
+          }),
+        );
+
+        expect(called).toBe(false);
+        expect(response.status).toBeGreaterThanOrEqual(300);
+        expect(response.status).toBeLessThan(400);
+        // A read that merely failed to answer is not proof the cookie's
+        // grant is gone, so nothing here is cleared.
+        expect(response.headers.get("Set-Cookie")).toBeNull();
+      } finally {
+        touchGrantOverride.impl = undefined;
+      }
+    }),
+  );
+
+  it(
+    "invokes next, and lets its stand-in response through, once the browser holds a live grant",
     withDatabase(async ({ seedPasskey, seedUnlockGrant }) => {
       const passkey = await seedPasskey({ publicKey: A_PUBLIC_KEY });
       const grant = await seedUnlockGrant({ passkeyId: passkey.credentialId });
@@ -179,6 +246,9 @@ describe("the lock middleware", () => {
         },
       );
 
+      // The assertion that actually proves something: not that the response
+      // carries the stand-in body (`servedThrough` would produce that
+      // whatever the middleware did with `next`), but that `next` itself ran.
       expect(called).toBe(true);
       expect(await response.text()).toBe("the page");
       // The case this header actually matters for: a back-forward-cache
@@ -189,18 +259,22 @@ describe("the lock middleware", () => {
   );
 
   it(
-    "refuses an expired grant and clears its cookie, so a stale value does not survive to confuse the next unlock",
+    "refuses an expired grant, never invoking next, and clears its cookie so a stale value does not survive to confuse the next unlock",
     withDatabase(async ({ seedPasskey, seedUnlockGrant }) => {
       const passkey = await seedPasskey({ publicKey: A_PUBLIC_KEY });
       const grant = await seedUnlockGrant({
         passkeyId: passkey.credentialId,
         expiresAt: new Date(Date.now() - 1000),
       });
+      let called = false;
 
       const response = await responseOf(() =>
-        servedThrough(middleware, get("/holdings", `${LOCK_COOKIE}=${grant.id}`)),
+        servedThrough(middleware, get("/holdings", `${LOCK_COOKIE}=${grant.id}`), {}, () => {
+          called = true;
+        }),
       );
 
+      expect(called).toBe(false);
       expect(response.headers.get("Set-Cookie")).toMatch(/max-age=0/i);
     }),
   );
@@ -235,9 +309,61 @@ describe("the lock middleware", () => {
   );
 
   it(
+    "exempts a path the router would also match, whatever case or trailing slash it arrives in",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+
+      // `compilePath` (react-router 7.18.2) matches case-insensitively and
+      // tolerates any number of trailing slashes — `Array.includes` alone
+      // does neither, so every one of these reached the health route while
+      // silently missing this exemption before it was normalised.
+      for (const path of ["/HEALTHZ", "/healthz/", "/healthz//", "/Unlock", "/unlock/"]) {
+        let called = false;
+        await servedThrough(middleware, get(path), {}, () => {
+          called = true;
+        });
+        expect(called).toBe(true);
+      }
+    }),
+  );
+
+  it(
+    "does not exempt a path that merely starts with an exempt one",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedPasskey({ publicKey: A_PUBLIC_KEY });
+
+      // Guards the matching rule's shape, not only its data: rewriting the
+      // comparison as `LOCK_EXEMPT_PATHS.some((p) => pathname.startsWith(p))`
+      // would wrongly wave both of these through, and the array-contents
+      // test above cannot catch that — it never runs the comparison.
+      for (const path of ["/unlockables", "/healthz-debug"]) {
+        let called = false;
+        await responseOf(() =>
+          servedThrough(middleware, get(path), {}, () => {
+            called = true;
+          }),
+        );
+        expect(called).toBe(false);
+      }
+    }),
+  );
+
+  it(
     "carries Cache-Control: no-store on a response it lets through",
     withDatabase(async () => {
       const response = await servedThrough(middleware, get("/"));
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    }),
+  );
+
+  it(
+    "carries Cache-Control: no-store on a response the exempt branch lets through too",
+    withDatabase(async () => {
+      // `/healthz` sets its own `no-store` today, which is exactly why this
+      // branch's own header was invisible to removing `withNoStore` from it
+      // alone — the moment `/unlock` exists, that screen becomes cacheable
+      // instead, the bfcache hole the ADR names.
+      const response = await servedThrough(middleware, get("/unlock"));
       expect(response.headers.get("Cache-Control")).toBe("no-store");
     }),
   );

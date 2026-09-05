@@ -4,8 +4,13 @@
  * resource route because five screens carry the control — an action per
  * screen would be the same twenty lines five times. Follows `masking.ts`: no
  * component, a real form target, so the control works with JavaScript off.
- * Nothing guards who may press it and nothing needs to: the gate fronts the
+ * Who may press it is the gate's own business, unchanged: it fronts the
  * whole app (§11), and every family member sees and can do everything.
+ * Since ticket 03, whether a browser may reach this route *at all* is the
+ * lock's: root middleware refuses a request from a browser holding no live
+ * grant before this action runs, and a refusal here is redirected to `/`,
+ * never back to this route — `POST` has no return address a redirect's own
+ * `GET` could land on (`app/root.tsx`'s `redirectToUnlock`).
  */
 import { redirect } from "react-router";
 

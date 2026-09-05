@@ -7,6 +7,15 @@
  * one question — is there a live grant — and acts on the answer. No route
  * states a rule that belongs here.
  *
+ * **The grant cookie's builders live here, not in `lock.ts`.** They are
+ * `HttpOnly`: only this module and `app/root.tsx`'s middleware ever read or
+ * write them, so nothing browser-reachable needs the import. An earlier
+ * version placed them beside `lock.ts`'s browser-safe vocabulary on the
+ * claim that they shared masking's "two writers, one cookie" argument for
+ * doing so — they do not. Masking's cookie is genuinely written by client
+ * script; this one cannot be, which is the whole of that argument, so it
+ * does not transfer.
+ *
  * **The honest limit, stated where somebody will act on it.** A provider
  * whose vault is already unlocked can return a verified assertion without
  * prompting anybody — WebAuthn gives no freshness signal an assertion could
@@ -88,6 +97,7 @@ import type {
 } from "@simplewebauthn/server";
 
 import { getConfig } from "../../server/config.ts";
+import { readCookie } from "./cookies.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError, parseInput, requiredText } from "./input.server.ts";
 import { IDLE_WINDOW_MS, joinTransports, splitTransports } from "./lock.ts";
@@ -166,6 +176,68 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
     enrolledAt: row.enrolled_at,
     lastUsedAt: row.last_used_at,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// The grant cookie (ticket 03)
+// ---------------------------------------------------------------------------
+
+/**
+ * The grant's cookie — named for the table the id it carries addresses.
+ * `__Host-` prefixed because this one carries a credential, where masking's
+ * cookie deliberately carries neither prefix nor `Secure` (its own header):
+ * a passkey will not run outside a secure context anyway, so the attributes
+ * cost this feature nothing.
+ *
+ * **Whether a `Secure` cookie actually survives the dev loop's plain-http
+ * localhost is unverified.** Some browsers carve out `localhost` as a
+ * secure-enough origin for `Secure` cookies and some do not, and this has not
+ * actually been tried in a running browser — say so plainly rather than
+ * claim it works on the strength of an argument alone.
+ */
+export const LOCK_COOKIE = "__Host-unlock_grant";
+
+/**
+ * The `Set-Cookie` value for a browser whose assertion this module just
+ * verified. `Secure`, `HttpOnly`, `Path=/` and the `__Host-` prefix all
+ * follow from carrying a credential rather than a preference (this file's
+ * comment on {@link LOCK_COOKIE}). No `Max-Age`: the *grant row* is the
+ * authority on how long this lasts, extended by the request that uses it
+ * ({@link touchGrant}) — a fixed cookie lifetime set once at unlock would
+ * expire the cookie under a family member still actively reading, even
+ * though the row itself had just been pushed further out, which would read
+ * as a lock that relocks mid-use for no reason anyone could see.
+ *
+ * **`SameSite=Lax`, never `Strict`.** The gate's own redirect through Google
+ * returns as a top-level, cross-site navigation — not on every request,
+ * since the gate's own cookie is seven days and does not roll (ADR-0012),
+ * but on the weekly sign-in bounce every browser eventually takes. `Strict`
+ * would withhold this cookie on that very return trip and re-lock every
+ * browser on that same schedule, which would read as a random bug rather
+ * than anything this feature did.
+ */
+export function lockCookie(grantId: string): string {
+  return `${LOCK_COOKIE}=${grantId}; Path=/; Secure; HttpOnly; SameSite=Lax`;
+}
+
+/**
+ * The `Set-Cookie` value that removes it — sent whenever the grant it names
+ * turns out to be gone, so a stale id does not survive to confuse the next
+ * unlock. Carries the same attributes {@link lockCookie} does: a `__Host-`
+ * prefixed cookie is dropped by the browser unless *every* `Set-Cookie` that
+ * names it — clearing included — carries `Secure` and `Path=/`.
+ */
+export function clearedLockCookie(): string {
+  return `${LOCK_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+/**
+ * What this browser's grant cookie names, or `undefined` — nothing else:
+ * the row is the authority, and the cookie carries no claim, no timestamp
+ * and no signature for that reason (docs/adr/0012).
+ */
+export function readLockCookie(request: Request): string | undefined {
+  return readCookie(request, LOCK_COOKIE);
 }
 
 // ---------------------------------------------------------------------------
@@ -274,22 +346,75 @@ export async function readGrant(
 }
 
 /**
- * Move a grant's expiry out to a fresh idle window from now — never for one
- * already past its expiry, and never merely because it was asked: the
- * update is skipped while more than half the window remains, so this is not
- * an unconditional write on every document and data request.
+ * Is this grant live right now, rolling its expiry a fresh idle window out
+ * if less than half the window remains — one atomic statement, which is
+ * what the middleware (ticket 03) needs and `readGrant` followed by a
+ * separate `extendGrant` call could not give it.
+ *
+ * **What two round trips could not tell apart.** A middleware that reads a
+ * grant and then extends it as two separate calls has a gap between them —
+ * a browser's grant can be deleted in that gap (ticket 06's "Lock now", or a
+ * concurrent removal cascading it away) without the extend call ever
+ * learning why it wrote nothing: `UPDATE ... WHERE id = ? AND expires_at >
+ * now() AND expires_at <= half-window` matches zero rows whether the row is
+ * gone or simply not due for a refresh yet, and a caller that only checked
+ * the *first* call's answer would serve the page regardless — the grant it
+ * decided to trust was already stale. One statement removes the gap: the
+ * decision the caller acts on and the write that keeps a live grant alive
+ * are the same round trip, so there is no window between them left for a
+ * concurrent deletion to land in unnoticed.
+ *
+ * **The row lock, not only the `WHERE`, is what closes the race.** A plain
+ * `SELECT` takes its snapshot at the start of the statement and would still
+ * report a grant deleted by a since-committed concurrent transaction as
+ * live, if that transaction's delete was merely in flight, uncommitted, the
+ * instant this statement's read ran. `for update` forces this read to
+ * behave like a write: if another transaction holds a conflicting lock on
+ * this row — `deleteGrant`'s `DELETE`, say — this blocks until that
+ * transaction resolves, and then re-checks the row's current state exactly
+ * as an `UPDATE` would (Postgres's own `SELECT ... FOR UPDATE` semantics) —
+ * gone if the other transaction deleted and committed, unchanged if it rolled
+ * back. Without it, this function would have traded one silent wrong answer
+ * for another.
+ *
+ * **The write stays conditional.** The `rolled` CTE's own `WHERE` still
+ * skips the actual `UPDATE` while more than half the window remains, the
+ * same predicate `extendGrant` used to carry — so this is not an
+ * unconditional write on every document and data request, merely an
+ * unconditional row lock (cheap, held only for this one statement) on every
+ * live one.
  */
-export async function extendGrant(id: string, db: Kysely<Database> = getDb()): Promise<void> {
+export async function touchGrant(
+  id: string,
+  db: Kysely<Database> = getDb(),
+): Promise<UnlockGrant | undefined> {
   const now = new Date();
   const halfWindowFromNow = new Date(now.getTime() + IDLE_WINDOW_MS / 2);
+  const freshExpiry = new Date(now.getTime() + IDLE_WINDOW_MS);
 
-  await db
-    .updateTable("unlock_grant")
-    .set({ expires_at: new Date(now.getTime() + IDLE_WINDOW_MS) })
-    .where("id", "=", id)
-    .where("expires_at", ">", now)
-    .where("expires_at", "<=", halfWindowFromNow)
-    .execute();
+  const result = await sql<UnlockGrantRow>`
+    with live as (
+      select id, passkey_id, expires_at
+      from unlock_grant
+      where id = ${id} and expires_at > ${now}
+      for update
+    ),
+    rolled as (
+      update unlock_grant
+      set expires_at = ${freshExpiry}
+      where id = (select id from live where expires_at <= ${halfWindowFromNow})
+      returning id, passkey_id, expires_at
+    )
+    select
+      coalesce(rolled.id, live.id) as id,
+      coalesce(rolled.passkey_id, live.passkey_id) as passkey_id,
+      coalesce(rolled.expires_at, live.expires_at) as expires_at
+    from live
+    left join rolled on rolled.id = live.id
+  `.execute(db);
+
+  const row = result.rows[0];
+  return row === undefined ? undefined : toGrant(row);
 }
 
 /** Delete a grant outright — the explicit lock control (ticket 06) needs this. */

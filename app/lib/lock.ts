@@ -2,12 +2,11 @@
  * The lock's shared, browser-safe pieces (docs/adr/0012, CONTEXT.md's
  * `Locked`): the two windows it is measured in, the one encoding rule
  * `passkey.transports` is written and read through, and — since ticket 03 —
- * the grant cookie's name and attributes, and the query parameter the
- * unlock screen's return address travels under. A plain `.ts`, not
- * `lock.server.ts` — the same argument `masking.ts`'s header makes for
- * itself: ticket 06's client-side re-entry script has to read
- * {@link REENTRY_GRACE_MS} in the browser to decide when a hidden tab posts
- * the lock action, and a value import of a `.server` module from
+ * the query parameter the unlock screen's return address travels under. A
+ * plain `.ts`, not `lock.server.ts` — the same argument `masking.ts`'s
+ * header makes for itself: ticket 06's client-side re-entry script has to
+ * read {@link REENTRY_GRACE_MS} in the browser to decide when a hidden tab
+ * posts the lock action, and a value import of a `.server` module from
  * browser-reachable code either ships server code into the client bundle or
  * breaks the build. The transport helpers live here for a narrower version
  * of the same reason: `tests/support/fixtures.ts` seeds the very column
@@ -17,14 +16,18 @@
  * `lock.server.ts` (which would also drag in `@simplewebauthn/server` for
  * two one-line string functions).
  *
- * **The cookie and the return parameter are here for the same "two writers,
- * one truth" reason**, not because reading a request's `Cookie` header needs
- * anything browser-side: ticket 03's root middleware reads and clears the
- * cookie, and ticket 04's unlock route sets it and reads the return
- * parameter back — two modules that must agree on a name neither owns
- * alone, exactly `masking.ts`'s own cookie constant's argument for itself.
+ * **The grant cookie itself is not here.** An earlier version of this file
+ * kept `LOCK_COOKIE` and its `Set-Cookie` builders beside the return
+ * parameter, on the claim that they shared masking's "two writers, one
+ * cookie" argument for living beside its vocabulary. They do not: masking's
+ * cookie is genuinely written by client script, which is that argument's
+ * whole point, while this one is `HttpOnly` and can only ever be written by
+ * the server — no browser-side writer ever needs its name or its attributes.
+ * The cookie helpers live in `lock.server.ts` now, beside the grant they
+ * name. `RETURN_PARAM` and the two window constants stay here because
+ * ticket 04's screen and ticket 06's script genuinely read them in the
+ * browser.
  */
-import { readCookie } from "./cookies.ts";
 
 /** How long an unlock grant lives while idle, in milliseconds. Fifteen minutes. */
 export const IDLE_WINDOW_MS = 15 * 60 * 1000;
@@ -54,25 +57,6 @@ export function joinTransports(transports: readonly string[] | undefined): strin
   return transports === undefined || transports.length === 0 ? null : transports.join(",");
 }
 
-// ---------------------------------------------------------------------------
-// The grant cookie (ticket 03)
-// ---------------------------------------------------------------------------
-
-/**
- * The grant's cookie — named for the table the id it carries addresses.
- * `__Host-` prefixed because this one carries a credential, where masking's
- * cookie deliberately carries neither prefix nor `Secure` (its own header):
- * a passkey will not run outside a secure context anyway, so the attributes
- * cost this feature nothing.
- *
- * **Whether a `Secure` cookie actually survives the dev loop's plain-http
- * localhost is unverified.** Some browsers carve out `localhost` as a
- * secure-enough origin for `Secure` cookies and some do not, and this has not
- * actually been tried in a running browser — say so plainly rather than
- * claim it works on the strength of an argument alone.
- */
-export const LOCK_COOKIE = "__Host-unlock_grant";
-
 /**
  * The unlock screen's own return address, as one query parameter rather
  * than the query it came from. The gate's own sign-in bounce (Caddy)
@@ -88,45 +72,3 @@ export const LOCK_COOKIE = "__Host-unlock_grant";
  * which query key that is.
  */
 export const RETURN_PARAM = "redirectTo";
-
-/**
- * The `Set-Cookie` value for a browser whose assertion the domain module
- * just verified. `Secure`, `HttpOnly`, `Path=/` and the `__Host-` prefix all
- * follow from carrying a credential rather than a preference (this file's
- * comment on {@link LOCK_COOKIE}). No `Max-Age`: the *grant row* is the
- * authority on how long this lasts, extended by the request that uses it
- * (`lock.server.ts`'s `extendGrant`) — a fixed cookie lifetime set once at
- * unlock would expire the cookie under a family member still actively
- * reading, even though the row itself had just been pushed further out,
- * which would read as a lock that relocks mid-use for no reason anyone could
- * see.
- *
- * **`SameSite=Lax`, never `Strict`.** The gate's own redirect through Google
- * returns as a top-level, cross-site navigation; `Strict` would withhold
- * this cookie on that very request and re-lock every browser the instant
- * the gate's cookie merely refreshed, which would read as a random bug
- * rather than anything this feature did.
- */
-export function lockCookie(grantId: string): string {
-  return `${LOCK_COOKIE}=${grantId}; Path=/; Secure; HttpOnly; SameSite=Lax`;
-}
-
-/**
- * The `Set-Cookie` value that removes it — sent whenever the grant it names
- * turns out to be gone, so a stale id does not survive to confuse the next
- * unlock. Carries the same attributes {@link lockCookie} does: a `__Host-`
- * prefixed cookie is dropped by the browser unless *every* `Set-Cookie` that
- * names it — clearing included — carries `Secure` and `Path=/`.
- */
-export function clearedLockCookie(): string {
-  return `${LOCK_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`;
-}
-
-/**
- * What this browser's grant cookie names, or `undefined` — nothing else:
- * the row is the authority, and the cookie carries no claim, no timestamp
- * and no signature for that reason (docs/adr/0012).
- */
-export function readLockCookie(request: Request): string | undefined {
-  return readCookie(request, LOCK_COOKIE);
-}

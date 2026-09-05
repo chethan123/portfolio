@@ -35,16 +35,7 @@ import type { AuthenticationResponseJSON, VerifiedAuthenticationResponse } from 
 
 import { createDatabase, type Database } from "~/lib/db.server";
 import { NotFoundError, ValidationError } from "~/lib/input.server";
-import {
-  IDLE_WINDOW_MS,
-  LOCK_COOKIE,
-  RETURN_PARAM,
-  clearedLockCookie,
-  joinTransports,
-  lockCookie,
-  readLockCookie,
-  splitTransports,
-} from "~/lib/lock";
+import { IDLE_WINDOW_MS, RETURN_PARAM, joinTransports, splitTransports } from "~/lib/lock";
 
 import { closeTestDatabase, testDatabase, withDatabase } from "./support/database.ts";
 import type { Fixtures } from "./support/fixtures.ts";
@@ -118,16 +109,20 @@ function mockPublicOrigin(origin: string): void {
 const DIFFERENT_PORT_ORIGIN = `${expectedOrigin}:8443`;
 
 const {
+  LOCK_COOKIE,
   beginEnrolment,
+  clearedLockCookie,
   completeRegistration,
   deleteGrant,
   enrolmentAssertionOptions,
-  extendGrant,
   isLocked,
   listPasskeys,
+  lockCookie,
   readGrant,
+  readLockCookie,
   removalAssertionOptions,
   removePasskey,
+  touchGrant,
   unlockOptions,
   verifyUnlock,
 } = await import("~/lib/lock.server");
@@ -285,8 +280,9 @@ describe("the grant cookie", () => {
 
   it("is SameSite=Lax, never Strict, because the gate's own sign-in bounce is a top-level cross-site return", () => {
     // `Strict` would withhold this cookie on that very navigation and
-    // re-lock every browser the moment the gate's own cookie merely
-    // refreshed — a random-looking bug rather than anything this feature
+    // re-lock every browser on the weekly sign-in bounce the gate's own
+    // seven-day, non-rolling cookie eventually forces (ADR-0012's first
+    // paragraph) — a random-looking bug rather than anything this feature
     // did (ADR-0012's own reasoning, restated as a test rather than only a
     // comment).
     expect(lockCookie("a-grant-id")).toMatch(/samesite=lax/i);
@@ -345,57 +341,6 @@ describe("grants", () => {
   );
 
   it(
-    "never resurrects an already-expired grant when extended",
-    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
-      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
-      const grant = await seedUnlockGrant({
-        passkeyId: passkey.credentialId,
-        expiresAt: new Date(Date.now() - 1000),
-      });
-
-      await extendGrant(grant.id, db);
-
-      expect(await readGrant(grant.id, db)).toBeUndefined();
-    }),
-  );
-
-  it(
-    "skips the extension while more than half the idle window remains",
-    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
-      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
-      const originalExpiry = new Date(Date.now() + IDLE_WINDOW_MS - 5000);
-      const grant = await seedUnlockGrant({ passkeyId: passkey.credentialId, expiresAt: originalExpiry });
-
-      await extendGrant(grant.id, db);
-
-      const row = await db
-        .selectFrom("unlock_grant")
-        .select("expires_at")
-        .where("id", "=", grant.id)
-        .executeTakeFirstOrThrow();
-      expect(row.expires_at.getTime()).toBe(originalExpiry.getTime());
-    }),
-  );
-
-  it(
-    "moves the expiry out once at or past half the idle window",
-    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
-      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
-      const originalExpiry = new Date(Date.now() + 1000);
-      const grant = await seedUnlockGrant({ passkeyId: passkey.credentialId, expiresAt: originalExpiry });
-
-      await extendGrant(grant.id, db);
-
-      const row = await db
-        .selectFrom("unlock_grant")
-        .select("expires_at")
-        .where("id", "=", grant.id)
-        .executeTakeFirstOrThrow();
-      expect(row.expires_at.getTime()).toBeGreaterThan(originalExpiry.getTime());
-    }),
-  );
-
-  it(
     "sweeps expired grants at the moment a new one is minted",
     withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
       const stale = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, credentialId: "stale-owner" });
@@ -430,6 +375,77 @@ describe("grants", () => {
       await deleteGrant(grant.id, db);
 
       expect(await readGrant(grant.id, db)).toBeUndefined();
+    }),
+  );
+});
+
+/**
+ * `touchGrant` replaces the middleware's old `readGrant` then `extendGrant`
+ * pair with the one atomic read-and-maybe-extend statement §2 of the review
+ * this file folds in asked for — the tests below pin the same three
+ * outcomes `readGrant`/`extendGrant` used to split across two calls, now
+ * from the one call the middleware actually makes. The genuinely
+ * concurrent race — a grant deleted while `touchGrant` is reading it —
+ * has its own two-connection test beside this file's other such races,
+ * further down.
+ */
+describe("touchGrant", () => {
+  it(
+    "reads nothing for an id past its expiry, and writes nothing",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
+      const grant = await seedUnlockGrant({
+        passkeyId: passkey.credentialId,
+        expiresAt: new Date(Date.now() - 1000),
+      });
+
+      expect(await touchGrant(grant.id, db)).toBeUndefined();
+      // Never resurrected: touching an already-expired grant did not roll it
+      // forward on the strength of merely being asked.
+      expect(await readGrant(grant.id, db)).toBeUndefined();
+    }),
+  );
+
+  it(
+    "reads nothing for an id that does not exist",
+    withDatabase(async ({ db }) => {
+      expect(await touchGrant("no-such-grant-id-at-all-xxxxxxxxxxxx", db)).toBeUndefined();
+    }),
+  );
+
+  it(
+    "returns the grant unmodified while more than half the idle window remains",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
+      const originalExpiry = new Date(Date.now() + IDLE_WINDOW_MS - 5000);
+      const grant = await seedUnlockGrant({ passkeyId: passkey.credentialId, expiresAt: originalExpiry });
+
+      expect(await touchGrant(grant.id, db)).toBeDefined();
+
+      const row = await db
+        .selectFrom("unlock_grant")
+        .select("expires_at")
+        .where("id", "=", grant.id)
+        .executeTakeFirstOrThrow();
+      expect(row.expires_at.getTime()).toBe(originalExpiry.getTime());
+    }),
+  );
+
+  it(
+    "rolls the expiry a fresh window out once at or past half the idle window remains, surviving past its original expiry",
+    withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
+      const passkey = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
+      const originalExpiry = new Date(Date.now() + 1000);
+      const grant = await seedUnlockGrant({ passkeyId: passkey.credentialId, expiresAt: originalExpiry });
+
+      expect(await touchGrant(grant.id, db)).toBeDefined();
+
+      const row = await db
+        .selectFrom("unlock_grant")
+        .select("expires_at")
+        .where("id", "=", grant.id)
+        .executeTakeFirstOrThrow();
+      expect(row.expires_at.getTime()).toBeGreaterThan(originalExpiry.getTime());
     }),
   );
 });
@@ -1335,6 +1351,90 @@ describe("passkey removed mid-verification", () => {
         let cleanupError: unknown;
         try {
           await database.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
+        } catch (error) {
+          cleanupError = error;
+        }
+        if (cleanupError !== undefined && !bodyFailed) throw cleanupError;
+      }
+    },
+    20_000,
+  );
+});
+
+describe("touchGrant, deleted mid-touch", () => {
+  it(
+    "reports a grant deleted by a since-committed concurrent request as gone, never the stale snapshot its own read held a lock against",
+    async () => {
+      const database = await testDatabase();
+      const racePasskeyId = "touch-grant-race-passkey";
+      const raceGrantId = "touch-grant-race-grant-000000000000000000000000";
+
+      // Guards against a previous crashed run leaving this fixture's own
+      // rows behind, the same reasoning the other cross-connection races in
+      // this file give for cleaning up both before and after.
+      await database.deleteFrom("passkey").where("credential_id", "=", racePasskeyId).execute();
+      await database
+        .insertInto("passkey")
+        .values({
+          credential_id: racePasskeyId,
+          public_key: Buffer.from(BYSTANDER_PUBLIC_KEY),
+          counter: 0,
+          transports: null,
+          backup_eligible: false,
+          label: "Race",
+          bootstrap: false,
+        })
+        .execute();
+      await database
+        .insertInto("unlock_grant")
+        .values({
+          id: raceGrantId,
+          passkey_id: racePasskeyId,
+          // Comfortably in the future: this race is about a concurrent
+          // deletion, not about whether the grant is due for extension.
+          expires_at: new Date(Date.now() + 60 * 60 * 1000),
+        })
+        .execute();
+
+      const trxA = await database.startTransaction().execute();
+      const trxB = await database.startTransaction().execute();
+      let bodyFailed = false;
+
+      try {
+        // B's own connection, watched below so this test knows — rather
+        // than guesses — the moment its read actually blocks.
+        const pidB = await backendPid(trxB);
+
+        // A deletes the very grant B is about to touch, uncommitted — a
+        // tentative deletion B cannot yet know about.
+        await trxA.deleteFrom("unlock_grant").where("id", "=", raceGrantId).execute();
+
+        // B's `touchGrant` blocks on its own `SELECT ... FOR UPDATE`: without
+        // that row lock, B's read would take its snapshot before A's delete
+        // and report the grant as live regardless of what A does next — the
+        // exact stale answer this function exists to close off.
+        const blocked = touchGrant(raceGrantId, trxB);
+        blocked.catch(() => {});
+
+        await waitUntilBlocked(database, pidB);
+        await trxA.commit().execute();
+
+        // Unblocked, B's `FOR UPDATE` read re-checks the row's now-committed
+        // state — gone — the same re-check an `UPDATE` gets, rather than
+        // returning the pre-delete row it was blocked holding a lock
+        // against.
+        expect(await blocked).toBeUndefined();
+      } catch (error) {
+        bodyFailed = true;
+        throw error;
+      } finally {
+        if (!trxA.isCommitted && !trxA.isRolledBack) await trxA.rollback().execute().catch(() => {});
+        if (!trxB.isCommitted && !trxB.isRolledBack) await trxB.rollback().execute().catch(() => {});
+
+        let cleanupError: unknown;
+        try {
+          // The passkey's own cascade takes any surviving grant row with it.
+          await database.deleteFrom("passkey").where("credential_id", "=", racePasskeyId).execute();
         } catch (error) {
           cleanupError = error;
         }
