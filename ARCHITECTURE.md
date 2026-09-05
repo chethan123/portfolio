@@ -335,7 +335,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:654` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:660` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 
 **Owned by a module, upheld by its callers.**
@@ -1516,8 +1516,8 @@ A past `price_daily` row *can* be rewritten, and that is not a violation: it is 
 with the provider's own price for the day that provider says it belongs to, so a rewrite is idempotent
 unless the provider itself revises a close — which is a correction, not corruption. Bounded, since
 spec 0018 §3.1, to seven days either side of today's market date: past that a claimed date is not
-a correction but a different day asserted. Whether that day is filled later depends on the
-instrument: only one whose spine does not yet reach its own first-held date is a backfill candidate.
+a correction but a different day asserted. A past day so skipped is filled later only while the
+instrument is still a backfill candidate; a future one is beyond any batch, whose range ends today.
 
 ### 7.4 Observability
 
@@ -1559,7 +1559,7 @@ makes that tolerable is that swapping it is a day's work — which is only true 
 the sole thing the write path imports. Both methods are required, not optional: a provider that
 cannot answer history is not this application's provider, and an optional method would let a batch be
 skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:880`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:894`), deliberately, to pin the static-versus-instance shape the
 adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
 client hands back.
 

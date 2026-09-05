@@ -54,12 +54,12 @@
  * settled — and a quote dated further ahead would plant a close on a day yet
  * to come, permanent if that day turns out to be a weekend or holiday the
  * poller never revisits. Outside the window the quote and the observation
- * still land; only the close is skipped, and logged. Whether it is ever filled
- * depends on the instrument: the backfill's candidates are those with no close
- * at or before first-held ({@link NO_CLOSE_BY_FIRST_HELD}), so a spine still
- * missing its start picks the day up on a later batch, while one that already
- * reaches back never becomes a candidate and the day stays absent — carried
- * across by `holding_valued_at` either way, as any non-trading day is.
+ * still land; only the close is skipped, and logged. A skipped *past* day is
+ * picked up by a later batch only while the instrument is still a candidate
+ * ({@link NO_CLOSE_BY_FIRST_HELD}); a skipped *future* day no batch ever
+ * reaches, that batch's range ending at today. Either way `holding_valued_at`
+ * carries the previous close across the gap, as it does across any day the
+ * market did not trade.
  *
  * Every exported query takes an optional `db`; tests pass a transaction they
  * roll back.

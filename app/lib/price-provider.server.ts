@@ -351,20 +351,26 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
       ? quote.regularMarketPrice
       : undefined;
 
-  // Bounded like the rate and the close columns, and for the identical
-  // reason: `quote.price` is `numeric(20, 4)`, so an unbounded figure aborts
-  // the refresh transaction for every instrument, not just this one.
-  const price = inRange(decimal(quoted, 4), PRICE_CEILING);
-
   // No usable price is not an error — Yahoo drops delisted and unknown
-  // symbols, and a ceiling-dropped figure is treated the same way. Either way
-  // the caller's answer is: keep the last price, mark it stale.
-  if (price === null) return null;
+  // symbols. The caller's answer is: keep the last price, mark it stale.
+  const quotedPrice = decimal(quoted, 4);
+  if (quotedPrice === null) return null;
 
-  // Checked only once there is a price to refuse.
+  // Checked only once there is a price to refuse, and *before* the ceiling
+  // below: a quote can be both foreign and absurd, and dropping it for its
+  // size first would lose the refusal the person creating the instrument
+  // acts on — `probeVerdicts` reads an absent quote as `unavailable`, which
+  // creates the instrument, where `non-usd` refuses it (spec 0018 §1).
   if (quote.currency !== undefined && quote.currency.toUpperCase() !== USD) {
     throw new CurrencyRefused(quote.symbol, quote.currency.toUpperCase());
   }
+
+  // Bounded like the rate and the close columns, and for the identical
+  // reason: `quote.price` is `numeric(20, 4)`, so an unbounded figure aborts
+  // the refresh transaction for every instrument, not just this one. Dropped,
+  // not clamped, so the symbol comes back absent and goes stale.
+  const price = inRange(quotedPrice, PRICE_CEILING);
+  if (price === null) return null;
 
   // The equity/mutual-fund spelling first, then the ETF one — both amounts
   // per share in the quote's currency, so preferring either is a matter of

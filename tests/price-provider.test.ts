@@ -59,6 +59,20 @@ describe("reading a price", () => {
     expect(quoteFor({ symbol: "GARBAGE", regularMarketPrice: 1e16 })).toBeNull();
   });
 
+  it("refuses a foreign currency even when the price is over the ceiling", () => {
+    // The two guards meet on one quote, and their order decides what a person
+    // creating the instrument is told. Dropped for its size first, the quote
+    // comes back absent, `probeVerdicts` reads that as `unavailable`, and the
+    // resolver creates the instrument — where `non-usd` refuses it. Spec 0018
+    // §1 lists that refusal among the things this slice does not change.
+    expect(() =>
+      toProviderQuote(
+        { symbol: "VWRL.L", currency: "GBP", regularMarketPrice: 10 ** 16 },
+        FETCHED_AT,
+      ),
+    ).toThrow(CurrencyRefused);
+  });
+
   it("keeps a price that sits just below the ceiling", () => {
     // The ceiling bounds what cannot be stored and nothing else — a guard
     // that rounded honest data away would be the more expensive bug.
