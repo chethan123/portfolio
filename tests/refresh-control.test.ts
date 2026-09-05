@@ -51,6 +51,28 @@ describe("where a press may send the browser", () => {
     expect(safeReturn("https://evil.test/holdings")).toBe("/");
   });
 
+  // The origin check alone passes every one of these: a `.` or `..` segment
+  // contributes no segment of its own, so the empty segment that follows it
+  // becomes the path's first and each resolves to
+  // `http://return.invalid//evil.test` — our origin, and a pathname a browser
+  // reads as a host. The bare `/..//` is the same trick with nothing after it:
+  // it serialised as `//` before this rule, and the second parse now refuses
+  // it by throwing rather than by answering an origin, which is the branch
+  // nothing else here would reach.
+  it.each([
+    "/..//evil.test",
+    "/%2e%2e//evil.test",
+    "/.//evil.test",
+    "/a/..//evil.test",
+    "/..\\/evil.test",
+    "/..//",
+  ])(
+    "refuses %j, which resolves to this origin and still serialises with a leading // a browser reads as a host",
+    (to) => {
+      expect(safeReturn(to)).toBe("/");
+    },
+  );
+
   it("answers with the Overview for a missing or unparseable destination", () => {
     expect(safeReturn(null)).toBe("/");
     expect(safeReturn("")).toBe("/");
