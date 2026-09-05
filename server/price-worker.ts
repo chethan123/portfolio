@@ -36,7 +36,11 @@
  *
  * **Logs:** one line per non-`200` answer, naming the endpoint, the status
  * and the reason, stem `Price worker`; nothing at all for a successful
- * call — a healthy worker is silent.
+ * call — a healthy worker is silent. The one exception is a client that
+ * hangs up before its declared body arrives: there is no status to name
+ * because nothing was ever sent, so {@link isAbandonedRead} logs one line
+ * naming just the endpoint rather than falling into the unhandled-request
+ * catch below, which stays for a genuine bug in the handler itself.
  */
 import { chmod, unlink } from "node:fs/promises";
 import http from "node:http";
@@ -106,6 +110,21 @@ const historyBodySchema = z.object({
 
 /** Thrown by {@link readBody} once the cap is spent; the socket is already gone by then. */
 class BodyTooLargeError extends Error {}
+
+/**
+ * `readBody`'s own `for await` rejects with exactly this shape when the peer
+ * hangs up before its declared body arrives — Node's own `abortIncoming`
+ * (`_http_server.js`) destroys the request with a plain `Error("aborted")`
+ * carrying `.code === "ECONNRESET"`. Not a bug in the handler: the client is
+ * simply gone, there is no answer to send and nothing left to destroy.
+ */
+function isAbandonedRead(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "aborted" &&
+    (error as NodeJS.ErrnoException).code === "ECONNRESET"
+  );
+}
 
 /**
  * The request body, capped at {@link MAX_BODY_BYTES}. Past the cap the
@@ -211,6 +230,10 @@ async function handleQuotes(
     raw = await readBody(req, MAX_BODY_BYTES);
   } catch (error) {
     if (error instanceof BodyTooLargeError) return;
+    if (isAbandonedRead(error)) {
+      console.error(`Price worker: ${endpoint} client disconnected before the body completed`);
+      return;
+    }
     throw error;
   }
 
@@ -254,6 +277,10 @@ async function handleHistory(
     raw = await readBody(req, MAX_BODY_BYTES);
   } catch (error) {
     if (error instanceof BodyTooLargeError) return;
+    if (isAbandonedRead(error)) {
+      console.error(`Price worker: ${endpoint} client disconnected before the body completed`);
+      return;
+    }
     throw error;
   }
 

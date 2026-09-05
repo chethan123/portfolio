@@ -84,7 +84,16 @@ async function start(
 
 type JsonResponse = { status: number; headers: http.IncomingHttpHeaders; json: unknown; text: string };
 
-/** `agent: false`: this file's own sockets must not be kept alive into the next case. */
+/**
+ * `agent: false`: this file's own sockets must not be kept alive into the
+ * next case. A `content-length` is added for any `body` the caller does not
+ * already frame itself: Node's client only adds `Transfer-Encoding: chunked`
+ * on its own for a method conventionally carrying a body — a `GET` with an
+ * unframed `.write()` sends the bytes on the wire with nothing telling the
+ * server's parser they belong to this message, so they land as garbage after
+ * the terminating blank line rather than in `req`'s body stream, and the
+ * worker sees an empty body regardless of what was written.
+ */
 function rawRequest(
   socketPath: string,
   method: string,
@@ -92,8 +101,12 @@ function rawRequest(
   body?: string,
   headers: http.OutgoingHttpHeaders = {},
 ): Promise<JsonResponse> {
+  const framedHeaders =
+    body === undefined || "content-length" in headers
+      ? headers
+      : { ...headers, "content-length": Buffer.byteLength(body) };
   return new Promise((resolve, reject) => {
-    const req = http.request({ socketPath, agent: false, method, path, headers }, (res) => {
+    const req = http.request({ socketPath, agent: false, method, path, headers: framedHeaders }, (res) => {
       const chunks: Buffer[] = [];
       res.on("data", (chunk: Buffer) => chunks.push(chunk));
       res.on("end", () => {
@@ -248,6 +261,28 @@ describe("400: a body or route the worker refuses before any library call", () =
     expect(chart).not.toHaveBeenCalled();
   });
 
+  it("answers 400 for a /history symbol that would escape into the URL path, the fake's chart never called", async () => {
+    // On /quotes the library puts symbols in a query parameter that
+    // URLSearchParams escapes anyway; on /history it concatenates the symbol
+    // into the URL *path*
+    // (node_modules/yahoo-finance2/esm/src/modules/chart.js), so an
+    // unchecked symbol here reaches a different endpoint entirely.
+    const chart = vi.fn(async () => ({}));
+    await start(fakeYahoo({ chart }));
+
+    const traversal = await requestJson(currentSocketPath, "POST", "/history", {
+      symbol: "../../v1/test/getcrumb",
+      from: "2024-06-01",
+    });
+    const slash = await requestJson(currentSocketPath, "POST", "/history", {
+      symbol: "AAA/BBB",
+      from: "2024-06-01",
+    });
+
+    expect([traversal.status, slash.status]).toEqual([400, 400]);
+    expect(chart).not.toHaveBeenCalled();
+  });
+
   it("answers 400 for a /history from that is not YYYY-MM-DD", async () => {
     const chart = vi.fn(async () => ({}));
     await start(fakeYahoo({ chart }));
@@ -255,6 +290,36 @@ describe("400: a body or route the worker refuses before any library call", () =
     const res = await requestJson(currentSocketPath, "POST", "/history", {
       symbol: "VTI",
       from: "2024-6-1",
+    });
+
+    expect(res.status).toBe(400);
+    expect(chart).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 for a /history from with a valid date only at the end of a longer string", async () => {
+    // Pins the regex's leading `^`: without it, `.test()` only needs a match
+    // anywhere, and `2024-06-01` occurring at the very end still satisfies
+    // the trailing `$`.
+    const chart = vi.fn(async () => ({}));
+    await start(fakeYahoo({ chart }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/history", {
+      symbol: "VTI",
+      from: "not-a-date-2024-06-01",
+    });
+
+    expect(res.status).toBe(400);
+    expect(chart).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 for a /history from with a valid date only at the start of a longer string", async () => {
+    // The mirror case, pinning the trailing `$`.
+    const chart = vi.fn(async () => ({}));
+    await start(fakeYahoo({ chart }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/history", {
+      symbol: "VTI",
+      from: "2024-06-01-extra-garbage",
     });
 
     expect(res.status).toBe(400);
@@ -269,27 +334,41 @@ describe("400: a body or route the worker refuses before any library call", () =
     expect(res.status).toBe(400);
   });
 
-  it("answers 400 for a method the route does not take, on a path that has one", async () => {
+  it("answers 400 for a method /quotes does not take, with a body that would otherwise parse", async () => {
     // `GET /quotes` above answers 400 either way — an empty body is not JSON —
-    // so it cannot tell the method guard from the schema. These can: each is
-    // a path the table has, under a method it does not, with a body that
-    // would otherwise parse.
+    // so it cannot tell the method guard from the schema. `rawRequest` now
+    // frames this body with a real `content-length`, so it genuinely would
+    // parse if the method guard let it through.
     const quote = vi.fn(async () => []);
-    const chart = vi.fn(async () => ({}));
-    await start(fakeYahoo({ quote, chart }));
+    await start(fakeYahoo({ quote }));
 
-    const quotes = await rawRequest(currentSocketPath, "GET", "/quotes", '{"symbols":["VTI"]}');
-    const history = await rawRequest(
+    const res = await rawRequest(currentSocketPath, "GET", "/quotes", '{"symbols":["VTI"]}');
+
+    expect(res.status).toBe(400);
+    expect(quote).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 for a method /history does not take, with a body that would otherwise parse", async () => {
+    const chart = vi.fn(async () => ({}));
+    await start(fakeYahoo({ chart }));
+
+    const res = await rawRequest(
       currentSocketPath,
       "GET",
       "/history",
       '{"symbol":"VTI","from":"2024-06-01"}',
     );
-    const healthz = await rawRequest(currentSocketPath, "POST", "/healthz");
 
-    expect([quotes.status, history.status, healthz.status]).toEqual([400, 400, 400]);
-    expect(quote).not.toHaveBeenCalled();
+    expect(res.status).toBe(400);
     expect(chart).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 for a method /healthz does not take", async () => {
+    await start(fakeYahoo());
+
+    const res = await rawRequest(currentSocketPath, "POST", "/healthz");
+
+    expect(res.status).toBe(400);
   });
 
   it("cuts an unknown route's text rather than echoing the whole URL", async () => {
@@ -311,37 +390,98 @@ describe("400: a body or route the worker refuses before any library call", () =
 
     expect(res.status).toBe(400);
   });
+
+  it("logs one line naming the endpoint, the status and the reason for a non-200 answer", async () => {
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+
+    await start(fakeYahoo());
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: [] });
+    spy.mockRestore();
+
+    const reason = (res.json as { error: string }).error;
+    expect(calls).toEqual([[`Price worker: quotes 400 ${reason}`]]);
+  });
 });
 
 describe("the 16 KB body cap", () => {
-  it("destroys the socket past the cap, with no status and no library call", async () => {
-    const quote = vi.fn(async () => []);
-    await start(fakeYahoo({ quote }));
-
-    const body = `{"symbols":["VTI"],"padding":"${"x".repeat(17 * 1024)}"}`;
-
-    await new Promise<void>((resolve, reject) => {
-      const req = http.request(
-        {
-          socketPath: currentSocketPath,
-          agent: false,
-          method: "POST",
-          path: "/quotes",
-          headers: { "content-length": Buffer.byteLength(body) },
-        },
-        (res) => {
-          reject(new Error(`expected the connection to error, got status ${res.statusCode}`));
-        },
-      );
-      req.on("error", (error) => {
-        expect(["ECONNRESET", "EPIPE"]).toContain((error as NodeJS.ErrnoException).code);
-        resolve();
+  it(
+    "destroys the socket past the cap, with no status and no library call",
+    async () => {
+      const quote = vi.fn(async () => []);
+      // headersTimeout, requestTimeout and server.timeout all pinned far out
+      // of reach (30 s, per the ticket): the body below completes framing
+      // (a real content-length, fully sent) before the cap trips, so none of
+      // the three timeout mechanisms is even in a position to fire — only
+      // `readBody`'s own `req.destroy()` can end this connection. The test's
+      // own timeout (third argument) is bounded well under 30 s so a build
+      // missing that `destroy()` fails fast instead of hanging to it.
+      await start(fakeYahoo({ quote }), {
+        headersTimeout: 30_000,
+        requestTimeout: 30_000,
+        timeout: 30_000,
+        connectionsCheckingInterval: 50,
       });
-      req.write(body);
-      req.end();
+
+      const body = `{"symbols":["VTI"],"padding":"${"x".repeat(17 * 1024)}"}`;
+
+      await new Promise<void>((resolve, reject) => {
+        const req = http.request(
+          {
+            socketPath: currentSocketPath,
+            agent: false,
+            method: "POST",
+            path: "/quotes",
+            headers: { "content-length": Buffer.byteLength(body) },
+          },
+          (res) => {
+            reject(new Error(`expected the connection to error, got status ${res.statusCode}`));
+          },
+        );
+        req.on("error", (error) => {
+          expect(["ECONNRESET", "EPIPE"]).toContain((error as NodeJS.ErrnoException).code);
+          resolve();
+        });
+        req.write(body);
+        req.end();
+      });
+
+      expect(quote).not.toHaveBeenCalled();
+    },
+    2_000,
+  );
+});
+
+describe("a client that hangs up before its declared body arrives", () => {
+  it("logs one line naming the endpoint, not the unhandled-bug line", async () => {
+    const calls: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
     });
 
-    expect(quote).not.toHaveBeenCalled();
+    await start(fakeYahoo());
+
+    const socket = await connectSocket(currentSocketPath);
+    socket.resume();
+    // A content-length the client never fulfils, then the client itself
+    // hangs up mid-body — `readBody`'s `for await` sees the peer gone.
+    socket.write("POST /quotes HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n");
+    socket.write("partial-body");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    socket.destroy();
+
+    // Give the server a moment to observe the abort and log it.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    spy.mockRestore();
+
+    const lines = calls.map((args) => args.map(String).join(" "));
+    const unhandled = lines.filter((line) => line.includes("unhandled request error"));
+    const abandoned = lines.filter((line) => line.includes("quotes") && !line.includes("unhandled"));
+
+    expect(unhandled).toHaveLength(0);
+    expect(abandoned).toHaveLength(1);
   });
 });
 
@@ -396,7 +536,18 @@ describe("mapping a provider failure to a status", () => {
       })) as typeof fetch;
 
     const realClient = createYahooClient({ timeoutMs: 50 });
-    await start({ quote: async () => [], chart: realClient.chart });
+    // A generous `timeout` here, exactly as the `maxConnections` case does:
+    // this case is about the CLIENT's 50 ms deadline, not the socket-
+    // inactivity watchdog, and the handler must complete a cold
+    // `import("yahoo-finance2")` plus that 50 ms before answering — on a
+    // cold run under vitest's transform that import alone can approach
+    // `server.timeout`'s default 200 ms test value, closing the idle socket
+    // before the handler ever gets to reply. `server.timeout` is noise in
+    // this case; do not shorten the 50 ms client deadline to compensate.
+    await start(
+      { quote: async () => [], chart: realClient.chart },
+      { ...TEST_TIMEOUTS, timeout: 2000 },
+    );
 
     const res = await requestJson(currentSocketPath, "POST", "/history", {
       symbol: "VTI",
@@ -429,6 +580,37 @@ describe("mapping a provider failure to a status", () => {
 
     expect(res.status).toBe(502);
     expect((res.json as { error: string }).error).toBe("fetch failed: ECONNREFUSED");
+  });
+
+  it("caps a causeless provider error's text at 1000 characters", async () => {
+    // 1000 is `ERROR_TEXT_LIMIT` in server/price-worker.ts.
+    const longMessage = "x".repeat(2000);
+    const quote = vi.fn(async () => {
+      throw new Error(longMessage);
+    });
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+    expect(res.status).toBe(502);
+    const error = (res.json as { error: string }).error;
+    expect(error).toBe(longMessage.slice(0, 1000));
+    expect(error).toHaveLength(1000);
+  });
+
+  it("caps a provider error with a long cause message at 1000 characters", async () => {
+    const longCauseMessage = "y".repeat(2000);
+    const quote = vi.fn(async () => {
+      throw new Error("fetch failed", { cause: new Error(longCauseMessage) });
+    });
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+    expect(res.status).toBe(502);
+    const error = (res.json as { error: string }).error;
+    expect(error).toBe(`fetch failed: ${longCauseMessage}`.slice(0, 1000));
+    expect(error).toHaveLength(1000);
   });
 });
 
@@ -497,10 +679,12 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a connection whose headers never complete within headersTimeout plus one checking interval", async () => {
-    // `server.timeout` pinned far out of reach, the mirror of what the silent
-    // case above does for the header deadlines: both mechanisms can satisfy
-    // this bound, and a case two things can answer pins neither.
-    await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000 });
+    // `server.timeout` pinned far out of reach, and `requestTimeout`
+    // disabled (0) rather than merely left alone: for a connection that has
+    // sent no complete request, both header deadlines are in Node's reach at
+    // once (verified on Node 24.12.0), so leaving requestTimeout at its
+    // normal value would let it — not headersTimeout — be what closes this.
+    await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000, requestTimeout: 0 });
 
     const socket = await connectSocket(currentSocketPath);
     socket.resume();
@@ -511,6 +695,29 @@ describe("the socket file and its lifecycle", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(
       TEST_TIMEOUTS.headersTimeout + TEST_TIMEOUTS.connectionsCheckingInterval + 1000,
+    );
+  });
+
+  it("closes a connection whose body never completes within requestTimeout plus one checking interval", async () => {
+    // The mirror case, pinning `requestTimeout` alone. `headersTimeout` must
+    // be disabled with 0 rather than pinned far out of reach: Node throws
+    // ERR_OUT_OF_RANGE at server construction when a *nonzero* headersTimeout
+    // exceeds requestTimeout (verified on Node 24.12.0), so 0 — which Node
+    // exempts from that check — is the only way to hold it out of reach here.
+    await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000, headersTimeout: 0 });
+
+    const socket = await connectSocket(currentSocketPath);
+    socket.resume();
+    // Headers complete (the terminating blank line is sent); the declared
+    // body never arrives.
+    socket.write("POST /quotes HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n");
+    socket.write("partial-body");
+
+    const startedAt = Date.now();
+    await new Promise<void>((resolve) => socket.once("close", resolve));
+
+    expect(Date.now() - startedAt).toBeLessThan(
+      TEST_TIMEOUTS.requestTimeout + TEST_TIMEOUTS.connectionsCheckingInterval + 1000,
     );
   });
 

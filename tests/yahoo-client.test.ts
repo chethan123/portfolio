@@ -7,7 +7,7 @@
  * the client sets neither a constructor `fetch` nor a per-call one, so the
  * library falls through to it (`yahooFinanceFetch.js:58`).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createYahooClient, type ChartRequest } from "../server/yahoo-client.ts";
 
@@ -101,6 +101,31 @@ describe("the deadline every call carries", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(signal?.aborted).toBe(false);
   });
+
+  it("passes exactly 30 000 ms to AbortSignal.timeout, not merely something above 50 ms", async () => {
+    // The case above only pins "greater than about 50 ms" — 100 ms and 60 s
+    // both survive it. A default above `server.timeout` would silently put
+    // every call past the worker's own socket watchdog.
+    //
+    // Fake timers were tried first and do not work here: verified on Node
+    // 24.12.0 that `vi.useFakeTimers()` (any `toFake` set) never flips a
+    // `AbortSignal.timeout(...)` signal's `.aborted` even after advancing
+    // past its delay — the internal timer it schedules is not one Node
+    // routes through the global `setTimeout` that fake timers patch. A
+    // direct spy on `AbortSignal.timeout` reads the exact argument instead,
+    // with no waiting at all.
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    globalThis.fetch = (async () => {
+      throw new Error("stop here");
+    }) as typeof fetch;
+
+    await createYahooClient()
+      .chart("VTI", REQUEST)
+      .catch(() => {});
+
+    expect(spy).toHaveBeenCalledWith(30_000);
+    spy.mockRestore();
+  });
 });
 
 describe("the request a chart call forwards", () => {
@@ -157,5 +182,101 @@ describe("the client's fixed timeout", () => {
     const client = createYahooClient({ timeoutMs: 50 });
 
     await expect(client.chart("VTI", REQUEST)).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+});
+
+describe("the per-call options built for each request", () => {
+  it("gives two calls made more than the deadline apart two different, live signals", async () => {
+    // A hoisted `moduleOptions` (one built per client rather than per call)
+    // would hand the second call the same, already-expired signal: the
+    // worker builds one client for the process's life, so from 30 s after
+    // start every call would carry a pre-aborted signal and answer 504
+    // forever, silently.
+    const seenSignals: Array<AbortSignal | undefined> = [];
+    globalThis.fetch = (async (_url: string | URL, init: RequestInit) => {
+      seenSignals.push(init.signal ?? undefined);
+      return new Response(chartResponseBody());
+    }) as typeof fetch;
+
+    const client = createYahooClient({ timeoutMs: 50 });
+
+    const first = await client.chart("VTI", REQUEST);
+    // Longer than the client's own 50 ms deadline.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const second = await client.chart("VTI", REQUEST);
+
+    // Both succeeding alone proves too little — a fake that never inspects
+    // `init.signal` would let a hoisted, already-expired one "succeed" the
+    // same way, which is why the signal identity below is the real pin.
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(seenSignals).toHaveLength(2);
+    const [firstSignal, secondSignal] = seenSignals;
+    expect(firstSignal).toBeInstanceOf(AbortSignal);
+    expect(secondSignal).toBeInstanceOf(AbortSignal);
+    expect(secondSignal).not.toBe(firstSignal);
+    expect(secondSignal?.aborted).toBe(false);
+  });
+});
+
+describe("the shared library instance", () => {
+  // Both cases here need a `yahoo-finance2` this file's earlier tests never
+  // touched — the module-level `library` in server/yahoo-client.ts is
+  // memoised for the life of the process, so by this point in the file a
+  // real instance may already be cached from a prior case, which would make
+  // "one instance" trivially true regardless of `library ??=` vs `library =`.
+  // `vi.doMock` plus a fresh dynamic import gives each case its own module
+  // graph instead.
+  afterEach(() => {
+    vi.doUnmock("yahoo-finance2");
+    vi.resetModules();
+  });
+
+  it("constructs the library with versionCheck: false, never the library's own default", async () => {
+    // The default is `true` and, on the library's options-validation-failure
+    // path only, fetches registry.npmjs.org/yahoo-finance2/latest — a
+    // process with no business resolving npm's hostname must never risk that
+    // call (module header).
+    vi.resetModules();
+    const seenOptions: unknown[] = [];
+    vi.doMock("yahoo-finance2", () => ({
+      default: class {
+        constructor(options: unknown) {
+          seenOptions.push(options);
+        }
+        quote = async () => [];
+        chart = async () => ({});
+      },
+    }));
+
+    const { createYahooClient: freshCreateYahooClient } = await import("../server/yahoo-client.ts");
+    await freshCreateYahooClient().chart("VTI", REQUEST);
+
+    expect(seenOptions).toHaveLength(1);
+    expect(seenOptions[0]).toMatchObject({ versionCheck: false });
+  });
+
+  it("builds one shared instance across calls, memoised rather than rebuilt", async () => {
+    // A fresh instance per call would redo the library's cookie/crumb
+    // handshake on every history call — the burst an unofficial,
+    // rate-limiting endpoint punishes (module header).
+    vi.resetModules();
+    let constructions = 0;
+    vi.doMock("yahoo-finance2", () => ({
+      default: class {
+        constructor() {
+          constructions += 1;
+        }
+        quote = async () => [];
+        chart = async () => ({});
+      },
+    }));
+
+    const { createYahooClient: freshCreateYahooClient } = await import("../server/yahoo-client.ts");
+    const client = freshCreateYahooClient();
+    await client.chart("VTI", REQUEST);
+    await client.chart("VTI", REQUEST);
+
+    expect(constructions).toBe(1);
   });
 });
