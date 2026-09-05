@@ -669,13 +669,15 @@ flowchart LR
   account's balance is [`app/lib/balances.server.ts`](../app/lib/balances.server.ts); correcting
   one position inside a set is [`app/lib/positions.server.ts`](../app/lib/positions.server.ts).
 - **The price refresh** ([`app/lib/prices.server.ts`](../app/lib/prices.server.ts) — the only
-  price writer; [`app/lib/price-provider.server.ts`](../app/lib/price-provider.server.ts) — the
-  only importer of the provider library) overwrites `quote`, appends new `price_observation`
-  instants, keeps each market day's `price_daily` row at the provider's latest price for that day,
-  and records the attempt in `price_poll`. It also refreshes `instrument.quote_type` from the
-  provider. The **backfill batch** runs on the same refresh and writes the other two: `price_daily`
-  again, inserting only days the spine does not already hold, and one `price_backfill` row per
-  instrument attempted.
+  price writer, taking the provider through the `PriceProvider` interface
+  [`app/lib/price-provider.server.ts`](../app/lib/price-provider.server.ts) defines;
+  [`server/yahoo-client.ts`](../server/yahoo-client.ts) — reached from the price worker process, not
+  this one — is the only importer of the provider library) overwrites `quote`, appends new
+  `price_observation` instants, keeps each market day's `price_daily` row at the provider's latest
+  price for that day, and records the attempt in `price_poll`. It also refreshes
+  `instrument.quote_type` from the provider. The **backfill batch** runs on the same refresh and
+  writes the other two: `price_daily` again, inserting only days the spine does not already hold,
+  and one `price_backfill` row per instrument attempted.
 - **Deletes are rare and enumerable.** From the application: a `person` owning no accounts, an
   `instrument` that lost an alias race, a `passkey` a person removes (cascading its own
   `unlock_grant` rows away with it), and swept, consumed or explicitly-cleared scaffolding —

@@ -16,7 +16,7 @@
 import { getConfig } from "../../server/config.ts";
 
 import { getDb } from "./db.server.ts";
-import { yahooPriceProvider, type PriceProvider } from "./price-provider.server.ts";
+import { socketProvider } from "./provider-socket.server.ts";
 import {
   refreshPrices,
   withRefreshLock,
@@ -24,6 +24,8 @@ import {
   type RefreshPricesReport,
   type RefreshReport,
 } from "./prices.server.ts";
+
+import type { PriceProvider } from "./price-provider.server.ts";
 
 /**
  * What one press of "Refresh now" came to, in the shape the control renders.
@@ -91,11 +93,17 @@ type RunWithQuotes =
  * untouched (story 18) is the one a throw cannot show. Every path here returns
  * something {@link outcomeOf} can render.
  *
- * The default provider is `yahooPriceProvider()`, and this is the only place
- * a *caller* of a refresh names one — the price-worker cutover changes it here
+ * The default provider is `socketProvider()`, and this is the only place a
+ * *caller* of a refresh names one — the price-worker cutover changed it here
  * and in `startPricePoller`'s own default, which holds one instance for the
  * process. An instance, not a factory: with no per-operation state to reset
  * there is nothing a factory would buy.
+ *
+ * `socketProvider()` runs as this function's default *parameter*, evaluated
+ * before the `try` below ever starts — so it must never throw merely being
+ * built, or "never throws" above would be false for exactly the omitted-
+ * provider call every real caller makes. `provider-socket.server.ts`'s own
+ * header is where that constraint is kept, not enforced here.
  */
 export async function runRefresh(
   options: { quotes: true },
@@ -107,7 +115,7 @@ export async function runRefresh(
 ): Promise<RefreshRun>;
 export async function runRefresh(
   { quotes }: { quotes: boolean },
-  provider: PriceProvider = yahooPriceProvider(),
+  provider: PriceProvider = socketProvider(),
 ): Promise<RefreshRun> {
   try {
     const result = await withRefreshLock(() =>

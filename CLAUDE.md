@@ -85,8 +85,8 @@ concluding a grep found a violation):
 
 - `server/db.ts` is the only pool construction — it registers the type parsers that keep
   `numeric`/`int8`/`date` as strings.
-- `app/lib/price-provider.server.ts` is the only importer of `yahoo-finance2`;
-  `app/lib/prices.server.ts` is the only price writer.
+- `server/yahoo-client.ts` is the only importer of `yahoo-finance2`, reached from the price worker
+  process, not this one; `app/lib/prices.server.ts` is the only price writer.
 - `app/lib/valuation.server.ts` is the only valuation reader of `holding_valued` — every screen
   reads holdings through its readers (`currentHoldings(owners)`, `netWorth(owners)`,
   `holdingsAt(owners, d)`, `netWorthAt(owners, d)`, `accountHoldings(id)`, `accountTotals(owners)`).

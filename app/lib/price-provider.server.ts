@@ -1,12 +1,19 @@
 /**
  * Where prices come from, and the one shape the rest of the app knows them
  * in. DESIGN.md §6.1 fixed the interface at a single batched method;
- * ADR-0011 adds a second, and the reasoning that chose the first still holds:
- * `yahoo-finance2` is an unofficial client for an unpublished endpoint and
- * can break; what makes that tolerable is that swapping it is a day's work —
- * true only while `server/yahoo-client.ts` stays its one importer, which is
- * where this module now reaches it. The interface is also the test seam: CI
- * never reaches the network.
+ * ADR-0011 adds a second. The seam now has two implementations, and only one
+ * of them imports the library: the worker process (`server/price-worker.ts`)
+ * reaches `yahoo-finance2` through `server/yahoo-client.ts`, its one importer
+ * (ARCHITECTURE.md §4.2); this process's own, `socketProvider()`
+ * (`app/lib/provider-socket.server.ts`), dials the worker's unix socket and
+ * never touches the package at all (spec 0018 §3.3, §3.8). This module sits
+ * behind both — every schema, every conversion, every refusal a response can
+ * produce — so `socketProvider()` runs the very same `toProviderHistory` a
+ * direct call to the library would have, ADR-0011's split arithmetic
+ * included. `yahoo-finance2` is named below only in comments, documenting
+ * the shape the worker's payload is still expected to hold — swapping the
+ * library there is still a day's work, and this module's schemas are why.
+ * The interface is also the test seam: CI never reaches the network.
  *
  *   getQuotes        every symbol at once — the batching is why Yahoo was chosen
  *   getDailyCloses   one symbol, one range — history is per instrument, and the
@@ -62,7 +69,6 @@
  */
 import { z } from "zod";
 
-import { createYahooClient, type ChartRequest, type YahooClient } from "../../server/yahoo-client.ts";
 import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import { MONEY_SCALE, divide, render, toUnits } from "./money.ts";
 import { matchKey } from "./prices.server.ts";
@@ -656,21 +662,22 @@ export type SymbolProbe =
 
 /**
  * The probe as the resolution step receives it — every symbol at once,
- * keyed by the symbol as asked, so a test stub is one async arrow. The
- * client parameter is this module's business. Over the socket ([06]) each
- * serial probe would be a round trip; batched, one call answers every
- * symbol an upload creates.
+ * keyed by the symbol as asked, so a test stub is one async arrow. Where the
+ * client (or the socket) comes from is the implementation's own business,
+ * never this type's: over the socket ([06](../../docs/specs/price-worker/06-the-app-cutover.md))
+ * a serial probe would be a round trip, so `provider-socket.server.ts`'s
+ * `socketProbe` batches, one call answering every symbol an upload creates.
  */
 export type ProbeSymbols = (symbols: string[]) => Promise<Map<string, SymbolProbe>>;
 
 /**
  * Do these symbols quote, and in a currency we can hold? The verdict logic
- * behind {@link probeSymbols} and the socket probe ([06]) alike — pure, so
- * both can share it without either owning the client call.
+ * behind `socketProbe` (`app/lib/provider-socket.server.ts`) — pure, so it
+ * can be shared without the caller owning the transport.
  *
  * Built on the raw entries and not on `getQuotes`, because that seam
  * collapses a refusal into an absence by design (§6.1's reasoning, restated
- * at {@link probeSymbols}) — the probe needs the refusal named. A non-array
+ * just below) — the probe needs the refusal named. A non-array
  * `raw` answers every symbol `unavailable`, the same as Yahoo dropping a
  * symbol it never heard of.
  *
@@ -726,107 +733,20 @@ export function probeVerdicts(
 }
 
 /**
- * Do these symbols quote, and in a currency we can hold? The creation-time
- * half of the guard (§6.1 puts it at instrument resolution), one
- * `quote(symbols)` call answered through {@link probeVerdicts}. `getQuotes`
- * cannot serve it: there a refusal becomes an absent quote, since a refresh
- * must not lose ninety-nine prices over one foreign listing — but here the
- * caller is a person creating instruments, and "absent" would collapse the
- * distinction they can act on (a refused currency) into the one they cannot
- * (a provider's bad day). So non-USD comes back named per symbol; everything
- * else — an unknown symbol, a thrown client, a malformed payload — is
- * `unavailable` for every symbol asked, never a throw: a provider failure
- * must not block creation, because the next refresh marks every instrument
- * stale anyway. `client` is injectable: no test touches the network.
+ * The two live implementations — the creation-time probe and the refresh
+ * provider — both moved to `app/lib/provider-socket.server.ts` in the price-
+ * worker cutover (spec 0018 §3.3): `socketProbe` and `socketProvider()` now
+ * dial the worker's unix socket instead of taking a `YahooClient` directly,
+ * but every rule stated above them here is unchanged — `socketProvider()`'s
+ * `getQuotes` still logs and skips a `CurrencyRefused` exactly as this
+ * module's former `yahooPriceProvider` did, and its `getDailyCloses` still
+ * runs {@link toProviderHistory} and answers `no-history` for whatever
+ * {@link isMissingHistory} matches. `probeSymbols`, the function this
+ * replaced, is gone rather than kept alongside it: nothing under `app/`
+ * calls the direct client any more (`npm run build`'s own gate), and a second
+ * implementation nothing calls is a trap the next reader trips on, not a
+ * safety net.
  */
-export async function probeSymbols(
-  symbols: string[],
-  client: YahooClient = createYahooClient(),
-): Promise<Map<string, SymbolProbe>> {
-  try {
-    const fetchedAt = new Date();
-    const raw = await client.quote(symbols);
-    return probeVerdicts(symbols, raw, fetchedAt);
-  } catch {
-    // Deliberately everything: whatever the provider did, the caller's
-    // actionable answer is the same for every symbol asked — create anyway.
-    const verdicts = new Map<string, SymbolProbe>();
-    for (const symbol of symbols) verdicts.set(symbol, { status: "unavailable" });
-    return verdicts;
-  }
-}
-
-/**
- * The live provider. Constructed, not a singleton, so nothing imports
- * `yahoo-finance2` by reaching for a module-level value — the only caller
- * that asks is the refresh path. A non-USD quote is refused per symbol, not
- * per batch (one foreign listing must not cost ninety-nine prices), returned
- * as an absent quote and logged here where the currency is still known —
- * `ProviderQuote` has nowhere to carry it, on purpose (§6.1 stores no
- * currency column).
- */
-export function yahooPriceProvider(client: YahooClient = createYahooClient()): PriceProvider {
-  return {
-    async getQuotes(symbols: string[]): Promise<ProviderQuote[]> {
-      if (symbols.length === 0) return [];
-
-      const fetchedAt = new Date();
-
-      // `unknown[]` because the client is typed loosely (`server/yahoo-client.ts`).
-      // Nothing is lost: `yahooQuote` validates every field read — the
-      // correct posture towards an unofficial client for an unpublished
-      // endpoint (§6.1).
-      const raw = (await client.quote(symbols)) as unknown[];
-
-      const quotes: ProviderQuote[] = [];
-      for (const entry of raw) {
-        try {
-          const quote = toProviderQuote(entry, fetchedAt);
-          if (quote !== null) quotes.push(quote);
-        } catch (error) {
-          if (error instanceof CurrencyRefused) {
-            console.warn(`Price refused: ${error.message}`);
-            continue;
-          }
-          throw error;
-        }
-      }
-
-      return quotes;
-    },
-
-    async getDailyCloses(
-      symbol: string,
-      range: HistoryRange,
-      marketTimeZone: string,
-    ): Promise<ProviderHistory> {
-      try {
-        // One symbol per call. `matchKey` because that is the form the quote
-        // path sends and the endpoint answers in; the stored symbol is
-        // untouched, and nothing here matches one back — one call is one
-        // instrument.
-        //
-        // **`period2` is absent on purpose, and must stay absent.** The
-        // library defaults it to the instant of the call, which fetches more
-        // than the range needs — and that surplus is what makes the un-adjust
-        // complete. Yahoo restates closes through *every* split up to today, so
-        // bounding the request at `range.until` would drop the splits between
-        // `until` and now out of `events.splits` while leaving every close in
-        // the range adjusted for them: silently wrong by the whole factor. The
-        // range's real end is enforced on each bar's market date instead.
-        const request: ChartRequest = { period1: range.from, interval: "1d", events: "split" };
-        const raw = await client.chart(matchKey(symbol), request);
-
-        return toProviderHistory(raw, range, marketTimeZone);
-      } catch (error) {
-        if (isMissingHistory(error)) return { status: "no-history" };
-
-        // Everything else propagates: the caller's ledger wants the text.
-        throw error;
-      }
-    },
-  };
-}
 
 /**
  * The two things Yahoo says when it has no history to give: an unknown or
@@ -841,8 +761,13 @@ export function yahooPriceProvider(client: YahooClient = createYahooClient()): P
  *
  * A stem that stops matching degrades gracefully rather than lying: the ledger
  * records `provider_failed` with the text, and the instrument is retried daily.
+ *
+ * Exported for `app/lib/provider-socket.server.ts`, which runs the identical
+ * check against the text an `ask("history", …)` refusal carries — the worker
+ * answers with Yahoo's own message untouched (`server/price-worker.ts`'s
+ * `providerErrorText`), so the same stems still apply.
  */
-function isMissingHistory(error: unknown): boolean {
+export function isMissingHistory(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return NO_HISTORY_STEMS.some((stem) => message.includes(stem));
 }

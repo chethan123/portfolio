@@ -287,14 +287,27 @@ printf 'runtime dependencies intact\n'
 run_in_image 'test ! -e /app/node_modules/yahoo-finance2/script' ||
   fail "the CommonJS copy of yahoo-finance2 is still in the runtime image"
 
-# And the half the app does reach, proved rather than inferred: the provider
-# loads the package through a lazy `import()` on the first quote refresh, not
-# at boot, so a healthy container says nothing about it. This is the exact path
-# app/lib/price-provider.server.ts takes.
-docker compose exec -T app node -e \
+# And the half something reaches, proved rather than inferred: the package
+# loads through a lazy `import()` on the first call, not at boot, so a healthy
+# container says nothing about it. Since 06's cutover the app reaches it on no
+# path at all — this is the worker's path, and the same image serves both, so
+# either container proves the package is loadable where the worker will want it.
+docker compose exec -T worker node -e \
   'import("yahoo-finance2").then(({default:YahooFinance})=>{process.exit(typeof new YahooFinance().quote==="function"?0:1)}).catch(()=>process.exit(1))' ||
   fail "the ESM half of yahoo-finance2 did not import and construct inside the image"
 printf 'yahoo-finance2 CommonJS copy removed, ESM half loads\n'
+
+# 06's cutover, proved at the source level a container check cannot reach: the
+# app's own module graph no longer imports server/yahoo-client.ts, so its
+# built server bundle should carry no trace of the package that wraps. Grepped
+# against the *built* output rather than the source tree because a comment
+# naming the package (price-provider.server.ts's header keeps it in prose
+# only) is stripped by the build — a source grep would trip on that; a hit
+# surviving into the bundle is a real import.
+log "Checking the app's built bundle carries no trace of yahoo-finance2"
+run_in_image '! grep -rq yahoo-finance2 /app/build/server/' ||
+  fail "yahoo-finance2 is reachable from the app's own built server bundle"
+printf 'app bundle: no yahoo-finance2\n'
 
 for compiler in gcc cc g++ make tsc; do
   run_in_image "! command -v $compiler >/dev/null" || fail "compiler in the runtime image: $compiler"
