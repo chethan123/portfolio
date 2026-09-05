@@ -734,7 +734,7 @@ describe("what a batch writes to the spine", () => {
 
       // The real adapter, not the fake above: the floor lives in
       // `toProviderHistory`, which only the real adapter runs. The stub plays
-      // `clientCharting`'s role (`tests/price-provider.test.ts:736-818`).
+      // `clientCharting`'s role (`tests/price-provider.test.ts:757-830`).
       const provider = yahooPriceProvider(async () => ({
         quote: async () => [],
         chart: async () => ({

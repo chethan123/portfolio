@@ -565,7 +565,7 @@ export function toProviderHistory(
     // The mirror image at the other end. `writeBackfilledCloses` inserts
     // where absent, so a hostile or merely wrong bar dated 1971 would land as
     // a row — and the gap predicate `NO_CLOSE_BY_FIRST_HELD`
-    // (`prices.server.ts:276-281`) is satisfied by any row at or before
+    // (`prices.server.ts:280-285`) is satisfied by any row at or before
     // first-held, so that one row would take the instrument out of the
     // candidate set for good while the ledger says `filled`: the real gap,
     // first-held back to the spine's true start, is never filled. ADR-0011

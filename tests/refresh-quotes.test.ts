@@ -390,6 +390,58 @@ describe("the seven-day window", () => {
   );
 
   it(
+    "warns once for the whole refresh, naming every instrument whose close was skipped",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // Three words of the rule, each its own way to get it wrong: *one* line
+      // (not one per instrument), *per refresh* (not on a refresh that skipped
+      // nothing), naming *the instruments* (not just the first).
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      await seedInstrument({ symbol: "VXUS", priceSource: "feed" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await withClockNear("2026-06-15T12:00:00Z", () =>
+          refreshQuotes(
+            fakeProvider([
+              quote({ symbol: "VTI", asOf: new Date("2026-06-01T20:00:00Z") }),
+              quote({ symbol: "VXUS", asOf: new Date("2026-06-01T20:00:00Z") }),
+            ]),
+            NEW_YORK,
+            db,
+          ),
+        );
+
+        const skipped = warn.mock.calls.filter((call) => String(call[0]).includes("close skipped"));
+        expect(skipped).toHaveLength(1);
+        expect(String(skipped[0]?.[0])).toContain("VTI");
+        expect(String(skipped[0]?.[0])).toContain("VXUS");
+      } finally {
+        warn.mockRestore();
+      }
+    }),
+  );
+
+  it(
+    "says nothing about skipped closes on a refresh that skipped none",
+    withDatabase(async ({ db, seedInstrument }) => {
+      await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await withClockNear("2026-06-05T21:00:00Z", () =>
+          refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db),
+        );
+
+        expect(warn.mock.calls.filter((call) => String(call[0]).includes("close skipped"))).toEqual(
+          [],
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    }),
+  );
+
+  it(
     "writes the close for a quote exactly seven days ahead of today, the other edge",
     withDatabase(async ({ db, seedInstrument }) => {
       // The spec calls the window symmetric, so both edges are rules. Without
@@ -1018,6 +1070,30 @@ describe("the observation log", () => {
 });
 
 describe("the archive cap", () => {
+  it(
+    "drops a payload one byte over the cap",
+    withDatabase(async ({ db, seedInstrument }) => {
+      // The mirror of the at-cap case. Without it any cap up to the 33 KB the
+      // oversize case uses would pass, and "over 32 KB" would be untrue across
+      // a whole kilobyte.
+      const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
+      const envelope = JSON.stringify({ symbol: "VTI", note: "" }).length;
+      const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope + 1) };
+      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBe(32 * 1024 + 1);
+
+      await withClockNear("2026-06-05T21:00:00Z", () =>
+        refreshQuotes(fakeProvider([quote({ symbol: "VTI", payload })]), NEW_YORK, db),
+      );
+
+      const observation = await db
+        .selectFrom("price_observation")
+        .select("payload")
+        .where("instrument_id", "=", vti.id)
+        .executeTakeFirstOrThrow();
+      expect(observation.payload).toBeNull();
+    }),
+  );
+
   it(
     "archives a payload of exactly the cap, which is not over it",
     withDatabase(async ({ db, seedInstrument }) => {

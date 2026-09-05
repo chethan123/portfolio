@@ -503,6 +503,21 @@ describe("reading a day of history", () => {
     ]);
   });
 
+  it("judges a bar against its market date, not the instant's UTC date", () => {
+    // 01:00Z on 2024-06-01 is the evening of 2024-05-31 in New York, so the
+    // bar belongs to a day before the range starts. Comparing the instant's
+    // UTC date instead would keep it — the same zone confusion the quote
+    // path's window guard has to avoid, on the other side of the seam.
+    const closes = closesOf(
+      historyOf({ quotes: [bar("2024-06-01T01:00:00Z", 9), bar("2024-06-07", 11)] }, {
+        from: "2024-06-01",
+        until: "2024-12-31",
+      }),
+    );
+
+    expect(closes).toEqual([{ date: "2024-06-07", close: "11.0000" }]);
+  });
+
   it("skips a bar with no close rather than writing a row for it", () => {
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-06-07", null), bar("2024-06-10", 12)] }),
