@@ -251,14 +251,26 @@ function DismissedNote({ phase }: { phase: Phase }) {
  * the message ticket 04 says has no test at all today, and the `disabled`
  * attribute a mutation could quietly drop — are each a direct render
  * assertion rather than a state this suite has no browser to reach.
+ *
+ * **`revalidatorState` disables the button too, not only `phase` (finding
+ * 5).** A dismissed or failed attempt starts `loaderData.options` refreshing
+ * (`runCeremony`'s own header) without moving `phase` off whatever it
+ * settled to — `"idle"` once the ceremony effect resets it. A press accepted
+ * during that window would run `requestAssertion` only after the effect
+ * waits for the revalidation already in flight to resolve, spending this very
+ * click's activation on the network round trip it started — exactly the
+ * `NotAllowedError`-as-dismissal bug this screen was rewritten to avoid
+ * (`shouldRevalidateBeforeRetry`'s own header, commit c0af420).
  */
 function UnlockControl({
   supported,
   phase,
+  revalidatorState,
   onUnlock,
 }: {
   supported: boolean | null;
   phase: Phase;
+  revalidatorState: "idle" | "loading" | "submitting";
   onUnlock: () => void;
 }) {
   if (supported === false) {
@@ -266,7 +278,12 @@ function UnlockControl({
   }
 
   return (
-    <button type="button" className="button" onClick={onUnlock} disabled={phase === "confirming"}>
+    <button
+      type="button"
+      className="button"
+      onClick={onUnlock}
+      disabled={phase === "confirming" || revalidatorState !== "idle"}
+    >
       Unlock
     </button>
   );
@@ -467,7 +484,12 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
 
       <section className="panel">
         <div className="panel-body panel-body--empty">
-          <UnlockControl supported={supported} phase={phase} onUnlock={handleUnlock} />
+          <UnlockControl
+            supported={supported}
+            phase={phase}
+            revalidatorState={revalidator.state}
+            onUnlock={handleUnlock}
+          />
 
           <DismissedNote phase={phase} />
 

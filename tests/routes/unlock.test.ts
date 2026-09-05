@@ -496,7 +496,7 @@ describe("UnlockControl — finding 10's untested unsupported-browser branch and
     "offers the button when supported is $supported",
     ({ supported }) => {
       const markup = renderToStaticMarkup(
-        UnlockControl({ supported, phase: "idle", onUnlock: () => {} }),
+        UnlockControl({ supported, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
       );
       expect(markup).toContain(">Unlock<");
     },
@@ -504,21 +504,44 @@ describe("UnlockControl — finding 10's untested unsupported-browser branch and
 
   it("shows the no-ceremony message instead of a button once the browser is confirmed unable to run one", () => {
     const markup = renderToStaticMarkup(
-      UnlockControl({ supported: false, phase: "idle", onUnlock: () => {} }),
+      UnlockControl({ supported: false, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
     );
     expect(markup).not.toContain("<button");
     expect(markup).toContain(NO_CEREMONY_MESSAGE);
   });
 
-  it("disables the button only while a ceremony is in flight", () => {
+  it("disables the button while a ceremony is in flight", () => {
     const confirming = renderToStaticMarkup(
-      UnlockControl({ supported: true, phase: "confirming", onUnlock: () => {} }),
+      UnlockControl({ supported: true, phase: "confirming", revalidatorState: "idle", onUnlock: () => {} }),
     );
     expect(confirming).toContain('disabled=""');
 
-    const idle = renderToStaticMarkup(UnlockControl({ supported: true, phase: "idle", onUnlock: () => {} }));
+    const idle = renderToStaticMarkup(
+      UnlockControl({ supported: true, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
+    );
     expect(idle).not.toContain("disabled");
   });
+
+  it(
+    // The pin for finding 5: a dismissed or failed attempt starts
+    // `loaderData.options` revalidating without moving `phase` off "idle"
+    // (`runCeremony`'s own header) — before this fix, a press accepted here
+    // ran the ceremony only after this same effect waited on that
+    // already-in-flight network round trip, spending the click's activation
+    // on the wait rather than the check.
+    "disables the button while its revalidator is refreshing stale options, even though phase itself is idle",
+    () => {
+      const loading = renderToStaticMarkup(
+        UnlockControl({ supported: true, phase: "idle", revalidatorState: "loading", onUnlock: () => {} }),
+      );
+      expect(loading).toContain('disabled=""');
+
+      const submitting = renderToStaticMarkup(
+        UnlockControl({ supported: true, phase: "idle", revalidatorState: "submitting", onUnlock: () => {} }),
+      );
+      expect(submitting).toContain('disabled=""');
+    },
+  );
 });
 
 describe("DismissedNote — finding 10's cancelled-prompt note", () => {

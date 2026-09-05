@@ -104,7 +104,7 @@ import { getConfig } from "../../server/config.ts";
 import { readCookie } from "./cookies.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { NotFoundError, ValidationError, parseInput, requiredText } from "./input.server.ts";
-import { IDLE_WINDOW_MS, joinTransports, splitTransports } from "./lock.ts";
+import { IDLE_WINDOW_MS, LABEL_MAX_LENGTH, joinTransports, splitTransports } from "./lock.ts";
 
 /** The household's own name, shown to a password manager as the relying party. */
 const RP_NAME = "Portfolio Tracker";
@@ -871,16 +871,31 @@ export async function verifyUnlock(
 // Enrolling
 // ---------------------------------------------------------------------------
 
+/**
+ * A `PublicKeyCredentialCreationOptionsJSON` this module actually hands
+ * out — narrower than the library's own declared return type by exactly one
+ * property, the registration twin of {@link UnlockOptions} above and for
+ * the identical reason: {@link registrationOptionsFor} never passes
+ * `extensions` to `generateRegistrationOptions`, so the value it returns
+ * never carries that key at all. Fixed here, once, at the one place the
+ * value is produced — the same move that type makes for the assertion
+ * options — so that Settings → Passkeys (the one route that hands this to a
+ * browser) derives its own type from {@link beginEnrolment}'s return rather
+ * than importing `@simplewebauthn/server` a second time for a type this
+ * module already narrows correctly.
+ */
+export type RegistrationOptions = PublicKeyCredentialCreationOptionsJSON & { extensions?: undefined };
+
 async function registrationOptionsFor(
   label: string,
   bootstrap: boolean,
   db: Kysely<Database>,
   expected: RelyingPartyExpectation,
-): Promise<PublicKeyCredentialCreationOptionsJSON> {
+): Promise<RegistrationOptions> {
   const excludeCredentials = await allowCredentialList(db);
   const { bytes } = mintChallenge({ kind: "register", label, bootstrap });
 
-  return generateRegistrationOptions({
+  const options = await generateRegistrationOptions({
     rpName: RP_NAME,
     rpID: expected.rpID,
     // The name is the label the person typed, so their password manager
@@ -901,9 +916,49 @@ async function registrationOptionsFor(
     // across different devices and providers is what this household needs.
     excludeCredentials,
   });
+
+  // The one assertion {@link RegistrationOptions}'s own header promises:
+  // nothing above ever sets `extensions`, so the library's wider declared
+  // return type is honestly narrower here, in the one value this function
+  // actually produces.
+  return options as RegistrationOptions;
 }
 
-const labelInput = z.object({ label: requiredText("A label", 60) });
+/**
+ * A label, bounded and trimmed by {@link requiredText} — plus what that
+ * shared helper does not itself refuse. A control character (a NUL byte
+ * among them) or a newline stored in this column is rendered verbatim in
+ * Settings, and a lone surrogate is a value `JSON.stringify`'s own escaping
+ * cannot make round-trip; either one reaches here only after the browser has
+ * *already* created a real credential in the family member's own password
+ * manager (this function refuses before that, {@link completeRegistration}'s
+ * insert refuses only after), which is exactly why the refusal belongs at
+ * this end of the ceremony and not the other.
+ */
+const NO_CONTROL_CHARACTERS_MESSAGE =
+  "A label cannot carry a line break or another control character.";
+const NOT_WELL_FORMED_MESSAGE = "A label cannot carry an incomplete character.";
+
+const labelInput = z.object({
+  label: requiredText("A label", LABEL_MAX_LENGTH)
+    .refine((value) => !/[\p{Cc}]/u.test(value), { message: NO_CONTROL_CHARACTERS_MESSAGE })
+    .refine((value) => value.isWellFormed(), { message: NOT_WELL_FORMED_MESSAGE }),
+});
+
+/**
+ * What {@link beginEnrolment} refuses the household's first passkey with when
+ * `acknowledgement` is not the literal `"true"` — ticket 05's own rule that
+ * the warning shown before that enrolment "is a statement the person must
+ * pass", enforced here rather than left to a client-side `disabled` attribute
+ * a direct POST can simply skip. This is not a second authorisation path for
+ * the *write* — the bootstrap case still needs no assertion, exactly as
+ * spec 0019 says, because there is still nothing to authorise against — it is
+ * the same kind of courtesy gate {@link removePasskey}'s own `confirmRemoval`
+ * already is: a plain "was this actually shown" check, never a credential.
+ */
+const FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE =
+  "Enrolling the household's first passkey locks every other browser immediately — tick " +
+  "that acknowledgement first.";
 
 /**
  * Begin enrolling a passkey: the very first, with nothing to prove, or
@@ -916,6 +971,10 @@ const labelInput = z.object({ label: requiredText("A label", 60) });
  * {@link completeRegistration}'s conditional insert, and the *concurrent*
  * half by migration 0012's `passkey_bootstrap_idx` — neither is enough
  * alone, and that migration's comment on the index is explicit about why.
+ * That same bootstrap case also requires `acknowledgement` to be exactly
+ * `"true"` — see {@link FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE}. Ignored once
+ * the household holds a passkey: the warning this guards is shown only for
+ * the first one, and enrolling a second changes nothing for anybody.
  *
  * Every later enrolment needs `assertion`, verified as scoped to `"enrol"`
  * — which also mints a grant, the same as any verified assertion. The
@@ -924,9 +983,10 @@ const labelInput = z.object({ label: requiredText("A label", 60) });
  */
 export async function beginEnrolment(
   label: string,
-  assertion: unknown,
+  input: { assertion: unknown; acknowledgement?: string },
   db: Kysely<Database> = getDb(),
-): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; grant: UnlockGrant | undefined }> {
+): Promise<{ options: RegistrationOptions; grant: UnlockGrant | undefined }> {
+  const { assertion, acknowledgement } = input;
   const { label: validLabel } = parseInput(labelInput, { label });
 
   const locked = await isLocked(db);
@@ -940,6 +1000,8 @@ export async function beginEnrolment(
       );
     }
     grant = await verifyScopedAssertion(narrowAssertion(assertion), { kind: "enrol" }, db);
+  } else if (acknowledgement !== "true") {
+    throw ValidationError.form(FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE);
   }
 
   const options = await registrationOptionsFor(validLabel, /* bootstrap */ !locked, db, expectedRelyingParty());
