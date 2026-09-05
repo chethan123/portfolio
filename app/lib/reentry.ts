@@ -39,9 +39,11 @@
  * `Source/WebCore/history/BackForwardCache.cpp` (HEAD `6787a18c74`, lines
  * 156–160) guards it on `document->url().protocolIs("https")`, so the
  * identical response over plain HTTP is left eligible for its cache. This
- * app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost`/
- * `127.0.0.1` (`server/config.ts`), so in production Safari refuses the
- * cache too; it is the plain-HTTP development loop where it does not.
+ * app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost` itself
+ * — `server/config.ts` turns away every IP address before it reaches
+ * that carve-out, `127.0.0.1` included — so in production Safari refuses
+ * the cache too; it is the plain-HTTP development loop, on that one
+ * hostname, where it does not.
  * `event.persisted` is simply never true on the two engines and the one
  * protocol where the cache is refused outright — the same handler costs
  * nothing there, and closes the gap that survives everywhere else: Chrome,

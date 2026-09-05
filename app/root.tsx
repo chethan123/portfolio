@@ -141,9 +141,11 @@ function isLockNowPath(pathname: string): boolean {
  * that: `Source/WebCore/history/BackForwardCache.cpp` guards it on
  * `document->url().protocolIs("https")`, so the identical response over
  * plain HTTP — `http://localhost` included — is left eligible for its cache.
- * This app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost`/
- * `127.0.0.1` (`server/config.ts`), so in production Safari does refuse the
- * cache too; it is the plain-HTTP development loop where it does not.
+ * This app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost`
+ * itself — `server/config.ts` turns away every IP address before it
+ * reaches that carve-out, `127.0.0.1` included — so in production Safari
+ * does refuse the cache too; it is the plain-HTTP development loop, on
+ * that one hostname, where it does not.
  * **Chrome admits such a page regardless of protocol.**
  * `CacheControlNoStoreEnterBackForwardCache` has been enabled by default
  * since 2025; Chrome shortens such an entry's life to three minutes and
