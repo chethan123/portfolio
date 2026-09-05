@@ -96,6 +96,10 @@ const {
 } = await import("~/lib/lock.server");
 const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { middleware } = await import("../../app/root.tsx");
+// The window the screen's guard is measured against, read from where the
+// domain and the screen now share it (ticket 11's F14) rather than restated
+// here — a restatement is exactly the drift that finding was about.
+const { CHALLENGE_TTL_MS } = await import("~/lib/lock");
 
 afterAll(closeTestDatabase);
 
@@ -408,12 +412,12 @@ describe("registrationOptionsExpired — the stale-registration-options guard", 
     expect(registrationOptionsExpired(1_000, 1_000)).toBe(false);
   });
 
-  it("is not expired just under the two-minute TTL lock.server.ts's own CHALLENGE_TTL_MS grants", () => {
-    expect(registrationOptionsExpired(0, 2 * 60 * 1000 - 1)).toBe(false);
+  it("is not expired just under the window CHALLENGE_TTL_MS grants", () => {
+    expect(registrationOptionsExpired(0, CHALLENGE_TTL_MS - 1)).toBe(false);
   });
 
-  it("is expired at exactly the two-minute mark", () => {
-    expect(registrationOptionsExpired(0, 2 * 60 * 1000)).toBe(true);
+  it("is expired at exactly the window CHALLENGE_TTL_MS grants", () => {
+    expect(registrationOptionsExpired(0, CHALLENGE_TTL_MS)).toBe(true);
   });
 
   it(
@@ -422,7 +426,7 @@ describe("registrationOptionsExpired — the stale-registration-options guard", 
     // Create step for as long as they like before pressing it again.
     "stays expired well past the TTL, the case a dismissed creation followed by a long pause produces",
     () => {
-      expect(registrationOptionsExpired(0, 5 * 60 * 1000)).toBe(true);
+      expect(registrationOptionsExpired(0, CHALLENGE_TTL_MS * 2.5)).toBe(true);
     },
   );
 });

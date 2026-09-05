@@ -829,7 +829,7 @@ on that browser's first refusal after somebody enrols again. Nobody has to clear
 
 **The delete alone does not close a ceremony already in flight — stopping `app` before you delete does.**
 A registration challenge lives in the app's own process memory, not in the database, for two minutes
-after it is minted (`CHALLENGE_TTL_MS` in [`app/lib/lock.server.ts`](../app/lib/lock.server.ts)); a
+after it is minted (`CHALLENGE_TTL_MS` in [`app/lib/lock.ts`](../app/lib/lock.ts)); a
 browser that had already reached the "Create the passkey" step keeps that challenge live until either
 it completes or the two minutes pass, and `app` is the only thing that can complete it. Delete first
 and only stop-and-restart `app` afterward, and there is a live gap between the delete committing and
