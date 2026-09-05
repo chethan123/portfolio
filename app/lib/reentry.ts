@@ -49,38 +49,36 @@
  * nothing there, and closes the gap that survives everywhere else: Chrome,
  * unconditionally, and Safari's own local-dev loop.
  *
- * **The postLock-or-askServer decision lives here now, not at the call
- * site — and both halves install unconditionally, always.** An earlier
- * version left that decision in `app/root.tsx`, which decided *whether to
- * install the `visibilitychange` listener at all* off `hasPasskey` at render
- * time: `watchReentry(hasPasskey ? callback : null, askServer)`. That
- * reasoning is where the bug lived — `hasPasskey` is baked into a page at
- * render time and can go stale (a household may enrol its first passkey in
- * another tab after this one already rendered with none), and passing
- * `null` skipped installing the listener for this tab's *entire* lifetime,
- * not merely for one return. A page caught that way never got a second
- * chance: the `pageshow` half only fires on a back/forward-cache restore,
- * which an ordinary foreground-after-hidden never is. A second review round
- * found that moving the decision into a *function* the call site still chose
- * whether to call (`resolveReentryCallback`) did not close the gap either —
- * the call site could still revert to gating installation on `hasPasskey`
- * and every existing test stayed green, since none of them called through
- * the production wiring itself. The fix is structural rather than
- * behavioural: `watchReentry` takes `assumedPasskey` as a plain `boolean` and
- * both real actions, always installs both listeners, and decides internally,
- * at the instant a hidden-too-long return actually happens, whether to post
- * the lock or only ask the server. There is no nullable slot left for a call
- * site to pass `null` into — the old call shape does not typecheck against
- * this one at all.
+ * **No belief is consulted, and both halves install unconditionally,
+ * always.** Three versions of this file asked `hasPasskey` — loader data
+ * from the last render — what a hidden-too-long return should do, and each
+ * one leaked through the same crack. First it decided *whether to install
+ * the `visibilitychange` listener at all* (`watchReentry(hasPasskey ?
+ * callback : null, askServer)`), which skipped the listener for the tab's
+ * entire lifetime rather than for one return; the `pageshow` half only fires
+ * on a bfcache restore, which an ordinary foreground-after-hidden never is,
+ * so a page caught that way never got a second chance. Then it moved the
+ * decision into a function the call site still chose whether to call, which
+ * the call site could simply revert while every test stayed green. Then it
+ * moved inside this function, which fixed the wiring but not the belief:
+ * a tab that rendered before the household's first-ever enrolment still
+ * carried `false` into a return that happened after it, downgraded its post
+ * to a revalidation, and was admitted on the grant the enrolling tab minted
+ * for this same browser — hidden well past the grace, still reading.
+ *
+ * So the belief is gone rather than fixed for a fourth time. There is no
+ * parameter left to stale: a hidden-too-long return posts the lock, which is
+ * what ticket 06 and spec 0019 both say without a condition, and what the
+ * server was always the right place to answer anyway.
  *
  * **A persisted restore is not by itself evidence the grant is gone.**
  * Unlike the hidden-too-long case, which already knows what it wants (end
  * this browser's reading, unconditionally), a bfcache restore might be
  * perfectly innocent — the grant may still be live and idle-fresh, and nine
- * requests out of ten it will be. So `askServer` never posts the lock action
- * on its own say-so; it asks the loaders to run again, through the very
- * middleware every ordinary navigation already passes through, and lets a
- * genuinely dead grant redirect the way one always does. Re-locking a
+ * requests out of ten it will be. So `onPersistedRestore` never posts the
+ * lock action on its own say-so; it asks the loaders to run again, through
+ * the very middleware every ordinary navigation already passes through, and
+ * lets a genuinely dead grant redirect the way one always does. Re-locking a
  * perfectly good session on every Back gesture would be wrong in the other
  * direction — the annoyance that gets a real security feature turned off.
  *
@@ -138,14 +136,6 @@ export function shouldPostLock(hiddenAt: HiddenAt | null, nowWallMs: number, now
 function readClocks(): HiddenAt {
   return { wallMs: Date.now(), monoMs: performance.now() };
 }
-
-/**
- * What a hidden-too-long return does once it happens: `postLock` ends this
- * browser's own reading outright; `askServer` merely re-asks the middleware,
- * for a belief that might already be stale ({@link watchReentry}'s own
- * `assumedPasskey` parameter doc).
- */
-export type ReentryActions = { postLock: () => void; askServer: () => void };
 
 /**
  * What actually posting the automatic lock does — the whole of
@@ -221,30 +211,37 @@ export async function postLockNow(
  * always — see this file's own header for why that is the fix rather than a
  * stylistic choice.
  *
- * **`assumedPasskey` is read only at the instant a hidden-too-long return
- * actually happens, never at wire time.** A hidden-too-long return
- * ({@link shouldPostLock} saying the grace has passed) calls
- * `actions.postLock()` when `assumedPasskey` is true, and
- * `actions.askServer()` otherwise — never silence: a page that rendered
- * believing no passkey was enrolled may be wrong by the time it actually
- * returns, and asking the server is the cheap, always-correct fallback for
- * that belief, the same one `onPersistedRestore` below already relies on.
+ * **A hidden-too-long return posts the lock, and consults nothing first.**
+ * Ticket 06 states the trigger without a condition — *"on return, if the gap
+ * exceeds the grace, it **posts the lock action** — the same route the
+ * control uses. Navigating to the unlock screen alone would leave the grant
+ * row and its cookie live"* — and spec 0019 says the same in the same words.
+ * This function briefly took a `hasPasskey` belief and downgraded the post to
+ * a bare revalidation when it read false, to spare an unprotected household
+ * a `/lock-now` round trip it had nothing to gain from. That belief is loader
+ * data from the last render, and a tab that rendered before the household's
+ * very first enrolment carries `false` into a return that happens after it:
+ * the branch then revalidates, the middleware admits the grant the enrolling
+ * tab minted for this same browser, and a browser hidden well past the grace
+ * goes on reading. Which is the exact outcome both sentences above exist to
+ * forbid. The saving was two requests that end where they started (the POST
+ * is a documented no-op with no grant to delete — `app/routes/lock-now.ts` —
+ * and `/unlock` bounces straight back to `/`, all inside `fetch`'s own
+ * redirect following, so no reader ever sees it). Two invisible requests is
+ * not a price worth a hole in the thing this slice is for.
+ *
  * Nothing here posts on every ordinary return, which would be tiresome about
  * the few seconds of switching apps (story 4) — only once the grace has
  * actually passed.
  *
  * `onPersistedRestore` runs on every `pageshow` whose `event.persisted` is
- * true, unconditionally and regardless of `assumedPasskey`: see this file's
- * header for why that call must never assume the answer is "gone" the way
- * `actions.postLock` does. Kept as its own parameter rather than folded into
- * `actions.askServer` — it answers a different trigger (a back/forward-cache
- * restore, never a hidden-too-long return) that this change did not touch.
+ * true, and is deliberately *not* the same action: ticket 06 asks for "a
+ * revalidation, not an unconditional lock post, because a persisted restore
+ * is not by itself evidence the grant is gone". It stays its own parameter
+ * because it answers its own trigger — a back/forward-cache restore, never a
+ * hidden-too-long return.
  */
-export function watchReentry(
-  assumedPasskey: boolean,
-  actions: ReentryActions,
-  onPersistedRestore: () => void,
-): () => void {
+export function watchReentry(postLock: () => void, onPersistedRestore: () => void): () => void {
   // Seeded from the current visibility state, not `null` — a page mounted
   // into an already-hidden tab (opened in a background tab, or hydrated
   // while the document is already hidden) never sees a `visibilitychange`
@@ -262,10 +259,7 @@ export function watchReentry(
     }
 
     const { wallMs, monoMs } = readClocks();
-    if (shouldPostLock(hiddenAt, wallMs, monoMs)) {
-      if (assumedPasskey) actions.postLock();
-      else actions.askServer();
-    }
+    if (shouldPostLock(hiddenAt, wallMs, monoMs)) postLock();
     hiddenAt = null;
   }
 

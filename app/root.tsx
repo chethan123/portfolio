@@ -436,13 +436,10 @@ export const middleware: Route.MiddlewareFunction[] = [lockMiddleware];
  * `hasPasskey: false` (ticket 06) are the two fields with no existing failure
  * default to reuse, so each gets a fresh one on the same principle: `gated:
  * true` is the value that keeps `OpenInstanceBanner` off, and `hasPasskey:
- * false` is the value that keeps the lock-now control and the re-entry effect
- * off — both moot in practice, since `Layout`'s bare-shell branch for this
- * route drops every control regardless of what either field says, but the
- * type this loader returns has to agree with the branch that does read them.
- * `passkeyCheckFailed: false` for the same reason: this screen's `isLocked`
- * read never even runs (this loader returns before it), so there is no
- * uncertain reading here to report either.
+ * false` is the value that keeps the lock-now control off — moot in
+ * practice, since `Layout`'s bare-shell branch for this route drops every
+ * control regardless of what either field says, but the type this loader
+ * returns has to agree with the branch that does read them.
  */
 const UNLOCK_SCREEN_ROOT_DATA = {
   gated: true,
@@ -450,7 +447,6 @@ const UNLOCK_SCREEN_ROOT_DATA = {
   masked: true,
   maskingPolicy: "masked" as MaskingPolicy,
   hasPasskey: false,
-  passkeyCheckFailed: false,
 };
 
 /**
@@ -531,28 +527,19 @@ export async function loader({ request }: Route.LoaderArgs) {
   // fail toward showing a button that clears a grant which may be exactly
   // what is protecting this render.
   //
-  // **`hasPasskey: false` on a throw is not the same claim as "no passkey"
-  // (finding C), and `passkeyCheckFailed` is what lets a reader downstream
-  // tell the two apart.** `hasPasskey` alone answers the chrome's question —
-  // draw the lock-now control or not — and fails toward `false` for exactly
-  // the reason two paragraphs up; that bias is right for a button. It is
-  // wrong for `watchReentry`'s question, which is not "is there a
-  // control to draw" but "should a hidden-too-long return post the lock or
-  // merely ask the server" — an `isLocked` that could not answer is not
-  // proof there is nothing to protect, and reading it as one lets a stale
-  // reader's `askServer` fallback ask a middleware that is *itself* failing
-  // the same read, wave the request through, and extend the very grant the
-  // guard exists to end. `passkeyCheckFailed` carries that distinction to
-  // `app/root.tsx`'s own {@link assumePasskeyForReentry}, so an uncertain
-  // read takes the cautious branch there without changing what `hasPasskey`
-  // means for the control it already gates.
+  // **This answers the chrome's question only** — draw the lock-now control
+  // or not — which is why failing toward `false` is right here. It used to
+  // carry a second field saying whether the read had actually failed, so the
+  // re-entry guard could tell "no passkey" from "could not tell" and take the
+  // cautious branch. That guard no longer asks: a hidden-too-long return
+  // posts the lock without consulting anything this loader believes
+  // (`~/lib/reentry.ts`'s own header), so there is no longer a client-side
+  // decision for an uncertain read to mislead.
   let hasPasskey = false;
-  let passkeyCheckFailed = false;
   try {
     hasPasskey = await isLocked();
   } catch (error) {
     console.error("Lock check failed; hiding the lock-now control rather than guessing:", error);
-    passkeyCheckFailed = true;
   }
 
   // Read here rather than in the banner, because a component cannot: the value
@@ -563,7 +550,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     masked,
     maskingPolicy,
     hasPasskey,
-    passkeyCheckFailed,
   };
 }
 
@@ -640,25 +626,6 @@ function Brand({ search }: { search: string }) {
   );
 }
 
-/**
- * What {@link watchReentry} should be handed for `assumedPasskey`, given the
- * root loader's own two-field answer (finding C) — not `rootData.hasPasskey`
- * read alone. The loader's `hasPasskey` fails toward `false` on an
- * `isLocked` it could not answer, which is the right bias for the chrome's
- * control and the wrong one here: a bare `false` would tell `watchReentry` to
- * fall back to asking the server rather than posting the lock, trusting a
- * middleware that, during the same outage, is failing the identical read and
- * waving the request through — a live grant that fallback would then only
- * extend, never end. `passkeyCheckFailed` is what this reads instead of
- * trusting the `false`: true takes the cautious branch (as good as a passkey
- * being believed enrolled) regardless of what `hasPasskey` itself says,
- * because posting the lock on an uncertain read costs one needless round
- * trip and failing to post one costs the guard's whole purpose.
- */
-export function assumePasskeyForReentry(hasPasskey: boolean, passkeyCheckFailed: boolean): boolean {
-  return hasPasskey || passkeyCheckFailed;
-}
-
 export function Layout({ children }: { children: React.ReactNode }) {
   // From the root loader, not a prop: `Layout` wraps error boundaries too,
   // where there is no loader data at all. The banner lives here so every
@@ -731,11 +698,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // one that may not apply".
   const hasPasskey = rootData?.hasPasskey === true;
 
-  // Finding C: never read alone by the reentry effect below any more — see
-  // `assumePasskeyForReentry`'s own header for why an uncertain `isLocked`
-  // must not fall in with "no passkey" for that one decision.
-  const passkeyCheckFailed = rootData?.passkeyCheckFailed === true;
-
   // Named directly in the reentry effect's dependency array below, not
   // stashed in a ref: `useRevalidator` memoises `revalidate` on
   // `[dataRouterContext.router]` (react-router 7.18.2), which never changes
@@ -802,27 +764,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   /**
    * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
-   * the whole argument for what each half does and does not promise, and
-   * now carries the postLock-or-askServer decision too (finding 6):
-   * `watchReentry` takes the raw `assumedPasskey` belief and both real
-   * actions, and decides internally which to invoke — `Layout` has no
-   * branch of its own left to get wrong, and no nullable slot here for a
-   * reverted call site to pass `null` into the way the old
-   * `hasPasskey ? callback : null` did. What counts as "assumed-enrolled" is
-   * {@link assumePasskeyForReentry}, not `hasPasskey` alone — finding C:
-   * `hasPasskey` fails toward `false` on an `isLocked` that could not
-   * answer, which is the chrome's own bias and the wrong one for this
-   * decision (that function's own header).
+   * the whole argument for what each half does and does not promise. There
+   * is nothing for `Layout` to decide: a hidden-too-long return posts the
+   * lock and a persisted restore asks the server, and neither consults what
+   * this render believes about the household. Three rounds of findings came
+   * from handing `watchReentry` a `hasPasskey` belief that this page baked in
+   * at render time; the parameter that carried it is gone, so there is no
+   * longer a shape here for a call site to get wrong.
    */
   useEffect(() => {
     if (isUnlockScreen) return;
 
-    return watchReentry(
-      assumePasskeyForReentry(hasPasskey, passkeyCheckFailed),
-      { askServer, postLock: attemptLock },
-      askServer,
-    );
-  }, [isUnlockScreen, hasPasskey, passkeyCheckFailed, askServer, attemptLock]);
+    return watchReentry(attemptLock, askServer);
+  }, [isUnlockScreen, askServer, attemptLock]);
 
   return (
     <html lang="en">

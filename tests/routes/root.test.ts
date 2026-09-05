@@ -84,13 +84,6 @@ describe("the shell's loader", () => {
       // never a figure, so the fail-safe answer here is "no control" rather
       // than "show one that clears a grant which may not exist".
       expect(data.hasPasskey).toBe(false);
-
-      // Finding C: `hasPasskey: false` on its own does not distinguish "no
-      // passkey" from "could not tell" — `passkeyCheckFailed` is what tells
-      // `app/root.tsx`'s `assumePasskeyForReentry` the two apart, so the
-      // reentry guard takes the cautious branch on exactly this outage
-      // rather than reading it the same as a confirmed-empty household.
-      expect(data.passkeyCheckFailed).toBe(true);
     } finally {
       await unreachable.destroy();
     }
@@ -112,21 +105,14 @@ describe("the shell's loader", () => {
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({ publicKey: new Uint8Array([1, 1, 1]) });
 
-      const data = await loader(args(get("/")));
-      expect(data.hasPasskey).toBe(true);
-      expect(data.passkeyCheckFailed).toBe(false);
+      expect((await loader(args(get("/")))).hasPasskey).toBe(true);
     }),
   );
 
   it(
     "reports no passkey while the household holds none at all",
     withDatabase(async () => {
-      const data = await loader(args(get("/")));
-      expect(data.hasPasskey).toBe(false);
-      // The read answered, plainly — never confused with the outage case
-      // above, which also answers `hasPasskey: false` but for a different
-      // reason `passkeyCheckFailed` is what carries.
-      expect(data.passkeyCheckFailed).toBe(false);
+      expect((await loader(args(get("/")))).hasPasskey).toBe(false);
     }),
   );
 });
@@ -169,7 +155,6 @@ describe("the shell's loader on /unlock — the household's setup state must not
         masked: true,
         maskingPolicy: "masked",
         hasPasskey: false,
-        passkeyCheckFailed: false,
       });
     }),
   );
@@ -186,7 +171,6 @@ describe("the shell's loader on /unlock — the household's setup state must not
           masked: true,
           maskingPolicy: "masked",
           hasPasskey: false,
-          passkeyCheckFailed: false,
         });
       } finally {
         await unreachable.destroy();
