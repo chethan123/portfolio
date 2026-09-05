@@ -54,6 +54,15 @@
  * `--first-run` pass mints nothing and plants no passkey: that database is
  * migrated but unseeded, and the empty-instance shots are of it honestly
  * unlocked.
+ *
+ * **Validate first, write second.** `main` checks the `demo_seed` marker
+ * ({@link requireDemoSeed}) and reads the fixture ({@link prepare}) before
+ * either the passkey or the grant is inserted. Pointed at a migrated-but-
+ * unseeded database, or any database that is not the one this script means,
+ * both checks throw with nothing planted; minting the passkey and the grant
+ * first and validating after would instead leave that database locked
+ * behind a credential no authenticator owns, discovered only by the
+ * exception that follows.
  */
 import { randomBytes } from "node:crypto";
 
@@ -308,6 +317,27 @@ function refuse(what: string): never {
       "This script captures the demo household. Seed it first:\n" +
       "  node --env-file=<file> ./scripts/seed-demo.ts",
   );
+}
+
+/**
+ * The one check that has to run before anything is written (finding 1):
+ * `demo_seed` is the marker `scripts/seed-demo.ts` stamps on the database it
+ * generated (that script's own `MARKER_TABLE`), so its presence is what
+ * actually tells a demo household apart from a migrated-but-unseeded
+ * database, or the wrong database entirely, that a mistyped `DATABASE_URL`
+ * could just as easily point at. Without this, {@link mintCaptureGrant}
+ * would plant a passkey no authenticator holds the private half of into
+ * *any* database this points at, `prepare`'s own checks would then throw on
+ * data that was never there, and the database would be left locked behind a
+ * credential nothing can ever satisfy. Calling this before either write
+ * means a wrong `DATABASE_URL` refuses with nothing planted, exactly like
+ * every other refusal in this file.
+ */
+async function requireDemoSeed(pool: Pool): Promise<void> {
+  const { rows } = await pool.query<{ present: boolean }>(
+    `select to_regclass('public.demo_seed') is not null as present`,
+  );
+  if (rows[0]?.present !== true) refuse("the `demo_seed` marker table");
 }
 
 /** Account ids, by kind, as this run of the seed happens to have numbered them. */
@@ -746,10 +776,16 @@ async function main(): Promise<void> {
     const { DATABASE_URL } = loadConfig(process.env);
     const pool = createPool(DATABASE_URL);
     try {
-      // Once, before any context opens — every `open()` call for the rest of
-      // this run reads the same grant (see `captureGrant`'s own comment).
-      await mintCaptureGrant(pool);
+      // Validate before writing anything (finding 1): the marker and the
+      // fixture checks both have to pass before either the passkey or the
+      // grant is inserted, so a wrong or unseeded database refuses cleanly
+      // rather than being left locked behind a credential nothing can use.
+      await requireDemoSeed(pool);
       const fixture = await prepare(pool);
+      // Only now, once both checks above have passed — before any context
+      // opens, since every `open()` call for the rest of this run reads the
+      // same grant (see `captureGrant`'s own comment).
+      await mintCaptureGrant(pool);
       await captureReadme(browser, pool, fixture);
       await captureGuide(browser, pool, fixture);
     } finally {

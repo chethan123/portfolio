@@ -158,9 +158,9 @@ the sign-in at the front door keeps a person out while the lock keeps a browser 
 
 ## Passkeys
 
-What can unlock a browser, once the household holds one. Enrol another, see which are synced, and
-remove one that is gone for good — the full explanation, in the household's own words rather than
-this page's, is [Passkeys and the lock](passkeys.md).
+What can unlock a browser, once the household holds one. Enrol another, see which can sync to other
+devices, and remove one that is gone for good — the full explanation, in the household's own words
+rather than this page's, is [Passkeys and the lock](passkeys.md).
 
 No passkey enrolled is not a broken state — it is what a fresh instance already is: unlocked, exactly
 as before this tab existed. Enrolling the first one is what turns the lock on, for every browser but

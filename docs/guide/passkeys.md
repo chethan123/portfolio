@@ -3,8 +3,10 @@
 A browser can go from showing you everything to showing you nothing, with no warning beyond what
 this page explains — and no password, ever, is what unlocks it again. This is what that is, in the
 household's own words: what it means to be locked, how to get back in, and what to know before
-anyone turns it on. All of it lives in one place, Settings → Passkeys, whether you are looking at a
-locked screen right now or you are the one about to set the lock up for the first time.
+anyone turns it on. If you are looking at a locked screen right now, unlocking happens right there —
+its one control is the whole of what you need, and the next section says what to expect from it.
+Everything about managing a passkey instead — enrolling one, seeing what the household holds,
+removing one — lives in Settings → Passkeys, reachable only once a browser is already unlocked.
 
 ## Being locked
 
@@ -81,16 +83,19 @@ If the check is dismissed, or it does not finish, nothing has changed and nothin
 
 A browser does not stay unlocked forever on its own say-so, even if nobody ever presses **Lock now**.
 
-**Fifteen minutes without you asking this app for anything is enough by itself.** Come back after a
-gap that long and it is locked again, waiting for another check. Ordinary use — reading a screen,
-opening another — keeps resetting that clock, so a browser you are actually using stays unlocked; one
-left open and forgotten does not.
+**Going untouched for a while is enough by itself.** Somewhere between about seven and a half and
+fifteen minutes with nobody asking this app for anything, and it is locked again, waiting for another
+check — exactly how long depends on where in that stretch the last ask fell. Ordinary use — reading a
+screen, opening another — keeps pushing that moment further off, so a browser you are actually using
+stays unlocked; one left open and forgotten does not.
 
 **Stepping away for around a minute does the same, sooner.** Switch away to another app or tab, or
-lock your phone, for about that long, and coming back to this one locks it on the spot rather than
-showing you whatever was on the screen — even if the fifteen-minute clock above still had plenty of
-time left. That is deliberate, not a glitch: a browser left behind and unlocked, even briefly, is
-exactly the situation this feature exists to close off.
+lock your phone, for about that long, and coming back to this one asks the app to lock it right
+away — even if the fifteen-minute clock above still had plenty of time left. That ask has to reach
+the app before the lock actually takes hold, so on a slow connection, or with none at all, whatever
+was already on the screen can stay up longer than you would expect, until it does. That is
+deliberate, not a glitch: a browser left behind and unlocked, even briefly, is exactly the situation
+this feature exists to close off.
 
 Neither of those needs you to do anything, and neither is a fault if it catches you off guard the
 first few times — it is the lock doing its job while you were not looking, not a random failure. **Lock

@@ -186,7 +186,10 @@ and hold everywhere:
   exactly once, in SQL.
 - **Surrogate keys are `bigint generated always as identity`.** They are monotonic, which is what
   makes "tie-break by id descending" mean "the later insert wins"; a UUID would make that
-  tie-break arbitrary.
+  tie-break arbitrary. **One deliberate exception:** `unlock_grant.id` (§4.8) is application-generated
+  random text, not an identity column, because that id travels in a cookie and is the whole of the
+  cookie's security — a sequential one would hand a bearer token an attacker could simply count
+  through. It is the only surrogate key in this schema this rule does not describe.
 - **Enumerated columns are `CHECK` constraints, never `CREATE TYPE` enums.** Altering a check is a
   small operation; the value sets are expected to grow.
 - **Timestamps are `timestamptz`**, stored in UTC regardless of the container clock. Statement and

@@ -524,36 +524,46 @@ docker compose exec db psql -U portfolio -d portfolio \
 **If you removed the bundled `db` service and point at your own Postgres**
 ([Running against your own Postgres](operating.md#running-against-your-own-postgres)), there is no
 `db` container to exec into — run the identical SQL through your own database's own administrative
-connection instead, from anywhere that can reach it:
+connection instead. `DATABASE_URL` lives in `.env`, which Compose reads and the invoking shell does
+not (docs/developing.md's "Which files Vite reads") — `psql "$DATABASE_URL"` typed as-is reaches an
+empty string and connects nowhere. From the repository root, on the host running Compose, read it
+out of `.env` directly:
 
 ```sh
-psql "$DATABASE_URL" \
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" \
   -c "select credential_id, label, enrolled_at, last_used_at from passkey order by enrolled_at"
 ```
+
+Running this from somewhere else entirely — a laptop that is not the Compose host — has no `.env` to
+read; paste the same connection string you set as `DATABASE_URL` there in its place instead.
 
 One row per enrolled passkey, either way. An empty result means the instance is not actually locked
 at all — go to [Nobody can sign in](#nobody-can-sign-in) instead.
 
-**Do.** Delete every row, then restart `app`. There is no token, no recovery code and no second path
-in through the front door — this is the one way back, and it returns the instance to the same state a
-fresh install starts in: unlocked, with anyone the gate admits free to enrol a passkey again.
+**Do.** Stop `app`, delete every row, then start `app` again — in that order, because the order is
+the point. There is no token, no recovery code and no second path in through the front door — this is
+the one way back, and it returns the instance to the same state a fresh install starts in: unlocked,
+with anyone the gate admits free to enrol a passkey again.
 
 ```sh
+docker compose stop app
+
 docker compose exec db psql -U portfolio -d portfolio -c "delete from passkey"
 # or, against your own Postgres:
-psql "$DATABASE_URL" -c "delete from passkey"
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" -c "delete from passkey"
 
-docker compose restart app
+docker compose start app
 ```
 
 `unlock_grant.passkey_id` references `passkey` `on delete cascade`, so the delete also removes every
 browser's current grant along with the passkey that minted it — nothing is left half-cleared.
 
-**Restarting `app` is part of this recovery, not an optional extra.** A browser that was already
-mid-enrolment when you ran the delete can still complete it afterward and re-lock the instance —
-restarting `app` is what closes that window; if you would rather not restart, wait at least two
-minutes with the Passkeys screen left untouched by everyone instead before trusting the instance is
-actually clear.
+**Stopping `app` before the delete, not restarting it after, is what actually closes the window.**
+`app` is the only thing that can complete a registration, so while it is down nothing can enrol a
+passkey no matter how long the delete takes. Deleting first and restarting after leaves a live gap
+between the delete committing and the restart taking hold — a registration that finishes inside that
+gap writes a passkey that survives the restart and re-locks the instance, having made the restart do
+nothing. Stopping first means there is no such gap left to race.
 
 Why: [The lock](operating.md#the-lock).
 

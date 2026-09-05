@@ -138,7 +138,8 @@ differs by engine. Firefox refuses a `no-store` document into its back-forward c
 regardless of protocol. Safari/WebKit refuses one too, but only over HTTPS —
 `Source/WebCore/history/BackForwardCache.cpp` at HEAD `6787a18c74`, lines 156–160, guards the check
 on `document->url().protocolIs("https")` — and this app refuses any non-HTTPS `PUBLIC_ORIGIN` except
-`localhost`/`127.0.0.1`, so production gets that refusal and the plain-http development loop does
+`localhost` (an IP-address host, `127.0.0.1` included, is refused regardless of scheme —
+`server/config.ts`), so production gets that refusal and the plain-http development loop does
 not. Chrome does not refuse a `no-store` entry at all: `CacheControlNoStoreEnterBackForwardCache` has
 admitted one by default since 2025, caps it at three minutes, and evicts it early only when *this
 browser's* cookies change — neither of which fires when a passkey or grant is removed on another
