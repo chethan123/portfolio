@@ -563,6 +563,23 @@ Why, including why the order above is stop-delete-start and not delete-then-rest
 
 ---
 
+## A second device offers no way to use another device on the unlock screen
+
+**Confirm.** A browser that holds no passkey shows the unlock screen, and pressing **Unlock** offers
+only this device's own provider — no code to scan, no prompt arriving on a phone that does hold one.
+Another browser on the same device behaves the same way.
+
+**Do.** Nothing here is broken and there is nothing to repair: whether that path is offered is
+decided by the provider that made the household's first passkey, not by this instance. Enrol a
+passkey on this device from a browser that is still unlocked. If no browser in the household is
+still unlocked, this is
+[Every browser is locked and no passkey can be reached](#every-browser-is-locked-and-no-passkey-can-be-reached)
+above instead.
+
+Why: [Before the household's first passkey](operating.md#before-the-households-first-passkey).
+
+---
+
 ## Somebody wants to sign out
 
 **Do.** Send them to `PUBLIC_ORIGIN` + `/oauth2/sign_out` in the browser they want cleared.

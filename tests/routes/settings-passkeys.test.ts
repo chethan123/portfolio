@@ -1406,6 +1406,13 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
         await loader(args(get("/settings/passkeys"))),
       );
       expect(withoutOne).toContain("Enrolling this passkey locks every other browser");
+      // The half that is not certain, pinned separately from the half that
+      // is: whether a browser holding no passkey can be unlocked from one
+      // that does is the registering provider's decision, and no device has
+      // been tried (docs/operating.md, "Before the household's first
+      // passkey"). A reader deciding whether to lock the household out is
+      // owed both sentences, so both are asserted.
+      expect(withoutOne).toContain("depends on the provider making this passkey");
 
       await seedFixturePasskey(seedPasskey);
       const withOne = renderRoute(
@@ -1414,6 +1421,7 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
         await loader(args(get("/settings/passkeys"))),
       );
       expect(withOne).not.toContain("Enrolling this passkey locks every other browser");
+      expect(withOne).not.toContain("depends on the provider making this passkey");
     }),
   );
 

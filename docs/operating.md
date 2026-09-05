@@ -741,6 +741,36 @@ locked whenever the household holds at least one passkey, and open whenever it h
 brand-new instance holds none, so every family member the gate admits sees every figure, exactly as
 it always has — nothing here changes what a fresh install looks like.
 
+### Before the household's first passkey
+
+**Nobody has done this yet.** The slice that shipped the lock was verified against a real Postgres
+and a headless Chromium, and against no real device at all — it says so itself
+([the launch review](research/2026-09-05-lock-slice-launch-review.md), §9). Until somebody runs the
+two steps below on the household's own phones, one sentence the enrolment screen shows is a
+reasonable expectation rather than an observed fact, and that screen hedges it accordingly.
+
+1. Enrol the household's first passkey on the household's primary phone.
+2. On a second device holding no passkey, open the instance, press **Unlock**, and watch for an
+   offer to use another device — a code to scan, or a prompt arriving on the phone. Approve it on
+   the phone, and confirm the second device lands on the Overview.
+
+If step 2 offers nothing of the kind, that second device cannot be unlocked from the phone, and
+every browser in the household without its own passkey is in the same position. Deleting every
+passkey returns the instance to open — [the runbook](runbook.md#every-browser-is-locked-and-no-passkey-can-be-reached)
+carries the command and the order to run it in — and the household should enrol its first passkey
+from a provider whose passkeys are known to reach other devices.
+
+Which providers those are is a fact about the *registering* client rather than about this app. The
+credentials this instance offers a locked browser carry whatever transports the enrolling client
+reported, and both WebKit and Chromium hide the use-another-device option when every offered
+credential lists `internal` alone. Current iCloud Keychain and Google Password Manager report
+`hybrid` beside `internal`, which is what makes the option appear; older Safari and Android values
+were not verified, and no other provider has been checked at all.
+
+**Write down what you find, here.** Once the walk has been run, record which providers were tried
+and what each offered. That record is what lets a later change take the hedge out of the enrolment
+screen's own sentence: it may say what was observed, and until then it keeps hedging.
+
 ### Enrolling the first one locks everyone else, from their very next request
 
 The moment anyone enrols the household's first passkey, every *other* browser in the household is
