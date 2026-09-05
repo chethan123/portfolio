@@ -584,27 +584,24 @@ Why: [Security](operating.md#security).
 
 ## I changed the database password and nothing connects
 
-**Confirm.** `app` crash-looping, with `password authentication failed for user "portfolio"` in its
-log.
+**Confirm.** `app` (and `dump`, if it is enabled) crash-looping, with `password authentication
+failed for user "portfolio"` in the log.
 
 **Do.** `POSTGRES_PASSWORD` is read by Postgres only when it first initialises an empty data
 directory, and never again. On an instance that has already run, changing it in `.env` does nothing
-to the role. Change the role itself, then make `DATABASE_URL` match:
+to the role by itself. Write the new value to `.env` first, then change the role to match, then
+recreate the containers that still hold the old one:
 
 ```sh
+# In .env: POSTGRES_PASSWORD=the-new-one
 docker compose exec db psql -U portfolio -d portfolio \
   -c "alter role portfolio with password 'the-new-one'"
+docker compose up -d
 ```
 
-```sh
-# In .env, both of them, to the same new value:
-#   POSTGRES_PASSWORD=the-new-one
-#   DATABASE_URL=postgres://portfolio:the-new-one@db:5432/portfolio
-docker compose up -d app
-```
-
-The user and database names are hardcoded literals in `compose.yaml`, not variables. Only the
-password is substituted.
+`app` and `dump` both read the password through `PGPASSWORD`, set from this same variable — there is
+no `DATABASE_URL` to keep in sync with it any more. The user and database names are hardcoded
+literals in `compose.yaml`, not variables; only the password is substituted.
 
 Why: [Environment variables](operating.md#environment-variables).
 
@@ -643,8 +640,9 @@ Why: [Restoring](operating.md#restoring), [Backups](operating.md#backups).
 - The `pg_dump` file. It is the whole of the data, including the original uploaded CSVs, the
   migration ledger and the settings row.
 - **`.env`.** It is gitignored and dockerignored, so a fresh clone does not have it. It holds
-  `DATABASE_URL` and the gate's four. A regenerated `GATE_COOKIE_SECRET` signs everyone out and is
-  recoverable; the client id and secret come back only from the Google Cloud console.
+  `POSTGRES_PASSWORD` and the gate's four — plus `DATABASE_URL`, if you set one to run against your
+  own Postgres. A regenerated `GATE_COOKIE_SECRET` signs everyone out and is recoverable; the client
+  id and secret come back only from the Google Cloud console.
 - **`allowed-emails.txt`.** Also gitignored. Without it nothing starts at all.
 
 The image is rebuildable and is not worth carrying.

@@ -83,19 +83,26 @@ irreversible act to sit than a flag on a routine command.
 ## Installing
 
 **Host requirements.** Docker Engine 28.0 or newer, with the Compose v2 plugin — `docker compose`,
-two words, not the older `docker-compose` script; resolving a volume's `device:` relative to the
-Compose file has worked since Compose 1.27.4, well under this floor. The floor is declared as of this
-release, where `worker` brings the first non-default network, even though nothing here yet wires the
-kernel isolation that needs it — the network-lockdown release does, with a `gateway_mode_ipv4` option
-that Engine 26 ignores silently, leaving a host address reachable on the bridge, and Engine 27
-refuses outright. Check with `docker version --format '{{.Server.Version}}'`; below `28.0`, upgrade
-the Engine package before that release lands, not because this one needs it — nothing here fails on
-an older Engine yet. Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image
-is pulled, and to `quay.io`, because the gate image is. A Google account for each family member, and
-one Google Cloud project to hold the OAuth client. `linux/amd64` and `linux/arm64` are both
-published, so a Raspberry Pi or an ARM NAS needs nothing special. There is no build step and
-therefore no build-memory requirement — that is the whole point of publishing the image, and it is
-what makes a small NAS or VPS a reasonable host.
+two words, not the older `docker-compose` script — and Docker Compose 2.31.0 or newer beside it, a
+second floor this release adds. Resolving a volume's `device:` relative to the Compose file has
+worked since Compose 1.27.4, well under both floors; the new one exists for something this release
+actually does at `up` time. `docker compose up` only recreates an existing network to match a changed
+definition when the Compose that created it stamped a config hash onto it, a comparison
+`docker/compose` added in November 2024 and first shipped in 2.31.0. Below that version there is no
+hash to compare, so `up` leaves an existing plain bridge exactly as plain as it found it even once
+this release's `compose.yaml` turns it `internal` — a successful `up`, no isolation, and nothing in
+the output says so. The Engine floor was declared when `worker` first brought a non-default network
+into this file, even though nothing wired the kernel isolation that needed it yet; this release is
+what makes it load-bearing, with the `gateway_mode_ipv4` option that Engine 26 ignores silently,
+leaving a host address reachable on the bridge, and Engine 27 refuses outright. Check both before you
+replace `compose.yaml`: `docker version --format '{{.Server.Version}}'` and `docker compose version
+--short`; below either floor, upgrade first — an old Engine or an old Compose no longer merely misses
+a feature here, it leaves the network looking locked down when it is not. Port 80 free. Outbound
+HTTPS to `ghcr.io`, because the app image is pulled, and to `quay.io`, because the gate image is. A
+Google account for each family member, and one Google Cloud project to hold the OAuth client.
+`linux/amd64` and `linux/arm64` are both published, so a Raspberry Pi or an ARM NAS needs nothing
+special. There is no build step and therefore no build-memory requirement — that is the whole point
+of publishing the image, and it is what makes a small NAS or VPS a reasonable host.
 
 Node itself is a requirement for *working on* this, not for running it.
 
@@ -184,13 +191,16 @@ warning does not apply, and `docker compose down -v` is harmless for the same re
 
 ### What to put in `.env`
 
-`cp .env.example .env`, then fill in its gate section — [`google-sign-in.md`](google-sign-in.md)
-walks you through where each of those values comes from. Beyond them, every setting has a working
-default except `DATABASE_URL`, which Compose supplies. One more is worth deciding before the first
-`up`:
-
-- `POSTGRES_PASSWORD` — because it is read only when the data directory is first created. Setting it
-  later is a different, more annoying operation ([Environment variables](#environment-variables)).
+`cp .env.example .env`, then fill in the gate section and generate `POSTGRES_PASSWORD` —
+[`google-sign-in.md`](google-sign-in.md) walks you through where the gate's own values come from;
+[Environment variables](#environment-variables) has `POSTGRES_PASSWORD`'s own recipe
+(`openssl rand -hex 32`). Both are required now: `docker compose up` refuses to start with either
+missing, naming whichever it reaches first. `POSTGRES_PASSWORD` is worth getting right before that
+first `up` specifically, because Postgres reads it only when it first initialises an empty data
+directory — setting it after is a different, more annoying operation
+([Environment variables](#environment-variables) has that recipe too). Beyond the two of them, every
+setting has a working default, `DATABASE_URL` included: Compose points it at the bundled `db` service
+unless you say otherwise.
 
 The full surface, with defaults, is the table in [Environment variables](#environment-variables).
 
@@ -380,15 +390,20 @@ yourself:
 `POSTGRES_PASSWORD` also appears in `.env.example`. It configures `compose.yaml` rather than the
 app, which is why it is not in the table above.
 
-**It only takes effect on an empty data directory.** Postgres reads it when it first initialises its data
-directory and never again. On an instance that has already run, changing `POSTGRES_PASSWORD` and
-`DATABASE_URL` together does not rotate the password — it leaves the app unable to authenticate and
-crash-looping. Change it inside the database instead, then update `DATABASE_URL` to match:
+**It only takes effect on an empty data directory.** Postgres reads it when it first initialises its
+data directory and never again, so editing `POSTGRES_PASSWORD` in `.env` alone rotates nothing
+already running. Write the new value to `.env` first, then change the role to match, then recreate
+the containers that still hold the old one:
 
 ```sh
+# In .env: POSTGRES_PASSWORD=the-new-one
 docker compose exec db psql -U portfolio -d portfolio \
   -c "alter role portfolio with password 'the-new-one'"
+docker compose up -d
 ```
+
+`app` and `dump` read the password through `PGPASSWORD`, set from this same variable — there is no
+`DATABASE_URL` to keep in sync with it any more.
 
 ---
 
@@ -1232,6 +1247,36 @@ security release — nothing here will tell you one exists.
 cross `1` → `2`, because a major is where a breaking change would be. Read the release notes, set
 `APP_VERSION=2` in `.env`, then run the same procedure above.
 
+**This release requires `.env` set up before `docker compose up -d` will do anything, and only one
+order gets there.** The new `compose.yaml` carries `${POSTGRES_PASSWORD:?}` on `db`, and Compose
+interpolates the whole model before every command it runs, `exec` included — refusing an empty value
+exactly as it refuses a missing one — so nothing reaches Postgres, not even a shell inside the
+running container, until `.env` holds it. Confirm the floors in [Installing](#installing) first —
+Engine 28.0 and Compose 2.31.0, both load-bearing as of this release — then, in this order:
+
+1. Replace `compose.yaml` with this release's copy.
+2. Delete the `DATABASE_URL` line from `.env`, unless you run your own Postgres
+   ([Running against your own Postgres](#running-against-your-own-postgres)) — `pg` prefers a URL's
+   own password to `PGPASSWORD`, so a leftover line with the old password crash-loops `app` and
+   `dump` on `password authentication failed` once step 4 below actually changes the role, instead of
+   picking up the new one through `PGPASSWORD` the way it should.
+3. Generate the password with `openssl rand -hex 32` and write it to `.env` as
+   `POSTGRES_PASSWORD`. Skip this and step 5 refuses by name — the message `compose.yaml` carries
+   points back to this section — rather than starting anything half-configured.
+4. Change the role, while the old containers are still running on it:
+   `docker compose exec db psql -U portfolio -d portfolio -c "alter role portfolio with password
+   'the-generated-value'"`. `exec` reaches `db` over the container's own loopback `trust` line,
+   which needs no password at all, so this succeeds regardless of what `app` and `dump` currently
+   believe the password is — and from the moment it runs, any *new* connection either of them opens
+   starts failing on `password authentication failed`, though a connection already held keeps
+   working.
+5. `docker compose up -d`, which recreates `db` for its new network and restarts `app` and `dump`
+   alongside it — the brief outage a network change to any of them already causes — now reading the
+   password staged in step 3.
+
+Between steps 4 and 5, only new connections from the old containers fail; nothing is lost, and
+nothing here needs redoing.
+
 The entrypoint validates the configuration, applies any new migrations to completion, and only then
 starts serving — so a request is never served against a half-migrated schema. Migrations are
 idempotent, so a restart is always safe, and `GET /healthz` returns a non-200 if the image ever
@@ -1266,6 +1311,25 @@ never resolves itself. The rollback above is the obvious way into it, but the li
 simpler: an operator who already pins an older `APP_VERSION` and only now adopts this release's
 `compose.yaml`, meeting `worker` for the first time as a crash loop rather than as the idle service
 this document otherwise describes.
+
+**A pin below *this* release needs `compose.yaml` rolled back with it, not just `APP_VERSION`.** An
+old `app` image — one that still fetches prices for itself rather than dialing `worker` — started
+under this release's `compose.yaml` finds itself on a network with no route to Yahoo at all: it logs
+`Price provider failed` on every tick, forever, with `/healthz` still green, because a missing price
+provider has never been a health signal ([Monitoring](#monitoring)). Roll `compose.yaml` back to
+match the pinned image, or do not pin below this release at all — re-upgrade instead. This slice adds
+no migration and no column, so nothing it wrote to the database is at risk either way; an old image
+only loses the worker cutover, never any data.
+
+**Rolling `compose.yaml` itself back needs the generated password carried into a `DATABASE_URL`, in
+`.env`: `DATABASE_URL=postgres://portfolio:<the generated password>@db:5432/portfolio`.** That is the
+one documented way back, because the old file has no `PGPASSWORD` and reads the password from the URL
+the way every release before this one did. **Never reset the role's password itself back to the old
+file's hardcoded default** to make the old file work unmodified — that would undo this release's
+whole point, which was to get a generated password onto the role once and keep it there rather than
+the one every checkout's `.env.example` already carries. The moment that matters here is the password
+sitting in a URL again, in `.env`, for as long as the old `compose.yaml` runs; it is not the moment
+the password itself goes weak, and a rollback is not the occasion to make it one.
 
 ### Moving an instance that predates the local path
 
@@ -1312,7 +1376,9 @@ The dump-and-restore procedure above *is* the upgrade path:
 4. Restore into it, then `docker compose up -d`.
 
 Step 3 is also the one moment `POSTGRES_PASSWORD` is read again, because the data directory is empty
-again — so it is the easy time to change it, and the time to make sure `DATABASE_URL` agrees.
+again — so it is the easy time to change it. Nothing else needs to agree with it any more: `app` and
+`dump` read the same variable through `PGPASSWORD` rather than carrying their own copy of it in
+`DATABASE_URL`.
 
 ---
 
