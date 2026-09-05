@@ -100,11 +100,11 @@ hostile worker, all are pure domain rules with fixture-shaped tests, and none sh
 - [ ] The six existing cases that assert a written close (`tests/refresh-quotes.test.ts:125`, `:169`,
       `:203`, `:227`, `:247`, `:357`) carry June-2026 `asOf` fixtures against the real clock and need
       the same fake clock, or an `asOf` relative to now
-- [ ] `tests/price-provider.test.ts`, "reading a day of history" (`:421`): a chart carrying one bar
-      dated before `RANGE.from` (`:380`) and one inside the range yields the inside close only — the
+- [ ] `tests/price-provider.test.ts`, "reading a day of history" (`:542`): a chart carrying one bar
+      dated before `RANGE.from` (`:501`) and one inside the range yields the inside close only — the
       bar before the range is not written
 - [ ] `tests/price-backfill.test.ts`, "what a batch writes to the spine" (`:611`): the real adapter
-      over a client stub (`tests/price-provider.test.ts:704-786` is the shape) whose chart carries a
+      over a client stub (`tests/price-provider.test.ts:825-907` is the shape) whose chart carries a
       single bar dated 1971 for an instrument first held in 2024 writes no `price_daily` row. The
       floor drops that lone bar before `range.from`, so `toProviderHistory` returns `no-history`
       exactly as an empty chart would (`price-provider.server.ts:562-575`) — a pre-range-only

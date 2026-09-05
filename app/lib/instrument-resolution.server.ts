@@ -17,8 +17,8 @@
 import { isAssetClass } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { ValidationError } from "./input.server.ts";
-import { probeSymbol, type ProbeSymbol } from "./price-provider.server.ts";
 
+import type { ProbeSymbols } from "./price-provider.server.ts";
 import type { ParsedPosition } from "./statement.ts";
 import type { AssetClass } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
@@ -209,10 +209,15 @@ export type ResolvedAlias = {
   instrumentId: string;
 };
 
-/** The dependencies a test stubs. No test touches the network. */
+/**
+ * The dependencies a test stubs. No test touches the network. `probe` is
+ * required, not defaulted: a default would make "required" a type and not a
+ * fact, and the production caller (`app/routes/upload/instruments.tsx`)
+ * could still reach the network by omission.
+ */
 export type ResolutionDeps = {
-  /** The creation-time USD guard, defaulting to the live provider's probe. */
-  probe?: ProbeSymbol;
+  /** The creation-time USD guard. */
+  probe: ProbeSymbols;
 };
 
 /** A validated "create" resolution, ready to write. */
@@ -267,7 +272,7 @@ function inTransaction<T>(
  */
 export async function resolveAll(
   resolutions: ReadonlyArray<ResolutionInput>,
-  deps: ResolutionDeps = {},
+  deps: ResolutionDeps,
   db: Kysely<Database> = getDb(),
 ): Promise<ResolvedAlias[]> {
   const errors: Record<string, string> = {};
@@ -493,22 +498,33 @@ export async function resolveAll(
 
   if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
-  // ---- the USD probe, once per created feed symbol (cached, so two strings
-  // creating one ticker cost one call), before any write: a non-USD refusal
-  // must leave nothing behind.
-  const probe = deps.probe ?? probeSymbol;
-  const verdicts = new Map<string, Awaited<ReturnType<ProbeSymbol>>>();
+  // ---- the USD probe, one call for every distinct feed symbol the
+  // submission creates (so two strings creating one ticker still cost one
+  // call), before any write: a non-USD refusal must leave nothing behind.
+  const feedSymbols = [
+    ...new Set(
+      plans.flatMap((plan) =>
+        plan?.kind === "create" && plan.priceSource === "feed" && plan.symbol !== null
+          ? [plan.symbol]
+          : [],
+      ),
+    ),
+  ];
+
+  // A manual-only submission collects nothing here — the common case — and
+  // makes no provider call at all, by construction: over the socket a
+  // zero-symbol ask is a round trip the worker refuses anyway (§3.2).
+  const verdicts: Awaited<ReturnType<ProbeSymbols>> =
+    feedSymbols.length > 0 ? await deps.probe(feedSymbols) : new Map();
 
   for (const [index, plan] of plans.entries()) {
     if (plan?.kind !== "create" || plan.priceSource !== "feed" || plan.symbol === null) {
       continue;
     }
 
-    let verdict = verdicts.get(plan.symbol);
-    if (verdict === undefined) {
-      verdict = await probe(plan.symbol);
-      verdicts.set(plan.symbol, verdict);
-    }
+    // A symbol the map lacks is `unavailable` — the batched probe never
+    // throws, so this is a defensive fallback rather than an expected path.
+    const verdict = verdicts.get(plan.symbol) ?? { status: "unavailable" as const };
 
     // `unavailable` does not block: created now, marked stale by the next
     // refresh — a network hiccup must not hold a statement hostage.

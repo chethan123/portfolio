@@ -83,7 +83,7 @@ graph LR
     browser -.->|"sign-in redirect"| google
     csv -.->|"uploaded through the browser"| browser
     app -->|SQL over the compose network| db
-    app -->|"batched quote fetch, market hours only, per the refresh cadence (seeded 15 min)<br/>+ a per-symbol history fetch on the same refresh, at any hour, while a spine has a gap<br/>+ a one-symbol probe at instrument creation, in the request path"| yahoo
+    app -->|"batched quote fetch, market hours only, per the refresh cadence (seeded 15 min)<br/>+ a per-symbol history fetch on the same refresh, at any hour, while a spine has a gap<br/>+ one batched probe at instrument creation, in the request path"| yahoo
 
     classDef ext fill:#f5f0e8,stroke:#8a7a5c,color:#3b3222
     class yahoo,csv,google,house ext
@@ -93,8 +93,8 @@ graph LR
 is the application's, and its only one: no email, no object store, no queue, no cache tier, no
 analytics. It is reached three ways, over two endpoints — the poller's batched *quote* fetch and
 the per-symbol *chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the
-request path entirely, and `probeSymbol`, a single-symbol currency check that runs *inside* a form
-submission when someone creates a feed-priced instrument (§6.1). The last is the only place a
+request path entirely, and `probeSymbols`, a currency check over every symbol one submission
+creates, run *inside* the form submission that creates them (§6.1). The last is the only place a
 third party can make a person wait. All three go through the one interface in §7.5, precisely
 because the endpoint is unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
 the browser is redirected there to sign in and the sidecar exchanges the code for a token, both
@@ -335,7 +335,7 @@ grep. They come in three tiers.
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
 | Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
-| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:636` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Importing `yahoo-finance2` | `app/lib/price-provider.server.ts:637` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
 
 **Owned by a module, upheld by its callers.**
@@ -464,7 +464,7 @@ rather than a number to notice.
 | Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft, captures `account.external_account_number` when still null | Yes — a new set |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes — a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes — a new set |
-| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:663`) |
+| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:639`) |
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
 | Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes — it fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
 
@@ -657,7 +657,7 @@ split is exact and each side is a decision:
 
 **Only two of those deletes are reachable from the application at all:** a person who owns no
 accounts (`people.server.ts:278`), and a just-created, never-held instrument that lost an alias race
-(`instrument-resolution.server.ts:663`). There is no account delete and no position-set delete
+(`instrument-resolution.server.ts:639`). There is no account delete and no position-set delete
 anywhere in `app/`. The rest of the table is a standing guarantee about someone with a `psql`
 session, not about a screen.
 
@@ -985,8 +985,8 @@ sequenceDiagram
     IR->>IR: validate ALL, collect field-level refusals
     Note right of IR: Nothing is written unless everything<br/>passes: a refusal must re-render the<br/>same list of questions it was asked.
     alt creating a feed instrument
-        IR->>Y: probeSymbol(symbol)
-        Y-->>IR: ok{quoteType} | non-usd{currency} | unavailable
+        IR->>Y: probeSymbols(every new feed symbol)
+        Y-->>IR: per symbol: ok{quoteType} | non-usd{currency} | unavailable
         Note right of IR: non-usd REFUSES creation.<br/>unavailable does NOT block — the next<br/>refresh marks it stale like any symbol.
     end
     IR->>PG: BEGIN
@@ -1548,7 +1548,7 @@ the exemption survives only as long as that file says so.
                     ▼                        ▼
         yahooPriceProvider()          the tests' fake
         the only importer in app/     implements both and nothing else;
-        (price-provider.server:722)   no test reaches the network
+        (price-provider.server:776)   no test reaches the network
 ```
 
 `yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
@@ -1556,7 +1556,7 @@ makes that tolerable is that swapping it is a day's work — which is only true 
 the sole thing the write path imports. Both methods are required, not optional: a provider that
 cannot answer history is not this application's provider, and an optional method would let a batch be
 skipped with nothing saying so. One test imports the library directly
-(`tests/price-provider.test.ts:812`), deliberately, to pin the static-versus-instance shape the
+(`tests/price-provider.test.ts:933`), deliberately, to pin the static-versus-instance shape the
 adapter depends on; a sibling asserts that both methods are callable on the *instance* the memoised
 client hands back.
 
@@ -1567,9 +1567,9 @@ These conversions happen at this boundary and nowhere else:
   would be one more place to forget.
 - **The payload is parsed through Zod**, so a shape change is a refusal rather than a `NaN`.
 - **The currency guard.** A non-USD quote is refused. `getQuotes` turns that into an *absent* quote,
-  because a refresh must not lose ninety-nine prices over one foreign listing. `probeSymbol`, used at
-  instrument creation, returns it *named* — because there the caller is a person creating one
-  instrument, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
+  because a refresh must not lose ninety-nine prices over one foreign listing. `probeSymbols`, used at
+  instrument creation, returns it *named* per symbol — because there the caller is a person
+  creating instruments, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
   the one distinction they can act on. `getDailyCloses` refuses a non-USD history the same way,
   before a figure is read.
 - **The split un-adjust**, on history only. The feed restates closes through later splits while a
