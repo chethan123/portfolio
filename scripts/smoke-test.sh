@@ -117,6 +117,29 @@ engine_major="${engine_version%%.*}"
 ((engine_major >= 28)) || fail "Docker Engine ${engine_version} is below the 28.0 floor"
 printf 'Docker Engine %s\n' "$engine_version"
 
+# --- The stack refuses to start without a database password -------------------
+# Same fail-closed contract as the gate credentials below, now for `db`'s
+# `${POSTGRES_PASSWORD:?}` — checked first and on purpose: `db` sits earlier
+# in the file than `gate`, and Compose reports only the first missing
+# variable it hits while interpolating. The gate's four are equally unset at
+# this point too — the throwaway ones below are exported only after this
+# check — so a refusal naming `POSTGRES_PASSWORD` rather than one of them is
+# what proves that file order, not merely assumes it.
+log "Checking the stack refuses to start without a database password"
+if refusal="$(env -u POSTGRES_PASSWORD docker compose --env-file /dev/null config --quiet 2>&1)"; then
+  fail "compose accepted a configuration with no POSTGRES_PASSWORD"
+fi
+[[ "$refusal" == *"POSTGRES_PASSWORD"* ]] ||
+  fail "compose refused without naming POSTGRES_PASSWORD: ${refusal}"
+printf 'compose refused: %s\n' "$refusal"
+
+# Exported here, ahead of the gate check below, so that check tests only what
+# it means to: unexported, `db`'s own `${POSTGRES_PASSWORD:?}` would be the
+# first thing missing (the same file-order fact proved above) and the gate
+# check would fail naming this variable instead of any gate one. Real for
+# the rest of the run — the bundled `db` boots on it like any other password.
+export POSTGRES_PASSWORD="smoke-test-postgres-password"
+
 # --- The stack refuses to start half-protected --------------------------------
 # Unconfigured, compose must stop rather than bring up an ungated instance.
 # `config`, not `up`: interpolation is `up`'s first step and needs no daemon.
@@ -158,6 +181,40 @@ if [[ ! -e "$ALLOWLIST" ]]; then
   chmod 600 "$ALLOWLIST"
   allowlist_is_ours=true
 fi
+
+# --- compose.external-db.yaml starts neither db nor dump -----------------------
+# The override's entire point: an install pointing at its own Postgres must
+# never depend on the bundled one coming up healthy — `dump-loop.sh` refuses
+# any host but `db` and would crash-loop against someone else's Postgres — so
+# with the override loaded and no profile naming `bundled-db`, `db` and
+# `dump` must never be created at all, not merely fail to reach healthy. Its
+# own short-lived project: `compose.dev.yaml` stays in the mix so this still
+# builds from the checkout rather than pulling a release, and the trap tears
+# everything down again before the real stack below starts, success or fail.
+#
+# `app worker gate` named explicitly, `caddy` left out on purpose: `app` has
+# no real Postgres to reach under this override in CI and its healthcheck
+# will never turn healthy, and `caddy`'s `depends_on: app: condition:
+# service_healthy` would make `up` sit and wait on exactly that before this
+# check ever got to run. Nothing named here waits on anything: `app`'s own
+# `db` dependency is `required: false` precisely for this override, and
+# `worker` and `gate` depend on nothing at all.
+log "Checking compose.external-db.yaml starts neither db nor dump"
+(
+  export COMPOSE_FILE="compose.yaml:compose.external-db.yaml:compose.dev.yaml"
+  trap 'docker compose down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
+  docker compose up -d --build app worker gate
+  # Containers that exist at all, running or not — `-a` is what makes this
+  # "created", not merely "currently up". `--services`, not `ps db dump`: a
+  # service Compose dropped for the active profile set is not a name it is
+  # willing to take as an argument on every Compose version, and the thing
+  # under test is what has a container, not what a literal name resolves to.
+  created="$(docker compose ps -a --services)"
+  if grep -Fxq db <<<"$created" || grep -Fxq dump <<<"$created"; then
+    fail "compose.external-db.yaml created a container for db or dump: ${created}"
+  fi
+)
+printf 'compose.external-db.yaml: db and dump not created\n'
 
 # --- A fresh machine with an empty data directory ------------------------------
 log "Starting from an empty data directory"
@@ -465,7 +522,7 @@ done
 printf 'db, dump, gate, caddy do not mount price-worker-sock\n'
 
 # The mount set only says who is on the volume, not what they may do with it.
-# `app` mounts it `:ro` (compose.yaml:236) — deleting those two characters
+# `app` mounts it `:ro` (compose.yaml:267) — deleting those two characters
 # leaves every check above green, because nothing until now reads app's own
 # mount. `.RW` is Docker's own name for the field; false is a read-only mount.
 log "Checking app's price-worker-sock mount is read-only"
@@ -490,7 +547,7 @@ worker_mem="${resource_line##* }"
   fail "worker Memory is '${worker_mem}', expected 268435456 (256m)"
 printf 'worker: PidsLimit=%s Memory=%s\n' "$worker_pids" "$worker_mem"
 
-# compose.yaml:271-276 spends six lines arguing the worker gets no
+# compose.yaml:310-315 spends six lines arguing the worker gets no
 # `environment:` at all — no DATABASE_URL, no PGPASSWORD — because the
 # network fence below does not cover an external Postgres reachable over the
 # open internet. Asserted here so adding DATABASE_URL "for convenience" fails
@@ -541,11 +598,100 @@ for option in mode=770 uid=1000 gid=1000; do
 done
 printf 'worker: %s\n' "$mounts_line"
 
+# --- app, db and dump have no route out ----------------------------------------
+# `backend`, `caddy-app` and `caddy-gate` are `internal: true`: no default
+# route at all, so none of these three can reach the internet by any path,
+# not merely a blocked one. `dump` is not a smaller case of `app` and `db` to
+# skip over — it holds the whole household's history in every archive it
+# writes, requirement 1 names it beside them, and it runs the identical
+# `postgres:17-alpine` image as `db` (both `image: *postgres-image`), so the
+# same three commands against a third service cost nothing extra to run.
+log "Checking app, db and dump have no route out"
+
+# `db` and `dump` share an image with no node, so their request is busybox's
+# own `wget`; `app` has node but no `wget`, so its request goes through the
+# same `fetch` its own healthcheck uses, under a 5s abort. Both forms take
+# the full budget on a container with no route: the embedded resolver
+# answers SERVFAIL only after it has tried, and failed, to forward the
+# query upstream — never an immediate refusal.
+expect_no_egress() {
+  local service="$1" default_route
+  if [[ "$service" == app ]]; then
+    if docker compose exec -T app node -e '
+      fetch("http://example.com/", { signal: AbortSignal.timeout(5000) })
+        .then(() => process.exit(0))
+        .catch(() => process.exit(1));
+    '; then
+      fail "${service} reached a public host over HTTP"
+    fi
+  else
+    if docker compose exec -T "$service" wget -T 5 -q -O /dev/null http://example.com/; then
+      fail "${service} reached a public host over HTTP"
+    fi
+  fi
+  printf '%s: no route to a public host over HTTP\n' "$service"
+
+  if docker compose exec -T "$service" timeout 5 nslookup example.com >/dev/null 2>&1; then
+    fail "${service} resolved a public hostname"
+  fi
+  printf '%s: cannot resolve a public hostname\n' "$service"
+
+  # `internal: true` drops the default route along with forwarding; a
+  # `00000000` *destination* (field 2) in /proc/net/route is the kernel's own
+  # record of a default route — read with awk rather than `ip route`, an
+  # applet neither image needs to carry for this, and matched by column
+  # rather than by substring: a direct route to the container's own subnet
+  # legitimately carries `00000000` too, as its *gateway* (field 3), and a
+  # plain substring match would call that a default route by mistake.
+  default_route="$(docker compose exec -T "$service" \
+    awk 'NR>1 && $2=="00000000" { print }' /proc/net/route)" ||
+    fail "could not read ${service}'s /proc/net/route"
+  [[ -z "$default_route" ]] ||
+    fail "${service} has a default route: ${default_route}"
+  printf '%s: no default route in /proc/net/route\n' "$service"
+}
+
+for service in app db dump; do
+  expect_no_egress "$service"
+done
+
+# --- The isolation is read from the daemon's record, never provoked -----------
+# `backend`, `caddy-app` and `caddy-gate` share the property under test, so
+# one loop, not three copy-pasted checks. A connect would only prove the
+# negative for the address it happened to pick, and would fall back to
+# localhost and pass for the wrong reason if the engine ignored `isolated`
+# and allocated a gateway anyway — the case this exists to catch. Read
+# instead from the daemon's own IPAM record: under `isolated`, no gateway
+# address is allocated *at all*, so the field is empty on an engine that
+# honours it, and populated on one that silently ignores it (Engine 26, the
+# floor above).
+log "Checking the isolated networks were created with no gateway"
+for net in backend caddy-app caddy-gate; do
+  gateway="$(docker network inspect \
+    -f '{{if (index .IPAM.Config 0).Gateway}}{{(index .IPAM.Config 0).Gateway}}{{end}}' \
+    "portfolio_${net}")" || fail "could not inspect the ${net} network"
+  [[ -z "$gateway" ]] ||
+    fail "${net} has a gateway address (${gateway}) — isolated did not take"
+  printf '%s: no gateway allocated\n' "$net"
+
+  # The same fact from the other side: no bridge interface on the host
+  # carries an address for this network either. `docker network inspect`'s
+  # own 12-character id prefix is what `br-<id>` is built from.
+  bridge_id="$(docker network inspect -f '{{slice .Id 0 12}}' "portfolio_${net}")" ||
+    fail "could not read the ${net} network id"
+  bridge_addr="$(ip -4 addr show dev "br-${bridge_id}" 2>&1)" ||
+    fail "could not read host bridge br-${bridge_id} for ${net}: ${bridge_addr}"
+  [[ "$bridge_addr" != *inet\ * ]] ||
+    fail "host bridge br-${bridge_id} (${net}) carries an address: ${bridge_addr}"
+  printf '%s: host bridge br-%s carries no address\n' "$net" "$bridge_id"
+done
+
 # --- The worker shares no network with app, gate or db ------------------------
-# egress-worker is worker's only network; app, gate and db stay on the
-# implicit default bridge until 07. A connect to an unroutable address waits
-# on the kernel's default (minutes), so every attempt carries its own 3s
-# timeout — and never `ping`, since NET_RAW is dropped (cap_drop: ALL).
+# egress-worker is worker's only network; app is on backend and caddy-app,
+# gate is on caddy-gate and egress-gate, db is on backend alone — none of
+# them egress-worker. A connect to an unroutable address waits on the
+# kernel's default (minutes), so every attempt carries its own 3s timeout —
+# and never `ping`, since NET_RAW is dropped (cap_drop: ALL).
 log "Checking the worker cannot reach app, gate or db"
 
 # Space-separated, not concatenated: `{{range}}` supplies no separator of its
@@ -611,6 +757,40 @@ probe_all_ips db 5432 "db"
 docker compose exec -T worker timeout 5 nslookup example.com >/dev/null ||
   fail "worker cannot resolve DNS (nslookup example.com)"
 printf 'worker: DNS still resolves\n'
+
+# The residual, asserted rather than left implicit: `egress-worker` is a plain
+# bridge, so unlike the three isolated networks above it *does* get a gateway,
+# and that address is the host — through which `worker` reaches every host
+# service bound on `0.0.0.0`, `caddy`'s published `:80` among them (research
+# §1.5). That is the one path out of the fence this release does not close,
+# and 08's allowlist is what closes it. Asserting it *succeeds* is what makes
+# 08's own assertion mean something: without this, the check that flips to
+# "refused" could pass on a release where the path never existed, and nobody
+# would learn that 08 had done anything.
+gateway="$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' portfolio_egress-worker)" ||
+  fail "could not read the egress-worker gateway"
+[[ -n "$gateway" ]] ||
+  fail "egress-worker has no gateway — this network is meant to be a plain bridge"
+if docker compose exec -T worker node -e '
+  const net = require("node:net");
+  const [host] = process.argv.slice(1);
+  const socket = net.connect({ host, port: 80 });
+  let done = false;
+  const finish = (code) => {
+    if (done) return;
+    done = true;
+    socket.destroy();
+    process.exit(code);
+  };
+  socket.setTimeout(3000);
+  socket.once("connect", () => finish(0));
+  socket.once("timeout", () => finish(1));
+  socket.once("error", () => finish(1));
+' "$gateway"; then
+  printf 'worker: reaches the egress-worker gateway on :80 (%s) — the residual, until 08\n' "$gateway"
+else
+  fail "worker cannot reach the egress-worker gateway ${gateway}:80 — this release does not close that path, so something else changed"
+fi
 
 # The capability's effect, not its declaration: read as the sidecar's own uid
 # from the same ro bind mount — on a non-root runner, the 0600 file above.

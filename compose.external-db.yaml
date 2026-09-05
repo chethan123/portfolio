@@ -1,0 +1,42 @@
+# Override for running against a Postgres this Compose project does not own —
+# a LAN box, a managed instance, anything `DATABASE_URL` can already name.
+# Load it once, in `.env`:
+#
+#     COMPOSE_FILE=compose.yaml:compose.external-db.yaml
+#
+# rather than `-f` on every `ps`, `logs` and `down` (scripts/smoke-test.sh's
+# own COMPOSE_FILE is the same precedent). Forgetting it has one signature:
+# `app` crash-looping on `ETIMEDOUT`/`EHOSTUNREACH` against its Postgres, with
+# nothing in the message naming this file.
+#
+# What it gives up: requirement 1, the no-egress guarantee for `app`. On
+# `backend` and `caddy-app` alone `app` has no route anywhere; `external-db`
+# is a plain bridge carrying a default route, because reaching a host outside
+# this Compose project needs one. What survives: requirement 3, the worker
+# still holds no credential to read anything with — this file gives it
+# neither a network nor a variable — and requirement 5, the worker still
+# shares no network with `app` or `gate`.
+#
+# `db` and `dump` are gated behind a profile nothing here names, so `up`
+# starts neither: an external Postgres is the operator's own to run and back
+# up (docs/operating.md), and `dump-loop.sh` refuses any host but `db` — left
+# running against someone else's Postgres it would crash-loop under its own
+# `restart: on-failure` for nothing. Bringing the bundled database back is
+# `COMPOSE_PROFILES=bundled-db`, not deleting this file.
+
+name: portfolio
+
+networks:
+  external-db:
+    enable_ipv6: false
+
+services:
+  app:
+    networks:
+      - external-db
+
+  db:
+    profiles: ["bundled-db"]
+
+  dump:
+    profiles: ["bundled-db"]

@@ -76,6 +76,18 @@ the work has landed, read the tree rather than the table.
   they exist. `scripts/smoke-test.sh:544-548` carries the same claim in the same words ("app, gate
   and db stay on the implicit default bridge until 07") and goes false with it — the assertions
   under it stay correct, only the prose is wrong.
+- **The override needs one line in the base file that the ticket says it will not.** Item 2 argues
+  that `profiles` appending across compose files means "the base file need not change". The
+  appending is real; the conclusion is not. `app` carries `depends_on: db: condition:
+  service_healthy`, and once the override profiles `db` out with no profile active, that reference
+  is to a service Compose has dropped — which is a **`config`-time** error, not an `up`-time one:
+  `service "app" depends on undefined service "db": invalid compose project`. The override cannot
+  render at all. `required: false` on that condition is the fix, it belongs in `compose.yaml`
+  rather than the override so the override stays networks-and-profiles as specified, and it is a
+  no-op wherever `db` exists — the health condition still blocks. Verified on Compose v5.1.1 with
+  a two-service file: fails without it, renders with it, and with the profile active `db` still
+  gates `app`. `dump` needs no equivalent: the same profile excludes it, so its own `depends_on`
+  is never validated.
 - **Two comments beside the lines this ticket edits are already false.** `compose.yaml:232-234`
   ("nothing calls it yet, `app` still fetches prices in-process — so the cutover in ticket 06
   changes no compose line, only code") and `:255-259` ("Nothing calls the socket yet … until ticket
