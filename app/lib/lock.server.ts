@@ -950,17 +950,6 @@ async function registrationOptionsFor(
 }
 
 /**
- * A label, bounded and trimmed by {@link requiredText} — plus what that
- * shared helper does not itself refuse. A control character (a NUL byte
- * among them) or a newline stored in this column is rendered verbatim in
- * Settings, and a lone surrogate is a value `JSON.stringify`'s own escaping
- * cannot make round-trip; either one reaches here only after the browser has
- * *already* created a real credential in the family member's own password
- * manager (this function refuses before that, {@link completeRegistration}'s
- * insert refuses only after), which is exactly why the refusal belongs at
- * this end of the ceremony and not the other.
- */
-/**
  * The characters a label may not carry, and the ones it deliberately may.
  *
  * Refused: `\p{Cc}` (C0 and C1, which is where a NUL or a newline lives);
@@ -975,9 +964,27 @@ async function registrationOptionsFor(
  * selectors. Emoji sequences are built out of them, and a household that
  * labels a passkey with one is doing nothing wrong — refusing them to catch
  * an invisible character would cost more than it buys.
+ *
+ * This reads the *trimmed* value, because {@link requiredText} trims first.
+ * So a separator or a newline at either edge is removed rather than refused,
+ * exactly as a stray space is and exactly as an account or person name
+ * already behaves — what reaches the column is clean either way. Only the
+ * ones a trim cannot reach, which is all of them in the middle and the
+ * invisibles at any position, come back as a refusal.
  */
 const REFUSED_LABEL_CHARACTERS = /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B]/u;
 
+/**
+ * A label, bounded and trimmed by {@link requiredText} — plus what that
+ * shared helper does not itself refuse. A control character (a NUL byte
+ * among them) or a newline stored in this column is rendered verbatim in
+ * Settings, and a lone surrogate is a value `JSON.stringify`'s own escaping
+ * cannot make round-trip; either one reaches here only after the browser has
+ * *already* created a real credential in the family member's own password
+ * manager (this function refuses before that, {@link completeRegistration}'s
+ * insert refuses only after), which is exactly why the refusal belongs at
+ * this end of the ceremony and not the other.
+ */
 const NO_CONTROL_CHARACTERS_MESSAGE =
   "A label cannot carry a line break, an invisible character, or another control character.";
 const NOT_WELL_FORMED_MESSAGE = "A label cannot carry an incomplete character.";

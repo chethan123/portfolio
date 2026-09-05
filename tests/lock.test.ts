@@ -920,6 +920,24 @@ describe("enrolling", () => {
   );
 
   it(
+    "trims a separator off either edge rather than refusing it, as it trims a space",
+    withDatabase(async ({ db }) => {
+      // `requiredText` trims before this refinement sees the value, so a
+      // separator at an edge never reaches the refinement or the column —
+      // it is gone, the way a stray space is, and the way an account or a
+      // person name has always treated one. Refusing here instead would
+      // make this the one field in the app that rejects a pasted trailing
+      // newline. The middle, which a trim cannot reach, is refused above.
+      const { options } = await beginEnrolment(
+        "\u2029Kitchen iPad\u2028",
+        { assertion: undefined, acknowledgement: "true" },
+        db,
+      );
+      expect(options.user.name).toBe("Kitchen iPad");
+    }),
+  );
+
+  it(
     "keeps a label whose emoji is held together by a zero width joiner",
     withDatabase(async ({ db }) => {
       // The deliberate exception. A family emoji is a sequence joined by
