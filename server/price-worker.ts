@@ -536,19 +536,35 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   });
 
   await new Promise<void>((resolve, reject) => {
-    server.once("error", (error) => {
+    const onListenError = (error: Error): void => {
       // Nothing to close and nothing to stop: take the listener back off the
       // shared `process` object rather than leaving one per failed start.
       process.removeListener("SIGTERM", onSigterm);
       reject(error);
-    });
+    };
+    server.once("error", onListenError);
     server.listen(socketPath, () => {
-      server.removeAllListeners("error");
+      // Named, so this takes off the one listener this promise added and
+      // leaves any other alone.
+      server.removeListener("error", onListenError);
       resolve();
     });
   });
 
-  await chmod(socketPath, 0o660);
+  try {
+    await chmod(socketPath, 0o660);
+  } catch (error) {
+    // The other failure path with a listener to take back — and the only one
+    // with a live server behind it, `listen` having already succeeded. Left
+    // alone, the socket stays connectable at whatever the umask gave it,
+    // which is the one thing this `chmod` is here to prevent: the failure to
+    // narrow the permissions would leave the socket open to more than the
+    // group, not merely unstarted. `close()` unlinks the path on its way out.
+    process.removeListener("SIGTERM", onSigterm);
+    server.closeAllConnections();
+    server.close();
+    throw error;
+  }
 
   console.log(`Price worker listening on ${socketPath}`);
 

@@ -1299,6 +1299,29 @@ describe("the socket file and its lifecycle", () => {
     }
   });
 
+  it("takes its SIGTERM handler back off and closes the server when chmod fails", async () => {
+    // The one failure path with a live server behind it: `listen` has already
+    // succeeded, so unlike a failed `listen` there is something still bound to
+    // the socket. Leaving it is not merely untidy — the socket stays
+    // connectable at whatever the umask gave it, which is exactly what the
+    // `chmod` that just failed exists to prevent.
+    const listenersBefore = process.listeners("SIGTERM").length;
+    const originalChmod = chmodOverride.impl!;
+    chmodOverride.impl = () =>
+      Promise.reject(Object.assign(new Error("chmod failed"), { code: "ENOENT" }));
+
+    try {
+      await expect(
+        startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo(), timeouts: TEST_TIMEOUTS }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
+      expect(process.listeners("SIGTERM").length).toBe(listenersBefore);
+      await expect(rawRequest(currentSocketPath, "GET", "/healthz")).rejects.toThrow();
+    } finally {
+      chmodOverride.impl = originalChmod;
+    }
+  });
+
   it("exits on SIGTERM even while every connection it admits is held open", async () => {
     // Spawned rather than called, because an exit code is the assertion and
     // only a child process has one.
