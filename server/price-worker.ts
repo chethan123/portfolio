@@ -500,16 +500,6 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   // (module header, {@link onClientError}'s own).
   server.on("clientError", onClientError);
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-
-  await chmod(socketPath, 0o660);
-
   // Node is PID 1 under the compose `entrypoint` and ignores a signal it has
   // no handler for — without this, every stop is Docker's 10 s wait plus
   // `SIGKILL`, and a stale socket file (spec §3.2). `close()` removes the
@@ -518,6 +508,16 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   // test in `tests/price-worker.test.ts` starts a fresh server, and a
   // listener left on the shared `process` object per server would exceed
   // Node's default max within one test file.
+  //
+  // Registered *before* `listen`, which is the whole point of where it sits.
+  // The socket file appears — and accepts connections through the kernel's
+  // backlog — the instant `listen` succeeds, while the `chmod` below is
+  // another turn of the loop away. A `SIGTERM` arriving in that gap used to
+  // find no handler at all and take Node's default disposition: the process
+  // died by signal with the socket file still on disk, which is exactly the
+  // stop this handler exists to prevent. Measured before the move, signalling
+  // the moment the file appeared: five of twelve starts died that way, every
+  // one of them leaving the file behind.
   const onSigterm = (): void => {
     // Every connection, not just the idle ones. `close()` waits for all of
     // them, and a socket that has never sent a byte is not *idle* in Node's
@@ -534,6 +534,21 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   server.once("close", () => {
     process.removeListener("SIGTERM", onSigterm);
   });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", (error) => {
+      // Nothing to close and nothing to stop: take the listener back off the
+      // shared `process` object rather than leaving one per failed start.
+      process.removeListener("SIGTERM", onSigterm);
+      reject(error);
+    });
+    server.listen(socketPath, () => {
+      server.removeAllListeners("error");
+      resolve();
+    });
+  });
+
+  await chmod(socketPath, 0o660);
 
   console.log(`Price worker listening on ${socketPath}`);
 
