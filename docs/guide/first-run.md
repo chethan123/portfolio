@@ -83,7 +83,8 @@ Amounts start hidden on a browser nobody has answered for: each shows a run of d
 dates and the shape of the chart stay readable. Press **Show amounts** in the navigation to reveal
 them on this browser; hiding them again is the same control. What a fresh browser opens showing is
 a household choice at [Settings → Display](settings.md#display). It is a defence against being read
-over your shoulder, not a lock — the sign-in above is the only thing that keeps anyone out.
+over your shoulder, not a lock — the sign-in above keeps a person out, and the lock keeps a browser
+out.
 
 ## Light and dark
 

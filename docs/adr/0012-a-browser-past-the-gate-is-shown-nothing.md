@@ -118,10 +118,13 @@ second, unlocked way in.
   genuinely reached over plain http must still get it; this one carries a credential, and WebAuthn
   will not run outside a secure context anyway, so the attributes cost nothing and the prefix is
   free.
-- **A browser that cannot run the ceremony cannot read this instance** once a passkey exists — an
-  in-app WebView browser has no WebAuthn at all. This is not enforced by a capability check, which
-  the client would control; it falls out of the server refusing until an assertion arrives.
-  Recovery is the operator's, not the front door's.
+- **A browser that cannot run the ceremony cannot read this instance** once a passkey exists — many
+  in-app WebView browsers offer no *completable* ceremony (`app/lib/unlock-ceremony.ts`'s own hedge,
+  which this document matches rather than overstating). This is not enforced by a capability check,
+  which the client would control; it falls out of the server refusing until an assertion arrives.
+  The unlock screen names two self-service recoveries first — another browser on this device, or a
+  device that can reach a passkey the household has enrolled — and only after those does it point at
+  the operator.
 - **The relying-party id is the instance's public hostname** and cannot be an IP address. Changing
   the hostname orphans every enrolled passkey, and every family member enrols again.
 - **A runtime dependency arrives** in a repository that prunes them deliberately. Verifying a

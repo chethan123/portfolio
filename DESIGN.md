@@ -770,7 +770,8 @@ That placement is load-bearing rather than convenient: the policy is seeded to *
 run is a page of dots, and dots whose only cure is three clicks into a configuration area is an app
 that looks broken. `docs/adr/0002-masking-is-a-display-state.md` records the split and the
 deliberately weak guarantee under it — masking defends against being read over the shoulder, and the
-gate in front of the instance (§10) remains the only thing that keeps anyone out.
+gate in front of the instance (§10) keeps a *person* out while the lock
+(`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) keeps a *browser* out.
 
 **The Instruments tab will carry real weight**, which is why it isn't planned as just inline
 editing on a table row. It will be the only place that answers "which manual-priced instruments

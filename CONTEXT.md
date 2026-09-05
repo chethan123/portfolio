@@ -154,6 +154,15 @@ only its public half, and never sees the check that guards it. Not a device: one
 every device in a vault, and one device may hold several.
 _Avoid_: biometric, fingerprint, face, device credential, enrolled device, key.
 
+**Grant**:
+The row a verified assertion mints, addressed by an opaque id a cookie carries — the row is the
+authority and the cookie itself makes no claim, so a copied cookie only ever names the row it was
+copied from. It carries a rolling idle expiry rather than a fixed lifetime: every request that passes
+the lock extends it, and removing the passkey that minted it cascades its grants away with it. It
+says one browser was unlocked and when, nothing else — attribution stays the gate's authenticated
+email, which a grant never carries.
+_Avoid_: session, token, cookie, login.
+
 ### Whose money a screen is showing
 
 **Person**:

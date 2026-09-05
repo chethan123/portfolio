@@ -152,7 +152,7 @@ This is the household's standing answer, not the control itself. The control —
 **Hide amounts**, in the navigation on every screen — flips this one browser right now, and needs
 no network to do it. Masking hides every amount behind dots while names, dates, the shape of the
 chart and every percentage stay readable. It is not a lock: the amounts are still in the page, and
-the sign-in at the front door is the only thing that keeps anyone out.
+the sign-in at the front door keeps a person out while the lock keeps a browser out.
 
 ---
 

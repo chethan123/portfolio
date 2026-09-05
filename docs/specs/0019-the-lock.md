@@ -125,15 +125,25 @@ a **sixty second** grace **posts the lock action** when it comes back rather tha
 navigating alone would leave the grant and its cookie live, so Back or a typed URL would still be
 admitted and nothing would have been locked. The trigger is still a courtesy, because a hidden page
 cannot be trusted to run timers and `visibilitychange` cannot tell a locked screen from an app
-switch; what it triggers is the same server-side deletion the explicit control performs. Both numbers
-are stated here and named once in code; this repository names its constants rather than leaving them
-to be discovered.
+switch; what it triggers is the same server-side deletion the explicit control performs. A `pageshow`
+listener checking `event.persisted` re-runs the same check whenever a back-forward cache restore
+hands a page back with no request at all — the one case neither the visibility grace nor an ordinary
+request would ever see. Both numbers are stated here and named once in code; this repository names
+its constants rather than leaving them to be discovered.
 
 **What locking cannot reach.** Deleting the grant stops the next request; it does not reach into pages
 already rendered. Another tab of the same browser keeps the figures on screen until it asks the
-server for something, and a back-forward cache restore can hand a page back without a request at all.
-Protected responses therefore carry `Cache-Control: no-store`, and the guarantee is stated as what it
-is: the lock ends the *reading*, not every pixel already drawn.
+server for something. Protected responses carry `Cache-Control: no-store`, and what that header buys
+differs by engine. Firefox refuses a `no-store` document into its back-forward cache outright,
+regardless of protocol. Safari/WebKit refuses one too, but only over HTTPS —
+`Source/WebCore/history/BackForwardCache.cpp` at HEAD `6787a18c74`, lines 156–160, guards the check
+on `document->url().protocolIs("https")` — and this app refuses any non-HTTPS `PUBLIC_ORIGIN` except
+`localhost`/`127.0.0.1`, so production gets that refusal and the plain-http development loop does
+not. Chrome does not refuse a `no-store` entry at all: `CacheControlNoStoreEnterBackForwardCache` has
+admitted one by default since 2025, caps it at three minutes, and evicts it early only when *this
+browser's* cookies change — neither of which fires when a passkey or grant is removed on another
+device. The `pageshow` guard above is what closes that gap. The guarantee is stated as what it is:
+the lock ends the *reading*, not every pixel already drawn.
 
 Separately, an explicit control locks the current browser immediately. For the threat this slice
 exists to answer — handing somebody your phone — that control is the most direct answer in the

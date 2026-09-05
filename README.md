@@ -162,10 +162,10 @@ the [how](docs/guide/owner-filter.md); what follows is why it is shaped this way
   picker beside it reaches the same no-JavaScript result through a native popover.
 
 - **It is noise reduction, never privacy.** Anyone may set it, clear it, and set it to anybody; the
-  gate at the front door is the only thing that keeps anyone out, and every family member sees
-  everything. It is never derived from who signed in — the app deliberately holds no mapping from a
-  sign-in to an owner, and inventing one so that a screen could open on "you" is the short step to
-  "and this is *your* data" that a household of shared money does not want taken.
+  gate at the front door keeps a *person* out and the lock keeps a *browser* out, and every family
+  member sees everything. It is never derived from who signed in — the app deliberately holds no
+  mapping from a sign-in to an owner, and inventing one so that a screen could open on "you" is the
+  short step to "and this is *your* data" that a household of shared money does not want taken.
 - **The URL is the whole of it.** `?owner=1&owner=3` and nothing else: no cookie, no stored setting.
   Closing the tab forgets it because there is nothing left to remember it, and pasting the address
   to the other person in the household shows them the same reading — which a cookie could never do.
@@ -350,8 +350,8 @@ not be one. Settings → Display chooses what a browser opens in — masked ever
 time, or however that browser was last left — and a browser nobody has answered for opens masked.
 
 **It is not a lock.** The amounts are still in the page; masking defends against being read over
-someone's shoulder, and the sign-in gate in front of the instance is the only thing that keeps
-anyone out.
+someone's shoulder, and the sign-in gate in front of the instance keeps a *person* out while the
+lock keeps a *browser* out.
 
 ### On a phone
 

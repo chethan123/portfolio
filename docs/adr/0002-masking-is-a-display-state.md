@@ -17,6 +17,12 @@ this application has, and anyone who can reach a masked screen can unmask it wit
 rather than a login page inside it — ADR-0005. The limit stated here is unchanged, and so is
 everything below it.]
 
+[It is no longer the only one: once the household holds a passkey, a browser the gate has already
+admitted is refused every screen until an assertion proves it — ADR-0012. The sentence above can no
+longer say *only*, and nothing else here moves. Masking still keeps nobody out, is still not access
+control, and the amounts are still in the payload of a screen a reader is allowed to see; the lock
+decides whether they are allowed to see it, which is the question masking was never asking.]
+
 Everything below follows from accepting that limit rather than fighting it.
 
 ## Why the policy is a row and the state is a cookie

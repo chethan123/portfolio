@@ -237,9 +237,14 @@ pass `process.env` without knowing what is in it, and `getConfig()` is the singl
 is a Zod schema, parsed once. It carries no cross-field rules: the one it used to have coupled the
 deleted password to the deleted cookie secret, and every remaining variable stands alone.
 
+The table below is a deliberate second copy of [`DESIGN.md`](DESIGN.md) §10.1's environment surface
+table — for a contributor reading the code rather than an operator configuring a deployment. Named
+here, in place, with DESIGN.md's table given as the one to believe.
+
 | Variable | Default | Required | Effect |
 |---|---|---|---|
 | `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. |
+| `PUBLIC_ORIGIN` | — | **yes** | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. The lock (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) derives its WebAuthn relying-party id from it — its first variable shared with the sidecar. Also read by the `gate` service, which builds its redirect from it. |
 | `AUTH_GATE` | `none` | no | `external` or `none`: whether something in front of the app authenticates. It enables nothing — the app authenticates nobody either way — and decides only whether the unprotected-instance banner is drawn. A union rather than a boolean so a third posture is a value, not a redesign. |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
 | `MAX_UPLOAD_MB` | `10` | no | Upload body cap. **Not wired through `compose.yaml`** — under the documented deployment it is permanently 10 MB (§11.3). |
@@ -250,13 +255,13 @@ More variables exist that the application never reads, all Compose-level and non
 by `server/config.ts`, which never sees them. **`POSTGRES_PASSWORD`** is consumed by the `db`
 service and must be kept in sync with the credentials inside `DATABASE_URL`. **`APP_VERSION`**
 selects the published image tag the `app` service runs, defaulting to the floating major. **The
-gate's own settings** — its Google client id and secret, its cookie encryption key, and `PUBLIC_ORIGIN`, the
-`https://` origin the house proxy serves and the gate builds its redirect from — configure the
-`gate` service. They are the only settings anywhere with no default, and they are interpolated
-with `${VAR:?}` so a missing one stops `docker compose up` naming it, before any container runs. Who
-may enter is not a variable at all: it is `allowed-emails.txt`, bind-mounted into `gate` with
-`create_host_path: false`, so a missing file stops `up` the same way rather than becoming an empty
-directory and a crash-looping sidecar.
+rest of the gate's settings are not in the table above, because the app reads none of the rest** —
+its Google client id and secret and its cookie encryption key genuinely are the gate's alone:
+Compose-level variables consumed only by the `gate` service, with no default, and a missing one
+stops `docker compose up` naming it, before any container runs, the same way a missing
+`PUBLIC_ORIGIN` does. Who may enter is not a variable at all: it is `allowed-emails.txt`,
+bind-mounted into `gate` with `create_host_path: false`, so a missing file stops `up` the same way
+rather than becoming an empty directory and a crash-looping sidecar.
 
 Two properties of this module are structural rather than cosmetic:
 
@@ -2032,6 +2037,9 @@ still live in the current code:
 | `people.server.ts` | People. A person owning no account can be removed outright; one who owns any is refused, naming them |
 | `owner-reading.server.ts` | The owner-filter reading (spec 0013, ADR-0008): `ownerReading` settles a screen's address, reads the roster once, and resolves `reading` — what the calling loader's household-scoped readers narrow by, never the raw filter. Throws the redirect itself rather than handing one back, the one documented exception to §7.1's error model. Does not read money: a screen's own `currentHoldings`/`netWorth` calls stay in the loader, visible in review (ADR-0008) |
 | `chart-series.server.ts` | **The one place a chart's series is read** (spec 0015), for both surfaces: `chartReach` reads how far a surface can reach — its earliest recorded date and the latest observed session — and `chartSeries` picks the reader the resolved window implies, then applies §6.3's `coverage.total > 0` rule. That rule was two copies of route code before, one per screen, and forgetting it fails nothing: the chart just draws a climb out of a zero nobody recorded. `ChartScope` names the surface and what narrows it — §6.3 on where the owner filter then sits |
+| `lock.server.ts` | **The only module that imports `@simplewebauthn/server`.** Ceremony options, assertion and registration verification, grant minting and its rolling idle expiry, and the fresh-assertion authorisation that enrolling or removing a passkey requires (docs/adr/0012, spec 0019). The grant cookie's own builders live here too, `HttpOnly`, so nothing browser-reachable ever needs them. The middleware (`app/root.tsx`) asks this module one question — is there a live grant — and acts on the answer |
+| `lock.ts` | The lock's browser-safe vocabulary: the idle-window and re-entry-grace constants, the one encoding rule `passkey.transports` is written and read through, and the return-address query parameter the unlock screen carries. Plain `.ts`, not `.server.ts` — the same argument `masking.ts` makes for itself. Pure, and in the client bundle |
+| `unlock-ceremony.ts` | The unlock screen's client-only seam onto `@simplewebauthn/browser` — the one file naming that package, and only inside a dynamic `import()` in a function body, never at module scope, so it never sits in a server bundle. `supportsPasskeys()` decides only what the screen shows, never what the server allows |
 | `account-options.ts` | The closed vocabularies the forms are built from and the domain validates against — account kind, tax treatment, asset class — and the two predicates read off a kind: which hold their whole position in one number, which run negative. Pure, and in the client bundle |
 | `account-label.ts` | The upload picker's labels — grouped by owner, quiet until two rows would read the same: a row says more (number tail, then institution and type, then tax treatment) only when saying less would make it a twin, and rows identical in every stored attribute render identically, honestly. Pure, because the one piece of that screen with rules in it has to be testable without importing a route |
 | `settings.server.ts` | The capital gains rate |
@@ -2053,7 +2061,7 @@ still live in the current code:
 **There is no authentication module, and its absence is the design.** A contributor looking for one
 should read §7.6 and stop: authentication is a Compose service and a `Caddyfile`, not code in
 `app/`. The only trace inside the process is `AUTH_GATE` deciding whether the warning banner is
-drawn, and a comment in `app/root.tsx` — where the middleware used to be — recording that the
+drawn, and a comment beside the lock's own `middleware` export in `app/root.tsx` recording that the
 verified email rides in on every request and is read by nothing.
 
 ### `app/` and `app/routes/` — the shell and the screens
@@ -2067,7 +2075,7 @@ there.
 
 | File | Role |
 |---|---|
-| `../root.tsx` | The shell every page is drawn inside — the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its loader starts the price poller, because `react-router-serve` leaves no server entry to hook and root's loader is the one server path every render passes through. Also where the gate's middleware used to be: the only place recording that the verified email rides in on every request and is read by nothing |
+| `../root.tsx` | The shell every page is drawn inside — the rail, the masking toggle, the open-instance banner, the first-run prompt, and the one `ErrorBoundary`. Its loader starts the price poller, because `react-router-serve` leaves no server entry to hook and root's loader is the one server path every render passes through. Also where the lock's `middleware` export lives (`lockMiddleware`, docs/adr/0012) — the first rule ever to fill the slot the gate's own middleware never did, refusing a request with no valid grant before `next()` is called, except for the two exempt paths (`/unlock`, `/healthz`). The same file still records, in the same place, that the gate's verified email rides in on every request and is read by nothing |
 | `../routes.ts` | The route table, ordered by how often a page is opened, and where the exceptions are argued: a step screen is not a nav entry, Settings is a section rather than a page, and the three UI-less routes are routes for two different reasons — two are form targets that keep working with JavaScript off, and `healthz` is in the router so dev and the container behave identically |
 | `overview.tsx` | The net worth headline, the trend line and the accounts rollup. The empty case is load-bearing and comes first: an instance nothing has been uploaded to renders no figure at all |
 | `holdings.tsx` | Every position across every account — §8.1's workhorse. One query, one array; `holdings-view.ts` filters, groups and totals it without touching the database again. Its one write is a link that opens exactly one row (`?edit=`), not a `useState` per row |
@@ -2088,6 +2096,7 @@ there.
 | `settings/tax.tsx` | The capital gains rate — a stored setting, not an environment variable, because it is the household's number (`0005_app_setting.sql`) |
 | `settings/prices.tsx` | The refresh cadence, for the same reason (`0008_refresh_cadence.sql`), stated beside the storage cost the dial controls — and the list of holdings whose price history does not reach as far back as they are held, with the last attempt's outcome in words |
 | `settings/display.tsx` | The masking policy a browser opens in. **Not the masking control** — ADR-0002 records why that lives in the chrome |
+| `unlock.tsx` | The lock's one screen (docs/adr/0012, spec 0019): one action, calling `navigator.credentials.get()` against a server-issued challenge, and an honest message where the ceremony cannot run or scripting is off, naming the recoveries that exist before the operator. The first screen in the app that requires JavaScript — there is no progressive-enhancement path for a passkey check |
 | `masking.ts` | The masking toggle's server-side writer, no screen: the control is in the chrome, and this keeps it working with JavaScript off. The second of two writers of one cookie; `lib/masking.ts` owns its name, vocabulary and lifetime |
 | `refresh.ts` | The one way a person spends a provider request on demand — a resource route, like `masking.ts`, so a press works with JavaScript off. A press runs the backfill batch too, and reports the quotes, since that is what it promises. A thin caller of `lib/refresh.server.ts`, which owns the run and `RefreshOutcome` |
 | `healthz.ts` | Whether the instance is genuinely serving: database reachable, every migration on disk recorded as applied. Never checks the provider, never requires authentication (§7.4) |
@@ -2132,6 +2141,7 @@ functions rather than only a component, so this tree is not purely presentationa
 | `0009_price_observation.sql` | `price_observation` and `price_poll`, and a `comment on table` stating each price tier's contract (ADR-0006) |
 | `0010_price_backfill.sql` | `price_backfill` — one attempt per instrument, its outcome vocabulary as a `check`, and the index both the retry clock and Settings → Prices read (ADR-0011) |
 | `0011_latest_position_set_cost.sql` | `latest_position_set`'s planner cost, raised to 1000 so the read path stops hash-joining on the call |
+| `0012_lock.sql` | `passkey` and `unlock_grant` — the household's enrolled credentials and one browser's current unlock, addressed by an opaque id a cookie carries. `on delete cascade` from grant to passkey is what lets removing a passkey end its grants with it (ADR-0012) |
 
 ### `public/`
 
