@@ -265,7 +265,9 @@ function withNoStore(response: Response): Response {
  * thing it already does — and it is the last of three reasons rather than
  * the only one.
  *
- * The other two are `Origin` checks, and neither is invented here. React
+ * The other two are `Origin` checks — alternatives over disjoint sets of
+ * routes, so exactly one of them is live for any given request — and neither
+ * is invented here. React
  * Router 7.18.2's own `throwIfPotentialCSRFAttack` refuses a mismatched
  * `Origin` with a 400 for document mutations and for single-fetch actions,
  * ahead of `staticHandler.query`, which is where the middleware pipeline
@@ -295,14 +297,16 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
 
 /**
  * The mutation methods this app judges an `Origin` for, in the framework's
- * own spelling: React Router's `validMutationMethods`
- * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:1345-1350`,
- * read back through `isMutationMethod` at `:5575-5577`). Written out because
- * the framework does not export it, and kept to that set rather than a wider
- * one so `OPTIONS` and `HEAD` are not judged — a preflight carries a
- * cross-origin `Origin` by definition and mutates nothing.
+ * own spelling and its own shape: React Router builds `validMutationMethods`
+ * as a `Set` over `validMutationMethodsArr`
+ * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:1345-1350`
+ * and `:1351-1353`) and reads it back through `isMutationMethod` at
+ * `:5575-5577`, uppercasing as it goes. Written out because the framework
+ * exports none of them, and kept to that set rather than a wider one so
+ * `OPTIONS` and `HEAD` are not judged — a preflight carries a cross-origin
+ * `Origin` by definition and mutates nothing.
  */
-const MUTATION_METHODS: readonly string[] = ["POST", "PUT", "PATCH", "DELETE"];
+const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
  * Who may *ask*, as against which browser may *read* — which is
@@ -312,38 +316,53 @@ const MUTATION_METHODS: readonly string[] = ["POST", "PUT", "PATCH", "DELETE"];
  * React Router 7.18.2 runs this check itself, as `throwIfPotentialCSRFAttack`
  * (`node_modules/react-router/dist/development/chunk-ZA36QIGN.mjs:747-765`),
  * for single-fetch actions (`:854`) and for document requests whose method is
- * a mutation (`:1419`) — and not for a resource route, which
- * `handleResourceRequest` (`:1563-1581`) serves with no such call. `/lock-now`,
+ * a mutation (`:1417-1419`) — and not for a resource route, which
+ * `handleResourceRequest` (`:1563-1609`) serves with no such call. `/lock-now`,
  * `/masking` and `/refresh` are resource routes: action-only, no component,
  * posted to directly. So the framework's rule stops exactly where this app's
- * three mutations live, and this restates it there. It is not a second
- * opinion and invents nothing — the same method set, the same comparison, the
- * same status.
+ * three mutations live, and this restates it there — the same method set, the
+ * same comparison, the same status, with the two departures named below.
  *
  * **Hosts, and never `PUBLIC_ORIGIN`.** The framework compares
- * `new URL(origin).host` against `new URL(request.url).host` (`:751`, `:757`),
- * so behind the proxy this agrees with it on the routes it already covers
- * rather than disagreeing with it about a scheme or a port. Reading the
+ * `new URL(origin).host` against `new URL(request.url).host` (`:751`, `:757`,
+ * `:758`), so behind the proxy this agrees with it on the routes it already
+ * covers rather than disagreeing with it about a scheme or a port. Reading the
  * configured origin instead would also refuse this suite's own requests,
  * which address the instance as `http://portfolio.local`
  * (`tests/support/routes.ts`) while the config is `https://portfolio.local`
- * (`vitest.config.ts`).
+ * (`vitest.config.ts`). The corollary is worth knowing: a deployment whose
+ * proxy rewrites `Host` makes this refuse — and it already makes the
+ * framework refuse every document and single-fetch mutation, so such an
+ * instance is broken before this middleware sees it.
  *
  * **No `Origin` continues.** A plain HTML form from this instance sends one;
  * a request with none is the shape the framework also lets through
- * (`originDomain` stays `null` at `:751`, and the comparison at `:757` is
- * never reached). What stands between that request and a cleared grant is the
- * cookie the refusal path requires — {@link redirectToUnlock}'s own header.
+ * (`originDomain` stays `null` at `:751`, so the comparison at `:758` is
+ * falsy). What stands between that request and a cleared grant is the cookie
+ * the refusal path requires — {@link redirectToUnlock}'s own header.
  *
  * **`Origin: null` is refused.** It is a real value — a sandboxed frame, a
  * redirected form post — rather than a missing header, and the framework
  * refuses it: it keeps the literal string instead of parsing it (`:751`),
- * finds it unequal to the host and not an allowed origin (`:757-762`), and
- * answers 400. Here that string is simply unparseable as a URL and lands in
- * the same refusal, which is the same answer by a shorter road.
+ * finds it unequal to the host and not an allowed origin (`:758-762`), and
+ * its callers turn that throw into a 400 (`:859`, `:1425`). Here the string is
+ * simply unparseable as a URL and lands in the same refusal, which is the same
+ * answer by a shorter road.
+ *
+ * **Two places this is deliberately not identical.** An `Origin` that parses
+ * to an *empty* host — `about:blank`, `data:`, `file:` — leaves the
+ * framework's `originDomain` falsy at `:758` and is admitted there; here it
+ * fails the comparison and is refused, which is the safer direction and is
+ * close to theoretical anyway, since browsers send `Origin: null` for those.
+ * And the framework's `allowedActionOrigins` allowlist (`:758-760`,
+ * `isAllowedOrigin` at `:805`) has no counterpart here: this app never sets
+ * it, and `@react-router/dev`'s own documentation says it does not apply to
+ * resource routes, so there is nothing to mirror today — but whoever sets it
+ * later has to teach this function about it too, because this one runs on
+ * every route.
  */
 const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) => {
-  if (!MUTATION_METHODS.includes(request.method.toUpperCase())) return;
+  if (!MUTATION_METHODS.has(request.method.toUpperCase())) return;
 
   const origin = request.headers.get("Origin");
   if (origin === null) return;

@@ -266,6 +266,20 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
  * would still hand it the URL parser's. Harmless today: `chartRangeMiddleware`
  * reads only `range`, which no owner-filter respelling touches. Worth stating
  * rather than leaving for whoever adds the next middleware to discover cold.
+ *
+ * **A second thing it does not reproduce, now that an array can hold two.**
+ * The real pipeline nests: `next()` recurses into the following middleware
+ * and the handler runs only past the last one
+ * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:4843-4891`),
+ * and it calls `next()` *itself* for a middleware that returns nothing
+ * (`:4884`). The loop below is flat instead: each step gets the same
+ * stand-in `next`, and a step that returns nothing leaves `response`
+ * undefined for the next step to overwrite. So `onNext` answers "did any
+ * step call `next`", never "which one", and *order* cannot be asserted here
+ * directly — a caller proving that one middleware runs before another has to
+ * arrange for the two to answer differently and assert which answer came
+ * back, as `tests/routes/root.test.ts`'s cross-origin refusal does against
+ * an unreachable database.
  */
 export async function servedThrough(
   // Untyped against a generated `Route.MiddlewareFunction[]`, deliberately —

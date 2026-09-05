@@ -702,6 +702,9 @@ describe("the cross-origin mutation refusal", () => {
       expect(response.status).toBe(400);
       expect(called).toBe(false);
       expect(response.headers.get("Set-Cookie")).toBeNull();
+      // No body: a refusal on this path tells a forger nothing about the
+      // instance, not even which rule turned them away.
+      expect(await response.text()).toBe("");
     } finally {
       await unreachable.destroy();
     }
