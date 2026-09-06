@@ -22,7 +22,7 @@ This file carries what the script cannot: which shot is of what, and why.
 | `overview-owner-*.png` | `/?owner=:id&range=all` | the first of the demo household's two owners, by id · the owner filter, which is only legible as a difference from `overview-*.png` above: same household, a smaller headline, the owners named beneath it, the long presets greyed out where the household reaches them, and the pre-app line withheld — at **All**, deliberately, because the withheld-history note only appears on a range that would have shown those points unfiltered, and the demo's are years old |
 | `overview-1d-*.png` | `/?range=1d` | — · the 1D range, whose time axis, time-of-day readout and one-point-per-refresh granularity are invisible on every other preset |
 | `holdings-*.png` | `/holdings` | — · unfiltered and ungrouped, which is the state the URL with no query string produces |
-| `holdings-edit-*.png` | `/holdings` with one row open | the brokerage one, on a row that has a cost basis, so both boxes carry a figure. Scoped to the table rather than the page: the point of the shot is the two boxes sitting in their own columns, which a whole-page capture at this width renders too small to read |
+| `holdings-edit-*.png` | `/holdings` with one row open | the brokerage one, on a row that has a cost basis, so both boxes carry a figure. Desktop is scoped to the table rather than the page: the point of the shot is the two boxes sitting in their own columns, which a whole-page capture at this width renders too small to read. The mobile shot is the whole viewport instead, scrolled to the open card — cropping to `<table>` means nothing once the row has reflowed into a card |
 | `analysis-*.png` | `/analysis` | — |
 | `income-*.png` | `/income` | — · the demo household pays a dividend in all three tax treatments, so the first breakdown shows the three slices rather than the two a household with no Roth would produce |
 | `account-detail-*.png` | `/accounts/:id` | the `brokerage` one — it holds seven positions, including a stale price |
@@ -32,9 +32,16 @@ This file carries what the script cannot: which shot is of what, and why.
 | `upload-*.png` | `/upload` | — · the drop screen as it opens: the step strip, the account select, no file chosen and no refusal showing |
 | `upload-mapping-*.png` | `/upload/:draftId/columns` | the `brokerage` one · the unfilled first-upload state, with the file's own header and sample rows visible verbatim above the mapping selects |
 | `upload-review-*.png` | `/upload/:draftId/review` | the `brokerage` one · **the diff must show a removal listed in full.** The statement is authored against what the account currently holds so all three groups render and the removed row carries its quantity and last known value |
+| `unlock-*.png` | `/unlock` | — · a browser holding no live grant, against the household this script itself locks (`ensureCapturePasskey`, `captureUnlock`) — enrolled and refused, never the unreachable state of an instance nobody has locked |
 | `overview-mobile-*.png` | `/` | — |
 | `analysis-mobile-*.png` | `/analysis` | — |
 | `holdings-mobile-*.png` | `/holdings?group=assetClass` | — · the card reflow, the only screen whose layout changes shape below 768px rather than merely narrowing. Grouped, so the group heading, the subtotal strip and the grand total are all in frame |
+
+**Every other `*-mobile-*.png` file is the phone companion of the desktop file its name matches
+minus `-mobile`** — `overview-owner-mobile-*.png` beside `overview-owner-*.png`, and so on through
+`upload-review-mobile-*.png`. Same page, same account, same query string; only the viewport and the
+non-full-page capture (below) differ. They exist because a screen that reflows is a screen a desktop
+shot alone cannot show, and the README shows every screen at both sizes rather than a chosen few.
 
 ## The decisions behind them
 
@@ -80,6 +87,19 @@ pair is drawn as does not matter: what it has to show is one of them rather than
 
 **The upload flow is walked but never committed.** The draft dies with the commit, and recording the
 statement would change the household every other shot is of.
+
+**Every screen has a phone shot, not a chosen few.** This set used to carry three curated mobile
+shots — Overview, Holdings and Analysis — picked because each showed something a desktop shot could
+not. That answered "does this app work on a phone at all" but not "what does *this* screen look like
+on one", and a reader could not tell from the README alone. Every desktop shot here now has a
+`-mobile-` companion at the same URL, so the README shows every screen at both sizes rather than
+arguing that a handful stands in for the rest.
+
+**`unlock-*.png` is the one shot deliberately of a *locked* browser.** Every other capture in this
+file carries a live grant (`ensureCapturePasskey`, `captureGrant`) so the screens behind the lock are
+what gets photographed; this is the one page that exists only for a browser without one, and its own
+context is opened without the grant cookie on purpose (`captureUnlock`, `open`'s `withGrant`
+parameter) rather than reusing any other shot's context.
 
 Research screenshots of the *Stitch mock* are a different thing entirely and live in
 [`../research/stitch-2026-08/`](../research/stitch-2026-08/).

@@ -110,7 +110,13 @@ type Theme = "light" | "dark";
  */
 let captureGrant: { id: string; expiresAt: Date } | undefined;
 
-async function open(browser: Browser, theme: Theme, mobile = false, masked = false): Promise<Page> {
+async function open(
+  browser: Browser,
+  theme: Theme,
+  mobile = false,
+  masked = false,
+  withGrant = true,
+): Promise<Page> {
   const context = await browser.newContext({
     viewport: mobile ? MOBILE : DESKTOP,
     deviceScaleFactor: 2,
@@ -129,7 +135,12 @@ async function open(browser: Browser, theme: Theme, mobile = false, masked = fal
   await context.addCookies([{ ...(masked ? MASKED_COOKIE : UNMASKED_COOKIE), url: BASE_URL }]);
 
   const page = await context.newPage();
-  if (captureGrant !== undefined) await setGrantCookie(context, page, captureGrant);
+  // `withGrant: false` is the unlock screen's own exception: every other shot
+  // in this file is deliberately of an already-unlocked browser, and that
+  // screen is the one place a live grant would redirect straight past the
+  // thing being photographed (`unlock.tsx`'s loader sends a browser already
+  // holding one on to `redirectTo` rather than rendering it).
+  if (withGrant && captureGrant !== undefined) await setGrantCookie(context, page, captureGrant);
   return page;
 }
 
@@ -505,6 +516,12 @@ async function walkUpload(
   csv: string,
   accountId: number,
   shots: { columnsBlank?: string; columnsMapped?: string; instruments?: string; review?: string },
+  // `false` for a phone `page`: every other shot this file takes of a phone
+  // is non-full-page (`shoot`'s own callers), for the fixed bottom
+  // navigation this flow's own step strip sits above, not below — but the
+  // reason still applies, and a full-page phone capture here would be the
+  // one inconsistent shot in the set.
+  fullPage = true,
 ): Promise<void> {
   const watermark = await mappingWatermark(pool);
 
@@ -519,7 +536,7 @@ async function walkUpload(
   await page.waitForURL(/\/columns/);
   await page.evaluate(() => document.fonts.ready);
 
-  if (shots.columnsBlank) await shoot(page, shots.columnsBlank);
+  if (shots.columnsBlank) await shoot(page, shots.columnsBlank, fullPage);
 
   for (const [name, value] of [
     ["instrument", "Symbol"],
@@ -530,7 +547,7 @@ async function walkUpload(
   ] as const) {
     await page.selectOption(`select[name="${name}"]`, value);
   }
-  if (shots.columnsMapped) await shoot(page, shots.columnsMapped);
+  if (shots.columnsMapped) await shoot(page, shots.columnsMapped, fullPage);
 
   await page.getByRole("button", { name: /save mapping and continue/i }).click();
   await page.waitForURL(/\/(instruments|review)/);
@@ -546,13 +563,13 @@ async function walkUpload(
       .nth(1)
       .getAttribute("value");
     await page.selectOption('select[name="classificationId-0"]', classification!);
-    if (shots.instruments) await shoot(page, shots.instruments);
+    if (shots.instruments) await shoot(page, shots.instruments, fullPage);
     await page.getByRole("button", { name: /save and continue/i }).click();
     await page.waitForURL(/\/review/);
     await page.evaluate(() => document.fonts.ready);
   }
 
-  if (shots.review) await shoot(page, shots.review);
+  if (shots.review) await shoot(page, shots.review, fullPage);
 
   await forgetWalkWrites(pool, watermark);
 }
@@ -568,6 +585,12 @@ async function captureFirstRun(browser: Browser): Promise<void> {
   await visit(page, "/settings/accounts");
   await shoot(page, "docs/guide/images/first-run-accounts.png");
   await page.close();
+
+  const phone = await open(browser, "light", true);
+  await visitAndShootMobile(phone, "/", "docs/guide/images/first-run-overview-mobile.png");
+  await visitAndShootMobile(phone, "/settings/people", "docs/guide/images/first-run-people-mobile.png");
+  await visitAndShootMobile(phone, "/settings/accounts", "docs/guide/images/first-run-accounts-mobile.png");
+  await phone.close();
 }
 
 /**
@@ -650,6 +673,61 @@ async function openOwnerFilter(page: Page): Promise<void> {
   await page.locator(".owner-filter[open]").waitFor({ state: "visible" });
 }
 
+/**
+ * A phone companion for a shot the desktop loop already took, added after
+ * the fact: most desktop shots in this file had no phone counterpart at all
+ * until this function existed to give them one. Never full-page, for the
+ * same reason every other phone shot here is not (`shoot`'s own callers):
+ * the bottom navigation is `position: fixed`, so a full-page capture paints
+ * it across the middle of the image instead of at the foot of the screen.
+ * `scrollInto`, when given, is for a row or panel that would otherwise sit
+ * below the fold at 390×900 — the same trick `captureReadme`'s own
+ * `holdings-mobile` shot already uses for its subtotal row.
+ */
+async function visitAndShootMobile(
+  page: Page,
+  path: string,
+  file: string,
+  opts: { prepare?: (page: Page) => Promise<void>; scrollInto?: string } = {},
+): Promise<void> {
+  await visit(page, path);
+  if (opts.prepare) await opts.prepare(page);
+  if (opts.scrollInto) {
+    await page.locator(opts.scrollInto).first().scrollIntoViewIfNeeded();
+    await page.evaluate(() => document.fonts.ready);
+  }
+  await shoot(page, file, false);
+}
+
+/**
+ * The unlock screen (`app/routes/unlock.tsx`), desktop and mobile — the one
+ * screen neither `docs/screenshots/` nor `docs/guide/images/` carried a shot
+ * of at all before this function existed, despite it being where every
+ * locked browser actually lands. Both contexts are opened with `withGrant:
+ * false` (`open`'s own comment on that parameter says why): this household's
+ * one passkey is already planted by the time either capture function calls
+ * this (`prepareCapture`, run before `captureReadme`/`captureGuide`), so what
+ * renders is the screen exactly as a real locked household sees it —
+ * enrolled and refused — never the placeholder state of a household that has
+ * not turned the lock on.
+ */
+async function captureUnlock(
+  browser: Browser,
+  theme: Theme,
+  desktopFile: string,
+  mobileFile: string,
+): Promise<void> {
+  const desktop = await open(browser, theme, false, false, false);
+  await visit(desktop, "/unlock");
+  await shoot(desktop, desktopFile);
+  await desktop.close();
+
+  const mobile = await open(browser, theme, true, false, false);
+  await visit(mobile, "/unlock");
+  await shoot(mobile, mobileFile, false);
+  await mobile.close();
+}
+
 /** The README's shots: both themes, plus the two phone ones. */
 async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Promise<void> {
   console.log("\nREADME — docs/screenshots/");
@@ -722,6 +800,16 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     });
     await page.close();
 
+    // The unlock screen (`captureUnlock`'s own header) — its own contexts,
+    // never `page` above, because the one thing that screen needs is the one
+    // thing every other shot in this loop deliberately has: no live grant.
+    await captureUnlock(
+      browser,
+      theme,
+      `docs/screenshots/unlock-${theme}.png`,
+      `docs/screenshots/unlock-mobile-${theme}.png`,
+    );
+
     const phone = await open(browser, theme, true);
     await visit(phone, "/");
     await shoot(phone, `docs/screenshots/overview-mobile-${theme}.png`, false);
@@ -740,7 +828,69 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     });
     await phone.evaluate(() => document.fonts.ready);
     await shoot(phone, `docs/screenshots/holdings-mobile-${theme}.png`, false);
+
+    // The phone companions below are every remaining README shot that had
+    // none until now — everything above this line in the loop already had a
+    // desktop shot; nothing here is a screen this file has not already
+    // photographed once. Reusing `phone` rather than opening one context per
+    // shot: none of these need a clean context the way the masked shot just
+    // below does (finding 2's exception is about the *masking* cookie, not
+    // the viewport), and every navigation already tears down the last
+    // screen's state the same way the desktop loop's own `page` does.
+    await visitAndShootMobile(
+      phone,
+      `/?owner=${ownerId}&range=all`,
+      `docs/screenshots/overview-owner-mobile-${theme}.png`,
+      { prepare: openOwnerFilter },
+    );
+    await visitAndShootMobile(phone, "/?range=1d", `docs/screenshots/overview-1d-mobile-${theme}.png`);
+    await visitAndShootMobile(
+      phone,
+      `/holdings?account=${brokerage}&edit=${editRow}`,
+      `docs/screenshots/holdings-edit-mobile-${theme}.png`,
+      { scrollInto: ".row-editing" },
+    );
+    await visitAndShootMobile(phone, "/income", `docs/screenshots/income-mobile-${theme}.png`);
+    await visitAndShootMobile(
+      phone,
+      `/accounts/${brokerage}`,
+      `docs/screenshots/account-detail-mobile-${theme}.png`,
+    );
+    await visitAndShootMobile(
+      phone,
+      `/accounts/${accounts.liability}`,
+      `docs/screenshots/account-balance-mobile-${theme}.png`,
+    );
+    await visitAndShootMobile(phone, "/settings/accounts", `docs/screenshots/settings-mobile-${theme}.png`);
+    await visitAndShootMobile(
+      phone,
+      "/settings/passkeys",
+      `docs/screenshots/settings-passkeys-mobile-${theme}.png`,
+    );
+    await visitAndShootMobile(phone, "/upload", `docs/screenshots/upload-mobile-${theme}.png`);
     await phone.close();
+
+    // The masked phone shot needs its own context (`open`'s `masked`
+    // parameter), the same reason `overview-masked-${theme}.png` above does
+    // not reuse `page`.
+    const maskedPhone = await open(browser, theme, true, true);
+    await visit(maskedPhone, "/");
+    await shoot(maskedPhone, `docs/screenshots/overview-masked-mobile-${theme}.png`, false);
+    await maskedPhone.close();
+
+    const uploadPhone = await open(browser, theme, true);
+    await walkUpload(
+      uploadPhone,
+      pool,
+      csv,
+      brokerage,
+      {
+        columnsBlank: `docs/screenshots/upload-mapping-mobile-${theme}.png`,
+        review: `docs/screenshots/upload-review-mobile-${theme}.png`,
+      },
+      false,
+    );
+    await uploadPhone.close();
   }
 }
 
@@ -807,10 +957,64 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
   });
   await page.close();
 
+  // The unlock screen — the guide's own copy of it lives in passkeys.md,
+  // which walks the screen in prose at length but, until now, had no picture
+  // of it at all (`captureUnlock`'s own header explains the contexts).
+  await captureUnlock(browser, "light", "docs/guide/images/unlock.png", "docs/guide/images/unlock-mobile.png");
+
   const phone = await open(browser, "light", true);
   await visit(phone, "/");
   await shoot(phone, "docs/guide/images/overview-mobile.png", false);
+
+  // Every other guide screen's own phone companion — added after the fact,
+  // the same as the README's own second pass above: `overview-mobile.png`
+  // was the guide's one phone shot before this, on the strength of
+  // `overview.md`'s "On a phone" section alone.
+  await visitAndShootMobile(phone, "/?range=all", "docs/guide/images/overview-range-all-mobile.png");
+  await visitAndShootMobile(phone, "/?range=1d", "docs/guide/images/overview-range-1d-mobile.png");
+  await visitAndShootMobile(phone, "/holdings", "docs/guide/images/holdings-mobile.png");
+  await visitAndShootMobile(phone, "/holdings?group=assetClass", "docs/guide/images/holdings-grouped-mobile.png");
+  await visitAndShootMobile(phone, `/holdings?owner=${ownerId}`, "docs/guide/images/holdings-owner-mobile.png", {
+    prepare: openOwnerFilter,
+  });
+  await visitAndShootMobile(
+    phone,
+    `/holdings?account=${brokerage}&edit=${editRow}`,
+    "docs/guide/images/holdings-edit-mobile.png",
+    { scrollInto: ".row-editing" },
+  );
+  await visitAndShootMobile(phone, "/analysis", "docs/guide/images/analysis-mobile.png");
+  await visitAndShootMobile(phone, "/income", "docs/guide/images/income-mobile.png");
+  await visitAndShootMobile(phone, `/accounts/${brokerage}`, "docs/guide/images/account-detail-mobile.png");
+  await visitAndShootMobile(phone, `/accounts/${accounts.bank}`, "docs/guide/images/set-balance-mobile.png");
+  await visitAndShootMobile(phone, "/settings/people", "docs/guide/images/settings-people-mobile.png");
+  await visitAndShootMobile(phone, "/settings/accounts", "docs/guide/images/settings-accounts-mobile.png");
+  await visitAndShootMobile(
+    phone,
+    `/settings/accounts/${accounts.bank}`,
+    "docs/guide/images/settings-account-edit-mobile.png",
+  );
+  await visitAndShootMobile(phone, "/settings/tax", "docs/guide/images/settings-tax-mobile.png");
+  await visitAndShootMobile(phone, "/settings/prices", "docs/guide/images/settings-prices-mobile.png");
+  await visitAndShootMobile(phone, "/settings/passkeys", "docs/guide/images/settings-passkeys-mobile.png");
+  await visitAndShootMobile(phone, "/upload", "docs/guide/images/upload-1-account-and-file-mobile.png");
   await phone.close();
+
+  const uploadPhone = await open(browser, "light", true);
+  await walkUpload(
+    uploadPhone,
+    pool,
+    csv,
+    brokerage,
+    {
+      columnsBlank: "docs/guide/images/upload-2-columns-blank-mobile.png",
+      columnsMapped: "docs/guide/images/upload-2-columns-mapped-mobile.png",
+      instruments: "docs/guide/images/upload-3-instruments-mobile.png",
+      review: "docs/guide/images/upload-4-review-mobile.png",
+    },
+    false,
+  );
+  await uploadPhone.close();
 }
 
 async function main(): Promise<void> {
