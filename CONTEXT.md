@@ -119,6 +119,16 @@ but its spine does not, from the feed's own history. Fills what is absent and ne
 close the running system recorded itself; a day the market did not trade stays absent.
 _Avoid_: historical import, catch-up, re-pricing, price sync.
 
+**Price worker**:
+The one process that talks to the price feed, holding no rule about what to fetch or what a price
+means, and no database credential.
+_Avoid_: sidecar, fetcher, poller (for this).
+
+**Worker socket**:
+The unix socket in the shared volume through which the app asks and the worker answers — a
+request and a raw answer, nothing kept.
+_Avoid_: queue, job table, sidecar API, RPC.
+
 ### Who gets in
 
 **Gate**:

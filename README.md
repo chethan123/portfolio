@@ -470,6 +470,8 @@ graph LR
         caddy["caddy<br/>the only published port"]
         gate["gate<br/>Google sign-in + allowlist"]
         app["app<br/>the tracker"]
+        worker["worker<br/>fetches prices, nothing else"]
+        egressProxy["egress-proxy<br/>the worker's only way out"]
         db[("db<br/>PostgreSQL — ./volumes/db/data")]
     end
 
@@ -481,7 +483,9 @@ graph LR
     caddy --> app
     gate -.-> google
     app --> db
-    app -.->|quotes in market hours,<br/>history while a gap is open,<br/>or Refresh now| yahoo
+    app -->|unix socket| worker
+    worker --> egressProxy
+    egressProxy -.->|quotes in market hours,<br/>history while a gap is open,<br/>or Refresh now| yahoo
 ```
 
 ### Who gets in, and where that is decided
@@ -616,17 +620,18 @@ first upload (DESIGN.md §7).
 
 ## Where prices come from
 
-Prices are fetched by an in-process loop on the refresh cadence set at Settings → Prices (seeded to
-every 15 minutes) — there is no worker container, which DESIGN.md §10 chose deliberately for the
-single deployment target. *Quotes* are asked for only while the market is open. Riding the same
-refresh at any hour is a bounded **backfill** batch: whenever a holding's history reaches further
-back than its prices do, the feed's own daily history fills the missing days in — inserted where
-absent, never over a close the instance recorded itself, and un-adjusted for splits because a
-statement records the shares as held on the day.
-[`app/lib/price-provider.server.ts`](app/lib/price-provider.server.ts) is the only module that
-imports `yahoo-finance2`, behind the two-method interface §6.1 mandates, so swapping providers
-touches one file. [`app/lib/prices.server.ts`](app/lib/prices.server.ts) is the only module that
-writes a price.
+Prices refresh on a cadence set at Settings → Prices (seeded to every 15 minutes), timed by a
+scheduler inside the app — but the fetch itself runs in a separate `worker` container, reached
+over a private socket, that holds no database credential and can reach nothing but the price feed.
+*Quotes* are asked for only while the market is open. Riding the same refresh at any hour is a
+bounded **backfill** batch: whenever a holding's history reaches further back than its prices do,
+the feed's own daily history fills the missing days in — inserted where absent, never over a close
+the instance recorded itself, and un-adjusted for splits because a statement records the shares as
+held on the day.
+[`server/yahoo-client.ts`](server/yahoo-client.ts) is the only module that imports
+`yahoo-finance2`, reached from that worker process rather than this one, behind the two-method
+interface §6.1 mandates, so swapping providers still touches one file.
+[`app/lib/prices.server.ts`](app/lib/prices.server.ts) is the only module that writes a price.
 
 Three decisions in there are worth knowing before reading a number on a screen:
 

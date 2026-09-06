@@ -1,9 +1,11 @@
 /**
  * The refresh loop (DESIGN.md §6.2), in the app's own process, on the cadence
- * chosen at Settings → Prices. §10 chose in-process over a worker container —
- * "one process to deploy, one place to read logs" — accepting that a restart
- * mid-session misses a poll until the next tick; hence no third service in
- * `compose.yaml`.
+ * chosen at Settings → Prices. §10 kept the scheduler here — one timer to
+ * arm, one cadence to read — accepting that a restart mid-session misses a
+ * poll until the next tick. The fetch itself no longer runs here: every tick
+ * reaches the price feed by dialling `worker` over the socket the two
+ * containers share ({@link socketProvider}), and this process holds no
+ * network path to it at all.
  *
  * **The cadence is a row, not an environment variable**
  * (`0008_refresh_cadence.sql`): a tick re-reads it and re-arms when it moved —
@@ -172,7 +174,7 @@ function logBackfill(report: BackfillReport): void {
 
   const summary =
     `Price backfill: ${report.attempted} attempted, ${report.written} closes written, ` +
-    `${failed} failed.${report.batchFailed ? " The batch itself failed; see the error above." : ""}`;
+    `${failed} failed.${report.batchFailed ? " The batch itself failed; see the line above." : ""}`;
 
   if (failed > 0 || report.batchFailed) console.warn(summary);
   else console.info(summary);
