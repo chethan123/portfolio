@@ -25,16 +25,24 @@ The line moved to somewhere defensible: **the stack produces a dump and never le
 backup tool inside the stack, no repository password, no remote credentials, no new outbound
 dependency. Being precise about the property this preserves: the stack is not egress-free and never
 has been — `ARCHITECTURE.md` §2 lists two outbound dependencies, the gate's token exchange with
-Google and the app's quote fetch from Yahoo. What holds is that both are the deployment's own
-function, are named in one place each, and carry no credential to the household's data. A backup
-tool would add a third — one whose credential unlocks every dump ever taken.
+Google and the worker's quote fetch from Yahoo through the egress proxy — the app itself has no
+route out at all
+([ADR-0010](0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)). What holds
+is that both are the deployment's own function, are named in one place each, and carry no
+credential to the household's data. A backup tool would add a third — one whose credential unlocks
+every dump ever taken.
 
 ## This also reverses "no separate worker service"
 
-Three places argue there is no second container: DESIGN.md §10.1 ("A worker container would mean two
-images, two deployments, and two places to read logs"), `ARCHITECTURE.md` §3.1's "**No worker
-container**", and `compose.yaml`'s header. This is that second container, and the argument for the
-exception is specific rather than general:
+Three places argued there was no second container: DESIGN.md §10.1 ("A worker container would mean
+two images, two deployments, and two places to read logs"), `ARCHITECTURE.md` §3.1's "**No worker
+container**", and `compose.yaml`'s header. `compose.yaml`'s header no longer makes that argument at
+all — it now describes the worker and the egress proxy rather than arguing against them — and
+DESIGN.md and ARCHITECTURE.md have since been brought level with what shipped. There are three more
+containers today than the original argument allowed for, not the one this ADR carved an exception
+for: `dump`, `worker` and `egress-proxy`. The argument for `dump`'s own exception was specific rather
+than general — `worker`'s and `egress-proxy`'s are
+[ADR-0010](0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)'s:
 
 - `pg_dump` is not in the application image and has no business being there — the client must match
   the server version, which is a fact about the database service, not the app.
