@@ -311,8 +311,8 @@ function LockMark({ phase }: { phase: Phase }) {
  * announce.
  */
 function WaitingNote({ phase }: { phase: Phase }) {
-  if (phase === "confirming") return <>Waiting for your passkey…</>;
-  if (phase === "verifying") return <>Checking that passkey with this instance…</>;
+  if (phase === "confirming") return <p className="field-note">Waiting for your passkey…</p>;
+  if (phase === "verifying") return <p className="field-note">Checking that passkey with this instance…</p>;
   return null;
 }
 
@@ -325,7 +325,27 @@ function WaitingNote({ phase }: { phase: Phase }) {
  */
 function DismissedNote({ phase }: { phase: Phase }) {
   if (phase !== "dismissed") return null;
-  return <>That passkey check did not complete. Nothing has changed here — press Unlock to try again.</>;
+  return (
+    <p className="field-note">
+      That passkey check did not complete. Nothing has changed here — press Unlock to try again.
+    </p>
+  );
+}
+
+/**
+ * The sentence shown once this browser is confirmed unable to run the
+ * ceremony at all. It lives here rather than inside {@link UnlockControl},
+ * where it began, because it is the one message on this screen that replaces
+ * a control the reader may already have reached: `supported` is `null` until
+ * the mount check answers, so the button renders first and is then taken
+ * away. Swapped out in place it announced nothing at all — a screen reader
+ * reported only that the focused button had gone, without the explanation or
+ * any of the three ways back. Printed into the same live region as every
+ * other sentence here, it is read out like every other sentence here.
+ */
+function UnsupportedNote({ supported }: { supported: boolean | null }) {
+  if (supported !== false) return null;
+  return <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>;
 }
 
 /**
@@ -349,8 +369,10 @@ function pressIsRefused(phase: Phase, revalidatorState: "idle" | "loading" | "su
 }
 
 /**
- * The one control, or the message replacing it — never both, and never
- * neither: `supported` is `null` until the mount check answers (the server
+ * The one control, or nothing at all — never both. What is said in its place
+ * when there is nothing is {@link UnsupportedNote}'s, printed into the live
+ * region with every other sentence rather than substituted silently here.
+ * `supported` is `null` until the mount check answers (the server
  * can never know, so the button renders by default per ticket 04: the two
  * are not alternatives the server chooses between) and only ever narrows to
  * `false` after hydration. Extracted as its own component so both branches —
@@ -379,9 +401,7 @@ function UnlockControl({
   revalidatorState: "idle" | "loading" | "submitting";
   onUnlock: () => void;
 }) {
-  if (supported === false) {
-    return <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>;
-  }
+  if (supported === false) return null;
 
   // The arc is the app's existing spinner (`.lock-spinner`, sharing
   // `refresh-spin` and its reduced-motion opt-out with the refresh control),
@@ -653,10 +673,11 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
             announce, which would have made every sentence below silent to the
             reader who most needs it read out. */}
         <div className="lock-message">
-          <p className="field-note" role="status">
+          <div role="status">
+            <UnsupportedNote supported={supported} />
             <WaitingNote phase={phase} />
             <DismissedNote phase={phase} />
-          </p>
+          </div>
 
           <div role="alert">{refusal ? <p className="form-error">{refusal}</p> : null}</div>
 
@@ -680,6 +701,7 @@ export {
   UnlockControl,
   DismissedNote,
   LockMark,
+  UnsupportedNote,
   WaitingNote,
   pressIsRefused,
   visibleRefusal,

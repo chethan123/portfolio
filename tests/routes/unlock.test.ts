@@ -54,6 +54,7 @@ const {
   NOSCRIPT_MESSAGE,
   UNREADABLE_SUBMISSION_MESSAGE,
   LockMark,
+  UnsupportedNote,
   pressIsRefused,
   UnlockControl,
   WaitingNote,
@@ -484,11 +485,11 @@ describe("what the screen renders", () => {
       // first appears already holding its text is one assistive technology
       // commonly declines to announce, which would make every message here
       // silent for the reader with the most need of it.
-      // The pairing, not just the roles: the status region is the note
-      // paragraph itself, so moving a sentence out of it is a failure here
-      // rather than a silent loss of the announcement.
-      expect(markup).toContain('<p class="field-note" role="status">');
-      expect(markup).toContain('role="alert"');
+      // Both regions are present and empty, so every sentence that lands in
+      // one later is a change inside a node the accessibility tree already
+      // has — which is the whole condition for it being announced.
+      expect(markup).toContain('<div role="status">');
+      expect(markup).toContain('<div role="alert">');
       expect(markup).not.toContain("did not complete");
     }),
   );
@@ -608,12 +609,11 @@ describe("UnlockControl — the unsupported-browser branch, and what the one but
     },
   );
 
-  it("shows the no-ceremony message instead of a button once the browser is confirmed unable to run one", () => {
+  it("offers nothing at all once the browser is confirmed unable to run a ceremony", () => {
     const markup = renderToStaticMarkup(
       UnlockControl({ supported: false, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
     );
-    expect(markup).not.toContain("<button");
-    expect(markup).toContain(NO_CEREMONY_MESSAGE);
+    expect(markup).toBe("");
   });
 
   it("disables the button while a ceremony is in flight", () => {
@@ -739,6 +739,23 @@ describe("WaitingNote — the sentence that says which of the two working states
   });
 });
 
+describe("UnsupportedNote — the sentence that replaces a control the reader may already have reached", () => {
+  it("names the three ways back once the browser is confirmed unable to run a ceremony", () => {
+    const markup = renderToStaticMarkup(UnsupportedNote({ supported: false }));
+    expect(markup).toContain(NO_CEREMONY_MESSAGE);
+  });
+
+  it.for([{ supported: null }, { supported: true }] as const)(
+    // `null` is the server render and the first client frame: the button is
+    // offered until the mount check has actually answered, so a browser that
+    // can run the ceremony never sees this even for a frame.
+    "shows nothing while supported is $supported",
+    ({ supported }) => {
+      expect(renderToStaticMarkup(UnsupportedNote({ supported }))).toBe("");
+    },
+  );
+});
+
 describe("LockMark — the padlock opens on a passed check, never on a press", () => {
   it("draws the shackle open only once an assertion is with this instance", () => {
     const markup = renderToStaticMarkup(LockMark({ phase: "verifying" }));
@@ -832,11 +849,15 @@ describe("runCeremony", () => {
   );
 
   it(
-    // Without this the repair is untestable and therefore undefended:
-    // `startTransition` runs its scope synchronously, so deleting the wrapper
-    // changes no assertion anywhere else in this file — while restoring, in a
-    // real browser, the committed frame of a shut padlock that the wrapper
-    // exists to remove.
+    // What this can and cannot show, stated plainly. It cannot show React
+    // batching the commits — that needs a DOM, and this suite deliberately
+    // has none (CLAUDE.md). What it shows is the property the batching
+    // argument rests on: that the reset is handed to the scheduler rather
+    // than called outright. Without it the repair is undefended, because
+    // `startTransition` runs its scope synchronously — so deleting the
+    // wrapper changes no other assertion in this file while restoring, in a
+    // real browser, the committed frame of a shut padlock it exists to
+    // remove.
     "schedules the return to idle as a transition, so it cannot commit ahead of the redirect",
     async () => {
       vi.mocked(requestAssertion).mockResolvedValue({
