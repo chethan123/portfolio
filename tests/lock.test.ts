@@ -1,10 +1,6 @@
-// app/lib/lock.server.ts's WebAuthn ceremonies (docs/adr/0012, docs/specs/lock/02-the-two-ceremonies.md).
-// No browser, no route — refusals come from varying the server's expectation (mocked
-// ../server/config.ts) or the response's signed content (webauthn.ts's re-signing), never a
-// broken signature outright.
-// Five describe blocks below drive real cross-connection races against the database rather
-// than withDatabase's rolled-back transaction, synchronising through waitUntilBlocked except
-// "duplicate credential id", which still sleeps.
+// app/lib/lock.server.ts's WebAuthn ceremonies (ADR-0012, docs/specs/lock/02-the-two-ceremonies.md).
+// No browser: refusals come from varying the server's expectation or the response's signed content, never a broken signature.
+// Five describe blocks below race real DB connections (not withDatabase's rollback), synced via waitUntilBlocked; "duplicate credential id" still sleeps.
 import { generateKeyPairSync } from "node:crypto";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -135,7 +131,7 @@ async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> 
   throw new Error("expected the call to be refused, and it was not");
 }
 
-/** Bytes a base64url string decodes to, for asserting a challenge's or a grant id's true length. */
+/** For asserting a challenge's or grant id's true byte length. */
 function decodedByteLength(base64url: string): number {
   return Buffer.from(base64url, "base64url").length;
 }
@@ -402,7 +398,7 @@ describe("touchGrant", () => {
   );
 });
 
-/** Seed the one passkey `tests/support/webauthn.ts`'s fixtures can sign for. */
+/** The one passkey `tests/support/webauthn.ts`'s fixtures can sign for. */
 function seedFixturePasskey(seedPasskey: Fixtures["seedPasskey"], counter = 0) {
   return seedPasskey({ publicKey, credentialId, transports, backupEligible, counter });
 }
@@ -474,8 +470,8 @@ describe("unlocking", () => {
   it(
     "refuses an assertion the authenticator signed without verifying anybody, writing nothing",
     withDatabase(async ({ db, seedPasskey }) => {
-      // Library defaults requireUserVerification: true (verifyAuthenticationResponse.js:24), signed
-      // with the bit cleared rather than flipped after, so this is the UV refusal, not a broken signature.
+      // Library defaults requireUserVerification: true (verifyAuthenticationResponse.js:24); signed with
+      // the bit cleared, not flipped — so this is the UV refusal, not a broken signature.
       await seedFixturePasskey(seedPasskey, /* counter */ 3);
       const options = await unlockOptions(db);
 
@@ -1307,9 +1303,8 @@ describe("what a registration may store", () => {
   );
 });
 
-/** Each hostile shape here threw a TypeError before narrowAssertion/narrowRegistration existed (CLAUDE.md's
- * "Zod at the boundaries only") — must refuse, never throw. verifyUnlock carries all four shapes; the other
- * three entry points carry one each, confirming every entry narrows. */
+/** Each hostile shape threw a TypeError before narrowAssertion/narrowRegistration existed (CLAUDE.md's
+ * "Zod at the boundaries only") — must refuse, never throw. verifyUnlock carries all four shapes; the rest one each. */
 describe("hostile responses", () => {
   it(
     "refuses an empty object rather than throwing when unlocking",
@@ -1398,8 +1393,8 @@ describe("hostile responses", () => {
 });
 
 
-/** Every verified assertion mints one grant per browser; before this rule an unlock, an enrolment confirm and a
- * removal left three live rows, and "Lock now" ended only one. supersedes is the request's own cookie, as routes hand it down. */
+/** One grant per browser per verified assertion; before this rule unlock + enrolment confirm + removal left
+ * three live rows, and "Lock now" ended only one. `supersedes` is the request's own cookie, as routes hand it down. */
 describe("one live grant per browser", () => {
   it(
     "leaves one live grant behind an unlock, an enrolment confirm and a removal made by the same browser",
@@ -1669,7 +1664,6 @@ describe("counter concurrency", () => {
         const blocked = verifyUnlock(assertionResponse(optionsB.challenge, { counter: 3 }), trxB);
         blocked.catch(() => {});
 
-        // Polled via a third connection — a fixed delay would only guess B had time to reach Postgres.
         await waitUntilBlocked(database, pidB);
         await trxA.commit().execute();
         // Unblocked, greatest(counter, 3) re-evaluates against A's now-committed row (READ COMMITTED) — B's write re-affirms 9, doesn't throw.
@@ -1729,10 +1723,8 @@ describe("passkey removed mid-verification", () => {
 
       try {
         const optionsB = await unlockOptions(trxB);
-        // B's own connection — watched so the test knows when its counter update blocks.
         const pidB = await backendPid(trxB);
 
-        // A removes the very passkey B is about to verify against, uncommitted — B can't yet know.
         await trxA.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
 
         // B verifies against the pre-delete snapshot (READ COMMITTED) so it succeeds; its counter UPDATE then blocks on A's locked row.
@@ -1776,7 +1768,6 @@ describe("touchGrant, deleted mid-touch", () => {
       const racePasskeyId = "touch-grant-race-passkey";
       const raceGrantId = "touch-grant-race-grant-000000000000000000000000";
 
-      // Guards a crashed prior run's leftover rows — same cleanup reasoning as the races above.
       await database.deleteFrom("passkey").where("credential_id", "=", racePasskeyId).execute();
       await database
         .insertInto("passkey")
@@ -1806,10 +1797,8 @@ describe("touchGrant, deleted mid-touch", () => {
       let bodyFailed = false;
 
       try {
-        // B's own connection — watched so the test knows when its read blocks.
         const pidB = await backendPid(trxB);
 
-        // A deletes the very grant B is about to touch, uncommitted — B can't yet know.
         await trxA.deleteFrom("unlock_grant").where("id", "=", raceGrantId).execute();
 
         // touchGrant's SELECT ... FOR UPDATE blocks here — without that lock, B would snapshot before A's delete and report the grant live regardless.

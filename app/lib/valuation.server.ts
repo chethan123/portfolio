@@ -1,10 +1,6 @@
-// Only reader of holding_valued/holding_valued_at, and (ADR-0006) the only thing that values
-// anything from price_observation. Mitigates DESIGN.md §8.2's weakest point (hand-rolled
-// dashboard queries disagreeing) with one view and this one module over it — a screen writing
-// its own join to holding has left the mitigation. Translation layer, not a service: every
-// valuation rule lives in the view's SQL; the only numbers here are Coverage cardinalities,
-// everything else crosses as a decimal string. Every household-scoped reader takes OwnerFilter
-// first, no default — ADR-0008.
+// Only reader of holding_valued/holding_valued_at and (ADR-0006) the only thing that values from
+// price_observation — a screen writing its own join to holding has left the design. Valuation
+// rules live in the view's SQL; every household-scoped reader takes OwnerFilter first (ADR-0008).
 import { sql } from "kysely";
 
 import { numberTail } from "./account-label.ts";
@@ -15,19 +11,16 @@ import type { AliasedRawBuilder, Kysely, RawBuilder, Selectable, SqlBool } from 
 
 export type AccountKind = "brokerage" | "401k" | "ira" | "bank" | "liability";
 
-// Three-way, not boolean: $500k Traditional is ~$350k of spending power where $500k Roth is
-// $500k — a boolean throws that away (DESIGN.md §4.5).
+// Three-way, not boolean: $500k Traditional is ~$350k of spending power (DESIGN.md §4.5).
 export type TaxTreatment = "taxable" | "tax_deferred" | "tax_free";
 
 export type AssetClass = "equity" | "bond" | "cash" | "other";
 
-// Cash is a USD position priced at 1.00 and a liability a negative USD quantity, so nothing
-// reading this needs a branch for either (DESIGN.md §2).
+// Cash is USD priced at 1.00, a liability a negative USD quantity — no branch for either (§2).
 export type ValuedHolding = {
   accountId: string;
   accountName: string;
-  // Pre-masked (raw number never leaves the server). Not a view column: a label isn't part of
-  // the valuation contract (ADR-0001) — readHoldings joins account for it instead.
+  // Pre-masked; not a view column — a label isn't part of the valuation contract (ADR-0001).
   accountNumberTail: string | null;
   institution: string;
   accountKind: AccountKind;
@@ -35,7 +28,6 @@ export type ValuedHolding = {
   ownerId: string;
   ownerName: string;
   instrumentId: string;
-  // Null for an instrument with no public ticker, such as a 401k trust.
   symbol: string | null;
   instrumentName: string;
   // Provider's word (EQUITY, ETF, MUTUALFUND, seeded CURRENCY). Null = nobody quotes it, not a fault.
@@ -44,33 +36,25 @@ export type ValuedHolding = {
   assetClass: AssetClass;
   // Negative for a liability — the sign lives here.
   quantity: string;
-  // Null only when never quoted.
   price: string | null;
-  // Null exactly when price is null. Never zero standing in for unknown.
   value: string | null;
-  // Null when the statement omitted it, as 401k statements routinely do.
   costBasisPerShare: string | null;
   costBasis: string | null;
-  // Null when either side is unknown — never a gain invented from a null.
   unrealized: string | null;
   isPriced: boolean;
-  // A stale price is still used; this says so rather than hiding it.
   isStale: boolean;
-  // quantity x current per-share rate. Never null on the current path (missing rate coalesces
-  // to zero, DESIGN.md §14 #9); always null on an as-of path (no historical rate stored).
+  // quantity x current per-share rate. Always null on an as-of path — no historical rate stored.
   annualDividend: string | null;
 };
 
-// "based on 8 of 12 holdings" — the alternative, coercing unknown to zero, reports a total that
-// looks complete and isn't.
+// "based on 8 of 12 holdings" — unknown coerced to zero reports a total that isn't complete.
 export type Coverage = { known: number; total: number };
 
 export type Total = { amount: string; coverage: Coverage };
 
 type HoldingValuedRow = Selectable<Database["holding_valued"]>;
 
-// Postgres reports every view column nullable regardless of reality. Narrow loudly: a null
-// here means the view and this module disagree about the schema — a bug to surface, not paper over.
+// Postgres calls every view column nullable. A null here means view and module disagree — a bug.
 function required<T>(value: T | null, column: string): T {
   if (value === null) {
     throw new Error(`holding_valued.${column} was null, which the view cannot produce.`);
@@ -111,30 +95,24 @@ function toValuedHolding(
   };
 }
 
-// Crosses as a string in both directions: default pg parses date at local midnight, and a
-// round trip west of UTC lands on the previous day — the wrong position set, silently.
-// server/db.ts registers the parser that prevents it.
+// String both ways: pg parses date at local midnight — west of UTC a round trip loses a day.
 export type IsoDate = string;
 
-// One type for both sources (view for "now", function for a date) since the function returns
-// setof holding_valued — everything below is written once and reads either.
+// One type for both sources: holding_valued_at returns setof holding_valued.
 type ValuedSource = AliasedRawBuilder<HoldingValuedRow, "holding_valued">;
 
 const valuedNow = (): ValuedSource =>
   sql.table<HoldingValuedRow>("holding_valued").as("holding_valued");
 
-// What was held on date, priced at that date's carried-forward close.
 const valuedAt = (date: IsoDate): ValuedSource =>
   sql<HoldingValuedRow>`holding_valued_at(${date}::date)`.as("holding_valued");
 
-// Ordering is for determinism, not display. `where` narrows the same read, so a drill-down
-// never needs its own join to the view (§8.2).
+// Ordering is for determinism, not display; `where` narrows the same read (§8.2).
 async function readHoldings(
   db: Kysely<Database>,
   source: ValuedSource,
   where?: RawBuilder<SqlBool>,
 ): Promise<ValuedHolding[]> {
-  // Joins account only for the number tail — a label, not part of the valuation contract (ADR-0001).
   const all = db
     .selectFrom(source)
     .innerJoin("account", "account.id", "holding_valued.account_id")
@@ -150,8 +128,7 @@ async function readHoldings(
   return rows.map(toValuedHolding);
 }
 
-// SUM over value, no branch for cash or debt. Unpriced holdings add nothing to amount but
-// still count in coverage.total, so a partial answer is labelled partial.
+// SUM over value, no branch for cash or debt. Unpriced adds nothing but still counts in coverage.
 async function readTotal(
   db: Kysely<Database>,
   source: ValuedSource,
@@ -160,7 +137,6 @@ async function readTotal(
   const all = db
     .selectFrom(source)
     .select([
-      // value is null exactly when unpriced and SUM skips nulls; coalesce covers an empty portfolio.
       sql<string>`cast(coalesce(sum(value), 0) as numeric(20, 4))`.as("amount"),
       sql<string>`count(*) filter (where is_priced)`.as("known"),
       sql<string>`count(*)`.as("total"),
@@ -170,14 +146,11 @@ async function readTotal(
 
   return {
     amount: row.amount,
-    // Counts, not money.
     coverage: { known: Number(row.known), total: Number(row.total) },
   };
 }
 
-// "Currently" is the view's business: newest position set per account, deterministic
-// tie-break, closed accounts excluded. Never-priced holdings included (isPriced: false),
-// never dropped.
+// "Currently" is the view's business: newest position set per account, closed accounts excluded.
 export async function currentHoldings(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -192,10 +165,8 @@ export async function netWorth(
   return readTotal(db, valuedNow(), ownedBy("holding_valued.owner_id", filter));
 }
 
-// Carried-forward close (a Saturday equals the preceding Friday, no calendar anywhere). Doesn't
-// invent a past: an account with no upload before date contributes no rows, not a zero
-// (DESIGN.md §7 — that period belongs to manual_networth); an account closed after date is
-// included, since it was open then. isStale is always false: a historical close is simply the close.
+// Carried-forward close (a Saturday equals the preceding Friday). No upload before date means no
+// rows, not a zero (§7); an account closed after date is included. isStale is always false.
 export async function holdingsAt(
   filter: OwnerFilter,
   date: IsoDate,
@@ -204,8 +175,7 @@ export async function holdingsAt(
   return readHoldings(db, valuedAt(date), ownedBy("holding_valued.owner_id", filter));
 }
 
-// Before the first upload: 0.0000 over zero coverage — "nothing recorded yet", not "had
-// nothing" — the coverage count lets a chart say so.
+// Before the first upload: 0.0000 over zero coverage — "nothing recorded yet", not "had nothing".
 export async function netWorthAt(
   filter: OwnerFilter,
   date: IsoDate,
@@ -214,9 +184,7 @@ export async function netWorthAt(
   return readTotal(db, valuedAt(date), ownedBy("holding_valued.owner_id", filter));
 }
 
-// Rolled up in SQL, not JS (which would need Number or a decimal lib redoing what numeric
-// already does). Same view as everything else, so an account's total can't disagree with the
-// net worth headline (§8.2).
+// Rolled up in SQL so an account's total can't disagree with the net worth headline (§8.2).
 export type AccountTotal = {
   accountId: string;
   accountName: string;
@@ -224,17 +192,14 @@ export type AccountTotal = {
   institution: string;
   accountKind: AccountKind;
   ownerName: string;
-  // Negative for a liability account.
   amount: string;
   coverage: Coverage;
 };
 
 export type NetWorthPoint = { date: IsoDate; amount: string; coverage: Coverage };
 
-// The pre-day-zero series (DESIGN.md §7).
 export type ManualPoint = { date: IsoDate; amount: string };
 
-// Shared by the list and single-account query below so the two can't describe one account differently.
 type AccountTotalRow = {
   account_id: string | null;
   account_name: string | null;
@@ -260,19 +225,14 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
   };
 }
 
-// Bound is on magnitude, not character count: a digit-count guard would 404 a row that exists
-// (leading zeros). Compared as BigInt (§5.6): past 2^53 a float rounds.
+// Magnitude, not digit count (leading zeros). BigInt (§5.6): past 2^53 a float rounds.
 const MAX_BIGINT = 9223372036854775807n;
 
-// Whether an id could name a row, rather than error inside Postgres.
 function couldBeId(id: string): boolean {
   return /^\d+$/.test(id) && BigInt(id) <= MAX_BIGINT;
 }
 
-// <column> in (<ids>), or a match-nothing predicate when none could be an id — a non-digit id
-// would otherwise fail inside Postgres. Unusable ids drop from the list (?owner=1,abc still
-// narrows to 1), but nothing usable yields false, never an empty in () and never silently no
-// filter — widening a view somebody asked to narrow is the failure holdings-view.ts names.
+// Unusable ids drop out; nothing usable yields false, never an empty `in ()` and never no filter.
 function isOneOf(column: string, ids: readonly string[]): RawBuilder<SqlBool> {
   const usable = ids.filter(couldBeId);
 
@@ -285,14 +245,11 @@ function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
   return isOneOf(column, [accountId]);
 }
 
-// undefined, not a tautology, so an unfiltered read stays the query it's always been.
 function ownedBy(column: string, filter: OwnerFilter): RawBuilder<SqlBool> | undefined {
   return isFiltered(filter) ? isOneOf(column, filter) : undefined;
 }
 
-// Largest value first; a liability sorts to the bottom by construction (negative sum, §2).
-// Row for row the same answer accountTotal gives, by rule not coincidence. LEFT join: grouping
-// the view directly would silently drop the empty accounts it exists to keep (0.0000 over zero rows).
+// LEFT join: grouping the view directly would drop the empty accounts it exists to keep.
 export async function accountTotals(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -311,16 +268,12 @@ export async function accountTotals(
       "account.kind as account_kind",
       "person.name as owner_name",
       sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
-      // is_priced is null on the manufactured row for an empty account; null fails the filter.
       sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
-      // Joined column, not the row: count(*) would score the manufactured row as one holding.
       sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
-    // View already drops closed accounts; joining from account reaches past that.
     .where("account.closed_at", "is", null);
 
-  // Narrowed on account.owner_id, not through the view: an empty account still reports
-  // 0.0000, and the view's owner column is null on exactly those manufactured rows.
+  // Narrowed on account.owner_id, not the view: the view's owner column is null on empty accounts.
   const rows = await (owned === undefined ? base : base.where(owned))
     .groupBy([
       "account.id",
@@ -338,11 +291,8 @@ export async function accountTotals(
   return rows.map(toAccountTotal);
 }
 
-// Same AccountTotal shape as the list (accountTotals is this query without the id filter) — a
-// separate type is how the two would come to disagree. LEFT join from account: no view rows
-// (sold to nothing, or pre-first-upload) reports 0.0000 over zero coverage, not missing.
-// Null covers a nonexistent id and a closed one alike (the view excludes closed accounts, §8.2)
-// — the caller should 404, not render a page of blanks.
+// Same AccountTotal shape as the list — a separate type is how the two would come to disagree.
+// Null covers a nonexistent id and a closed one alike (§8.2); the caller should 404.
 export async function accountTotal(
   accountId: string,
   db: Kysely<Database> = getDb(),
@@ -359,12 +309,10 @@ export async function accountTotal(
       "account.kind as account_kind",
       "person.name as owner_name",
       sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
-      // Same is_priced null-on-manufactured-row shape as accountTotals.
       sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
       sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
     .where(isAccount("account.id", accountId))
-    // Turns "closed" into null, distinct from an account holding nothing.
     .where("account.closed_at", "is", null)
     .groupBy([
       "account.id",
@@ -379,9 +327,7 @@ export async function accountTotal(
   return row === undefined ? null : toAccountTotal(row);
 }
 
-// Same rows as currentHoldings' overview total, filtered to one account, unpriced included so
-// the table can say which line is missing. Empty for holds-nothing, closed, and no-such-id
-// alike — accountTotal answers which.
+// currentHoldings filtered to one account. Empty for holds-nothing, closed and no-such-id alike.
 export async function accountHoldings(
   accountId: string,
   db: Kysely<Database> = getDb(),
@@ -389,9 +335,7 @@ export async function accountHoldings(
   return readHoldings(db, valuedNow(), isAccount("holding_valued.account_id", accountId));
 }
 
-// A value at each date in one round trip: a lateral join evaluates holding_valued_at once per
-// date inside one statement, where netWorthAt in a loop would be a round trip and a re-plan
-// per point. dates may be any order; the result comes back sorted.
+// One round trip: a lateral evaluates holding_valued_at once per date, not netWorthAt in a loop.
 async function readSeries(
   db: Kysely<Database>,
   dates: IsoDate[],
@@ -401,14 +345,12 @@ async function readSeries(
 
   const rows = await db
     .selectFrom(sql<{ date: string }>`unnest(cast(${dates} as date[]))`.as("d"))
-    // LEFT, not INNER: a date before the first upload has no rows, and INNER would drop it
-    // silently instead of reporting it uncovered.
+    // LEFT, not INNER: a date before the first upload has no rows and INNER would drop it silently.
     .leftJoinLateral(
       (join) => {
         const held = join.selectFrom(sql`holding_valued_at(d.date)`.as("v")).selectAll();
 
-        // Inside the lateral, never the outer WHERE: out there it runs after the join and
-        // takes the uncovered date's all-null row down with it.
+        // Inside the lateral, never the outer WHERE — out there it drops the uncovered date's row.
         return (where === undefined ? held : held.where(where)).as("v");
       },
       (join) => join.onTrue(),
@@ -417,7 +359,6 @@ async function readSeries(
       sql<string>`cast(d.date as text)`.as("date"),
       sql<string>`cast(coalesce(sum(v.value), 0) as numeric(20, 4))`.as("amount"),
       sql<string>`count(*) filter (where v.is_priced)`.as("known"),
-      // Joined column, not the row: count(*) would score the manufactured all-null row as 1.
       sql<string>`count(v.instrument_id)`.as("total"),
     ])
     .groupBy(sql`d.date`)
@@ -431,19 +372,16 @@ async function readSeries(
   }));
 }
 
-// A date before the first upload is 0.0000 over zero coverage — not a real zero (§7) —
-// coverage.total says where the line starts.
+// A date before the first upload is 0.0000 over zero coverage, not a real zero (§7).
 export async function netWorthSeries(
   filter: OwnerFilter,
   dates: IsoDate[],
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthPoint[]> {
-  // v is the lateral's alias — narrowing goes inside it (readSeries).
   return readSeries(db, dates, ownedBy("v.owner_id", filter));
 }
 
-// Same terms as netWorthSeries: dates before its first statement or after it closed come back
-// 0.0000 over zero coverage, reported rather than skipped (§7).
+// Same terms as netWorthSeries: dates outside the account's life come back 0.0000, not skipped.
 export async function accountSeries(
   accountId: string,
   dates: IsoDate[],
@@ -453,17 +391,13 @@ export async function accountSeries(
 }
 
 export type SessionPoint = {
-  // ISO instant, not a date — hence "at". The chart widens its own date to hold either and is
-  // told which it's drawing rather than inferring it (ChartPoint).
+  // ISO instant, not a date — hence "at". The chart is told which it is drawing (ChartPoint).
   at: string;
   amount: string;
   coverage: Coverage;
 };
 
-// Read off the log, not the calendar (ADR-0006): max(market_date) is stamped at write time by
-// the same rule that files a daily close, so a weekend answers with Friday's session and a
-// half-day ends where its observations end. Matched by price_observation_market_date_idx — a
-// backward scan stopping at row one.
+// Off the log, not the calendar (ADR-0006) — market_date is stamped when a close is filed.
 export async function latestObservedSession(
   db: Kysely<Database> = getDb(),
 ): Promise<IsoDate | null> {
@@ -475,29 +409,17 @@ export async function latestObservedSession(
   return row?.session ?? null;
 }
 
-// What a surface was worth at each observed instant of session (the only thing that values
-// anything from the observation log, §4.2 extended to the third tier). Instants come from the
-// log as a whole, not the surface: a cash-only account observes nothing, and both surfaces must
-// plot the same moments (the surface narrows only whose holdings are valued). Each point values
-// positions held now at the price known then, so an upload mid-session stays consistent with
-// the headline. Fallback carries forward the last close strictly before the session — the
-// session's own price_daily row is provisional and converges on the day's last observation, so
-// including it would price the open at the close; reaching past it correctly prices cash,
-// hand-priced trusts, and failed fetches. Unhandled by design: an instrument first priced today
-// has no price before its own first observation, so it's a step in the line (out of `known`,
-// per-point coverage says so); an account closed during the session is absent from the whole 1D
-// line while holding_valued_at still counts it that day (1D/1W may disagree, the price of
-// valuing today's positions rather than the day's). The line is a running total, not a
-// valuation repeated per instant: value at an instant is the opening value plus, over every
-// observation at or before it, that holding's new rounded value less its previous rounded value
-// — telescoping exactly in numeric since rounding stays per holding. Arithmetic never leaves SQL (§5.6).
+// Values each observed instant of the session off the log (§4.2 extended to the third tier).
+// Instants come from the whole log, not the surface, so both surfaces plot the same moments.
+// Fallback is the last close *strictly before* the session — today's price_daily row is
+// provisional and would price the open at the close. Running total of per-holding rounded
+// deltas, telescoping exactly in numeric. Known gaps: DESIGN.md §14.
 async function readSessionSeries(
   db: Kysely<Database>,
   session: IsoDate,
   where?: RawBuilder<SqlBool>,
 ): Promise<SessionPoint[]> {
-  // Narrowing sits in the holdings CTE, never the outer WHERE: an instant where this surface
-  // holds nothing observed is still a point on the line.
+  // Narrowing sits in the holdings CTE — an instant holding nothing observed is still a point.
   const narrowing = where === undefined ? sql`true` : where;
 
   const rows = await sql<{ at: Date; amount: string; known: string; total: string }>`
@@ -507,8 +429,7 @@ async function readSessionSeries(
       where market_date = ${session}::date
     ),
 
-    -- Positions held now, one row per holding — deltas/opening_total round per holding below,
-    -- same as every other reader, which is what keeps totals equal.
+    -- Positions held now, one row per holding; deltas round per holding, like every other reader.
     held as (
       select h.id, h.instrument_id, h.quantity
       from account a
@@ -517,8 +438,7 @@ async function readSessionSeries(
         and ${narrowing}
     ),
 
-    -- Price as the session opens: latest observation before the first instant (any date), else
-    -- the last close strictly before the session, else null (unpriced).
+    -- Price as the session opens: last observation before the first instant, else the last close.
     opening as (
       select
         h.id, h.instrument_id, h.quantity,
@@ -534,13 +454,8 @@ async function readSessionSeries(
       from held h
     ),
 
-    -- Every observation of a held instrument in the session's span, with the price it replaces
-    -- (previous observation in span, else opening price; null previous = priced for the first
-    -- time ever, the one case known moves). Bounded by the span, not market_date, so it holds on
-    -- any rows regardless of today's MARKET_TIMEZONE. Bounds are scalar subqueries, not a joined
-    -- CTE: a join would make the span a join condition the planner won't turn into an index
-    -- condition (seq-scans the whole log); scalar subqueries are init-plan params that do hit
-    -- the index on price_observation_pkey — one scan per holding.
+    -- Every observation of a held instrument in the span, with the price it replaces (null
+    -- previous = first ever priced). Bounds as scalar subqueries: a joined CTE seq-scans the log.
     changes as (
       select
         o.as_of,
@@ -554,8 +469,7 @@ async function readSessionSeries(
        and o.as_of <= (select max(as_of) from instants)
     ),
 
-    -- What the observations at one instant add to the total and the priced count, rounded per
-    -- holding like the total.
+    -- What one instant's observations add to the total and the priced count, rounded per holding.
     deltas as (
       select
         as_of,
@@ -574,9 +488,7 @@ async function readSessionSeries(
       from opening
     ),
 
-    -- Instants and deltas on one timeline. A plotted instant takes every delta at or before it,
-    -- ties included — the default RANGE frame of sum(...) over (order by as_of) does exactly
-    -- that, no ordering needed between the two row kinds.
+    -- One timeline; the default RANGE frame takes every delta at or before it, ties included.
     timeline as (
       select
         as_of, true as plotted,
@@ -595,9 +507,8 @@ async function readSessionSeries(
       from timeline
     )
 
-    -- plotted filter sits here, after the window, not inside running: a WHERE runs before
-    -- window functions and would drop delta rows before they're summed. known is cast back to
-    -- bigint since bigint + sum(bigint) is numeric in Postgres, and coverage must stay one type.
+    -- plotted filter after the window, not inside running: a WHERE would drop delta rows before
+    -- they're summed. known cast back to bigint — bigint + sum(bigint) is numeric in Postgres.
     select
       r.as_of                                              as at,
       cast(ot.amount + r.value_delta as numeric(20, 4))    as amount,
@@ -622,12 +533,10 @@ export async function netWorthSessionSeries(
   session: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<SessionPoint[]> {
-  // a is the account alias in the held CTE, where the narrowing goes.
   return readSessionSeries(db, session, ownedBy("a.owner_id", filter));
 }
 
-// A cash-only account draws a flat line, not an empty one: instants are the log's, so every
-// account answers at the same moments.
+// A cash-only account draws a flat line, not an empty one: instants are the log's.
 export async function accountSessionSeries(
   accountId: string,
   session: IsoDate,
@@ -636,8 +545,7 @@ export async function accountSessionSeries(
   return readSessionSeries(db, session, isAccount("a.id", accountId));
 }
 
-// The hand-typed prefix series (DESIGN.md §7), raw and unmerged — the overlap rule (computed
-// wins, manual fills gaps) is a display rule about two lines, not a fact about either.
+// The hand-typed prefix series (§7), raw — the overlap rule is a display rule, not a fact here.
 export async function manualNetWorth(
   db: Kysely<Database> = getDb(),
 ): Promise<ManualPoint[]> {
@@ -650,9 +558,7 @@ export async function manualNetWorth(
   return rows.map((row) => ({ date: row.date, amount: String(row.amount) }));
 }
 
-// Headline's "+$14,921.00 / +1.2%" pair, in SQL numeric (§4.1) — the difference of two
-// six-figure balances is exactly where float drift shows. Divides by abs(previous) so a
-// household climbing out of net debt reports a rise as a rise, not "-x%".
+// In SQL numeric (§4.1); divides by abs(previous) so climbing out of net debt reads as a rise.
 export type NetWorthChange = {
   current: string;
   previous: string;
@@ -700,9 +606,7 @@ export async function netWorthChange(
   };
 }
 
-// Day zero (DESIGN.md §7), or null on an instance with none — the "All" range needs it, else a
-// fixed wide window wastes most samples on uncovered pre-app years. Read from position_set, not
-// the view: a fact about uploads, correct even once every account has since closed.
+// Day zero (§7) or null — from position_set: a fact about uploads, not about open accounts.
 export async function firstRecordedDate(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -711,8 +615,7 @@ export async function firstRecordedDate(
     .selectFrom("position_set")
     .select(sql<string | null>`cast(min(as_of_date) as text)`.as("date"));
 
-  // position_set carries an account, never an owner (§4.2) — narrowing reaches the owner via
-  // a subquery spanning closed accounts too, deliberately: their statements are still history.
+  // position_set carries an account, never an owner (§4.2); the subquery spans closed accounts too.
   const owned = isFiltered(filter)
     ? sql<SqlBool>`position_set.account_id in (
         select id from account where ${isOneOf("owner_id", filter)}
@@ -724,8 +627,7 @@ export async function firstRecordedDate(
   return row?.date ?? null;
 }
 
-// This account's own earliest date, or null (spec 0008) — from position_set, same reason as
-// firstRecordedDate. Falling back to the household-wide date would understate how new an account is.
+// This account's own earliest date (spec 0008) — the household-wide date would understate it.
 export async function accountFirstRecordedDate(
   accountId: string,
   db: Kysely<Database> = getDb(),

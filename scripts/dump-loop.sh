@@ -1,12 +1,6 @@
 #!/bin/sh
-#
-# Dump service's whole program (docs/specs/dump/01-the-dump-sidecar.md,
-# ADR-0009). Daily: prune, check room, dump, verify it decodes whole, publish
-# into the directory the operator's backup tool collects from.
-#
-# POSIX sh only, no bashisms — runs under busybox ash in postgres:17-alpine,
-# so arithmetic is epoch seconds: `date -d yesterday` and `find -newermt` don't exist here.
-#
+# Dump service's whole program (docs/specs/dump/01-the-dump-sidecar.md, ADR-0009): prune, check
+# room, dump, verify, publish. POSIX sh only (busybox ash) — arithmetic is epoch seconds, no `date -d yesterday`/`find -newermt`.
 #   dump-loop.sh [loop]            the service's command
 #   dump-loop.sh verify <file>     decode an archive whole (smoke test)
 #   dump-loop.sh prune <dir>       apply retention (smoke test)
@@ -19,17 +13,14 @@ set -eu
 umask 027
 
 DUMP_DIR="${DUMP_DIR:-/dumps}"
-# `-`, not `:-`, on everything validated below: an unset knob takes the default,
-# an explicitly empty one stays empty and is refused by name. The colon form
-# would quietly turn `DUMP_ENABLED=` into `true`, which is the one value an
-# operator setting it empty certainly did not mean.
+# `-`, not `:-`: an unset knob takes the default; an explicitly empty one stays empty and is
+# refused by name — the colon form would quietly turn `DUMP_ENABLED=` into `true`.
 DUMP_ENABLED="${DUMP_ENABLED-true}"
 DUMP_AT="${DUMP_AT-02}"
 DUMP_KEEP_DAYS="${DUMP_KEEP_DAYS-7}"
 DUMP_COMPRESS="${DUMP_COMPRESS-0}"
 APP_VERSION="${APP_VERSION:-unknown}"
 
-# Every line greps as `dump:` — docs/operating.md's Logs section points at it.
 log() { printf 'dump: %s\n' "$*"; }
 die() { printf 'dump: %s\n' "$*" >&2; exit 1; }
 
@@ -48,10 +39,8 @@ stamp() { date -u +%Y%m%dT%H%M%SZ; }
 # bashism this shell does not have. Strip the zero instead.
 strip0() { v=${1#0}; printf '%s\n' "${v:-0}"; }
 
-# Fails closed and names the variable (.env.example's promise). No
-# DUMP_UID/DUMP_GID here: Compose applies them as container identity before
-# this script runs, so a malformed one fails `up` and never reaches us.
-# Checked alone, first: turning dumps off must work even if other inputs are bad.
+# Fails closed and names the variable (.env.example's promise). No DUMP_UID/DUMP_GID here —
+# Compose applies them before this script runs. Checked alone, first: disabling dumps must work even if other inputs are bad.
 validate_enabled() {
   case "$DUMP_ENABLED" in
     true|false) ;;
@@ -93,10 +82,8 @@ validate() {
   [ -w "$DUMP_DIR" ] || die "$DUMP_DIR is not writable as $(id -u):$(id -g)"
 }
 
-# Hand-rolled JSON: the image has no jq and these are four flat fields.
 marker() { printf '%s/%s' "$DUMP_DIR" "$1"; }
 
-# A field out of one of our own markers; empty when absent.
 marker_field() {
   [ -f "$1" ] || return 0
   sed -n 's/.*"'"$2"'"[ ]*:[ ]*"\{0,1\}\([^",}]*\)"\{0,1\}.*/\1/p' "$1" | head -1
@@ -118,8 +105,6 @@ write_error() {
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" > "$(marker last-error.json)"
 }
 
-# Matches only this service's own stamp format, so a hand-taken dump parked
-# in the same directory is never ours to delete.
 is_ours() {
   case "$1" in
     portfolio-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.dump) return 0 ;;
@@ -127,8 +112,6 @@ is_ours() {
   esac
 }
 
-# Age from the name, not mtime — copying a directory resets mtimes and would
-# silently re-age the archive. Spelled into the one form busybox `date -d` parses.
 name_epoch() {
   s=${1#portfolio-}
   s=${s%.dump}
@@ -146,9 +129,7 @@ prune() {
     [ -e "$f" ] || continue
     b=$(basename "$f")
     is_ours "$b" || continue
-    # Spelled as an `if` rather than `a || b && c`: that form is false when the
-    # name is not newer, and a false last command in a loop body is an exit
-    # under `set -e`.
+    # Spelled as an `if`, not `a || b && c`: that form's false result would exit the loop under `set -e`.
     if [ -z "$newest" ] || [ "$b" \> "$newest" ]; then newest="$b"; fi
   done
   for f in "$dir"/portfolio-*.dump; do
@@ -177,9 +158,8 @@ db_query() { psql -d "$DATABASE_URL" -At -q -c "$1"; }
 
 free_bytes() { df -P "$DUMP_DIR" | awk 'NR==2 {print $4 * 1024}'; }
 
-# Bounded from the database, not the last archive (a first run has no
-# predecessor). Twice the size: an uncompressed dump exceeds its source pages
-# since TOAST-compressed jsonb expands on the way out.
+# Bounded from the database, not the last archive (a first run has no predecessor). Twice the
+# size: an uncompressed dump exceeds its source pages since TOAST-compressed jsonb expands.
 room_for_dump() {
   size=$(db_query "select pg_database_size(current_database())") || size=""
   # Distinct from a space refusal, or a stale `stage=space` marker would skip
@@ -197,9 +177,8 @@ room_for_dump() {
   return 2
 }
 
-# A dump far smaller than the last is a truncation the decode did not catch —
-# but only when both were written at the same compression, since changing that
-# setting legitimately changes the size by an order of magnitude.
+# A dump far smaller than the last is a truncation the decode missed — but only when both were
+# written at the same compression, since changing that legitimately changes size by an order of magnitude.
 too_small() {
   last=$(marker last-success.json)
   prev_bytes=$(marker_field "$last" bytes)
@@ -291,9 +270,8 @@ nap() {
   done
 }
 
-# Not "dump on every boot" (a crash loop would dump on each one). Only a
-# *successful* attempt within the last hour holds the boot dump back, so a
-# crash mid-retry doesn't abandon the ladder until tomorrow.
+# Not "dump on every boot" (a crash loop would dump each time). Only a *successful* attempt within
+# the last hour holds the boot dump back, so a crash mid-retry doesn't abandon the ladder until tomorrow.
 needs_catch_up() {
   a=$(marker last-attempt.json)
   [ -f "$a" ] || return 0
@@ -331,9 +309,7 @@ retry_ladder() {
   log "three attempts failed; waiting for the next window"
 }
 
-# Age of the newest dump, not the last exit status (a run from three weeks
-# ago exited 0 too). For a human at `docker compose ps` — restart policies
-# don't act on this; the markers are what reach the collector.
+# Age of the newest dump, not the last exit status — for a human at `docker compose ps`; restart policies don't act on this.
 healthcheck() {
   newest=""
   for f in "$DUMP_DIR"/portfolio-*.dump; do

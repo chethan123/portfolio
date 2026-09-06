@@ -1,24 +1,8 @@
-// Owner-filter reading (spec 0013, ADR-0008): the single place that turns ?owner= into what a
-// screen may believe it means — replaces four drifting near-duplicate loader preambles.
-// .server.ts because it imports ownerRoster; owner-filter.ts stays plain for the browser-side
-// control.
-//
-// Order: parse filter from URL -> redirect to canonical spelling (needs no DB) -> read roster
-// once -> redirect an everyone-selection to the no-owner-param address (ADR-0008) -> resolve
-// `reading` against the roster, never raw ids -> project into OwnerBlock.
-//
-// Doesn't read money: ADR-0008's point is that a screen reading the whole household says
-// ALL_OWNERS visibly at its own call site, so money reads stay in the loader / chart-series.server.ts.
-// `reading` != raw filter because holding_valued_at admits accounts closed after the date asked
-// about — a stale/removed id must not reach a dated reader. A selection resolving to nobody keeps
-// the raw ids though: `[]` means "whole household" (owner-filter.ts forbids that widening).
-//
-// Invariants on every return:
-// 1. address settled: url.search === address.request(owners); resolved.coversEveryone is false.
-// 2. isFiltered(owners) === isFiltered(reading).
-// 3. reading is [] only when owners is [] — never widens.
-// 4. at most two redirects.
-// 5. every OwnerBlock field is plain data.
+// Owner-filter reading (spec 0013, ADR-0008): the one place that turns ?owner= into what a screen
+// may believe it means. Every return is settled: url.search === address.request(owners), and
+// resolved.coversEveryone is false. Reads no money — a whole-household read says ALL_OWNERS at its
+// own call site. `reading` resolves against the roster, never raw ids, because holding_valued_at
+// admits accounts closed after the date asked about; it never widens (`[]` only when owners is `[]`).
 import { redirect } from "react-router";
 
 import {

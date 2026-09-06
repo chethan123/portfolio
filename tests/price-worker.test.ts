@@ -18,7 +18,7 @@ import { createYahooClient, type YahooClient } from "../server/yahoo-client.ts";
 
 const WORKER_ENTRY = fileURLToPath(new URL("../server/price-worker.ts", import.meta.url));
 
-// the one seam this file controls: startWorker's own chmod call (shape: tests/routes/lock-now.test.ts:28-49)
+// the one seam this file controls: startWorker's own chmod call
 const chmodOverride = vi.hoisted(() => ({
   impl: undefined as ((path: string, mode: number) => Promise<void>) | undefined,
 }));
@@ -122,8 +122,8 @@ async function start(
 
 type JsonResponse = { status: number; headers: http.IncomingHttpHeaders; json: unknown; text: string };
 
-// agent:false — no keepalive across cases. content-length added manually: Node only auto-frames
-// a body for methods conventionally carrying one, so an unframed GET body lands as garbage
+// agent:false — no keepalive across cases. Node auto-frames a body only for methods that
+// conventionally carry one, so an unframed GET body lands as garbage.
 function rawRequest(
   socketPath: string,
   method: string,
@@ -1101,7 +1101,7 @@ describe("the socket file and its lifecycle", () => {
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, headersTimeout: 10_000, requestTimeout: 10_000 });
 
     const socket = await connectSocket(currentSocketPath);
-    socket.resume(); // a paused socket never notices the peer closing
+    socket.resume();
 
     const startedAt = Date.now();
     await new Promise<void>((resolve) => socket.once("close", resolve));

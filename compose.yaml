@@ -45,9 +45,7 @@ services:
       - ALL
     read_only: true
     tmpfs:
-      # Socket + lock file. A tmpfs inherits its mount point's mode; this dir is
-      # 3777 in-image so uid 70 can write, `/run` (0755 root) would not. The
-      # entrypoint's chmod here logs `Operation not permitted` — cosmetic.
+      # Socket + lock file, 3777 in-image so uid 70 can write; `/run` (0755) would not — chmod here logs harmlessly.
       - /var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
@@ -65,15 +63,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # The operator's own account — the dumps must stay readable to whatever
-    # collects them. Required, not defaulted: 1000 would collide with `app`'s
-    # uid, and shared uids share bind-mount rights.
+    # The operator's own account so dumps stay readable to whatever collects them; required, not defaulted (1000 collides with `app`).
     user: "${DUMP_UID:?set DUMP_UID to the account owning ./volumes/dumps — `id -u`}:${DUMP_GID:?set DUMP_GID to that account's group — `id -g`}"
     environment:
       # Password via PGPASSWORD, not the URL — libpq reads it when the URL has none.
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio@db:5432/portfolio}
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      # Recorded beside each dump: which image wrote it.
       APP_VERSION: ${APP_VERSION:-1}
       # `-` not `:-`: an empty value passes through so the script refuses it by
       # name; the colon form would read `DUMP_ENABLED=` as true.
@@ -112,18 +107,16 @@ services:
       # here — a cross-device `mv` is a copy a collector could catch half-landed.
       - /tmp
     healthcheck:
-      # Age of the newest dump, not the last exit status. Nothing acts on it.
       test: ["CMD", "sh", "/usr/local/bin/dump-loop.sh", "healthcheck"]
       interval: 5m
       timeout: 10s
       retries: 3
-      # First dump on a large database takes minutes.
       start_period: 15m
   app:
     # No `build:` on purpose: a deploy that cannot reach the registry must fail
     # loudly, not build for minutes on some NAS. compose.dev.yaml builds.
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
-    # What makes `up -d` an upgrade: `missing` fetches a floating tag once only.
+    # What makes `up -d` an upgrade: the default `missing` fetches a floating tag once only.
     pull_policy: always
     restart: unless-stopped
     logging: *container-logging
@@ -144,9 +137,7 @@ services:
     volumes:
       # `:ro` — this volume is `worker`'s one writable path, not `app`'s.
       - price-worker-sock:/run/price-worker:ro
-    # Neither carries a default route, so `app` has no route off them at IP
-    # level. Residual, known not closed: `app` still reaches `gate` through
-    # Caddy's `/oauth2/*` (spec 0018 §2.1).
+    # Neither carries a default route off them at IP level; `app` still reaches `gate` through Caddy's `/oauth2/*` (spec 0018 §2.1).
     networks:
       - backend
       - caddy-app
@@ -168,9 +159,7 @@ services:
       retries: 5
       start_period: 20s
 
-  # yahoo-finance2 behind a unix socket — spec 0018. The only container that
-  # fetches a price; reaches Yahoo only through `egress-proxy`, with no resolver
-  # and no default route of its own.
+  # yahoo-finance2 behind a unix socket — spec 0018. No resolver, no default route of its own.
   worker:
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
     pull_policy: always
@@ -210,10 +199,7 @@ services:
       retries: 3
       start_period: 10s
 
-  # `worker`'s only way out — spec 0018 §3.7. CONNECT-only proxy admitting five
-  # Yahoo hosts, and only once the TLS ClientHello inside the tunnel names the
-  # host it was opened to (server/egress-proxy.ts). Shares a name with the
-  # network below, deliberately.
+  # `worker`'s only way out — spec 0018 §3.7. CONNECT-only, five Yahoo hosts, ClientHello must match (server/egress-proxy.ts).
   egress-proxy:
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
     pull_policy: always
@@ -223,7 +209,6 @@ services:
     networks:
       - worker-proxy
       - egress-proxy
-    # Reachable from a compromised `worker`: no more trust than the thing it fences.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -234,8 +219,7 @@ services:
     tmpfs:
       - /tmp:size=64m
     healthcheck:
-      # A request, not a bare connect: with all eight `maxConnections` held by
-      # stalled tunnels the accept queue still completes a TCP handshake.
+      # A request, not a bare connect: with all eight `maxConnections` held by stalled tunnels, the accept queue still completes a handshake.
       test:
         - CMD
         - node
@@ -254,7 +238,6 @@ services:
     logging: *container-logging
     environment:
       OAUTH2_PROXY_PROVIDER: google
-      # `:?` is evaluated before any container starts.
       OAUTH2_PROXY_CLIENT_ID: "${GATE_CLIENT_ID:?missing GATE_CLIENT_ID — see the gate section of .env.example}"
       OAUTH2_PROXY_CLIENT_SECRET: "${GATE_CLIENT_SECRET:?missing GATE_CLIENT_SECRET — see the gate section of .env.example}"
       OAUTH2_PROXY_COOKIE_SECRET: "${GATE_COOKIE_SECRET:?missing GATE_COOKIE_SECRET — see the gate section of .env.example}"
@@ -284,9 +267,8 @@ services:
         read_only: true
         bind:
           create_host_path: false
-    # Neither reaches `app`, `db` or `worker`. `egress-gate` is a plain bridge:
-    # unrestricted egress plus a route to the host — worth naming because this is
-    # the one container running as root.
+    # Neither reaches `app`, `db` or `worker`. `egress-gate` is a plain bridge, unrestricted
+    # egress plus a route to the host — worth naming because this is the one container running as root.
     networks:
       - caddy-gate
       - egress-gate
@@ -314,8 +296,7 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     logging: *container-logging
-    # Own uid, not `app`'s 1000: shared uids share bind-mount rights, and the one
-    # LAN-reachable service is the worst to join. 65532 = distroless "nonroot".
+    # Own uid, not `app`'s 1000 — shared uids share bind-mount rights, and this is the worst service to join. 65532 = distroless "nonroot".
     user: "65532:65532"
     depends_on:
       app:
@@ -324,9 +305,7 @@ services:
         condition: service_healthy
     environment:
       APP_PORT: ${PORT:-3000}
-    # The only published port, so the only place the gate can be enforced. Plain
-    # HTTP: TLS and the hostname belong to the house-wide Caddy in front. The
-    # container side is the Caddyfile's site address — change one, change both.
+    # The only published port, so the only place the gate can be enforced. Plain HTTP — TLS and hostname belong to the house-wide Caddy in front.
     ports:
       - "80:8080"
     volumes:
@@ -339,19 +318,15 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Not for binding — 8080 needs nothing. /usr/bin/caddy carries the file
-    # capability cap_net_bind_service=ep, and the kernel refuses to exec a binary
-    # whose file caps the bounding set cannot supply.
+    # Not for binding — 8080 needs nothing. /usr/bin/caddy's file capability cap_net_bind_service=ep needs it in the bounding set to exec.
     cap_add:
       - NET_BIND_SERVICE
     read_only: true
     tmpfs:
-      # Both dirs are root 0755 in-image and a tmpfs inherits its mount point's
-      # mode, so the pinned uid could not write them. Buys clean logs only.
+      # Both dirs are root 0755 in-image; a tmpfs inherits that mode, so the pinned uid could not write them otherwise. Buys clean logs only.
       - /config:mode=1777
       - /data:mode=1777
     healthcheck:
-      # /healthz is the only route answering without a Google session.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
@@ -359,11 +334,7 @@ services:
       start_period: 10s
 
 volumes:
-  # A bound name rather than a plain bind, for the one thing a bind cannot do —
-  # ownership: a volume over an *empty* directory takes the image's 70:70 before
-  # initdb looks. Empty is load-bearing; any file in there first (a .gitkeep)
-  # skips that and initdb refuses the directory. Not `db-data`: reusing that name
-  # over an existing instance's volume makes `up` offer to destroy it.
+  # Bound name, not a bind, for ownership: an *empty* dir takes the image's 70:70 before initdb looks. Not `db-data` — that name over an existing volume makes `up` offer to destroy it.
   db-store:
     driver: local
     driver_opts:
@@ -372,11 +343,7 @@ volumes:
       # Resolved against the project directory. Must already exist.
       device: ./volumes/db/data
 
-  # tmpfs, not a bind: the socket must not outlive the host. uid/gid 1000 is the
-  # image's `node` user, which `app` and `worker` both run as. The mode is not the
-  # fence — `app` mounts this `:ro` — the mount set is, asserted in
-  # scripts/smoke-test.sh. `driver_opts` are read once at creation, so changing
-  # `o:` needs a new volume *name*, never `down -v` (which takes `db-store` too).
+  # tmpfs, not a bind: socket must not outlive the host. uid/gid 1000 is `app`/`worker`'s node user; the mount set is the fence (`app` mounts `:ro`, scripts/smoke-test.sh asserts it). `driver_opts` read once at creation — changing `o:` needs a new volume *name*, never `down -v`.
   price-worker-sock:
     driver: local
     driver_opts:
@@ -385,17 +352,12 @@ volumes:
       o: "size=1m,uid=1000,gid=1000,mode=0770"
 
 networks:
-  # Docker Engine 28.0+ required and load-bearing: 26 ignores `gateway_mode_ipv4`
-  # silently, 27 refuses it, and without it every container on an `internal`
-  # network still gets an address on the host — a route to whatever else the house
-  # binds on `0.0.0.0`. scripts/smoke-test.sh checks the floor.
-  #
-  # `caddy-app` and `caddy-gate` are kept apart to deny `app` a direct route to
-  # `gate:4180`; that is the only claim — `trusted_proxies static private_ranges`
-  # (Caddyfile:19) still lets `app` forge X-Forwarded-* *through* Caddy.
-  # `worker-proxy` allocates no gateway, so `worker` cannot reach the host's
-  # published ports either. The plain bridges carry a default route
-  # (`egress-proxy`, `egress-gate`) or the published port (`ingress`).
+  # Docker Engine 28.0+ required and load-bearing: 26 ignores `gateway_mode_ipv4` silently, 27 refuses it.
+  # Without it every container on an `internal` network still gets a host route. scripts/smoke-test.sh checks the floor.
+  # `caddy-app`/`caddy-gate` kept apart to deny `app` a direct route to `gate:4180` — `trusted_proxies static private_ranges`
+  # (Caddyfile:19) still lets `app` forge X-Forwarded-* through Caddy.
+  # `worker-proxy` allocates no gateway, so `worker` cannot reach the host's published ports either.
+  # Plain bridges (`egress-proxy`, `egress-gate`, `ingress`) carry the default route or published port these deny.
   backend:
     internal: true
     enable_ipv6: false

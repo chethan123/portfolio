@@ -1,4 +1,4 @@
-// backfill exists because an instrument new to the system predates its own first close (ADR-0011) — real Postgres, since it's a query and check constraints
+// ADR-0011. Real Postgres — query and check constraints, not mocked.
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,7 +29,7 @@ import type { Database } from "~/lib/db.server";
 import type { HistoryRange, PriceProvider, ProviderHistory, ProviderQuote } from "~/lib/price-provider.server";
 import type { YahooClient } from "../server/yahoo-client.ts";
 
-// getConfig() memoises its first read — set before any test can reach it (price-poller.test.ts:37's precedent for DATABASE_URL)
+// getConfig() memoises its first read — set before any test reaches it
 process.env.PRICE_WORKER_SOCKET = join(tmpdir(), `pb-${randomBytes(4).toString("hex")}.sock`);
 
 afterAll(closeTestDatabase);
@@ -141,7 +141,6 @@ describe("which instruments carry a coverage gap", () => {
   it(
     "never names an instrument nobody holds, because a gap is a property of the positions",
     withDatabase(async ({ db, seedInstrument }) => {
-      // created at resolution, before any position set exists — why "new instrument" is the wrong trigger
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
       expect(await selectBackfillCandidates(db)).toEqual([]);
@@ -280,7 +279,6 @@ describe("the daily retry clock", () => {
       async ({ db, seedAccount, seedInstrument, seedPositionSet, seedBackfillAttempt }) => {
         const account = await seedAccount();
         const attempted = await seedInstrument({ symbol: "DELISTED", priceSource: "feed" });
-        // the assertion: an attempt is a fact about one instrument, not a suppressor of the whole batch
         const untouched = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
         await seedPositionSet({
@@ -472,7 +470,7 @@ const NEW_YORK = "America/New_York";
 
 type Asked = { symbol: string; range: HistoryRange };
 
-// answers verbatim, unfiltered (refresh-quotes.test.ts:25-31) — a tidying fake can't test a bad one
+// answers verbatim, unfiltered — a tidying fake can't test a bad one (cf. refresh-quotes.test.ts)
 function fakeProvider(
   answer: (symbol: string) => ProviderHistory,
   quotes: ProviderQuote[] = [],
@@ -508,7 +506,7 @@ const history = (closes: Array<[string, string]>): ProviderHistory => ({
   closes: closes.map(([date, close]) => ({ date, close })),
 });
 
-// a plugin, not a Proxy (breaks on private fields); throws in JS since a Postgres refusal would abort the whole withDatabase transaction (refresh-quotes.test.ts:1022-1049)
+// plugin, not a Proxy (breaks on private fields); throws in JS so it aborts the whole withDatabase transaction
 function refusingInsertInto(
   db: Kysely<Database>,
   table: string,
@@ -590,7 +588,7 @@ describe("what a batch writes to the spine", () => {
       const { db, seedDailyClose } = context;
       const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-01" });
 
-      // poller's own row for a finished day — a backfill must never overwrite live-recorded data
+      // simulates the poller's own row for a finished day — backfill must never overwrite it
       await seedDailyClose({ instrument, date: "2024-06-10", close: "250.0000" });
 
       const provider = fakeProvider(() =>
@@ -633,7 +631,7 @@ describe("what a batch writes to the spine", () => {
       const { db, seedDailyClose } = context;
       const instrument = await heldFrom(context, { symbol: "VTI", asOf: "2024-06-03" });
 
-      // a hole is never a trigger on its own — filled only as a side effect of the head gap (0002's surviving half)
+      // a hole alone isn't a trigger — filled only as a side effect of the head gap (0002)
       await seedDailyClose({ instrument, date: "2024-06-10", close: "250.0000" });
       await seedDailyClose({ instrument, date: "2024-06-12", close: "252.0000" });
 
@@ -654,7 +652,7 @@ describe("what a batch writes to the spine", () => {
         .orderBy("date")
         .execute();
 
-      // 8th/9th weekend the fake didn't return — a row there would state a close that never happened
+      // 8th/9th is a weekend the fake didn't return — a row there would state a close that never happened
       expect(rows.map((row) => row.date)).toEqual(["2024-06-10", "2024-06-11", "2024-06-12"]);
     }),
   );
@@ -665,7 +663,7 @@ describe("what a batch writes to the spine", () => {
       const { db } = context;
       const instrument = await heldFrom(context, { symbol: "OLDCO", asOf: "2024-06-14" });
 
-      // the floor lives in toProviderHistory, the real adapter — socketProvider() takes no injected client, so a real worker on a real socket
+      // floor lives in toProviderHistory, the real adapter — socketProvider() takes no injected client
       const yahoo: YahooClient = {
         quote: async () => [],
         chart: async () => ({
@@ -742,7 +740,6 @@ describe("what a batch records", () => {
       const first = await seedInstrument({ symbol: "BROKEN", priceSource: "feed" });
       const second = await seedInstrument({ symbol: "FINE", priceSource: "feed" });
 
-      // deeper gap first, so the failure is worked before the one that answers
       await seedPositionSet({
         account,
         asOf: "2024-01-31",
@@ -814,7 +811,6 @@ describe("what a batch records", () => {
       const provider = fakeProvider(() => ({ status: "no-history" }));
       await backfillCloses(provider, NEW_YORK, db);
 
-      // the ledger is the retry clock — an unfillable gap costs one request a day, not one every tick
       expect(await selectBackfillCandidates(db)).toEqual([]);
     }),
   );
@@ -842,8 +838,7 @@ describe("what a batch asks for", () => {
 
       const provider = fakeProvider(() => ({ status: "no-history" }));
 
-      // 02:00 UTC is the previous evening in NY — why the range end goes through marketDateOf, not a UTC truncation
-      // only fakes Date: pg times connects with setTimeout on this real connection (price-poller.test.ts:156-163)
+      // 02:00 UTC is the previous evening in NY — range end goes through marketDateOf, not a UTC truncation
       vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-05T02:00:00Z") });
       try {
         await backfillCloses(provider, NEW_YORK, db);
@@ -877,7 +872,6 @@ describe("what a batch asks for", () => {
       await backfillCloses(provider, NEW_YORK, db);
 
       expect(provider.asked).toHaveLength(3);
-      // the batch bound is the pacing — not the library's request queue, not the endpoint's patience
       expect(provider.concurrency.peak).toBe(1);
     }),
   );
@@ -890,7 +884,7 @@ describe("what a batch asks for", () => {
 
       const began = new Date("2026-06-05T14:00:00Z");
 
-      // span between the two is how long the provider took — why the earlier one is recorded (price_poll's reasoning)
+      // span between the two is how long the provider took — mirrors price_poll's timestamp rule
       const provider = fakeProvider(() => {
         vi.setSystemTime(new Date("2026-06-05T14:00:30Z"));
         return history([["2024-06-10", "250.0000"]]);
@@ -916,7 +910,7 @@ describe("what a batch asks for", () => {
 
 describe("the boundary each attempt commits in", () => {
   it("commits an attempt's closes with its ledger row, or neither", async () => {
-    // can't run inside withDatabase: inTransaction joins a caller's transaction rather than nesting — a real handle instead, cleaned up after itself
+    // can't run inside withDatabase: inTransaction joins a caller's transaction rather than nesting
     const committing = createDatabase(TEST_DATABASE_URL);
     const fixtures = makeFixtures(committing);
 
@@ -959,7 +953,6 @@ describe("the boundary each attempt commits in", () => {
         backfillCloses(provider, NEW_YORK, refusingInsertInto(committing, "price_backfill")),
       ).rejects.toThrow(/refused an insert/);
 
-      // the ledger row is what failed — its closes must go with it, or spine and ledger disagree forever
       const closes = await committing
         .selectFrom("price_daily")
         .select("date")
@@ -1065,7 +1058,6 @@ describe("a refresh, which is quotes and then one batch", () => {
         refusingInsertInto(db, "price_backfill", { after: 1 }),
       );
 
-      // a batch that filled one instrument then met an unreachable database must not report doing nothing
       expect(report.backfill.batchFailed).toBe(true);
       expect(report.backfill.attempted).toBe(1);
       expect(report.backfill.written).toBe(1);
@@ -1106,7 +1098,7 @@ describe("a refresh, which is quotes and then one batch", () => {
         .executeTakeFirst();
       expect(quoted?.price).toBe("100.0000");
 
-      // visible only because withDatabase has no rollback boundary inside it — in production inTransaction commits closes+ledger together or not at all
+      // visible only because withDatabase has no rollback boundary; production commits closes+ledger together or not at all
       const closes = await db
         .selectFrom("price_daily")
         .select("date")
@@ -1128,7 +1120,6 @@ describe("a refresh, which is quotes and then one batch", () => {
       const second = await seedInstrument({ symbol: "SECOND", priceSource: "feed" });
       const third = await seedInstrument({ symbol: "THIRD", priceSource: "feed" });
 
-      // deepest gap first, so the batch works them in this order and the provider dies in the middle
       await seedPositionSet({
         account,
         asOf: "2024-01-31",
@@ -1200,7 +1191,6 @@ describe("the whole list of gaps, for the person reading Settings", () => {
 
       const gaps = await backfillGaps(db);
 
-      // their gaps are just as real — the screen is where a person learns Settings → Instruments is the answer
       expect(gaps.map((gap) => ({ id: gap.id, willTry: gap.willTry }))).toEqual([
         { id: trust.id, willTry: false },
         { id: unnamed.id, willTry: false },
@@ -1213,7 +1203,7 @@ describe("the whole list of gaps, for the person reading Settings", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, usdInstrument }) => {
       const account = await seedAccount();
 
-      // USD alone proves nothing (its 1970 close covers every date) — this one has no close at all, only the fixed-source filter keeps it off
+      // USD alone proves nothing (its 1970 close covers every date); this one has no close, only the fixed-source filter keeps it off
       const fixed = await seedInstrument({ symbol: "CASHLIKE", priceSource: "fixed" });
       const usd = await usdInstrument();
 
@@ -1256,7 +1246,6 @@ describe("the whole list of gaps, for the person reading Settings", () => {
       const account = await seedAccount();
       const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      // held in several sets — the ordinary case after a few uploads, and tells min from max
       await seedPositionSet({
         account,
         asOf: "2024-06-28",
@@ -1411,7 +1400,7 @@ describe("the whole list of gaps, for the person reading Settings", () => {
           outcome: "no_history",
         });
 
-        // screen and batch must agree on which have a gap at all — the retry skip and the bound are the batch's alone
+        // retry skip and batch bound apply to the batch only — not to this gap predicate
         expect((await backfillGaps(db)).map((gap) => gap.symbol)).toEqual(["OPEN", "ATTEMPTED"]);
         expect((await selectBackfillCandidates(db)).map((row) => row.symbol)).toEqual(["OPEN"]);
       },

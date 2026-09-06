@@ -1,9 +1,6 @@
-// Resolves a statement's instrument strings against the alias table (DESIGN.md §4.3, spec
-// 0004 step 04). Lookup is byte-exact (raw_string collate "C") — no trimming/folding/heuristics,
-// since a fuzzy merge could silently attach a holding to the wrong fund; a miss just prompts
-// once and is remembered forever. Writes happen here, not at commit: an alias is a vocabulary
-// fact, not this statement's, so a re-upload of a corrected file shouldn't ask again, and an
-// abandoned draft correctly leaves the vocabulary behind with nothing recorded as held.
+// Resolves a statement's instrument strings against the alias table (DESIGN.md §4.3, spec 0004
+// step 04). Byte-exact lookup (raw_string collate "C") — no fuzzy merge onto the wrong fund; a
+// miss prompts once, remembered forever. Written here, not at commit, so a re-upload of a fixed file doesn't ask again.
 import { isAssetClass } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { ValidationError } from "./input.server.ts";
@@ -13,8 +10,7 @@ import type { ParsedPosition } from "./statement.ts";
 import type { AssetClass } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
 
-// Sentinel like NOT_IN_FILE (column-mapping.server.ts): "new classification" and "none chosen"
-// are different answers.
+// Sentinel like NOT_IN_FILE (column-mapping.server.ts): "new classification" != "none chosen".
 export const NEW_CLASSIFICATION = "__new__";
 
 // Distinct strings with no instrument_alias row, in first-appearance order.
@@ -43,10 +39,8 @@ export async function unresolvedStrings(
   return distinct.filter((value) => !resolved.has(value));
 }
 
-// Byte-exact except line endings, normalised (\r\n? -> \n): HTML form serialisation turns a
-// lone LF/CR into CRLF, so a quoted multi-line cell echoed through a hidden field would
-// otherwise fail this staleness check on every submit. Comparison only — storage always uses
-// the draft's own parsed string, so no CRLF-mangled alias can land.
+// Byte-exact except line endings (\r\n? -> \n): HTML form serialisation turns a lone LF/CR into
+// CRLF, so a quoted multi-line cell would fail this staleness check on every submit. Comparison only.
 export function sameRawStrings(a: string, b: string): boolean {
   const lineEndings = (value: string): string => value.replace(/\r\n?/g, "\n");
   return lineEndings(a) === lineEndings(b);
@@ -67,8 +61,7 @@ export type ResolutionScreen = {
   classifications: Array<{ id: string; name: string; assetClass: string }>;
 };
 
-// positions come from parseStatement, already grouped by raw instrument cell — one position
-// per distinct string.
+// positions come from parseStatement, already grouped by raw instrument cell — one position per distinct string.
 export async function resolutionScreen(
   positions: ReadonlyArray<ParsedPosition>,
   db: Kysely<Database> = getDb(),
@@ -113,8 +106,7 @@ export async function resolutionScreen(
   };
 }
 
-// Every field optional — validating what's missing is this module's job. Field names are these
-// keys with the string's index appended (kind-0); resolutionFieldsAt reads them back.
+// Every field optional — validating what's missing is this module's job. Keys are field-index (kind-0); resolutionFieldsAt reads them back.
 export type ResolutionFields = {
   // "existing" | "create".
   kind?: string;
@@ -163,8 +155,7 @@ export type ResolvedAlias = {
   instrumentId: string;
 };
 
-// probe is required, not defaulted, so production (app/routes/upload/instruments.tsx) can't
-// reach the network by omission; tests stub it instead.
+// probe is required, not defaulted, so production can't reach the network by omission; tests stub it.
 export type ResolutionDeps = {
   probe: ProbeSymbols;
 };
@@ -182,8 +173,7 @@ type CreatePlan = {
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
 
-// Kysely refuses .transaction() on a transaction, and the test seam is one (prices.server.ts
-// carries the same helper).
+// Kysely refuses .transaction() on a transaction; the test seam is one (prices.server.ts has the same helper).
 function inTransaction<T>(
   db: Kysely<Database>,
   body: (trx: Kysely<Database>) => Promise<T>,
@@ -191,15 +181,11 @@ function inTransaction<T>(
   return db.isTransaction ? body(db) : db.transaction().execute(body);
 }
 
-// Resolves every unresolved string in one submit, or refuses the whole with a message per
-// field (keyed ${field}-${index}), nothing written unless everything passes. Rules (spec 0004
-// step 04): no skip (a skipped row is a holding silently missing); create writes classification
-// (if new) then instrument then alias, a name typed twice in one submit is created once and
-// shared; a new name colliding with a stored classification is a field refusal; feed requires
-// a symbol, manual allows none; creating a feed instrument probes its symbol once (non-USD
-// refuses, a provider failure doesn't block — next refresh marks it stale); concurrent drafts
-// resolving the same string don't error, the alias insert tolerates the conflict and the
-// existing row wins.
+// Resolves every unresolved string in one submit, refusing the whole with a message per field
+// (${field}-${index}) unless all pass (spec 0004 step 04). No skip; a new classification name
+// typed twice is created once and shared; feed requires a symbol and probes it once (non-USD
+// refuses, a provider failure just leaves it stale); concurrent drafts resolving the same string
+// don't error — the alias insert tolerates the conflict and the existing row wins.
 export async function resolveAll(
   resolutions: ReadonlyArray<ResolutionInput>,
   deps: ResolutionDeps,
@@ -331,8 +317,7 @@ export async function resolveAll(
     });
   }
 
-  // Options were rendered from the database, so a miss here is a forged/stale post — still a
-  // sentence, not an FK fault.
+  // Options were rendered from the database, so a miss here is a forged/stale post — still a sentence, not an FK fault.
   const instrumentIds = [
     ...new Set(
       plans.flatMap((plan) => (plan?.kind === "existing" ? [plan.instrumentId] : [])),
@@ -385,8 +370,7 @@ export async function resolveAll(
     }
   }
 
-  // Colliding with a stored classification is a refusal; two strings typing the same new name
-  // share one pending creation and are only checked against the database.
+  // Colliding with a stored classification is a refusal; two strings typing the same new name share one pending creation, checked only against the database.
   const pendingNames = [
     ...new Set(
       plans.flatMap((plan) =>
@@ -425,8 +409,7 @@ export async function resolveAll(
 
   if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
-  // One probe call per distinct feed symbol (two strings creating one ticker cost one call),
-  // before any write, so a non-USD refusal leaves nothing behind.
+  // One probe call per distinct feed symbol (two strings creating one ticker cost one call), before any write, so a non-USD refusal leaves nothing behind.
   const feedSymbols = [
     ...new Set(
       plans.flatMap((plan) =>
@@ -449,8 +432,7 @@ export async function resolveAll(
     // Defensive fallback — the batched probe never throws, so the map shouldn't lack an entry.
     const verdict = verdicts.get(plan.symbol) ?? { status: "unavailable" as const };
 
-    // unavailable doesn't block: created now, marked stale by the next refresh — a network
-    // hiccup must not hold a statement hostage.
+    // unavailable doesn't block: created now, marked stale by the next refresh — a network hiccup must not hold a statement hostage.
     if (verdict.status === "non-usd") {
       refuse(
         index,
@@ -470,11 +452,9 @@ export async function resolveAll(
     return verdict?.status === "ok" ? verdict.quoteType : null;
   };
 
-  // Classification (if new), then instrument, then alias — one transaction, so a fault leaves
-  // no half-remembered vocabulary.
+  // Classification (if new), then instrument, then alias — one transaction, so a fault leaves no half-remembered vocabulary.
   return inTransaction(db, async (trx) => {
-    // doNothing + re-read covers the race validation can't: a concurrent submit landing the
-    // same name. Either way the stored id answers.
+    // doNothing + re-read covers the race validation can't: a concurrent submit landing the same name; either way the stored id answers.
     const created = new Map<string, string>();
     for (const [index, plan] of plans.entries()) {
       if (plan?.kind !== "create" || plan.newClassification === null) continue;
@@ -516,9 +496,8 @@ export async function resolveAll(
           .values({
             symbol: plan.symbol,
             name: plan.name,
-            // Whatever the probe was told; null if it was told nothing (unquoted symbol, a
-            // trust, a provider's bad day) — a refresh backfills the rest. Never guessed: the
-            // Analysis split (§4.4) treats a null as a visible catch-all, not a misfiled equity.
+            // Whatever the probe was told; null if told nothing (unquoted symbol, a trust, a bad
+            // provider day) — never guessed, the Analysis split (§4.4) treats null as a visible catch-all.
             quote_type: quoteTypeOf(plan),
             price_source: plan.priceSource,
             classification_id: classificationId,
@@ -544,8 +523,7 @@ export async function resolveAll(
           .where("raw_string", "=", raw)
           .executeTakeFirstOrThrow();
 
-        // Lost the race, nothing points at it — deleted rather than left as a duplicate the
-        // select would offer forever. A new classification stays: harmless even with no instruments.
+        // Lost the race, nothing points at it — deleted rather than left as a duplicate forever. A new classification stays, harmless even unused.
         if (createdInstrument && winner.instrument_id !== instrumentId) {
           await trx.deleteFrom("instrument").where("id", "=", instrumentId).execute();
         }

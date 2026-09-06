@@ -1,10 +1,7 @@
-// Corrects one position in place on Holdings (DESIGN.md §5.4) — balances.server.ts for
-// accounts holding more than one thing. Same three rules: appends, never edits (an update would
-// silently restate every plotted date back to the statement it landed in); carries the whole
-// account forward (a set with only the corrected row would record everything else as sold, §5.2);
-// changes numbers, never membership (adding an instrument is the upload flow's job, §4.3 — a
-// sold-out position is stored as zero, never dropped). One statement (balances.server.ts's
-// reason); the CTE also guards the instrument is still on the account.
+// Corrects one position in place on Holdings (DESIGN.md §5.4) — balances.server.ts for accounts
+// holding more than one thing. Same rules: appends never edits (an update would restate every
+// plotted date back to the statement); carries the whole account forward; changes numbers, never
+// membership (§4.3). One statement; the CTE guards the instrument is still on the account.
 import { sql } from "kysely";
 import { z } from "zod";
 
@@ -38,18 +35,16 @@ export type CurrentPosition = {
   // Null when no statement ever carried one (401k statements routinely don't).
   costBasisPerShare: string | null;
   asOf: IsoDate;
-  // The other operand of a multiplication the view performs — revisePosition needs it to check
-  // fitsTheMoneyColumn before storing.
+  // The other operand of a multiplication the view performs — revisePosition checks fitsTheMoneyColumn before storing.
   price: string | null;
   // Since migration 0006, the third operand holding_valued multiplies the quantity by.
   annualDividendPerShare: string | null;
-  // 'fixed' = the seeded USD row only. Needed so revisePosition can tell a share count from a
-  // sum of money — §2 stores a cash balance as a quantity of fixed-price currency.
+  // 'fixed' = the seeded USD row only. Needed so revisePosition can tell a share count from a sum
+  // of money (§2: a cash balance is a quantity of fixed-price currency).
   priceSource: Selectable<Database["instrument"]>["price_source"];
 };
 
-// Not CurrentPosition & …: a price is a market fact this write never set, and a caller handed
-// one would reasonably read it as part of what got recorded.
+// Not CurrentPosition & …: a price is a market fact this write never set, so a caller handing one would misread it as recorded.
 export type RevisedPosition = {
   accountId: string;
   accountName: string;
@@ -61,10 +56,8 @@ export type RevisedPosition = {
   asOf: IsoDate;
 };
 
-// Resolved via latest_position_set (§8.2). Read twice per correction (the write checks whether
-// it may apply; the Holdings loader reads the date it'll carry) — not the source of the boxes'
-// contents, which are the figures already on screen (120.5 opens as 120.5, not 120.50000000).
-// Returns null for no such instrument, and for an account with no statement at all.
+// Resolved via latest_position_set (§8.2), read twice per correction (write checks whether it
+// may apply, loader reads the date it'll carry). Null for no such instrument, or no statement at all.
 export async function currentPosition(
   accountId: string,
   instrumentId: string,
@@ -115,23 +108,20 @@ export async function currentPosition(
   };
 }
 
-// numeric(20, 4), the view's cast on its three products — not the columns' own precision:
-// each operand can fit its column while the product doesn't (why this check exists at all).
+// numeric(20, 4), the view's cast on its three products — not the columns' own precision (each
+// operand can fit while the product doesn't, why this check exists).
 const MONEY_PRECISION = 20;
 
-// numeric(p, s) rounds under 10^(p-s); a figure at scale s is 10^s times itself, so exponents
-// cancel and the limit is 10^p regardless of scale.
+// numeric(p, s) rounds under 10^(p-s); at scale s a figure is 10^s times itself, so exponents cancel and the limit is 10^p regardless of scale.
 const MONEY_LIMIT = 10n ** BigInt(MONEY_PRECISION);
 
 // Scale 8 x scale 4 = a scale-12 product; the view casts it down to scale 4.
 const SCALE_GAP = 10n ** BigInt(QUANTITY_SCALE);
 
-// quantity x perShare overflowing numeric(20,4) makes the view's cast raise on every future
-// read (not just a refused form) — Holdings included, so only psql could recover it. Can't be
-// prevented by bounding the fields alone (each can be in-column, only the product overflows),
-// so this checks the product itself, exact in bigint, rounded the way the cast rounds (so a
-// hair-under figure that rounds up to the limit is still caught). Called at every write:
-// revisePosition (one row) and commitUpload (every parsed row).
+// quantity x perShare overflowing numeric(20,4) makes the view's cast raise on every future read
+// (not just a refused form) — can't be prevented by bounding the fields alone, since either can
+// be in-column while only the product overflows. Checks the product itself, exact in bigint,
+// rounded the way the cast rounds. Called at every write: revisePosition and commitUpload.
 export function fitsTheMoneyColumn(quantity: string, perShare: string | null): boolean {
   if (perShare === null) return true;
 
@@ -142,8 +132,7 @@ export function fitsTheMoneyColumn(quantity: string, perShare: string | null): b
   return rounded < MONEY_LIMIT;
 }
 
-// Zero points nowhere and matches anything — lets a position close then reopen the other way
-// across two deliberate edits, rather than one absent-minded one.
+// Zero points nowhere and matches anything — lets a position close then reopen the other way across two deliberate edits, not one absent-minded one.
 function sameDirection(before: string, after: string): boolean {
   const negative = (value: string) => /^-/.test(value) && !/^-0+(\.0+)?$/.test(value);
   const zero = (value: string) => /^-?0+(\.0+)?$/.test(value);
@@ -177,8 +166,8 @@ export async function revisePosition(
 
   const input = parseInput(positionInput, raw);
 
-  // On a cash row this box holds money (§2): a second door onto what setBalance writes, so it
-  // must refuse the same things — signedQuantity alone allows 8 places, moneyMagnitude only 2.
+  // On a cash row this box holds money (§2), a second door onto what setBalance writes — must
+  // refuse the same things (signedQuantity allows 8 places, moneyMagnitude only 2).
   if (before.priceSource === "fixed" && (input.quantity.split(".")[1] ?? "").length > 2) {
     throw new ValidationError({
       quantity: "A balance is recorded to the cent, so it takes at most two decimal places.",
@@ -186,8 +175,7 @@ export async function revisePosition(
   }
 
   // Flipping the sign (§2) asserts an asset became a debt, moving net worth by twice the figure
-  // while reading as an ordinary correction. balances.server.ts refuses signs outright; this box
-  // must show one (it opens containing the printed number), so it refuses the change instead.
+  // while reading as an ordinary correction — refused, since this box just shows the printed number.
   if (!sameDirection(before.quantity, input.quantity)) {
     throw new ValidationError({
       quantity:
@@ -198,8 +186,8 @@ export async function revisePosition(
     });
   }
 
-  // The three multiplications the view will perform, checked before storage. Price and
-  // dividend rate aren't household-editable, so those refusals name the quantity instead.
+  // The three multiplications the view will perform, checked before storage; price/dividend
+  // rate aren't editable here, so those refusals name the quantity.
   if (!fitsTheMoneyColumn(input.quantity, input.costBasisPerShare)) {
     throw new ValidationError({
       costBasisPerShare:
@@ -228,9 +216,7 @@ export async function revisePosition(
   const asOf = effectiveDate(before.asOf);
 
   // One statement, every guard in it: `source` is empty unless the current set still carries
-  // this instrument, and both writes select from it. `greatest` re-runs effectiveDate's logic
-  // against the set the write actually locks (same set except in a race), so the correction
-  // can't land behind the statement it corrects.
+  // this instrument; `greatest` re-runs effectiveDate against the locked set, so the correction can't land behind it.
   const written = await sql<{ position_set_id: string }>`
     with source as (
       select ps.id, ps.as_of_date
@@ -265,8 +251,7 @@ export async function revisePosition(
 
   const landed = written.rows[0];
   if (landed === undefined) {
-    // source was empty by the time the statement ran — the same race the before===null check
-    // catches, lost after it ran. Reported, not retried.
+    // source was empty by the time the statement ran — the same race before===null catches, lost after. Reported, not retried.
     throw ValidationError.form(
       `${account.name} changed while this form was open, so nothing was recorded. ` +
         "Reload the page and make the correction against what it holds now.",
@@ -280,17 +265,14 @@ export async function revisePosition(
     instrumentName: before.instrumentName,
     quantity: input.quantity,
     costBasisPerShare: input.costBasisPerShare,
-    // Recomputed by the same function as the write: RETURNING on this INSERT…SELECT sees
-    // holding's columns, and as_of_date isn't one of them.
+    // Recomputed by the same function as the write: RETURNING on this INSERT…SELECT sees holding's columns, not as_of_date.
     asOf,
   };
 }
 
 // today, unless asOf is ahead of it (recordedDate allows one day east of UTC) — a correction
-// filed behind the sheet it corrects would appear to succeed and change nothing. Exported so
-// the editor can name this date before the click; `greatest` in the write applies the same
-// rule where the row is locked. Server clock, not current_date, so it agrees with
-// latestRecordableDate.
+// filed behind the sheet it corrects would appear to succeed and change nothing. Server clock,
+// not current_date, agreeing with latestRecordableDate; exported so the editor can name this date before the click.
 export function effectiveDate(asOf: IsoDate): IsoDate {
   const today = new Date().toISOString().slice(0, 10);
 

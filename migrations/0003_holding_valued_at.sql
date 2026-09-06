@@ -1,4 +1,4 @@
--- Same shape as holding_valued, for a past date d -- that date's positions priced at that date's close (DESIGN.md §7).
+-- Same shape as holding_valued, for a past date d — that date's positions priced at that date's close (DESIGN.md §7).
 -- returns setof holding_valued: one row type, no second definition to drift.
 
 

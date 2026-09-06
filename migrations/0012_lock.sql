@@ -1,4 +1,4 @@
--- Locked (CONTEXT.md, ADR-0012): passkey (enrolled credentials) + unlock_grant (one browser's current unlock). Neither is history -- both may be deleted from freely.
+-- Locked (CONTEXT.md, ADR-0012): passkey (enrolled credentials) + unlock_grant (one browser's current unlock). Neither is history — both may be deleted from freely.
 -- No challenge table: a WebAuthn challenge lives seconds, kept in a module-level map (ticket 02), not the DB.
 
 
@@ -8,11 +8,11 @@ create table passkey (
 
   public_key      bytea not null,
 
-  -- 32-bit unsigned (WebAuthn's own range) -- not money/qty/id/date, so ok as a JS number in ticket 02.
+  -- 32-bit unsigned (WebAuthn's own range) — not money/qty/id/date, so ok as a JS number in ticket 02.
   counter         bigint not null default 0
                     check (counter >= 0 and counter <= 4294967295),
 
-  -- Comma-joined transport list (vocabulary carries no commas, so lossless); null (not '') when none reported -- ''.split(',') would read as one empty transport.
+  -- Comma-joined transport list (vocabulary carries no commas, so lossless); null (not '') when none reported — ''.split(',') would read as one empty transport.
   transports      text,
 
   -- Eligibility, not current state: fixed at creation, no write-on-every-unlock for a value nothing re-reads freshly.
@@ -25,19 +25,19 @@ create table passkey (
 
   enrolled_at     timestamptz not null default now(),
 
-  -- Stamped by any verified assertion (unlock, or an enrol/remove confirmation) -- not just "last unlocked".
+  -- Stamped by any verified assertion (unlock, or an enrol/remove confirmation) — not just "last unlocked".
   last_used_at    timestamptz
 );
 
 -- Guards concurrent bootstrap enrolment: a unique partial index over flagged rows closes the race a check-then-insert
--- leaves open (two browsers each see an empty table under READ COMMITTED). Guarantees at most one live bootstrap row --
+-- leaves open (two browsers each see an empty table under READ COMMITTED). Guarantees at most one live bootstrap row —
 -- not that an assertion-authorised insert can't race a bootstrap one too (spec 0020, still open).
 create unique index passkey_bootstrap_idx on passkey (bootstrap) where bootstrap;
 
 
 -- The row is the authority; the cookie only names it (a forged cookie names nothing, a copied one only the row it copied).
 create table unlock_grant (
-  -- Opaque random token (ticket 02 mints it), not the bigint-identity convention -- sequential would be a guessable bearer token.
+  -- Opaque random token (ticket 02 mints it), not the bigint-identity convention — sequential would be a guessable bearer token.
   -- length >= 32 guards against a blank/absent cookie normalising to '' and matching every browser.
   id          text primary key check (length(id) >= 32),
 

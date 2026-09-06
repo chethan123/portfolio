@@ -1,12 +1,7 @@
 /**
- * Every lock rule — unlocking, enrolling, removing, and the grant recording one browser's unlock.
- * The only module importing `@simplewebauthn/server`. docs/adr/0012
- *
- * Challenges live in a module-level `Map`, so a restart loses every outstanding one. Reading a
- * challenge spends it whether or not what follows verifies: a retry must re-fetch options first.
- *
- * A verified assertion is not proof of a fresh prompt — an already-unlocked vault can answer
- * without one, and WebAuthn carries no freshness signal (ADR-0012).
+ * Every lock rule; the only importer of `@simplewebauthn/server` (docs/adr/0012). Challenges are
+ * in-memory: a restart loses every outstanding one. A verified assertion is not proof of a fresh
+ * prompt — an already-unlocked vault answers without one, and WebAuthn carries no freshness signal.
  */
 import { randomBytes, randomFillSync } from "node:crypto";
 
@@ -50,10 +45,7 @@ export type UnlockGrant = {
   expiresAt: Date;
 };
 
-/**
- * Both derived from `PUBLIC_ORIGIN` (ADR-0012): the relying-party id is its bare hostname. Never a
- * parameter, so no route can supply a different expectation than this instance's configured origin.
- */
+/** Both from `PUBLIC_ORIGIN` (ADR-0012). Never a parameter: no route can supply another expectation. */
 type RelyingPartyExpectation = { origin: string; rpID: string };
 
 function expectedRelyingParty(): RelyingPartyExpectation {
@@ -61,7 +53,6 @@ function expectedRelyingParty(): RelyingPartyExpectation {
   return { origin, rpID: new URL(origin).hostname };
 }
 
-/** Holding a passkey is the whole of "locked" (ADR-0012). Throws rather than failing open. */
 export async function isLocked(db: Kysely<Database> = getDb()): Promise<boolean> {
   const row = await db
     .selectNoFrom((eb) => eb.exists(eb.selectFrom("passkey").select("passkey.credential_id").limit(1)).as("locked"))
@@ -86,22 +77,14 @@ export async function listPasskeys(db: Kysely<Database> = getDb()): Promise<Pass
   }));
 }
 
-/**
- * Carries an opaque grant id with no claim of its own, so `__Host-` and `Secure` cost nothing here.
- * Chromium accepts the prefix over `http://localhost` and `http://127.0.0.1`; Firefox untested.
- */
+/** Chromium accepts the `__Host-` prefix over `http://localhost` and `http://127.0.0.1`; Firefox untested. */
 export const LOCK_COOKIE = "__Host-unlock_grant";
 
-/**
- * No `Max-Age`: the row is the authority on lifetime, rolled by {@link touchGrant}, so a fixed
- * cookie expiry would re-lock a family member mid-read. `Lax`, never `Strict` — the gate's weekly
- * sign-in bounce returns as a cross-site navigation and `Strict` would withhold this on it.
- */
+/** No `Max-Age` — the row owns lifetime ({@link touchGrant} rolls it). `Lax`: the sign-in bounce is cross-site. */
 export function lockCookie(grantId: string): string {
   return `${LOCK_COOKIE}=${grantId}; Path=/; Secure; HttpOnly; SameSite=Lax`;
 }
 
-/** Same attributes, or the browser drops the clear: a `__Host-` cookie needs them on every `Set-Cookie`. */
 export function clearedLockCookie(): string {
   return `${LOCK_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
@@ -130,16 +113,9 @@ function isForeignKeyViolation(error: unknown, constraint: string): boolean {
 }
 
 /**
- * Module-private: no export hands out a grant without a verified ceremony behind it. Sweeps expired
- * rows on the way, the moment this table is guaranteed to be looked at.
- *
- * `supersedes` is the row this browser trades in, and must come from its own `LOCK_COOKIE` — never
- * a form field. Nothing here can confirm the id belongs to the caller; `HttpOnly` and `SameSite=Lax`
- * are what stop a page aiming it elsewhere. Deleted before the insert: a failure between the two
- * leaves no live grant rather than two.
- *
- * The passkey can be removed between the caller's read and this insert, so the foreign key is left
- * to find out — caught here as a refusal rather than a raw violation.
+ * No export hands out a grant without a verified ceremony. `supersedes` must come from the caller's
+ * own `LOCK_COOKIE`, never a form field — nothing here can confirm the id belongs to the caller.
+ * Deleted before the insert: a failure between the two leaves no live grant rather than two.
  */
 async function mintGrant(
   passkeyId: string,
@@ -176,7 +152,6 @@ async function mintGrant(
   return toGrant(row);
 }
 
-/** Nothing for an unknown id and nothing for an expired one, without the caller reading the clock. */
 export async function readGrant(
   id: string,
   db: Kysely<Database> = getDb(),
@@ -191,12 +166,7 @@ export async function readGrant(
   return row === undefined ? undefined : toGrant(row);
 }
 
-/**
- * Live-check and expiry roll in one statement: as two round trips, a grant deleted in the gap
- * (a "Lock now", a cascading removal) is indistinguishable from one merely not due for a refresh.
- * `for update` is what closes it — a plain `select`'s snapshot would still report a row as live
- * while a concurrent delete was in flight. The `UPDATE` stays conditional on half the window.
- */
+/** One statement, `for update`: two round trips would read a concurrently deleted grant as live. */
 export async function touchGrant(
   id: string,
   db: Kysely<Database> = getDb(),
@@ -234,7 +204,6 @@ export async function deleteGrant(id: string, db: Kysely<Database> = getDb()): P
   await db.deleteFrom("unlock_grant").where("id", "=", id).execute();
 }
 
-/** Kept distinct so a challenge minted for one action can never satisfy another. */
 type ChallengePurpose =
   | { kind: "unlock" }
   | { kind: "enrol" }
@@ -247,11 +216,7 @@ type ChallengeKind = ChallengePurpose["kind"];
 
 const CHALLENGE_KINDS: readonly ChallengeKind[] = ["unlock", "enrol", "remove", "register"];
 
-/**
- * Budget per {@link ChallengeKind}, never shared: `unlock` is the only kind a browser holding no
- * grant can mint, and a shared budget let a flood of those evict the recovery kinds behind the lock.
- * Bounds memory, not availability — a flood still denies its own kind. Exported for `tests/lock.test.ts`.
- */
+/** Per kind, never shared: `unlock` is the only kind a browser holding no grant can mint. */
 export const MAX_LIVE_CHALLENGES_PER_PURPOSE = 500;
 
 type ChallengeEntry = { purpose: ChallengePurpose; expiresAt: number; spent: boolean };
@@ -263,11 +228,7 @@ function isUsable(entry: ChallengeEntry, now: number): boolean {
   return !entry.spent && entry.expiresAt > now;
 }
 
-/**
- * Two budgets per kind, live and dead. Counting dead entries against the live budget let a
- * spend-and-retry flood evict a confirmation somebody was mid-way through; not counting them at all
- * bounded nothing. `Map` insertion order makes the first match the oldest.
- */
+/** Two budgets per kind: counting dead entries against the live one let a retry flood evict a live one. */
 function evictOldestOfKind(kind: ChallengeKind, now: number): void {
   for (const usable of [true, false]) {
     let held = 0;
@@ -317,7 +278,6 @@ function mintChallenge(purpose: ChallengePurpose): { text: string; bytes: Uint8A
   return { text, bytes };
 }
 
-/** Expiry before spent-ness: an entry that is both is expired, not a replay. */
 function takeChallenge(text: string): ChallengePurpose {
   const entry = challenges.get(text);
   if (entry === undefined) {
@@ -344,7 +304,6 @@ function scopeMatches(purpose: ChallengePurpose, expected: AssertionScope): bool
 
 const clientDataSchema = z.object({ challenge: z.string() });
 
-/** From the signed client data, never re-derived from `id`. */
 function decodeChallenge(clientDataJSON: string): string {
   let parsed: unknown;
   try {
@@ -361,11 +320,7 @@ function decodeChallenge(clientDataJSON: string): string {
   return clientData.data.challenge;
 }
 
-/**
- * Only the fields this module itself dereferences; the rest is the library's own schema to state.
- * A response arrives as client JSON, so without this `{}` becomes a `TypeError` and a 500 rather
- * than a refusal.
- */
+/** Only the fields this module dereferences. Without it a client `{}` is a `TypeError` and a 500. */
 const webAuthnResponseShape = z.object({
   id: z.string().min(1),
   response: z.object({ clientDataJSON: z.string().min(1) }),
@@ -373,12 +328,7 @@ const webAuthnResponseShape = z.object({
 
 const UNREADABLE_RESPONSE_MESSAGE = "This passkey response could not be read.";
 
-/**
- * `verifyRegistrationResponse` copies `transports` verbatim and checks nothing, so this is the only
- * guard before the column. The vocabulary is deliberately not enforced (migration 0012) — an unknown
- * transport is still worth keeping — but the count is, or one registration poisons every
- * `allowCredentials` this app hands out.
- */
+/** The library copies `transports` unchecked — unbounded, one registration poisons every `allowCredentials`. */
 const MAX_REPORTED_TRANSPORTS = 8;
 
 const registrationResponseShape = webAuthnResponseShape.extend({
@@ -393,7 +343,6 @@ const registrationResponseShape = webAuthnResponseShape.extend({
 const REGISTRATION_TRANSPORTS_MESSAGE =
   "This passkey listed how it can be reached in a form this app cannot store. Try enrolling it again.";
 
-/** Returns the original value, not the parsed one: fields this schema does not name must reach the verifier untouched. */
 function narrowAssertion(value: unknown): AuthenticationResponseJSON {
   if (!webAuthnResponseShape.safeParse(value).success) {
     throw ValidationError.form(UNREADABLE_RESPONSE_MESSAGE);
@@ -401,7 +350,6 @@ function narrowAssertion(value: unknown): AuthenticationResponseJSON {
   return value as AuthenticationResponseJSON;
 }
 
-/** Checked in schema order, so the second failure can only be `transports` and gets its own sentence. */
 function narrowRegistration(value: unknown): RegistrationResponseJSON {
   if (!webAuthnResponseShape.safeParse(value).success) {
     throw ValidationError.form(UNREADABLE_RESPONSE_MESSAGE);
@@ -419,11 +367,7 @@ async function allowCredentialList(
   return rows.map((row) => ({ id: row.credential_id, transports: splitTransports(row.transports) }));
 }
 
-/**
- * Narrower than the library's declared return by exactly `extensions`, which this module never
- * passes: react-router's wire-type serialisation rewrites the `BufferSource` nested inside it, so
- * every consumer would otherwise need an assertion of its own.
- */
+/** Narrower by exactly `extensions`: react-router's serialisation rewrites the `BufferSource` inside it. */
 type UnlockOptions = PublicKeyCredentialRequestOptionsJSON & { extensions?: undefined };
 
 async function authenticationOptionsFor(
@@ -464,10 +408,9 @@ export async function removalAssertionOptions(
 }
 
 /**
- * Matched on the library's own message prefix (@simplewebauthn/server 14.0.0, pinned) rather than
- * `instanceof Error`, which every other thrown verification failure also satisfies. Judged before
- * the signature is checked, so a forged response with a low counter lands here too — which is why
- * the message says the counter went backwards, never that the passkey was copied.
+ * Message prefix, not `instanceof Error`, which every verification failure also satisfies
+ * (@simplewebauthn/server 14.0.0, pinned). Judged before the signature check, so a forged response
+ * with a low counter lands here too.
  */
 function isCounterRegression(cause: unknown): boolean {
   return cause instanceof Error && cause.message.startsWith("Response counter value");
@@ -478,13 +421,9 @@ const COUNTER_WENT_BACKWARDS_MESSAGE =
   "The check was refused. Remove this passkey from Settings → Passkeys and enrol it again.";
 
 /**
- * Refuses a challenge never issued, spent, expired, or minted for a different action or target,
- * each with its own message. The library owns the signature-counter comparison; a regression is
- * surfaced as a refusal, not restated here.
- *
- * Nothing is written before `verified.verified`. The counter only moves forward (`greatest`, one
- * statement) and `last_used_at` is written regardless. The passkey can be removed between the read
- * and the mint: {@link mintGrant}'s insert is what discovers that, not a re-check here.
+ * Nothing is written before `verified.verified`; the counter only moves forward (`greatest`).
+ * A passkey removed between the read and the mint is found by {@link mintGrant}'s insert, not
+ * re-checked here.
  */
 async function verifyScopedAssertion(
   response: AuthenticationResponseJSON,
@@ -556,7 +495,6 @@ async function verifyScopedAssertion(
   return mintGrant(passkeyRow.credential_id, db, signerIsRemovalTarget ? undefined : supersedes);
 }
 
-/** `supersedes` is this request's own cookie: verifying replaces a stale grant rather than adding a second. */
 export async function verifyUnlock(
   response: unknown,
   db: Kysely<Database> = getDb(),
@@ -565,7 +503,6 @@ export async function verifyUnlock(
   return verifyScopedAssertion(narrowAssertion(response), { kind: "unlock" }, db, supersedes);
 }
 
-/** {@link UnlockOptions}'s registration twin, narrowed for the same reason. */
 export type RegistrationOptions = PublicKeyCredentialCreationOptionsJSON & { extensions?: undefined };
 
 async function registrationOptionsFor(
@@ -596,9 +533,8 @@ async function registrationOptionsFor(
 }
 
 /**
- * Control characters, the line/paragraph separators, the bidi overrides and isolates (a row that
- * reads back to front removes the wrong passkey), and the zero width space. U+200D and the
- * variation selectors stay allowed — emoji are built from them. Reads the already-trimmed value.
+ * Control chars, line/paragraph separators, bidi overrides (a row reading back to front removes the
+ * wrong passkey), zero width space. U+200D and the variation selectors stay — emoji need them.
  */
 const REFUSED_LABEL_CHARACTERS = /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B]/u;
 
@@ -618,13 +554,9 @@ const FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE =
   "that acknowledgement first.";
 
 /**
- * The first passkey needs no assertion — there is nothing to authorise against yet — only the
- * acknowledgement. That check is a courtesy: {@link completeRegistration}'s conditional insert and
- * migration 0012's `passkey_bootstrap_idx` are what actually close the bootstrap race.
- *
- * Every later enrolment needs an assertion scoped to `"enrol"`, which mints a grant and supersedes
- * the one `input.supersedes` names. The registration challenge carries `label` and is accepted
- * against nothing else.
+ * The first passkey needs only the acknowledgement, and that is a courtesy: the conditional insert
+ * and `passkey_bootstrap_idx` close the bootstrap race. Every later enrolment needs an assertion
+ * scoped to `"enrol"`.
  */
 export async function beginEnrolment(
   label: string,
@@ -674,10 +606,7 @@ function uniqueViolationConstraint(error: unknown): string | undefined {
   return code === "23505" && typeof constraint === "string" ? constraint : undefined;
 }
 
-/**
- * Savepoint so a *caught* constraint violation does not leave a caller's transaction aborted for
- * whatever runs next — which is every test's `withDatabase`. A no-op outside a transaction.
- */
+/** Savepoint so a caught violation does not leave the caller's transaction aborted. No-op outside one. */
 async function guardedAgainstConstraintViolation<T>(
   db: Kysely<Database>,
   body: () => Promise<T>,
@@ -712,16 +641,10 @@ const CREDENTIAL_ID_MISMATCH_MESSAGE =
   "This passkey named itself two different things in one answer, so it was not enrolled.";
 
 /**
- * Accepted only against the single-use `"register"` challenge {@link beginEnrolment} minted.
- *
- * Bootstrap inserts with `where not exists`, refusing when it writes no row; the partial unique
- * index closes the concurrent half. Neither is sufficient alone and one interleaving stays open —
- * migration 0012's comment on `passkey_bootstrap_idx` sets out which. A duplicate credential id is
- * left to the constraint rather than a preceding `select`; the bootstrap race reports as
- * `passkey_pkey`, since Postgres writes the primary-key entry first, so both names are handled.
- *
- * Bootstrap mints a grant, or the browser that enrolled the first passkey is locked out by its own
- * redirect. Every other path already carries one from its assertion.
+ * Only against the single-use `"register"` challenge. Bootstrap's `where not exists` and
+ * `passkey_bootstrap_idx` are each insufficient alone (migration 0012 says which interleaving stays
+ * open); the race reports as `passkey_pkey`. Bootstrap mints a grant, or the browser that enrolled
+ * the first passkey is locked out by its own redirect.
  */
 export async function completeRegistration(
   response: unknown,
@@ -834,14 +757,9 @@ export async function completeRegistration(
 }
 
 /**
- * Needs a fresh assertion scoped to removing *this* target, plus its own acknowledgement. The
- * target is resolved before every other check, so naming a passkey that does not exist spends no
- * challenge and writes nothing.
- *
- * The last passkey may authorise its own removal — the only credential that can, and how the lock
- * is turned off. Deleting it cascades its grants away, which is what locks this browser.
- * `input.supersedes` is the request's own cookie; {@link verifyScopedAssertion} declines to use it
- * when the signer is the target.
+ * Target resolved before every other check, so an unknown one spends no challenge. The last passkey
+ * may authorise its own removal — how the lock is turned off; deleting it cascades its grants away,
+ * which is what locks this browser.
  */
 export async function removePasskey(
   credentialId: string,

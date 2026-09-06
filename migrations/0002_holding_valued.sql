@@ -1,4 +1,4 @@
--- Current holdings, valued -- the one join every consumer reads (DESIGN.md §8.2).
+-- Current holdings, valued — the one join every consumer reads (DESIGN.md §8.2).
 
 
 -- Latest position set for an account (at-or-before p_as_of if given); shared so the tie-break can't drift.
@@ -16,7 +16,7 @@ as $$
 $$;
 
 
--- Column list is a contract: holding_valued_at() returns this same row shape -- add a column here, update both.
+-- Column list is a contract: holding_valued_at() returns this same row shape — add a column here, update both.
 -- quantity(20,8) * price(20,4) computed at scale 12, cast to money scale (20,4) once, here in SQL.
 create view holding_valued as
 select
@@ -43,11 +43,11 @@ select
   money.value                                         as value,
   h.cost_basis_per_share                              as cost_basis_per_share,
   money.cost_basis                                    as cost_basis,
-  -- Null if either operand is null (no coalesce -- avoids a fake gain); cast just types the column.
+  -- Null if either operand is null (no coalesce — avoids a fake gain); cast just types the column.
   cast(money.value - money.cost_basis
        as numeric(20, 4))                             as unrealized,
 
-  -- is_priced false: missing from sums, present in the count -- no silent understating.
+  -- is_priced false: missing from sums, present in the count — no silent understating.
   (q.price is not null)                               as is_priced,
   -- Unpriced != stale: staleness only applies to a price that exists.
   coalesce(q.is_stale, false)                         as is_stale

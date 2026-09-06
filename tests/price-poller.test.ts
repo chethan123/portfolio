@@ -1,9 +1,7 @@
 /**
- * What one tick does with the connection it borrows (prices are refresh-quotes.test.ts's job).
- * What lives only here is the Postgres session holding pg_try_advisory_lock: a tick that fails
- * halfway and returns its connection intact poisons the pool, silently freezing prices for the
- * process's life (§11's worst failure — healthz.ts can't see it). Driven through startPricePoller
- * with a faked interval and a fake provider, against the real pool, patched to report handbacks.
+ * Connection lifecycle for one tick (prices are refresh-quotes.test.ts's job). A tick that fails
+ * mid-lock and returns its connection intact poisons the pool — silent, permanent (§11; healthz
+ * can't see it). Fake interval + fake provider, real pool patched to report handbacks.
  */
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -67,16 +65,14 @@ type WatchedPool = {
   pool: pg.Pool;
   /** One entry per connection handed back: true when it was destroyed. */
   destroyed: boolean[];
-  /** Resolves once `count` connections have been handed back. */
   handedBack(count: number): Promise<void>;
   close(): Promise<void>;
 };
 
 /**
- * A real pool that says when the poller gives a connection back, and how. Patched, not
- * replaced by a stand-in: the lock is a real advisory lock on a real session (the whole
- * subject), and idleCount/totalCount are then the pool's own accounting. Handing a connection
- * back is the last thing a tick does that this file can see — the signal to wait on instead of a sleep.
+ * Real pool, patched not replaced: the lock is a real advisory lock on a real session, so
+ * idleCount/totalCount stay the pool's own accounting. Handback is the last observable step of a
+ * tick — wait on it, not a sleep.
  */
 function watchedPool(): WatchedPool {
   const pool = createPool(TEST_DATABASE_URL);
@@ -113,15 +109,12 @@ function watchedPool(): WatchedPool {
   };
 }
 
-// handedBack alone stopped meaning "tick done" once withRefreshLock releases the connection in
-// its own finally, before its promise resolves — the tick's log lines land a few resolutions
-// later. Nothing between does I/O, so one macrotask turn drains them (a sleep would be guessing).
+// handedBack fires before the tick's log line resolves (finally releases early); one macrotask
+// (setImmediate) drains the rest — a sleep would be guessing.
 const tickFinished = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-// only setInterval/clearInterval/Date are faked; pg times real connects with setTimeout. Runs
-// up to the tick's first await inside advanceTimersByTime, then returns with ticks started —
-// caller waits on the pool, since a weekend tick still spends a connection on the backfill batch.
-// Poller is stopped before real timers return, so no test leaves a timer behind.
+// Only setInterval/clearInterval/Date faked — pg's connect timeout uses a real setTimeout.
+// advanceTimersByTime returns once ticks have started; caller then waits on the pool.
 function runTicks(
   provider: PriceProvider,
   { at = TRADING_HOUR, ticks = 1 }: { at?: Date; ticks?: number } = {},
@@ -153,7 +146,7 @@ describe("the connection a tick borrows", () => {
       );
 
       expect(watched.destroyed).toEqual([true]);
-      // pool's own account: nothing left to hand out, so no later tick gets a session with unknown lock state
+      // nothing left to hand out — no later tick gets a session with unknown lock state
       expect(watched.pool.totalCount).toBe(0);
       expect(watched.pool.idleCount).toBe(0);
     } finally {
@@ -178,7 +171,7 @@ describe("the connection a tick borrows", () => {
           watched.pool,
         );
 
-        // counterpart to the test above — destroying on every failure would force a fresh connect every tick during an outage
+        // destroying on every failure would force a fresh connect every tick during an outage
         expect(watched.destroyed).toEqual([false]);
         expect(watched.pool.idleCount).toBe(1);
       } finally {
@@ -190,8 +183,7 @@ describe("the connection a tick borrows", () => {
   it(
     "is spent outside market hours on the backfill, but no quote is asked for and no poll recorded",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
-      // held from a date the spine doesn't reach — makes this a backfill candidate, or a weekend
-      // tick can't be told apart from one that skipped the batch entirely
+      // held from a date the spine doesn't reach — makes this a backfill candidate
       const account = await seedAccount();
       const instrument = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedPositionSet({
@@ -204,8 +196,7 @@ describe("the connection a tick borrows", () => {
       const provider = fakeProvider();
 
       try {
-        // calendar used to keep the tick off the db all weekend; now it only gates quotes
-        // (ADR-0011) — a weekend tick still spends a connection on the cadence read and gap query
+        // calendar only gates quotes now (ADR-0011) — weekend tick still spends a connection
         await withDb(
           db,
           async () => {
@@ -218,8 +209,6 @@ describe("the connection a tick borrows", () => {
         expect(provider.asked).toEqual([]);
         expect(provider.askedHistory).toEqual(["VTI"]);
         expect(watched.destroyed).toEqual([false]);
-
-        // a poll is an attempt at quotes, and this tick attempted none
         expect(await db.selectFrom("price_poll").selectAll().execute()).toEqual([]);
       } finally {
         await watched.close();
@@ -249,8 +238,8 @@ describe("a cadence the household moved", () => {
             vi.advanceTimersByTime(INTERVAL_MS);
             await watched.handedBack(1);
 
-            // tick read 60 and re-armed; 15 more minutes must fire nothing (what the old timer
-            // would've done) — grace period, not a fake advance, since a fire reaches the pool via real IO
+            // tick read 60 and re-armed; 15 more minutes must fire nothing. Real setTimeout race,
+            // not a fake advance — a fire reaches the pool via real IO.
             vi.advanceTimersByTime(INTERVAL_MS);
             const early = await Promise.race([
               watched.handedBack(2).then(() => "ticked" as const),
@@ -258,7 +247,7 @@ describe("a cadence the household moved", () => {
             ]);
             expect(early).toBe("quiet");
 
-            // completing the hour fires the re-armed timer
+            // 45 more minutes completes the re-armed 60-minute cadence
             vi.advanceTimersByTime(45 * 60 * 1000);
             await watched.handedBack(2);
           },
@@ -294,7 +283,6 @@ describe("a tick that arrives while one is still running", () => {
           watched.pool,
         );
 
-        // next tick is along shortly at this cadence — a queue of pending fetches is how an instance gets rate-limited
         expect(provider.asked).toHaveLength(1);
         expect(watched.destroyed).toEqual([false]);
       } finally {
@@ -319,7 +307,6 @@ describe("a refresh an upload asks for", () => {
           async () => {
             startPricePoller(provider);
 
-            // uploader is implicitly asking for a quote — shouldn't wait until Monday for a first price
             requestRefresh();
             await watched.handedBack(1);
           },
@@ -350,7 +337,7 @@ describe("a refresh an upload asks for", () => {
           async () => {
             startPricePoller(provider);
 
-            // tick started, not finished — request lands on the same `running` flag an overlapping tick would
+            // request lands on the same `running` flag an overlapping tick would
             vi.advanceTimersByTime(INTERVAL_MS);
             requestRefresh();
 
@@ -380,8 +367,7 @@ describe("a refresh an upload asks for", () => {
         await withDb(
           db,
           async () => {
-            // action runs before its own request's loaders, so the poller (started by
-            // root.tsx's loader) may not exist yet; dropped, not queued or replayed
+            // action runs before its own request's loaders, so the poller may not exist yet
             requestRefresh();
 
             startPricePoller(provider);

@@ -1,23 +1,8 @@
 /**
- * The price-worker process (spec 0018 §3.2, §3.5): `node:http` on a unix socket, answering three
- * endpoints with the library's raw JSON. No database, no domain logic, no wall clock — the rate
- * window slides on `performance.now()`, so a step backward (a restored snapshot, an NTP correction)
- * cannot freeze it open, and the worker needs no `TZ`. Symbols are gated by `./symbol-pattern.ts`
- * before any URL is built (spec §2.1: this check binds, the app's is a courtesy).
- *
- * Imports only `node:http`, `node:fs/promises`, `zod`, `./config.ts`, `./yahoo-client.ts`,
- * `./symbol-pattern.ts` — nothing under `app/`, no `pg`, no Kysely. Nothing enforces that but a
- * grep of the import lines and ticket 05's in-image smoke.
- *
- * The bounds are defensive against the app's own compromise, not against Yahoo: `maxConnections` 8,
- * `maxRequestsPerSocket` 1, 5 s headers/request deadlines polled every 1 s (the 30 s default would
- * let a 5 s deadline bind anywhere up to 35), `server.timeout` 35 s for a connection that has sent
- * its request and gone idle while a handler waits on Yahoo, and per-endpoint caps of ten quotes and
- * twenty history calls a minute.
- *
- * One log line per non-`200` answer, stem `Price worker`; nothing at all on success. The exception
- * is a client that hangs up mid-body: no status was ever sent, so {@link isAbandonedRead} logs the
- * endpoint alone rather than falling into the unhandled-request catch.
+ * The price-worker process (spec 0018 §3.2, §3.5): `node:http` on a unix socket, three endpoints
+ * answering the library's raw JSON. No database, no domain logic, no wall clock — the rate window
+ * slides on `performance.now()`, so a backward step cannot freeze it open and no `TZ` is needed.
+ * Every bound here is defensive against the app's own compromise, not against Yahoo.
  */
 import { chmod, unlink } from "node:fs/promises";
 import http from "node:http";
@@ -31,19 +16,15 @@ import { createYahooClient } from "./yahoo-client.ts";
 // live `import {} from "…"` under Node's type stripping. Every `import type` under `server/` too.
 import type { YahooClient } from "./yahoo-client.ts";
 
-/** A body past this many bytes gets its socket destroyed, no status at all. */
 const MAX_BODY_BYTES = 16 * 1024;
 
 /** `${message}: ${cause}` is cut here — undici's `fetch failed` keeps the detail in `cause`. */
 const ERROR_TEXT_LIMIT = 1000;
 
-/** A sliding sixty-second window. */
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-/** Spec §3.5's caps: ten quotes calls and twenty history calls a minute. */
 const RATE_CAPS = { quotes: 10, history: 20 } as const;
 
-/** The four numbers {@link startWorker} accepts under `timeouts`, and production's own. */
 export type WorkerTimeouts = {
   timeout: number;
   headersTimeout: number;
@@ -51,7 +32,6 @@ export type WorkerTimeouts = {
   connectionsCheckingInterval: number;
 };
 
-/** Production's numbers (module header). Tests inject their own, in tens of milliseconds. */
 export const PRODUCTION_TIMEOUTS: WorkerTimeouts = {
   timeout: 35_000,
   headersTimeout: 5_000,
@@ -77,13 +57,9 @@ const historyBodySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
-/** Thrown by {@link readBody} once the cap is spent; the socket is already gone by then. */
 class BodyTooLargeError extends Error {}
 
-/**
- * Node's own `abortIncoming` destroys the request with `Error("aborted")` carrying `ECONNRESET`
- * when the peer hangs up mid-body. Not a handler bug: nothing to answer and nothing to destroy.
- */
+/** Node's `abortIncoming` gives `Error("aborted")` with `ECONNRESET` when the peer hangs up mid-body. Not a bug. */
 function isAbandonedRead(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -92,10 +68,7 @@ function isAbandonedRead(error: unknown): boolean {
   );
 }
 
-/**
- * The request body, capped at {@link MAX_BODY_BYTES}. Past the cap the socket is destroyed with no
- * status at all: the honest app never sends near this much, and the cap is against one that is not.
- */
+/** Past {@link MAX_BODY_BYTES} the socket is destroyed with no status — the cap is against a compromised app. */
 async function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -118,25 +91,17 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(payload);
 }
 
-/**
- * Control characters collapsed to a space, for the log line only — a provider failure's `reason`
- * can be Yahoo's own body, and a raw newline would forge lines under this module's own stem. The
- * response body needs none: `sendJson`'s `JSON.stringify` already escapes them.
- */
+/** Log line only: a provider `reason` can be Yahoo's body, and a raw newline would forge lines under this stem. */
 function logSafe(text: string): string {
   return text.replace(/[\x00-\x1f\x7f]/g, " ");
 }
 
-/** Every non-`200` answer: logged once, stem `Price worker`, then sent. */
 function refuse(res: http.ServerResponse, endpoint: string, status: number, reason: string): void {
   console.error(`Price worker: ${endpoint} ${status} ${logSafe(reason)}`);
   sendJson(res, status, { error: reason });
 }
 
-/**
- * What Node's own default `clientError` handling answers per parser error code — verified against
- * Node 24.12.0's `lib/_http_server.js`, `default` included.
- */
+/** Node's own default `clientError` answers, per parser error code — verified against 24.12.0's `lib/_http_server.js`. */
 function clientErrorResponse(code: string | undefined): { status: number; line: string } {
   switch (code) {
     case "HPE_HEADER_OVERFLOW":
@@ -154,11 +119,8 @@ function clientErrorResponse(code: string | undefined): { status: number; line: 
 }
 
 /**
- * Attaching any `clientError` listener replaces Node's default entirely, for every parser error, so
- * this reproduces it exactly rather than inventing a narrower one. There is no endpoint to name.
- *
- * The `writable`/`ECONNRESET` guard is Node's own: a bare reset received nothing to refuse, and
- * logging it would hand a compromised app the log flood this contract exists to prevent.
+ * Any `clientError` listener replaces Node's default for every parser error, so this reproduces it.
+ * The `writable`/`ECONNRESET` guard is Node's own: logging a bare reset would be the log flood.
  */
 function onClientError(
   error: Error,
@@ -175,10 +137,8 @@ function onClientError(
 }
 
 /**
- * Sliding-window admission, one instance per endpoint per server: the eleventh call within the
- * last sixty seconds, not since a fixed boundary. Aged by `performance.now()` — with `Date.now()`,
- * a backward step made `now - calls[0]` negative, evicting nothing until wall time caught up and
- * freezing every cap at whatever it held, `/healthz` green throughout.
+ * Sliding window, one per endpoint per server. Aged by `performance.now()`: with `Date.now()` a
+ * backward step makes `now - calls[0]` negative, evicting nothing and freezing every cap open.
  */
 function makeRateLimiter(limit: number): () => boolean {
   const calls: number[] = [];
@@ -192,16 +152,11 @@ function makeRateLimiter(limit: number): () => boolean {
   };
 }
 
-/** `error.name === "TimeoutError"` is what a `fetch` rejects with once its own signal aborts. */
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === "TimeoutError";
 }
 
-/**
- * The one detail {@link providerErrorText} takes from a cause: an `Error`'s `message`, preferred
- * over its `code` rather than falling back to it — a real DNS failure's message is `getaddrinfo
- * ENOTFOUND egress-proxy`, where `code` alone drops the host (ticket 08's `fetch failed: ENOTFOUND`).
- */
+/** `message` over `code`: a DNS failure's `getaddrinfo ENOTFOUND egress-proxy` keeps the host, `code` alone drops it. */
 function detailFor(value: unknown): string | undefined {
   if (value instanceof Error) return value.message;
   if (typeof value === "object" && value !== null && "code" in value) {
@@ -212,11 +167,9 @@ function detailFor(value: unknown): string | undefined {
 }
 
 /**
- * The text a provider failure answers with. undici's errors are all `TypeError: fetch failed` with
- * the real reason nested in `cause`, so the message plus exactly one more level of `cause`, cut to
- * {@link ERROR_TEXT_LIMIT}. One level is as far as the shape needs: a `fetch` refused by a CONNECT
- * proxy has a `DOMException` cause naming nothing, `code` the *number* 0, and the informative text
- * (`Proxy response (502) !== 200 when HTTP Tunneling`) at `cause.cause.message`.
+ * undici errors are all `TypeError: fetch failed` with the reason nested in `cause`, so: message plus
+ * one more level, cut to {@link ERROR_TEXT_LIMIT}. That level is needed — a CONNECT refusal's first
+ * cause is a `DOMException` naming nothing, with the real text at `cause.cause.message`.
  */
 function providerErrorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -231,17 +184,12 @@ function providerErrorText(error: unknown): string {
   return `${message}: ${detail}`.slice(0, ERROR_TEXT_LIMIT);
 }
 
-/** `504` for the client's own watchdog, `502` for anything else Yahoo or the library threw. */
 function respondProviderError(res: http.ServerResponse, endpoint: string, error: unknown): void {
   const text = providerErrorText(error);
   refuse(res, endpoint, isTimeoutError(error) ? 504 : 502, text);
 }
 
-/**
- * The body read, JSON parse, schema and rate check the two endpoints share. `undefined` means the
- * caller's work is done — a response already sent, or deliberately none for an oversized or
- * abandoned body; a genuine bug still propagates to `handle`'s own catch.
- */
+/** `undefined` = already answered, or deliberately unanswered (oversized/abandoned body). Bugs still throw. */
 async function readAdmittedBody<Schema extends z.ZodType>(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -350,8 +298,7 @@ async function handle(
     return;
   }
 
-  // Cut like every other refusal text: a URL is bounded only by Node's 16 KB header cap, and this
-  // route has no rate cap to spend, so an unbounded echo could flush the operator's log ring.
+  // Cut: a URL is bounded only by the 16 KB header cap and this route has no rate cap — an unbounded echo floods the log.
   refuse(
     res,
     "unknown",
@@ -365,18 +312,15 @@ async function unlinkIfExists(path: string): Promise<void> {
     await unlink(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    // Anything else — EISDIR on a directory squatting the path, EACCES — is the caller's to log
-    // and exit on (spec §3.2).
+    // EISDIR on a squatting directory, EACCES — the caller's to log and exit on (spec §3.2).
     throw error;
   }
 }
 
 /**
- * Starts the worker and returns the listening server — the test seam and the entry's one call.
- * In order: unlink a stale socket file (`EADDRINUSE` otherwise); register `SIGTERM` before anything
- * can connect; `listen`; then `chmod` 0o660, because `listen` creates the file at `0777 & ~umask`
- * and takes no mode of its own. Each of the four failure paths rejects with the raw error, so the
- * caller below is the one place that logs and exits, and each undoes what it had set up.
+ * Order matters: unlink a stale socket (else `EADDRINUSE`); register `SIGTERM` before anything can
+ * connect; `listen`; `chmod` 0o660, since `listen` creates the file at `0777 & ~umask` and takes no
+ * mode. Every failure path rejects raw and undoes its own setup; the caller below logs and exits.
  */
 export async function startWorker(options: StartWorkerOptions): Promise<http.Server> {
   const { socketPath, yahoo } = options;
@@ -387,8 +331,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   const admitQuotes = makeRateLimiter(RATE_CAPS.quotes);
   const admitHistory = makeRateLimiter(RATE_CAPS.history);
 
-  // `connectionsCheckingInterval` is a constructor-only option in @types/node, so it is passed here
-  // rather than assigned after.
+  // `connectionsCheckingInterval` is constructor-only in @types/node.
   const server = http.createServer(
     {
       headersTimeout: timeouts.headersTimeout,
@@ -397,8 +340,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
     },
     (req, res) => {
       handle(req, res, yahoo, admitQuotes, admitHistory).catch((error: unknown) => {
-        // A bug in the handler itself — provider and validation failures are already caught above.
-        // Same answer as an oversized body: no half-written response, socket gone.
+        // A handler bug — provider and validation failures are caught above. No half-written response.
         console.error("Price worker: unhandled request error", error);
         req.socket.destroy();
       });
@@ -408,25 +350,15 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   server.maxConnections = 8;
   server.maxRequestsPerSocket = 1;
   server.timeout = timeouts.timeout;
-  // Node answers a malformed request line, an oversized header block and an unfinished header set
-  // itself, but only while nothing is listening for `clientError`.
+  // Node answers a malformed request line itself, but only while nothing listens for `clientError`.
   server.on("clientError", onClientError);
 
-  // Node is PID 1 under the compose `entrypoint` and ignores a signal it has no handler for —
-  // without this, every stop is Docker's 10 s wait plus `SIGKILL`, and a stale socket file. `close()`
-  // unlinks the file, so the app sees `ENOENT` rather than a stale file's `ECONNREFUSED`. Removed
-  // once the server closes: one listener per server on the shared `process` would exceed Node's max
-  // across a test file.
-  //
-  // Registered *before* `listen`: the socket accepts connections through the kernel backlog the
-  // instant `listen` succeeds, and a `SIGTERM` in the sub-millisecond gap before this line used to
-  // take Node's default disposition — dead by signal, socket file still on disk. Narrow, but a
-  // busy spin on the file hit it twelve times in twelve.
+  // Node is PID 1 under compose and ignores unhandled signals; without this every stop is 10 s then
+  // `SIGKILL`, leaving a stale socket file (`close()` unlinks it). Before `listen`, not after: the
+  // backlog accepts the instant `listen` returns, and a `SIGTERM` in that gap hit 12 tries in 12.
   const onSigterm = (): void => {
-    // Every connection, not just the idle ones: a socket that has never sent a byte is not *idle*
-    // in Node's sense, so `closeIdleConnections()` leaves exactly the eight a compromised app would
-    // hold and the wait outlasts Docker's grace. A request in flight is lost, which is the answer a
-    // stopped worker gives anyway.
+    // Not `closeIdleConnections()`: a socket that never sent a byte is not *idle*, so a compromised
+    // app's eight would outlast Docker's grace. An in-flight request is lost, which is fine.
     server.closeAllConnections();
     server.close(() => process.exit(0));
   };
@@ -437,8 +369,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
 
   await new Promise<void>((resolve, reject) => {
     const onListenError = (error: Error): void => {
-      // Nothing to close and nothing to stop: take the listener back off the shared `process`
-      // object rather than leaving one per failed start.
+      // Nothing to close: take the listener off the shared `process` rather than leak one per failed start.
       process.removeListener("SIGTERM", onSigterm);
       reject(error);
     };
@@ -450,9 +381,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
         resolve();
       });
     } catch (error) {
-      // `listen` does not only *emit* its failures: Node reads a `socketPath` that parses as a
-      // number as a TCP port, and `99999` throws `ERR_SOCKET_BAD_PORT` straight out of this
-      // executor, past the `error` listener that would have cleaned up.
+      // `listen` also throws: a numeric `socketPath` is read as a TCP port, and `99999` throws `ERR_SOCKET_BAD_PORT` here.
       server.removeListener("error", onListenError);
       onListenError(error instanceof Error ? error : new Error(String(error)));
     }
@@ -461,9 +390,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   try {
     await chmod(socketPath, 0o660);
   } catch (error) {
-    // The one failure path with a live server behind it. Not about permissions — `app` runs as the
-    // same uid and is the socket's owner either way — but because a `startWorker` that rejected must
-    // not leave a server bound to a path its caller was told it never got. `close()` unlinks it.
+    // The one failure path with a live server behind it: a rejected `startWorker` must leave nothing bound.
     process.removeListener("SIGTERM", onSigterm);
     server.closeAllConnections();
     server.close();
@@ -475,7 +402,6 @@ export async function startWorker(options: StartWorkerOptions): Promise<http.Ser
   return server;
 }
 
-// `undefined` under vitest (Node ≥ 24.2), so the loop below never runs under the test suite.
 if (import.meta.main) {
   const config = loadWorkerConfig(process.env);
 

@@ -1,8 +1,6 @@
 /**
- * Retakes every committed screenshot (docs/screenshots/, docs/guide/images/)
- * against the real app + generated demo household — never a mock, so a
- * screen can drift from its picture with nothing failing. Run recipe and
- * `--first-run` (empty-instance shots): docs/developing.md.
+ * Retakes every committed screenshot (docs/screenshots/, docs/guide/images/) against the real
+ * app + demo household — never a mock, so a screen can drift from its picture unnoticed. Run recipe: docs/developing.md.
  */
 import { randomBytes } from "node:crypto";
 
@@ -12,7 +10,6 @@ import { loadConfig } from "../server/config.ts";
 import { createPool } from "../server/db.ts";
 import type { Pool, PoolClient } from "pg";
 
-/** Where the application under capture is serving. */
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:5173";
 
 /** Playwright's own Chromium unless CI/a sandbox sets this to an existing one. */
@@ -28,8 +25,7 @@ const FIRST_SIGHTING = "SCHD";
 
 type Theme = "light" | "dark";
 
-// Module state, not a parameter — `open`'s dozen call sites take none today.
-// undefined only on --first-run: that database stays honestly unlocked.
+// Module state, not a parameter — `open`'s call sites take none; undefined only on --first-run.
 let captureGrant: { id: string; expiresAt: Date } | undefined;
 
 async function open(browser: Browser, theme: Theme, mobile = false, masked = false): Promise<Page> {
@@ -41,8 +37,7 @@ async function open(browser: Browser, theme: Theme, mobile = false, masked = fal
     colorScheme: theme,
   });
 
-  // Fresh context seeds *masked* by policy (spec 0007) — this un-masks every
-  // shot except when `masked` flips it back (finding 2's dots-shown pair).
+  // Fresh context seeds *masked* by policy (spec 0007) — un-masks every shot except when `masked` flips it back.
   await context.addCookies([{ ...(masked ? MASKED_COOKIE : UNMASKED_COOKIE), url: BASE_URL }]);
 
   const page = await context.newPage();
@@ -50,47 +45,31 @@ async function open(browser: Browser, theme: Theme, mobile = false, masked = fal
   return page;
 }
 
-/**
- * Spelled out, not imported from app/lib/masking.ts — script talks to a
- * served app over HTTP, sharing no module with it. No `path`: Playwright
- * refuses a cookie carrying both `url` and `path`.
- */
+/** Spelled out, not imported from app/lib/masking.ts — script talks over HTTP, sharing no module.
+ * No `path`: Playwright refuses a cookie carrying both `url` and `path`. */
 const UNMASKED_COOKIE = { name: "masked", value: "0" } as const;
 
 /** Masked variant, for the one pair of shots meant to show dots (finding 2). */
 const MASKED_COOKIE = { name: "masked", value: "1" } as const;
 
-/**
- * Lock's own cookie name (LOCK_COOKIE), spelled out for the same reason as
- * UNMASKED_COOKIE. Needs raw CDP `Network.setCookie` in {@link setGrantCookie}:
- * Playwright's `addCookies` refuses a `Secure` cookie on `http://` outright,
- * where Chromium itself allows it on loopback.
- */
+/** Lock's own cookie name, spelled out like UNMASKED_COOKIE. Needs raw CDP `Network.setCookie`
+ * ({@link setGrantCookie}) — Playwright's `addCookies` refuses a `Secure` cookie on `http://`, Chromium allows it on loopback. */
 const GRANT_COOKIE = "__Host-unlock_grant";
 
 /** Comfortably past any run's real duration (30+ navigations, two themes) — not measured, just obviously safe. */
 const CAPTURE_GRANT_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
 /**
- * This run's own placeholder passkey (migration 0012), so the lock's chrome
- * (Passkeys tab, "Lock now") has an enrolled row to render. seed-demo.ts
- * deliberately doesn't plant this itself (finding 1: it'd lock out every
- * dev checkout with no assertion that could ever succeed) — safe here since
- * a capture run never presents a real WebAuthn response. `backup_eligible:
- * true`: the common synced-passkey case, not the exception.
- *
- * Idempotent by this id. Refuses rather than adopting (finding 3) if any
- * *other* passkey is present, so a dev's own enrolled passkey never leaks
- * into committed screenshots; seed-demo.ts's WIPE list clears this row on
- * the next re-seed.
+ * Placeholder passkey (migration 0012) so the lock's chrome has an enrolled row. seed-demo.ts
+ * won't plant it (would lock out real checkouts); safe here since capture never does a real WebAuthn response.
+ * Idempotent by this id; refuses if any *other* passkey exists, so a dev's own never leaks into screenshots.
  */
 export const CAPTURE_PLACEHOLDER_CREDENTIAL_ID = "demo-placeholder-credential-id";
 
 /** Exported for tests/scripts/capture-screenshots.test.ts (finding 1's coexistence case). */
 export async function ensureCapturePasskey(pool: Pool | PoolClient): Promise<string> {
-  // Read + classify the whole table before returning or writing — scoping to
-  // just the placeholder id used to early-return past a coexisting real
-  // passkey (the bug finding 1 fixes).
+  // Reads + classifies the whole table before writing — scoping to just the placeholder id
+  // would miss a coexisting real passkey (finding 1).
   const { rows } = await pool.query<{ credential_id: string }>(`select credential_id from passkey`);
 
   const other = rows.find((row) => row.credential_id !== CAPTURE_PLACEHOLDER_CREDENTIAL_ID);
@@ -123,10 +102,8 @@ export async function ensureCapturePasskey(pool: Pool | PoolClient): Promise<str
 }
 
 /**
- * One grant for the whole run, reused by every {@link open} call — like one
- * browser's cookie across tabs. Writes straight to unlock_grant, the same
- * licence ARCHITECTURE.md grants seed-demo.ts for price_daily: this isn't
- * the app either, and a real unlock ceremony needs a credential Chromium has no authenticator to produce.
+ * One grant for the whole run, reused by every {@link open} call. Writes straight to unlock_grant
+ * (same licence ARCHITECTURE.md grants seed-demo.ts) since a real unlock ceremony needs a credential Chromium can't produce.
  */
 async function mintCaptureGrant(pool: Pool | PoolClient): Promise<void> {
   const credentialId = await ensureCapturePasskey(pool);
@@ -141,11 +118,8 @@ async function mintCaptureGrant(pool: Pool | PoolClient): Promise<void> {
   captureGrant = { id, expiresAt };
 }
 
-/**
- * Raw CDP session, not `addCookies` (see {@link GRANT_COOKIE}) — Chromium's
- * own permissive-on-loopback behaviour, not Playwright's stricter guard.
- * `url` not `domain`: a `__Host-` cookie is rejected outright with any `Domain` attribute.
- */
+/** Raw CDP session, not `addCookies` (see {@link GRANT_COOKIE}) — Chromium is permissive on loopback, Playwright isn't.
+ * `url` not `domain`: a `__Host-` cookie rejects any `Domain` attribute outright. */
 async function setGrantCookie(
   context: BrowserContext,
   page: Page,
@@ -194,10 +168,8 @@ function refuse(what: string): never {
 }
 
 /**
- * Must run before any write (finding 1): demo_seed is seed-demo.ts's marker,
- * telling a real demo household apart from an unseeded or plain-wrong
- * database. Skipping this would plant an unrecoverable passkey into whatever
- * DATABASE_URL points at, then throw on missing data with a credential nothing can satisfy.
+ * Must run before any write (finding 1): demo_seed is seed-demo.ts's marker for a real demo
+ * household. Skipping it would plant an unrecoverable passkey wherever DATABASE_URL points.
  */
 async function requireDemoSeed(pool: Pool | PoolClient): Promise<void> {
   const { rows } = await pool.query<{ present: boolean }>(
@@ -243,10 +215,8 @@ async function currentPositions(pool: Pool | PoolClient, accountId: number): Pro
 }
 
 /**
- * Fidelity-shaped statement CSV. The diff is the point: every position
- * restated unchanged but one bumped quantity, one added (new-instruments
- * step), one dropped ("sold") — one removal of seven stays under the
- * majority-removal confirmation, a different screenshot's lesson.
+ * Fidelity-shaped statement CSV. The diff is the point: one bumped quantity, one added
+ * (new-instruments step), one dropped ("sold") — a single removal stays under the majority-removal confirmation.
  */
 function authorStatement(positions: Position[], accountNumber: string): string {
   const priced = positions.filter((p) => p.symbol !== null);
@@ -295,11 +265,8 @@ function authorStatement(positions: Position[], accountNumber: string): string {
 }
 
 /**
- * Undo the walk's two writes so the household stays untaught: resolving
- * SCHD (the flow's only early write) would make every later walk skip the
- * new-instruments step; a saved column mapping would prefill the "before
- * anything is mapped" shot. Deleted above a pre-walk watermark, not
- * truncated, so a mapping the household legitimately has is never collateral.
+ * Undoes the walk's two writes so the household stays untaught — else later walks would skip
+ * the new-instruments step or prefill the mapping shot. Deletes above a watermark, never truncates.
  */
 async function mappingWatermark(pool: Pool): Promise<string> {
   const { rows } = await pool.query<{ max: string }>(
@@ -313,11 +280,7 @@ async function forgetWalkWrites(pool: Pool, watermark: string): Promise<void> {
   await pool.query(`delete from column_mapping where id > $1`, [watermark]);
 }
 
-/**
- * Walks the four-step upload as far as a given step; stops short of
- * recording. Cleans up its own writes — a caller that forgot would silently
- * photograph the wrong screen next run.
- */
+/** Walks the four-step upload as far as a given step, stopping short of recording; cleans up its own writes. */
 async function walkUpload(
   page: Page,
   pool: Pool,
@@ -433,10 +396,8 @@ async function prepare(pool: Pool | PoolClient): Promise<Fixture> {
 }
 
 /**
- * Validate (requireDemoSeed) → read fixture (prepare) → only then plant
- * passkey+grant (mintCaptureGrant) — exported so `main` can't drift back to
- * write-before-validate by inlining these, and so the test can pin the order
- * (a still-empty passkey table after rejection): tests/scripts/capture-screenshots.test.ts.
+ * Validate → read fixture → only then plant passkey+grant — exported so this order can't drift
+ * and the test can pin it (tests/scripts/capture-screenshots.test.ts).
  */
 export async function prepareCapture(pool: Pool | PoolClient): Promise<Fixture> {
   await requireDemoSeed(pool);
@@ -445,10 +406,7 @@ export async function prepareCapture(pool: Pool | PoolClient): Promise<Fixture> 
   return fixture;
 }
 
-/**
- * Opens the owner-filter `<details>` before shooting — it loads closed.
- * Click targets the summary so a markup change fails loudly, not silently.
- */
+/** Opens the owner-filter `<details>` before shooting — it loads closed; clicks the summary so a markup change fails loudly. */
 async function openOwnerFilter(page: Page): Promise<void> {
   const summary = page.locator(".owner-filter > summary");
   await summary.click();
@@ -466,15 +424,13 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await visit(page, "/");
     await shoot(page, `docs/screenshots/overview-${theme}.png`);
 
-    // Masked variant of the same screen (finding 2) — separate context so
-    // the rest of this loop's `page` stays unmasked throughout.
+    // Masked variant (finding 2) — separate context so this loop's `page` stays unmasked throughout.
     const maskedPage = await open(browser, theme, false, true);
     await visit(maskedPage, "/");
     await shoot(maskedPage, `docs/screenshots/overview-masked-${theme}.png`);
     await maskedPage.close();
 
-    // Paired with the shot above (spec 0013). range=all: the withheld-history
-    // note only shows on a range with hand-typed points, none this recent.
+    // Paired with the shot above (spec 0013); range=all is the only range showing the withheld-history note.
     await visit(page, `/?owner=${ownerId}&range=all`);
     await openOwnerFilter(page);
     await shoot(page, `docs/screenshots/overview-owner-${theme}.png`);
@@ -519,8 +475,7 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(phone, `docs/screenshots/overview-mobile-${theme}.png`, false);
     await visit(phone, "/analysis");
     await shoot(phone, `docs/screenshots/analysis-mobile-${theme}.png`, false);
-    // Only screen reflowing to a card stack below 768px. Grouped: the group
-    // heading, subtotal strip and grand total are what the reflow must get right.
+    // Only screen reflowing to a card stack below 768px — group heading, subtotal strip, grand total must reflow right.
     await visit(phone, "/holdings?group=assetClass");
     // Cards start below the fold on a phone viewport — scroll to the subtotal before shooting.
     await phone.evaluate(() => {
@@ -628,9 +583,7 @@ async function main(): Promise<void> {
   console.log("\nDone.");
 }
 
-// Guarded: tests import ensureCapturePasskey from this module, and an
-// unguarded call would launch a browser on every test run. import.meta.main
-// is true only for the invoked module, never one merely imported.
+// Guarded: tests import ensureCapturePasskey from this module; an unguarded call would launch a browser on every test run.
 if (import.meta.main) {
   await main();
 }

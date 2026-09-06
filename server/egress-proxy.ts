@@ -1,65 +1,31 @@
 /**
- * The egress proxy (spec 0018 §3.7, ticket 08): a `CONNECT`-only forward proxy on `node:http`,
- * `node:net` and `node:dns` — nothing else, no `zod`, no config, no `process.env` — admitting the
- * five hosts `yahoo-finance2` 4.0.2 reaches, and only when the TLS ClientHello inside the tunnel
- * names the same host the `CONNECT` asked for. `compose.yaml` gives `worker` no other network.
+ * CONNECT-only forward proxy, `worker`'s one route out (spec 0018 §3.7). Five hosts, exact
+ * case-insensitive match — never a suffix (`evil.yahoo.com.attacker.example`).
  *
- * The allowlist is a module constant, compared exactly and case-insensitively — never as a suffix,
- * which would admit `evil-finance.yahoo.com.attacker.example`. `guce`/`consent` are a snapshot of
- * Yahoo's live redirect chain rather than literals in 4.0.2: when Yahoo moves one, quotes stop on a
- * `403` and the fix is a release. A sixth host, the library's `registry.npmjs.org` version check,
- * is never reached only because `yahoo-client.ts` constructs with `versionCheck: false`.
- *
- * The order below is this module's one hard invariant:
- *
- *  1. The `CONNECT` host — port 443, non-empty, not an IP literal, on {@link ALLOWED_HOSTS} —
- *     checked with nothing upstream touched. Any failure is a logged `403` with a real response.
- *  2. Resolve, guard the whole answer against loopback/link-local/private addresses (ADR-0005: a
- *     LAN resolver must not make this proxy a pivot), and connect, within {@link STAGE_DEADLINE_MS}:
- *     `502` for a failed lookup or every address refusing, `403` for a private answer, `504` for the
- *     deadline. Nothing has been sent upstream yet.
- *  3. Only now is `200 Connection Established` written. An honest client sends no bytes before it
- *     (measured, Node 24.20), and resolving first is what gives "Yahoo is down" its own signature:
- *     undici reports a non-`200` CONNECT answer, where a refusal after this line is a bare close.
- *  4. The ClientHello is read with the buffer seeded from `head` *and* filled from `'data'`: a
- *     client may pipeline the hello into the `CONNECT` write (measured, 1595 bytes in `head`), and
- *     the more common one sends nothing until the `200`. Capped at {@link MAX_RECORD_BYTES}.
- *  5. {@link parseServerName} fails closed on anything but one well-formed `server_name`. The `200`
- *     is already written, so a refusal here can only destroy the socket — which is why step 3 cannot
- *     move later and step 6 cannot move earlier.
- *  6. Only a match is replayed upstream and piped both ways, torn down on {@link IDLE_TEARDOWN_MS}.
- *
- * `maxConnections = 8` counts accepted sockets, not tunnels: a socket that never sends a valid
- * hello would never reach a tunnel counter. A ninth is accepted and closed by Node itself, unlogged.
- *
- * Logs, stem `Egress proxy`: one line per refusal and per upstream failure, none for an allowed
- * tunnel. Both halves go through `logSafe` — the host and the `server_name` are bytes the audited
- * peer chooses. `SIGTERM` must destroy established tunnels itself: `server.close()` and
- * `closeAllConnections()` leave an upgraded socket alone and the close callback never fires.
+ * Order is the invariant: allowlist -> resolve + reject non-public addresses (ADR-0005) ->
+ * write `200` -> read ClientHello -> SNI must match. The `200` cannot move later (undici
+ * needs a non-200 to report "Yahoo is down") or earlier (a mismatch after it can only
+ * destroy the socket). `SIGTERM` must destroy tunnels itself: `closeAllConnections()` skips
+ * upgraded sockets.
  */
 import dns from "node:dns";
 import http from "node:http";
 import net from "node:net";
 
-/** The compose network's only route to this process (ticket 08's contract). */
 const PORT = 8888;
 
 /** Every stage that waits on the peer — request line, resolve+connect, hello — shares this deadline. */
 const STAGE_DEADLINE_MS = 5_000;
 
-/** An established tunnel silent this long, either direction, is torn down. */
 const IDLE_TEARDOWN_MS = 60_000;
 
-/**
- * How often Node sweeps for a blown {@link STAGE_DEADLINE_MS}. Constructor-only, and the 30 s
- * default would let a five-second deadline bind anywhere up to thirty-five.
- */
+/** Sweep interval for {@link STAGE_DEADLINE_MS}. Constructor-only; on the 30 s default a 5 s deadline binds at 35 s. */
 const CONNECTIONS_CHECKING_INTERVAL_MS = 1_000;
 
 /** A ClientHello record — 5-byte header plus payload — past this size is refused unread. */
 const MAX_RECORD_BYTES = 16 * 1024;
 
-/** The five hosts 4.0.2 reaches (module header has the argument for each). */
+/** The five hosts 4.0.2 reaches (docs/specs/price-worker/08-the-egress-allowlist.md argues each). */
 const ALLOWED_HOSTS = new Set(
   [
     "query1.finance.yahoo.com",
@@ -77,21 +43,16 @@ const STATUS_TEXT: Record<number, string> = {
   504: "Gateway Timeout",
 };
 
-/** Thrown by {@link resolveAndConnectUpstream} when step 2's own deadline fires first. */
 class DeadlineExceededError extends Error {}
-/** Thrown by {@link resolveAndConnectUpstream} when the whole answer contains a non-public address. */
 class PrivateAddressError extends Error {}
-/** Thrown by {@link readClientHelloRecord} and {@link parseServerName} — every step-4/5 failure. */
 class HelloRejectedError extends Error {}
 
-/** The one seam onto `node:dns` — production's own below, a local listener in tests. */
 export type DnsLookupFn = (
   hostname: string,
   options: { all: true; family: 4 },
   callback: (error: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void,
 ) => void;
 
-/** The one seam onto `node:net`'s upstream connect — production's own below, a local listener in tests. */
 export type NetConnectFn = (
   options: { host: string; port: number },
   connectionListener: () => void,
@@ -113,7 +74,6 @@ const defaultNetConnect: NetConnectFn = (options, connectionListener) =>
 
 const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
 
-/** A `CONNECT` host that is already an address rather than a name — refused before the allowlist. */
 function isIpLiteral(host: string): boolean {
   return IPV4_LITERAL.test(host) || host.includes(":");
 }
@@ -145,7 +105,6 @@ function isPrivateAddress(address: string): boolean {
   return false;
 }
 
-/** `req.url` for a `CONNECT` request is exactly `host:port` — nothing else to parse. */
 function parseConnectTarget(url: string | undefined): { host: string; port: number } | undefined {
   if (url === undefined) return undefined;
   const match = /^([^:]+):(\d+)$/.exec(url);
@@ -153,10 +112,7 @@ function parseConnectTarget(url: string | undefined): { host: string; port: numb
   return { host: match[1]!, port: Number.parseInt(match[2]!, 10) };
 }
 
-/**
- * Step 2: resolve, guard, and connect to the first address that accepts, within {@link deadlineMs}.
- * A success arriving after the deadline, or after another address won, is destroyed rather than leaked.
- */
+/** Resolve, guard, connect to the first address that accepts. A late success is destroyed, not leaked. */
 function resolveAndConnectUpstream(
   host: string,
   deadlineMs: number,
@@ -166,10 +122,8 @@ function resolveAndConnectUpstream(
   return new Promise((resolve, reject) => {
     let settled = false;
 
-    // The attempt in flight, so the deadline can destroy it. A blackholing address is the case that
-    // needs it: it answers neither the connect callback nor `'error'`, so `settle`'s late-arrival
-    // guard is never reached and the socket sits in `SYN_SENT` for minutes, while the client has
-    // long since had its `504` and freed the only slot this proxy counts.
+    // The attempt in flight, so the deadline can destroy it. A blackholing address answers neither the
+    // connect callback nor `'error'`, so it sits in `SYN_SENT` for minutes past the client's `504`.
     let pending: net.Socket | undefined;
 
     const timer = setTimeout(() => {
@@ -239,9 +193,8 @@ function resolveAndConnectUpstream(
 }
 
 /**
- * Step 4: accumulate `head` and then `'data'` into one TLS record, to the length its own 5-byte
- * header declares, capped at {@link MAX_RECORD_BYTES}. Resolves with the whole record (header
- * included, for replay) and whatever arrived past it — drained here, so otherwise lost to `.pipe()`.
+ * Accumulates `head` then `'data'` into one TLS record, to its 5-byte header's declared length, capped
+ * at {@link MAX_RECORD_BYTES}. Returns the record (for replay) plus bytes past it, else lost to `.pipe()`.
  */
 function readClientHelloRecord(
   socket: net.Socket,
@@ -314,9 +267,8 @@ function readClientHelloRecord(
 }
 
 /**
- * Step 5: a hand-rolled walk to the ClientHello's `server_name` extension (record header already
- * stripped). Every read is bounds-checked against the boundary its own length field declared, so a
- * truncated or malformed hello throws {@link HelloRejectedError} rather than reading past it.
+ * Hand-rolled walk to the ClientHello's `server_name` (record header already stripped). Every read is
+ * bounds-checked against its own declared boundary, so a malformed hello throws instead of reading past.
  */
 function parseServerName(handshake: Buffer): string {
   let offset = 0;
@@ -397,28 +349,22 @@ function parseServerName(handshake: Buffer): string {
   return serverName;
 }
 
-/**
- * Control bytes out of what reaches `console.error`, as `server/price-worker.ts`'s `logSafe` does:
- * the host and the `server_name` are peer-supplied, and a raw newline would let the party being
- * audited forge a refusal line under this module's own stem.
- */
+/** Host and `server_name` are peer bytes: a raw newline would forge a refusal line under this stem. */
 function logSafe(text: string): string {
   return text.replace(/[\x00-\x1f\x7f]/g, " ");
 }
 
-/** One line, stem `Egress proxy`, for every refusal — naming the reason and the host. */
 function logRefusal(host: string | undefined, reason: string): void {
   console.error(`Egress proxy: refused CONNECT ${logSafe(host ?? "(unparseable target)")} — ${logSafe(reason)}`);
 }
 
-/** A refusal before the `200`: a real HTTP status, the socket then closed. */
 function refuseWithStatus(socket: net.Socket, status: number, host: string | undefined, reason: string): void {
   logRefusal(host, reason);
   if (socket.writable) socket.end(`HTTP/1.1 ${status} ${STATUS_TEXT[status]}\r\n\r\n`);
   else socket.destroy();
 }
 
-/** A refusal after the `200`: no status is possible, only a torn-down socket (module header, step 5). */
+/** After the `200` no status is possible — only a torn-down socket. */
 function refuseTunnel(clientSocket: net.Socket, upstream: net.Socket, host: string, reason: string): void {
   logRefusal(host, reason);
   clientSocket.destroy();
@@ -426,10 +372,7 @@ function refuseTunnel(clientSocket: net.Socket, upstream: net.Socket, host: stri
 }
 
 type ConnectDeps = Required<Pick<StartEgressProxyOptions, "dnsLookup" | "netConnect" | "stageDeadlineMs" | "idleTeardownMs">> & {
-  /**
-   * Every socket of an *established* tunnel, so `SIGTERM` can end it: `server.closeAllConnections()`
-   * does not — measured, an upgraded socket survives it and `close()`'s callback never fires.
-   */
+  /** Established tunnels, so `SIGTERM` can end them: `closeAllConnections()` skips upgraded sockets — measured. */
   tunnels: Set<net.Socket>;
 };
 
@@ -439,8 +382,7 @@ async function handleConnect(
   head: Buffer,
   deps: ConnectDeps,
 ): Promise<void> {
-  // A baseline for the socket's whole lifetime: an EventEmitter with no `'error'` listener crashes
-  // the process. Every later stage attaches its own more specific one.
+  // Baseline for the socket's lifetime: an EventEmitter with no `'error'` listener crashes the process.
   clientSocket.on("error", () => {});
 
   const target = parseConnectTarget(req.url);
@@ -509,27 +451,20 @@ async function handleConnect(
 }
 
 /**
- * The first deadline — accept to a complete request line and headers — expires inside Node, before
- * {@link handleConnect} has anything to refuse, and logged nothing: a peer could hold slots to the
- * deadline repeatedly and leave no trail. `server.timeout`'s `'timeout'` event is the only hook
- * that fires *at* the deadline rather than on the next sweep, and it does not fire for an upgraded
- * socket (24.12.0), whose own `setTimeout` replaces the server's. Attaching a listener replaces
- * Node's default, which is to destroy the socket; that is reproduced below.
+ * Accept-to-headers expires inside Node, unlogged, so a peer could hold slots leaving no trail.
+ * `server.timeout`'s `'timeout'` is the only hook firing *at* the deadline, and never for an upgraded
+ * socket (24.12.0). Attaching it replaces Node's default destroy, reproduced below.
  */
 function onHeaderDeadline(socket: net.Socket): void {
-  // Not `logRefusal`: no `CONNECT` was received, so naming one would describe a request the peer
-  // never made. The stem is the same, which is what an operator greps for.
+  // Not `logRefusal`: no `CONNECT` arrived to name. Same stem, which is what an operator greps for.
   console.error("Egress proxy: no complete request line and headers before the deadline");
   socket.destroy();
 }
 
 /**
- * Attaching any `clientError` listener replaces Node's default for *every* parser error, so this
- * reproduces that mapping rather than collapsing the rest to `400`. Duplicated from
- * `server/price-worker.ts` rather than shared: importing it would end this module's closure.
- *
- * Nothing is logged here — the deadline is {@link onHeaderDeadline}'s to report, and the `writable`
- * guard (Node's own) keeps a bare `ECONNRESET` from becoming a log flood.
+ * Any `clientError` listener replaces Node's default for *every* parser error, so this reproduces that
+ * mapping. Duplicated from `server/price-worker.ts`: an import would end this module's closure.
+ * Unlogged — the `writable` guard keeps a bare `ECONNRESET` off the log.
  */
 function onClientError(error: Error, socket: net.Socket): void {
   if (!socket.writable) {
@@ -570,8 +505,7 @@ export async function startEgressProxy(options: StartEgressProxyOptions = {}): P
     tunnels: new Set<net.Socket>(),
   };
 
-  // `connectionsCheckingInterval` is what makes the two deadlines above mean what they say: on the
-  // 30 s default a silent socket lived 30004 ms here, measured, against a 5 s deadline.
+  // `connectionsCheckingInterval` is what makes the deadlines above mean it: on the 30 s default a silent socket lived 30004 ms, measured.
   const server = http.createServer(
     {
       headersTimeout: deps.stageDeadlineMs,
@@ -588,8 +522,7 @@ export async function startEgressProxy(options: StartEgressProxyOptions = {}): P
   server.on("timeout", onHeaderDeadline);
 
   server.on("connect", (req, duplexSocket, head) => {
-    // Typed `stream.Duplex` by @types/node but always the real `net.Socket` for a server bound to a
-    // TCP port — `setTimeout` below is a `net.Socket` method a bare `Duplex` lacks.
+    // @types/node says `Duplex`; a TCP-bound server always gives a `net.Socket`, which `setTimeout` needs.
     const clientSocket = duplexSocket as net.Socket;
     handleConnect(req, clientSocket, head, deps).catch((error: unknown) => {
       console.error("Egress proxy: unhandled tunnel error", error);
@@ -597,11 +530,9 @@ export async function startEgressProxy(options: StartEgressProxyOptions = {}): P
     });
   });
 
-  // Node is PID 1 under the compose `entrypoint` and ignores a signal it has no handler for;
-  // without this every stop is Docker's 10 s wait plus `SIGKILL`.
+  // Node is PID 1 under compose and ignores unhandled signals; without this every stop is 10 s then `SIGKILL`.
   const onSigterm = (): void => {
-    // Tunnels first: `closeAllConnections()` leaves an upgraded socket alone, so one live tunnel
-    // would hold `close()`'s callback until the 60 s idle teardown, well past Docker's grace.
+    // Tunnels first: `closeAllConnections()` skips upgraded sockets, so one would hold `close()` until idle teardown.
     for (const socket of deps.tunnels) socket.destroy();
     deps.tunnels.clear();
     server.closeAllConnections();
