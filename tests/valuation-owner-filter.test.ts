@@ -1,11 +1,4 @@
-/**
- * The owner filter where it meets SQL (spec 0013 ticket 02, ADR-0008). ALL_OWNERS isn't
- * exercised here on purpose — the rest of the suite passing unchanged says the unfiltered
- * read is the query it always was. Two rules carry the weight: narrowing lives inside the
- * lateral in readSeries/readSessionSeries, so an uncovered date is reported, not dropped (an
- * outer WHERE would silently shorten the line); and firstRecordedDate narrows through account,
- * not the view, so it spans closed accounts. Exact decimal strings; the one JS sum goes through money.ts.
- */
+// owner filter meets SQL (spec 0013 ticket 02, ADR-0008) — ALL_OWNERS untouched on purpose: the rest of the suite is that case
 import { afterAll, describe, expect, it } from "vitest";
 
 import { MONEY_SCALE, render, sumMoney } from "~/lib/money";
@@ -26,8 +19,7 @@ import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
-// an id no person can have: appending zeros puts it far past anything bigserial could have
-// issued, while staying inside the 18-digit bound so it reaches the query, not the guard
+// zeros appended push past anything bigserial issued, staying inside the 18-digit bound so it hits the query, not the guard
 function noSuchOwner(id: string): string {
   return `${id}000000`;
 }
@@ -65,8 +57,7 @@ describe("a household reader narrowed to one owner", () => {
         ["Alice", "Alice Brokerage", "25000.0000"],
       ]);
 
-      // rollup narrows through account.owner_id, not the view — a second predicate on a
-      // second column, needing its own assertion
+      // rollup narrows through account.owner_id, not the view — a second predicate, own assertion
       expect(await accountTotals([alice.id], db)).toEqual([
         expect.objectContaining({ accountName: "Alice Brokerage", ownerName: "Alice", amount: "25000.0000" }),
       ]);
@@ -156,7 +147,7 @@ describe("the narrowing inside the lateral", () => {
       const hers = await seedAccount({ name: "Alice Savings", owner: alice, kind: "bank" });
       const his = await seedAccount({ name: "Bob Savings", owner: bob, kind: "bank" });
 
-      // Bob's history starts in January, Alice's not until April — February is covered for Bob, not Alice
+      // Bob's history starts January, Alice's not until April — February covers Bob, not Alice
       await seedPositionSet({
         account: his,
         asOf: "2026-01-31",
@@ -170,14 +161,13 @@ describe("the narrowing inside the lateral", () => {
 
       const dates = ["2026-02-15", "2026-04-30"];
 
-      // the premise: unfiltered, February is a covered point — if this stops being true the test below passes for the wrong reason
+      // premise: February is covered unfiltered — else the test below passes for the wrong reason
       expect(await netWorthSeries(ALL_OWNERS, dates, db)).toEqual([
         { date: "2026-02-15", amount: "9000.0000", coverage: { known: 1, total: 1 } },
         { date: "2026-04-30", amount: "13000.0000", coverage: { known: 2, total: 2 } },
       ]);
 
-      // narrowed to Alice, February is uncovered — reported, never dropped. A predicate in the
-      // outer WHERE would reject the all-null LEFT JOIN row and take the date with it silently
+      // narrowing lives inside the lateral — an outer WHERE would drop the all-null row, and the date with it
       expect(await netWorthSeries([alice.id], dates, db)).toEqual([
         { date: "2026-02-15", amount: "0.0000", coverage: { known: 0, total: 0 } },
         { date: "2026-04-30", amount: "4000.0000", coverage: { known: 1, total: 1 } },
@@ -209,7 +199,7 @@ describe("the narrowing inside the lateral", () => {
       await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
       await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "220.0000" });
 
-      // ten shares, not a hundred and ten — instants come from the whole observation log, value from one owner's holdings
+      // ten shares not a hundred ten — instants from the whole log, value from one owner's holdings
       expect(await netWorthSessionSeries([alice.id], "2026-06-05", db)).toEqual([
         { at: "2026-06-05T13:30:00.000Z", amount: "2100.0000", coverage: { known: 1, total: 1 } },
         { at: "2026-06-05T14:00:00.000Z", amount: "2200.0000", coverage: { known: 1, total: 1 } },
@@ -235,7 +225,6 @@ describe("accountTotals narrowed", () => {
         asOf: "2026-01-31",
         holdings: [{ instrument: usd, quantity: "5000.00000000" }],
       });
-      // sold down to nothing: a legal, empty statement, no rows in the view
       await seedPositionSet({ account: emptied, asOf: "2026-01-31", holdings: [] });
       await seedPositionSet({
         account: his,
@@ -245,7 +234,7 @@ describe("accountTotals narrowed", () => {
 
       const totals = await accountTotals([alice.id], db);
 
-      // owner predicate sits beside the LEFT join, not replacing it — the emptied account is still here saying "nothing to value"
+      // owner predicate sits beside the LEFT join, not replacing it — emptied still says "nothing to value"
       expect(totals.map((total) => [total.accountName, total.amount])).toEqual([
         ["Alice Funded", "5000.0000"],
         ["Alice Emptied", "0.0000"],
@@ -276,8 +265,7 @@ describe("netWorthChange narrowed", () => {
         asOf: "2026-06-30",
         holdings: [{ instrument: usd, quantity: "15000.00000000" }],
       });
-      // Bob's balance makes the two ends distinguishable — an unnarrowed `past` CTE would
-      // report 60,000 here and turn Alice's rise into a fall
+      // an unnarrowed `past` CTE would report 60,000 and turn Alice's rise into a fall
       await seedPositionSet({
         account: his,
         asOf: "2026-01-31",
@@ -336,9 +324,7 @@ describe("an id that names nobody", () => {
       });
       await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "220.0000" });
 
-      // without the length bound this id reaches Postgres and errors out of range — a 500
-      // where the honest answer is "no such owner". Every column is exercised since the bound
-      // lives in isOneOf and each reader names its own column.
+      // without the length bound this reaches Postgres and errors out of range — a 500 for "no such owner"
       const tooLong = [OUT_OF_RANGE_ID];
 
       expect(await currentHoldings(tooLong, db)).toEqual([]);
@@ -350,7 +336,6 @@ describe("an id that names nobody", () => {
       });
       expect(await firstRecordedDate(tooLong, db)).toBeNull();
 
-      // the two lateral readers keep reporting their dates and instants — only the values inside go to nothing
       expect(await netWorthSeries(tooLong, ["2026-02-15"], db)).toEqual([
         { date: "2026-02-15", amount: "0.0000", coverage: { known: 0, total: 0 } },
       ]);
@@ -407,8 +392,7 @@ describe("firstRecordedDate narrowed", () => {
         holdings: [{ instrument: usd, quantity: "7000.00000000" }],
       });
 
-      // deliberate asymmetry ticket 03's chart depends on: the view excludes closed accounts,
-      // but firstRecordedDate reaches position_set through account, where closed is still history
+      // deliberate asymmetry (ticket 03): the view excludes closed accounts, firstRecordedDate reaches position_set through account, where closed is still history
       expect(await currentHoldings([departed.id], db)).toEqual([]);
       expect(await accountTotals([departed.id], db)).toEqual([]);
       expect(await netWorth([departed.id], db)).toEqual({

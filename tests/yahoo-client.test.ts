@@ -1,9 +1,4 @@
-/**
- * What server/yahoo-client.ts adds on top of yahoo-finance2: a constructed instance rather
- * than the class's own broken static, the request it forwards, validateResult:false's effect
- * on a drifted field, and the fixed timeout every call gets. No network — every case swaps
- * globalThis.fetch, since the client sets no fetch of its own and the library falls through to it.
- */
+// what server/yahoo-client.ts adds atop yahoo-finance2 — no network, every case swaps globalThis.fetch
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createYahooClient, type ChartRequest } from "../server/yahoo-client.ts";
@@ -16,7 +11,6 @@ afterEach(() => {
 
 const REQUEST: ChartRequest = { period1: "2024-06-01", interval: "1d", events: "split" };
 
-/** A minimally valid `chart()` response body, one bar, USD by default. */
 function chartResponseBody({
   currency = "USD",
   close = 10,
@@ -37,7 +31,6 @@ function chartResponseBody({
   });
 }
 
-/** A minimally valid `quote()` response body for one symbol. */
 function quoteResponseBody({
   currency = "USD",
   regularMarketPrice = 250,
@@ -50,9 +43,7 @@ function quoteResponseBody({
   });
 }
 
-// fake fetch for quote()'s crumb handshake (chart() never makes this round trip): first call is
-// the cookie leg, second is getcrumb, every call from the third on goes to finalResponse. Every
-// call recorded so a test can assert on request shape and signal.
+// crumb handshake (chart() never makes this trip): call 1 cookie leg, call 2 getcrumb, 3+ finalResponse
 function fakeFetchWithCrumbHandshake(finalResponse: () => Response): {
   calls: Array<{ url: string; init: RequestInit }>;
   fetch: typeof fetch;
@@ -73,10 +64,7 @@ function fakeFetchWithCrumbHandshake(finalResponse: () => Response): {
 
 describe("the shape of the library this client wraps", () => {
   it("constructs an instance rather than calling the class's own broken static", async () => {
-    // yahoo-finance2's default export is the YahooFinance class; its static quote/chart
-    // type-check but throw before any network access. If construction ever regressed to the
-    // bare class, this would throw synchronously and the fake fetch would never be reached —
-    // so a fetch call happening at all is the proof instantiation is real.
+    // bare YahooFinance statics type-check but throw before any network — fetch being reached at all proves real construction
     const seen: unknown[] = [];
     globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
       seen.push(args);
@@ -91,20 +79,18 @@ describe("the shape of the library this client wraps", () => {
   });
 
   it("refuses to be used as a bare static, which is the trap this module exists to avoid", async () => {
-    // the other direction — if a future library version makes the statics work, this fails
-    // and the indirection can go; the only signal that would tell us so
+    // canary for a future library version making the statics work — the signal to drop the indirection
     const { default: YahooFinance } = await import("yahoo-finance2");
     const bare = YahooFinance as unknown as { chart(symbol: string, request: unknown): Promise<unknown> };
 
-    // synchronously, before any promise exists — a regression to the bare class throws at the call site, not a swallowed rejection
+    // throws synchronously at the call site, not a swallowed rejection
     expect(() => bare.chart("VTI", REQUEST)).toThrow(/new YahooFinance/);
   });
 });
 
 describe("the deadline every call carries", () => {
   it("defaults to thirty seconds, the number the spec fixes and no caller may change", async () => {
-    // the default is what production uses — worker, adapter, probe all call createYahooClient()
-    // with no argument. Read off the forwarded signal rather than waited out.
+    // read off the forwarded signal rather than waiting out 30s
     const seen: Array<AbortSignal | undefined> = [];
     globalThis.fetch = (async (_url: string | URL, init: RequestInit) => {
       seen.push(init?.signal ?? undefined);
@@ -123,12 +109,7 @@ describe("the deadline every call carries", () => {
   });
 
   it("passes exactly 30 000 ms to AbortSignal.timeout, not merely something above 50 ms", async () => {
-    // case above only pins "greater than ~50ms" — 100ms and 60s both survive it. A default
-    // above server.timeout would silently put every call past the worker's socket watchdog.
-    // Fake timers don't work here: verified on Node 24.12.0 that vi.useFakeTimers() never flips
-    // an AbortSignal.timeout's .aborted even after advancing past its delay — its internal
-    // timer isn't routed through the global setTimeout fake timers patch. A direct spy reads
-    // the exact argument instead, with no waiting at all.
+    // vi.useFakeTimers() never flips AbortSignal.timeout's .aborted (verified Node 24.12.0) — spy the argument instead
     const spy = vi.spyOn(AbortSignal, "timeout");
     globalThis.fetch = (async () => {
       throw new Error("stop here");
@@ -166,8 +147,7 @@ describe("the request a chart call forwards", () => {
   });
 
   it("passes validateResult: false so one drifted field does not fail the whole call", async () => {
-    // fixture research note 2026-09-04-price-worker-platform-facts.md §3.3 exercised live: a
-    // non-string currency and a non-number close. At the default, either throws FailedYahooValidationError.
+    // research note 2026-09-04-price-worker-platform-facts.md §3.3 — either field throws FailedYahooValidationError by default
     globalThis.fetch = (async () =>
       new Response(chartResponseBody({ currency: 123, close: "not-a-number" }))) as typeof fetch;
 
@@ -183,8 +163,7 @@ describe("the request a chart call forwards", () => {
 
 describe("the client's fixed timeout", () => {
   it("rejects with the signal's own TimeoutError once the fixed deadline expires", async () => {
-    // a fake that rejects only when its signal aborts — the library never races the signal
-    // itself, so a fake ignoring init.signal would hang this test to vitest's own timeout
+    // the library never races the signal itself — a fake ignoring init.signal would hang to vitest's own timeout
     globalThis.fetch = ((_url: string | URL, init: RequestInit) =>
       new Promise((_resolve, reject) => {
         init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
@@ -198,9 +177,7 @@ describe("the client's fixed timeout", () => {
 
 describe("the per-call options built for each request", () => {
   it("gives two calls made more than the deadline apart two different, live signals", async () => {
-    // a hoisted per-client (not per-call) options object would hand the second call the same,
-    // already-expired signal — the worker builds one client for the process's life, so every
-    // call past 30s from start would carry a pre-aborted signal and answer 504 forever, silently
+    // a hoisted per-client options object would hand every call past 30s a pre-aborted signal — 504 forever, silently
     const seenSignals: Array<AbortSignal | undefined> = [];
     globalThis.fetch = (async (_url: string | URL, init: RequestInit) => {
       seenSignals.push(init.signal ?? undefined);
@@ -210,12 +187,9 @@ describe("the per-call options built for each request", () => {
     const client = createYahooClient({ timeoutMs: 50 });
 
     const first = await client.chart("VTI", REQUEST);
-    // longer than the client's own 50ms deadline
     await new Promise((resolve) => setTimeout(resolve, 100));
     const second = await client.chart("VTI", REQUEST);
 
-    // both succeeding alone proves too little — a fake ignoring init.signal would let a
-    // hoisted, already-expired one "succeed" the same way; signal identity below is the real pin
     expect(first).toBeDefined();
     expect(second).toBeDefined();
     expect(seenSignals).toHaveLength(2);
@@ -228,13 +202,9 @@ describe("the per-call options built for each request", () => {
 });
 
 describe("the quote path the poller calls every tick", () => {
-  // quote() needs a crumb, chart() never does, and the crumb is cached on the shared library's
-  // cookie jar for the process's life once fetched — a second quote() call would skip the
-  // handshake entirely (verified: vi.resetModules() doesn't reliably rebuild the real instance
-  // the way vi.doMock does). So one call, one case, pins both facts.
+  // crumb caches on the shared cookie jar for the process's life — a second quote() call would skip the handshake, so one call pins every fact here
   it("completes the crumb handshake, carries one live signal through all three requests, and passes validateResult: false so a drifted field survives", async () => {
-    // fixture research note 2026-09-04-price-worker-platform-facts.md §3.3 exercised live: a
-    // non-string currency. At the default (validateResult:true) this throws FailedYahooValidationError.
+    // research note 2026-09-04-price-worker-platform-facts.md §3.3 — throws FailedYahooValidationError at the default
     const { calls, fetch: fetchFake } = fakeFetchWithCrumbHandshake(
       () => new Response(quoteResponseBody({ currency: 123, regularMarketPrice: "not-a-number" })),
     );
@@ -259,8 +229,7 @@ describe("the quote path the poller calls every tick", () => {
     expect(mainParams.get("symbols")).toBe("VTI");
     expect(mainParams.get("crumb")).toBe("test-crumb");
 
-    // one signal, built once per quote() call and forwarded to every fetch it makes — not a
-    // fresh one per request, and not the constructor's one-per-process-life signal either
+    // one signal per quote() call, forwarded to every fetch it makes — not per-request, not per-process
     for (const { init } of calls) expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(crumbLeg.init.signal).toBe(cookieLeg.init.signal);
     expect(mainCall.init.signal).toBe(cookieLeg.init.signal);
@@ -268,18 +237,14 @@ describe("the quote path the poller calls every tick", () => {
 });
 
 describe("the shared library instance", () => {
-  // both cases need a yahoo-finance2 this file's earlier tests never touched — the module-level
-  // `library` is memoised for the process's life, so a real instance may already be cached by
-  // this point, making "one instance" trivially true regardless of library ??= vs library =.
-  // vi.doMock plus a fresh dynamic import gives each case its own module graph instead.
+  // `library` is memoised per-process — without a fresh module graph (vi.doMock + dynamic import), "one instance" would already be trivially true
   afterEach(() => {
     vi.doUnmock("yahoo-finance2");
     vi.resetModules();
   });
 
   it("constructs the library with versionCheck: false, never the library's own default", async () => {
-    // default is true and, on the library's options-validation-failure path only, fetches
-    // registry.npmjs.org — a process with no business resolving npm's hostname must never risk that
+    // default true fetches registry.npmjs.org on the options-validation-failure path — this process has no business resolving that
     vi.resetModules();
     const seenOptions: unknown[] = [];
     vi.doMock("yahoo-finance2", () => ({
@@ -300,8 +265,7 @@ describe("the shared library instance", () => {
   });
 
   it("builds one shared instance across calls, memoised rather than rebuilt", async () => {
-    // a fresh instance per call would redo the cookie/crumb handshake on every history call —
-    // the burst an unofficial, rate-limiting endpoint punishes
+    // a fresh instance per call would redo the cookie/crumb handshake every time — punished by rate limiting
     vi.resetModules();
     let constructions = 0;
     vi.doMock("yahoo-finance2", () => ({

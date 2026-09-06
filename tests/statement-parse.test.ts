@@ -1,9 +1,4 @@
-/**
- * Applying a mapping to a file's rows (spec 0004, step 02). Fixture tests run whole
- * brokerage-shaped exports through readCsv + parseStatement together, since a real
- * institution's file is the point of a pure parser. Inline tests pin each contract rule one
- * row at a time. Every money/quantity assertion is an exact decimal string (money.test.ts's reasoning).
- */
+// applying a mapping to a file's rows (spec 0004, step 02) — fixtures run whole exports, inline tests pin one rule per row
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -14,7 +9,6 @@ import { parseStatement, type StatementMapping } from "~/lib/statement";
 const fixture = (name: string): Uint8Array =>
   readFileSync(fileURLToPath(new URL(`./fixtures/statements/${name}`, import.meta.url)));
 
-/** A mapping with the flags at their commonest values, columns always stated. */
 const mapping = (
   over: Partial<StatementMapping> & { columns: StatementMapping["columns"] },
 ): StatementMapping => ({
@@ -45,8 +39,6 @@ describe("parseStatement on the fixtures", () => {
 
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(4);
-    // footer disclaimers (including the quoted sentence full of commas) never reach positions —
-    // not worth reporting either, their rows carry nothing under symbol
     expect(parsed.skipped).toEqual([]);
 
     const aapl = parsed.positions[0];
@@ -56,7 +48,7 @@ describe("parseStatement on the fixtures", () => {
     expect(aapl?.costBasisPerShare).toBe("170.6600");
     expect(aapl?.accountNumber).toBe("Z12-345678");
 
-    // quoted quantity with thousands separator; n/a basis lands as null, never zero (would report free money)
+    // n/a basis lands as null, never zero — zero would report free money
     const spaxx = parsed.positions[3];
     expect(spaxx?.quantity).toBe("2450.10");
     expect(spaxx?.costBasisPerShare).toBeNull();
@@ -84,15 +76,14 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(3);
 
-    // $8,533.00 over 50 shares.
+    // $8,533/50=170.66; $9,875.50/25=395.02
     expect(parsed.positions[0]?.costBasisPerShare).toBe("170.6600");
-    // $9,875.50 over 25.
     expect(parsed.positions[1]?.costBasisPerShare).toBe("395.0200");
-    // short position: parenthesised total over negative quantity — sign stays in the quantity, price stays positive
+    // parenthesised total means negative — sign stays in the quantity, price stays positive
     expect(parsed.positions[2]?.quantity).toBe("-10");
     expect(parsed.positions[2]?.costBasisPerShare).toBe("26.5000");
 
-    // cash/total lines name something but state no quantity — skipped and reported so the review screen can say so
+    // named but no quantity — skipped and reported, not a problem
     expect(parsed.skipped).toEqual([
       { row: 6, instrument: "Cash & Cash Investments" },
       { row: 7, instrument: "Account Total" },
@@ -110,11 +101,11 @@ describe("parseStatement on the fixtures", () => {
 
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(3);
-    // no cost basis column mapped — null for every row, which Holdings' coverages already report honestly (§8.2)
+    // no basis column mapped — null for every row (§8.2)
     for (const position of parsed.positions) {
       expect(position.costBasisPerShare).toBeNull();
     }
-    // collective trusts have no ticker — the fund name is the instrument string resolution will see
+    // no ticker on a collective trust — fund name is the instrument string
     expect(parsed.positions[0]?.instrument).toBe("Vanguard Target Retirement 2045 Trust II");
     expect(parsed.positions[0]?.quantity).toBe("412.51230000");
 
@@ -139,18 +130,16 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(2);
 
-    // 100+200+112.5 lots, basis weighted by quantity: (100×95.10 + 200×110.25 + 112.5×123.40)
-    // / 412.5 = 110.16363…, rounded half away from zero at numeric(20,4)
+    // (100×95.10 + 200×110.25 + 112.5×123.40)/412.5 = 110.16363…, rounded half away from zero
     const vtsax = parsed.positions[0];
     expect(vtsax?.quantity).toBe("412.50000000");
     expect(vtsax?.costBasisPerShare).toBe("110.1636");
     expect(vtsax?.row).toBe(1);
 
-    // single-lot fund passes through untouched, at the file's own scale
+    // single-lot fund passes through at the file's own scale, uncombined
     expect(parsed.positions[1]?.quantity).toBe("50.0000");
     expect(parsed.positions[1]?.costBasisPerShare).toBe("72.8000");
 
-    // reported for the review screen to print as its own line, not a count
     expect(parsed.combined).toEqual([
       { instrument: "VTSAX", rowCount: 3, quantity: "412.50000000" },
     ]);
@@ -166,7 +155,6 @@ describe("parseStatement on the fixtures", () => {
       }),
     );
 
-    // a position set holds one row per instrument — the duplicate can't pass silently, named with the row it recurs on
     expect(parsed.problems).toHaveLength(1);
     expect(parsed.problems[0]?.message).toMatch(/"VTSAX" appears on 3 lines/);
     expect(parsed.problems[0]?.row).toBe(2);
@@ -277,7 +265,6 @@ describe("row handling", () => {
 
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(1);
-    // not reported either — a spacer names nothing worth telling the reader
     expect(parsed.skipped).toEqual([]);
   });
 
@@ -297,7 +284,6 @@ describe("row handling", () => {
   });
 
   it("refuses a row with an instrument and an unparseable quantity, naming the row", () => {
-    // a disclaimer line under the symbol column must not become a position — and must not vanish either
     const parsed = parseStatement(
       [
         ["Symbol", "Qty"],

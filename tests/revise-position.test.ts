@@ -1,10 +1,4 @@
-/**
- * Correcting one position on the Holdings table (DESIGN.md §5.4). Against real Postgres —
- * every rule at risk lives in one statement. Grouped around the silent failures: editing in
- * place (every past figure moves), a set holding only the corrected row (rest reads as sold),
- * landing behind the statement it corrects (changes nothing), turning an asset into a debt
- * (net worth moves by twice the figure). Every money/quantity assertion is an exact decimal string.
- */
+// revisePosition — one-off correction as an appended position_set (DESIGN.md §5.4), against real Postgres
 import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
@@ -16,10 +10,8 @@ import { ALL_OWNERS } from "../app/lib/owner-filter.ts";
 
 afterAll(closeTestDatabase);
 
-// today, the way the module under test reads it
 const today = (): string => new Date().toISOString().slice(0, 10);
 
-// the refusal a call produced, or a failure if it did not refuse
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
     await run();
@@ -54,7 +46,7 @@ describe("revisePosition", () => {
       expect(written.asOf).toBe(today());
 
       const [holding] = await currentHoldings(ALL_OWNERS, db);
-      // 120 × 250 = 30,000, against 120 × 210 = 25,200 of basis
+      // 120×250 = 30,000; basis 120×210 = 25,200
       expect(holding?.quantity).toBe("120.00000000");
       expect(holding?.value).toBe("30000.0000");
       expect(holding?.costBasisPerShare).toBe("210.0000");
@@ -65,8 +57,7 @@ describe("revisePosition", () => {
   it(
     "appends a statement rather than editing one, so no past figure moves",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose }) => {
-      // guards against what an `update holding` invites: the chart reads position sets for
-      // every date it plots, so restating a row in place restates the whole history
+      // history reads position sets per date — an in-place edit would move every chart point behind it
       const account = await seedAccount({ kind: "brokerage" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
       await seedDailyClose({ instrument: vti, date: "2026-06-30", close: "250.0000" });
@@ -81,7 +72,6 @@ describe("revisePosition", () => {
 
       await revisePosition(account.id, vti.id, { quantity: "120", costBasisPerShare: "" }, db);
 
-      // June is still June — the correction speaks from today onward
       expect((await netWorthAt(ALL_OWNERS, "2026-06-30", db)).amount).toBe("25000.0000");
 
       const sets = await db
@@ -98,8 +88,7 @@ describe("revisePosition", () => {
   it(
     "carries every other position in the account forward, rather than recording them as sold",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // §5.2's "a missing row means sold" makes this the sharpest edge: a set holding only the
-      // corrected row is a valid write that wipes the rest of the account with no error
+      // §5.2: a missing row reads as sold, so a set holding only the corrected row wipes the rest with no error
       const account = await seedAccount({ kind: "brokerage" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
       const bnd = await seedInstrument({ symbol: "BND", name: "Vanguard Total Bond" });
@@ -124,13 +113,12 @@ describe("revisePosition", () => {
 
       const byName = new Map(holdings.map((holding) => [holding.instrumentName, holding]));
       expect(byName.get("Vanguard Total Stock Market")?.quantity).toBe("120.00000000");
-      // untouched to the last digit, including the null and the eight decimal places of a fractional trust unit
       expect(byName.get("Vanguard Total Bond")?.quantity).toBe("50.00000000");
       expect(byName.get("Vanguard Total Bond")?.costBasisPerShare).toBeNull();
       expect(byName.get("Target Retirement 2045 Trust II")?.quantity).toBe("12.34567800");
       expect(byName.get("Target Retirement 2045 Trust II")?.costBasisPerShare).toBe("31.4159");
 
-      // 120×250 + 50×70 = 33,500, with the unpriced trust left out rather than counted as zero
+      // 120×250 + 50×70 = 33,500; unpriced trust excluded, not counted as zero
       expect((await accountTotal(account.id, db))?.amount).toBe("33500.0000");
     }),
   );
@@ -138,8 +126,7 @@ describe("revisePosition", () => {
   it(
     "does not land behind a statement dated ahead of today",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // recordedDate allows a statement dated tomorrow (household east of UTC) — a correction
-      // dated today would be outranked by the very sheet it corrects, changing no figure at all
+      // recordedDate allows one day of slack (household east of UTC)
       const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
       const account = await seedAccount({ kind: "brokerage" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
@@ -177,8 +164,7 @@ describe("revisePosition", () => {
       await revisePosition(account.id, vti.id, { quantity: "120", costBasisPerShare: "" }, db);
       await revisePosition(account.id, vti.id, { quantity: "130", costBasisPerShare: "" }, db);
 
-      // undo is a second correction, not a delete — tie-break on a shared as-of date is
-      // created_at then id, same as a re-uploaded statement resolves through
+      // tie-break on a shared as-of date is created_at then id, as a re-uploaded statement resolves
       expect((await currentHoldings(ALL_OWNERS, db))[0]?.quantity).toBe("130.00000000");
       const sets = await db
         .selectFrom("position_set")
@@ -203,7 +189,6 @@ describe("revisePosition", () => {
 
       await revisePosition(account.id, vti.id, { quantity: "0", costBasisPerShare: "" }, db);
 
-      // still a row, so the table still prints it and the editor can still reach it — omitting it would mean "sold"
       const holdings = await currentHoldings(ALL_OWNERS, db);
       expect(holdings).toHaveLength(1);
       expect(holdings[0]?.quantity).toBe("0.00000000");
@@ -223,7 +208,7 @@ describe("revisePosition", () => {
         holdings: [{ instrument: usd, quantity: "-14500.00000000" }],
       });
 
-      // typed the way the table prints it (U+2212, thousands separator) — that's what the box opens containing
+      // typed as the table prints it: U+2212 minus sign, thousands separator
       await revisePosition(loan.id, usd.id, { quantity: "−13,900.50", costBasisPerShare: "" }, db);
 
       expect((await accountTotal(loan.id, db))?.amount).toBe("-13900.5000");
@@ -234,8 +219,7 @@ describe("revisePosition", () => {
   it(
     "refuses to turn something owed into something held",
     withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
-      // why setBalance refuses a sign outright: a debt restated as an asset moves net worth by
-      // twice the loan, reading on every screen as an ordinary correction
+      // a sign flip moves net worth by twice the loan, reading as an ordinary correction
       const usd = await usdInstrument();
       const loan = await seedAccount({ kind: "liability", name: "Chase Auto Loan" });
       await seedPositionSet({
@@ -249,7 +233,6 @@ describe("revisePosition", () => {
       );
       expect(refusal.fieldErrors.quantity).toMatch(/how much rather than which way/);
 
-      // the refusal is the point — debt untouched, no set written
       expect((await accountTotal(loan.id, db))?.amount).toBe("-14500.0000");
       expect(
         await db
@@ -283,8 +266,6 @@ describe("revisePosition", () => {
   it(
     "writes nothing at all for an instrument the account's current statement no longer carries",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // a form left open while a statement was uploaded elsewhere — carrying the new set
-      // forward with no edit would record a correction nobody can find
       const account = await seedAccount({ kind: "brokerage" });
       const vti = await seedInstrument({ symbol: "VTI" });
       const aapl = await seedInstrument({ symbol: "AAPL", name: "Apple" });
@@ -357,9 +338,7 @@ describe("revisePosition", () => {
   it(
     "refuses a cost basis whose product with the quantity the view could not value",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // not a bad write — a successful one no screen can then render. holding_valued casts
-      // quantity*cost_basis to numeric(20,4); both operands fit their columns, only the
-      // product doesn't, and Holdings is the only screen the editor is reachable from
+      // holding_valued casts quantity*cost_basis to numeric(20,4) — both operands fit, only the product doesn't
       const account = await seedAccount({ kind: "brokerage", name: "Fidelity Individual" });
       const vti = await seedInstrument({ symbol: "VTI" });
       await seedQuote({ instrument: vti, price: "250.0000" });
@@ -380,7 +359,6 @@ describe("revisePosition", () => {
       );
       expect(refusal.fieldErrors.costBasisPerShare).toMatch(/larger figure than this application/);
 
-      // proof the refusal was the point: the view still renders
       const holdings = await currentHoldings(ALL_OWNERS, db);
       expect(holdings).toHaveLength(1);
       expect(holdings[0]?.costBasisPerShare).toBeNull();
@@ -390,8 +368,7 @@ describe("revisePosition", () => {
   it(
     "refuses a quantity whose product with the current price the view could not value",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // same overflow, other axis: 12 integer digits is a legal quantity, $700,000 a real
-      // price — the product is not
+      // same overflow, other axis: 12-digit quantity, $700,000 price — the product isn't
       const account = await seedAccount({ kind: "brokerage" });
       const brk = await seedInstrument({ symbol: "BRK-A", name: "Berkshire Hathaway A" });
       await seedQuote({ instrument: brk, price: "700000.0000" });
@@ -413,9 +390,7 @@ describe("revisePosition", () => {
   it(
     "refuses a quantity whose product with the dividend rate the view could not project",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // third axis, unguarded until migration 0006 checked annual_dividend against the other
-      // two — every operand is individually legal, so the older guards wave this through and
-      // the view's third cast raises on every read, with nothing saying why
+      // third axis, unguarded until migration 0006 — operands individually legal, product isn't
       const account = await seedAccount({ kind: "brokerage" });
       const penny = await seedInstrument({ symbol: "PENNY", name: "Penny Income Trust" });
       await seedQuote({
@@ -435,8 +410,6 @@ describe("revisePosition", () => {
       );
       expect(refusal.fieldErrors.quantity).toMatch(/larger annual dividend/);
 
-      // the whole point: the view still answers — before the guard this raised numeric field
-      // overflow, with no screen left to correct the row
       const holdings = await currentHoldings(ALL_OWNERS, db);
       expect(holdings).toHaveLength(1);
       expect(holdings[0]?.quantity).toBe("1.00000000");
@@ -446,7 +419,6 @@ describe("revisePosition", () => {
   it(
     "still records a position the dividend projection can express",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // guard bounds the product only — a real income holding pays a real rate and must stay recordable
       const account = await seedAccount({ kind: "brokerage" });
       const schd = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity" });
       await seedQuote({ instrument: schd, price: "27.5000", annualDividendPerShare: "1.0300" });
@@ -468,7 +440,6 @@ describe("revisePosition", () => {
   it(
     "still accepts a large position that does fit, right up to the edge",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // guard bounds the product only — a genuinely large holding isn't a household with a bug
       const account = await seedAccount({ kind: "brokerage" });
       const vti = await seedInstrument({ symbol: "VTI" });
       await seedQuote({ instrument: vti, price: "250.0000" });
@@ -493,8 +464,6 @@ describe("revisePosition", () => {
   it(
     "refuses a balance typed past the cent, because a cash row's quantity is money",
     withDatabase(async ({ db, seedAccount, seedPositionSet, usdInstrument }) => {
-      // second door onto a bank balance — setBalance refuses this figure too; a row editor
-      // that took it would store $100.1235, a balance no statement can produce
       const usd = await usdInstrument();
       const account = await seedAccount({ kind: "bank", name: "Ally Savings" });
       await seedPositionSet({
@@ -508,7 +477,6 @@ describe("revisePosition", () => {
       );
       expect(refusal.fieldErrors.quantity).toMatch(/recorded to the cent/);
 
-      // fault in a box, so nothing lands — balance and statement are exactly as they were
       expect((await accountTotal(account.id, db))?.amount).toBe("500.0000");
       expect(
         await db
@@ -547,8 +515,7 @@ describe("revisePosition", () => {
   it(
     "leaves a share quantity at its eight places, which is not money and is reported that way",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
-      // the rule the cent check must not spread to — a brokerage really does report a
-      // fractional share to eight places
+      // the cent check must not spread here — a brokerage really reports shares to 8 places
       const account = await seedAccount({ kind: "brokerage" });
       const vti = await seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock Market" });
       await seedQuote({ instrument: vti, price: "250.0000" });
@@ -575,7 +542,6 @@ describe("revisePosition", () => {
   it(
     "raises a not-found for an account id that names nothing",
     withDatabase(async ({ db }) => {
-      // separate from a refusal: a bad figure re-renders the form, a missing row is a 404
       await expect(
         revisePosition("999999999", "1", { quantity: "1", costBasisPerShare: "" }, db),
       ).rejects.toBeInstanceOf(NotFoundError);
@@ -594,13 +560,11 @@ describe("effectiveDate", () => {
   });
 
   it("is the statement's own date when that is still ahead of today", () => {
-    // recordedDate allows exactly one day of slack (household east of UTC) — a correction
-    // dated today would be outranked by the very sheet it corrects
+    // recordedDate allows one day of slack (household east of UTC)
     expect(effectiveDate(tomorrow)).toBe(tomorrow);
   });
 
   it("is the date the editor's note promises, which is why it is exported", () => {
-    // the note under an open row names this before the click — misreporting it would misreport the write's own effect
     expect(effectiveDate(today)).toBe(today);
   });
 });
@@ -629,11 +593,10 @@ describe("currentPosition", () => {
         quantity: "12.34567800",
         costBasisPerShare: "31.4159",
         asOf: "2026-06-30",
-        // null rather than absent — a collective trust nobody quotes is still held, joined left exactly as the view joins it
+        // null, not absent — an unquoted trust is still held, left-joined as the view joins it
         price: null,
-        // the third operand holding_valued multiplies by, for the product guard alone — null for the same reason as price
         annualDividendPerShare: null,
-        // read alongside price because the write needs it: anything but "fixed" is a count, not a sum of money
+        // anything but "fixed" is a count, not a sum of money
         priceSource: "feed",
       });
     }),

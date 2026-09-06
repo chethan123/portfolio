@@ -1,11 +1,4 @@
-/**
- * Transport in front of the worker (spec 0018 §3.3): `ask`, and socketProvider()/socketProbe
- * built on it. No database — a real startWorker on a temp unix socket, a fake Yahoo client per
- * case (price-worker.test.ts's shape); pins the HTTP exchange and batching, never the worker's
- * own protocol. PRICE_WORKER_SOCKET is set once, before any getConfig() call, since it memoises
- * on first use (price-poller.test.ts:37's precedent) — every case but the ENOTDIR one (which
- * needs vi.resetModules() for a fresh path) shares this fixed path.
- */
+// transport in front of the worker (spec 0018 §3.3) — real startWorker on a temp unix socket, fake Yahoo client per case (price-worker.test.ts's shape)
 import { randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import http from "node:http";
@@ -37,7 +30,6 @@ afterEach(async () => {
   currentServer = undefined;
 });
 
-/** Starts a real worker on {@link SOCKET_PATH} with the given fake Yahoo client. */
 async function start(yahoo: YahooClient): Promise<void> {
   currentServer = await startWorker({ socketPath: SOCKET_PATH, yahoo });
 }
@@ -81,9 +73,7 @@ describe("socketProvider().getQuotes", () => {
   });
 
   it("scrubs a refused symbol's newline before it reaches the log, so a forged line stays inert", async () => {
-    // ask's own scrubForLog guard, at its other call site: instrument-resolution.server.ts
-    // accepts any character in a stored symbol, even when the probe was "unavailable" — one
-    // saved with a newline would otherwise forge an operator-visible log line on every refresh
+    // scrubForLog's other call site: instrument-resolution.server.ts accepts any character in a stored symbol — a newline would forge a log line on every refresh
     const seen: string[][] = [];
     await start({
       quote: async (symbols) => {
@@ -168,9 +158,7 @@ describe("socketProvider().getDailyCloses", () => {
   });
 
   it("rejects with ProviderUnreachable, rather than answering no-history, when no worker is listening", async () => {
-    // not start(): nothing listening at SOCKET_PATH is exactly what a dead worker looks like.
-    // isMissingHistory matches on message stems alone, never the error's class — this is the
-    // case that would silently pass if that check ever widened to catch ProviderUnreachable too
+    // isMissingHistory matches on message stems alone, never the error's class — would silently pass if that check ever widened to catch ProviderUnreachable too
     await expect(socketProvider().getDailyCloses("VTI", RANGE, NEW_YORK)).rejects.toBeInstanceOf(
       ProviderUnreachable,
     );
@@ -179,12 +167,7 @@ describe("socketProvider().getDailyCloses", () => {
 
 describe("ask", () => {
   it("keeps the history budget past the worker's own Yahoo watchdog", async () => {
-    // spied, not waited out — a real 30s+ timeout would make this test as slow as the bug it
-    // guards against. AbortSignal.timeout(budgetMs) is ask's one call per request, so its
-    // argument is BUDGET_MS.history. 30_000 here (not an import) is Yahoo's own fetch timeout
-    // default (yahoo-client.ts:135), not PRODUCTION_TIMEOUTS.timeout (Node's idle bound, a
-    // different, only-coincidentally-equal 35s). A shorter budget would always win the race
-    // and report "no answer" where the worker's 504 already carries the reason.
+    // 30_000 here is Yahoo's own fetch timeout default (yahoo-client.ts:135), not PRODUCTION_TIMEOUTS.timeout — a different, coincidentally-equal 35s
     await start({ quote: async () => [], chart: async () => ({}) });
 
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
@@ -220,7 +203,7 @@ describe("ask", () => {
   });
 
   it("throws ProviderUnreachable naming the path and ENOENT when no worker is listening, well within a second", async () => {
-    // no start() — nothing listening at SOCKET_PATH; a slow answer would not fail this fast
+    // nothing listening at SOCKET_PATH — a slow answer would not fail this fast
     const startedAt = Date.now();
 
     let caught: unknown;
@@ -236,14 +219,12 @@ describe("ask", () => {
   });
 
   it("throws ProviderUnreachable naming ENOTDIR when the path's parent is a regular file", async () => {
-    // rule is keyed on the syscall, not a code list — a different code, same branch (EACCES via
-    // a 0600 socket owned by another uid would work too, but isn't runnable in CI)
+    // keyed on the syscall, not a code list — EACCES via a 0600 socket would work too, but isn't runnable in CI
     const parent = join(tmpdir(), `psock-parent-${randomBytes(4).toString("hex")}`);
     writeFileSync(parent, "");
     const badPath = join(parent, "worker.sock");
 
-    // fresh module graph: getConfig() already memoised SOCKET_PATH for every top-level
-    // binding — resetModules + a dynamic re-import gives this case its own config instance
+    // getConfig() already memoised SOCKET_PATH for every top-level binding — resetModules + a dynamic re-import gives this case its own
     vi.resetModules();
     process.env.PRICE_WORKER_SOCKET = badPath;
     const { ask: freshAsk } = await import("~/lib/provider-socket.server");
@@ -254,8 +235,7 @@ describe("ask", () => {
     } catch (error) {
       caught = error;
     } finally {
-      // shared ask binding is already memoised and unaffected; restoring the env var keeps the
-      // process honest for anything else reading it directly
+      // shared ask binding is already memoised and unaffected — restores the env var for anything else reading it directly
       process.env.PRICE_WORKER_SOCKET = SOCKET_PATH;
     }
 
@@ -264,10 +244,8 @@ describe("ask", () => {
   });
 
   it("does not treat a mid-stream read error as ProviderUnreachable", async () => {
-    // rule is keyed on syscall === "connect" and nothing broader — a mid-stream ECONNRESET
-    // carries syscall: "read" and must reach the caller as a plain, ledgered failure, never
-    // abort the batch as if no worker were reachable. A real TCP reset isn't reproducible over
-    // a unix socket here, so this synthesises the exact error shape on the real request.
+    // keyed on syscall === "connect" only — a mid-stream ECONNRESET carries syscall: "read" and must reach the caller as a plain failure, not abort the batch
+    // a real TCP reset isn't reproducible over a unix socket, so this synthesises the exact error shape
     await start({
       // never resolves — nothing here should settle the promise before the synthetic error does
       quote: () => new Promise<never>(() => undefined),
@@ -352,15 +330,11 @@ describe("ask", () => {
   it(
     "rejects, well within its budget, when the peer destroys the socket after the headers and before the declared body completes",
     async () => {
-      // not start(): sendJson writes the whole answer in one res.end(), which can never
-      // reproduce a death mid-body. Needs a raw server to put the socket in the exact state a
-      // worker killed mid-answer (OOM kill, restart) leaves it in: headers sent, part of a
-      // declared body written, connection destroyed with no FIN/RST courtesy.
+      // sendJson writes the whole answer in one res.end(), which can never reproduce a death mid-body — a raw server puts the socket in a worker-OOM-killed shape
       currentServer = http.createServer((req, res) => {
         res.writeHead(200, { "content-type": "application/json", "content-length": "1000" });
         res.write("x".repeat(500));
-        // setImmediate, not sync destroy — a same-tick destroy surfaces as a plain "socket hang
-        // up" error instead, never exercising the gap this test pins
+        // setImmediate, not sync destroy — a same-tick destroy surfaces as a plain "socket hang up" instead, never exercising the gap this pins
         setImmediate(() => res.socket?.destroy());
       });
       await new Promise<void>((resolve) => currentServer!.listen(SOCKET_PATH, resolve));
@@ -370,17 +344,14 @@ describe("ask", () => {
         "the worker's connection closed before the quotes answer completed",
       );
 
-      // well under the 5s budget: req's own close settles the promise, never the budget
-      // expiring — this would time out at 5s if the fix regressed
+      // well under the 5s budget — this would time out at 5s if the fix regressed
       expect(Date.now() - startedAt).toBeLessThan(1_000);
     },
     10_000,
   );
 
   it("scrubs a control character out of a non-200 error before it becomes the rejection's message", async () => {
-    // JSON.stringify escapes this on the wire, but this is the first thing under app/ that
-    // JSON.parses a worker error body back — a forged line would otherwise print as three
-    // physical lines wherever this Error's message lands
+    // first thing under app/ that JSON.parses a worker error body back — a forged line would otherwise print as three physical lines wherever it lands
     await start({
       quote: async () => {
         throw new Error("boom\nPrice worker: forged line\nmore");
@@ -399,9 +370,7 @@ describe("ask", () => {
   });
 
   it("caps a non-200 error's length at 1000 characters", async () => {
-    // raw server, not start(): the real worker's providerErrorText already cuts to this limit
-    // before the wire, so a fake YahooClient throwing something huge would only prove the
-    // worker's own cap, never this reading side's — a compromised worker skips its own cap
+    // raw server: the real worker's providerErrorText already cuts to this limit before the wire — a fake client would only prove the worker's cap, not this side's
     currentServer = http.createServer((req, res) => {
       res.writeHead(502, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "x".repeat(300_000) }));
@@ -419,9 +388,7 @@ describe("ask", () => {
   });
 
   it("rejects, rather than silently answering as if nothing came back, when a 200 body is not valid JSON", async () => {
-    // raw server again: sendJson always writes valid JSON, so only a server outside the
-    // worker's protocol can produce this. Swallowing it silently would read a quotes batch
-    // back as empty or a history call as no-history — neither is true: something answered
+    // sendJson always writes valid JSON — swallowing this silently would read a batch back as empty when something did in fact answer
     currentServer = http.createServer((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end("not json");
@@ -434,10 +401,7 @@ describe("ask", () => {
   });
 
   it("rejects an empty body on a 200, but still takes the status-only path when a non-200 has one", async () => {
-    // two different meanings for the same empty wire shape: a 200 with nothing behind it is
-    // the same lie an unparseable body is (a drifted undefined result rendering as no body).
-    // A non-200 with nothing behind it is the legitimate shape of a refusal Node itself writes
-    // (its clientError path) — that half must still resolve via the ordinary status fallback.
+    // a 200 with nothing behind it is the same lie an unparseable body is; a non-200 empty body is Node's own clientError shape, resolving via the status fallback
     const empty200 = http.createServer((req, res) => {
       res.writeHead(200);
       res.end();
@@ -514,7 +478,7 @@ describe("socketProbe", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const verdicts = await socketProbe(["VTI", "VXUS", "BND"]);
 
-      // one bad batch costs every symbol in it its guard, and the only trace is this one line
+      // one bad batch costs every symbol its guard — the only trace is this one warn
       expect(warn).toHaveBeenCalledTimes(1);
       warn.mockRestore();
 
@@ -549,9 +513,7 @@ describe("socketProbe", () => {
   });
 
   it("keeps the second chunk's verdict, non-usd included, when only the first chunk's request throws", async () => {
-    // first chunk's ask throws immediately and the second still runs and keeps its own verdict
-    // — proof socketProbe has no `break` after a failed batch. A real timeout on the last chunk
-    // could never pin this (nothing after it to skip), so a fast thrown failure is enough here.
+    // proof socketProbe has no `break` after a failed batch — a real timeout on the last chunk couldn't pin this, so a thrown failure instead
     let call = 0;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await start({
@@ -571,17 +533,14 @@ describe("socketProbe", () => {
 
     expect(verdicts.get("S0")).toEqual({ status: "unavailable" });
     expect(verdicts.get("S99")).toEqual({ status: "unavailable" });
-    // second chunk's own verdict, not the trailing default — the only way to tell "ran and
-    // answered" from "skipped by a break", since both land the first chunk's symbols on unavailable
+    // second chunk's own verdict, not the trailing default — the only way to tell "ran and answered" from "skipped by a break"
     expect(verdicts.get("S100")).toEqual({ status: "non-usd", currency: "GBP" });
   });
 });
 
 describe("socketProvider()'s own construction", () => {
   it("reads no configuration until a method is actually called", async () => {
-    // .not.toThrow() alone can't tell "reads no config" from "reads it and happens not to
-    // throw" — spying on the getConfig binding provider-socket.server.ts imports is what
-    // actually pins "not called yet" against "called once a method runs"
+    // .not.toThrow() alone can't tell "reads no config" from "reads it and happens not to throw" — spying on the import pins the real claim
     const getConfigSpy = vi.spyOn(configModule, "getConfig");
 
     let provider: PriceProvider | undefined;

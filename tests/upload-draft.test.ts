@@ -1,13 +1,4 @@
-/**
- * The upload draft's lifecycle (DESIGN.md §5.1, docs/specs/0004-ingest.md).
- * Against real Postgres — the risk is in the database: bytes surviving the
- * round trip, the sweep deleting exactly the right rows, the join turning a
- * closed account's draft into a 404. Grouped around the quiet failures: a
- * stale draft outliving its day or a fresh one swept with it; a draft
- * staged against an account no statement may land in; a dead draft URL
- * surfacing as anything but the expired page — a driver error on "abc" is a
- * 500 wearing a bookmark.
- */
+// upload draft lifecycle (DESIGN.md §5.1, docs/specs/0004-ingest.md) — against real Postgres, since the risk is in the database
 import { afterAll, describe, expect, it } from "vitest";
 
 import { sql } from "kysely";
@@ -22,7 +13,6 @@ afterAll(closeTestDatabase);
 
 const CSV = new TextEncoder().encode("Symbol,Quantity\nVTI,100\n");
 
-// the refusal a call produced, or a failure if it did not refuse
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
     await run();
@@ -46,8 +36,6 @@ describe("createDraft", () => {
 
       expect(draft.accountId).toBe(account.id);
 
-      // row holds everything a later step needs — bytes byte-exact, progress markers still
-      // null since no step has been passed
       const stored = await requireDraft(draft.id, db);
       expect(stored.filename).toBe("Positions_2026-06-30.csv");
       expect(stored.accountName).toBe(account.name);
@@ -60,10 +48,6 @@ describe("createDraft", () => {
   it(
     "keeps a draft exactly 24 hours old and sweeps one a second older",
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
-      // "older than 24 hours" is a strict comparison, pinned at the second — deterministic
-      // because now() is fixed for the whole test transaction, so the backdate and the sweep's
-      // cutoff read the same instant. createDraft below also proves the sweep has no scheduler:
-      // staging the next upload is what clears the abandoned one.
       const account = await seedAccount({ kind: "brokerage" });
       const onTheLine = await seedUploadDraft({ account });
       const justPast = await seedUploadDraft({ account });
@@ -131,7 +115,6 @@ describe("requireDraft", () => {
 
       await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
 
-      // closed through the domain function, exactly as Settings closes one
       await closeAccount(account.id, { confirmClose: "true" }, db);
 
       await expect(requireDraft(draft.id, db)).rejects.toThrow(NotFoundError);

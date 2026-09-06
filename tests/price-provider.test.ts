@@ -1,9 +1,4 @@
-/**
- * The boundary between an unofficial API and a `numeric` column — everything here exercises
- * `toProviderQuote`, translating Yahoo's JSON into decimal strings Postgres can take directly
- * (DESIGN.md §6.1). The yield cases matter most: a hundredfold error in `yield_pct` produces
- * an Income page where every figure looks plausible and the total is nonsense, silently.
- */
+// toProviderQuote translates Yahoo's JSON into decimal strings Postgres can take directly (DESIGN.md §6.1)
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,8 +19,7 @@ import { startWorker } from "../server/price-worker.ts";
 import type { ChartRequest, YahooClient } from "../server/yahoo-client.ts";
 import type http from "node:http";
 
-// socketProvider()/socketProbe read the socket path through getConfig(), memoised on first
-// read — set before any test can reach it (price-poller.test.ts:37's precedent for DATABASE_URL)
+// getConfig() memoises its first read — set before any test can reach it (price-poller.test.ts:37's precedent)
 const SOCKET_PATH = join(tmpdir(), `pp-${randomBytes(4).toString("hex")}.sock`);
 process.env.PRICE_WORKER_SOCKET = SOCKET_PATH;
 
@@ -37,12 +31,10 @@ afterEach(async () => {
   currentServer = undefined;
 });
 
-/** Starts a real worker on {@link SOCKET_PATH} with the given fake Yahoo client. */
 async function start(yahoo: YahooClient): Promise<void> {
   currentServer = await startWorker({ socketPath: SOCKET_PATH, yahoo });
 }
 
-/** The fetch time, for the fallback path. Fixed so assertions can name it. */
 const FETCHED_AT = new Date("2026-06-05T18:00:00Z");
 
 const quoteFor = (raw: Record<string, unknown>) => toProviderQuote(raw, FETCHED_AT);
@@ -56,20 +48,17 @@ describe("reading a price", () => {
   });
 
   it("carries the provider's own quote type through unchanged", () => {
-    // Theirs, not ours — §4.1 stores it unconstrained for exactly this reason.
     const quote = quoteFor({ symbol: "VTSAX", regularMarketPrice: 130, quoteType: "MUTUALFUND" });
 
     expect(quote?.quoteType).toBe("MUTUALFUND");
   });
 
   it("declines a payload with no price rather than inventing one", () => {
-    // Yahoo drops delisted/unknown symbols; caller keeps the last known price and marks it stale
     expect(quoteFor({ symbol: "DELISTED", currency: "USD" })).toBeNull();
   });
 
   it("drops a price at the ceiling rather than clamping it", () => {
-    // quote.price is numeric(20,4); 16 integer digits overflows and would abort the whole
-    // refresh transaction. Dropped, not clamped — same as no price arriving at all.
+    // quote.price is numeric(20,4); 16 integer digits overflows and would abort the whole refresh transaction
     expect(quoteFor({ symbol: "GARBAGE", regularMarketPrice: 1e16 })).toBeNull();
   });
 
@@ -85,7 +74,6 @@ describe("reading a price", () => {
   });
 
   it("keeps a price that sits just below the ceiling", () => {
-    // ceiling bounds only what can't be stored — rounding honest data away would be the worse bug
     const quote = quoteFor({ symbol: "WIDE", regularMarketPrice: 9999999999999998 });
 
     expect(quote?.price).toBe("9999999999999998.0000");
@@ -109,8 +97,7 @@ describe("the yield unit hazard", () => {
   });
 
   it("ignores trailingAnnualDividendYield even when it is the only yield offered", () => {
-    // library's doc comment calls this a percentage, but the value is a fraction — reading it
-    // would put 0.0234 where other rows hold 2.34
+    // library's doc comment calls this a percentage, but the value is a fraction: 0.0234 where other rows hold 2.34
     const quote = quoteFor({
       symbol: "AMBIGUOUS",
       regularMarketPrice: 100,
@@ -121,7 +108,6 @@ describe("the yield unit hazard", () => {
   });
 
   it("derives the yield from the rate and the price when no percentage is given", () => {
-    // $2.50/$100 = 2.5%; both operands share the quote's currency, so the unit can't be mistaken
     const quote = quoteFor({
       symbol: "DIVIDEND",
       regularMarketPrice: 100,
@@ -135,12 +121,11 @@ describe("the yield unit hazard", () => {
   it("reports no yield rather than dividing by zero", () => {
     const quote = quoteFor({ symbol: "ZERO", regularMarketPrice: 0, dividendRate: 2.5 });
 
-    // a zero price is not a price at all — no quote to carry a yield
     expect(quote).toBeNull();
   });
 
   it("prefers dividendYield when both yield fields disagree", () => {
-    // both fields present, mutually inconsistent — a future edit reaching for the fraction gets 0.0234 instead of 2.34
+    // a future edit reaching for the fraction field here gets 0.0234 instead of 2.34
     const quote = quoteFor({
       symbol: "BOTH",
       regularMarketPrice: 100,
@@ -152,27 +137,24 @@ describe("the yield unit hazard", () => {
   });
 
   it("drops a derived yield too large for the column rather than losing the batch", () => {
-    // $2.50/$0.02 = 12500%, over yield_pct's numeric(10,6) ceiling — an overflow would abort
-    // the whole refresh transaction
+    // $2.50/$0.02 = 12500%, over yield_pct's numeric(10,6) ceiling
     const quote = quoteFor({ symbol: "DISTRESSED", regularMarketPrice: 0.02, dividendRate: 2.5 });
 
     expect(quote?.price).toBe("0.0200");
     expect(quote?.yieldPct).toBeNull();
-    // per-share amount stays real — 2.5×10^12 at the widest legal quantity is nowhere near the 10^16 ceiling
+    // 2.5×10^12 at the widest legal quantity is nowhere near annualDividendPerShare's 10^16 ceiling
     expect(quote?.annualDividendPerShare).toBe("2.5000");
   });
 
   it("drops a per-share rate too large for its own column, as it does a yield", () => {
-    // migration 0006's asymmetry: yield_pct has been bounded since added; annual_dividend_per_share
-    // is written straight through at numeric(20,4) in the same transaction — an unbounded figure
-    // aborts the whole refresh. 16 integer digits is the first it can't hold.
+    // migration 0006's asymmetry: yield_pct is bounded, annual_dividend_per_share isn't —
+    // an unbounded figure here aborts the whole refresh
     const quote = quoteFor({
       symbol: "GARBAGE",
       regularMarketPrice: 100,
       dividendRate: 1e16,
     });
 
-    // one unusable field doesn't discard a quote
     expect(quote?.price).toBe("100.0000");
     expect(quote?.annualDividendPerShare).toBeNull();
     // null, never clamped — a clamped rate would read as a real projected payout on Holdings
@@ -180,8 +162,6 @@ describe("the yield unit hazard", () => {
   });
 
   it("keeps a rate that sits just inside the column", () => {
-    // The ceiling bounds what cannot be stored and nothing else. A guard that
-    // rounded honest data away would be the more expensive bug of the two.
     const quote = quoteFor({
       symbol: "WIDE",
       regularMarketPrice: 1e15,
@@ -192,7 +172,7 @@ describe("the yield unit hazard", () => {
   });
 
   it("reads an ETF's dividend from trailingAnnualDividendRate", () => {
-    // ETF payloads carry no dividendRate (equities/mutual funds only) — reading just it nulls every ETF's dividend
+    // ETF payloads carry no dividendRate (equities/mutual funds only)
     const quote = quoteFor({
       symbol: "VTI",
       quoteType: "ETF",
@@ -201,12 +181,10 @@ describe("the yield unit hazard", () => {
     });
 
     expect(quote?.annualDividendPerShare).toBe("3.3900");
-    // derives the yield from the same figure: 3.39 / 271.5 * 100
     expect(quote?.yieldPct).toBe("1.248619");
   });
 
   it("reports no yield when the provider offers neither field", () => {
-    // null, never zero — §8.2: zero would claim the fund pays nothing rather than that nobody said
     const quote = quoteFor({ symbol: "GROWTH", regularMarketPrice: 42 });
 
     expect(quote?.yieldPct).toBeNull();
@@ -216,7 +194,6 @@ describe("the yield unit hazard", () => {
 
 describe("the currency guard", () => {
   it("refuses a quote that is not in USD", () => {
-    // §6.1: stops a foreign listing summing GBP silently into a USD total — no column stores the difference
     expect(() => quoteFor({ symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBP" })).toThrow(
       CurrencyRefused,
     );
@@ -234,7 +211,6 @@ describe("the currency guard", () => {
   });
 
   it("accepts a quote whose currency is absent, since USD is the only thing stored", () => {
-    // refusing on absent currency would stop pricing an instrument over a field nobody promised
     expect(quoteFor({ symbol: "VTI", regularMarketPrice: 271.5 })?.price).toBe("271.5000");
   });
 });
@@ -258,7 +234,6 @@ describe("the instant a price was struck", () => {
   });
 
   it("falls back to the fetch time rather than inventing a trading day", () => {
-    // safe not lossy: "now" is at worst hours late on a NAV, never files under a day that didn't trade
     const quote = quoteFor({
       symbol: "VTI",
       regularMarketPrice: 271.5,
@@ -272,7 +247,7 @@ describe("the instant a price was struck", () => {
     const struck = new Date("2026-06-05T20:00:00Z");
     const quote = quoteFor({ symbol: "VTI", regularMarketPrice: 271.5, regularMarketTime: struck });
 
-    // two facts (ADR-0006) — losing either makes an evening NAV indistinguishable from a morning fetch of it
+    // ADR-0006 — losing either fact makes an evening NAV indistinguishable from a morning fetch of it
     expect(quote?.asOf).toEqual(struck);
     expect(quote?.fetchedAt).toEqual(FETCHED_AT);
   });
@@ -284,7 +259,7 @@ describe("the raw entry kept for the archive", () => {
       symbol: "VTI",
       regularMarketPrice: 271.5,
       currency: "USD",
-      // neither field is in the schema above — the archive exists for what the typed parse throws away (ADR-0006)
+      // neither field is in the schema (ADR-0006: the archive exists for what the typed parse throws away)
       marketState: "REGULAR",
       fiftyTwoWeekHigh: 280.1,
     };
@@ -293,7 +268,6 @@ describe("the raw entry kept for the archive", () => {
   });
 
   it("archives nothing for an entry it refused, because there is no quote to archive it against", () => {
-    // stored only when the typed parse succeeded — a shape change stays a refusal, not a stored surprise
     expect(quoteFor({ nothing: "useful" })).toBeNull();
     expect(quoteFor({ symbol: "DELISTED", currency: "USD" })).toBeNull();
   });
@@ -301,7 +275,7 @@ describe("the raw entry kept for the archive", () => {
 
 describe("probeVerdicts — the verdict logic a batched probe answers with", () => {
   it("lands an ok verdict on the asked symbol across a case difference", () => {
-    // verdict keys on what was asked, not the provider's echoed spelling (refreshQuotes's own matching rule)
+    // keys on what was asked, not the provider's echoed spelling
     const verdicts = probeVerdicts(
       ["vti"],
       [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" }],
@@ -312,7 +286,6 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("answers both spellings when one ticker was asked for twice", () => {
-    // two statement rows can spell one ticker two ways — batched, one entry must serve both asked symbols
     const verdicts = probeVerdicts(
       ["vti", "VTI"],
       [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" }],
@@ -338,7 +311,7 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("leaves a symbol unavailable when the only entry names a ticker nobody asked about", () => {
-    // batching's new rule: one answer must not be spent on whichever symbol was asked first
+    // batching's rule: one answer must not be spent on whichever symbol was asked first
     const verdicts = probeVerdicts(
       ["VTI", "VWRL"],
       [{ symbol: "ZZZ", regularMarketPrice: 1, currency: "GBp" }],
@@ -354,7 +327,6 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("matches an entry whose own spelling differs in case from the symbol asked", () => {
-    // match key taken on both sides — the feed's own casing still answers the symbol we asked
     const verdicts = probeVerdicts(
       ["VTI"],
       [{ symbol: "vti", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" }],
@@ -384,9 +356,7 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
 });
 
 describe("probing symbols at creation time", () => {
-  // creation-time half of the currency guard (0004). socketProbe dials the worker — a real one
-  // per case on SOCKET_PATH, closed by the shared afterEach. `chart` exists only so the fake
-  // satisfies YahooClient's shape.
+  // `chart` exists only so the fake satisfies YahooClient's shape — socketProbe never calls it
   const clientAnswering = (quote: (symbols: string[]) => Promise<unknown>): YahooClient => ({
     quote,
     chart: () => {
@@ -401,7 +371,6 @@ describe("probing symbols at creation time", () => {
 
     const verdicts = await socketProbe(["VTI"]);
 
-    // null, not a guess — the column holds the provider's own vocabulary or nothing
     expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
   });
 
@@ -418,7 +387,7 @@ describe("probing symbols at creation time", () => {
   });
 
   it("carries the provider's currency when the quote is not in USD", async () => {
-    // must not flatten to "unavailable" — why this can't be built on getQuotes, where a refusal is just an absent quote
+    // must not flatten to "unavailable" — can't be built on getQuotes, where a refusal is just an absent quote
     await start(
       clientAnswering(async () => [{ symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" }]),
     );
@@ -429,8 +398,6 @@ describe("probing symbols at creation time", () => {
   });
 
   it("answers unavailable for a symbol the provider does not know", async () => {
-    // Yahoo drops unknown symbols entirely; creation proceeds and the next refresh marks it
-    // stale, like any symbol that stops quoting
     await start(clientAnswering(async () => []));
 
     const verdicts = await socketProbe(["MISTYPED"]);
@@ -439,8 +406,7 @@ describe("probing symbols at creation time", () => {
   });
 
   it("answers unavailable for every symbol asked rather than throwing when the provider fails", async () => {
-    // provider error/timeout must not block creation (0004) — probe never throws; worker's
-    // 502 becomes "unavailable" for the whole batch
+    // provider error/timeout must not block creation (0004) — probe never throws
     await start(
       clientAnswering(async () => {
         throw new Error("socket hang up");
@@ -454,7 +420,6 @@ describe("probing symbols at creation time", () => {
   });
 
   it("answers unavailable for a payload that is not even a list", async () => {
-    // unofficial endpoint can change shape — an unrecognized payload is a provider failure, not a refusal reason
     await start(clientAnswering(async () => ({ quotes: [] })));
 
     const verdicts = await socketProbe(["VTI"]);
@@ -494,17 +459,14 @@ describe("probing symbols at creation time", () => {
 
 const NEW_YORK = "America/New_York";
 
-// range wide enough that nothing in these payloads falls outside it
 const RANGE: HistoryRange = { from: "2024-06-01", until: "2024-12-31" };
 
-// daily bar stamped at session open (13:30Z = 09:30 NY for June) — spelled out, not defaulted,
-// since a bar's whole meaning is its day
+// 13:30Z = 09:30 NY (June) — spelled out, not defaulted, since a bar's whole meaning is its day
 const bar = (date: string, close: number | null) => ({
   date: new Date(`${date}T13:30:00Z`),
   close,
 });
 
-// a split as the library hands it back in return:"array" mode
 const split = (date: string, numerator: number, denominator: number) => ({
   date: new Date(`${date}T13:30:00Z`),
   numerator,
@@ -527,7 +489,6 @@ const historyOf = (
   range: HistoryRange = RANGE,
 ) => toProviderHistory(chartOf(payload), range, NEW_YORK);
 
-// closes of an ok answer, or a failure naming what came back instead
 function closesOf(history: ReturnType<typeof toProviderHistory>) {
   if (history.status !== "ok") throw new Error(`expected closes, got ${history.status}`);
   return history.closes;
@@ -537,7 +498,6 @@ describe("reading a day of history", () => {
   it("returns a close as a decimal string at scale 4, never a number", () => {
     const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 271.5)] }));
 
-    // toEqual is type-strict — a number 271.5 wouldn't match the string
     expect(closes).toEqual([{ date: "2024-06-07", close: "271.5000" }]);
   });
 
@@ -566,8 +526,7 @@ describe("reading a day of history", () => {
   });
 
   it("drops a bar before the range's start and keeps the day inside it", () => {
-    // mirror of the until cut — a bar before range.from would insert-where-absent and
-    // permanently satisfy the gap predicate
+    // a bar before range.from would insert-where-absent and permanently satisfy the gap predicate
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-05-31", 10), bar("2024-06-07", 11)] }, {
         from: "2024-06-01",
@@ -579,8 +538,7 @@ describe("reading a day of history", () => {
   });
 
   it("keeps a bar dated exactly at the range's start", () => {
-    // range.from = first-held minus the 7-day lead; an exclusive floor would drop the
-    // gap-closing bar and record a fill while the gap stays open
+    // an exclusive floor would drop the gap-closing bar and record a fill while the gap stays open
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-06-01", 9), bar("2024-06-07", 11)] }, {
         from: "2024-06-01",
@@ -595,8 +553,7 @@ describe("reading a day of history", () => {
   });
 
   it("judges a bar against its market date, not the instant's UTC date", () => {
-    // 01:00Z on 06-01 is the evening of 05-31 in NY — UTC-date comparison would wrongly keep
-    // it; written out since `bar` can't express this hour
+    // 01:00Z on 06-01 is the evening of 05-31 in NY — a UTC-date comparison would wrongly keep it
     const closes = closesOf(
       historyOf({ quotes: [{ date: new Date("2024-06-01T01:00:00Z"), close: 9 }, bar("2024-06-07", 11)] }, {
         from: "2024-06-01",
@@ -628,8 +585,7 @@ describe("reading a day of history", () => {
   });
 
   it("skips a close too small to render as anything but zero", () => {
-    // >0 isn't enough — toFixed(4) rounds under half a ten-thousandth to "0.0000", valuing
-    // the holding at nothing, permanently (insert-where-absent)
+    // toFixed(4) rounds under half a ten-thousandth to "0.0000" — would value the holding at nothing, permanently
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-06-07", 0.000049), bar("2024-06-10", 12)] }),
     );
@@ -645,7 +601,6 @@ describe("reading a day of history", () => {
   });
 
   it("refuses a currency it cannot read rather than taking it for an absent one", () => {
-    // worst guess here would sum a foreign listing silently into a USD net worth
     expect(
       toProviderHistory(
         { meta: { currency: 123 }, quotes: [bar("2024-06-07", 10)] },
@@ -666,7 +621,6 @@ describe("reading a day of history", () => {
   });
 
   it("refuses a history quoted in a currency this instance cannot hold", () => {
-    // checked before any figure is read — prevents GBP silently summing into a USD net worth
     expect(historyOf({ currency: "GBP", quotes: [bar("2024-06-07", 271.5)] })).toEqual({
       status: "non-usd",
       currency: "GBP",
@@ -701,7 +655,6 @@ describe("reading a day of history", () => {
   });
 
   it("skips a bar whose timestamp cannot be read, rather than filing it under today", () => {
-    // unlike a quote, whose fallback to fetch time is the lesser error — a bar's whole meaning is its day
     const history = toProviderHistory(
       {
         meta: { currency: "USD" },
@@ -717,8 +670,6 @@ describe("reading a day of history", () => {
 
 describe("un-adjusting the closes Yahoo restates through splits", () => {
   // figures chosen to be checkable by eye; asserted as the resulting close, not a factor
-  // (which could pass either arithmetic direction)
-
   it("multiplies a pre-split close back by the split's ratio", () => {
     const closes = closesOf(
       historyOf({
@@ -841,8 +792,6 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
 });
 
 describe("asking the worker for one symbol's history", () => {
-  // socketProvider() dials the worker — a real one per case on SOCKET_PATH, closed by the
-  // shared afterEach; fake client still shapes both methods like yahoo-finance2
   const clientCharting = (
     chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
   ): YahooClient => ({ quote: async () => [], chart });

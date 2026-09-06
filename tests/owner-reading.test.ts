@@ -1,8 +1,4 @@
-/**
- * `ownerReading` is the one place all four owner-filter screens settle an address and narrow
- * `reading` — a bug here reaches all of them at once. The settle chain is the sharpest risk
- * (a non-fixed-point spelling loops forever), so this file follows it to the end.
- */
+// ownerReading is the one place all four owner-filter screens settle an address and narrow `reading` — a bug here reaches all of them
 import { afterAll, describe, expect, it } from "vitest";
 
 import { isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
@@ -18,7 +14,6 @@ afterAll(closeTestDatabase);
 // arbitrary pathname — ownerReading is screen-agnostic, no route need exist
 const PATH = "/screen";
 
-// two owners, each with one open account — enough for real narrowing
 async function seedTwoOwners(ctx: Pick<TestContext, "seedPerson" | "seedAccount">) {
   const alice = await ctx.seedPerson({ name: "Alice" });
   const bob = await ctx.seedPerson({ name: "Bob" });
@@ -28,8 +23,7 @@ async function seedTwoOwners(ctx: Pick<TestContext, "seedPerson" | "seedAccount"
   return { alice, bob };
 }
 
-// stand-in for Holdings' own address (?edit=/?saved=): request keeps `row`; link (and
-// showEveryone) always drops it — a view link must not reopen an editor never opened
+// stand-in for Holdings' address (?edit=/?saved=): request keeps `row`, link drops it — a view link must not reopen an editor
 function rowAddress(row: string): ScreenAddress {
   const link = (owners: OwnerFilter) => ownerSearch(owners);
 
@@ -43,9 +37,7 @@ function rowAddress(row: string): ScreenAddress {
 }
 
 describe("the settle chain", () => {
-  // terminates rather than bounces-once: legitimate chains are 2 hops (canonical, then
-  // all-owners collapse); a 3rd repeating the 2nd is a loop. 4 is generous enough to prove
-  // the loop, not to permit one.
+  // legitimate chains are 2 hops (canonical, then all-owners collapse); 4 is generous enough to prove a loop, not permit one
   const settles = async (search: string): Promise<void> => {
     let where = `${PATH}${search}`;
     const seen: string[] = [];
@@ -82,7 +74,6 @@ describe("the settle chain", () => {
         `?owner=${bob.id},${alice.id}`,
         `?owner=${alice.id}&owner=${bob.id}`,
         "?owner=",
-        // a non-owner parameter on either side, carried through every hop
         `?range=1m&owner=${bob.id},${alice.id}`,
         `?owner=${alice.id}&range=3m`,
       ]) {
@@ -106,10 +97,7 @@ describe("the settle chain", () => {
   it(
     "bounces a comma-spelled selection — literal or percent-encoded — to the repeated-key address, on its own and not only as part of the chain",
     withDatabase(async () => {
-      // empty seed is itself the assertion: respelling is decided from the address alone,
-      // before any db work. "?owner=1,3" was the old canonical spelling, still accepted as
-      // legacy input, never a redirect target. Both separators must bounce to the same
-      // repeated-key address, or a reader who typed either settles on a different URL.
+      // no seed needed — respelling is decided from the address alone; "?owner=1,3" is the old canonical spelling, accepted but never a redirect target
       for (const search of ["?owner=1,3&range=1m", "?owner=1%2C3&range=1m"]) {
         expect(await redirectTo(() => ownerReading(get(`${PATH}${search}`)))).toBe(
           `${PATH}?owner=1&owner=3&range=1m`,
@@ -125,13 +113,13 @@ describe("what `reading` resolves to", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx);
 
-      // 999999999 sorts after any seeded id and is already canonical — exercises resolution, not the bounce
+      // sorts after any seeded id and is already canonical — exercises resolution, not the bounce
       const { reading, owner } = await ownerReading(
         get(`${PATH}?owner=${alice.id}&owner=999999999`),
       );
 
       expect(reading).toEqual([alice.id]);
-      // raw selection stays untouched — reading narrows what's shown, not what the control ticks or names
+      // reading narrows what's shown, not what the control ticks or names
       expect(owner.owners).toEqual([alice.id, "999999999"]);
       expect(owner.unknownOwner).toBe(true);
     }),
@@ -144,8 +132,7 @@ describe("what `reading` resolves to", () => {
 
       const { reading } = await ownerReading(get(`${PATH}?owner=888888888&owner=999999999`));
 
-      // [] reads as the whole household — keeping raw unmatched ids narrows a reader to
-      // nothing instead of silently widening
+      // [] reads as the whole household — keeping raw unmatched ids narrows instead of silently widening
       expect(reading).toEqual(["888888888", "999999999"]);
     }),
   );
@@ -175,13 +162,11 @@ describe("a screen's own request-only state", () => {
       const { alice, bob } = await seedTwoOwners(ctx);
       const spell = rowAddress("42");
 
-      // non-canonical order, the row present: the canonical bounce keeps it
       const messy = get(`${PATH}?owner=${bob.id},${alice.id}&row=42`);
       const sorted = await redirectTo(() => ownerReading(messy, spell));
       expect(sorted).toBe(`${PATH}?${ownerParam(alice.id, bob.id)}&row=42`);
 
-      // Alice+Bob are the whole household — everyone bounce (same request fn) keeps the row
-      // too; closes the gap where Holdings' own everyone bounce used to drop `saved`
+      // regression: Holdings' own everyone bounce used to drop `saved` here
       const everyone = await redirectTo(() => ownerReading(get(sorted), spell));
       expect(everyone).toBe(`${PATH}?row=42`);
 
@@ -198,8 +183,7 @@ describe("showEveryone", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx);
 
-      // default ScreenAddress spells unfiltered as no owner param, so canonical is "" —
-      // <Link to=""> would resolve to the current filtered page, making Show everyone a no-op
+      // canonical is "" here — <Link to=""> would resolve to the current filtered page, making Show everyone a no-op
       const { owner } = await ownerReading(get(`${PATH}?owner=${alice.id}`));
 
       expect(owner.showEveryone).toBe(".");
