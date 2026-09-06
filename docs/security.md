@@ -2,24 +2,20 @@
 
 **This app holds no credential to any bank or broker.** There is no account linking, no Plaid, no
 Yodlee, no stored password to anything. It learns what you hold because you upload a statement you
-downloaded yourself, or type a balance in. That is the whole of the ingest path, and it is the
-reason the rest of this page can be short.
+downloaded yourself, or type a balance in. That is the whole of the ingest path, and it is why the
+rest of this page can be short.
 
-You are weighing this against a hosted aggregator that does hold those logins. This page is what you
-need to make that call: what leaves your box, what defends what, and — the half that decides it —
-what is not defended, so you know what you are still carrying yourself.
+You are weighing this against a hosted aggregator that does hold those logins. This page covers what
+leaves your box, what defends what, and what is not defended.
 
-Three claims shape the design. Each is true with named exceptions, and the exceptions are on this
-page rather than left off it:
+Three claims shape the design. Each holds with exceptions, and the exceptions are named below:
 
 - **The containers holding your money data have no route to the internet.**
 - **The container that talks to the internet holds no database credential and cannot reach the database.**
 - **A browser that has gone idle is refused every screen until a passkey is checked.**
 
-`ARCHITECTURE.md` §7.6 holds the control table for someone reading the code, and
-[`operating.md`](operating.md) holds the knobs you turn. This page is for the decision that comes
-before both. Where they disagree with it, [`../compose.yaml`](../compose.yaml) is the one to believe
-— it enforces most of what follows, and its comments carry the reasoning.
+Where this page and [`../compose.yaml`](../compose.yaml) disagree, believe `compose.yaml` — it
+enforces most of what follows, and its comments carry the reasoning.
 
 ## 1. What leaves the box
 
@@ -36,8 +32,8 @@ graph TB
     google["<b>Google</b><br/>identity only"]
     yahoo["<b>Yahoo Finance</b><br/>ticker symbols only"]
 
-    gate ==>|"the address that signs in, and when —<br/>at sign-in, then about weekly"| google
-    worker ==>|"the tickers you hold — every 15 minutes<br/>by default, only while a market is open"| yahoo
+    gate ==>|"who signs in, and when"| google
+    worker ==>|"the tickers you hold"| yahoo
 
     classDef keep fill:#f8eeee,stroke:#a05a5a,color:#3f2020
     classDef svc fill:#eef3f8,stroke:#4a6d8c,color:#1c2f42
@@ -48,30 +44,25 @@ graph TB
 ```
 
 - **Google learns who signs in and when.** That is what the sign-in gate is. It never sees a figure.
-- **Yahoo learns which tickers you hold**, on the refresh cadence — a setting, defaulting to fifteen
-  minutes, in Settings → Prices. The poller runs on a timer whether or not anyone is looking, and
-  skips the quote fetch outside market hours. Yahoo never learns how many shares, or what they are
-  worth to you.
+- **Yahoo learns which tickers you hold**, every fifteen minutes by default — a setting in
+  Settings → Prices. It runs on a timer whether or not anyone is looking, and skips the fetch
+  outside market hours. Yahoo never learns how many shares, or what they are worth to you.
 - **Nothing else.** No analytics, no error reporting, no CDN, no fonts fetched at page load, no
-  third-party script of any kind in the page. The service worker stores nothing on the device — no
-  Cache Storage, no IndexedDB — so there is no cached copy of your figures on the phone either.
-
-A privacy reader counts two third parties, then. Not one, and not zero.
+  third-party script of any kind in the page. The service worker stores nothing on the device, so
+  there is no cached copy of your figures on the phone either.
 
 ## 2. If something goes wrong
 
 | If this happens | What stops it | What still gets through |
 |---|---|---|
-| A device on your LAN dials the box | The **gate** — Google sign-in plus an address allowlist, enforced by this stack's own Caddy. `/healthz` is the one path routed past it, and there is no other | `/healthz` says whether the database is reachable and the schema current, and names pending migration files when it is not |
+| A device on your LAN dials the box | The **gate** — Google sign-in plus an address allowlist, enforced by this stack's own Caddy | `/healthz`, the one path routed past it. It reports whether the database is reachable and the schema current, and names pending migration files when it is not |
 | Someone picks up a family phone that is already signed in | The **lock** — every screen refused until a passkey is checked | Pages already drawn stay drawn until that tab next asks the server for something |
-| A poisoned release of the market-data package | It runs in `worker`: no database credential, no shared network with `app` or `db`, one route out to five Yahoo hostnames | It still sees the tickers — pricing them is its job. And it is in the app image too; see §5 |
+| A poisoned release of the market-data package | It runs in `worker`: no database credential, no shared network with `app` or `db`, one route out | It still sees the tickers — pricing them is its job. And it is in the app image too; see §5 |
 | A poisoned dependency inside the app itself | `app` sits on two internal networks with no default route; read-only root filesystem, every capability dropped | An application-layer relay out through `caddy` to `gate` — §4 |
 | Someone gets the disk, a dump, or the database volume | Nothing | Everything. Data is plaintext at rest, by decision — §8 |
 | A script injected into a page | Nothing at the header layer | No CSP, HSTS, frame protection or `nosniff` is set anywhere — §7 |
 
 ## 3. The lock
-
-This is the defence you meet daily, so it comes first.
 
 The gate decides which *person* may reach the instance. The lock decides which *browser* may read it
 once admitted. It exists because the gate holds its answer for seven days without rolling —
@@ -84,80 +75,81 @@ stateDiagram-v2
     direction LR
     [*] --> Refused
     Refused --> Locked: Google sign-in,<br/>address on the allowlist
-    Locked --> Unlocked: passkey checked,<br/>user verification required
+    Locked --> Unlocked: passkey checked
     Unlocked --> Unlocked: activity — the window is extended<br/>only once less than half of it remains
     Unlocked --> Locked: fifteen minutes idle
     Unlocked --> Locked: "Lock now"
     Unlocked --> Locked: that passkey removed
 ```
 
-- The refusal is **root middleware**, thrown before any loader runs. A locked browser is not shown a
-  blanked page — the query that would have fetched your holdings never executes.
-- The unlock **grant** is a row in the database, named by an opaque random id in a `__Host-`
-  prefixed, `Secure`, `HttpOnly`, `SameSite=Lax` cookie. The cookie carries no claim of its own —
-  **the row is the authority**, so revoking is a delete rather than an expiry you wait out.
-- The instance stores only the **public half** of a passkey. It never sees the check that guards it.
+- The refusal happens before any page code runs. A locked browser is not shown a blanked page — the
+  query that would have fetched your holdings is never made.
+- Unlocking writes a row in the database, the **grant**. Your browser gets a cookie holding nothing
+  but a random id pointing at that row — HTTPS-only, unreadable by scripts, and not sent when
+  another site posts to this one. **The row is what counts**, so revoking access is a delete rather
+  than an expiry you wait out.
+- The app stores only the **public half** of a passkey. It never sees your face, fingerprint or
+  device PIN.
 - The idle window is **fifteen minutes**, extended only when less than half remains — so the lock can
-  arrive as little as seven and a half minutes after your last request. The window is a constant in
-  `app/lib/lock.ts`; the half is derived from it in the one statement that extends a grant. **There
-  is no environment variable to change either.**
+  arrive as little as seven and a half minutes after your last request. **There is no setting to
+  change either figure.**
 - Unlocking again replaces that browser's own previous grant. It does **not** end any other
   browser's — two devices unlocked with the same passkey each hold their own, and removing the
   passkey is what ends all of them at once.
 
 Two corrections to the mental model most people arrive with:
 
-**It is not necessarily a fingerprint or a face.** WebAuthn's user verification is satisfied by
-whatever the authenticator accepts, and a device passcode counts for exactly as much. The guarantee
-is only as strong as whatever unlocks the passkey provider on that device.
+**It is not necessarily a fingerprint.** The check is whatever your device accepts — a face, a
+fingerprint and a device PIN all count the same. The lock is only as strong as whatever unlocks
+passkeys on that device.
 
-**Nothing is encrypted by the passkey.** This is the one most often assumed. The lock decides
-whether the server runs a route at all. It performs no encryption. Your accounts, holdings,
-statements and every dump remain plaintext in Postgres, and anyone holding the volume reads them
-without ever meeting the lock. See §8.
+**Nothing is encrypted by the passkey.** This is the one most often assumed. The lock decides whether
+the server will answer at all. It encrypts nothing. Anyone holding the database volume reads
+everything without ever meeting it — §8.
 
 ## 4. The shape of the stack
 
-Seven services on seven networks ([`../compose.yaml`](../compose.yaml)). Four of those are `internal: true` with
-`gateway_mode_ipv4: isolated` — in Docker terms, no default route and no bridge address at all. Not
-a firewall rule that could be misread, but the absence of anywhere to send a packet.
+Seven services on seven networks ([`../compose.yaml`](../compose.yaml)). Four of those are
+`internal: true` with `gateway_mode_ipv4: isolated` — in Docker terms, no default route and no
+bridge address at all. Not a firewall rule that could be misread, but the absence of anywhere to
+send a packet.
 
-**This needs Docker Engine 28.0 or newer.** Engine 26 accepts the isolated-gateway option and
-ignores it *silently*, which leaves containers on those networks with an address on the host and a
-route to whatever else the house binds on `0.0.0.0`; Engine 27 refuses it outright. `internal: true`
-holds on every version, so the route to the *internet* is closed either way — but check
-`docker version` before believing the stronger half.
+**This needs Docker Engine 28.0 or newer.** Engine 26 accepts the option and ignores it, without
+saying so; containers then keep an address on the host and can reach anything else your machine is
+listening with. Engine 27 refuses the option outright. `internal: true` holds on every version, so
+the route to the *internet* is closed either way — but check `docker version` before believing the
+stronger half.
 
 ```mermaid
 graph TB
     you["A family browser<br/>on the LAN"]
     house["Your own TLS proxy<br/>— outside this stack"]
 
-    subgraph sealed["Holds household data — no route to the internet"]
-        app["<b>app</b><br/>the tracker<br/>holds the database credential"]
-        db[("<b>db</b><br/>PostgreSQL<br/>every byte of state")]
+    subgraph sealed["Holds your data — no route out"]
+        app["<b>app</b><br/>the tracker"]
+        db[("<b>db</b><br/>PostgreSQL")]
         dump["<b>dump</b><br/>scheduled pg_dump"]
     end
 
-    subgraph lone["Reaches the proxy and nothing else"]
-        worker["<b>worker</b><br/>asks Yahoo for prices<br/>no database credential, no clock<br/>one volume — the socket it alone writes"]
+    subgraph lone["Reaches the proxy only"]
+        worker["<b>worker</b><br/>asks Yahoo<br/>for prices"]
     end
 
-    subgraph out["Has a route out — stores no household data"]
-        caddy["<b>caddy</b><br/>the only published port"]
-        gate["<b>gate</b><br/>Google sign-in + allowlist<br/>runs as root"]
-        proxy["<b>egress-proxy</b><br/>five hostnames, port 443"]
+    subgraph out["Has a route out — holds no data"]
+        caddy["<b>caddy</b><br/>the only<br/>published port"]
+        gate["<b>gate</b><br/>Google sign-in<br/>+ allowlist"]
+        proxy["<b>egress-proxy</b><br/>five hostnames"]
     end
 
     google["Google"]
     yahoo["Yahoo Finance"]
 
     you --> house --> caddy
-    caddy -->|"every request except /healthz:<br/>is this address on the allowlist?"| gate
+    caddy -->|"every request<br/>except /healthz"| gate
     caddy --> app
     app --> db
     dump --> db
-    app -.->|"a unix socket on a 1 MB tmpfs —<br/>not a network, and app always dials"| worker
+    app -.->|"a unix socket,<br/>app always dials"| worker
     worker --> proxy
     gate --> google
     proxy --> yahoo
@@ -170,53 +162,53 @@ graph TB
     class google,yahoo,house,you ext
 ```
 
-- **Only `caddy` publishes a port.** `db`, `app`, `gate`, `worker` and `egress-proxy` publish
-  nothing, so there is no address that reaches `app` without passing the door where the check happens.
+- **Only `caddy` publishes a port**, so no address on your LAN reaches `app` without passing the
+  gate. `app` holds the database credential and `db` holds every byte of state; neither has a route
+  out.
 - **`db` is reachable only from `app` and `dump`**, with no published port. Its password has no
   default; the stack refuses to start without one.
 - **`worker` shares no network with `app`, `gate` or `db`** — not a rule about what it may do, but no
-  address on any network they are on. The smoke test probes for them by name *and* by every
-  container IP.
+  address on any network they are on.
 - **TLS is not in this stack.** The bundled Caddy serves plain HTTP; the certificate and public
   hostname are your proxy's job. That is also why the gate is enforced *here* rather than upstairs: a
   LAN device can dial this box directly, and that device is the threat the gate exists for.
 - **Privilege is dropped, with the exceptions named.** `app`, `worker`, `egress-proxy` and `db` run
   non-root and read-only with `cap_drop: ALL` and `no-new-privileges`. The other two are exceptions:
-  `caddy` keeps `NET_BIND_SERVICE` because the image's binary will not exec without it, and `gate` —
+  `caddy` keeps `NET_BIND_SERVICE` because the image's binary will not start without it, and `gate` —
   the container that faces Google — **runs as root** with `DAC_READ_SEARCH`, because the published
-  image sets no user and the allowlist file's mode is yours. Both are still read-only. The smoke test
-  reads all six postures back out of the running containers rather than trusting the file.
+  image sets no user and the allowlist file's mode is yours. Both are still read-only. An automated
+  test in CI reads these settings back out of the running containers rather than trusting the file,
+  and probes the worker for the others by name and by every container address.
 
 ### The two ways the no-egress claim is not absolute
 
 **The `caddy` → `gate` relay.** A compromised `app` still reaches `caddy`, because it must; `caddy`
-proxies `/oauth2/*` to `gate`; `gate` has real egress, because Google's token endpoint is on the
-internet. `compose.yaml` calls that "known rather than closed". It is narrow — not a socket, but
-whatever can be smuggled through an OAuth proxy's endpoints — and the thing at the far end is the
-least constrained container in the stack: `gate` runs as root on a plain bridge with unrestricted
-egress, and through that bridge's gateway can reach the Docker host and every host service bound on
-`0.0.0.0`. A residual of the same shape: Caddy trusts `X-Forwarded-*` from any private address, and
-`app`'s address is private, so `app` can forge those headers through Caddy. Nothing behind Caddy
-decides anything on them today, which is why that is affordable.
+passes `/oauth2/*` to `gate`; `gate` has real egress, because Google's token endpoint is on the
+internet. `compose.yaml` calls that "known rather than closed". The opening is narrow: not a socket,
+only whatever can be smuggled through a sign-in proxy's own endpoints. But what is on the far side is
+the least restricted container here — `gate` runs as root, can reach the whole internet, and through
+its network can reach the Docker host and anything else your machine is listening with. One more of
+the same kind: Caddy believes the headers naming the original caller if they come from any address on
+the local network, and `app`'s address is one, so `app` could fake them. Nothing behind Caddy decides
+anything on those headers today, which is why that is affordable.
 
 **The external-database option.** If you run Postgres elsewhere and load
 [`../compose.external-db.yaml`](../compose.external-db.yaml), `app` moves onto a network with a
-gateway. That restores public DNS for `app` and gives it a route to the Docker host, and so to every
-host service on `0.0.0.0`. The file says so in its own header. The worker's isolation is unaffected —
-the override adds no network and no variable to it — but note it also profiles `db` and `dump` out,
-so on that path the stack takes **no dumps at all**, and backing up the external database is yours.
-The first of this page's three claims is what you give up by taking it.
+gateway. That restores public DNS for `app` and gives it a route to the Docker host, and so to
+anything else your machine is listening with. The file says so in its own header. The worker's
+isolation is unaffected — the override adds no network and no variable to it — but it also removes
+the `db` and `dump` containers, so on that path the stack takes **no dumps at all**, and backing up
+the external database is yours. Taking this option gives up the first of the three claims at the top
+of this page.
 
 ## 5. The price worker
 
 `yahoo-finance2` is the one production dependency that opens a socket to the internet. The design
-assumes it will eventually be what goes wrong, and arranges for that to be survivable rather than
-promising it will not happen.
+assumes it will eventually be what goes wrong, and is built so that it survives.
 
 It runs in `worker`. What makes that safe is not the image but what the process is denied: no
-`DATABASE_URL` and no `PGPASSWORD` in its environment, no shared network with `app`, `gate` or `db`,
-no database client in its code at all — the worker's import graph contains no `pg` and no Kysely —
-plus a capped process count and memory, a read-only root filesystem, and one route out.
+`DATABASE_URL` and no `PGPASSWORD` in its environment, no database client in its code at all, a
+capped process count and memory, a read-only root filesystem, and one route out.
 
 **The honest limit of that.** `app`, `worker` and `egress-proxy` are one image started three ways, so
 the package's files are physically present in the app container too. What keeps it out of your
@@ -246,20 +238,17 @@ sequenceDiagram
 ```
 
 The socket is a 1 MB tmpfs volume defined in [`../compose.yaml`](../compose.yaml). The proxy is
-hand-written Node in [`../server/egress-proxy.ts`](../server/egress-proxy.ts) —
-`node:http`, `node:net`, `node:dns` and no other import, so it is not itself a third-party
-dependency. Four properties are worth knowing:
+hand-written Node in [`../server/egress-proxy.ts`](../server/egress-proxy.ts) — `node:http`,
+`node:net`, `node:dns` and no other import, so it is not itself a third-party dependency. Three
+things the diagram cannot show:
 
-1. **The allowlist is five Yahoo hostnames** — a module constant in that file, counted there —
-   **compared exactly**, never as a suffix, so
-   `query1.finance.yahoo.com.evil.test` does not match. It is a module constant rather than
-   configuration, so a compromised process cannot widen it by setting an environment variable.
-2. **It never terminates TLS.** It reads the one unencrypted field in the handshake, the SNI, and
-   checks it against the host the client asked to connect to. It cannot read your traffic; it also
-   cannot be talked into tunnelling somewhere else under an allowed name.
-3. **A DNS answer inside a private range is refused**, so a poisoned or LAN-aware resolver cannot
-   turn the proxy into a pivot back into your network.
-4. **Refusals fail closed**, with a deadline on every stage that waits on a peer.
+1. **The five hostnames are compared exactly** — a list written into that file, not read from
+   configuration — never as a suffix, so `query1.finance.yahoo.com.evil.test` does not match, and a
+   compromised process cannot widen it.
+2. **It never decrypts anything.** It checks the hostname sent in the clear at the start of the
+   handshake against the one the client asked for, then relays bytes.
+3. **A DNS answer pointing back inside your network is refused**, so a poisoned resolver cannot turn
+   the proxy into a way back in.
 
 A compromised market-data package therefore gets the ticker list, the timing, and a tunnel to Yahoo.
 It does not get the database, the balances, a route to your LAN, or anywhere else to send what it
@@ -275,13 +264,10 @@ learns.
   republished with different contents — and blocks on `npm audit --omit=dev --audit-level=high`.
 - CI **fails the build if any production package gains an install script, or an `os`/`cpu`
   constraint**, and the image publish depends on that job. The production tree is held to pure
-  JavaScript with no install-time step, which removes the most common delivery mechanism for a
-  poisoned package.
+  JavaScript with no install-time step, which removes the most common way a poisoned package runs.
 - The release image prunes the dev tree and unreachable runtime dependencies, and deletes the
   TypeScript compiler.
-- The container hardening and the worker's quarantine, both in §4 and §5.
-- No third-party scripts, analytics or CDN in the page at all — nothing loaded that could be
-  compromised upstream.
+- The container hardening and the worker's quarantine, in §4 and §5.
 
 **Not in place** — do not assume these:
 
@@ -293,53 +279,50 @@ learns.
   publisher not to move it. Pinning `APP_VERSION` to a `tag@sha256:` digest is the only form that
   holds against a compromised publisher, and it is not the documented default.
 - **`--ignore-scripts` is used only in the audit job**, not in the build. An install script in a dev
-  dependency still runs on the path that produces the release image — which is the gap §5's "honest
-  limit" points at.
+  dependency still runs on the path that produces the release image — the gap §5's honest limit
+  points at.
 - **No reproducible build, and no runtime integrity check.**
 
 ## 7. What this does not protect against
 
-A security page that only lists wins is worth less than nothing to the person reading it.
-
-- **No encryption at rest.** Recorded as an acceptance, not an oversight, in
+- **No encryption at rest** — a deliberate choice, argued in
   [`adr/0009`](adr/0009-the-stack-takes-dumps-not-backups.md).
 - **No security response headers at all** — no CSP, no HSTS, no `X-Frame-Options`, no `nosniff`.
   Neither the app nor the bundled Caddy sets one.
-- **No rate limiting**, at the gate or on the unlock ceremony.
-- **No CSRF token.** What stands in its place is an origin check on every mutating request — the
-  app's own root middleware and, behind it, React Router's — plus `SameSite=Lax` on both cookies. A
-  request sending no `Origin` header passes both; browsers always send one on a cross-site POST, so
-  that gap is a non-browser client, which carries no cookie to abuse.
-- **No authorization inside the app.** Everyone the allowlist admits sees everything. The owner
-  filter is a view, never a permission.
-- **Request bodies are effectively unbounded.** The upload route refuses a body whose
-  `Content-Length` exceeds the limit before reading it, but a chunked request declaring none slips
-  past that, only the file part is measured, and every other action buffers whatever arrives. No size
-  limit is set at either proxy.
+- **No rate limiting** — not on sign-in, not on unlocking.
+- **No CSRF token.** Instead, every request that changes data must say which site it came from, and
+  neither cookie is sent when another site posts to this one. A request naming no site at all passes
+  that check — but browsers always name one when posting across sites, so anything exploiting the gap
+  is not a browser, and has no cookie to abuse.
+- **No authorization inside the app.** Everyone the allowlist admits sees everything. Choosing whose
+  accounts a screen shows is a filter on the view, never a permission.
+- **Request bodies are effectively unbounded.** An upload that declares its size is refused if it is
+  too big. One that declares no size is not, only the file part is measured at all, and every other
+  form buffers whatever arrives. No size limit is set at either proxy.
 - **The lock does not un-draw pixels.** A tab already showing figures keeps showing them until it
   next asks the server for something, and a browser's back/forward cache can serve a rendered stale
   page for minutes after a grant is revoked elsewhere.
-- **A passkey check carries no freshness signal.** A provider whose vault is already open may return
-  success without prompting anyone. That raises the cost of a borrowed phone; it does not close it.
-- **A household with exactly one passkey cannot recover a lost device by itself** — removal needs an
-  assertion, and the only credential that can give one is on the missing device. That falls back to
-  you, at a shell. **Enrol a second passkey.**
+- **A passkey check does not prove someone was just there.** A device whose passkeys are already
+  unlocked may answer without prompting anyone. That raises the cost of a borrowed phone; it does not
+  close it.
+- **A household with exactly one passkey cannot recover a lost device by itself** — removing a
+  passkey requires checking one, and the only one that will do is on the missing device. That falls
+  back to you, at a shell. **Enrol a second passkey.**
 - **The documented external-Postgres path never requires TLS** to the database.
 - **This is not safe to publish on the open internet as it stands.** It is built for a box behind
   your own proxy, on your own network.
 
-The reasoning behind most of these was written up in
+The list above is current. An older audit,
 [`research/2026-09-02-security-and-privacy-audit.md`](research/2026-09-02-security-and-privacy-audit.md),
-a snapshot taken against one commit and not maintained since. Several of its findings have been
-closed — the flat service network, the version-check call to npm, the redirect it found — so read it
-for the argument, not for current status. The list above is this page's own.
+has the longer argument behind several of these, but it is a snapshot against one commit and some of
+what it found has since been fixed.
 
 ## 8. What you carry
 
 The stack cannot do these for you.
 
-1. **Encrypt the disk.** Everything above is request-time authorization; none of it survives someone
-   holding the volume.
+1. **Encrypt the disk.** Everything above only decides who gets an answer from the running app. None
+   of it helps once someone has the disk.
 2. **Encrypt the dumps and keep them off the host.** A dump is every balance, every statement and
    every original uploaded CSV, in plaintext. Encryption is the collecting tool's job.
 3. **Pin `APP_VERSION` to a digest** if you want the image tag to hold against a compromised
@@ -348,6 +331,8 @@ The stack cannot do these for you.
 5. **Terminate TLS yourself**, and keep the box off the open internet.
 6. **Keep the address allowlist short.** It is the whole of who may enter; there is no second check
    behind it.
+
+`operating.md`'s "Upgrading" and "Reverse proxy and TLS" sections say how each of these is done.
 
 ## 9. Checking this yourself
 
@@ -369,7 +354,7 @@ docker compose exec worker node -e "fetch('https://example.com').then(r=>console
 docker compose ps --format '{{.Service}}\t{{.Ports}}'
 ```
 
-If any of the first four surprises you, trust the result over this page and check
+If any of these surprises you, trust the result over this page and check
 [`../compose.yaml`](../compose.yaml).
 
 ## Where the detail lives
