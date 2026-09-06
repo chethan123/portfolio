@@ -936,9 +936,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
           // above. `.app`/`.app-main` are reused rather than new classes
           // invented for one screen, so this gets the same centred column
           // and padding every other page's content sits in without pulling
-          // in a single rail- or topbar-specific rule.
-          <div className="app">
-            <main className="app-main">{children}</main>
+          // in a single rail- or topbar-specific rule. `--lock` is the one
+          // thing this screen asks of the column that no other screen does:
+          // its single card sits in the middle of the viewport rather than
+          // at the top of it, because there is nothing below it to scroll to
+          // (`.app-main--lock`, app.css).
+          <div className="app app--lock">
+            <main className="app-main app-main--lock">{children}</main>
           </div>
         ) : (
           <div className="app">

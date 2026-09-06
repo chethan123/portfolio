@@ -253,13 +253,30 @@ export function MaskedIcon(props: IconProps) {
   );
 }
 
+/** The busy mark: one open arc, drawn to be turned by `refresh-spin`
+ * (app.css). Deliberately not `RefreshIcon` with its arrowheads — those say
+ * "fetch this again", which is a thing the reader asked for, where this says
+ * only "this control is working", which is a thing they are waiting on. */
+export function SpinnerIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5" />
+    </Icon>
+  );
+}
+
 /** "Lock now" (ticket 06): a closed padlock, its shackle drawn shut rather
  * than open — the one direction this control ever offers. */
 export function LockIcon(props: IconProps) {
   return (
     <Icon {...props}>
       <rect x="4.5" y="11" width="15" height="9.5" rx="2" />
-      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+      {/* Named so one caller can draw it open: the unlock screen lifts this
+          path off the body while an assertion is being verified
+          (`.lock-shackle`, app.css). Every rule that names it is scoped to
+          that card's own mark, so nothing matches this path here and "Lock
+          now" keeps a shut padlock. */}
+      <path className="lock-shackle" d="M8 11V7a4 4 0 0 1 8 0v4" />
     </Icon>
   );
 }

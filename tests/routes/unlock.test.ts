@@ -22,6 +22,8 @@
  * with.
  */
 import { renderToStaticMarkup } from "react-dom/server";
+
+import type { Phase } from "../../app/routes/unlock.tsx";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -51,7 +53,11 @@ const {
   NO_CEREMONY_MESSAGE,
   NOSCRIPT_MESSAGE,
   UNREADABLE_SUBMISSION_MESSAGE,
+  LockMark,
+  UnsupportedNote,
+  pressIsRefused,
   UnlockControl,
+  WaitingNote,
   runCeremony,
   shouldRevalidateBeforeRetry,
   shouldRunCeremony,
@@ -60,6 +66,31 @@ const {
 const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { LOCK_COOKIE, verifyUnlock } = await import("~/lib/lock.server");
 const { RETURN_PARAM } = await import("~/lib/lock");
+
+/**
+ * Every phase there is, and the type is made to say so. A sixth member of
+ * `Phase` is a compile error here rather than a silent hole in the exhaustive
+ * lists below — which is how `"verifying"` slipped past four of them when it
+ * was added.
+ *
+ * Written through `Record<Phase, 0>` rather than the obvious
+ * `[...] as const satisfies readonly Phase[]`, which does not do this: that
+ * form only asks whether each element *is* a `Phase`, so it catches a typo or
+ * a member removed and never one added. It was tried first, and it passed
+ * against a deliberately widened union.
+ */
+const PHASES = Object.keys({
+  idle: 0,
+  confirming: 0,
+  verifying: 0,
+  dismissed: 0,
+  failed: 0,
+} satisfies Record<Phase, 0>) as Phase[];
+
+/** Every phase but the ones named — for the lists that are "all except". */
+function everyPhaseExcept(...except: readonly Phase[]): { phase: Phase }[] {
+  return PHASES.filter((phase) => !except.includes(phase)).map((phase) => ({ phase }));
+}
 
 afterAll(closeTestDatabase);
 
@@ -430,9 +461,36 @@ describe("what the screen renders", () => {
       // one word this screen is built around — contains it as a bare
       // substring, so checking for it naively would fail against the
       // screen's own correct copy rather than against a regression.
+      //
+      // Read the other way, this is a live constraint on the markup rather
+      // than on the copy: it lowercases the *whole* rendered string, so
+      // "face" also matches "surface". No class, custom property or
+      // attribute value reaching this screen may carry that word — which
+      // rules out styling anything here with an inline `var(--surface-*)`,
+      // however correct the sentence beside it reads.
       for (const word of ["biometric", "fingerprint", "face", "device credential", "enrolled device"]) {
         expect(markup).not.toContain(word);
       }
+    }),
+  );
+
+  it(
+    "mounts both live regions empty, so the sentences that land in them later are announced at all",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const loaderData = await loader(args(get("/unlock")));
+      const markup = renderRoute(Unlock, "/unlock", loaderData);
+
+      // Rendered on an idle screen with nothing to say: a live region that
+      // first appears already holding its text is one assistive technology
+      // commonly declines to announce, which would make every message here
+      // silent for the reader with the most need of it.
+      // Both regions are present and empty, so every sentence that lands in
+      // one later is a change inside a node the accessibility tree already
+      // has — which is the whole condition for it being announced.
+      expect(markup).toContain('<div role="status">');
+      expect(markup).toContain('<div role="alert">');
+      expect(markup).not.toContain("did not complete");
     }),
   );
 
@@ -494,6 +552,13 @@ describe("visibleRefusal — which phase may show which refusal (finding 10: a s
   it("shows nothing for a dismissed prompt — that is a note, not a refusal", () => {
     expect(visibleRefusal("dismissed", "server said no", "client said no")).toBeNull();
   });
+
+  it("hides a previous attempt's refusal while this one's assertion is still being verified", () => {
+    // Without this, the tempting mutation — treating "verifying" like "idle",
+    // since neither has a client-side failure to report — puts an older
+    // server refusal on screen beside an open padlock.
+    expect(visibleRefusal("verifying", "an older server refusal", null)).toBeNull();
+  });
 });
 
 describe("shouldRevalidateBeforeRetry — finding 10's revalidator.revalidate() guard", () => {
@@ -533,7 +598,7 @@ describe("shouldRunCeremony — finding 10's 'returning early so no ceremony eve
   });
 });
 
-describe("UnlockControl — finding 10's untested unsupported-browser branch and disabled attribute", () => {
+describe("UnlockControl — the unsupported-browser branch, and what the one button says while it is busy", () => {
   it.for([{ supported: null }, { supported: true }] as const)(
     "offers the button when supported is $supported",
     ({ supported }) => {
@@ -544,12 +609,11 @@ describe("UnlockControl — finding 10's untested unsupported-browser branch and
     },
   );
 
-  it("shows the no-ceremony message instead of a button once the browser is confirmed unable to run one", () => {
+  it("offers nothing at all once the browser is confirmed unable to run a ceremony", () => {
     const markup = renderToStaticMarkup(
       UnlockControl({ supported: false, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
     );
-    expect(markup).not.toContain("<button");
-    expect(markup).toContain(NO_CEREMONY_MESSAGE);
+    expect(markup).toBe("");
   });
 
   it("disables the button while a ceremony is in flight", () => {
@@ -584,6 +648,62 @@ describe("UnlockControl — finding 10's untested unsupported-browser branch and
       expect(submitting).toContain('disabled=""');
     },
   );
+
+  it("turns the app's own arc in the button for exactly as long as the button refuses a press", () => {
+    const idle = renderToStaticMarkup(
+      UnlockControl({ supported: true, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
+    );
+    expect(idle).not.toContain("lock-spinner");
+
+    for (const props of [
+      { phase: "confirming", revalidatorState: "idle" },
+      { phase: "verifying", revalidatorState: "idle" },
+      { phase: "idle", revalidatorState: "loading" },
+    ] as const) {
+      const busy = renderToStaticMarkup(UnlockControl({ supported: true, onUnlock: () => {}, ...props }));
+      expect(busy).toContain("lock-spinner");
+      expect(busy).toContain('disabled=""');
+    }
+  });
+
+  it.for(everyPhaseExcept("confirming", "verifying"))(
+    // The other half of the rule, and the half nothing pinned: after a
+    // dismissed or failed attempt the button has to come back. Without this,
+    // the obvious simplification of `pressIsRefused` — `phase !== "idle"` —
+    // passes every other assertion in this file and leaves the screen dead
+    // after one cancelled prompt, with no way back but a reload.
+    "offers the button again once an attempt has settled into $phase",
+    ({ phase }) => {
+      const markup = renderToStaticMarkup(
+        UnlockControl({ supported: true, phase, revalidatorState: "idle", onUnlock: () => {} }),
+      );
+      expect(markup).not.toContain("disabled");
+      expect(markup).not.toContain("lock-spinner");
+    },
+  );
+});
+
+describe("pressIsRefused — one rule, stated once for the attribute and the handler", () => {
+  it.for(everyPhaseExcept("confirming", "verifying"))(
+    "accepts a press while $phase and nothing is in flight",
+    ({ phase }) => {
+      expect(pressIsRefused(phase, "idle")).toBe(false);
+    },
+  );
+
+  it.for([{ phase: "confirming" }, { phase: "verifying" }] as const)(
+    "refuses a press while $phase, so a second cannot spend a fresh challenge",
+    ({ phase }) => {
+      expect(pressIsRefused(phase, "idle")).toBe(true);
+    },
+  );
+
+  it.for([{ state: "loading" }, { state: "submitting" }] as const)(
+    "refuses a press while the revalidator is $state, whatever the phase says",
+    ({ state }) => {
+      expect(pressIsRefused("idle", state)).toBe(true);
+    },
+  );
 });
 
 describe("DismissedNote — finding 10's cancelled-prompt note", () => {
@@ -592,7 +712,7 @@ describe("DismissedNote — finding 10's cancelled-prompt note", () => {
     expect(markup).toContain("did not complete");
   });
 
-  it.for([{ phase: "idle" }, { phase: "confirming" }, { phase: "failed" }] as const)(
+  it.for(everyPhaseExcept("dismissed"))(
     "shows nothing while $phase",
     ({ phase }) => {
       expect(renderToStaticMarkup(DismissedNote({ phase }))).toBe("");
@@ -600,7 +720,82 @@ describe("DismissedNote — finding 10's cancelled-prompt note", () => {
   );
 });
 
+describe("WaitingNote — the sentence that says which of the two working states this is", () => {
+  it("names the passkey as what it is waiting on while the provider's prompt is open", () => {
+    expect(renderToStaticMarkup(WaitingNote({ phase: "confirming" }))).toContain("Waiting for your passkey");
+  });
+
+  it("stops claiming to wait for a passkey that has already been given", () => {
+    // The defect this phase exists to fix: between the provider answering and
+    // this instance agreeing, one sentence went on saying it was waiting for
+    // something the reader had already produced.
+    const markup = renderToStaticMarkup(WaitingNote({ phase: "verifying" }));
+    expect(markup).toContain("Checking that passkey with this instance");
+    expect(markup).not.toContain("Waiting for");
+  });
+
+  it.for(everyPhaseExcept("confirming", "verifying"))("shows nothing while $phase", ({ phase }) => {
+    expect(renderToStaticMarkup(WaitingNote({ phase }))).toBe("");
+  });
+});
+
+describe("UnsupportedNote — the sentence that replaces a control the reader may already have reached", () => {
+  it("names the three ways back once the browser is confirmed unable to run a ceremony", () => {
+    const markup = renderToStaticMarkup(UnsupportedNote({ supported: false }));
+    expect(markup).toContain(NO_CEREMONY_MESSAGE);
+  });
+
+  it.for([{ supported: null }, { supported: true }] as const)(
+    // `null` is the server render and the first client frame: the button is
+    // offered until the mount check has actually answered, so a browser that
+    // can run the ceremony never sees this even for a frame.
+    "shows nothing while supported is $supported",
+    ({ supported }) => {
+      expect(renderToStaticMarkup(UnsupportedNote({ supported }))).toBe("");
+    },
+  );
+});
+
+describe("LockMark — the padlock opens on a passed check, never on a press", () => {
+  it("draws the shackle open only once an assertion is with this instance", () => {
+    const markup = renderToStaticMarkup(LockMark({ phase: "verifying" }));
+    expect(markup).toContain("lock-mark--open");
+  });
+
+  it.for(everyPhaseExcept("verifying"))(
+    // "confirming" is the one that would be tempting and wrong: the prompt is
+    // open, the reader has done something, and nothing has been proved yet.
+    // "dismissed" and "failed" are the pins for a lock that must not stay
+    // open after an attempt that went nowhere.
+    "draws it shut while $phase",
+    ({ phase }) => {
+      const markup = renderToStaticMarkup(LockMark({ phase }));
+      expect(markup).toContain("lock-mark");
+      expect(markup).not.toContain("lock-mark--open");
+    },
+  );
+});
+
 describe("runCeremony", () => {
+  /**
+   * Stands in for React's `startTransition` in the tests that are not about
+   * scheduling: runs the update immediately, which is what the real one does
+   * with its scope too — the lane it assigns is invisible from here.
+   */
+  const runTransition = (update: () => void) => update();
+
+  /** The same, but remembering what it was handed and in what order. */
+  function recordingTransition() {
+    const scheduled: (() => void)[] = [];
+    return {
+      scheduled,
+      scheduleAsTransition: (update: () => void) => {
+        scheduled.push(update);
+        update();
+      },
+    };
+  }
+
   const FAKE_OPTIONS = { challenge: "fixture-challenge" } as Parameters<typeof requestAssertion>[0];
 
   afterEach(() => {
@@ -617,7 +812,7 @@ describe("runCeremony", () => {
       const setClientMessage = vi.fn();
       const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/holdings", submit as never, setPhase, setClientMessage, revalidate);
+      await runCeremony(FAKE_OPTIONS, "/holdings", submit as never, setPhase, setClientMessage, revalidate, runTransition);
 
       expect(submit).toHaveBeenCalledWith(
         { assertion: JSON.stringify(response), redirectTo: "/holdings" },
@@ -628,6 +823,93 @@ describe("runCeremony", () => {
       // `submit`'s own promise already carries a post-action revalidation
       // (this file's own header) — a second one here would be redundant.
       expect(revalidate).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    // The padlock reads this order directly: it opens on "verifying" and on
+    // nothing else, so a version that set the phase *after* awaiting `submit`
+    // would open a lock for the length of one already-departing frame, and a
+    // version that never left "confirming" would never open it at all.
+    "reports the assertion as with this instance before submitting it, and only then returns to idle",
+    async () => {
+      const response = assertionResponse("fixture-challenge");
+      vi.mocked(requestAssertion).mockResolvedValue({ status: "ok", response });
+      const setPhase = vi.fn();
+      const submit = vi.fn().mockImplementation(() => {
+        expect(setPhase.mock.calls).toEqual([["verifying"]]);
+        return Promise.resolve(undefined);
+      });
+
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, vi.fn(), vi.fn(), runTransition);
+
+      expect(submit).toHaveBeenCalledOnce();
+      expect(setPhase.mock.calls).toEqual([["verifying"], ["idle"]]);
+    },
+  );
+
+  it(
+    // What this can and cannot show, stated plainly. It cannot show React
+    // batching the commits — that needs a DOM, and this suite deliberately
+    // has none (CLAUDE.md). What it shows is the property the batching
+    // argument rests on: that the reset is handed to the scheduler rather
+    // than called outright. Without it the repair is undefended, because
+    // `startTransition` runs its scope synchronously — so deleting the
+    // wrapper changes no other assertion in this file while restoring, in a
+    // real browser, the committed frame of a shut padlock it exists to
+    // remove.
+    "schedules the return to idle as a transition, so it cannot commit ahead of the redirect",
+    async () => {
+      vi.mocked(requestAssertion).mockResolvedValue({
+        status: "ok",
+        response: assertionResponse("fixture-challenge"),
+      });
+      const { scheduled, scheduleAsTransition } = recordingTransition();
+      const setPhase = vi.fn();
+
+      await runCeremony(
+        FAKE_OPTIONS,
+        "/",
+        vi.fn().mockResolvedValue(undefined) as never,
+        setPhase,
+        vi.fn(),
+        vi.fn(),
+        scheduleAsTransition,
+      );
+
+      expect(scheduled).toHaveLength(1);
+      // "verifying" is set outright — it has no router update to ride with —
+      // and only the reset is scheduled.
+      expect(setPhase.mock.calls).toEqual([["verifying"], ["idle"]]);
+    },
+  );
+
+  it.for([
+    { status: "dismissed", phase: "dismissed" },
+    { status: "failed", phase: "failed" },
+  ] as const)(
+    // The same defect on the branch that stays on this screen: settling the
+    // phase urgently commits a frame in which the button is live again, beside
+    // a note asking for a press, before the revalidation disables it.
+    "settles a $status outcome as a transition, and schedules it before starting the refresh",
+    async ({ status, phase }) => {
+      vi.mocked(requestAssertion).mockResolvedValue(
+        status === "dismissed" ? { status } : { status, message: "No authenticator found." },
+      );
+      const { scheduled, scheduleAsTransition } = recordingTransition();
+      const setPhase = vi.fn();
+      const revalidate = vi.fn().mockImplementation(() => {
+        // Scheduling has to have happened already: React resets the event's
+        // transition lane in a microtask, so an update queued after the
+        // router's own would land in a second batch and a second commit.
+        expect(scheduled).toHaveLength(1);
+        expect(setPhase).toHaveBeenCalledWith(phase);
+      });
+
+      await runCeremony(FAKE_OPTIONS, "/", vi.fn() as never, setPhase, vi.fn(), revalidate, scheduleAsTransition);
+
+      expect(revalidate).toHaveBeenCalledOnce();
+      expect(scheduled).toHaveLength(1);
     },
   );
 
@@ -647,7 +929,7 @@ describe("runCeremony", () => {
       const setClientMessage = vi.fn();
       const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate);
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate, runTransition);
 
       expect(submit).not.toHaveBeenCalled();
       expect(setPhase).toHaveBeenCalledWith("dismissed");
@@ -667,7 +949,7 @@ describe("runCeremony", () => {
       const setClientMessage = vi.fn();
       const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate);
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate, runTransition);
 
       expect(submit).not.toHaveBeenCalled();
       expect(setClientMessage).toHaveBeenCalledWith("No authenticator found.");
