@@ -1,13 +1,6 @@
-/**
- * The chrome control that ends a browser's own reading immediately (ticket
- * 06, docs/adr/0012).
- *
- * Rendered through `Layout`, `masking-toggle.test.tsx`'s own reason: "drawn
- * while the household holds a passkey at all" is a property of the shell,
- * not of any one page, and a component test rendering the control on its own
- * would not notice the shell dropping it or drawing it where it should not
- * appear.
- */
+// Lock-now chrome control (ticket 06, docs/adr/0012). Rendered through Layout (same reason as
+// masking-toggle.test.tsx): "drawn only while the household holds a passkey" is a property of
+// the shell, not any one page — a lone component test wouldn't notice the shell dropping it.
 import { describe, expect, it } from "vitest";
 
 import { LOCK_NOW_ACTION } from "~/lib/lock";
@@ -24,16 +17,10 @@ function lockNowForms(markup: string): string[] {
   );
 }
 
-/**
- * The markup from one container's opening tag to its own matching close,
- * read by class name rather than by nesting depth: `renderToStaticMarkup`
- * gives back one flat string, and counting forms alone (as the two tests
- * below used to) cannot tell "one in the rail, one in the bar" from "both in
- * the bar" or "one in the bottom nav the ticket forbids". Searching for the
- * first closing tag of `tag` after the opening one is enough here — none of
- * `app-rail`, `app-topbar-actions` or `app-bottomnav` nests another element
- * of its own tag name inside itself.
- */
+/** Markup from a container's opening tag to its matching close, by class name not nesting
+ * depth — renderToStaticMarkup gives one flat string, so counting forms alone can't tell
+ * "one per region" from "both in one region" or "one in the forbidden bottom nav". Finding
+ * the first closing tag after the opening one is enough — none of these regions nests its own tag. */
 function regionByClass(markup: string, className: string, tag: "nav" | "div"): string {
   const start = markup.indexOf(`class="${className}"`);
   if (start === -1) throw new Error(`no ${className} in markup`);
@@ -43,9 +30,8 @@ function regionByClass(markup: string, className: string, tag: "nav" | "div"): s
 
 describe("the lock-now control", () => {
   it("does not render at all while the household holds no passkey", () => {
-    // The ticket's own reasoning: with nothing to unlock, this would clear a
-    // grant that does not exist and send the reader to a screen no
-    // credential can satisfy, while every route stays open behind it.
+    // With nothing to unlock, this would clear a nonexistent grant and send the reader to
+    // a screen no credential can satisfy, while every route stays open behind it.
     const markup = renderChrome(false);
 
     expect(lockNowForms(markup)).toEqual([]);
@@ -53,9 +39,8 @@ describe("the lock-now control", () => {
   });
 
   it("renders in the rail's foot and the top bar, and nowhere else, once the household holds a passkey", () => {
-    // Not merely two forms in the markup — the ticket names exactly these
-    // two positions and forbids a third, the phone's bottom nav; a control
-    // moved there would still pass a bare `toHaveLength(2)`.
+    // Not merely two forms — ticket names exactly these two positions and forbids a third
+    // (phone bottom nav); a control moved there would still pass a bare toHaveLength(2).
     const markup = renderChrome(true);
 
     expect(lockNowForms(markup)).toHaveLength(2);
@@ -76,19 +61,15 @@ describe("the lock-now control", () => {
   });
 
   it("states the action, not a state — the only label this control ever has", () => {
-    // Unlike the masking toggle, there is no second label: a browser
-    // rendering this chrome at all is, by definition, not locked.
+    // Unlike the masking toggle, no second label — rendering this chrome at all means not locked.
     expect(renderChrome(true)).toContain("Lock now");
   });
 
   it("does not render on the bare unlock shell, even on a household that holds a passkey", () => {
-    // The bare-shell branch (`app/root.tsx`'s `Layout`) drops every control
-    // for `/unlock`, this one included — a button offering to lock an
-    // already-locked browser would also discard the return address that
-    // screen was reached with. Guarded here rather than assumed, because it
-    // is exactly the failure this control's own gating on `hasPasskey` would
-    // reproduce if the bare-shell branch were ever narrowed to name
-    // `MaskingToggle` alone.
+    // Bare-shell branch (app/root.tsx's Layout) drops every control for /unlock, this one
+    // included — locking an already-locked browser would discard the return address.
+    // Guarded here, not assumed, since narrowing the bare-shell branch to name MaskingToggle
+    // alone would reproduce exactly this failure.
     const markup = renderThroughLayout("/unlock", {
       gated: true,
       firstRun: null,

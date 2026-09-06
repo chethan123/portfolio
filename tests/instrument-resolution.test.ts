@@ -602,8 +602,8 @@ describe("resolveAll — the USD probe", () => {
       // One call, three distinct symbols — not six, and not three calls.
       expect(calls).toEqual([["VTI", "VWRL", "ZZZZ"]]);
 
-      // Only the two strings naming the refused ticker are refused; the ok
-      // and unavailable tickers' strings are untouched by it.
+      // Only the two strings naming the refused ticker are refused; ok and unavailable
+      // tickers' strings are untouched.
       expect(Object.keys(refusal.fieldErrors)).toEqual(["symbol-2", "symbol-3"]);
       expect(refusal.fieldErrors["symbol-2"]).toBe(
         "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
@@ -617,12 +617,10 @@ describe("resolveAll — the USD probe", () => {
   it(
     "creates the instrument when the probe answered nothing about its symbol",
     withDatabase(async ({ db, seedClassification }) => {
-      // A probe may answer about fewer symbols than it was asked. Over the
-      // socket that is not hypothetical: a symbol failing the worker's own
-      // pattern check is dropped before the call and comes back absent. An
-      // absent verdict has to read as `unavailable` — created now, priced or
-      // marked stale by the next refresh — because reading it as a refusal
-      // would block a statement over a symbol nobody judged.
+      // Probe may answer fewer symbols than asked (not hypothetical — a symbol failing
+      // the worker's pattern check is dropped before the call). Absent verdict reads as
+      // unavailable (created, priced/staled by the next refresh) — a refusal here would
+      // block a statement over a symbol nobody judged.
       const classification = await seedClassification();
       const silentProbe: ProbeSymbols = async () => new Map();
 
@@ -658,10 +656,9 @@ describe("resolveAll — the USD probe", () => {
   it(
     "resolves a manual-only submission with a probe stub that was never called",
     withDatabase(async ({ db, seedClassification }) => {
-      // The call counter is the assertion, not the created row's absence of
-      // one: a manual-only submission — the common case — must make no
-      // provider call at all, because over the socket a zero-symbol ask is a
-      // round trip the worker refuses anyway.
+      // Call counter is the assertion — a manual-only submission (the common case) must
+      // make no provider call at all; a zero-symbol ask over the socket is a round trip
+      // the worker refuses.
       const classification = await seedClassification();
       const calls: string[][] = [];
       const probe: ProbeSymbols = async (symbols) => {
@@ -711,8 +708,7 @@ describe("resolveAll — the whole submission", () => {
 
       expect(refusal.fieldErrors["kind-1"]).toMatch(/silently missing/);
 
-      // The answered string is not written either: the refusal re-renders
-      // the same list of questions it was asked about.
+      // Answered string isn't written either — refusal re-renders the same list of questions.
       const aliases = await db
         .selectFrom("instrument_alias")
         .select("raw_string")
@@ -747,9 +743,8 @@ describe("resolveAll — the whole submission", () => {
         db,
       );
 
-      // The result points at the winner, not at what this submit tried to
-      // create — and the instrument created for the losing answer is not
-      // left behind for the point-at-existing select to offer forever.
+      // Result points at the winner, not what this submit tried to create — the losing
+      // instrument isn't left behind for the point-at-existing select to offer forever.
       expect(resolved).toEqual([
         { raw: "CASH & CASH INVESTMENTS", instrumentId: cash.id },
       ]);
@@ -835,8 +830,8 @@ describe("resolutionScreen", () => {
         db,
       );
 
-      // The resolved string is absent; the misses keep file order and carry
-      // the context the screen shows — the name value and the quantity.
+      // Resolved string is absent; misses keep file order and carry the name/quantity
+      // the screen shows.
       expect(screen.totalPositions).toBe(3);
       expect(screen.unresolved).toEqual([
         {
@@ -887,9 +882,8 @@ describe("resolutionFieldsAt", () => {
 
 describe("sameRawStrings", () => {
   it("reads LF, CRLF and bare CR spellings of one cell as the same string", () => {
-    // HTML form serialisation rewrites a lone LF or CR inside a posted value
-    // to CRLF, so a quoted multi-line cell echoed through a hidden field
-    // would fail a byte-exact check on every submit, forever.
+    // HTML form serialisation rewrites a lone LF/CR in a posted value to CRLF — a quoted
+    // multi-line cell echoed through a hidden field would fail byte-exact checks on every submit.
     expect(sameRawStrings("FUND\nCLASS A", "FUND\r\nCLASS A")).toBe(true);
     expect(sameRawStrings("FUND\rCLASS A", "FUND\nCLASS A")).toBe(true);
     expect(sameRawStrings("FUND\r\nCLASS A", "FUND\r\nCLASS A")).toBe(true);
@@ -905,11 +899,9 @@ describe("sameRawStrings", () => {
   });
 });
 
-/**
- * Moved here from `column-mapping.test.ts`, which imported it from this module:
- * the lookup is resolution's, not the mapping's, and a rule tested a file away
- * from the code it governs is a rule nobody finds when that code changes.
- */
+/** Moved here from column-mapping.test.ts, which imported it from this module: the lookup
+ * is resolution's, not the mapping's, and a rule tested a file away from the code it governs
+ * is a rule nobody finds when that code changes. */
 describe("unresolvedStrings", () => {
   it(
     "matches byte-exactly, so a case or padding difference is a miss",
@@ -935,8 +927,8 @@ describe("unresolvedStrings", () => {
       await expect(
         unresolvedStrings(["VTI", "Vanguard Total Stock Market ETF", "VTI"], db),
       ).resolves.toEqual([]);
-      // An empty file asks nothing, rather than reaching the database to find
-      // out that it has nothing to ask.
+      // Empty file asks nothing, rather than reaching the database to find out it has
+      // nothing to ask.
       await expect(unresolvedStrings([], db)).resolves.toEqual([]);
     }),
   );
@@ -955,11 +947,9 @@ describe("unresolvedStrings", () => {
   it(
     "reads an alias written for one institution's statement when another's names the same string",
     withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
-      // `instrument_alias` is deliberately global — one `raw_string`, one
-      // instrument, no institution column — so Fidelity writing `CASH`
-      // resolves it for Schwab too. This replaces a test that asserted the
-      // table had exactly two columns via `information_schema` — true,
-      // brittle, and about the schema file rather than what the schema does.
+      // instrument_alias is deliberately global (one raw_string, one instrument, no
+      // institution column) — Fidelity writing CASH resolves it for Schwab too. Replaces a
+      // brittle information_schema assertion about the schema file, not what the schema does.
       const usd = await seedInstrument({ symbol: "USD", name: "US Dollar" });
       await seedInstrumentAlias({ instrument: usd, rawString: "CASH" });
 

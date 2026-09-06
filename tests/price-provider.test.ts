@@ -371,10 +371,7 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("answers unavailable for every symbol asked when the payload is not even a list", () => {
-    // An object, not a string: a string is iterable, so `for…of` walks its
-    // characters and the guard this case exists for never runs. `{}` is what
-    // a JSON body decoding to the wrong shape actually looks like, and
-    // iterating one throws.
+    // object, not string — a string is iterable and would silently walk characters instead of tripping this guard
     const verdicts = probeVerdicts(["VTI", "VXUS"], { quotes: [] }, FETCHED_AT);
 
     expect(verdicts).toEqual(
@@ -387,12 +384,9 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
 });
 
 describe("probing symbols at creation time", () => {
-  // The creation-time half of the currency guard (0004, "Resolution, and the
-  // guard that has to run here"). `socketProbe` takes no client of its own —
-  // it dials the worker, so every case here starts a real one on
-  // `SOCKET_PATH` with a fake Yahoo client instead, closed by the shared
-  // `afterEach` above. `chart` is never called by anything below — it exists
-  // only so the fake satisfies `YahooClient`'s shape (`server/yahoo-client.ts`).
+  // creation-time half of the currency guard (0004). socketProbe dials the worker — a real one
+  // per case on SOCKET_PATH, closed by the shared afterEach. `chart` exists only so the fake
+  // satisfies YahooClient's shape.
   const clientAnswering = (quote: (symbols: string[]) => Promise<unknown>): YahooClient => ({
     quote,
     chart: () => {
@@ -407,8 +401,7 @@ describe("probing symbols at creation time", () => {
 
     const verdicts = await socketProbe(["VTI"]);
 
-    // Null rather than a guess: this payload never said what the thing is, and
-    // the column it feeds is the provider's vocabulary or nothing.
+    // null, not a guess — the column holds the provider's own vocabulary or nothing
     expect(verdicts.get("VTI")).toEqual({ status: "ok", quoteType: null });
   });
 
@@ -425,11 +418,7 @@ describe("probing symbols at creation time", () => {
   });
 
   it("carries the provider's currency when the quote is not in USD", async () => {
-    // The one outcome the person creating the instrument can act on, so it
-    // must not be flattened into "unavailable" — which is why this cannot be
-    // built on getQuotes, where a refusal becomes an absent quote. The
-    // currency arrives as the refresh guard spells it, so the refusal names
-    // symbol and currency in the same words.
+    // must not flatten to "unavailable" — why this can't be built on getQuotes, where a refusal is just an absent quote
     await start(
       clientAnswering(async () => [{ symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBp" }]),
     );
@@ -440,10 +429,8 @@ describe("probing symbols at creation time", () => {
   });
 
   it("answers unavailable for a symbol the provider does not know", async () => {
-    // Yahoo drops unknown symbols from the response entirely; absence is its
-    // ordinary spelling of "never heard of it". Creation proceeds and the next
-    // refresh marks the instrument stale, same as any symbol that stops
-    // quoting.
+    // Yahoo drops unknown symbols entirely; creation proceeds and the next refresh marks it
+    // stale, like any symbol that stops quoting
     await start(clientAnswering(async () => []));
 
     const verdicts = await socketProbe(["MISTYPED"]);
@@ -452,10 +439,8 @@ describe("probing symbols at creation time", () => {
   });
 
   it("answers unavailable for every symbol asked rather than throwing when the provider fails", async () => {
-    // A provider error or timeout must not block creation (0004). The probe
-    // never throws; the caller has no catch to write. Over the socket the
-    // worker answers 502 for the thrown error, and `socketProbe` marks the
-    // whole batch unavailable rather than propagate it.
+    // provider error/timeout must not block creation (0004) — probe never throws; worker's
+    // 502 becomes "unavailable" for the whole batch
     await start(
       clientAnswering(async () => {
         throw new Error("socket hang up");
@@ -469,8 +454,7 @@ describe("probing symbols at creation time", () => {
   });
 
   it("answers unavailable for a payload that is not even a list", async () => {
-    // An unofficial endpoint can change shape under us. A payload the schema
-    // has never seen is a provider failure, not a reason to refuse creation.
+    // unofficial endpoint can change shape — an unrecognized payload is a provider failure, not a refusal reason
     await start(clientAnswering(async () => ({ quotes: [] })));
 
     const verdicts = await socketProbe(["VTI"]);
@@ -510,20 +494,17 @@ describe("probing symbols at creation time", () => {
 
 const NEW_YORK = "America/New_York";
 
-/** A range wide enough that nothing in these payloads falls outside it. */
+// range wide enough that nothing in these payloads falls outside it
 const RANGE: HistoryRange = { from: "2024-06-01", until: "2024-12-31" };
 
-/**
- * A daily bar, stamped at the session open — 13:30Z for a June NYSE session,
- * which is 09:30 in New York. Spelled out rather than defaulted because the
- * whole meaning of a bar is which day it is.
- */
+// daily bar stamped at session open (13:30Z = 09:30 NY for June) — spelled out, not defaulted,
+// since a bar's whole meaning is its day
 const bar = (date: string, close: number | null) => ({
   date: new Date(`${date}T13:30:00Z`),
   close,
 });
 
-/** A split as the library hands it back in `return: "array"` mode. */
+// a split as the library hands it back in return:"array" mode
 const split = (date: string, numerator: number, denominator: number) => ({
   date: new Date(`${date}T13:30:00Z`),
   numerator,
@@ -546,7 +527,7 @@ const historyOf = (
   range: HistoryRange = RANGE,
 ) => toProviderHistory(chartOf(payload), range, NEW_YORK);
 
-/** The closes of an `ok` answer, or a failure naming what came back instead. */
+// closes of an ok answer, or a failure naming what came back instead
 function closesOf(history: ReturnType<typeof toProviderHistory>) {
   if (history.status !== "ok") throw new Error(`expected closes, got ${history.status}`);
   return history.closes;
@@ -556,15 +537,13 @@ describe("reading a day of history", () => {
   it("returns a close as a decimal string at scale 4, never a number", () => {
     const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 271.5)] }));
 
-    // `toEqual` is strict about the type, so the exact string is the whole
-    // assertion: a number 271.5 would not match it.
+    // toEqual is type-strict — a number 271.5 wouldn't match the string
     expect(closes).toEqual([{ date: "2024-06-07", close: "271.5000" }]);
   });
 
   it("files a bar under the trading day inside its own timestamp, not its UTC one", () => {
-    // 02:00Z is the previous evening in New York. A UTC truncation would file
-    // this under the 8th; the spine would then carry a close for a day whose
-    // real close overwrites it, losing the earlier one entirely.
+    // 02:00Z is the previous evening in NY — UTC truncation would file this under the 8th,
+    // losing it when the real 8th close overwrites it
     const history = toProviderHistory(
       { meta: { currency: "USD" }, quotes: [{ date: new Date("2024-06-08T02:00:00Z"), close: 10 }] },
       RANGE,
@@ -575,7 +554,7 @@ describe("reading a day of history", () => {
   });
 
   it("drops a bar on the range's end and keeps the day before it", () => {
-    // The end is exclusive: today's row stays the poller's provisional one.
+    // the end is exclusive — today's row stays the poller's provisional one
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-06-11", 10), bar("2024-06-12", 11)] }, {
         from: "2024-06-01",
@@ -587,10 +566,8 @@ describe("reading a day of history", () => {
   });
 
   it("drops a bar before the range's start and keeps the day inside it", () => {
-    // The mirror of the `until` cut. `writeBackfilledCloses` inserts where
-    // absent, so a bar dated before `range.from` would land as a row and take
-    // the instrument out of the candidate set for good — the gap predicate
-    // is satisfied by any row at or before first-held.
+    // mirror of the until cut — a bar before range.from would insert-where-absent and
+    // permanently satisfy the gap predicate
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-05-31", 10), bar("2024-06-07", 11)] }, {
         from: "2024-06-01",
@@ -602,11 +579,8 @@ describe("reading a day of history", () => {
   });
 
   it("keeps a bar dated exactly at the range's start", () => {
-    // `range.from` is first-held minus the seven-day lead, and the lead exists
-    // because the bar that closes a gap may be the deepest one in the range —
-    // first-held on a Monday after a holiday run puts it at or near `from`
-    // exactly. An exclusive floor would drop it, leaving the gap open while
-    // the ledger recorded a fill: the very failure the floor exists to stop.
+    // range.from = first-held minus the 7-day lead; an exclusive floor would drop the
+    // gap-closing bar and record a fill while the gap stays open
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-06-01", 9), bar("2024-06-07", 11)] }, {
         from: "2024-06-01",
@@ -621,12 +595,8 @@ describe("reading a day of history", () => {
   });
 
   it("judges a bar against its market date, not the instant's UTC date", () => {
-    // 01:00Z on 2024-06-01 is the evening of 2024-05-31 in New York, so the
-    // bar belongs to a day before the range starts. Comparing the instant's
-    // UTC date instead would keep it — the same zone confusion the quote
-    // path's window guard has to avoid, on the other side of the seam.
-    // Written out rather than through `bar`, which stamps its own session
-    // open: the whole point is an instant at an hour `bar` cannot express.
+    // 01:00Z on 06-01 is the evening of 05-31 in NY — UTC-date comparison would wrongly keep
+    // it; written out since `bar` can't express this hour
     const closes = closesOf(
       historyOf({ quotes: [{ date: new Date("2024-06-01T01:00:00Z"), close: 9 }, bar("2024-06-07", 11)] }, {
         from: "2024-06-01",
@@ -658,10 +628,8 @@ describe("reading a day of history", () => {
   });
 
   it("skips a close too small to render as anything but zero", () => {
-    // `> 0` is not enough: `toFixed(4)` turns anything under half a
-    // ten-thousandth into "0.0000", which would value the holding at nothing —
-    // permanently, because the backfill's write is insert-where-absent on a
-    // finished day and nothing in the application rewrites it.
+    // >0 isn't enough — toFixed(4) rounds under half a ten-thousandth to "0.0000", valuing
+    // the holding at nothing, permanently (insert-where-absent)
     const closes = closesOf(
       historyOf({ quotes: [bar("2024-06-07", 0.000049), bar("2024-06-10", 12)] }),
     );
@@ -670,18 +638,14 @@ describe("reading a day of history", () => {
   });
 
   it("skips a close too large for the column it is bound for", () => {
-    // The guard `inRange` exists for on the sibling columns: a figure this big
-    // is not a price, and a `numeric` overflow would abort the transaction the
-    // whole batch of closes commits in.
+    // inRange exists for the sibling columns too — an overflow here would abort the whole batch's transaction
     const closes = closesOf(historyOf({ quotes: [bar("2024-06-07", 1e21), bar("2024-06-10", 12)] }));
 
     expect(closes).toEqual([{ date: "2024-06-10", close: "12.0000" }]);
   });
 
   it("refuses a currency it cannot read rather than taking it for an absent one", () => {
-    // The quote path refuses the whole payload for a non-string currency, and
-    // this is the guard where guessing is worst: a foreign listing summed into
-    // a USD net worth, with no error anywhere.
+    // worst guess here would sum a foreign listing silently into a USD net worth
     expect(
       toProviderHistory(
         { meta: { currency: 123 }, quotes: [bar("2024-06-07", 10)] },
@@ -702,8 +666,7 @@ describe("reading a day of history", () => {
   });
 
   it("refuses a history quoted in a currency this instance cannot hold", () => {
-    // Before any figure is read: the failure this prevents is the worst
-    // available — GBP quietly summed into a USD net worth, with no error.
+    // checked before any figure is read — prevents GBP silently summing into a USD net worth
     expect(historyOf({ currency: "GBP", quotes: [bar("2024-06-07", 271.5)] })).toEqual({
       status: "non-usd",
       currency: "GBP",
@@ -721,8 +684,7 @@ describe("reading a day of history", () => {
   });
 
   it("keeps the later instant when two bars file under one trading day", () => {
-    // Yahoo inserts extra bars at event times; two bars under one day are one
-    // day, and the later instant is the nearer thing to a close.
+    // Yahoo inserts extra bars at event times — later instant of the pair is the nearer thing to a close
     const history = toProviderHistory(
       {
         meta: { currency: "USD" },
@@ -739,8 +701,7 @@ describe("reading a day of history", () => {
   });
 
   it("skips a bar whose timestamp cannot be read, rather than filing it under today", () => {
-    // Unlike a quote, whose fallback to fetch time is the lesser error: a
-    // bar's whole meaning is its day.
+    // unlike a quote, whose fallback to fetch time is the lesser error — a bar's whole meaning is its day
     const history = toProviderHistory(
       {
         meta: { currency: "USD" },
@@ -755,9 +716,8 @@ describe("reading a day of history", () => {
 });
 
 describe("un-adjusting the closes Yahoo restates through splits", () => {
-  // The figures are chosen so the un-adjusted close is checkable by eye, and
-  // asserted as the resulting close rather than as a factor: a factor asserted
-  // against itself would pass whichever direction the arithmetic went.
+  // figures chosen to be checkable by eye; asserted as the resulting close, not a factor
+  // (which could pass either arithmetic direction)
 
   it("multiplies a pre-split close back by the split's ratio", () => {
     const closes = closesOf(
@@ -768,9 +728,9 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
     );
 
     expect(closes).toEqual([
-      // Held at 200 a share the Friday before; Yahoo restates it as 50.
+      // held at 200/share the Friday before; Yahoo restates it as 50
       { date: "2024-06-07", close: "800.0000" },
-      // The split's own day already trades at the new price.
+      // the split's own day already trades at the new price
       { date: "2024-06-10", close: "50.0000" },
       { date: "2024-06-11", close: "52.0000" },
     ]);
@@ -803,8 +763,7 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
   });
 
   it("refuses the whole response when a split's ratio cannot be applied", () => {
-    // Some rows right and some wrong is the outcome worth refusing: every
-    // figure would look plausible.
+    // some rows right, some wrong — the outcome worth refusing, since every figure would look plausible
     expect(
       historyOf({
         splits: [split("2024-06-10", 4, 0)],
@@ -828,11 +787,8 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
   });
 
   it("refuses an events block it cannot read, rather than reporting no history", () => {
-    // The raw endpoint keys splits by epoch second, and `return: "object"`
-    // mode hands them back that way. An events block we cannot read may be
-    // hiding a split, and a close un-adjusted by a split nobody saw is the
-    // silent wrong figure — where `no-history` would have the ledger say the
-    // ticker is unknown or delisted, which it is not.
+    // raw endpoint keys splits by epoch second (return:"object" mode); an unreadable events
+    // block may hide a split — a close un-adjusted by it is the silent wrong figure
     expect(
       toProviderHistory(
         {
@@ -847,8 +803,7 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
   });
 
   it("carries a close whose un-adjusted value does not land on a whole cent", () => {
-    // One rounding, at the end, half away from zero: rounding per split would
-    // answer "0.0002" for the second case below.
+    // one rounding at the end, half away from zero — per-split rounding would answer "0.0002" for the case below
     expect(
       closesOf(historyOf({ splits: [split("2024-06-10", 1, 3)], quotes: [bar("2024-06-07", 200)] })),
     ).toEqual([{ date: "2024-06-07", close: "66.6667" }]);
@@ -864,8 +819,7 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
   });
 
   it("drops a row whose un-adjusted product outgrows the column, keeping the rest", () => {
-    // The figure that arrived fits; the product does not. An overflow inside
-    // the batch's transaction would cost every other close committing with it.
+    // figure fits, the un-adjusted product doesn't — an overflow here would cost every other close in the batch
     const closes = closesOf(
       historyOf({
         splits: [split("2024-06-10", 1000, 1)],
@@ -887,11 +841,8 @@ describe("un-adjusting the closes Yahoo restates through splits", () => {
 });
 
 describe("asking the worker for one symbol's history", () => {
-  // `socketProvider()` takes no client of its own — it dials the worker, so
-  // every case here starts a real one on `SOCKET_PATH` with a fake Yahoo
-  // client instead, closed by the shared `afterEach` above. The client is
-  // still shaped the way `yahoo-finance2` is (both methods), so the fake
-  // satisfies `YahooClient` honestly.
+  // socketProvider() dials the worker — a real one per case on SOCKET_PATH, closed by the
+  // shared afterEach; fake client still shapes both methods like yahoo-finance2
   const clientCharting = (
     chart: (symbol: string, options: ChartRequest) => Promise<unknown>,
   ): YahooClient => ({ quote: async () => [], chart });
@@ -911,8 +862,7 @@ describe("asking the worker for one symbol's history", () => {
     expect(seen).toEqual([
       {
         symbol: "VTI",
-        // No `period2`: the library defaults it to the instant of the call, and
-        // the range's real end is enforced on each bar's market date.
+        // no period2 — library defaults it to now; the real end is enforced per-bar on its market date
         options: { period1: "2024-06-01", interval: "1d", events: "split" },
       },
     ]);
@@ -943,13 +893,9 @@ describe("asking the worker for one symbol's history", () => {
   });
 
   it("reads the stem off any thrown error, never off its class", async () => {
-    // The library picks the class from Yahoo's own error `code` with the spaces
-    // removed, and only "Bad Request" resolves to one it defines — so the "Not
-    // Found" a delisted symbol answers arrives as a plain `Error`. This stands
-    // in for the library's class, which its `exports` map does not expose —
-    // and over the socket the class is lost regardless: the worker's `502`
-    // carries only the message text, so `isMissingHistory` could not see a
-    // class here even if it tried to.
+    // library only defines a class for "Bad Request"; "Not Found" arrives as plain Error. Stands
+    // in for a class its exports don't expose — and over the socket it's lost anyway (worker's
+    // 502 carries only text).
     class BadRequestError extends Error {
       override readonly name = "BadRequestError";
     }

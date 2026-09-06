@@ -1,32 +1,16 @@
-/**
- * `app/lib/lock.server.ts` — the module that offers a WebAuthn challenge and
- * judges the answer (docs/adr/0012, docs/specs/lock/02-the-two-ceremonies.md).
- * No browser and no route sits between these tests and the refusals; every
- * one is provoked by varying either the *server's* expectation — a wrong
- * configured origin or relying-party id, a spent, unknown or expired
- * challenge — mocking `../server/config.ts` to do it (the module derives
- * its expectation from `getConfig()` internally and takes no override
- * parameter), or a *response's own* signed content — a wrong relying-party
- * id, a bumped signed counter, a wrong public key — using
- * `tests/support/webauthn.ts`'s re-signing options. Never by breaking a
- * signature outright, which is that file's own rule and would pass a test
- * for the wrong reason.
- *
- * Five `describe` blocks below — `duplicate credential id`, `concurrent
- * bootstrap registrations`, `counter concurrency`, `passkey removed
- * mid-verification` and `touchGrant, deleted mid-touch` — drive genuine
- * cross-connection races against the real test database rather than
- * `withDatabase`'s single rolled-back transaction, the same reason
- * `tests/lock-schema.test.ts` does for `passkey_bootstrap_idx`. Each cleans
- * up its own committed rows at both ends, the way that file does, because
- * they share `tests/support/webauthn.ts`'s one signable credential id with
- * every `withDatabase` test here. All but `duplicate credential id`
- * synchronise through {@link waitUntilBlocked} — polling real, observable
- * database state rather than a fixed delay — so the interleaving each pins
- * is not a guess about timing that a loaded runner can guess wrong; that one
- * still sleeps, and races only against how fast the driver dispatches a
- * statement rather than against which of two refusals fires.
- */
+// app/lib/lock.server.ts: offers a WebAuthn challenge and judges the answer (docs/adr/0012,
+// docs/specs/lock/02-the-two-ceremonies.md). No browser, no route — every refusal is provoked
+// by varying either the server's expectation (wrong origin/RP id, spent/unknown/expired
+// challenge, via mocking ../server/config.ts) or the response's signed content (wrong RP id,
+// bumped counter, wrong public key, via tests/support/webauthn.ts's re-signing options). Never
+// by breaking a signature outright — that's webauthn.ts's own rule.
+// Five describe blocks — duplicate credential id, concurrent bootstrap registrations, counter
+// concurrency, passkey removed mid-verification, touchGrant deleted mid-touch — drive genuine
+// cross-connection races against the real database rather than withDatabase's rolled-back
+// transaction (same reason as lock-schema.test.ts's passkey_bootstrap_idx), each cleaning up
+// its own committed rows since they share webauthn.ts's one signable credential id. All but
+// duplicate credential id synchronise through waitUntilBlocked (polling real database state,
+// not a fixed delay); that one still sleeps, racing only how fast the driver dispatches a statement.
 import { generateKeyPairSync } from "node:crypto";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,10 +37,8 @@ import {
   transports,
 } from "./support/webauthn.ts";
 
-// `verifyAuthenticationResponse` is spied on, not replaced: every other test
-// in this file needs the library's real verification. Hoisted because
-// `vi.mock`'s factory runs before this file's own top-level `const`s would
-// otherwise exist.
+// Spied, not replaced — every other test needs the library's real verification. Hoisted
+// because vi.mock's factory runs before this file's top-level consts would otherwise exist.
 const capturedAssertionOptions = vi.hoisted(
   () => [] as Array<{ requireUserVerification?: boolean }>,
 );
@@ -74,18 +56,10 @@ vi.mock("@simplewebauthn/server", async (importOriginal) => {
   };
 });
 
-/**
- * `lock.server.ts` derives its relying-party expectation from
- * `getConfig().PUBLIC_ORIGIN`, computed fresh on every call rather than
- * taken as a parameter (§2 of the review this file folds in). This is the
- * seam that gives tests control instead: mock the config module the same
- * way `@simplewebauthn/server` is mocked above, and let one test-local knob
- * override `PUBLIC_ORIGIN` for the duration of a single call.
- * `server/config.ts` memoises its real answer with no reset (its own
- * header), which is exactly why a route parameter felt necessary to the
- * original author — mocking is the way round it without changing a
- * signature, `app/lib/db.server.ts`'s `withDb` comment's own principle.
- */
+/** lock.server.ts derives its RP expectation from getConfig().PUBLIC_ORIGIN fresh on every
+ * call, not a parameter (§2 of the review). Mocking the config module the same way
+ * @simplewebauthn/server is mocked above gives tests control without changing a signature
+ * (server/config.ts memoises with no reset, db.server.ts's withDb comment's own principle). */
 const configOverride = vi.hoisted(() => ({ origin: undefined as string | undefined }));
 
 vi.mock("../server/config.ts", async (importOriginal) => {
@@ -104,12 +78,8 @@ function mockPublicOrigin(origin: string): void {
   configOverride.origin = origin;
 }
 
-/**
- * `expectedOrigin` with a different port — the hostname (and so the
- * relying-party id `lock.server.ts` derives from it) is unchanged, which is
- * what isolates "wrong expected origin" from "wrong expected relying-party
- * id": each test below is provoked by exactly one of the two.
- */
+/** expectedOrigin with a different port — hostname (and the RP id lock.server.ts derives
+ * from it) unchanged, isolating "wrong origin" from "wrong RP id". */
 const DIFFERENT_PORT_ORIGIN = `${expectedOrigin}:8443`;
 
 const {
@@ -137,9 +107,8 @@ afterAll(closeTestDatabase);
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  // Every refusal below logs its cause (§6 of the review) — silenced here so
-  // a deliberately-provoked refusal does not spam the test run, and
-  // inspected directly by the one test about the logging itself.
+  // Every refusal logs its cause (§6 of the review) — silenced here so provoked refusals
+  // don't spam the run; inspected directly by the one test about logging itself.
   consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -249,13 +218,11 @@ describe("listPasskeys", () => {
 });
 
 describe("transports encoding", () => {
-  // `lock.server.ts` and `tests/support/fixtures.ts`'s `seedPasskey` both
-  // import these from `app/lib/lock.ts` now (§8 of the review) — pinned here
-  // as the module's own exported behaviour, not restated per caller.
+  // lock.server.ts and fixtures.ts's seedPasskey both import these from app/lib/lock.ts
+  // (§8 of the review) — pinned here as the module's own behavior, not restated per caller.
   it("joins no transports as null rather than an empty string", () => {
-    // The exact bug migration 0012's `transports` comment says the writer
-    // has to refuse: `[].join(",")` is `""`, and `"".split(",")` reads back
-    // as one bogus transport rather than none.
+    // Exact bug migration 0012's transports comment warns against: [].join(",") is "", and
+    // "".split(",") reads back as one bogus transport instead of none.
     expect(joinTransports([])).toBeNull();
     expect(joinTransports(undefined)).toBeNull();
   });
@@ -271,10 +238,9 @@ describe("transports encoding", () => {
 });
 
 describe("the grant cookie", () => {
-  // Pinned the way masking's is pinned (tests/masking.test.ts) — the same
-  // kind of test, not the same values: this cookie carries the id of a live
-  // unlock rather than a preference, so it parts company with masking's on
-  // exactly the two attributes that matter for that (ticket 03).
+  // Pinned like masking's (tests/masking.test.ts), same kind of test not the same values —
+  // this cookie carries a live unlock's id, not a preference, so it parts from masking's on
+  // the two attributes that matter (ticket 03).
   it("carries Secure, HttpOnly and the __Host- prefix, unlike masking's cookie", () => {
     const cookie = lockCookie("a-grant-id");
     expect(cookie).toMatch(/;\s*secure\b/i);
@@ -284,27 +250,22 @@ describe("the grant cookie", () => {
   });
 
   it("is SameSite=Lax, never Strict, because the gate's own sign-in bounce is a top-level cross-site return", () => {
-    // `Strict` would withhold this cookie on that very navigation and
-    // re-lock every browser on the weekly sign-in bounce the gate's own
-    // seven-day, non-rolling cookie eventually forces (ADR-0012's first
-    // paragraph) — a random-looking bug rather than anything this feature
-    // did (ADR-0012's own reasoning, restated as a test rather than only a
-    // comment).
+    // Strict would withhold this cookie on that navigation and re-lock every browser on
+    // the gate's weekly sign-in bounce (ADR-0012's first paragraph) — a random-looking bug,
+    // not anything this feature did.
     expect(lockCookie("a-grant-id")).toMatch(/samesite=lax/i);
   });
 
   it("is scoped to the whole app, and to exactly that", () => {
-    // `toContain("Path=/")` alone also accepts `Path=/settings`, which would
-    // scope the grant to one screen and lock every other one; the attribute
-    // has to *end* there.
+    // toContain("Path=/") alone also accepts Path=/settings, scoping the grant to one
+    // screen — the attribute has to end there.
     expect(lockCookie("a-grant-id")).toMatch(/;\s*Path=\/(?:;|$)/);
   });
 
   it("carries no Domain, which the __Host- prefix forbids and a browser would reject the cookie over", () => {
-    // The absence of an attribute, which no other test here checks: a
-    // `Domain=` added to either builder makes every browser drop the cookie
-    // outright, so the lock would refuse every request and no assertion on
-    // the four attributes that *are* present would notice.
+    // Absence of an attribute, unchecked elsewhere — a Domain= added to either builder
+    // makes every browser drop the cookie outright, refusing every request with no other
+    // assertion noticing.
     expect(lockCookie("a-grant-id")).not.toMatch(/;\s*domain=/i);
     expect(clearedLockCookie()).not.toMatch(/;\s*domain=/i);
   });
@@ -367,10 +328,9 @@ describe("grants", () => {
         expiresAt: new Date(Date.now() - 1000),
       });
 
-      // Minting has no exported entry point of its own (§4 of the review —
-      // it is not authority anybody should be able to hand out on its own
-      // say-so) — reached here, as every real caller reaches it, through a
-      // verified ceremony.
+      // Minting has no exported entry point of its own (§4 of the review — not authority
+      // handed out on its own say-so) — reached here through a verified ceremony, like
+      // every real caller.
       const options = await unlockOptions(db);
       await verifyUnlock(assertionResponse(options.challenge), db);
 
@@ -410,16 +370,10 @@ describe("grants", () => {
   );
 });
 
-/**
- * `touchGrant` replaces the middleware's old `readGrant` then `extendGrant`
- * pair with the one atomic read-and-maybe-extend statement §2 of the review
- * this file folds in asked for — the tests below pin the same three
- * outcomes `readGrant`/`extendGrant` used to split across two calls, now
- * from the one call the middleware actually makes. The genuinely
- * concurrent race — a grant deleted while `touchGrant` is reading it —
- * has its own two-connection test beside this file's other such races,
- * further down.
- */
+/** touchGrant replaces the middleware's old readGrant-then-extendGrant pair with one atomic
+ * read-and-maybe-extend statement (§2 of the review) — pins the same three outcomes now from
+ * one call. The genuinely concurrent race (grant deleted while touchGrant reads it) has its
+ * own two-connection test further down. */
 describe("touchGrant", () => {
   it(
     "reads nothing for an id past its expiry, and writes nothing",
@@ -431,8 +385,8 @@ describe("touchGrant", () => {
       });
 
       expect(await touchGrant(grant.id, db)).toBeUndefined();
-      // Never resurrected: touching an already-expired grant did not roll it
-      // forward on the strength of merely being asked.
+      // Never resurrected — touching an already-expired grant doesn't roll it forward
+      // just for being asked.
       expect(await readGrant(grant.id, db)).toBeUndefined();
     }),
   );
@@ -518,15 +472,14 @@ describe("unlocking", () => {
 
       expect(typeof grant.id).toBe("string");
       expect(grant.id.length).toBeGreaterThanOrEqual(32);
-      // A length check alone would pass a shorter, non-random encoding of
-      // the right character count; decoding to exactly 32 bytes is what
-      // kills a sequential or otherwise guessable id (migration 0012's own
-      // reasoning about `unlock_grant.id`).
+      // Length check alone would pass a shorter, non-random encoding of the right character
+      // count; decoding to exactly 32 bytes kills a sequential or guessable id (migration
+      // 0012's reasoning).
       expect(decodedByteLength(grant.id)).toBe(32);
       expect(grant.passkeyId).toBe(credentialId);
       expect(grant.expiresAt).toBeInstanceOf(Date);
-      // The idle window named in `app/lib/lock.ts`, not some other figure —
-      // a year-long grant would also satisfy every other assertion here.
+      // Idle window named in app/lib/lock.ts, not some other figure — a year-long grant
+      // would also satisfy every other assertion here.
       expect(grant.expiresAt.getTime()).toBeGreaterThan(Date.now() + IDLE_WINDOW_MS - 5000);
       expect(grant.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + IDLE_WINDOW_MS + 5000);
       expect(await readGrant(grant.id, db)).toEqual(grant);
@@ -550,9 +503,8 @@ describe("unlocking", () => {
       await verifyUnlock(assertionResponse(options.challenge), db);
 
       expect(capturedAssertionOptions).toHaveLength(1);
-      // Left at the library's own default (`true`) rather than restated.
-      // This pins only that it was not restated; that the default is
-      // actually in force is the signed assertion below.
+      // Left at the library's default (true), not restated — pins only that it wasn't
+      // restated; the signed assertion below pins the default actually being in force.
       expect(capturedAssertionOptions[0]?.requireUserVerification).toBeUndefined();
     }),
   );
@@ -560,23 +512,17 @@ describe("unlocking", () => {
   it(
     "refuses an assertion the authenticator signed without verifying anybody, writing nothing",
     withDatabase(async ({ db, seedPasskey }) => {
-      // The library's default is `requireUserVerification: true`
-      // (`authentication/verifyAuthenticationResponse.js:24`) and it refuses
-      // at `:175-176`. Signed with the bit cleared rather than flipped after
-      // signing, so the refusal is the UV rule rather than a broken
-      // signature — the same re-signing the `counter` and `rpID` options do.
+      // Library defaults requireUserVerification: true (verifyAuthenticationResponse.js:24),
+      // refusing at :175-176. Signed with the bit cleared, not flipped after signing, so the
+      // refusal is the UV rule, not a broken signature — same re-signing as counter/rpID options.
       await seedFixturePasskey(seedPasskey, /* counter */ 3);
       const options = await unlockOptions(db);
 
-      // Signed with a counter *ahead* of the stored one, deliberately. The
-      // library checks user verification first (`:175-176`) and the counter
-      // after (`:182-188`), so on this code either counter refuses and the
-      // choice looks arbitrary. It is not: the case this test exists for is
-      // the one where UV enforcement has gone — and there a counter at or
-      // below the stored one refuses on the counter instead, so the test
-      // would stay green while pinning nothing. Ahead of it, there is
-      // nothing left to refuse but the missing UV bit, and the stored 3
-      // below is what a wrongly-accepted assertion would have moved to 5.
+      // Counter ahead of stored, deliberately — library checks UV first (:175-176), counter
+      // after (:182-188). A counter at/below stored would refuse on the counter instead if UV
+      // enforcement ever went missing, pinning nothing; ahead of it, only the missing UV bit
+      // is left to refuse, and stored 3 below is what a wrongly-accepted assertion would have
+      // moved to 5.
       const refusal = await refusalOf(() =>
         verifyUnlock(
           assertionResponse(options.challenge, { counter: 5, flags: NO_USER_VERIFICATION_FLAGS }),
@@ -584,12 +530,10 @@ describe("unlocking", () => {
         ),
       );
       expect(refusal).toBeInstanceOf(ValidationError);
-      // Which refusal, not merely that there was one: every library throw
-      // collapses into the same `ValidationError` here, so without this the
-      // test would stay green if the fixture ever stopped signing a
-      // non-default `flags` correctly — pinning a broken signature rather
-      // than the rule. The operator's own log carries the cause, and the
-      // counter test below asserts it the same way.
+      // Which refusal, not just that there was one — every library throw collapses into the
+      // same ValidationError, so this pins the fixture actually signing non-default flags
+      // rather than a broken signature. Log carries the cause; the counter test below
+      // asserts it the same way.
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("assertion (unlock)"),
         expect.objectContaining({ message: expect.stringContaining("User verification required") }),
