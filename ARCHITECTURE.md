@@ -284,7 +284,7 @@ here, in place, with DESIGN.md's table given as the one to believe.
 
 | Variable | Default | Required | Effect |
 |---|---|---|---|
-| `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. Required *here* because `server/config.ts` gives it no default and refuses to start without one; DESIGN.md §10.1 lists it as optional because `compose.yaml` supplies the deployment's value, pointed at the bundled `db`. Both are true — an operator never sets it, and the code never guesses it. It carries no password: that is `PGPASSWORD`, below. |
+| `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. Required *here* because `server/config.ts` gives it no default and refuses to start without one; DESIGN.md §10.1 lists it as optional because `compose.yaml` supplies the deployment's value, pointed at the bundled `db`. Both are true of the bundled database: an operator never sets it, the code never guesses it, and the password travels as `PGPASSWORD` instead. Running against a Postgres this project does not own is the exception on both counts — the operator sets it themselves, and `.env.example` shows it carrying its own password, which wins over `PGPASSWORD` when present. |
 | `PUBLIC_ORIGIN` | — | **yes** | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. The lock (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) derives its WebAuthn relying-party id from it — the first variable *the lock* needs shared with the sidecar, not the first shared full stop: `TZ` already reaches both `app` and `gate` below. Also read by the `gate` service, which builds its redirect from it. |
 | `AUTH_GATE` | `none` | no | `external` or `none`: whether something in front of the app authenticates. It enables nothing — the app authenticates nobody either way — and decides only whether the unprotected-instance banner is drawn. A union rather than a boolean so a third posture is a value, not a redesign. |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
@@ -1820,9 +1820,12 @@ the image's own `CMD` in favour of `node ./server/price-worker.ts` and `node ./s
 respectively (§3.1). One version to tag, one image to pull three times, and one release train: a fix
 to either process ships and rolls back exactly as an app fix does. The nine `server/*.ts` files in the
 runtime image are why `server/config.ts` and `server/db.ts` are dependency-light and side-effect free:
-`config.ts`, `validate-config.ts`, `db.ts`, `migrations.ts` and `migrate.ts` are executed two
-different ways — bundled into the server build by Vite for the app, and run directly by Node for the
-entrypoint's config gate and migration runner. `yahoo-client.ts`, `price-worker.ts` and
+`config.ts`, `db.ts` and `migrations.ts` are executed two different ways — bundled into the server
+build by Vite for the app, and run directly by Node underneath the entrypoint's config gate and
+migration runner. `validate-config.ts` and `migrate.ts` are those two runners themselves and are
+reached only the second way, from `docker-entrypoint.sh`; nothing under `app/` imports either, so
+they enter no bundle. It is their *dependencies* that have to survive both, which is the same
+constraint arriving by one path instead of two. `yahoo-client.ts`, `price-worker.ts` and
 `egress-proxy.ts` are reached only the second way, by the two alternate entrypoints above; nothing
 under `app/` imports them, so `npm run build`'s server bundle never carries them. `symbol-pattern.ts`
 is the one exception, reached both ways: the worker imports it directly (`price-worker.ts:61`), and

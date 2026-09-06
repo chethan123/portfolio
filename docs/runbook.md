@@ -323,16 +323,19 @@ ordinary. So:
     as its cause** — `worker` is up but `egress-proxy` is not: stopped answering, or never started.
     `docker compose ps egress-proxy` is not `healthy`, or `docker compose ps` shows six rows where
     seven belong.
-  - **`fetch failed`, with `Proxy response (502) !== 200 when HTTP Tunneling` as its cause** (a `504`
-    in its place for a resolve or connect that ran past its own deadline) — both `worker` and
-    `egress-proxy` are healthy, and Yahoo or the resolver behind the proxy is down. Nothing to
-    restart; wait it out.
-  - **`fetch failed`, with `Client network socket disconnected before secure TLS connection was
-    established` as its cause** — an SNI teardown: the host answered, but under a name
-    `egress-proxy` refuses to forward, so the proxy tore the tunnel down mid-connection instead of
-    answering with a status. Both containers stay healthy throughout, and this one is a code fix
-    (the allowlist's hardcoded host list), not an operator's — see
-    [Security](operating.md#security).
+  - **`fetch failed`, whose cause names a proxy response with a status** — grep `Proxy response`;
+    the status in it is the discriminator, `502` for a far side that could not be reached and `504`
+    for one that ran past a deadline. Both `worker` and `egress-proxy` are healthy, and Yahoo or the
+    resolver behind the proxy is down. Nothing to restart; wait it out.
+  - **`fetch failed`, whose cause is a socket disconnecting before TLS was established** — no status
+    at all, which is the tell: an SNI teardown. The host answered, but under a name `egress-proxy`
+    refuses to forward, so the proxy tore the tunnel down mid-handshake rather than answering. Both
+    containers stay healthy throughout, and this one is a code fix (the allowlist's host list), not
+    an operator's — see [Security](operating.md#security).
+
+  The exact wording of those last two comes from Node and its HTTP client rather than from this
+  project, so match on the shapes above — a status, or the absence of one — rather than on a
+  sentence a dependency upgrade can reword without failing anything here.
 
   Check `docker compose ps` for all three — `app`, `worker` and `egress-proxy` — before anything
   else, and [the worker's own healthcheck](operating.md#the-workers-own-healthcheck) for what its

@@ -1600,3 +1600,22 @@ Recorded so they are revisited deliberately rather than discovered under deadlin
     symbol that uses the difference never refreshes — shown stale, with a log line naming it — and
     the fix is narrowing where the longer bound is still needed, not widening the worker's pattern
     back out toward the internet.
+21. **The app's last route out is an application-layer one, not closed.** Neither network `app` sits
+    on carries a default route, so it reaches nothing off them at IP level. It can still reach
+    `caddy`, and `caddy` forwards `/oauth2/*` to `gate`, which has egress of its own — so a
+    compromised app has a relay to Google, hop by hop, that no network rule denies it. Closing it
+    means the gate stops being reachable through the front door, which is what the front door is
+    for. Named rather than removed.
+22. **The worker's bounds hold only while the worker is honest.** Its rate cap, its batch sizes and
+    its one-call deadline are its own code, so they bound a compromised worker not at all; what
+    remains after that are the proxy's socket cap, its deadlines, and the five hosts it will open a
+    tunnel to. Both halves come from one npm tree and one image, so a supply-chain compromise
+    reaches both at once. Decorrelating the worker's dependencies from the app's is named as
+    follow-up work in `docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md`
+    and is not done.
+23. **Below Docker Engine 28 the isolation silently does not apply.** The networks that carry no
+    gateway rely on an option Engine 26 ignores without comment and Engine 27 refuses outright,
+    and `docker compose up` reports success either way. An instance can therefore run with the
+    topology this design describes and none of the isolation it depends on, with nothing in the
+    output saying so; `docs/operating.md`'s Installing section carries the version check that is
+    the only way to know.

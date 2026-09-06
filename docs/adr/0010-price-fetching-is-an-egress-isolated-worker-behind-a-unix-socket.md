@@ -31,9 +31,10 @@ called the library before, across a channel rather than a function call.
   app's `socketProvider()` asks it instead of importing the library. What to fetch stays the app's
   decision; the worker holds no domain rule about what a price means.
 - **A unix socket in a tmpfs volume the two containers share.** The named volume `price-worker-sock`
-  is mounted at `/run/price-worker` in `app` and in `worker`, and nowhere else — no other container
-  shares a network, PID or IPC namespace with the worker, so the volume is its only link to the
-  stack.
+  is mounted at `/run/price-worker` in `app` and in `worker`, and nowhere else. The worker shares no
+  PID or IPC namespace with anything, and exactly one network — `worker-proxy`, with `egress-proxy`
+  and nothing else on it — so the volume is its only link to the rest of the stack and that network
+  is its only way out. Two links, each with one thing on the far side, is the whole topology.
 - **HTTP/1.1 over it, the library's raw JSON as the whole contract.** `node:http` on both ends, one
   request per connection; the answer is the library's own `quote()`/`chart()` result, validated on
   read with the same schemas the app already validates Yahoo's answers with. No envelope of its own,
@@ -104,11 +105,13 @@ Rejected on their own terms, unchanged from that same round of review:
 - **No new UI state.** The freshness component and the refresh route's outcomes are untouched; the
   dead-worker distinction — a connect failure versus Yahoo failing versus a slow answer — is the
   operator's, read in `docker compose ps` and the worker's own log line, never the household's.
-- **One required variable.** `POSTGRES_PASSWORD` is the only setting a fresh `docker compose up` now
-  fails closed without; `PRICE_WORKER_SOCKET` keeps a development-only default and is not set in
-  deployment.
+- **One new required variable.** `POSTGRES_PASSWORD` is the only setting this decision adds to those
+  a fresh `docker compose up` fails closed without — it joins six that were already there, the gate's
+  three, `PUBLIC_ORIGIN`, and the dump sidecar's two. `PRICE_WORKER_SOCKET` keeps a
+  development-only default and is not set in deployment.
 - **One image, entrypoints either side of which restart independently.** `worker` and `egress-proxy`
-  are two more entrypoints on the image `app` and `dump` already share, and the socket plus the
+  are two more entrypoints on `app`'s own image — three services from one build, `dump` being a
+  Postgres image and no relation — and the socket plus the
   library's raw JSON is the whole contract between them: an `up -d` that lands one side of a version
   bump before the other is harmless exactly because nothing but that contract crosses.
 - **Worker supply-chain decorrelation is named, not done here.** A worker-only image stage with its

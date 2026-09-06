@@ -29,7 +29,7 @@ The services defined in [`compose.yaml`](../compose.yaml), under the project nam
 | Service | What it is | Published port |
 |---|---|---|
 | `db` | Postgres. All persistent state, in `./volumes/db/data` beside `compose.yaml` | none |
-| `dump` | The nightly backup: dumps `db`, verifies the archive decodes, prunes old ones, into `./volumes/dumps` | none |
+| `dump` | The nightly dump: dumps `db`, verifies the archive decodes, prunes old ones, into `./volumes/dumps`. Not a backup — that is a copy taken *off* this machine, which this stack never makes (ADR-0009) | none |
 | `app` | The application: pages, uploads, and the price refresh loop, in one process | none |
 | `worker` | Fetches quotes and historical closes from the price provider, reached from `app` over the `price-worker-sock` volume they share | none |
 | `egress-proxy` | The only route out of this stack: a forward proxy admitting `worker`'s calls to the price provider and nothing else | none |
@@ -755,9 +755,11 @@ and these limits are the argument for it.
 
 ### One thing that leaves the house
 
-The app itself has no way out — `backend` and `caddy-app`, the only two networks it is on, are both
-internal. The worker is what leaves the house, and it makes outbound requests to exactly one
-destination: the price provider. What goes out is the list of ticker symbols being priced, plus your
+The app itself has no route out at IP level — `backend` and `caddy-app`, the only two networks it is
+on, are both internal. One application-layer path remains, and it is known rather than closed: `app`
+can reach `caddy`, and `caddy` forwards `/oauth2/*` to `gate`, which does have egress. Nothing in the
+app uses it; a compromised app could. The worker is what deliberately leaves the house, and it makes
+outbound requests to exactly one destination: the price provider. What goes out is the list of ticker symbols being priced, plus your
 public IP. Quantities, balances, account names, people and filenames do not. There is no analytics or
 error-reporting SDK anywhere in the image. It is still worth knowing that the symbol list reveals
 *what* is held, if not how much — an operator who objects can price instruments manually or block
