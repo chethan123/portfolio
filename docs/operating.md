@@ -104,13 +104,19 @@ changed definition when the Compose that created it stamped a config hash onto i
 `docker/compose` added in November 2024 and first shipped in 2.31.0 — below that version there is no
 hash to compare, so a future release that redefines a network already running under an older
 Compose would see `up` leave it exactly as it found it, a successful `up` with nothing in the output
-to say the change never took. This release does not do that: `egress-worker` is the only network
-here that predates it, and this release leaves that one byte-identical; the five others —
-`backend`, `caddy-app`, `caddy-gate`, `egress-gate` and `ingress` — are all created from nothing, and
-the implicit `default` network they replace is removed outright rather than redefined. There is
-nothing already running for an old Compose to fail to reconcile, so nothing here fails on a Compose
-below 2.31.0 — check it too (`docker compose version --short`), for whichever later release does
-touch one of these five again, but it is not a reason to stop today.
+to say the change never took. This release does not do that either, though the reason has changed
+since the last one: back then `egress-worker` was the one network here that predated the floor,
+carried over byte-identical release to release; this release deletes `egress-worker` outright
+instead of carrying it over at all, replacing it with two networks of its own, `worker-proxy` and
+`egress-proxy` — Docker cannot flip a live plain bridge to `internal` in place, which is exactly why
+the replacement needed a new name rather than reusing the old one. So every network this release
+touches is one Compose has either never seen before or will never see again, and the five it leaves
+alone — `backend`, `caddy-app`, `caddy-gate`, `egress-gate` and `ingress` — keep the definition they
+already had, with nothing about them for even a new Compose to reconcile. Either way, there is
+nothing already running under a changed definition for an old Compose to fail to compare against, so
+nothing here fails on a Compose below 2.31.0 — check it too (`docker compose version --short`), for
+whichever later release does redefine one of these networks in place, but it is not a reason to stop
+today.
 
 Port 80 free. Outbound HTTPS to `ghcr.io`, because the app image is pulled, and to `quay.io`,
 because the gate image is. A Google account for each family member, and one Google Cloud project to
@@ -735,6 +741,39 @@ worth knowing that the symbol list reveals *what* is held, if not how much — a
 can price instruments manually or block egress and accept permanently stale prices. The app degrades
 to the last known price, never to zeros.
 
+**What actually enforces "exactly one destination" is `egress-proxy`, and it checks more than the
+hostname.** `worker`'s only network connects it to nothing but that proxy, which admits a `CONNECT`
+only to the five hosts `yahoo-finance2` 4.0.2 can reach — `query1.finance.yahoo.com`,
+`query2.finance.yahoo.com`, `finance.yahoo.com`, `guce.yahoo.com` and `consent.yahoo.com` — and only
+on port 443; nothing else
+from `worker` goes anywhere. The `CONNECT` host alone would not be enough of a check: all five names
+resolve to the same handful of addresses that also answer for unrelated Yahoo properties (mail,
+sign-in, the main site), so an address match proves nothing about which one is actually being
+reached — the edge decides that from the server name the *client* presents. So the proxy checks that
+too, once the tunnel is open: it reads the TLS ClientHello's own `server_name` and refuses to relay a
+single byte further unless it matches the host that was `CONNECT`ed to, which a compromised or
+misdirected `worker` cannot fake without the edge itself agreeing to answer under the wrong name.
+Every refusal, whichever check failed, is one line in `egress-proxy`'s own log —
+`docker compose logs egress-proxy` — reading `Egress proxy: refused CONNECT <host> — <reason>`: a
+host outside the five reads `host is not on the allowlist`; a name that passed that check but failed
+the ClientHello comparison reads `server_name <name> does not match CONNECT host <host>`. From
+`app`'s side the first of those is a numbered refusal like any other,
+`fetch failed: Proxy response (403) !== 200 when HTTP Tunneling` — a `403` rather than the `502`
+an unreachable Yahoo gives, which is the difference between "the proxy would not let this out" and
+"the proxy tried and could not get through". That second
+case is also the one place `worker`'s own fetch surfaces differently from an ordinary failure — the
+tunnel's `200` has already been sent by the time the mismatch is caught, so the proxy can only tear
+the connection down rather than answer with a status, and the text that reaches `app` under
+`Price provider failed` (see [Logs](#logs)) is
+`fetch failed: Client network socket disconnected before secure TLS connection was established`
+rather than a numbered failure. `worker` stays healthy throughout every one of these, because its own
+healthcheck asks its own socket and never Yahoo or the proxy. The allowlist itself is a constant in
+`server/egress-proxy.ts`, not a setting — there is no environment variable or file to add a host to —
+so if Yahoo ever moves `guce.yahoo.com` or `consent.yahoo.com` to a new name (a snapshot of Yahoo's
+live redirect chain, unlike the three `finance.yahoo.com` names the pinned library hardcodes), quotes
+stop and the refusal above names the host Yahoo redirected to instead. The one fix is a release that
+edits that constant; there is nothing here to configure your way out of.
+
 ### Can I put this on the internet?
 
 The honest answer changed with the gate, but not all the way to yes. The threat this was built
@@ -1027,7 +1066,23 @@ wording:
   all fails through this same stem differently: rate-limited or a Yahoo error, the response body's
   own text standing in for that sentence, never "no worker listening" — see
   [the worker's own healthcheck](#the-workers-own-healthcheck) for why a worker in that state still
-  answers `/healthz` with `200`. Other refresh failures (the pool, the advisory lock, the
+  answers `/healthz` with `200`. That "Yahoo error" is, since this release, at least as often
+  `egress-proxy` — `worker`'s only route anywhere — as Yahoo itself, and the two read differently.
+  `docker compose ps egress-proxy` not `healthy` means every call fails before it ever reaches
+  Yahoo: `fetch failed: connect ECONNREFUSED <address>` for a proxy that has stopped answering, or
+  `fetch failed: getaddrinfo ENOTFOUND egress-proxy` for one the network can no longer even name —
+  either way `worker` answers `app` with a `502`, and, confusingly, `ECONNREFUSED` names a
+  different actor than the one two sentences up: there it is `app`'s own socket to `worker` going
+  bad, here it is `worker`'s TCP connection to `egress-proxy` going bad, one level further down the
+  same call. A *healthy* `egress-proxy` that cannot reach Yahoo or its own resolver answers
+  the `CONNECT` itself with something other than `200`, which reaches `app` as
+  `fetch failed: Proxy response (502) !== 200 when HTTP Tunneling` (a `504` in place of the `502`
+  for a resolve or connect that ran past its own deadline instead of being refused outright), and
+  `egress-proxy`'s own log carries one `Egress proxy` line per such failure, naming the host and the
+  cause — worth reading directly rather than only inferring it from `app`'s side. `worker` itself
+  stays healthy in every one of these; see [Security](#security) for the fourth shape this same
+  stem takes, when the host is reachable but answers under a name `egress-proxy` refuses to
+  forward. Other refresh failures (the pool, the advisory lock, the
   transaction) log `Price refresh failed`, a pressed **Refresh now** included —
   one stem for all of them, the separate `Manual price refresh failed` line having retired with the
   route's own catch. A single symbol refused over its currency logs `Price refused`. None of them
@@ -1435,6 +1490,27 @@ starts serving — so a request is never served against a half-migrated schema. 
 idempotent, so a restart is always safe, and `GET /healthz` returns a non-200 if the image ever
 carries a migration the database has not recorded.
 
+**This release also deletes a network and adds two, and `docker compose up -d` will not clean up the
+one it drops.** Compose only ever reconciles a network its file still names; `egress-worker` going
+out of the file entirely leaves the old network running underneath, unreferenced, rather than
+removing it. Replace `compose.yaml` and run `docker compose up -d` as above, then remove the old
+network yourself:
+
+```sh
+docker network rm portfolio_egress-worker
+```
+
+and confirm the replacement actually took:
+
+```sh
+docker network inspect -f '{{.Internal}}' portfolio_worker-proxy
+```
+
+which must print `true`. Docker cannot flip a live plain bridge to `internal` in place, which is
+exactly why `worker`'s network needed a new name rather than `egress-worker` turned `internal` where
+it stood — the inspect check is what tells you the new one is genuinely there, rather than the
+`network rm` above having silently failed to run at all.
+
 ### There is no rollback
 
 Migrations are forward-only, and comprehensively so: there are no `down` files, there is no rollback
@@ -1483,6 +1559,21 @@ whole point, which was to get a generated password onto the role once and keep i
 the one every checkout's `.env.example` already carries. The moment that matters here is the password
 sitting in a URL again, in `.env`, for as long as the old `compose.yaml` runs; it is not the moment
 the password itself goes weak, and a rollback is not the occasion to make it one.
+
+**A pin below *this* release needs `compose.yaml` rolled back with it too, not just
+`APP_VERSION`.** `worker`, `app` and the new `egress-proxy` all share one tag, and an image from
+before this release has no `server/egress-proxy.ts` for `egress-proxy`'s entrypoint to run —
+`restart: unless-stopped` then crash-loops that container on `Cannot find module` forever, the same
+shape a pin below ticket 04 gives `worker` itself, above. Stopping that crash loop does not fix
+anything either: the topology on disk is still this release's, `worker` carries no network but
+`worker-proxy`, and `worker-proxy` reaches nowhere except that dead `egress-proxy` — so an old
+`worker` image started under this `compose.yaml` has no route to Yahoo at all, ever. It logs
+`fetch failed` on every call, `app` logs `Price provider failed` every tick behind it, forever, and
+`/healthz` stays green on every container throughout, because none of their healthchecks ask Yahoo
+or each other ([the worker's own healthcheck](#the-workers-own-healthcheck)). Roll `compose.yaml`
+back to match the pinned image, or do not pin below this release at all — re-upgrade instead. This
+release adds no migration and no column either, so an old image only loses the egress lockdown,
+never any data.
 
 ### Moving an instance that predates the local path
 
