@@ -464,33 +464,20 @@ function sameQuantity(before: string, after: string): boolean {
   return toUnits(before, QUANTITY_SCALE) === toUnits(after, QUANTITY_SCALE);
 }
 
-/**
- * Parse the draft through its saved mapping, resolve every string, and
- * classify against what the account holds now. Current holdings come through
- * {@link accountHoldings} — never a second `order by as_of_date desc` here:
- * §8.2's drift is a tie-break copied into a new caller.
- *
- * Two spellings of one fund (both aliased to it) fold here exactly as the
- * parser folds a duplicated string: quantities summed, basis
- * quantity-weighted, null when any lot's basis is unknown. `parseStatement`
- * groups by the raw string and defers this on purpose; here resolution has
- * decided.
- *
- * @throws {DraftNotReadyError} when a step has not genuinely been passed —
- *         the routes redirect there.
- */
+// Parses the draft through its saved mapping, resolves every string, classifies against what
+// the account holds now (via accountHoldings — never a second order-by here, §8.2). Two
+// spellings of one fund (both aliased to it) fold exactly as the parser folds a duplicated
+// string: quantities summed, basis quantity-weighted, null if any lot's basis is unknown —
+// parseStatement defers this fold on purpose, since resolution hasn't happened yet there.
 async function assembleDiff(
   draft: UploadDraft,
   db: Kysely<Database>,
 ): Promise<AssembledDiff> {
-  // The shared draft-parse rule: an owed step here is a bookmarked review over
-  // a draft whose mapping broke or whose file still carries a first sighting.
   const result = await parseDraft(draft, db);
   if (result.step !== null) throw new DraftNotReadyError(result.step);
   const { parsed } = result;
 
-  // Byte-exact alias lookup, all strings in one read — `parseDraft` has
-  // already established that every string resolves; this read is for the ids.
+  // parseDraft already established every string resolves; this read is for the ids.
   const strings = parsed.positions.map((position) => position.instrument);
   const aliasRows =
     strings.length === 0
@@ -539,8 +526,8 @@ async function assembleDiff(
       continue;
     }
 
-    // The spelling fold. Signs were already applied, so the sum is over final
-    // quantities; `foldLots` is the parser's own rule, called from both.
+    // Signs already applied, so the sum is over final quantities; foldLots is the parser's own
+    // rule, called from both places.
     const fold = foldLots(group);
 
     folded.push({
@@ -552,9 +539,7 @@ async function assembleDiff(
     });
   }
 
-  // What each instrument is and quotes at — the Value column's other operand
-  // and the product guard's provider operands. The dividend rate is read and
-  // nowhere rendered: the view multiplies it by whatever this commit writes.
+  // Dividend rate is read and nowhere rendered: the view multiplies it by whatever this commit writes.
   const ids = folded.map((row) => row.instrumentId);
   const factRows =
     ids.length === 0
@@ -649,8 +634,7 @@ async function assembleDiff(
     });
   }
 
-  // Every current holding the file does not carry is removed — in full, each
-  // with its last known value or "never priced".
+  // Every current holding the file doesn't carry is removed — in full.
   const removed: DiffRemoved[] = current
     .filter((holding) => !inFile.has(holding.instrumentId))
     .map((holding) => ({
@@ -663,9 +647,8 @@ async function assembleDiff(
       value: holding.value,
     }));
 
-  // "No statement yet" through `lastRecorded`, not an empty holdings read: an
-  // account sold to nothing has a statement and gets an honest diff, while a
-  // first upload reads as "14 added".
+  // Via lastRecorded, not an empty holdings read: an account sold to nothing still has a
+  // statement and gets an honest diff, while a first upload reads as "14 added".
   const firstStatement = (await lastRecorded(draft.accountId, db)) === null;
 
   return {
@@ -696,12 +679,6 @@ async function assembleDiff(
   };
 }
 
-/**
- * The review screen's read: what this draft's file changes.
- *
- * @throws {NotFoundError} through {@link requireDraft} for a dead draft.
- * @throws {DraftNotReadyError} when an earlier step has not been passed.
- */
 export async function diffForDraft(
   draftId: string,
   db: Kysely<Database> = getDb(),
@@ -710,18 +687,15 @@ export async function diffForDraft(
   return (await assembleDiff(draft, db)).diff;
 }
 
-/** The review form's fields, unvalidated — validating them is the commit's job. */
 export type CommitInput = {
-  /** The statement date, only read when the file did not date itself. */
+  // Only read when the file didn't date itself.
   asOf?: string;
-  /** "true" when the majority-removal sentence was ticked. */
+  // "true" when the majority-removal sentence was ticked.
   confirmRemovals?: string;
-  /** Hidden account id: feeds the expired page's link; here it only guards
-   *  that the post and the draft agree. */
+  // Hidden field feeds the expired page's link; here it only guards post/draft agreement.
   accountId?: string;
 };
 
-/** What the redirect and its receipt need to know about the write. */
 export type CommittedUpload = {
   setId: string;
   accountId: string;
@@ -731,32 +705,16 @@ export type CommittedUpload = {
   counts: { added: number; updated: number; unchanged: number; removed: number };
 };
 
-/**
- * The flow's one write: the immutable `position_set`, one holding per parsed
- * row, the draft deleted — one transaction, nothing partially applied.
- *
- * The refusals run before it, every one a sentence: a closed account (in
- * `setBalance`'s words); a posted account id disagreeing with the draft's (a
- * stale or forged form); the account-number guard, both halves naming both
- * numbers — a file disagreeing with itself is not a statement of one account,
- * and a mapped column disagreeing with the recorded number is §5.1's
- * silent-collision failure caught at the moment it would happen (a guard,
- * never a selector); the as-of date via `recordedDate` when the file did not
- * date itself — when it did, a posted date is not consulted: the review
- * renders no control, so one can only arrive from a stale or hand-built post,
- * and a statement's own date must not be overridable; the product guard per
- * row — all three multiplications `holding_valued` casts, one failing row
- * refusing the whole commit by name; and the majority-removal tick, refused
- * in the ratio's words.
- *
- * A second upload for an already-recorded date is allowed —
- * `latest_position_set`'s tie-break resolves it. Re-posting a committed draft
- * is a {@link NotFoundError} → the expired-or-recorded page.
- *
- * @throws {ValidationError} for every refusal above.
- * @throws {NotFoundError} for a dead draft, including a re-POST after commit.
- * @throws {DraftNotReadyError} when an earlier step has not been passed.
- */
+// The flow's one write: immutable position_set, one holding per parsed row, draft deleted —
+// one transaction. Refusals run first, each a sentence: closed account; posted account id
+// disagreeing with the draft's (stale/forged form); the account-number guard, naming both
+// numbers when a file disagrees with itself or with the recorded number (§5.1's silent-collision
+// caught at the moment it'd happen — a guard, never a selector); the as-of date via recordedDate
+// only when the file didn't date itself (a self-dated file's posted date is never consulted —
+// review renders no control for it, so one only arrives stale/hand-built); the product guard per
+// row (all three multiplications holding_valued casts, one failing row refuses the whole
+// commit); the majority-removal tick. A second upload for an already-recorded date is allowed
+// (latest_position_set's tie-break resolves it); re-posting a committed draft is a NotFoundError.
 export async function commitUpload(
   draftId: string,
   raw: CommitInput,
@@ -765,8 +723,7 @@ export async function commitUpload(
   const draft = await findDraft(draftId, db);
   if (draft === undefined) throw new NotFoundError(EXPIRED);
 
-  // First, deliberately, and in `setBalance`'s words: an account closed while
-  // the draft sat open is a problem no ticked box or typed date will fix.
+  // First: a closed account isn't fixable by a ticked box or typed date.
   if (draft.accountClosedAt !== null) {
     throw ValidationError.form(
       `${draft.accountName} is closed, and a closed account's history does not change. ` +
@@ -774,8 +731,7 @@ export async function commitUpload(
     );
   }
 
-  // The hidden field feeds the expired page's link, never a write — but a
-  // post naming a different account is stale or forged, and is refused.
+  // Hidden field feeds the expired page's link only — a different account is stale/forged.
   if (raw.accountId !== undefined && raw.accountId !== draft.accountId) {
     throw ValidationError.form(
       "This form was posted for a different account than the one this upload is recording " +
@@ -785,9 +741,8 @@ export async function commitUpload(
 
   const { diff, rows, fileAccountNumber } = await assembleDiff(draft, db);
 
-  // Intra-file half of the guard: a file carrying two numbers is not a
-  // statement of one account — refused naming both, never resolved by picking
-  // one (the parser's as-of-disagreement shape).
+  // Intra-file half of the guard: two numbers in one file isn't one account — refuse naming
+  // both, never resolve by picking one.
   const numbers = rows.flatMap((row) =>
     row.accountNumber !== null ? [row.accountNumber] : [],
   );
@@ -801,7 +756,7 @@ export async function commitUpload(
     );
   }
 
-  // The account-number guard (§9.12 of the brief: a guard, never a selector).
+  // Account-number guard: never a selector.
   if (draft.accountNumber !== null) {
     const disagreeing = rows.find(
       (row) => row.accountNumber !== null && row.accountNumber !== draft.accountNumber,
@@ -822,10 +777,8 @@ export async function commitUpload(
       : parseInput(z.object({ asOf: recordedDate("The statement date") }), { asOf: raw.asOf })
           .asOf;
 
-  // The product guard, all three multiplications the view performs. An
-  // overflow does not fail the write — it succeeds, then the view raises on
-  // every request, taking four screens down together. One failing row refuses
-  // the whole commit.
+  // All three multiplications the view performs. Unchecked, an overflow would succeed here then
+  // make the view raise on every request. One failing row refuses the whole commit.
   for (const row of rows) {
     if (!fitsTheMoneyColumn(row.quantity, row.costBasisPerShare)) {
       throw ValidationError.form(
@@ -861,9 +814,8 @@ export async function commitUpload(
   }
 
   return inTransaction(db, async (trx) => {
-    // The deletion leads and is the transaction's guard: a concurrent commit
-    // already took the row, and a second position set must not land behind
-    // its back. Nothing was written before this point.
+    // Deletion leads and is the transaction's guard: a concurrent commit already took the row,
+    // and a second position set must not land behind its back.
     const taken = await trx
       .deleteFrom("upload_draft")
       .where("id", "=", draft.id)
@@ -889,8 +841,7 @@ export async function commitUpload(
           rows.map((row) => ({
             position_set_id: set.id,
             instrument_id: row.instrumentId,
-            // Zero stays zero and null stays null: a defaulted basis reports
-            // a fake gain (§5.4, 0001).
+            // Zero stays zero, null stays null: a defaulted basis reports a fake gain (§5.4, 0001).
             quantity: row.quantity,
             cost_basis_per_share: row.costBasisPerShare,
           })),
@@ -898,8 +849,8 @@ export async function commitUpload(
         .execute();
     }
 
-    // Captured only where the column is still empty, so a hand-recorded or
-    // concurrent number is never silently overwritten.
+    // Only where the column is still empty, so a hand-recorded or concurrent number is never
+    // silently overwritten.
     if (fileAccountNumber !== null && draft.accountNumber === null) {
       await trx
         .updateTable("account")
@@ -925,34 +876,23 @@ export async function commitUpload(
   });
 }
 
-/** What the account page's `?uploaded=` confirmation sentence states. */
 export type UploadReceipt = {
   setId: string;
   asOf: IsoDate;
-  /** Null for a set with no filename — the receipt says "the statement". */
+  // Null for a set with no filename — receipt says "the statement".
   filename: string | null;
-  /** True when the set has no predecessor: the sentence reads "14 added". */
+  // True when the set has no predecessor: reads as "14 added".
   firstStatement: boolean;
   counts: { added: number; updated: number; unchanged: number; removed: number };
-  /**
-   * Positions in the recorded set — the receipt's "now holds N" (brief §6.5),
-   * counted from the set's own rows so a hand-typed parameter can only
-   * describe what is stored.
-   */
+  // Counted from the set's own rows so a hand-typed parameter can only describe what is stored.
   holdingCount: number;
 };
 
-/**
- * The receipt for `?uploaded=<setId>` — recomputed from the database, never
- * trusted from the URL: the parameter names *which* set, not what is in it
- * (the `?recorded=` receipt's guarantee). Counts are the set diffed against
- * its predecessor under the same `as_of_date desc, created_at desc, id desc`
- * ordering `latest_position_set` implements — cited here rather than
- * re-derived as a new rule.
- *
- * @returns null for a set that is not the account's latest, not the
- *          account's, or not an id — a stale bookmark renders no receipt.
- */
+// ?uploaded=<setId> is recomputed from the database, never trusted from the URL — the parameter
+// names which set, not what's in it. Diffed against its predecessor under the same
+// as_of_date/created_at/id ordering latest_position_set implements. Returns null for a set
+// that isn't the account's latest, isn't the account's, or isn't an id — a stale bookmark
+// renders no receipt.
 export async function uploadReceipt(
   accountId: string,
   setId: string,
@@ -961,9 +901,7 @@ export async function uploadReceipt(
 ): Promise<UploadReceipt | null> {
   if (!/^\d+$/.test(accountId) || !/^\d+$/.test(setId)) return null;
 
-  // "Latest" through the shared read, so the receipt and every figure on the
-  // page resolve the same set. A set the account is no longer reading gets no
-  // sentence — the receipt describes the holdings on screen or nothing.
+  // Through the shared read, so the receipt and every other figure resolve the same set.
   if (latest === null || latest.id !== setId) {
     return null;
   }

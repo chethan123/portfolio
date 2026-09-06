@@ -5,23 +5,12 @@ import { renderRoute } from "./support/render.tsx";
 
 import { ErrorPage } from "~/components/error-page";
 
-/**
- * The page every thrown error lands on (a4#11).
- *
- * The bug this protects against is that one boundary produced two pages for one
- * status code. `/no-such-page` printed "404 Not Found" over the router's own
- * `Error: No route matches URL "/no-such-page"`, and `/accounts/999999` printed
- * "404 " — the trailing space is an empty `statusText` — over a loader's bare
- * "Not found". Both defects came from printing the transport's strings, so the
- * rule is: **the same status renders the same page, and nothing the throwing
- * code wrote appears on it.**
- *
- * The two error shapes below are what the router hands a boundary in those two
- * cases. They are built by hand because neither is reachable without a running
- * router, so each is first put through `isRouteErrorResponse` — if the shape
- * ever drifts, these fail here rather than silently testing the fallback
- * branch.
- */
+// Error page every thrown error lands on (a4#11). Bug this guards: one boundary produced two
+// different pages for one status — /no-such-page printed the router's raw error string, while
+// /accounts/999999 printed "404 " (empty statusText) over a loader's bare message. Rule: same
+// status renders the same page, nothing the throwing code wrote appears on it.
+// The two shapes below are hand-built (unreachable without a running router) and verified
+// through isRouteErrorResponse so a shape drift fails here, not silently in the fallback branch.
 
 /** What React Router throws when no route matches the URL at all. */
 const NO_ROUTE_MATCHES = {
@@ -57,7 +46,7 @@ describe("the error page", () => {
 
     expect(markup).not.toContain("No route matches");
     expect(markup).not.toContain("/no-such-page");
-    // The status line, empty on one and stale on the other, is never the title.
+    // Status line, empty on one and stale on the other, is never the title.
     expect(markup).toContain("404 Not found");
     expect(markup).not.toContain("404 Not Found");
   });

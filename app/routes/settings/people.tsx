@@ -56,14 +56,12 @@ export async function action({ request }: Route.ActionArgs) {
 export default function People({ loaderData, actionData }: Route.ComponentProps) {
   const { people } = loaderData;
 
-  /** The messages for one row's rename form, or for the add form. */
   const errorsFor = (intent: string, personId: string | null = null) =>
     actionData?.intent === intent && actionData.personId === personId
       ? actionData.errors
       : undefined;
 
-  // A removal refusal names accounts rather than a field, so it is shown above
-  // the list it is about instead of beside a box.
+  // A removal refusal names accounts, not a field — shown above the list, not beside a box.
   const removalRefusal = actionData?.intent === "remove" ? actionData.formError : null;
 
   return (
@@ -95,16 +93,9 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
 
               return (
                 <li key={person.id}>
-                  {/* The row *is* the form. `.record` and `.record-form` both
-                      pad, so nesting one in the other would inset every row
-                      twice over. */}
                   <Form method="post" className="record record-form">
                     <input type="hidden" name="personId" value={person.id} />
 
-                    {/* The box and its refusal are one flex item
-                        (`AccountFields`' shape) so the sentence stacks under
-                        its box; loose in the row, the refusal sat beside the
-                        box and pushed that row out of line with the rest. */}
                     <div>
                       <label className="visually-hidden" htmlFor={`name-${person.id}`}>
                         Name
@@ -112,8 +103,6 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                       <input
                         id={`name-${person.id}`}
                         name="name"
-                        // What was typed survives a refusal; otherwise the stored
-                        // name is what the box shows.
                         defaultValue={errors ? (actionData?.values.name ?? "") : person.name}
                         aria-invalid={errors?.name ? true : undefined}
                       />
@@ -136,13 +125,8 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                       )}
                     </p>
 
-                    {/* Grouped and pushed to the trailing edge by the group:
-                        two actions on one record read as a pair, and
-                        `space-between` drew them a quarter-screen apart. */}
                     <div className="record-actions">
-                      {/* Outlined, not filled: five Saves would leave the page
-                          five primary actions and no obvious one — the filled
-                          button belongs to "Add person" below. */}
+                      {/* Outlined, not filled — the filled button belongs to "Add person" below. */}
                       <button
                         type="submit"
                         name="intent"
@@ -156,8 +140,7 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                         name="intent"
                         value="remove"
                         className="button button--danger"
-                        // Not disabled when they own accounts: the refusal
-                        // explains itself, a dead button explains nothing.
+                        // Not disabled with accounts owned — the refusal explains itself.
                         aria-label={`Remove ${person.name}`}
                       >
                         Remove

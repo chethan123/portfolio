@@ -119,7 +119,6 @@ describe("a first statement, from the drop screen to the account page", () => {
     withDatabase(async (ctx) => {
       const account = await aHouseholdWithAnAccount(ctx);
 
-      // --- The drop screen: choose an account, hand over a file ------------
       const toColumns = await redirectTo(() =>
         upload(
           args(
@@ -132,16 +131,12 @@ describe("a first statement, from the drop screen to the account page", () => {
       const draftId = draftIdFrom(toColumns);
       expect(toColumns).toBe(`/upload/${draftId}/columns`);
 
-      // --- Columns: say what the file's columns mean -----------------------
-      // Both instruments are first sightings, so the mapping step must send
-      // this reader on to resolution rather than to review. That routing is
-      // the draft's own answer, not this test's assumption.
+      // Both instruments are first sightings, so the routing below (the draft's own answer) must go to resolution, not review.
       const toInstruments = await redirectTo(() =>
         saveColumns(args(post(`/upload/${draftId}/columns`, COLUMNS_FORM), { draftId })),
       );
       expect(toInstruments).toBe(`/upload/${draftId}/instruments`);
 
-      // --- Instruments: name what has never been seen ----------------------
       const toReview = await redirectTo(() =>
         resolveInstruments(
           args(
@@ -152,17 +147,13 @@ describe("a first statement, from the drop screen to the account page", () => {
       );
       expect(toReview).toBe(`/upload/${draftId}/review`);
 
-      // --- Review: what a reader is shown before anything is written -------
-      // Nothing has been recorded yet, which is the promise the screen makes.
       const review = await reviewPage(draftId);
       expect(review.diff.added.map((row) => row.symbol).sort()).toEqual(["FZROX", "VTI"]);
-      // This export carries no date column, so the screen has to ask for one
-      // and the reader types it. A file that dated itself would say so here.
+      // No date column in this export, so the screen must ask for one.
       expect(review.diff.asOf.source).not.toBe("file");
       expect(review.diff.removed).toEqual([]);
       expect(await accountHasAnySet(ctx, account.id)).toBe(false);
 
-      // --- Commit: the flow's one write ------------------------------------
       const landing = await redirectTo(() =>
         commit(
           args(
@@ -177,13 +168,11 @@ describe("a first statement, from the drop screen to the account page", () => {
       const receipt = receiptFrom(landing);
       expect(receipt.accountId).toBe(account.id);
 
-      // --- The account page the reader actually lands on -------------------
       const page = await accountPage(
         args(get(landing), { accountId: receipt.accountId }),
       );
 
-      // The receipt describes what was recorded, and the quantities are the
-      // file's own — at the column's scale, as decimal strings.
+      // Quantities are the file's own, at the column's scale, as decimal strings.
       expect(page.receipt).toMatchObject({ holdingCount: 2 });
       expect(
         page.holdings
@@ -194,9 +183,7 @@ describe("a first statement, from the drop screen to the account page", () => {
         ["VTI", "100.00000000"],
       ]);
 
-      // The draft is gone: the flow staged it, spent it, and deleted it in the
-      // same transaction as the write. Going back to it is a 404 rather than a
-      // second chance to commit the same file.
+      // Draft deleted in the same transaction as the write — going back is a 404, not a second commit.
       const spent = await responseOf(() =>
         resumeDraft(args(get(`/upload/${draftId}`), { draftId })),
       );
@@ -211,8 +198,7 @@ describe("the same brokerage's next statement", () => {
     withDatabase(async (ctx) => {
       const account = await aHouseholdWithAnAccount(ctx);
 
-      // The whole of January's journey, so February meets a system that has
-      // genuinely learned rather than one a fixture told.
+      // The whole of January's journey, so February meets a system that genuinely learned, not one a fixture told.
       const first = await redirectTo(() =>
         upload(
           args(
@@ -247,7 +233,6 @@ describe("the same brokerage's next statement", () => {
         ),
       );
 
-      // --- February, same header, same instruments -------------------------
       const toColumns = await redirectTo(() =>
         upload(
           args(
@@ -259,24 +244,16 @@ describe("the same brokerage's next statement", () => {
       );
       const draftId = draftIdFrom(toColumns);
 
-      // The columns screen still opens — the reader confirms the remembered
-      // mapping rather than being written past it — but submitting it now goes
-      // straight to review, because the file raises no first sighting. The
-      // instruments step is skipped by the flow itself, not by this test
-      // declining to call it.
+      // Columns still opens (confirms the remembered mapping) but goes straight to review — the flow itself skips instruments, not this test.
       const next = await redirectTo(() =>
         saveColumns(args(post(`/upload/${draftId}/columns`, COLUMNS_FORM), { draftId })),
       );
       expect(next).toBe(`/upload/${draftId}/review`);
 
-      // And the strip records it as skipped rather than passed, which is the
-      // only surviving trace once the aliases are indistinguishable from any
-      // other vocabulary (brief §7.5).
+      // instrumentsSkipped is the only surviving trace once aliases are indistinguishable from any other vocabulary (brief §7.5).
       const review = await reviewPage(draftId);
       expect(review.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
 
-      // February states a change in VTI and no change in FZROX, so the diff a
-      // reader is shown is one changed row rather than two added ones.
       expect(review.diff.added).toEqual([]);
       expect(review.diff.removed).toEqual([]);
       expect(review.diff.updated.map((row) => row.symbol)).toEqual(["VTI"]);
@@ -293,7 +270,6 @@ describe("the same brokerage's next statement", () => {
         ),
       );
 
-      // --- The account now reads February, and January is history ----------
       const page = await accountPage(
         args(get(landing), { accountId: receiptFrom(landing).accountId }),
       );
@@ -301,7 +277,7 @@ describe("the same brokerage's next statement", () => {
       expect(
         page.holdings.find((holding) => holding.symbol === "VTI")?.quantity,
       ).toBe("120.00000000");
-      // The immutable spine: committing never edited January, it superseded it.
+      // Immutable spine: committing superseded January, never edited it.
       expect(await positionSetCount(ctx, account.id)).toBe(2);
     }),
   );

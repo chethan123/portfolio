@@ -428,34 +428,19 @@ export function summarise(holdings: ValuedHolding[]): HoldingsTotal {
   return totalOf(holdings).total;
 }
 
-/** One group's rows, its subtotal, and how much of the table it is. */
 export type HoldingsGroup = {
   key: string;
   label: string;
   holdings: ValuedHolding[];
   total: HoldingsTotal;
-  /**
-   * Six places, of the **gross positive total** (`allocation.ts`'s
-   * denominator): a liability's share stays finite and signed, and the
-   * positive groups sum to `1.000000` exactly via `allocateShares`. A screen
-   * must read the sign before drawing a width, and must say the denominator —
-   * with a liability in the set this is not a share of the footer total.
-   *
-   * `null` where there is no fraction to state, not a zero fraction: a group
-   * nothing could price (value itself null), and a set with nothing positive
-   * (no base). Both render as a dash; coercing either to `0.000000` would
-   * read as "this group is none of the portfolio".
-   */
+  // Fraction of the gross positive total (allocation.ts's denominator), same rules as
+  // AllocationSlice.share. Null (not "0.000000") when there's no fraction to state: value
+  // itself null, or nothing in the set positive.
   share: string | null;
 };
 
-/**
- * Split the rows into groups, largest subtotal first — grouping exists to
- * answer "where is the money", so the answer is the first row; ties fall to
- * the label for stable renders. An entirely-unpriced group sorts among the
- * zeros with a `null` subtotal, rendered as a dash rather than a claim of
- * nothing.
- */
+// Largest subtotal first, ties on label. An entirely-unpriced group sorts among the zeros
+// with a null subtotal, rendered as a dash.
 export function groupHoldings(
   holdings: ValuedHolding[],
   id: DimensionId,
@@ -481,14 +466,12 @@ export function groupHoldings(
     ...totalOf(bucket.holdings),
   }));
 
-  // Sorted before the shares: `allocateShares` breaks ties on position, in
-  // the rendered order.
+  // Sorted before shares: allocateShares breaks ties on this rendered order.
   const ordered = summed.sort((a, b) =>
     a.units === b.units ? compareText(a.label, b.label) : a.units > b.units ? -1 : 1,
   );
 
-  // `allocateShares` owns the denominator; what it cannot decide is a share
-  // of zero versus no share at all, so the no-positive-base case is asked here.
+  // allocateShares can't distinguish a share of zero from no share at all, so that's asked here.
   const anyPositive = ordered.some((group) => group.units > 0n);
   const shares = allocateShares(ordered.map((group) => group.units));
 
@@ -502,16 +485,9 @@ export function groupHoldings(
   }));
 }
 
-/**
- * A share count as text: the stored digits minus scale-8 padding. Not in
- * `format.ts` — everything there renders money, and a quantity takes no
- * currency mark: half a fund is half a share, not fifty cents. No computing;
- * the digits are grouped and trimmed as text, with the same U+2212 as
- * `format.ts` so a negative quantity and figure read alike. Here rather than
- * in a route because Account detail prints the same cell, and a second copy
- * drifted immediately — one screen showed a loan as `-14500`, the other as
- * `−14,500`.
- */
+// Not in format.ts, which renders money — a quantity takes no currency mark. Same U+2212 as
+// format.ts so a negative quantity and figure read alike. Shared with Account detail's cell,
+// which drifted the moment it had its own copy.
 export function formatQuantity(decimal: string): string {
   const trimmed = decimal.trim();
   const negative = trimmed.startsWith("-") || trimmed.startsWith("−");
@@ -524,14 +500,8 @@ export function formatQuantity(decimal: string): string {
   }`;
 }
 
-/**
- * The sub-line under an instrument's name: what it is, and what is wrong with
- * its price if anything. Here because Account detail renders the same caption
- * — two copies is one screen calling a holding "never priced" while the other
- * calls it stale. The words are load-bearing (§6.2: merely-old is shown and
- * counted; never-existed is a dash and excluded) and colour never carries
- * them (§12).
- */
+// Shared with Account detail's same caption. Words are load-bearing (§6.2: merely-old is
+// shown and counted, never-existed is a dash and excluded) and colour never carries them (§12).
 export function holdingNote(holding: {
   assetClass: ValuedHolding["assetClass"];
   isPriced: boolean;
@@ -545,33 +515,13 @@ export function holdingNote(holding: {
   return parts.join(" · ");
 }
 
-/**
- * What one holding pays as a fraction of what it is worth — `$340` a year on
- * `$27,000` is `"0.012593"`, at `SHARE_SCALE`, display only. One holding's,
- * never a group's (CONTEXT.md reserves *weighted yield* for that — a
- * different denominator). Not `quote.yield_pct` either: the stored yield was
- * struck against the provider's own snapshot, and reading it here would put
- * two numbers for one thing in a row — §8.2's named weak point. The dividend
- * is the one stored figure and this is a view of it.
- *
- * A percentage because the amount alone cannot be compared: `$340` says
- * nothing until you know the position size — so the fraction goes under the
- * amount rather than replacing it.
- *
- * Null in exactly two cases, both "no percentage here", never "zero percent":
- * **no value** — an unquoted trust has a dividend and nothing to state it
- * against, and `0.0%` would be a claim about a holding nobody can price; and
- * **a value of zero** — `divide` raises `RangeError` on a zero denominator,
- * and a sold-out position reaches here as `"0.0000"`; unguarded, one such row
- * would take the whole table down.
- *
- * **A liability's two negatives cancel, and that is the right answer**:
- * `−$522.00` at `3.6%` is what the note costs and the rate it costs it at;
- * the amount, not the percentage, says which way the money moves.
- *
- * Here for {@link formatQuantity}'s reason — Account detail renders the same
- * cells. Rendering is `formatShare`'s job in `allocation.ts`.
- */
+// One holding's yield (e.g. "$340" on "$27,000" -> "0.012593"), never a group's (CONTEXT.md
+// reserves weighted yield, a different denominator, for that) and never quote.yield_pct
+// (struck against the provider's own snapshot — reading it here would put two numbers on one
+// row, §8.2). Null means "no percentage here", never zero: no value (nothing to state it
+// against) or a value of zero (divide() would raise on that denominator). A liability's two
+// negatives cancelling is correct — the amount, not the percentage, says which way money moves.
+// Shared with Account detail; rendering is formatShare's job in allocation.ts.
 export function holdingYield(
   holding: Pick<ValuedHolding, "annualDividend" | "value">,
 ): string | null {
@@ -585,32 +535,18 @@ export function holdingYield(
   return render(divide(dividend, value, SHARE_SCALE), SHARE_SCALE);
 }
 
-/**
- * The name one row answers to in a URL — `12.7`, account then instrument. A
- * holding has no id of its own here on purpose: the view answers "what is
- * held now", and the underlying `holding` row's id changes on every upload —
- * a link built on it would rot while still pointing at a real row. The pair
- * does not rot and is exactly as unique (one position set per account, one
- * row per instrument within it), and it is why the editor needs no schema
- * change: the server re-resolves the pair through `latest_position_set` at
- * write time. A full stop separates two digit-only ids legibly where `%2F` or
- * `-` would not.
- */
+// e.g. "12.7" (account then instrument). A holding has no id of its own here on purpose:
+// the underlying holding row's id changes on every upload, so a link built on it would rot;
+// this pair doesn't (one position set per account, one row per instrument in it) — the
+// server re-resolves it through latest_position_set at write time.
 export function rowKey(holding: Pick<ValuedHolding, "accountId" | "instrumentId">): string {
   return `${holding.accountId}.${holding.instrumentId}`;
 }
 
-/**
- * The pair a row key names, or null. Strict about shape, silent about failure
- * ({@link parseQuery}'s way): a mangled or stale `edit=` closes the editor
- * rather than raising; whether the ids name a real row is the database's
- * question. Eighteen digits, not any run: a nineteen-digit number can exceed
- * `bigint`, which Postgres answers `value out of range` — a 500 instead of a
- * closed editor. No leading zeros, so the one spelling is the one
- * {@link rowKey} produces: `0001.0002` would pass the loader's canonical
- * check while matching no row's key — a URL claiming an open editor beside a
- * table that shows none, over a form target that would still have written.
- */
+// Strict about shape, silent about failure: a mangled or stale edit= closes the editor
+// rather than raising; whether the ids name a real row is the database's question. Capped at
+// 18 digits — 19 can exceed bigint, which Postgres answers with a 500 instead. No leading
+// zeros, so the one spelling is the one rowKey produces ("0001.0002" would match no row's key).
 export function parseRowKey(
   value: string | null,
 ): { accountId: string; instrumentId: string } | null {

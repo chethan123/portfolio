@@ -1,25 +1,10 @@
-/**
- * The only reader of `holding_valued` and `holding_valued_at`, and — since
- * ADR-0006 — the only thing that *values* anything from `price_observation`
- * (the intra-session readers at the foot). DESIGN.md §8.2 names hand-rolled
- * dashboard queries disagreeing as the design's weakest point; the mitigation
- * is one SQL view and this one module over it. A dashboard writing its own
- * join to `holding` has left the mitigation.
- *
- * A translation layer, not a service: no caching, no rules beyond assembling
- * coverage counts — every valuation rule lives in the view, in SQL, where the
- * arithmetic is exact. Every numeric field returned is a decimal string
- * (`server/db.ts`); the only numbers are {@link Coverage} cardinalities.
- * Every exported query takes an optional `db`, defaulting to the process
- * pool; tests pass a transaction they roll back.
- *
- * Every household-scoped reader takes an {@link OwnerFilter} **first**, no
- * default (ADR-0008): a screen cannot read holdings without saying whose, so
- * an omission is a word missing from a diff rather than a behaviour missing
- * from a screen. Account-scoped readers take none — an account is already
- * narrower than an owner, and asking again would invite "this account, if its
- * owner is also selected", which no screen means.
- */
+// Only reader of holding_valued/holding_valued_at, and (ADR-0006) the only thing that values
+// anything from price_observation. Mitigates DESIGN.md §8.2's weakest point (hand-rolled
+// dashboard queries disagreeing) with one view and this one module over it — a screen writing
+// its own join to holding has left the mitigation. Translation layer, not a service: every
+// valuation rule lives in the view's SQL; the only numbers here are Coverage cardinalities,
+// everything else crosses as a decimal string. Every household-scoped reader takes OwnerFilter
+// first, no default — ADR-0008.
 import { sql } from "kysely";
 
 import { numberTail } from "./account-label.ts";
@@ -28,35 +13,21 @@ import { isFiltered, type OwnerFilter } from "./owner-filter.ts";
 
 import type { AliasedRawBuilder, Kysely, RawBuilder, Selectable, SqlBool } from "kysely";
 
-/** `account.kind`, constrained by a check constraint in the schema. */
 export type AccountKind = "brokerage" | "401k" | "ira" | "bank" | "liability";
 
-/**
- * `account.tax_treatment`. Three-way, not boolean: $500k Traditional is
- * ~$350k of spending power where $500k Roth is $500k — a boolean throws away
- * exactly that (DESIGN.md §4.5).
- */
+// Three-way, not boolean: $500k Traditional is ~$350k of spending power where $500k Roth is
+// $500k — a boolean throws that away (DESIGN.md §4.5).
 export type TaxTreatment = "taxable" | "tax_deferred" | "tax_free";
 
-/** `classification.asset_class` — the fixed rollup under the user's labels. */
 export type AssetClass = "equity" | "bond" | "cash" | "other";
 
-/**
- * One holding, valued, with everything a dashboard groups by on it. Cash is a
- * `USD` position priced at 1.00 and a liability a negative `USD` quantity, so
- * nothing reading this shape needs a branch for either (DESIGN.md §2).
- */
+// Cash is a USD position priced at 1.00 and a liability a negative USD quantity, so nothing
+// reading this needs a branch for either (DESIGN.md §2).
 export type ValuedHolding = {
   accountId: string;
   accountName: string;
-  /**
-   * The number tail (CONTEXT.md) of `account.external_account_number`, null
-   * when none is recorded. Pre-masked here because loader data is serialized
-   * to the browser: the raw number never leaves the server, exactly as the
-   * upload draft's tail already promises. Not a view column either — a label
-   * does not belong in the valuation contract (ADR-0001), so
-   * {@link readHoldings} joins `account` for it instead.
-   */
+  // Pre-masked (raw number never leaves the server). Not a view column: a label isn't part of
+  // the valuation contract (ADR-0001) — readHoldings joins account for it instead.
   accountNumberTail: string | null;
   institution: string;
   accountKind: AccountKind;
@@ -64,60 +35,42 @@ export type ValuedHolding = {
   ownerId: string;
   ownerName: string;
   instrumentId: string;
-  /** Null for an instrument with no public ticker, such as a 401k trust. */
+  // Null for an instrument with no public ticker, such as a 401k trust.
   symbol: string | null;
   instrumentName: string;
-  /**
-   * The provider's word — `EQUITY`, `ETF`, `MUTUALFUND`, the seeded
-   * `CURRENCY`. Null for an instrument nobody quotes: a hand-priced
-   * workplace-plan trust, not a fault.
-   */
+  // Provider's word (EQUITY, ETF, MUTUALFUND, seeded CURRENCY). Null = nobody quotes it, not a fault.
   quoteType: string | null;
   classification: string;
   assetClass: AssetClass;
-  /** Decimal string. Negative for a liability — the sign lives here. */
+  // Negative for a liability — the sign lives here.
   quantity: string;
-  /** Null only when the instrument has never been quoted. */
+  // Null only when never quoted.
   price: string | null;
-  /** Null exactly when `price` is null. Never zero standing in for unknown. */
+  // Null exactly when price is null. Never zero standing in for unknown.
   value: string | null;
-  /** Null when the statement omitted it, as 401k statements routinely do. */
+  // Null when the statement omitted it, as 401k statements routinely do.
   costBasisPerShare: string | null;
   costBasis: string | null;
-  /** Null when either side is unknown — never a gain invented from a null. */
+  // Null when either side is unknown — never a gain invented from a null.
   unrealized: string | null;
   isPriced: boolean;
-  /** A stale price is still used; this says so rather than hiding it. */
+  // A stale price is still used; this says so rather than hiding it.
   isStale: boolean;
-  /**
-   * Projected pay over the coming year: quantity × current per-share rate,
-   * computed in the view. Never null on the current path — a missing rate
-   * coalesces to zero because "pays nothing" and "nobody asked" are the same
-   * null in `quote` (DESIGN.md §14, limitation 9) — and always null on an
-   * as-of path: the projection describes now, and no historical rate is stored.
-   */
+  // quantity x current per-share rate. Never null on the current path (missing rate coalesces
+  // to zero, DESIGN.md §14 #9); always null on an as-of path (no historical rate stored).
   annualDividend: string | null;
 };
 
-/**
- * How much of a figure is known: "based on 8 of 12 holdings". The alternative
- * — coercing unknown to zero — reports a total that looks complete and is
- * not, the failure this design refuses everywhere.
- */
+// "based on 8 of 12 holdings" — the alternative, coercing unknown to zero, reports a total that
+// looks complete and isn't.
 export type Coverage = { known: number; total: number };
 
-/** A money figure and how much of the portfolio it was computed from. */
 export type Total = { amount: string; coverage: Coverage };
 
-/** One row of the view, as the generated types describe it. */
 type HoldingValuedRow = Selectable<Database["holding_valued"]>;
 
-/**
- * Postgres reports every view column as nullable regardless of reality, so
- * the generated type is wider than the view can produce. Narrow loudly: a
- * null here means the view and this module disagree about the schema — a bug
- * to surface, not paper over.
- */
+// Postgres reports every view column nullable regardless of reality. Narrow loudly: a null
+// here means the view and this module disagree about the schema — a bug to surface, not paper over.
 function required<T>(value: T | null, column: string): T {
   if (value === null) {
     throw new Error(`holding_valued.${column} was null, which the view cannot produce.`);
@@ -131,12 +84,9 @@ function toValuedHolding(
   return {
     accountId: required(row.account_id, "account_id"),
     accountName: required(row.account_name, "account_name"),
-    // Nullable, and masked before it leaves the module: most accounts never
-    // record a number, and the raw one stays server-side.
     accountNumberTail: numberTail(row.external_account_number),
     institution: required(row.institution, "institution"),
-    // The schema's check constraints are what make these casts safe: the
-    // database cannot hold a kind, treatment or asset class outside the set.
+    // Check constraints make these casts safe.
     accountKind: required(row.account_kind, "account_kind") as AccountKind,
     taxTreatment: required(row.tax_treatment, "tax_treatment") as TaxTreatment,
     ownerId: required(row.owner_id, "owner_id"),
@@ -144,9 +94,7 @@ function toValuedHolding(
     instrumentId: required(row.instrument_id, "instrument_id"),
     symbol: row.symbol,
     instrumentName: required(row.instrument_name, "instrument_name"),
-    // Not `required`: genuinely nullable — `instrument-resolution.server.ts`
-    // writes null on purpose for a manually priced instrument, and insisting
-    // would 500 the screens over a 401k trust.
+    // Not required: genuinely nullable for a manually priced instrument (a 401k trust).
     quoteType: row.quote_type,
     classification: required(row.classification, "classification"),
     assetClass: required(row.asset_class, "asset_class") as AssetClass,
@@ -158,49 +106,35 @@ function toValuedHolding(
     unrealized: row.unrealized,
     isPriced: required(row.is_priced, "is_priced"),
     isStale: required(row.is_stale, "is_stale"),
-    // Not `required`: the as-of function reports null on purpose and this
-    // mapper reads both — narrowing would 500 every historical read (ADR-0001).
+    // Not required: the as-of function reports null on purpose (ADR-0001).
     annualDividend: row.annual_dividend,
   };
 }
 
-/**
- * A calendar date, `YYYY-MM-DD`, crossing as a string in both directions:
- * default `pg` parses `date` at *local* midnight, and a round trip west of
- * UTC lands on the previous day — the wrong position set, no error anywhere.
- * `server/db.ts` registers the parser that prevents it.
- */
+// Crosses as a string in both directions: default pg parses date at local midnight, and a
+// round trip west of UTC lands on the previous day — the wrong position set, silently.
+// server/db.ts registers the parser that prevents it.
 export type IsoDate = string;
 
-/**
- * Where a read gets its rows: the view for "now", the function for a date.
- * One type covers both because the function `returns setof holding_valued`,
- * so everything below is written once and reads either; aliasing both to
- * `holding_valued` keeps the column names identical.
- */
+// One type for both sources (view for "now", function for a date) since the function returns
+// setof holding_valued — everything below is written once and reads either.
 type ValuedSource = AliasedRawBuilder<HoldingValuedRow, "holding_valued">;
 
 const valuedNow = (): ValuedSource =>
   sql.table<HoldingValuedRow>("holding_valued").as("holding_valued");
 
-/** What was held on `date`, priced at that date's carried-forward close. */
+// What was held on date, priced at that date's carried-forward close.
 const valuedAt = (date: IsoDate): ValuedSource =>
   sql<HoldingValuedRow>`holding_valued_at(${date}::date)`.as("holding_valued");
 
-/**
- * Ordering is for determinism, not display; a screen sorts as it likes.
- * `where` narrows the same read — a drill-down writing its own join to the
- * view would be the fourth hand-rolled query §8.2 warns about; this is the
- * same rows filtered.
- */
+// Ordering is for determinism, not display. `where` narrows the same read, so a drill-down
+// never needs its own join to the view (§8.2).
 async function readHoldings(
   db: Kysely<Database>,
   source: ValuedSource,
   where?: RawBuilder<SqlBool>,
 ): Promise<ValuedHolding[]> {
-  // The account join carries only the number tail's column: display identity,
-  // deliberately not a view column (ADR-0001 makes widening `holding_valued`
-  // a paired migration, and a label is not part of the valuation contract).
+  // Joins account only for the number tail — a label, not part of the valuation contract (ADR-0001).
   const all = db
     .selectFrom(source)
     .innerJoin("account", "account.id", "holding_valued.account_id")
@@ -216,12 +150,8 @@ async function readHoldings(
   return rows.map(toValuedHolding);
 }
 
-/**
- * One `SUM` over `value`, no branch for cash or debt, in SQL in `numeric` so
- * no float touches it. Unpriced holdings add nothing to `amount` but count in
- * `coverage.total`, so a partial answer is labelled partial — a zero standing
- * in for an unknown price would look like a genuinely empty account.
- */
+// SUM over value, no branch for cash or debt. Unpriced holdings add nothing to amount but
+// still count in coverage.total, so a partial answer is labelled partial.
 async function readTotal(
   db: Kysely<Database>,
   source: ValuedSource,
@@ -230,8 +160,7 @@ async function readTotal(
   const all = db
     .selectFrom(source)
     .select([
-      // `value` is null exactly when unpriced and SUM skips nulls, so no
-      // filter needed; coalesce covers the empty portfolio — zero, not null.
+      // value is null exactly when unpriced and SUM skips nulls; coalesce covers an empty portfolio.
       sql<string>`cast(coalesce(sum(value), 0) as numeric(20, 4))`.as("amount"),
       sql<string>`count(*) filter (where is_priced)`.as("known"),
       sql<string>`count(*)`.as("total"),
@@ -241,17 +170,14 @@ async function readTotal(
 
   return {
     amount: row.amount,
-    // Counts, not money — cardinalities cannot reach the precision limit.
+    // Counts, not money.
     coverage: { known: Number(row.known), total: Number(row.total) },
   };
 }
 
-/**
- * Every holding currently held, valued. "Currently" is the view's business:
- * newest position set per account, deterministic tie-break, closed accounts
- * excluded. A never-priced holding is here too (`isPriced: false`) — dropping
- * it would understate every total silently.
- */
+// "Currently" is the view's business: newest position set per account, deterministic
+// tie-break, closed accounts excluded. Never-priced holdings included (isPriced: false),
+// never dropped.
 export async function currentHoldings(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -259,7 +185,6 @@ export async function currentHoldings(
   return readHoldings(db, valuedNow(), ownedBy("holding_valued.owner_id", filter));
 }
 
-/** Net worth right now, and how much of it is known. */
 export async function netWorth(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -267,18 +192,10 @@ export async function netWorth(
   return readTotal(db, valuedNow(), ownedBy("holding_valued.owner_id", filter));
 }
 
-/**
- * Every holding held on a past date, valued at that date's carried-forward
- * close — a Saturday equals the preceding Friday, so does a holiday, no
- * calendar anywhere. It does not invent a past: an account whose first upload
- * is after `date` contributes no rows rather than a zero (DESIGN.md §7 — the
- * period before belongs to `manual_networth`); an account closed after `date`
- * is included, because it was open then. `isStale` is always false: staleness
- * belongs to a live quote; a historical close is simply the close.
- *
- * @param date `YYYY-MM-DD`, any date — cash and debt still price at 1.00
- *             through the same carry-forward, no special case.
- */
+// Carried-forward close (a Saturday equals the preceding Friday, no calendar anywhere). Doesn't
+// invent a past: an account with no upload before date contributes no rows, not a zero
+// (DESIGN.md §7 — that period belongs to manual_networth); an account closed after date is
+// included, since it was open then. isStale is always false: a historical close is simply the close.
 export async function holdingsAt(
   filter: OwnerFilter,
   date: IsoDate,
@@ -287,13 +204,8 @@ export async function holdingsAt(
   return readHoldings(db, valuedAt(date), ownedBy("holding_valued.owner_id", filter));
 }
 
-/**
- * Net worth on a past date, on {@link netWorth}'s terms. Before the first
- * upload: `0.0000` over zero coverage — "nothing was recorded yet", not "the
- * household had nothing", and the coverage count lets a chart say so.
- *
- * @param date `YYYY-MM-DD`.
- */
+// Before the first upload: 0.0000 over zero coverage — "nothing recorded yet", not "had
+// nothing" — the coverage count lets a chart say so.
 export async function netWorthAt(
   filter: OwnerFilter,
   date: IsoDate,
@@ -302,36 +214,27 @@ export async function netWorthAt(
   return readTotal(db, valuedAt(date), ownedBy("holding_valued.owner_id", filter));
 }
 
-/**
- * One account's holdings, rolled up in SQL — JS addition of decimal strings
- * is either wrong (`Number`) or a decimal library redoing what `numeric` does
- * exactly. Reads the same view as everything else, so an account's total and
- * the net worth headline cannot disagree (DESIGN.md §8.2).
- */
+// Rolled up in SQL, not JS (which would need Number or a decimal lib redoing what numeric
+// already does). Same view as everything else, so an account's total can't disagree with the
+// net worth headline (§8.2).
 export type AccountTotal = {
   accountId: string;
   accountName: string;
-  /** The pre-masked number tail — {@link ValuedHolding}'s field, same terms. */
   accountNumberTail: string | null;
   institution: string;
   accountKind: AccountKind;
   ownerName: string;
-  /** Decimal string. Negative for a liability account — the sign lives in it. */
+  // Negative for a liability account.
   amount: string;
   coverage: Coverage;
 };
 
-/** One point on the computed net worth line. */
 export type NetWorthPoint = { date: IsoDate; amount: string; coverage: Coverage };
 
-/** One hand-typed point from the pre-day-zero series (DESIGN.md §7). */
+// The pre-day-zero series (DESIGN.md §7).
 export type ManualPoint = { date: IsoDate; amount: string };
 
-/**
- * The rollup's columns under the view's names, shared by the list and the
- * single-account query below so the two cannot describe one account
- * differently — the reason the view exists (DESIGN.md §8.2).
- */
+// Shared by the list and single-account query below so the two can't describe one account differently.
 type AccountTotalRow = {
   account_id: string | null;
   account_name: string | null;

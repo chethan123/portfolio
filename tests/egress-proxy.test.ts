@@ -1,24 +1,11 @@
-/**
- * The egress proxy (ticket 08, `server/egress-proxy.ts`): a real
- * `node:http` server on a loopback TCP port, a fake `dns.lookup` and a fake
- * upstream `net.connect` — never a socket to the internet — and raw TCP for
- * the client side, since a `CONNECT` tunnel and the TLS bytes inside it are
- * below anything `fetch` or `http.request` would let a test drive directly.
- *
- * `sendRaw` below writes the `CONNECT` request line and, for the pipelined
- * cases, the ClientHello bytes in the very same `socket.write()` call — the
- * shape the module header's step 4 depends on, and the reason a plain
- * `http.request({ method: "CONNECT" })` client cannot stand in for it: that
- * API has no way to put bytes on the wire before its own `'connect'` event
- * fires, i.e. before the `200` — which is also, precisely, the honest
- * client's shape, covered by the "arrives only after the 200" cases below.
- *
- * A raw `net.Socket` with no `'data'` listener stays *paused* and never
- * notices the peer closing — same trap `tests/price-worker.test.ts`
- * documents — so every socket below that is not read through
- * {@link waitForStatusLine} calls `.resume()` once it only needs to notice a
- * close.
- */
+// Egress proxy (ticket 08, server/egress-proxy.ts): real node:http server on loopback, fake
+// dns.lookup and upstream net.connect (never a socket to the internet), raw TCP for the client
+// side — CONNECT tunnels and TLS bytes are below what fetch/http.request can drive directly.
+// The pipelined case below writes the CONNECT line and ClientHello in one socket.write() — a
+// plain CONNECT client can't reach that shape (no way to write before its own 'connect' event,
+// i.e. before the 200).
+// A paused net.Socket never notices a close (same trap as price-worker.test.ts) — every socket
+// not read through waitForStatusLine calls .resume() once it only needs the close.
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 
@@ -36,12 +23,8 @@ const TEST_DEADLINES = { stageDeadlineMs: 200, idleTeardownMs: 300 };
 
 const ALLOWED_HOST = "finance.yahoo.com";
 
-// ---------------------------------------------------------------------------
-// ClientHello construction — a hand-rolled encoder mirroring the parser's own
-// field layout, built forward from the wire format rather than from the
-// module under test.
-// ---------------------------------------------------------------------------
-
+// ClientHello encoder mirrors the parser's own field layout, built from the wire format,
+// not the module under test.
 function tlsRecord(handshake: Buffer): Buffer {
   const header = Buffer.alloc(5);
   header[0] = 0x16; // handshake content type
@@ -99,11 +82,7 @@ function clientHello(names?: string[]): Buffer {
   return tlsRecord(Buffer.concat([handshakeHeader, body]));
 }
 
-// ---------------------------------------------------------------------------
-// Fakes for `dns.lookup` and the upstream `net.connect` — the two injectable
-// seams, per the ticket. Neither ever names a real host.
-// ---------------------------------------------------------------------------
-
+// Fakes for the two injectable seams (dns.lookup, net.connect) — neither ever names a real host.
 function fakeDnsLookup(addresses: string[]): DnsLookupFn {
   return (_hostname, _options, callback) => {
     queueMicrotask(() => callback(null, addresses.map((address) => ({ address, family: 4 }))));
@@ -152,10 +131,7 @@ function partiallyRefusingNetConnect(refusedAddress: string, port: number): NetC
   };
 }
 
-// ---------------------------------------------------------------------------
 // A fake upstream — the real TLS edge, from the proxy's point of view.
-// ---------------------------------------------------------------------------
-
 type FakeUpstream = { port: number; received: Buffer[]; close: () => Promise<void> };
 
 async function startFakeUpstream(reply: Buffer = Buffer.from("UPSTREAM-REPLY")): Promise<FakeUpstream> {
@@ -174,10 +150,6 @@ async function startFakeUpstream(reply: Buffer = Buffer.from("UPSTREAM-REPLY")):
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
-
-// ---------------------------------------------------------------------------
-// Raw client helpers.
-// ---------------------------------------------------------------------------
 
 /** Accumulates bytes until a blank line (`\r\n\r\n`) arrives, splitting off whatever followed it in the same reads. */
 function waitForStatusLine(socket: net.Socket): Promise<{ line: string; rest: Buffer }> {
@@ -236,12 +208,8 @@ function connectLine(target: string): string {
   return `CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`;
 }
 
-// ---------------------------------------------------------------------------
-// Suite plumbing: every server, fake upstream and ad-hoc socket started by a
-// case is tracked here and torn down in `afterEach`, whether the case passed
-// or not.
-// ---------------------------------------------------------------------------
-
+// Every server, upstream, and socket a case starts is tracked here and torn down in
+// afterEach regardless of pass/fail.
 let servers: Awaited<ReturnType<typeof startEgressProxy>>[] = [];
 let upstreams: FakeUpstream[] = [];
 let sockets: net.Socket[] = [];
@@ -286,8 +254,6 @@ afterEach(async () => {
   servers = [];
   vi.restoreAllMocks();
 });
-
-// ---------------------------------------------------------------------------
 
 describe("the CONNECT target", () => {
   it("refuses a host that is not on the allowlist with 403, nothing upstream touched", async () => {
@@ -393,12 +359,10 @@ describe("resolving and connecting the upstream (step 2)", () => {
   });
 
   it("destroys the upstream socket it was still connecting when the deadline fires", async () => {
-    // A blackholing address answers neither the connect callback nor
-    // `'error'`, so nothing in `tryAddress` runs again and the late-arrival
-    // guard is never reached. Left alone the socket sits in `SYN_SENT` for
-    // minutes while the client already has its 504 and has freed its
-    // `maxConnections` slot — the proxy's only bound counts client sockets,
-    // not upstream ones, so the leak is unbounded by anything.
+    // Blackholing address answers neither callback nor 'error', so tryAddress never runs
+    // again and the late-arrival guard is never reached. Left alone, the socket sits in
+    // SYN_SENT after the client's 504 — maxConnections counts client sockets only, so this
+    // leak is unbounded.
     const { fn, sockets: hungSockets } = hangingNetConnect();
     const port = await start({ netConnect: fn });
     const socket = track(await connectRaw(port));
@@ -412,9 +376,8 @@ describe("resolving and connecting the upstream (step 2)", () => {
   });
 
   it("answers 403 when one address among several is private, not only when all are", async () => {
-    // A single-address answer cannot tell `some` from `every`, and a mutation
-    // to `every` — refusing only if the whole answer is private, the opposite
-    // of the rule — survived the suite before this case existed.
+    // Single-address answer can't distinguish some from every — a mutation to every
+    // (refusing only if the whole answer is private) survived the suite before this case existed.
     const port = await start({ dnsLookup: fakeDnsLookup(["93.184.216.34", "10.0.0.5"]) });
     const socket = track(await connectRaw(port));
 
@@ -435,9 +398,8 @@ describe("resolving and connecting the upstream (step 2)", () => {
   });
 
   it("matches a lowercase server_name against an upper-case CONNECT host", async () => {
-    // The comparison has to be case-insensitive on *each side independently*.
-    // A case sending both in the same case cannot tell that apart from a
-    // case-sensitive compare, which is what a mutation to `!==` proved.
+    // Comparison must be case-insensitive on each side independently — sending both in the
+    // same case can't distinguish that from a case-sensitive compare (a mutation to !== proved it).
     const { proxyPort, upstream } = await startWithUpstream();
     const socket = track(await connectRaw(proxyPort));
 
@@ -451,10 +413,8 @@ describe("resolving and connecting the upstream (step 2)", () => {
   });
 
   it("refuses a server_name whose bytes only mask to the host under a lossy decoder", async () => {
-    // `ascii` masks the high bit, so 0xE6 0xE9 0xEE… decodes to "finance…".
-    // Decoded losslessly they are not the host, and the record replayed
-    // upstream would have carried the raw bytes either way — so the edge
-    // would have seen a name the proxy never matched.
+    // ascii masks the high bit, so 0xE6 0xE9 0xEE… decodes to "finance…" — but decoded
+    // losslessly they aren't the host, and upstream would see raw bytes the proxy never matched.
     const { proxyPort, upstream } = await startWithUpstream();
     const socket = track(await connectRaw(proxyPort));
 
@@ -523,9 +483,8 @@ describe("the ClientHello check (steps 3-6)", () => {
     const { proxyPort, upstream } = await startWithUpstream();
     const socket = track(await connectRaw(proxyPort));
 
-    // One `.write()`, request line and ClientHello together — the shape the
-    // module header's step 4 says a handler reading only `'data'` fails open
-    // on, and only seeding the record buffer from `head` survives.
+    // One write(), request line + ClientHello together — a handler reading only 'data' fails
+    // open on this shape; only seeding the record buffer from `head` survives.
     socket.write(Buffer.concat([Buffer.from(connectLine(`${ALLOWED_HOST}:443`)), clientHello([ALLOWED_HOST])]));
 
     const { line, rest } = await waitForStatusLine(socket);
@@ -642,23 +601,19 @@ describe("the concurrency bound", () => {
     await waitForClose(ninth);
     const elapsed = Date.now() - startedAt;
 
-    // The property this pins: a clean, fast close — not a timeout. Raising
-    // `maxConnections` does fail this case, but through vitest's own timeout
-    // rather than the ceiling below, since `waitForClose` never resolves for
-    // that mutant; the ceiling is what catches a close that arrives late.
+    // Pins a clean, fast close — not a timeout. Raising maxConnections fails this via
+    // vitest's own timeout (waitForClose never resolves), not the ceiling below, which
+    // catches a late close.
     expect(elapsed).toBeLessThan(1000);
 
     for (const socket of held) socket.destroy();
   });
 
   it("leaves a ninth GET /healthz unanswered while eight are held, which is why the healthcheck asks for one", async () => {
-    // The reason `compose.yaml` gives the proxy a `GET /healthz` healthcheck
-    // rather than a bare connect. A TCP connect completes at the accept queue
-    // whatever the server is doing, so it reads healthy with every slot held;
-    // only a request the HTTP server itself answers proves it is not
-    // saturated. The case above pins that the ninth *socket* closes cleanly —
-    // this one pins that no `200` comes back with it, which is the half the
-    // healthcheck actually depends on.
+    // Why compose.yaml's healthcheck is GET /healthz, not a bare connect: a TCP connect
+    // completes at the accept queue regardless of saturation, so only an HTTP response
+    // proves it isn't. The case above pins the ninth socket closes cleanly; this pins that
+    // no 200 comes with it.
     const port = await start();
 
     const held: net.Socket[] = [];
@@ -726,10 +681,9 @@ describe("logging", () => {
   });
 
   it("writes a refusal as one physical line when the server_name carries control bytes", async () => {
-    // The refusal line quotes bytes the peer chose. Unsanitised, one hello
-    // forges as many further lines as it likes, any of them free to open
-    // with this module's own stem — so the audit trail becomes writable by
-    // the party being audited.
+    // Refusal line quotes peer-chosen bytes — unsanitised, one hello could forge further log
+    // lines (even ones opening with this module's own stem), making the audit trail writable
+    // by the party being audited.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { proxyPort } = await startWithUpstream();
     const socket = track(await connectRaw(proxyPort));
@@ -742,17 +696,15 @@ describe("logging", () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
     const line = String(spy.mock.calls[0]?.[0]);
-    // One physical line is the property, so the assertion is on control
-    // bytes rather than on the forged stem: a peer may put the words "Egress
-    // proxy" in a server name all it likes, and it stays one line of text.
+    // Property is one physical line — assertion is on control bytes, not the forged stem;
+    // a peer can put "Egress proxy" in a server name and it still stays one line.
     expect(line).toMatch(/^[^\x00-\x1f\x7f]*$/);
     expect(line).toContain("Egress proxy: refused CONNECT");
   });
 
   it("logs once when a connection never completes a request line, and nothing when one merely closes", async () => {
-    // The first of the three deadlines expires inside Node, before this
-    // module has anything to refuse. A deadline nothing records is a slot a
-    // peer can hold to expiry over and over, invisibly.
+    // First of three deadlines expires inside Node, before this module has anything to
+    // refuse — an unrecorded deadline is a slot a peer can hold to expiry, invisibly, over and over.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const port = await start();
 
@@ -771,19 +723,12 @@ describe("logging", () => {
   });
 
   it("destroys an established tunnel on SIGTERM instead of waiting for it to end", async () => {
-    // `server.close()` — and `closeAllConnections()` with it — leaves an
-    // upgraded socket alone, so a proxy whose whole job is upgrading sockets
-    // holds its own stop open until the 60 s idle teardown, well past
-    // Docker's 10 s grace. `server/price-worker.ts` upgrades nothing, which
-    // is why the two lines that suffice there are silently insufficient here.
-    // The handler is invoked directly rather than by signalling this process:
-    // the exit is stubbed, so only the teardown is under assertion.
-    // The idle teardown is pushed well out of the way on purpose: at the
-    // suite's usual 300 ms it would close this tunnel by itself and the case
-    // would pass whether or not `SIGTERM` did anything. That is the bug in
-    // miniature — in production the same rescue arrives at 60 s, five times
-    // past the grace period — so the assertion is on promptness, not on the
-    // socket eventually going away.
+    // server.close() leaves an upgraded socket alone — without SIGTERM handling this proxy
+    // would hold open until the 60s idle teardown, past Docker's 10s grace (price-worker.ts
+    // upgrades nothing, so its simpler fix doesn't apply here). Handler invoked directly, exit
+    // stubbed, so only teardown is asserted. idleTeardownMs pushed out on purpose — at 300ms
+    // it'd close the tunnel regardless of SIGTERM, hiding the bug; assertion is on promptness,
+    // not eventual closure.
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const before = process.listeners("SIGTERM");
     const { proxyPort } = await startWithUpstream({ idleTeardownMs: 30_000 });
