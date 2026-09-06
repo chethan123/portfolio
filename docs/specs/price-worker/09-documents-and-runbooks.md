@@ -16,7 +16,7 @@ story, not rewritten.
 
 **Blocked by:** [08](08-the-egress-allowlist.md).
 
-**Status:** ready-for-agent
+**Status:** built
 
 **Corrected — the citations, and the checklist that is shorter than the ticket's own sentence.**
 
@@ -99,7 +99,7 @@ and only that clause.
 
 **`DESIGN.md`, `ARCHITECTURE.md`**
 
-- [ ] DESIGN §10's **Job scheduler** row (`:826`): the scheduler stays in-process and the fetch
+- [x] DESIGN §10's **Job scheduler** row (`:826`): the scheduler stays in-process and the fetch
       moves to a worker container behind a unix socket; why the trade flipped (spec §2.4). §10.1:
       `:913-918` rewritten; the services block (`:874-903`) gains `worker` and `egress-proxy` — and
       `dump`, missing today — and the shared volume; the environment table (`:944-951`) gains
@@ -108,14 +108,14 @@ and only that clause.
       and that the worker holds no rule; §6.1 (`:416-419`) gains one sentence: two implementations,
       one in the app. §14 gains the
       accepted limitations spec §8 names
-- [ ] ARCHITECTURE §2 (`:92-100`): Yahoo is reached from the worker through the proxy; the gate
+- [x] ARCHITECTURE §2 (`:92-100`): Yahoo is reached from the worker through the proxy; the gate
       needs `www.googleapis.com:443` only; Caddy needs no egress; the context diagram's edge moves.
       §4.2: rows `:337-339` — the import site already moved to `server/yahoo-client.ts`, the pool
       row noting that the worker constructs none, and no price written by the worker; the
       env-reader row (`:345`) says the driver reads its own `PGPASSWORD` and the runtime its own
       `NODE_USE_ENV_PROXY` and `HTTPS_PROXY` — neither `config.ts` nor any application code reads
       them
-- [ ] §7.2 (`:1474`): the lock client now spans the socket round trip to the worker; §7.4 (`:1519`):
+- [x] §7.2 (`:1474`): the lock client now spans the socket round trip to the worker; §7.4 (`:1519`):
       the `Price worker` and `Egress proxy` stems, what each healthcheck proves, the fifth and sixth
       causes; §7.5 (`:1539`): one seam, two implementations, the raw-JSON contract over the socket;
       §7.6 (`:1581`): rows for the networks, the shared volume and the allowlist; §7.7 (`:1631`):
@@ -125,26 +125,26 @@ and only that clause.
 
 **ADR-0010 — "Price fetching is an egress-isolated worker behind a unix socket"**
 
-- [ ] Context: the supply chain and the three adversaries; spec §2.3's disqualification in one
+- [x] Context: the supply chain and the three adversaries; spec §2.3's disqualification in one
       sentence. Decision: remote provider; a unix socket in a tmpfs volume the two containers
       share; HTTP/1.1 over it with the library's raw JSON as the whole contract; the worker holding
       no database credential and no TCP listener; passwords out of URLs. Consequences: the batch
       abort become a deploy-time event (§3.1); no new UI state (§7); one required variable,
       `POSTGRES_PASSWORD` (§5); one image either side of which restarts independently, the socket
       plus raw JSON being the whole contract (§8)
-- [ ] Alternatives rejected, each with its reason — spec §7's list, the mailbox first and at length:
+- [x] Alternatives rejected, each with its reason — spec §7's list, the mailbox first and at length:
       what it was, and the machinery it needed (spec §2.5's list) as the cost the decision was taken
       on; the heartbeat-file healthcheck it took with it; RLS, `LISTEN/NOTIFY` and the per-operation
       handle as things that only made sense for it; the TCP listener, the start-up refusal, IP
       pinning, the third-party proxy image, `pg_dumpall`, the worker owning the refresh, the
       separate image, the in-app fallback, the worker-unresponsive UI state
-- [ ] The named follow-ups: worker supply-chain decorrelation (spec §7), and the app off the
+- [x] The named follow-ups: worker supply-chain decorrelation (spec §7), and the app off the
       superuser. ADR-0011 and spec 0017 already carry the one-line banner landed with spec 0018 —
       "spec 0015" there is the deleted worker proposal; re-read it, rewrite nothing else in them
 
 **`CONTEXT.md`** (under "How prices stay fresh", `:93`)
 
-- [ ] **Price worker**: the one process that talks to the price feed, holding no rule about what to
+- [x] **Price worker**: the one process that talks to the price feed, holding no rule about what to
       fetch or what a price means, and no database credential. _Avoid_: sidecar, fetcher, poller
       (for this). **Worker socket**: the unix socket in the shared volume through which the app asks
       and the worker answers — a request and a raw answer, nothing kept. _Avoid_: queue, job table,
@@ -152,13 +152,13 @@ and only that clause.
 
 **`docs/operating.md`**
 
-- [ ] What runs here (`:28-33`, the services table; `:35-37`, "only `caddy` is reachable from your
+- [x] What runs here (`:28-33`, the services table; `:35-37`, "only `caddy` is reachable from your
       LAN; `app`, `db` and `gate`…"; `:56-59`, "All four drop… Three run as…"; and the verify
       step's "All four services `running` and `healthy`", `:206`): seven services — `db`, `dump`,
       `app`, `gate`, `caddy`, `worker` and `egress-proxy` — the table gaining a `dump` row missing
       today alongside the worker's and the proxy's, every "four" corrected to seven, and the shared
       volume named beside the table
-- [ ] Installing (`:84-92`): the Engine 28.0 and Compose floors with their checks, landed by
+- [x] Installing (`:84-92`): the Engine 28.0 and Compose floors with their checks, landed by
       [05](05-deploy-the-worker-alongside.md) and [07](07-the-network-lockdown.md), and 05's
       sentence for the hosts smoke never runs on — SELinux-enforcing, `userns-remap`, rootless
       Docker — pointing at the from-`app` socket check as the one command to run by hand. Running
@@ -172,7 +172,7 @@ and only that clause.
       with `app` or `gate`; **not** `app`'s no-egress guarantee, that bridge carrying a default
       route. Nothing about roles: the worker needs none, and "can create tables" stays the whole of
       what the app's role needs
-- [ ] Environment variables (`:238`): `POSTGRES_PASSWORD` required; `PGPASSWORD` and the URL rule;
+- [x] Environment variables (`:238`): `POSTGRES_PASSWORD` required; `PGPASSWORD` and the URL rule;
       generated passwords mandated; `.env` before any compose command; `PRICE_WORKER_SOCKET` marked
       development only, re-read. Monitoring: the worker's and the proxy's healthchecks beside
       `:710`, what each proves; Logs (`:717`): the `Price worker` and `Egress proxy` stems, and
@@ -181,13 +181,13 @@ and only that clause.
       [08](08-the-egress-allowlist.md), re-read as one. "There is no price line in the log"
       (`:761`) keeps its four causes: they are about a refresh that never ran, and a dead worker or
       proxy is a refresh that ran and failed
-- [ ] Restoring (`:870`): `docker compose stop app` stays the first line, and the reason at `:894`
+- [x] Restoring (`:870`): `docker compose stop app` stays the first line, and the reason at `:894`
       stays true of `app` alone; one sentence beside it: **the worker may keep running** — it holds
       no database connection and nothing about the restore reaches it, so `stop app` alone is what
       to type. The dump's contents are unchanged by this slice — no grant, no role, no catalog
       `REVOKE` — so a restore onto a fresh cluster (`:931-941`) and the drill (`:906`) need nothing
       new
-- [ ] Upgrading (`:949`): "replace `compose.yaml` with the release's copy before `up -d`" and its
+- [x] Upgrading (`:949`): "replace `compose.yaml` with the release's copy before `up -d`" and its
       symptom (a new image under an old file runs with no volume and no worker: stale prices, health
       green, one "no worker listening" line per call site, up to two per tick), and the rollback
       note with `DATABASE_URL` back in `.env` — landed by [05](05-deploy-the-worker-alongside.md),
@@ -198,7 +198,7 @@ and only that clause.
 
 **`docs/runbook.md`, `docs/developing.md`**
 
-- [ ] "Prices have stopped updating" (`:270`): first `docker compose ps` for `app`, `worker` and
+- [x] "Prices have stopped updating" (`:270`): first `docker compose ps` for `app`, `worker` and
       `egress-proxy`; the `Price provider failed` grep now tells "no worker listening" from Yahoo,
       `fetch failed` with one cause on every `Price worker` line tells the proxy from Yahoo, and
       `Proxy response (502)` in that cause tells Yahoo or the resolver down behind a healthy proxy
@@ -215,17 +215,17 @@ and only that clause.
       the database password" (`:525`): `.env` first, no URL to edit; "I need to restore" (`:553`):
       stop `app` only — the worker may keep running; "`docker compose up` refuses to start" (`:49`):
       `POSTGRES_PASSWORD`, and that `ps`, `logs` and `down` refuse too
-- [ ] The `.env.worker` recipe [06](06-the-app-cutover.md) landed under Recipes
+- [x] The `.env.worker` recipe [06](06-the-app-cutover.md) landed under Recipes
       (`developing.md:331`), re-read. "Verify the split convention" (`:435`): the call now runs
       through `server/yahoo-client.ts`, from the worker's environment. `:564-571`: `.env.worker` is
       read by nothing but the command that names it
 
 **`README.md`, code comments, the index**
 
-- [ ] `README.md` "Where prices come from" (`:592-600`): "there is no worker container" is false,
+- [x] `README.md` "Where prices come from" (`:592-600`): "there is no worker container" is false,
       and the only importer of `yahoo-finance2` is `server/yahoo-client.ts`; the deployment diagram
       (`:458`) gains the worker and the proxy, with the socket edge between `app` and `worker`
-- [ ] Two lines [01](01-one-refresh-and-the-batch-abort.md) left level-inconsistent, which that
+- [x] Two lines [01](01-one-refresh-and-the-batch-abort.md) left level-inconsistent, which that
       ticket's own file list did not reach. `app/lib/price-poller.server.ts:174` appends "The batch
       itself failed; see the error above." to the batch summary; since 01 the line above it is a
       *warning* whenever the provider could not be reached, so the sentence points at a level that
@@ -233,7 +233,7 @@ and only that clause.
       was corrected in 01, along with the sentence that told an operator to grep the retired
       `Manual price refresh failed` stem; re-read both against whatever the worker's arrival makes
       true
-- [ ] `server/db.ts:59-61`: the lock client now spans the socket round trip to the worker rather
+- [x] `server/db.ts:59-61`: the lock client now spans the socket round trip to the worker rather
       than the app's own provider network work. `app/lib/price-poller.server.ts:2-6` and
       `compose.yaml:1-2` no longer argue against a worker; re-read. PR #220, if still open, is
       re-pointed from spec 0015 to 0018 and ADR-0010. `docs/specs/README.md`: re-check that the
@@ -243,5 +243,5 @@ and only that clause.
 
 **Gates**
 
-- [ ] `npm run typecheck`, `npm test`, `npm run build` green (docs-only, but every ticket stands
+- [x] `npm run typecheck`, `npm test`, `npm run build` green (docs-only, but every ticket stands
       alone)
