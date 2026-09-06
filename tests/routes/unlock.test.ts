@@ -1,26 +1,8 @@
-/**
- * `app/routes/unlock.tsx` — the route's own contribution: asking the domain
- * module whether this screen is even needed before rendering it, reading a
- * submission it can never assume is well-formed, verifying through the
- * domain module, setting the grant cookie only on success, and honouring the
- * return path through `safeReturn`. Every rule about what a valid assertion
- * *is* belongs to `~/lib/lock.server` and is tested there
- * (`tests/lock.test.ts`); this file never re-derives one.
- *
- * The ceremony itself — `navigator.credentials.get()` — has no browser in
- * this suite and is not simulated here (the ticket's own list). What *is*
- * simulated is everything the component decides once the ceremony hands
- * back an outcome: `~/lib/unlock-ceremony` is mocked for exactly that,
- * leaving `shouldRunCeremony`/`runCeremony`/`shouldRevalidateBeforeRetry`
- * — the pure decisions the route pulls out of its effects so a mutation to
- * any of them is a failing assertion here rather than a state only a real
- * browser could ever notice (finding 10) — driven directly, with no DOM.
- *
- * Every assertion below that needs a signed WebAuthn response comes from
- * `tests/support/webauthn.ts`, signed for a challenge this file's own calls
- * to the loader actually minted, the same fixture `tests/lock.test.ts` signs
- * with.
- */
+// unlock.tsx's own contribution: asking the domain module whether the screen is needed, reading a submission that's never
+// assumed well-formed, verifying through the domain module, setting the grant cookie only on success, honoring safeReturn.
+// Assertion validity rules are lock.server's (tests/lock.test.ts). The ceremony itself (navigator.credentials.get()) isn't
+// simulated (no browser here) — ~/lib/unlock-ceremony is mocked, leaving shouldRunCeremony/runCeremony/
+// shouldRevalidateBeforeRetry (the pure decisions pulled out of effects, finding 10) driven directly, no DOM.
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { Phase } from "../../app/routes/unlock.tsx";
@@ -34,12 +16,8 @@ import { assertionResponse, backupEligible, credentialId, publicKey, transports 
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-// Mocked file-wide: nothing else in this suite exercises the real
-// `@simplewebauthn/browser` ceremony (there is no browser here), and the
-// component under test never calls either export outside a `useEffect` or a
-// click handler, neither of which a server render or a direct loader/action
-// call ever runs. `importOriginal` keeps every *type* this file borrows from
-// the module (`AssertionOutcome` et al.) resolving against the real source.
+// Mocked file-wide: neither export runs outside a useEffect/click handler, which a server render or direct loader/action
+// call never triggers. importOriginal keeps borrowed types (AssertionOutcome et al.) resolving against the real source.
 vi.mock("~/lib/unlock-ceremony", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/unlock-ceremony")>();
   return { ...actual, requestAssertion: vi.fn(), supportsPasskeys: vi.fn() };

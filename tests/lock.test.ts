@@ -614,18 +614,16 @@ describe("unlocking", () => {
       await seedFixturePasskey(seedPasskey);
       const first = await unlockOptions(db);
 
-      // 500 is `lock.server.ts`'s own cap (§5 of the review): the map holds
-      // `first` plus 500 more once this loop ends (501 total), and eviction
-      // only runs on the *next* mint's sweep — so it takes one more call
-      // past the cap, not merely reaching it, to actually force `first` out.
+      // 500 is lock.server.ts's own cap (§5 of the review) — map holds first plus 500 more,
+      // and eviction only runs on the next mint's sweep, so it takes one call past the cap
+      // to force first out.
       for (let i = 0; i < 501; i++) {
         await unlockOptions(db);
       }
 
-      // Evicted, not merely unspent: a spent-or-expired refusal would be the
-      // wrong sentence here and would mean the cap did not actually apply —
-      // this is the "unlock" purpose's own budget (finding 2's partition),
-      // exercised in isolation from the other three.
+      // Evicted, not merely unspent — a spent-or-expired refusal would mean the cap didn't
+      // apply. This is unlock's own budget (finding 2's partition), isolated from the other
+      // three purposes.
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(first.challenge), db));
       expect(refusal.fieldErrors.form).toMatch(/never issued/);
     }),
@@ -638,16 +636,14 @@ describe("unlocking", () => {
       await seedFixturePasskey(seedPasskey);
       const enrol = await enrolmentAssertionOptions(db);
 
-      // The one purpose an un-granted browser can reach at all, flooded past
-      // its own budget — the exact repro finding 2 describes against
-      // `/unlock` itself, minted straight against the domain module here.
+      // Only purpose an un-granted browser can reach, flooded past its own budget —
+      // finding 2's repro against /unlock, minted straight against the domain module here.
       for (let i = 0; i < 501; i++) {
         await unlockOptions(db);
       }
 
-      // Not evicted: the enrol challenge minted before the flood still
-      // verifies, rather than refusing "never issued" for a confirmation
-      // that really was issued.
+      // Not evicted — enrol challenge minted before the flood still verifies, rather than
+      // refusing "never issued" for a confirmation that really was issued.
       const { grant } = await beginEnrolment("Second phone", { assertion: assertionResponse(enrol.challenge) }, db);
       expect(grant).toBeDefined();
     }),
@@ -696,15 +692,11 @@ describe("unlocking", () => {
         verifyUnlock(assertionResponse(options.challenge, { rpID: "attacker.example.com" }), db),
       );
       expect(refusal).toBeInstanceOf(ValidationError);
-      // The generic sentence, and the one test that catches the counter match
-      // being loosened: match on `instanceof Error` alone and this refusal
-      // starts telling a household their passkey may have been copied. It is
-      // the only such guard here, and not the sharpest available — a response
-      // signed with the user-verification bit clear throws from *inside*
-      // `verifyAuthenticationResponse`, six lines above the counter check
-      // rather than thirty-three — but producing one needs a `flags` option
-      // on `assertionResponse` that ticket 02 adds; this is what exists
-      // today.
+      // Generic sentence — catches the counter match being loosened: matching on
+      // instanceof Error alone would tell a household their passkey may have been copied.
+      // Not the sharpest guard available (a cleared-UV response throws six lines above the
+      // counter check, not thirty-three), but producing one needs a flags option ticket 02
+      // adds; this is what exists today.
       expect(refusal.fieldErrors.form).toBe("This passkey could not be verified. Try again.");
     }),
   );

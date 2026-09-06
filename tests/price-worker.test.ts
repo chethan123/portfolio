@@ -1063,9 +1063,7 @@ describe("mapping a provider failure to a status", () => {
 
 describe("production's own timeout numbers, the deployed denial-of-service bounds", () => {
   it("pins the four PRODUCTION_TIMEOUTS values, three read back off the server startWorker returns with no timeouts option given", async () => {
-    // Every other case in this file injects TEST_TIMEOUTS (directly, or via
-    // `start`'s own default) — the module header's own numbers otherwise
-    // reach no case at all.
+    // every other case injects TEST_TIMEOUTS — these numbers otherwise reach no case at all
     expect(PRODUCTION_TIMEOUTS).toEqual({
       timeout: 35_000,
       headersTimeout: 5_000,
@@ -1073,12 +1071,10 @@ describe("production's own timeout numbers, the deployed denial-of-service bound
       connectionsCheckingInterval: 1_000,
     });
 
-    // No `timeouts` option: startWorker's own default is PRODUCTION_TIMEOUTS.
-    // Reading three of the four back off the instance pins that the object
-    // above is actually wired in, not merely a constant nothing consumes.
-    // `connectionsCheckingInterval` is a constructor-only option (not one of
-    // the `Server` instance's own properties, module header), so the
-    // `PRODUCTION_TIMEOUTS` assertion above is what covers that one.
+    // no timeouts option: startWorker's default is PRODUCTION_TIMEOUTS. Reading three of the
+    // four back off the instance pins that it's actually wired in, not an unused constant.
+    // connectionsCheckingInterval is constructor-only (not a Server instance property), so
+    // the assertion above is what covers that one.
     currentServer = await startWorker({ socketPath: currentSocketPath, yahoo: fakeYahoo() });
 
     expect(currentServer.timeout).toBe(35_000);
@@ -1106,8 +1102,7 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("exits 1, naming EISDIR and the path, when the entry point's own listen fails", async () => {
-    // The entry point, not `startWorker`: the `.catch` that logs and calls
-    // `process.exit(1)` is the entry's own, below `import.meta.main`.
+    // the entry point, not startWorker — the .catch that logs and exits is the entry's own
     const socketPath = await freshEntryPointSocket("pw-eisdir-");
     mkdirSync(socketPath);
 
@@ -1152,9 +1147,7 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("accepts and closes a ninth connection while eight are held open", async () => {
-    // A generous `timeout` here: this test is about `maxConnections`, not
-    // the socket-inactivity watchdog, and establishing nine connections
-    // must not race the held ones' own idle timers.
+    // generous timeout: about maxConnections, not the idle watchdog — nine connections must not race the held ones' idle timers
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 2000 });
 
     const held: net.Socket[] = [];
