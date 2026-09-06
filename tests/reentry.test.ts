@@ -172,9 +172,7 @@ describe("watchReentry", () => {
     browser.show();
 
     expect(postLock).toHaveBeenCalledTimes(1);
-    // And only the lock: ticket 06 asks the persisted-restore path for a
-    // revalidation, and a hidden-too-long return is a different trigger
-    // that must not borrow it.
+    // only the lock — persisted-restore is a different trigger and must not borrow this one
     expect(onPersistedRestore).not.toHaveBeenCalled();
     teardown();
   });
@@ -207,13 +205,8 @@ describe("watchReentry", () => {
   });
 
   it("arms the timer at wire time for a page that mounts into an already-hidden tab, not only on a later visibilitychange", () => {
-    // A page opened in a background tab, or hydrated while the document is
-    // already hidden, never sees a `visibilitychange` *to* hidden — its
-    // first event is the transition back to visible. Hiding the fake
-    // browser *before* `watchReentry` ever wires a listener reproduces
-    // exactly that: nothing here catches the transition into hidden, only
-    // `watchReentry`'s own read of the current `visibilityState` at wire
-    // time can arm the timer.
+    // a background-tab or hidden-hydrated page never sees a visibilitychange to hidden — only
+    // watchReentry's own read of visibilityState at wire time can arm the timer
     const browser = install();
     const perf = vi.spyOn(performance, "now");
     let clock = 0;
@@ -273,7 +266,7 @@ describe("watchReentry", () => {
     expect(browser.listenerCount("document", "visibilitychange")).toBe(0);
     expect(browser.listenerCount("window", "pageshow")).toBe(0);
 
-    // Firing both signals after teardown must reach neither callback.
+    // firing both signals after teardown must reach neither callback
     browser.hide();
     clock += REENTRY_GRACE_MS + 1;
     browser.show();
@@ -286,13 +279,9 @@ describe("watchReentry", () => {
   it(
     "still posts the lock once the grace is exceeded even when the wall clock jumps backwards while hidden",
     () => {
-      // `Date.now()` can run backwards (an NTP correction, someone setting
-      // the system clock back), which would make the *wall* gap negative.
-      // Moving `Date.now()` backwards here while `performance.now()` keeps
-      // advancing normally past the grace proves the monotonic gap is what
-      // carries this — reverting `reentry.ts` to read only `Date.now()`
-      // would fail this test, since the gap it would measure goes negative
-      // instead of past the grace.
+      // Date.now() can run backwards (NTP, manual clock set); moving it back here while
+      // performance.now() advances past the grace proves the monotonic gap carries this —
+      // reverting to Date.now() alone would fail, since the gap would go negative instead
       const browser = install();
       const dateNow = vi.spyOn(Date, "now");
       let simulatedWallClock = 1_700_000_000_000;
@@ -306,11 +295,9 @@ describe("watchReentry", () => {
       const teardown = watchReentry(postLock, vi.fn());
 
       browser.hide();
-      // The wall clock jumps back an hour while the tab sits hidden — far
-      // more than the grace, in the wrong direction.
+      // wall clock jumps back an hour while hidden — far more than the grace, wrong direction
       simulatedWallClock -= 60 * 60 * 1000;
-      // `performance.now()` cannot jump backwards; it keeps moving forward
-      // past the grace, same as any other hidden period this long.
+      // performance.now() can't jump backwards — keeps advancing past the grace like any long hidden period
       clock += REENTRY_GRACE_MS + 1;
       browser.show();
 
@@ -322,15 +309,9 @@ describe("watchReentry", () => {
   it(
     "still posts the lock once the grace is exceeded even though the monotonic clock stalled through a suspend",
     () => {
-      // The other direction, and the more important one: `performance.now()`
-      // does not advance while a device is suspended (Linux, Android,
-      // macOS, iOS), so a phone locked in a pocket for ten minutes can come
-      // back measuring a monotonic gap of only a couple of milliseconds —
-      // under the grace on its own. The wall clock, which does advance
-      // through a suspend, is what has to carry this one; reverting
-      // `reentry.ts` to read only `performance.now()` would fail this test,
-      // since the monotonic gap it would measure alone stays under the
-      // grace.
+      // the more important direction: performance.now() doesn't advance while suspended (all
+      // major OSes) — the wall clock has to carry a phone locked in a pocket for ten minutes;
+      // reverting to performance.now() alone would fail this test
       const browser = install();
       const dateNow = vi.spyOn(Date, "now");
       let simulatedWallClock = 1_700_000_000_000;
@@ -344,8 +325,7 @@ describe("watchReentry", () => {
       const teardown = watchReentry(postLock, vi.fn());
 
       browser.hide();
-      // The device suspends: the wall clock keeps advancing well past the
-      // grace, but the monotonic clock barely moves at all.
+      // device suspends: wall clock advances well past the grace, monotonic clock barely moves
       simulatedWallClock += REENTRY_GRACE_MS + 1;
       clock += 2;
       browser.show();
@@ -375,11 +355,8 @@ describe("postLockNow", () => {
   it(
     "does not revalidate when the response answers with an HTTP failure, even though fetch itself resolved (finding 1)",
     async () => {
-      // A 502 or 503 from a proxy in front of this instance is exactly what
-      // `fetch` resolves with — never a rejection — so reverting this to
-      // `.then(() => revalidate())` (treating "the promise resolved" as "the
-      // lock happened") would call `revalidate` here too, extending a grant
-      // that was never actually deleted.
+      // a 502/503 from a fronting proxy is exactly what fetch resolves with, never rejects —
+      // reverting to .then(() => revalidate()) would extend a grant that was never actually deleted
       const revalidate = vi.fn();
       const doFetch = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
 

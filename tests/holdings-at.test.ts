@@ -1,9 +1,6 @@
-// Rules holding_valued_at exists to keep true about the past (current view's rules live in
-// current-holdings.test.ts). Drives the three things the as-of answer varies — which position
-// set, which accounts, which price — plus two consequences: history starts at the first
-// upload, and a dollar is a dollar on any date. Calendar is real: 2026-02-13 is a Friday, the
-// 16th Presidents' Day; a non-trading day is the absence of a price_daily row (§6.2), never a
-// flag. Money assertions are exact decimal strings at stored scale.
+// holding_valued_at's rules for the past (current view's rules: current-holdings.test.ts).
+// 2026-02-13 is a Friday, the 16th Presidents' Day — a non-trading day is an absent
+// price_daily row (§6.2), never a flag.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { holdingsAt, netWorthAt } from "~/lib/valuation.server";
@@ -24,7 +21,6 @@ describe("the price on a date", () => {
         asOf: "2026-01-31",
         holdings: [{ instrument: fund, quantity: "10.00000000" }],
       });
-      // Friday's close, nothing for the weekend — a shut market prints no price.
       await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "100.0000" });
 
       expect(await netWorthAt(ALL_OWNERS, "2026-02-14", db)).toEqual({
@@ -63,11 +59,8 @@ describe("the price on a date", () => {
         holdings: [{ instrument: fund, quantity: "10.00000000" }],
       });
       await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "100.0000" });
-      // The market reopens the day after Presidents' Day at a different price.
       await seedDailyClose({ instrument: fund, date: "2026-02-17", close: "111.0000" });
 
-      // Presidents' Day has no close of its own, so Friday's stands — no holiday calendar
-      // exists to consult.
       expect(await netWorthAt(ALL_OWNERS, "2026-02-16", db)).toEqual({
         amount: "1000.0000",
         coverage: { known: 1, total: 1 },
@@ -91,8 +84,6 @@ describe("the price on a date", () => {
           holdings: [{ instrument: fund, quantity: "10.00000000" }],
         });
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "100.0000" });
-        // Today's price — a past date must not see it, or an intraday tick would move an
-        // already-drawn line.
         await seedQuote({ instrument: fund, price: "900.0000" });
 
         const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
@@ -114,12 +105,10 @@ describe("the price on a date", () => {
           holdings: [{ instrument: fund, quantity: "10.00000000" }],
         });
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "100.0000" });
-        // A refresh that failed this morning. It says nothing about February.
         await seedQuote({ instrument: fund, price: "900.0000", isStale: true });
 
         const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
-        // Staleness is a live-price property — a past date's close is simply the close.
         expect(holding).toMatchObject({ price: "100.0000", isPriced: true, isStale: false });
       },
     ),
@@ -138,14 +127,11 @@ describe("history starting at the first upload", () => {
         holdings: [{ instrument: usd, quantity: "5000.00000000" }],
       });
 
-      // Day before the first statement — money existed but no record of it; inventing a
-      // figure here would draw a chart line through an unknown period.
       expect(await holdingsAt(ALL_OWNERS, "2026-01-30", db)).toEqual([]);
       expect(await netWorthAt(ALL_OWNERS, "2026-01-30", db)).toEqual({
         amount: "0.0000",
         coverage: { known: 0, total: 0 },
       });
-      // One day later there is a record, and it is the whole answer.
       expect(await netWorthAt(ALL_OWNERS, "2026-01-31", db)).toEqual({
         amount: "5000.0000",
         coverage: { known: 1, total: 1 },
@@ -171,8 +157,6 @@ describe("history starting at the first upload", () => {
         holdings: [{ instrument: fund, quantity: "25.00000000" }],
       });
 
-      // Mid-February: no February statement yet, so January's positions stand — this is
-      // what makes a daily series possible from monthly statements.
       expect((await holdingsAt(ALL_OWNERS, "2026-02-13", db)).map((holding) => holding.quantity)).toEqual([
         "10.00000000",
       ]);
@@ -193,8 +177,6 @@ describe("history starting at the first upload", () => {
         asOf: "2026-01-31",
         holdings: [{ instrument: usd, quantity: "5000.00000000" }],
       });
-      // Statement listing nothing is legal — account was emptied, must not fall back to
-      // January's holdings.
       await seedPositionSet({ account, asOf: "2026-02-28", holdings: [] });
 
       expect(await netWorthAt(ALL_OWNERS, "2026-02-27", db)).toEqual({
@@ -232,8 +214,6 @@ describe("an account that has since been closed", () => {
         holdings: [{ instrument: usd, quantity: "4000.00000000" }],
       });
 
-      // January's net worth genuinely included the savings account — dropping it over a
-      // February event would make the chart lie about a month already lived.
       expect((await holdingsAt(ALL_OWNERS, "2026-01-31", db)).map((holding) => holding.accountName)).toEqual([
         "Checking",
         "Old savings",
@@ -243,7 +223,6 @@ describe("an account that has since been closed", () => {
         coverage: { known: 2, total: 2 },
       });
 
-      // From the closure onward it is gone, so today's figures are not polluted.
       expect((await holdingsAt(ALL_OWNERS, "2026-02-01", db)).map((holding) => holding.accountName)).toEqual([
         "Checking",
       ]);
@@ -251,9 +230,6 @@ describe("an account that has since been closed", () => {
   );
 });
 
-// latest_position_set(account, date) has one order by; holding_valued calls it with date
-// null, so the created_at-then-id tie-break is pinned once in current-holdings.test.ts, not
-// twice — only the date bound itself is reachable through this path.
 describe("which position set speaks for a date", () => {
   it(
     "ignores a position set dated after the requested date",
@@ -287,7 +263,6 @@ describe("cash and debt on a past date, with no branch", () => {
       const savings = await seedAccount({ name: "Savings", kind: "bank" });
       const loan = await seedAccount({ name: "Student loan", kind: "liability" });
 
-      // Statements from the last century, typed in from paper.
       await seedPositionSet({
         account: savings,
         asOf: "1998-12-31",
@@ -299,9 +274,7 @@ describe("cash and debt on a past date, with no branch", () => {
         holdings: [{ instrument: usd, quantity: "-500.00000000" }],
       });
 
-      // No 1999 price seeded for USD, none ever will — the 1970 row (initial migration)
-      // carries forward through the same lateral that turns Friday into Saturday; no cash
-      // branch to take.
+      // USD carries forward from the 1970 row (initial migration) — no separate cash branch.
       const holdings = await holdingsAt(ALL_OWNERS, "1999-01-01", db);
 
       expect(holdings.map((holding) => holding.price)).toEqual(["1.0000", "1.0000"]);
@@ -367,7 +340,6 @@ describe("partial data on a past date, told honestly", () => {
       async ({ db, seedAccount, seedInstrument, seedPositionSet, seedDailyClose, usdInstrument }) => {
         const account = await seedAccount();
         const usd = await usdInstrument();
-        // A collective investment trust priced by hand, first priced in March.
         const trust = await seedInstrument({
           symbol: null,
           name: "Vanguard Target Retirement 2045 Trust II",
@@ -387,8 +359,6 @@ describe("partial data on a past date, told honestly", () => {
         const holdings = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
         const trustHolding = holdings.find((holding) => holding.symbol === null);
 
-        // Row stays, not dropped — an inner join to price_daily would vanish it and
-        // understate February silently.
         expect(trustHolding).toMatchObject({
           quantity: "42.00000000",
           price: null,
@@ -397,7 +367,6 @@ describe("partial data on a past date, told honestly", () => {
           unrealized: null,
           isPriced: false,
         });
-        // The cash is counted, the trust is not, and the count says so.
         expect(await netWorthAt(ALL_OWNERS, "2026-02-13", db)).toEqual({
           amount: "500.0000",
           coverage: { known: 1, total: 2 },
@@ -413,7 +382,6 @@ describe("partial data on a past date, told honestly", () => {
       const fund = await seedInstrument({ symbol: "VTI" });
       await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
 
-      // A 401k statement that omits cost basis, which is the common case.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -422,8 +390,6 @@ describe("partial data on a past date, told honestly", () => {
 
       const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
-      // Zero here would report a $25,000 gain on a position whose basis is
-      // simply not known.
       expect(holding).toMatchObject({
         value: "25000.0000",
         costBasisPerShare: null,
@@ -447,14 +413,10 @@ describe("the projection a past date will not make", () => {
           holdings: [{ instrument: fund, quantity: "10.50000000" }],
         });
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "27.5000" });
-        // Today's rate, the only one the database has ever held: quote is one row per
-        // instrument, overwritten every refresh — says nothing about February.
         await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
 
         const [holding] = await holdingsAt(ALL_OWNERS, "2026-02-13", db);
 
-        // Not "37.8000" or "0.0000" — a projection from today isn't a fact about the past,
-        // so the honest answer is nothing.
         expect(holding).toMatchObject({ value: "288.7500", annualDividend: null });
       },
     ),
@@ -500,8 +462,6 @@ describe("the shape a past date returns", () => {
           holdings: [{ instrument: vti, quantity: "100.00000000", costBasisPerShare: "200.0000" }],
         });
 
-        // Same field-for-field shape as the current view — as-of answer is the view's row
-        // type, not a parallel one.
         expect(await holdingsAt(ALL_OWNERS, "2026-02-14", db)).toEqual([
           {
             accountId: account.id,
@@ -526,9 +486,7 @@ describe("the shape a past date returns", () => {
             unrealized: "5000.0000",
             isPriced: true,
             isStale: false,
-            // Written out, not left off — toEqual treats a missing property as undefined,
-            // so omitting this would pass even if the function emitted no such column
-            // (the failure ADR-0001 guards against).
+            // Written out, not omitted — toEqual treats missing as undefined (ADR-0001).
             annualDividend: null,
           },
         ]);
@@ -543,7 +501,6 @@ describe("the shape a past date returns", () => {
       const fund = await seedInstrument({ symbol: "VTI" });
       await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
 
-      // A dividend-reinvested holding: eight decimal places, exact.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -556,7 +513,7 @@ describe("the shape a past date returns", () => {
         quantity: "0.12345678",
         value: "30.8642",
         costBasis: "24.6901",
-        // value − cost_basis, rounded once — the two can never disagree by a fraction of a cent.
+        // Rounded once — can't disagree by a fraction of a cent.
         unrealized: "6.1741",
       });
     }),
@@ -576,8 +533,6 @@ describe("what the observation log may not touch", () => {
           holdings: [{ instrument: fund, quantity: "10.00000000" }],
         });
 
-        // Finished day, plus a third price the feed reported during it — real, correctly
-        // filed, just not history.
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
         await seedObservation({
           instrument: fund,
@@ -586,8 +541,7 @@ describe("what the observation log may not touch", () => {
           price: "300.0000",
         });
 
-        // ADR-0006's historical-line invariant: an already-drawn line can't move because a
-        // new tier arrived under it.
+        // ADR-0006's historical-line invariant.
         expect(await netWorthAt(ALL_OWNERS, "2026-02-13", db)).toEqual({
           amount: "2500.0000",
           coverage: { known: 1, total: 1 },
@@ -609,8 +563,6 @@ describe("what the observation log may not touch", () => {
         });
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
 
-        // Tuesday's session running, writing an observation every 15 minutes — none of
-        // them a fact about the Friday before, an already-drawn line that stays drawn.
         for (const [minute, price] of [
           ["14:30", "300.0000"],
           ["15:30", "310.0000"],

@@ -311,19 +311,13 @@ describe(
         );
         expect(setPhase).not.toHaveBeenCalled();
         expect(setNote).not.toHaveBeenCalled();
-        // `submit`'s own promise already carries a post-action revalidation
-        // (`unlock.tsx`'s own header) — a second one here would be redundant.
-        expect(revalidate).not.toHaveBeenCalled();
+        expect(revalidate).not.toHaveBeenCalled(); // submit's own promise already revalidates post-action
       },
     );
 
     it(
-      // The pin: a retry used to wait for a *later* press to revalidate,
-      // running the ceremony behind a pending network round trip and
-      // outside that press's own user activation (`unlock.tsx`'s commit
-      // c0af420). This is what proves the fix landed here too — the
-      // instant the outcome settles, not deferred to whenever the reader
-      // next presses Confirm.
+      // A retry used to wait for a later press to revalidate (unlock.tsx's commit c0af420) — proves the fix landed
+      // here too: the instant the outcome settles, not deferred to the next Confirm press.
       "revalidates immediately once a dismissed prompt leaves loaderData.enrolOptions stale, without submitting",
       async () => {
         vi.mocked(requestAssertion).mockResolvedValue({ status: "dismissed" });
@@ -375,9 +369,7 @@ describe("registrationOptionsExpired — the stale-registration-options guard", 
   });
 
   it(
-    // The case the finding names: a dismissed creation deliberately keeps its
-    // options (`runCreate`'s own header), so the reader can sit on the
-    // Create step for as long as they like before pressing it again.
+    // A dismissed creation deliberately keeps its options (runCreate's header), so the reader can sit on Create as long as they like.
     "stays expired well past the TTL, the case a dismissed creation followed by a long pause produces",
     () => {
       expect(registrationOptionsExpired(0, CHALLENGE_TTL_MS * 2.5)).toBe(true);
@@ -395,10 +387,7 @@ describe("enrolBusy — the Add-a-passkey panel's own disabled check, including 
   });
 
   it(
-    // The pin: before this fix, a dismissed or failed confirm started
-    // `loaderData.enrolOptions` revalidating (`runConfirmCeremony`'s own
-    // header) while `phase` had already reset to "idle" — leaving Confirm
-    // pressable during exactly the window a press must not be accepted.
+    // Before this fix, a dismissed/failed confirm started revalidating while phase had already reset to "idle" — leaving Confirm pressable in exactly the window it mustn't be.
     "is busy while a dismissed or failed confirm's own revalidation is still settling, even though phase itself is idle",
     () => {
       expect(enrolBusy("idle", "idle", "loading")).toBe(true);
@@ -429,11 +418,8 @@ describe("applyRemovalOptionsResult — landing a row's own options-fetch never 
   });
 
   it(
-    // The bug this whole ticket fixes was exactly this: a row auto-ran the
-    // ceremony the moment its own options landed. This is the pin — landing
-    // a successful fetch only ever stores the options, never touches
-    // `requestAssertion`; that call belongs to `runRemovalCeremony` alone,
-    // off the reader's own second press.
+    // The bug this ticket fixes: a row auto-ran the ceremony the moment its options landed. Landing a fetch only ever
+    // stores options, never touches requestAssertion — that call belongs to runRemovalCeremony alone, off a second press.
     "stores the landed options without ever calling requestAssertion",
     () => {
       const setNote = vi.fn();
@@ -503,10 +489,7 @@ describe(
     });
 
     it(
-      // The pin: before this fix, a removal the *server* refused left this
-      // row's stale options in place — every later Confirm removal press
-      // reused a challenge `lock.server.ts` had already marked spent the
-      // moment it was read, and could never succeed again.
+      // Before this fix, a server-refused removal left stale options in place — every later Confirm reused an already-spent challenge and could never succeed.
       "notes the server's own refusal and re-mints this row's options, because the challenge behind it is already spent",
       () => {
         const setNote = vi.fn();
@@ -549,9 +532,7 @@ describe("lockedByOtherRow — the page-level removal lock a row's own busy chec
   });
 
   it(
-    // A row's own in-flight removal is already covered by its own
-    // `confirming`/`fetcher.state` — this only ever adds the case those two
-    // cannot see: a *different* row's removal.
+    // A row's own in-flight removal is already covered by confirming/fetcher.state — this adds only the case those can't see: a different row's.
     "leaves a row unlocked for its own in-flight removal",
     () => {
       expect(lockedByOtherRow("this-credential", "this-credential")).toBe(false);
@@ -618,11 +599,7 @@ describe("runRemovalCeremony — the removal's own ceremony, run directly off it
     );
     expect(setConfirming).toHaveBeenCalledWith(false);
     expect(setNote).not.toHaveBeenCalled();
-    // The lock survives until this row's own submission actually lands
-    // (the concurrent-removal lock) — releasing it here, before the response
-    // is even in flight, is exactly what would let a second row's removal
-    // race it.
-    expect(releaseLock).not.toHaveBeenCalled();
+    expect(releaseLock).not.toHaveBeenCalled(); // survives until the submission lands, or a second row's removal could race it
   });
 
   it("notes a dismissed prompt, submits nothing, re-mints this row's options, and releases the page-level lock", async () => {
@@ -646,11 +623,8 @@ describe("runRemovalCeremony — the removal's own ceremony, run directly off it
     expect(submit).not.toHaveBeenCalled();
     expect(setNote).toHaveBeenCalledWith(expect.stringContaining("did not complete"));
     expect(setConfirming).toHaveBeenCalledWith(false);
-    // The challenge is unspent but not immortal — two minutes, `lock.server.ts`.
-    expect(refetchOptions).toHaveBeenCalledTimes(1);
-    // No `remove` submission is ever going to land for this press, so nothing
-    // else would ever release the lock this same press set.
-    expect(releaseLock).toHaveBeenCalledTimes(1);
+    expect(refetchOptions).toHaveBeenCalledTimes(1); // challenge unspent but not immortal — two minutes, lock.server.ts
+    expect(releaseLock).toHaveBeenCalledTimes(1); // no remove submission will land for this press, so nothing else would release it
   });
 
   it("carries a failed ceremony's own message, submits nothing, re-mints this row's options, and releases the page-level lock", async () => {
@@ -958,10 +932,7 @@ describe("a duplicate credential is refused rather than creating a second row", 
         ),
       );
 
-      // The very same credential id and public key as the first — the
-      // authenticator "replaying" its one credential rather than minting a
-      // second, which is exactly what `excludeCredentials` cannot prevent
-      // client-side once a test drives this without a browser.
+      // Same credential id and public key as the first — the authenticator "replaying" its one credential, exactly what excludeCredentials can't prevent client-side without a browser.
       const duplicate = payloadOf<{ ok: false; formError: string } | { ok: true }>(
         await action(
           args(
@@ -1061,11 +1032,7 @@ describe("enrolling the first passkey", () => {
             response: JSON.stringify(
               registrationResponse(begun.options.challenge, {
                 credentialId: "second-devic",
-                // A well-formed public key nobody signs for, not a four-byte
-                // stand-in: a malformed one makes this call refuse before it
-                // ever reaches the rule this test is named for, passing for
-                // the wrong reason (finding 6).
-                publicKey: unrelatedPublicKeyCose(),
+                publicKey: unrelatedPublicKeyCose(), // well-formed, not a 4-byte stand-in, or this refuses before reaching the rule under test (finding 6)
               }),
             ),
           }),
@@ -1144,9 +1111,7 @@ describe("removing", () => {
       const removalOptions = await removalAssertionOptions(target.credentialId, db);
       const assertion = assertionResponse(removalOptions.challenge);
 
-      // Another browser removed it first — the reachable case this finding
-      // names, a Passkeys tab left open while a different device deletes
-      // the very passkey this one is about to submit a removal for.
+      // Another browser removed it first — a Passkeys tab left open while a different device deletes this same passkey.
       await db.deleteFrom("passkey").where("credential_id", "=", target.credentialId).execute();
 
       const outcome = await action(
@@ -1192,11 +1157,8 @@ describe("removing", () => {
         ),
       );
 
-      // The assertion that authorised this removal was signed by the very
-      // passkey it deletes, so the grant it mints is cascaded away in the
-      // same statement as the delete — there is no live grant left to name,
-      // so the cookie is cleared outright rather than naming one that
-      // resolves to nothing (finding 1a).
+      // The assertion was signed by the passkey it deletes, so the grant it mints cascades away in the same statement as
+      // the delete — no live grant left to name, so the cookie is cleared outright (finding 1a).
       expect(setCookieOf(outcome)).toBe(clearedLockCookie());
       expect(await isLocked(db)).toBe(true); // the spare tablet's passkey survives it
 
@@ -1252,10 +1214,7 @@ describe("removing", () => {
   it(
     "keeps this browser's own still-live grant rather than naming the one this removal's assertion minted and then cascaded away (finding 1a)",
     withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
-      // This browser's own grant belongs to a passkey (`mine`) that plays no
-      // part in signing this removal at all — the OS picker (or a synced
-      // vault) answers instead with `target`, the very passkey being
-      // removed, exactly as ADR-0012's synced-vault case allows.
+      // This browser's grant belongs to `mine`, but the OS picker (or synced vault) answers with `target` instead — the passkey being removed, per ADR-0012's synced-vault case.
       const mine = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, label: "This phone" });
       const target = await seedFixturePasskey(seedPasskey, "Spare tablet");
       const priorGrant = await seedUnlockGrant({ passkeyId: mine.credentialId });
@@ -1279,10 +1238,7 @@ describe("removing", () => {
       );
 
       expect(payloadOf<{ ok: boolean }>(outcome).ok).toBe(true);
-      // `mine`'s own grant never named the passkey this removal deleted, so
-      // it survives untouched — the cookie must go on naming it rather than
-      // the fresh grant this same request minted for `target` and then
-      // cascaded away in the very next statement.
+      // mine's grant never named the deleted passkey, so it survives — the cookie must keep naming it, not the fresh grant this request minted for target and then cascaded away.
       expect(await readGrant(priorGrant.id, db)).toBeDefined();
       expect(grantIdOf(outcome)).toBe(priorGrant.id);
 
@@ -1326,9 +1282,7 @@ describe("removing", () => {
       expect(await readGrant(newGrantId as string, db)).toBeDefined();
       expect(await isLocked(db)).toBe(true);
 
-      // Proves the point findings 1 and 10 both make: the screen's own
-      // warning cannot promise a lockout unconditionally, because which
-      // passkey actually signs is not this screen's choice to make.
+      // Proves findings 1 and 10: the screen's warning can't promise a lockout unconditionally — which passkey signs isn't its choice.
       let nextCalled = false;
       await servedThrough(middleware, get("/", `${LOCK_COOKIE}=${newGrantId}`), {}, () => {
         nextCalled = true;
@@ -1367,18 +1321,9 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
         await loader(args(get("/settings/passkeys"))),
       );
       expect(withoutOne).toContain("Enrolling this passkey locks every other browser");
-      // The half that is not certain, pinned separately from the half that
-      // is: whether a browser holding no passkey can be unlocked from one
-      // that does is the registering provider's decision, and no device has
-      // been tried (docs/operating.md, "Before the household's first
-      // passkey"). A reader deciding whether to lock the household out is
-      // owed both sentences, so both are asserted.
+      // Whether an unenrolled browser can be unlocked from an enrolled one is the provider's decision (docs/operating.md).
       expect(withoutOne).toContain("depends on the provider that made it");
-      // And that the approving device is *any* device holding the passkey,
-      // not this one. A passkey is not a device (CONTEXT.md) — it syncs — so
-      // a household that enrols from a laptop may well approve on the phone
-      // the vault synced it to, and a sentence naming this browser would be
-      // read as ruling that out.
+      // Approving device is *any* device holding the passkey, not this one — a passkey syncs (CONTEXT.md), so naming this browser would wrongly rule that out.
       expect(withoutOne).toContain("approving from a device that already holds this");
 
       await seedFixturePasskey(seedPasskey);
@@ -1439,11 +1384,8 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
   );
 
   it(
-    // The browser-local date fix's first paint: the server has no browser
-    // zone to correct to, so the enrolled/last-used columns render inside a
-    // `<time>` element carrying the raw instant and `formatDate`'s own
-    // UTC-pinned text — identical to what the client's own hydration render
-    // produces before its effect ever runs, so nothing here can mismatch.
+    // Server has no browser zone to correct to — the <time> element carries the raw instant and formatDate's UTC text,
+    // identical to the client's pre-hydration render, so nothing here can mismatch.
     "renders each date inside a <time> element carrying the raw instant, with formatDate's own UTC text as the first paint",
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({
@@ -1490,10 +1432,7 @@ describe("the list, rendered from the real loader (tests/support/render.tsx's ow
       await seedFixturePasskey(seedPasskey, "Only phone");
       const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
 
-      // Not a bare `toContain(removalWarningText(...))`: the sentence's own
-      // apostrophe renders HTML-escaped (`&#x27;`) in static markup, so the
-      // two substrings either side of it are what a literal-string compare
-      // can actually match.
+      // Not a bare toContain(removalWarningText(...)) — the sentence's apostrophe renders HTML-escaped, so the two substrings either side of it are what a literal compare can match.
       expect(markup).toContain("Remove Only phone: this is the household");
       expect(markup).toContain("turns the lock off");
     }),
@@ -1524,10 +1463,7 @@ describe("the two-step control surface", () => {
 
       expect(markup).toContain(">Continue<");
       expect(markup).not.toContain("Confirm with an existing passkey");
-      // Never one press straight into `create()`: the first passkey is two
-      // taps too (finding 12), so its own first button never reads as
-      // though pressing it creates anything by itself.
-      expect(markup).not.toContain(">Create passkey<");
+      expect(markup).not.toContain(">Create passkey<"); // never one press into create() — the first passkey is two taps too (finding 12)
     }),
   );
 
@@ -1551,9 +1487,7 @@ describe("vocabulary — CONTEXT.md's Passkey entry rules these out, and this sc
       const loaderData = await loader(args(get("/settings/passkeys")));
       const markup = renderRoute(Passkeys, "/settings/passkeys", { ...loaderData, ownPasskeyId: mine.credentialId }).toLowerCase();
 
-      // "key" is deliberately not in this list, the same exception
-      // `tests/routes/unlock.test.ts` documents: "passkey"/"passkeys" is
-      // this screen's own vocabulary and contains it as a bare substring.
+      // "key" deliberately absent — "passkey" is this screen's own vocabulary and contains it as a bare substring (unlock.test.ts documents the same exception).
       for (const word of ["biometric", "fingerprint", "face", "device credential", "enrolled device"]) {
         expect(markup).not.toContain(word);
       }
@@ -1572,10 +1506,7 @@ describe("starting the enrolment panel over", () => {
       (mintedAt) => (calls.mintedAt = mintedAt),
     );
 
-    // All four, because leaving `registrationOptions` behind is exactly what
-    // keeps the create button up over a ceremony that cannot succeed, and
-    // leaving `registrationMintedAt` behind is what makes the next attempt
-    // measure its TTL from the wrong instant.
+    // All four: leaving registrationOptions behind keeps the create button up over a dead ceremony; leaving registrationMintedAt behind measures the next TTL from the wrong instant.
     expect(calls).toEqual({ note: null, phase: "idle", options: null, mintedAt: null });
   });
 
@@ -1600,11 +1531,7 @@ describe("the screen with scripting off", () => {
     withDatabase(async () => {
       const markup = renderRoute(Passkeys, "/settings/passkeys", await loader(args(get("/settings/passkeys"))));
 
-      // Real HTML rather than a React branch, so it is in the server render
-      // itself — which is the only place a browser with scripting off will
-      // ever see it. The whole sentence, as `tests/routes/unlock.test.ts`
-      // asserts its own: a fragment would hold with the message rewritten to
-      // say something else entirely.
+      // Real HTML, not a React branch — in the server render, the only place a no-script browser sees it. Whole sentence, not a fragment (as unlock.test.ts asserts its own).
       expect(markup).toContain("<noscript>");
       expect(markup).toContain(NOSCRIPT_MESSAGE);
     }),
