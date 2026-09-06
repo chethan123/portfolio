@@ -1070,7 +1070,10 @@ wording:
   `egress-proxy` — `worker`'s only route anywhere — as Yahoo itself, and the two read differently.
   `docker compose ps egress-proxy` not `healthy` means every call fails before it ever reaches
   Yahoo: `fetch failed: connect ECONNREFUSED <address>` for a proxy that has stopped answering, or
-  `fetch failed: getaddrinfo ENOTFOUND egress-proxy` for one the network can no longer even name —
+  `fetch failed: getaddrinfo ENOTFOUND egress-proxy` for one the network cannot name at all, which
+  is as often a proxy that was never *started* — a partial `up -d` that named services explicitly
+  and left this one out — as one whose network broke: `docker compose ps` showing six rows where
+  seven belong tells those apart, and the second is much the rarer —
   either way `worker` answers `app` with a `502`, and, confusingly, `ECONNREFUSED` names a
   different actor than the one two sentences up: there it is `app`'s own socket to `worker` going
   bad, here it is `worker`'s TCP connection to `egress-proxy` going bad, one level further down the
@@ -1380,7 +1383,7 @@ be running when the new image starts can stall the instance for the length of th
 
 ```sh
 docker compose stop dump
-docker compose up -d db app caddy gate worker
+docker compose up -d db app caddy gate worker egress-proxy
 docker compose up -d dump
 ```
 
@@ -1394,10 +1397,11 @@ before that would be noticed. `up -d dump` re-converges it against the file on d
 costs nothing when `dump` has not changed and is the only form still correct when it has. `db` is in
 the middle line for the same reason: this release also moves it to a network of its own, where a
 plain image-tag bump would not have touched it — check what a given release actually changed rather
-than copying this line unchanged next time. `worker` has no `depends_on` tying it to anything else,
-so naming it explicitly is what starts it at all: a list that left it off would look exactly like
-success, everything named coming up healthy with the missing service an *absent* row in
-`docker compose ps` rather than an unhealthy one, which is the row this recipe would otherwise leave
+than copying this line unchanged next time. `worker` and `egress-proxy` have no `depends_on` tying them to
+anything, and nothing depends on them, so naming each explicitly is what starts it at all: a list
+that left one off would look exactly like success, everything named coming up healthy with the
+missing service an *absent* row in `docker compose ps` rather than an unhealthy one, which is the
+row this recipe would otherwise leave
 nobody checking for.
 
 **This does not upgrade the gate.** `gate` is pinned to an exact release with no variable in front
@@ -1409,8 +1413,11 @@ security release — nothing here will tell you one exists.
 cross `1` → `2`, because a major is where a breaking change would be. Read the release notes, set
 `APP_VERSION=2` in `.env`, then run the same procedure above.
 
-**This release requires `.env` set up before `docker compose up -d` — or any other compose verb —
-will do anything, and the last three steps have only one order that works.** The new `compose.yaml` carries
+**Crossing the release that made `POSTGRES_PASSWORD` required — the one before the proxy — needs
+`.env` set up before `docker compose up -d` or any other compose verb will do anything, and the last
+three steps have only one order that works. Skip this whole sequence if you have already crossed it:
+`grep -c '^POSTGRES_PASSWORD=' .env` printing `1` is the test, and steps 3 and 4 would rotate a live
+credential a second time for nothing.** The new `compose.yaml` carries
 `${POSTGRES_PASSWORD:?}` on `db`, and Compose interpolates the whole model before every command it
 runs: `exec`, `ps`, `logs`, `restart` and `down` all refuse identically, not only a shell inside the
 running container, so nothing reaches Postgres until `.env` holds something for it. Confirm the
@@ -1457,9 +1464,8 @@ docker compose images app    # write the tag down: it is half of your way back
    believe the password is — and from the moment it runs, any *new* connection either of them opens
    starts failing on `password authentication failed`, though a connection already held keeps
    working.
-5. `docker compose up -d`, which recreates every service that gains a network in this release — `db`,
-   `dump`, `app`, `gate` and `caddy` — now reading the password staged in step 3; `worker` alone is
-   untouched. `caddy` is one of the five, and it is the one that publishes `80:8080`, so the outage
+5. `docker compose up -d`, which recreates every service that release changed — `db`, `dump`,
+   `app`, `gate` and `caddy`, each gaining a network there; `worker` alone was untouched by it. `caddy` is one of the five, and it is the one that publishes `80:8080`, so the outage
    this step causes reaches the whole instance for as long as the recreated containers take to
    report healthy again, not only the database-facing services a shorter list might suggest.
 
@@ -1490,7 +1496,13 @@ starts serving — so a request is never served against a half-migrated schema. 
 idempotent, so a restart is always safe, and `GET /healthz` returns a non-200 if the image ever
 carries a migration the database has not recorded.
 
-**This release also deletes a network and adds two, and `docker compose up -d` will not clean up the
+**This release recreates `worker` and creates `egress-proxy`, and nothing else.** `db`, `dump`,
+`gate` and `caddy` are byte-identical to the release before and are left running; `app` is recreated
+only if its image tag moved. So the row to look for after `up -d` is a *seventh* one — six healthy
+containers where seven belong is what a half-applied upgrade looks like here, and every other check
+in this section passes on it.
+
+**It also deletes a network and adds two, and `docker compose up -d` will not clean up the
 one it drops.** Compose only ever reconciles a network its file still names; `egress-worker` going
 out of the file entirely leaves the old network running underneath, unreferenced, rather than
 removing it. Replace `compose.yaml` and run `docker compose up -d` as above, then remove the old

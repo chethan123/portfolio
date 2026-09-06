@@ -1008,6 +1008,33 @@ describe("mapping a provider failure to a status", () => {
     expect((res.json as { error: string }).error).toBe("fetch failed: ECONNREFUSED");
   });
 
+  it("keeps the TLS wording when the proxy tears a tunnel down after answering it", async () => {
+    // The third signature the operator guide quotes, and the only one whose
+    // cause is an ordinary `ECONNRESET`. Measured against a real `fetch`
+    // behind `NODE_USE_ENV_PROXY` through a proxy that answers `200` and then
+    // destroys the socket — which is exactly what `server/egress-proxy.ts`
+    // does when the ClientHello's server name does not match the host the
+    // tunnel was opened to, the `200` being already written by then. Taking
+    // `.code` here would log `fetch failed: ECONNRESET`, which reads like any
+    // dropped connection and loses the one word — TLS — that says the fence
+    // fired rather than the network wobbling.
+    const quote = vi.fn(async () => {
+      const cause = new Error(
+        "Client network socket disconnected before secure TLS connection was established",
+      ) as NodeJS.ErrnoException;
+      cause.code = "ECONNRESET";
+      throw new Error("fetch failed", { cause });
+    });
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+    expect(res.status).toBe(502);
+    expect((res.json as { error: string }).error).toBe(
+      "fetch failed: Client network socket disconnected before secure TLS connection was established",
+    );
+  });
+
   it("prefers a cause's own message over its bare code, so a DNS failure keeps the hostname", async () => {
     // Measured against a real `fetch` behind `NODE_USE_ENV_PROXY` resolving a
     // bad hostname: `cause` is a genuine `Error`, `cause.code` is the string
