@@ -474,11 +474,15 @@ once is outstanding work**, and running it again after any `yahoo-finance2` upgr
 job. Record the answer in that header either way.
 
 One call, outside the suite — a REPL or a throwaway script — for a symbol with a large, recent,
-unambiguous split. NVDA's 10:1 on 2024-06-10 is the worked example:
+unambiguous split. NVDA's 10:1 on 2024-06-10 is the worked example. Since the app cutover the call
+itself is made from `server/yahoo-client.ts`, in the worker's own process — `yahoo-finance2` is not
+imported anywhere under `app/lib` any more, only named in comments there (ARCHITECTURE.md §4.2's
+import-site row) — so exercise that client rather than the library directly, or a drift between the
+two would hide the answer:
 
 ```js
-const { default: YahooFinance } = await import("yahoo-finance2");
-const chart = await new YahooFinance().chart("NVDA", {
+const { createYahooClient } = await import("./server/yahoo-client.ts");
+const chart = await createYahooClient().chart("NVDA", {
   period1: "2024-06-01",
   interval: "1d",
   events: "split",
@@ -601,8 +605,16 @@ no `dotenv` dependency; what you get is whatever the thing running your code doe
   the command line.
 - **Which files Vite reads.** `.env`, `.env.local` and `.env.<mode>` — `development` for `dev`,
   `production` for `build`. It does not read arbitrary names, which is why this document keeps
-  everything in `.env` rather than inventing a per-purpose filename that only `--env-file` would
-  find.
+  everything Vite-facing in `.env` rather than inventing a per-purpose filename that only
+  `--env-file` would find — `.env.worker`, [above](#run-a-price-worker-alongside-npm-run-dev), is
+  the one deliberate exception, and it is not really an exception to this rule: the worker never
+  runs under `npm run dev` or `npm run build`, so Vite never has occasion to read it either way. It
+  gets its own file for a different reason — its whole configuration is the one socket path, and it
+  must see neither `app`'s `DATABASE_URL` nor its password, which sharing `.env` would hand it for
+  free.
+- **`.env.worker` is read by nothing but the command that names it** —
+  `node --env-file=.env.worker ./server/price-worker.ts`. Not `npm run dev`, not Vite, not
+  `docker compose`; that one invocation is the only reader it has.
 - **`npm run migrate` does not**, and neither does anything else that runs a `server/*.ts` or
   `scripts/*.ts` file directly under Node. Those need `--env-file=<file>`, or the variable in the
   command's environment. Run one against a `.env` you assumed was being read and it refuses at once,
