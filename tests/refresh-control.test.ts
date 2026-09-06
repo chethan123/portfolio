@@ -1,7 +1,5 @@
-/**
- * The two pure pieces the "Refresh now" control stands on: the stamp it renders
- * and the guard on where a press may send the browser back to.
- */
+/** The two pure pieces the "Refresh now" control stands on: the stamp it renders and the guard
+ * on where a press may send the browser back to. */
 import { describe, expect, it } from "vitest";
 
 import { marketStampOf } from "../app/lib/market-hours.ts";
@@ -46,9 +44,8 @@ describe("where a press may send the browser", () => {
     expect(safeReturn("https://evil.test/holdings")).toBe("/");
   });
 
-  // origin check alone passes all of these: a "." or ".." segment contributes nothing, so the
-  // empty segment after it becomes the path's first, resolving to http://return.invalid//evil.test
-  // — our origin, but a pathname a browser reads as a host
+  // origin check alone passes all of these: a "." or ".." segment contributes nothing, so the empty
+  // segment after it becomes the path's first, resolving to a pathname a browser reads as a host.
   it.each([
     "/..//evil.test",
     "/%2e%2e//evil.test",

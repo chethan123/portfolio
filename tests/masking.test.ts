@@ -1,8 +1,5 @@
-/**
- * Precedence between the household's policy and one browser's cookie (spec 0007, ADR-0002).
- * The table below asks every policy every question, so a rule quietly holding for two of
- * three values can't pass.
- */
+/** Precedence between the household's policy and one browser's cookie (spec 0007, ADR-0002). The
+ * table below asks every policy every question, so a rule quietly holding for two of three can't pass. */
 import { describe, expect, it } from "vitest";
 
 import {

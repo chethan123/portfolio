@@ -1,8 +1,6 @@
-/**
- * Field shapes for the inline position editor (DESIGN.md §4.1, §5.4). Opposite of
- * `moneyMagnitude`: these boxes open containing the table's own figure, so they must take
- * it back — minus sign, U+2212, thousands separators and all — or the form refuses what it just displayed.
- */
+/** Field shapes for the inline position editor (DESIGN.md §4.1, §5.4). Opposite of `moneyMagnitude`:
+ * these boxes open containing the table's own figure, so they must take it back — minus sign,
+ * U+2212, thousands separators and all — or the form refuses what it just displayed. */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 

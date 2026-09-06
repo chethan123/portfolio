@@ -19,7 +19,7 @@ import { startWorker } from "../server/price-worker.ts";
 import type { ChartRequest, YahooClient } from "../server/yahoo-client.ts";
 import type http from "node:http";
 
-// getConfig() memoises its first read — set before any test can reach it (price-poller.test.ts:37's precedent)
+// getConfig() memoises its first read — set before any test can reach it
 const SOCKET_PATH = join(tmpdir(), `pp-${randomBytes(4).toString("hex")}.sock`);
 process.env.PRICE_WORKER_SOCKET = SOCKET_PATH;
 
@@ -63,8 +63,7 @@ describe("reading a price", () => {
   });
 
   it("refuses a foreign currency even when the price is over the ceiling", () => {
-    // order matters: size-drop happens first (making the quote "unavailable"), letting the
-    // resolver create the instrument where non-usd would refuse it — spec 0018 §1
+    // order matters: size-drop happens first, letting the resolver create the instrument where non-usd would refuse it (spec 0018 §1).
     expect(() =>
       toProviderQuote(
         { symbol: "VWRL.L", currency: "GBP", regularMarketPrice: 10 ** 16 },
@@ -147,8 +146,7 @@ describe("the yield unit hazard", () => {
   });
 
   it("drops a per-share rate too large for its own column, as it does a yield", () => {
-    // migration 0006's asymmetry: yield_pct is bounded, annual_dividend_per_share isn't —
-    // an unbounded figure here aborts the whole refresh
+    // migration 0006's asymmetry: yield_pct is bounded, annual_dividend_per_share isn't — an unbounded figure here aborts the whole refresh.
     const quote = quoteFor({
       symbol: "GARBAGE",
       regularMarketPrice: 100,

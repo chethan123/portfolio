@@ -1,7 +1,6 @@
-// Columns screen's form contract (parseMappingForm, DESIGN.md §5.3, spec 0004 step 03). Pure.
-// Three silent-failure risks pinned: a liability's sign (§14.8 overdraft case), cost-basis
-// scale (per_share/total flip), and what the mapping is checked against (hidden header-row
-// field must refuse if stale/forged). superRefine keeps refusals as one set of messages.
+// Columns screen's form contract (parseMappingForm, DESIGN.md §5.3, spec 0004 step 03). Pure. Three silent-failure
+// risks pinned: a liability's sign (§14.8 overdraft case), cost-basis scale (per_share/total flip), and what the
+// mapping is checked against (hidden header-row field must refuse if stale/forged).
 import { describe, expect, it } from "vitest";
 
 import { NOT_IN_FILE, parseMappingForm } from "~/lib/column-mapping.server";
@@ -87,8 +86,7 @@ describe("a mapping assembled from a well-formed submission", () => {
 
 describe("the owed-as-positive box, where a liability's sign is decided", () => {
   it("keeps the file's own sign when the box is unticked and posts nothing at all", () => {
-    // Overdraft case (§14.8): an export already negative must not be negated twice. Absence
-    // is all an unticked checkbox sends, so it reads as false.
+    // Overdraft case (§14.8): an export already negative must not be negated twice. Absence is all an unticked checkbox sends.
     const mapping = parseMappingForm(submission({ owedAsPositive: undefined }), ROWS, ",");
 
     expect(mapping.owedAsPositive).toBe(false);
@@ -103,8 +101,7 @@ describe("the owed-as-positive box, where a liability's sign is decided", () => 
   it.each(["", "on", "false", "TRUE", "1"])(
     "reads %j as unticked, because only the box's own value counts as ticked",
     (posted) => {
-      // "on" matters most: what a browser posts for a checkbox with no value — catches
-      // the markup losing value="true".
+      // "on" matters most: what a browser posts for a checkbox with no value.
       const mapping = parseMappingForm(submission({ owedAsPositive: posted }), ROWS, ",");
 
       expect(mapping.owedAsPositive).toBe(false);
@@ -127,8 +124,7 @@ describe("what the cost basis column states", () => {
     ["left blank", ""],
     ["a value no radio can produce", "Total"],
   ])("refuses a cost basis answer that is %s, rather than guessing per-share", (_case, posted) => {
-    // Guessing per_share would rescale every basis by position size and still print
-    // a plausible number.
+    // Guessing per_share would rescale every basis by position size and still print a plausible number.
     const refusal = refusalOf(() =>
       parseMappingForm(submission({ costBasisIs: posted }), ROWS, ","),
     );
@@ -150,8 +146,7 @@ describe("the two columns a statement cannot be read without", () => {
   ])(
     "refuses under the %s select when it is %j, wherever the unchosen answer came from",
     (field, label, posted) => {
-      // Absent, placeholder and "not in this file" are three different answers
-      // to an optional column and the same answer to a required one.
+      // Absent, placeholder and "not in this file" are three different answers to an optional column, one to a required one.
       const refusal = refusalOf(() => parseMappingForm(submission({ [field]: posted }), ROWS, ","));
 
       expect(refusal[field]).toBe(
@@ -224,8 +219,7 @@ describe("one column claimed by two fields", () => {
   });
 
   it("treats two header cells differing only in padding as the same column", () => {
-    // Trim-compared, matching parseStatement — same cell read by two fields, though
-    // posted strings differ.
+    // Trim-compared, matching parseStatement — same cell read by two fields, though posted strings differ.
     const padded: ReadonlyArray<ReadonlyArray<string>> = [["Symbol", " Symbol ", "Quantity"]];
 
     const refusal = refusalOf(() =>
@@ -252,8 +246,7 @@ describe("the hidden header row", () => {
   ])(
     "refuses a header row that is %s at form level, never against a row that is not there",
     (_case, posted) => {
-      // No control to hang a field message under — a mapping built against an undefined
-      // header would pass every column check by accident.
+      // No control to hang a field message under — a mapping built against an undefined header would pass every column check.
       const refusal = refusalOf(() =>
         parseMappingForm(submission({ headerRow: posted }), ROWS, ","),
       );

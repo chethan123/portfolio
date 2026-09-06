@@ -327,8 +327,7 @@ describe("accountSeries", () => {
 
       const series = await accountSeries(account.id, ["2025-06-01", "2026-01-31"], db);
 
-      // Reported, not dropped — stops the chart drawing a fictional climb from zero (§7).
-      // Screen filters on coverage, not amount.
+      // Reported, not dropped — stops the chart drawing a fictional climb from zero (§7). Screen filters on coverage, not amount.
       expect(series[0]).toEqual({
         date: "2025-06-01",
         amount: "0.0000",
@@ -439,8 +438,7 @@ describe("one account's 1D series", () => {
         holdings: [{ instrument: usd, quantity: "5000.00000000" }],
       });
 
-      // Instrument this account doesn't hold — instants come from the whole log, so every
-      // account answers at the same moments (story 10).
+      // Instrument this account doesn't hold — instants come from the whole log, so every account answers at the same moments (story 10).
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
       await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });

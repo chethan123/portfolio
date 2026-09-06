@@ -5,12 +5,10 @@ import { renderRoute } from "./support/render.tsx";
 
 import { ErrorPage } from "~/components/error-page";
 
-// Error page every thrown error lands on (a4#11). Bug this guards: one boundary produced two
-// different pages for one status — /no-such-page printed the router's raw error string, while
-// /accounts/999999 printed "404 " (empty statusText) over a loader's bare message. Rule: same
-// status renders the same page, nothing the throwing code wrote appears on it.
-// The two shapes below are hand-built (unreachable without a running router) and verified
-// through isRouteErrorResponse so a shape drift fails here, not silently in the fallback branch.
+// Error page every thrown error lands on (a4#11). Bug this guards: one boundary produced two different pages for
+// one status — /no-such-page printed the router's raw error string, /accounts/999999 printed "404 " over a
+// loader's bare message. Rule: same status renders the same page. The two shapes below are hand-built (unreachable
+// without a running router) and verified through isRouteErrorResponse so a shape drift fails here.
 
 /** What React Router throws when no route matches the URL at all. */
 const NO_ROUTE_MATCHES = {

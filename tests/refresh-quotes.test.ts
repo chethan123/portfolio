@@ -48,7 +48,7 @@ const quote = (overrides: Partial<ProviderQuote> & { symbol: string }): Provider
   ...overrides,
 });
 
-// pins today's market date near the fixtures' 2026 dates so the seven-day window doesn't refuse them (price-backfill.test.ts:965-978's shape)
+// pins today's market date near the fixtures' 2026 dates so the seven-day window doesn't refuse them
 async function withClockNear<T>(now: string, body: () => Promise<T>): Promise<T> {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date(now) });
   try {

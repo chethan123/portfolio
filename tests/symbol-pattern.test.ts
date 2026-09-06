@@ -22,8 +22,7 @@ describe("what the worker will build a URL from", () => {
   });
 
   it("accepts a bare .., which only climbs one path segment inside the library's own URL, same host (server/symbol-pattern.ts header)", () => {
-    // not a hole: dots are in the character class on purpose; a slash (which would cross a
-    // host/scheme boundary) is refused above — see the module header for why this is safe
+    // not a hole: dots are in the character class on purpose; a slash (which crosses a host/scheme boundary) is refused above.
     expect(isWellFormedSymbol("..")).toBe(true);
   });
 

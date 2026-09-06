@@ -1,7 +1,5 @@
-/**
- * Recording who is in the household, driven through `people.server.ts` against a real
- * Postgres — protects that the module every screen writes through keeps one rule for all callers.
- */
+/** Recording who is in the household, driven through `people.server.ts` against a real Postgres —
+ * protects that the module every screen writes through keeps one rule for all callers. */
 import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
@@ -190,8 +188,7 @@ describe("who the household can be read as (spec 0013)", () => {
       await ctx.seedAccount({ name: "Bob Roth", owner: bob });
       await ctx.seedAccount({ name: "Carol Old", owner: carol, closedAt: "2026-01-31" });
 
-      // Carol can't be selected — holding_valued excludes closed accounts, so picking her
-      // would silently empty every screen; leaving her off the roster is a state screens already handle
+      // Carol can't be selected — holding_valued excludes closed accounts, so picking her would silently empty every screen.
       const roster = async () =>
         (await ownerRoster(ALL_OWNERS, ctx.db)).people.map((person) => person.name);
       expect(await roster()).toEqual(["Alice", "Bob"]);
@@ -216,9 +213,8 @@ describe("the roster a selection is resolved against", () => {
       expect((await ownerRoster([alice.id, bob.id], ctx.db)).coversEveryone).toBe(true);
       expect((await ownerRoster([alice.id], ctx.db)).coversEveryone).toBe(false);
 
-      // Carol owns only a closed account (not offered) but holding_valued_at still values her
-      // pre-closure holdings — ticking every visible box is narrower than the household, so
-      // it must not collapse to the unfiltered URL
+      // Carol owns only a closed account (not offered) but holding_valued_at still values her pre-closure holdings —
+      // ticking every visible box is narrower than the household, so it must not collapse to the unfiltered URL.
       const carol = await ctx.seedPerson({ name: "Carol" });
       await ctx.seedAccount({ name: "Carol Old", owner: carol, closedAt: "2026-01-31" });
 

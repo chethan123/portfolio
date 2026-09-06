@@ -1,7 +1,7 @@
-// A balance typed by hand, got wrong, and corrected — the seam between set-balance.test.ts (the write) and routes/account.test.ts
-// (the receipt) that neither can see: write, redirect, and confirmation each pass their own test while disagreeing across the
-// seam (e.g. redirecting with the date submitted rather than stored). Only a round trip catches that, so nothing here is
-// seeded past the household — every balance goes through the real action, every page reached by following its real redirect.
+// A balance typed by hand, got wrong, and corrected — the seam between set-balance.test.ts (the write) and
+// routes/account.test.ts (the receipt) that neither can see: each passes its own test while disagreeing across the
+// seam (e.g. redirecting with the date submitted rather than stored). Only a round trip catches that, so nothing
+// here is seeded past the household — every page is reached by following its real redirect.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { action as recordBalance, loader as accountPage } from "../../app/routes/account.tsx";

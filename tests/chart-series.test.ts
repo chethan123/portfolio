@@ -1,7 +1,6 @@
-// Chart's read seam (spec 0015): coverage rule fires at the assembly seam, not just inside
-// the reader (ARCHITECTURE.md §6.3); account scope dispatches to the account reader; window
-// shape (dated vs. session) decides which reader answers. Narrowing and 1D resolution are
-// tested elsewhere (valuation-owner-filter.test.ts, chart-range.test.ts, account-queries.test.ts).
+// Chart's read seam (spec 0015): coverage rule fires at the assembly seam, not just inside the
+// reader (ARCHITECTURE.md §6.3); account scope dispatches to the account reader; window shape
+// (dated vs. session) decides which reader answers. Narrowing and 1D resolution tested elsewhere.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { chartSeries, type ChartScope } from "~/lib/chart-series.server";
@@ -74,9 +73,7 @@ describe("an account scope", () => {
         holdings: [{ instrument: usd, quantity: "9000.00000000" }],
       });
 
-      // 5000, not 14000 (household reader would sum both) — account-queries.test.ts already
-      // covers that an account's series prices only its own positions; this just checks
-      // dispatch reaches that reader off scope.surface alone.
+      // 5000, not 14000 (household reader would sum both) — checks dispatch reaches the account reader off scope.surface alone.
       expect(
         await chartSeries({ surface: "account", accountId: hers.id }, datedWindow(["2026-01-15"])),
       ).toEqual([{ date: "2026-01-15", amount: "5000.0000" }]);
@@ -99,8 +96,7 @@ describe("the window decides the reader", () => {
           holdings: [{ instrument: vti, quantity: "10.00000000" }],
         });
 
-        // Tiers disagree on purpose: day close carries forward at $100 (holding_valued_at),
-        // session observed $150 (readSessionSeries) — only the window says which is being asked.
+        // Tiers disagree on purpose: day close carries forward at $100, session observed $150 — only the window says which is asked.
         await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "100.0000" });
         await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "150.0000" });
 

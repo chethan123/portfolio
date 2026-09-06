@@ -1,9 +1,8 @@
 /**
  * The application's first multipart form, validated down to bytes (docs/specs/ingest/01,
- * DESIGN.md §5.1). Pure — no database. At risk is the guard order and the wording: every
- * refusal names the file or form field it's about, and a leading BOM (which looks like a
- * fault but isn't) must pass untouched. The size cap is guarded twice, both halves here: the
- * Content-Length header read before buffering, and the File.size check for whatever has none.
+ * DESIGN.md §5.1). Pure — no database. At risk is the guard order and the wording: every refusal
+ * names the file or form field it's about, and a leading BOM (which looks like a fault but isn't)
+ * must pass untouched. Size cap is guarded twice: Content-Length before buffering, File.size after.
  */
 import { describe, expect, it } from "vitest";
 

@@ -43,8 +43,7 @@ describe("readCsv", () => {
   });
 
   it("sniffs the delimiter by column-count consistency, not by counting line one", () => {
-    // Preamble sentence has two commas, no semicolon — counting line one alone would
-    // pick comma and shred every data row.
+    // Preamble sentence has two commas, no semicolon — counting line one alone would pick comma and shred every data row.
     const { rows, delimiter } = readCsv(
       bytes("Report, generated, 2026\nSymbol;Qty\nAAPL;50\nMSFT;25"),
     );
@@ -65,8 +64,7 @@ describe("readCsv", () => {
   });
 
   it("keeps ragged rows as they are, short or long", () => {
-    // Mapping step decides usability — padding would invent cells, refusing would throw
-    // away a parseable file over its footer.
+    // Mapping step decides usability — padding would invent cells, refusing would throw away a parseable file.
     const { rows } = readCsv(bytes("a,b,c\nonly one\nx,y\np,q,r,s"));
 
     expect(rows).toEqual([["a", "b", "c"], ["only one"], ["x", "y"], ["p", "q", "r", "s"]]);
@@ -107,8 +105,7 @@ describe("readCsv", () => {
   });
 
   it("honours a forced delimiter instead of sniffing", () => {
-    // Saved mapping records its delimiter — re-reading must not depend on the sniff
-    // agreeing twice.
+    // Saved mapping records its delimiter — re-reading must not depend on the sniff agreeing twice.
     const { rows, delimiter } = readCsv(bytes("a;b\nc;d"), ",");
 
     expect(delimiter).toBe(",");
@@ -136,8 +133,7 @@ describe("candidateHeaderRows and defaultHeaderRow", () => {
     expect(candidates).toContain(2);
     expect(candidates).not.toContain(1);
 
-    // Preamble is one cell wide, data below is nine — rules it out; header matches the
-    // rows under it.
+    // Preamble is one cell wide, data below is nine — rules it out; header matches the rows under it.
     expect(defaultHeaderRow(rows)).toBe(2);
   });
 
@@ -185,8 +181,7 @@ describe("candidateHeaderRows and defaultHeaderRow", () => {
 
 describe("headerRowChoices", () => {
   it("offers a real header that fails candidate detection, after the candidates", () => {
-    // Duplicate columns rule row 0 out as a candidate (a data row often qualifies instead),
-    // but it's still the header — a select that can't offer it strands the file.
+    // Duplicate columns rule row 0 out as a candidate, but it's still the header — a select that can't offer it strands the file.
     const rows = [
       ["Symbol", "Value", "Value"],
       ["AAPL", "50", "8533.00"],

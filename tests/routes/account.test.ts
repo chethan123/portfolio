@@ -1,7 +1,6 @@
 // Account drill-down's guards (DESIGN.md §13) — what the route does with the URL, not the already-tested modules
-// beneath it: the id (404 for no-such-account, non-id, or closed, all reachable by hand/bookmark/crawler) and the
-// receipt params (?uploaded=/?recorded= name which set or date was written; the confirmation is read back from the
-// database, never trusted from the URL, so a stale link can't confirm a statement nobody recorded).
+// beneath it: the id (404 for no-such-account, non-id, or closed) and the receipt params (?uploaded=/?recorded=
+// name which set or date was written; the confirmation is read back from the database, never trusted from the URL).
 import { afterAll, describe, expect, it } from "vitest";
 
 import Account, { action, loader, middleware } from "../../app/routes/account.tsx";
@@ -66,9 +65,8 @@ describe("the 404 gate", () => {
   it(
     "answers 404 for an account id that names no row and for one that is not an id at all",
     withDatabase(async () => {
-      // Neither of the first two may reach a query casting to bigint, where 'lookup'::bigint is a driver error (500,
-      // not 404). The third overflows bigint despite passing the shape guard — couldBeId's magnitude bound catches it;
-      // the fourth pins that boundary itself (one past the largest bigint).
+      // Neither of the first two may reach a query casting to bigint ('lookup'::bigint is a driver error, 500 not
+      // 404). Third overflows bigint past the shape guard; fourth pins that boundary (one past the largest bigint).
       for (const accountId of [
         "999999999",
         "lookup",

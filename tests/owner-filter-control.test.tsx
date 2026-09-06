@@ -1,8 +1,5 @@
-/**
- * A GET form submits fields in DOM order, and the canonical address spells owner first
- * (canonicalOwnerSearch in owner-filter.ts) — so checkboxes must render ahead of hidden
- * fields, or every Apply pays a respelling bounce for field order alone.
- */
+/** A GET form submits fields in DOM order, and the canonical address spells owner first — so
+ * checkboxes must render ahead of hidden fields, or every Apply pays a respelling bounce. */
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoutesStub } from "react-router";
 import { describe, expect, it } from "vitest";

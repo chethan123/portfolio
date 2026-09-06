@@ -1,8 +1,6 @@
-// Rules holding_valued exists to keep every consumer agreeing on. Driven through the query
-// module's public functions against real Postgres. Nothing asserts on generated SQL, joins,
-// or index existence — implementation, would fail on a harmless refactor. Money assertions
-// are exact decimal strings at stored scale — toBeCloseTo would hide the driver-coercion
-// regression this slice prevents.
+// Rules holding_valued exists to keep every consumer agreeing on. Driven through the query module's public functions
+// against real Postgres. Nothing asserts on generated SQL, joins, or index existence. Money assertions are exact
+// decimal strings at stored scale — toBeCloseTo would hide the driver-coercion regression this slice prevents.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { currentHoldings, netWorth } from "~/lib/valuation.server";

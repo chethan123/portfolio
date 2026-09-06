@@ -301,8 +301,7 @@ describe("changing an account's kind", () => {
   it(
     "refuses it for a closed account too, whose securities no current-holdings view lists",
     withDatabase(async ({ db, seedPerson, seedAccount, seedInstrument, seedPositionSet }) => {
-      // holding_valued drops closed accounts (0002_holding_valued.sql) — a guard built on
-      // that view would wrongly allow this relabel, with no way to undo it.
+      // holding_valued drops closed accounts — a guard built on that view would wrongly allow this relabel.
       const account = await seedAccount({
         name: "Old Brokerage",
         kind: "brokerage",
@@ -320,8 +319,7 @@ describe("changing an account's kind", () => {
 
       expect(errors.kind).toMatch(/Vanguard Total Stock Market/);
 
-      // Closed account: both of the open refusal's escape doors are shut, so this
-      // says the label is stuck instead (§5.3).
+      // Closed account: both of the open refusal's escape doors are shut, so this says the label is stuck (§5.3).
       expect(errors.kind).toMatch(/does not change/);
       expect(errors.kind).not.toMatch(/on Holdings/);
 
@@ -332,8 +330,7 @@ describe("changing an account's kind", () => {
   it(
     "refuses savings relabelled as a debt, in one hop and with no securities anywhere",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // report SET-1: check must be against the new kind, not the old — else $42,000
-      // savings would retroactively count as debt on every screen, with no write at all.
+      // report SET-1: check must be against the new kind, not the old — else $42,000 savings retroactively counts as debt.
       const savings = await seedAccount({
         name: "Ally Online Savings",
         kind: "bank",
@@ -357,8 +354,7 @@ describe("changing an account's kind", () => {
   it(
     "refuses a debt relabelled as savings, the same flip read from the other side",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // Mirrored direction: stored quantity is negative, so relabel would turn
-      // $14,500 owed into $14,500 held.
+      // Mirrored direction: stored quantity is negative, so relabel would turn $14,500 owed into $14,500 held.
       const loan = await seedAccount({
         name: "Chase Auto Loan",
         kind: "liability",
@@ -380,8 +376,7 @@ describe("changing an account's kind", () => {
   it(
     "tells a closed account its label is stuck, rather than naming doors it does not have",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // Closed account's mislabel is permanent (§5.3): the open refusal's doors don't exist
-      // here — /accounts/:id 404s when closed, and holding_valued excludes it from Holdings.
+      // Closed account's mislabel is permanent (§5.3): /accounts/:id 404s when closed, and holding_valued excludes it.
       const savings = await seedAccount({
         name: "Ally Online Savings",
         kind: "bank",
@@ -407,8 +402,7 @@ describe("changing an account's kind", () => {
   it(
     "refuses a debt relabelled as a bank balance, even by way of a securities kind",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // Guard checks new kind + rows, not old kind — routing through an intermediate
-      // kind doesn't bypass it.
+      // Guard checks new kind + rows, not old kind — routing through an intermediate kind doesn't bypass it.
       const loan = await seedAccount({
         name: "Chase Auto Loan",
         kind: "liability",
@@ -433,8 +427,7 @@ describe("changing an account's kind", () => {
   );
 
   // One case per allowed transition — over-refusal is the failure mode here.
-  // withDatabase is called per case rather than passed to it.each directly
-  // (see set-balance.test.ts's kind cases for what that silently discards).
+  // withDatabase is called per case rather than passed to it.each directly (see set-balance.test.ts).
   it.each([
     ["bank", "liability", "no statement"],
     ["brokerage", "401k", "securities"],

@@ -1,8 +1,5 @@
-/**
- * Tax settings' one field (DESIGN.md §8.4). Pure — the rate's validation used to be reachable
- * only through settings.server.ts, so a database-less CI run said nothing about it. Every
- * assertion is an exact string — a rate multiplies money, so no silent rounding.
- */
+/** Tax settings' one field (DESIGN.md §8.4). Pure — validation used to be reachable only through
+ * settings.server.ts, so a database-less CI run said nothing about it. Assertions are exact strings. */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 

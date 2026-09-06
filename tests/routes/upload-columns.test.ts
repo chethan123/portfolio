@@ -1,7 +1,6 @@
-// Step two's loader (ingest brief §4, §5.3): the header row's three-step precedence, and preselects resolved against that
-// row's cells. Both fail quietly if wrong — a precedence letting the saved mapping outrank "Re-read with this header
-// row" leaves a preambled file unmappable with no error; preselects resolving by position instead of column name would
-// map quantity onto cost basis and read as correct right up until the diff.
+// Step two's loader (ingest brief §4, §5.3): the header row's three-step precedence, and preselects resolved against
+// that row's cells. Both fail quietly if wrong — wrong precedence leaves a preambled file unmappable with no error;
+// preselects resolving by position instead of column name would map quantity onto cost basis and read as correct.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { loader } from "../../app/routes/upload/columns.tsx";
@@ -18,8 +17,8 @@ afterAll(closeTestDatabase);
 
 const encode = (text: string) => new TextEncoder().encode(text);
 
-// First row is shaped exactly like a header and isn't (a previous section's, same three columns) — detection picks it
-// since its cells are unique and its width matches the rows below; the real header is the row after it.
+// First row is shaped exactly like a header and isn't — detection picks it since its cells are unique and its width
+// matches the rows below; the real header is the row after it.
 const CSV = [
   "Fund,Units,Basis",
   "Symbol,Quantity,Cost Basis",
@@ -93,8 +92,8 @@ describe("the header row the screen opens on", () => {
   it(
     "ignores a header param that names no row of this file, rather than mapping against nothing",
     withDatabase(async (ctx) => {
-      // A hand-edited or bookmarked URL — falling through to the saved row keeps the screen mappable; taking the number
-      // would resolve every select against an undefined header, six empty controls over a file that maps perfectly well.
+      // A hand-edited or bookmarked URL — falling through to the saved row keeps the screen mappable; taking the
+      // number would resolve every select against an undefined header.
       const draftId = await stageDraft(ctx);
 
       const past = await screen(draftId, "?header=9");
@@ -133,7 +132,7 @@ describe("the preselected columns", () => {
     "leave a saved column the header on screen lacks unselected, and name it rather than take the column beside it",
     withDatabase(async (ctx) => {
       // The saved mapping's three columns are all absent from row 0, and each sits at the position its replacement
-      // occupies (instrument was column 0, column 0 here is "Fund") — resolving by position would silently map the wrong columns.
+      // occupies — resolving by position would silently map the wrong columns.
       const draftId = await stageDraft(ctx);
 
       const { defaults, missingColumns } = await screen(draftId, "?header=0");

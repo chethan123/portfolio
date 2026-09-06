@@ -415,8 +415,7 @@ describe("the schema's numeric scales", () => {
   });
 });
 
-// pins the cost, not a plan — EXPLAIN at fixture scale wouldn't reproduce the real shape
-// and would break on an unrelated Postgres upgrade
+// pins the cost, not a plan — EXPLAIN at fixture scale wouldn't reproduce the real shape.
 describe("the schema's planner costs", () => {
   it("prices latest_position_set at 1000, the cost the read path's plan depends on", async () => {
     const result = await sql<{ procost: number }>`

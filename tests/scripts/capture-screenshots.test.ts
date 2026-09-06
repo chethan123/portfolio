@@ -1,10 +1,8 @@
-// Two safety-critical cases a passing suite wouldn't otherwise catch:
-// - Coexistence (finding 1): placeholder + a developer's own passkey must refuse — the early-return-on-placeholder bug once
-//   skipped this check, letting a mixed set get captured into committed screenshots.
-// - Wrong database: no `demo_seed` marker must refuse before any write. Tested via prepareCapture (what main actually calls,
-//   in order), not ensureCapturePasskey directly, which would keep passing even if validation moved after the write.
-// Both talk to a raw pg connection, not Kysely, so withDatabase's rollback (a different connection) can't isolate them —
-// one client, one transaction, rolled back here instead.
+// Two safety-critical cases a passing suite wouldn't otherwise catch: coexistence (finding 1 — placeholder + a
+// developer's own passkey must refuse, once skipped by an early-return-on-placeholder bug), and wrong database (no
+// `demo_seed` marker must refuse before any write; tested via prepareCapture, what main actually calls, in order).
+// Both talk to a raw pg connection, not Kysely, so withDatabase's rollback can't isolate them — one client, one
+// transaction, rolled back here instead.
 import { afterAll, describe, expect, it } from "vitest";
 
 import {

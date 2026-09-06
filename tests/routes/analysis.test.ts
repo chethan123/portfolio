@@ -242,7 +242,7 @@ describe("the three empty states", () => {
   it(
     "still says it on an empty instance that is being read as somebody",
     withDatabase(async (ctx) => {
-      // Two accounts so the control draws; ticking one used to wrongly answer "Alice holds nothing, everything else is" on an empty instance.
+      // Ticking one used to wrongly answer "Alice holds nothing, everything else is" on an empty instance.
       const alice = await ctx.seedPerson({ name: "Alice" });
       const bob = await ctx.seedPerson({ name: "Bob" });
       await ctx.seedAccount({ name: "Alice Brokerage", owner: alice });

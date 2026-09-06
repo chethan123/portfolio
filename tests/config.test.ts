@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { ConfigError, loadConfig, loadWorkerConfig } from "../server/config.ts";
 
-/** Documented default (spec 0018 §3.2, .env.example), spelled literally — comparing against
- * the module's own constant would hide a changed default. */
+/** Documented default (spec 0018 §3.2, .env.example), spelled literally — comparing against the
+ * module's own constant would hide a changed default. */
 const DEFAULT_PRICE_WORKER_SOCKET = "/run/price-worker/worker.sock";
 
 const MINIMAL = {
@@ -47,8 +47,7 @@ describe("configuration validation", () => {
       loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://portfolio.example.com" }).PUBLIC_ORIGIN,
     ).toBe("https://portfolio.example.com");
 
-    // Each parses cleanly as a URL (the old validation) but isn't the exact string the
-    // browser sends or the gate concatenates its callback from — refused by name, not canonicalised.
+    // Each parses cleanly as a URL (the old validation) but isn't the exact string the browser sends.
     const nonCanonical = [
       "https://portfolio.example.com/", // trailing slash
       "HTTPS://Portfolio.Example.COM", // upper case
@@ -94,8 +93,7 @@ describe("configuration validation", () => {
   });
 
   it("refuses a value carrying a path", () => {
-    // compose.yaml builds the redirect as PUBLIC_ORIGIN + "/oauth2/callback" — a path here
-    // would make that a URL Google never registered, and isn't a valid WebAuthn origin either.
+    // compose.yaml builds the redirect as PUBLIC_ORIGIN + "/oauth2/callback" — a path here would make that a URL Google never registered.
     expect(() =>
       loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://portfolio.example.com/oauth2/callback" }),
     ).toThrow(/PUBLIC_ORIGIN/);
@@ -120,8 +118,7 @@ describe("configuration validation", () => {
     expect(config.MARKET_TIMEZONE).toBe("America/New_York");
     expect(config.TZ).toBe("UTC");
 
-    // "Nothing in front of me" is the honest default — what a fresh checkout is, and it
-    // leaves the warning banner showing.
+    // "Nothing in front of me" is the honest default — what a fresh checkout is, and it leaves the warning banner showing.
     expect(config.AUTH_GATE).toBe("none");
   });
 
@@ -147,8 +144,7 @@ describe("configuration validation", () => {
     expect(loadConfig({ ...MINIMAL, AUTH_GATE: "external" }).AUTH_GATE).toBe("external");
     expect(loadConfig({ ...MINIMAL, AUTH_GATE: "none" }).AUTH_GATE).toBe("none");
 
-    // Typo and a plausible boolean guess — both must fail loudly: reading either as
-    // "gated" would hide the warning on an instance with nothing in front of it.
+    // Typo and a plausible boolean guess — both must fail loudly, or the misread hides the warning.
     expect(() => loadConfig({ ...MINIMAL, AUTH_GATE: "externl" })).toThrow(/AUTH_GATE/);
     expect(() => loadConfig({ ...MINIMAL, AUTH_GATE: "true" })).toThrow(/AUTH_GATE/);
   });
@@ -171,8 +167,7 @@ describe("configuration validation", () => {
 });
 
 /** Worker's own schema (spec 0018 §3.5): one key. First case's point is what it doesn't need —
- * loadWorkerConfig({}) throwing nothing means no database/origin required, unlike
- * loadConfig's empty-environment case above. */
+ * loadWorkerConfig({}) throwing nothing means no database/origin required. */
 describe("the price worker's configuration", () => {
   it("answers the default socket path for an empty environment, needing neither database nor origin", () => {
     expect(loadWorkerConfig({}).PRICE_WORKER_SOCKET).toBe(DEFAULT_PRICE_WORKER_SOCKET);
@@ -181,8 +176,7 @@ describe("the price worker's configuration", () => {
   it("takes an override for the socket path, and ignores everything else in the environment", () => {
     const config = loadWorkerConfig({
       PRICE_WORKER_SOCKET: "/tmp/w.sock",
-      // Present, but not this schema's business — DATABASE_URL reaching the worker is
-      // ignored, not validated (module header).
+      // Present, but not this schema's business — DATABASE_URL reaching the worker is ignored, not validated.
       DATABASE_URL: "not a postgres url at all",
     });
 

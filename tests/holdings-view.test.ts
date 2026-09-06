@@ -1,7 +1,6 @@
-// Holdings table: what it shows, in what order, and what the figures come to (DESIGN.md §8.1).
-// No database — holdings-view.ts is pure, unit tests over a fixture function. Four things
-// pinned: grouping/filtering, exact-decimal arithmetic, the sort (string comparison would put
-// "9.0000" above "10.0000"), and the honesty rule — an unknown is never a zero.
+// Holdings table: what it shows, in what order, and what the figures come to (DESIGN.md §8.1). No database —
+// holdings-view.ts is pure. Four things pinned: grouping/filtering, exact-decimal arithmetic, the sort (string
+// comparison would put "9.0000" above "10.0000"), and the honesty rule — an unknown is never a zero.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -380,8 +379,7 @@ describe("sortHoldings", () => {
   });
 
   it("compares a quantity at its own scale, not the money scale", () => {
-    // quantity is numeric(20,8) — truncating to four places would tie these and let the
-    // tie-break decide.
+    // quantity is numeric(20,8) — truncating to four places would tie these and let the tie-break decide.
     const sorted = sortHoldings(
       [
         holding({ instrumentName: "Fewer", quantity: "1.00000001" }),
@@ -578,8 +576,7 @@ describe("groupHoldings", () => {
       DEFAULT_DIRECTION,
     );
 
-    // Each third rounds to 0.333333 alone (three are a millionth short); lost unit goes to
-    // the first tied remainder in sort order.
+    // Each third rounds to 0.333333 alone (three are a millionth short); lost unit goes to the first tied remainder.
     expect(groups.map((group) => [group.label, group.share])).toEqual([
       ["Bank", "0.333334"],
       ["Brokerage", "0.333333"],
@@ -588,8 +585,7 @@ describe("groupHoldings", () => {
       ["Liability", "-0.666667"],
     ]);
 
-    // Summed on the digits — Number() would round the millionth's shortfall away and call
-    // a gapped pie whole.
+    // Summed on the digits — Number() would round the millionth's shortfall away and call a gapped pie whole.
     const positive = groups
       .map((group) => group.share)
       .filter((share): share is string => share !== null && !share.startsWith("-"));
@@ -706,8 +702,7 @@ describe("holdingYield", () => {
   });
 
   it("has no percentage for a holding worth zero, and does not throw on one", () => {
-    // money.ts's divide raises RangeError on a zero denominator — one bad row would take
-    // down the whole table unguarded.
+    // money.ts's divide raises RangeError on a zero denominator — one bad row would take down the whole table.
     expect(() => holdingYield({ annualDividend: "0.0000", value: "0.0000" })).not.toThrow();
     expect(holdingYield({ annualDividend: "0.0000", value: "0.0000" })).toBeNull();
     expect(holdingYield({ annualDividend: "5.0000", value: "0.0000" })).toBeNull();

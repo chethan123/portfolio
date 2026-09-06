@@ -1,8 +1,5 @@
-/**
- * Import boundary keeping masking from decaying (spec 0007, ADR-0002). No linter enforces
- * this — the suite is the boundary. Ratios (formatPercent/formatShare) stay unmasked on purpose:
- * they describe composition, not size.
- */
+/** Import boundary keeping masking from decaying (spec 0007, ADR-0002). No linter enforces this —
+ * the suite is the boundary. Ratios (formatPercent/formatShare) stay unmasked: they describe composition, not size. */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 

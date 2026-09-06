@@ -12,11 +12,8 @@ import {
 
 import type { ChartPoint } from "../app/lib/chart-range.ts";
 
-/**
- * Arithmetic behind the net worth trend line (DESIGN.md §8.1, §13.6). Risk isn't a crash —
- * it's a plausible wrong axis or squeezed scale that reads as fact. Scale/labels tested as
- * pure functions; only the empty-render refusal and axis-label wiring pay for a render.
- */
+/** Arithmetic behind the net worth trend line (DESIGN.md §8.1, §13.6). Risk isn't a crash — it's a
+ * plausible wrong axis or squeezed scale that reads as fact. Scale/labels tested as pure functions. */
 
 // doubling over a year; money as decimal string throughout
 const rising: ChartPoint[] = [
