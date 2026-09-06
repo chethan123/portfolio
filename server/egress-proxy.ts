@@ -100,12 +100,21 @@
  *
  * **Logs**, stem `Egress proxy`: one line per refusal, naming the reason and
  * the host(s), and one per upstream failure, naming the host and the cause.
- * None for an allowed tunnel, and none for the maxConnections case above.
+ * That includes the deadline Node enforces before this file sees anything —
+ * a peer that never completes a request line (`onClientError`) — since a
+ * deadline nothing records is a slot a peer can hold repeatedly and
+ * invisibly. None for an allowed tunnel, none for the maxConnections case
+ * above, and none for an ordinary peer close. Both halves of every line go
+ * through `logSafe`: the host and the `server_name` are bytes the peer
+ * chooses, and this line is the audit trail it is being audited by.
  *
- * `if (import.meta.main)` guards the entry point, as `price-worker.ts` does,
- * and the `SIGTERM` handler is that file's own shape — `server.close(() =>
- * process.exit(0))` — because Node is PID 1 under the compose `entrypoint`
- * and a stop is otherwise Docker's 10 s wait plus `SIGKILL`.
+ * `if (import.meta.main)` guards the entry point, as `price-worker.ts` does.
+ * The `SIGTERM` handler starts from that file's shape and cannot end there:
+ * Node is PID 1 under the compose `entrypoint` and a stop is otherwise
+ * Docker's 10 s wait plus `SIGKILL`, but `server.close()` — and
+ * `closeAllConnections()` with it — leaves an *upgraded* socket alone, so a
+ * proxy whose whole job is upgrading sockets has to destroy its own tunnels
+ * first. Measured: one live tunnel and the close callback never fires.
  */
 import dns from "node:dns";
 import http from "node:http";
@@ -248,6 +257,18 @@ function resolveAndConnectUpstream(
   return new Promise((resolve, reject) => {
     let settled = false;
 
+    // The attempt currently in flight, so the deadline below can destroy it.
+    // A blackholing address is the case that needs this and the only one:
+    // it answers neither the connect callback nor `'error'`, so nothing in
+    // `tryAddress` ever runs again and `settle`'s own late-arrival guard —
+    // which does destroy a socket that connects after the deadline — is
+    // never reached. Left alone the socket sits in `SYN_SENT` until the
+    // kernel gives up (`tcp_syn_retries`, minutes), while the client has
+    // long since had its `504` and freed its `maxConnections` slot: the one
+    // bound this proxy has does not count upstream sockets, so a worker
+    // driving refusals at a blackholed address accumulates them unbounded.
+    let pending: net.Socket | undefined;
+
     const timer = setTimeout(() => {
       settle(new DeadlineExceededError(`resolving or connecting to ${host} exceeded ${deadlineMs}ms`));
     }, deadlineMs);
@@ -259,6 +280,10 @@ function resolveAndConnectUpstream(
       }
       settled = true;
       clearTimeout(timer);
+      // Only on the failure path: on success `pending` *is* the socket being
+      // handed to the caller.
+      if (error && pending !== undefined && pending !== socket) pending.destroy();
+      pending = undefined;
       if (error) reject(error);
       else resolve(socket!);
     }
@@ -278,10 +303,12 @@ function resolveAndConnectUpstream(
         attemptDone = true;
         settle(undefined, socket);
       });
+      pending = socket;
       socket.once("error", (connectError: Error) => {
         if (attemptDone) return;
         attemptDone = true;
         socket.destroy();
+        if (pending === socket) pending = undefined;
         tryAddress(addresses, index + 1, connectError);
       });
     }
@@ -479,9 +506,25 @@ function parseServerName(handshake: Buffer): string {
   return serverName;
 }
 
+/**
+ * Control bytes out of what reaches `console.error`, exactly as
+ * `server/price-worker.ts`'s own `logSafe` does and for the same reason: both
+ * halves of a refusal line are peer-supplied. The host comes off the `CONNECT`
+ * request line, and the reason quotes the `server_name` read out of the
+ * ClientHello — bytes a compromised worker chooses. Left alone, one refused
+ * hello could write many physical lines into the file an operator greps for
+ * trouble, any of them free to open with this module's own `Egress proxy` stem
+ * and so to forge a refusal that never happened. The line is the audit trail
+ * this proxy is supposed to leave, which is precisely why it may not be
+ * writable by the party being audited.
+ */
+function logSafe(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f]/g, " ");
+}
+
 /** One line, stem `Egress proxy`, for every refusal — naming the reason and the host. */
 function logRefusal(host: string | undefined, reason: string): void {
-  console.error(`Egress proxy: refused CONNECT ${host ?? "(unparseable target)"} — ${reason}`);
+  console.error(`Egress proxy: refused CONNECT ${logSafe(host ?? "(unparseable target)")} — ${logSafe(reason)}`);
 }
 
 /** A refusal before the `200`: a real HTTP status, the socket then closed. */
@@ -498,7 +541,18 @@ function refuseTunnel(clientSocket: net.Socket, upstream: net.Socket, host: stri
   upstream.destroy();
 }
 
-type ConnectDeps = Required<Pick<StartEgressProxyOptions, "dnsLookup" | "netConnect" | "stageDeadlineMs" | "idleTeardownMs">>;
+type ConnectDeps = Required<Pick<StartEgressProxyOptions, "dnsLookup" | "netConnect" | "stageDeadlineMs" | "idleTeardownMs">> & {
+  /**
+   * Every socket of an *established* tunnel, so `SIGTERM` can end it. Node's
+   * own `server.closeAllConnections()` does not: measured, a live `CONNECT`
+   * tunnel survives it and `server.close()`'s callback never fires, because
+   * an upgraded socket is no longer the HTTP server's to close. That is the
+   * one place this file cannot simply copy `server/price-worker.ts`'s
+   * shutdown — the worker upgrades nothing, so the same two lines are
+   * sufficient there and silently insufficient here.
+   */
+  tunnels: Set<net.Socket>;
+};
 
 async function handleConnect(
   req: http.IncomingMessage,
@@ -556,7 +610,11 @@ async function handleConnect(
     return;
   }
 
+  deps.tunnels.add(clientSocket);
+  deps.tunnels.add(upstream);
   const teardown = (): void => {
+    deps.tunnels.delete(clientSocket);
+    deps.tunnels.delete(upstream);
     clientSocket.destroy();
     upstream.destroy();
   };
@@ -571,6 +629,67 @@ async function handleConnect(
   if (hello.rest.length > 0) upstream.write(hello.rest);
   clientSocket.pipe(upstream);
   upstream.pipe(clientSocket);
+}
+
+/**
+ * The first of the three deadlines — accept to a complete request line and
+ * headers — expires inside Node, before {@link handleConnect} has anything to
+ * refuse. Ticket 08 requires every deadline to log once, and measured, this
+ * one logged nothing: a peer could hold slots to their deadline over and over
+ * and leave no `Egress proxy` trail at all.
+ *
+ * `server.timeout` is what actually ends that socket, and its `'timeout'`
+ * event is the only hook that fires *at* the deadline rather than on the next
+ * `connectionsCheckingInterval` sweep — which is a race the short deadlines a
+ * test uses lose outright, the socket being gone before the sweep looks.
+ * Measured on 24.12.0: it does not fire for an upgraded socket, because
+ * {@link handleConnect} gives every established tunnel a `setTimeout` of its
+ * own and that replaces the server's — so this covers the pre-`CONNECT` stage
+ * and nothing else, and an allowed tunnel still logs nothing.
+ *
+ * Attaching a listener replaces Node's own default here, which is to destroy
+ * the socket; that is reproduced rather than skipped.
+ */
+function onHeaderDeadline(socket: net.Socket): void {
+  // Not `logRefusal`: no `CONNECT` was ever received, so naming one — even as
+  // "(unparseable target)" — would describe a request the peer never made.
+  // The stem is the same, which is what an operator greps for.
+  console.error("Egress proxy: no complete request line and headers before the deadline");
+  socket.destroy();
+}
+
+/**
+ * Attaching any `clientError` listener replaces Node's own default handling
+ * for *every* parser error, not just the deadline above, so this reproduces
+ * that mapping rather than collapsing the rest to `400`.
+ * `server/price-worker.ts`'s `onClientError` is the same reasoning at more
+ * length; it is duplicated rather than shared because this module's closure is
+ * deliberately `node:http`, `node:net` and `node:dns` and nothing else, which
+ * importing the worker would end.
+ *
+ * Nothing is logged here. The deadline is {@link onHeaderDeadline}'s to
+ * report, and it has already destroyed the socket by the time the sweep
+ * raises `ERR_HTTP_REQUEST_TIMEOUT` for it — so the `writable` guard, which
+ * is Node's own, both keeps the contract at one line per refusal and keeps a
+ * bare `ECONNRESET` from becoming the log flood that contract exists to
+ * prevent.
+ */
+function onClientError(error: Error, socket: net.Socket): void {
+  if (!socket.writable) {
+    socket.destroy();
+    return;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "HPE_HEADER_OVERFLOW") {
+    socket.write("HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n");
+  } else if (code === "HPE_CHUNK_EXTENSIONS_OVERFLOW") {
+    socket.write("HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n");
+  } else if (code === "ERR_HTTP_REQUEST_TIMEOUT") {
+    socket.write("HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n");
+  } else {
+    socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+  }
+  socket.destroy();
 }
 
 function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -591,6 +710,7 @@ export async function startEgressProxy(options: StartEgressProxyOptions = {}): P
     netConnect: options.netConnect ?? defaultNetConnect,
     stageDeadlineMs: options.stageDeadlineMs ?? STAGE_DEADLINE_MS,
     idleTeardownMs: options.idleTeardownMs ?? IDLE_TEARDOWN_MS,
+    tunnels: new Set<net.Socket>(),
   };
 
   // `connectionsCheckingInterval` is the one that makes the two above mean
@@ -612,6 +732,9 @@ export async function startEgressProxy(options: StartEgressProxyOptions = {}): P
   server.maxConnections = 8;
   server.timeout = deps.stageDeadlineMs;
 
+  server.on("clientError", onClientError);
+  server.on("timeout", onHeaderDeadline);
+
   server.on("connect", (req, duplexSocket, head) => {
     // Typed `stream.Duplex` by @types/node (the same generality `upgrade`
     // and `clientError` get), but always the real underlying `net.Socket`
@@ -628,6 +751,13 @@ export async function startEgressProxy(options: StartEgressProxyOptions = {}): P
   // has no handler for; without this every stop is Docker's 10 s wait plus
   // `SIGKILL` (price-worker.ts's own `SIGTERM` shape and its own reasoning).
   const onSigterm = (): void => {
+    // Tunnels first: `closeAllConnections()` leaves an upgraded socket
+    // alone, so without this a single live tunnel holds `close()`'s
+    // callback until the 60 s idle teardown — well past Docker's 10 s
+    // grace, ending in the `SIGKILL` this handler exists to avoid.
+    for (const socket of deps.tunnels) socket.destroy();
+    deps.tunnels.clear();
+    server.closeAllConnections();
     server.close(() => process.exit(0));
   };
   process.on("SIGTERM", onSigterm);

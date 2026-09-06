@@ -392,6 +392,25 @@ describe("resolving and connecting the upstream (step 2)", () => {
     for (const hung of hungSockets) hung.destroy();
   });
 
+  it("destroys the upstream socket it was still connecting when the deadline fires", async () => {
+    // A blackholing address answers neither the connect callback nor
+    // `'error'`, so nothing in `tryAddress` runs again and the late-arrival
+    // guard is never reached. Left alone the socket sits in `SYN_SENT` for
+    // minutes while the client already has its 504 and has freed its
+    // `maxConnections` slot — the proxy's only bound counts client sockets,
+    // not upstream ones, so the leak is unbounded by anything.
+    const { fn, sockets: hungSockets } = hangingNetConnect();
+    const port = await start({ netConnect: fn });
+    const socket = track(await connectRaw(port));
+
+    socket.write(connectLine(`${ALLOWED_HOST}:443`));
+    const { line } = await waitForStatusLine(socket);
+
+    expect(line).toContain("504");
+    expect(hungSockets).toHaveLength(1);
+    expect(hungSockets[0]?.destroyed).toBe(true);
+  });
+
   it("answers 403 when one address among several is private, not only when all are", async () => {
     // A single-address answer cannot tell `some` from `every`, and a mutation
     // to `every` — refusing only if the whole answer is private, the opposite
@@ -704,5 +723,87 @@ describe("logging", () => {
     expect(line).toContain("Egress proxy");
     expect(line).toContain(ALLOWED_HOST);
     expect(line).toContain("mail.yahoo.com");
+  });
+
+  it("writes a refusal as one physical line when the server_name carries control bytes", async () => {
+    // The refusal line quotes bytes the peer chose. Unsanitised, one hello
+    // forges as many further lines as it likes, any of them free to open
+    // with this module's own stem — so the audit trail becomes writable by
+    // the party being audited.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { proxyPort } = await startWithUpstream();
+    const socket = track(await connectRaw(proxyPort));
+
+    socket.write(connectLine(`${ALLOWED_HOST}:443`));
+    await waitForStatusLine(socket);
+    socket.resume();
+    socket.write(clientHello(["a.test\nEgress proxy: refused CONNECT evil.test — allowed"]));
+    await waitForClose(socket);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const line = String(spy.mock.calls[0]?.[0]);
+    // One physical line is the property, so the assertion is on control
+    // bytes rather than on the forged stem: a peer may put the words "Egress
+    // proxy" in a server name all it likes, and it stays one line of text.
+    expect(line).toMatch(/^[^\x00-\x1f\x7f]*$/);
+    expect(line).toContain("Egress proxy: refused CONNECT");
+  });
+
+  it("logs once when a connection never completes a request line, and nothing when one merely closes", async () => {
+    // The first of the three deadlines expires inside Node, before this
+    // module has anything to refuse. A deadline nothing records is a slot a
+    // peer can hold to expiry over and over, invisibly.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const port = await start();
+
+    const silent = track(await connectRaw(port));
+    await waitForClose(silent);
+    const afterSilent = spy.mock.calls.length;
+
+    const closing = track(await connectRaw(port));
+    closing.end();
+    await waitForClose(closing);
+    await new Promise((resolve) => setTimeout(resolve, TEST_DEADLINES.stageDeadlineMs + 200));
+
+    expect(afterSilent).toBe(1);
+    expect(String(spy.mock.calls[0]?.[0])).toContain("Egress proxy");
+    expect(spy.mock.calls.length).toBe(afterSilent);
+  });
+
+  it("destroys an established tunnel on SIGTERM instead of waiting for it to end", async () => {
+    // `server.close()` — and `closeAllConnections()` with it — leaves an
+    // upgraded socket alone, so a proxy whose whole job is upgrading sockets
+    // holds its own stop open until the 60 s idle teardown, well past
+    // Docker's 10 s grace. `server/price-worker.ts` upgrades nothing, which
+    // is why the two lines that suffice there are silently insufficient here.
+    // The handler is invoked directly rather than by signalling this process:
+    // the exit is stubbed, so only the teardown is under assertion.
+    // The idle teardown is pushed well out of the way on purpose: at the
+    // suite's usual 300 ms it would close this tunnel by itself and the case
+    // would pass whether or not `SIGTERM` did anything. That is the bug in
+    // miniature — in production the same rescue arrives at 60 s, five times
+    // past the grace period — so the assertion is on promptness, not on the
+    // socket eventually going away.
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const before = process.listeners("SIGTERM");
+    const { proxyPort } = await startWithUpstream({ idleTeardownMs: 30_000 });
+    const socket = track(await connectRaw(proxyPort));
+
+    socket.write(connectLine(`${ALLOWED_HOST}:443`));
+    await waitForStatusLine(socket);
+    socket.resume();
+    socket.write(clientHello([ALLOWED_HOST]));
+    await waitForData(socket);
+
+    const added = process.listeners("SIGTERM").filter((fn) => !before.includes(fn));
+    expect(added).toHaveLength(1);
+
+    const startedAt = Date.now();
+    added[0]?.("SIGTERM");
+    await waitForClose(socket);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(socket.destroyed).toBe(true);
+    expect(exit).toHaveBeenCalledWith(0);
   });
 });

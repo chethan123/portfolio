@@ -38,6 +38,28 @@ sections, two releases back. Every number below was re-read on the tree this was
 | `docs/operating.md:761` | `:1057` | `### "There is no price line in the log" has four causes` |
 | `Dockerfile:104-110` | `:102-114` | the `COPY --chown=node:node` block; the file list ends at `:113` and the destination at `:114`, so a new file is added at `:113`, not `:110` |
 
+**The `SIGTERM` handler this ticket prescribes is not sufficient for this
+service.** The acceptance list says to take "the worker's `SIGTERM` handler
+(`server.close(() => process.exit(0))`)", and that is the whole of what
+`server/price-worker.ts` needs — because the worker upgrades no sockets.
+`server.close()` leaves an *upgraded* socket alone, and so does
+`closeAllConnections()`: measured, a single live `CONNECT` tunnel keeps the
+close callback from ever firing. A proxy whose entire job is upgrading sockets
+therefore has to track and destroy its own tunnels first, or every stop with a
+tunnel open runs to the 60 s idle teardown and is `SIGKILL`ed at Docker's 10 s.
+Measured both ways: 8 ms to a clean exit with the teardown, still running 15 s
+later without it. Copying the quoted line verbatim would have shipped the
+`SIGKILL` this ticket asks the handler to prevent.
+
+**"A deadline destroys the socket and logs once" was true of two deadlines out
+of three.** The first — accept to a complete request line and headers — expires
+inside `node:http`, before this module's code has anything to refuse, and it
+logged nothing at all. It is reported on the server's `'timeout'` event now,
+which is the hook that fires *at* the deadline rather than on the following
+`connectionsCheckingInterval` sweep, and which Node does not raise for an
+upgraded socket — so an allowed tunnel still logs nothing, as the next item
+requires.
+
 Still correct as written: `scripts/smoke-test.sh:71` and `ARCHITECTURE.md:92-100`.
 
 **The allowlist is right about `fc.yahoo.com` and incomplete about everything else.**

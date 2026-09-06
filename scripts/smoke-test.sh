@@ -963,7 +963,18 @@ if [[ "$yahoo_reachable" == true ]]; then
     raw.once("connect", () => {
       raw.write("CONNECT finance.yahoo.com:443 HTTP/1.1\r\nHost: finance.yahoo.com:443\r\n\r\n");
     });
+    // A proxy that closes before writing a status must fail this check, not
+    // pass it. Measured, the raw 10 s timeout above does catch that today —
+    // but incidentally: nothing here says an early close is a failure, so
+    // lengthening or dropping that timeout would turn a security assertion
+    // into one that passes when the tunnel it is asserting about never
+    // happened. `answered` makes it deliberate, and fast.
+    let answered = false;
+    const closedEarly = () => { if (!answered) process.exit(1); };
+    raw.once("end", closedEarly);
+    raw.once("close", closedEarly);
     raw.once("data", (head) => {
+      answered = true;
       if (!/^HTTP\/1\.[01] 200/.test(head.toString("latin1"))) { process.exit(1); return; }
       const tlsSocket = tls.connect({
         socket: raw,
