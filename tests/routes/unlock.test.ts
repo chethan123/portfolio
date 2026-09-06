@@ -51,6 +51,7 @@ const {
   NO_CEREMONY_MESSAGE,
   NOSCRIPT_MESSAGE,
   UNREADABLE_SUBMISSION_MESSAGE,
+  LockMark,
   UnlockControl,
   WaitingNote,
   runCeremony,
@@ -594,6 +595,7 @@ describe("UnlockControl — finding 10's untested unsupported-browser branch and
 
     for (const props of [
       { phase: "confirming", revalidatorState: "idle" },
+      { phase: "verifying", revalidatorState: "idle" },
       { phase: "idle", revalidatorState: "loading" },
     ] as const) {
       const busy = renderToStaticMarkup(UnlockControl({ supported: true, onUnlock: () => {}, ...props }));
@@ -640,6 +642,26 @@ describe("WaitingNote — the only thing that says a check is in flight rather t
   );
 });
 
+describe("LockMark — the padlock opens on a passed check, never on a press", () => {
+  it("draws the shackle open only once an assertion is with this instance", () => {
+    const markup = renderToStaticMarkup(LockMark({ phase: "verifying" }));
+    expect(markup).toContain("lock-mark--open");
+  });
+
+  it.for([{ phase: "idle" }, { phase: "confirming" }, { phase: "dismissed" }, { phase: "failed" }] as const)(
+    // "confirming" is the one that would be tempting and wrong: the prompt is
+    // open, the reader has done something, and nothing has been proved yet.
+    // "dismissed" and "failed" are the pins for a lock that must not stay
+    // open after an attempt that went nowhere.
+    "draws it shut while $phase",
+    ({ phase }) => {
+      const markup = renderToStaticMarkup(LockMark({ phase }));
+      expect(markup).toContain("lock-mark");
+      expect(markup).not.toContain("lock-mark--open");
+    },
+  );
+});
+
 describe("runCeremony", () => {
   const FAKE_OPTIONS = { challenge: "fixture-challenge" } as Parameters<typeof requestAssertion>[0];
 
@@ -668,6 +690,28 @@ describe("runCeremony", () => {
       // `submit`'s own promise already carries a post-action revalidation
       // (this file's own header) — a second one here would be redundant.
       expect(revalidate).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    // The padlock reads this order directly: it opens on "verifying" and on
+    // nothing else, so a version that set the phase *after* awaiting `submit`
+    // would open a lock for the length of one already-departing frame, and a
+    // version that never left "confirming" would never open it at all.
+    "reports the assertion as with this instance before submitting it, and only then returns to idle",
+    async () => {
+      const response = assertionResponse("fixture-challenge");
+      vi.mocked(requestAssertion).mockResolvedValue({ status: "ok", response });
+      const setPhase = vi.fn();
+      const submit = vi.fn().mockImplementation(() => {
+        expect(setPhase.mock.calls).toEqual([["verifying"]]);
+        return Promise.resolve(undefined);
+      });
+
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, vi.fn(), vi.fn());
+
+      expect(submit).toHaveBeenCalledOnce();
+      expect(setPhase.mock.calls).toEqual([["verifying"], ["idle"]]);
     },
   );
 

@@ -2395,6 +2395,25 @@ code {
   height: 24px;
 }
 
+/* The one reward this screen has to give. The shackle lifts and pivots on its
+ * right foot for as long as an assertion is with the server, and settles back
+ * if the server refuses it — so the movement means "your passkey checked out",
+ * never "you pressed a button" ({@link LockMark}, `app/routes/unlock.tsx`).
+ * `transform-box: fill-box` because an SVG child otherwise transforms about
+ * the viewBox origin, which swings the shackle clean out of the circle. The
+ * travel is deliberately small: 1.5px of lift and 6 degrees at a 24px drawing
+ * leaves the top of the arc inside the viewBox once its 1.75px stroke is
+ * counted, and anything larger stops reading as a padlock. */
+.lock-shackle {
+  transition: transform 200ms ease-out;
+  transform-box: fill-box;
+  transform-origin: 100% 100%;
+}
+
+.lock-mark--open .lock-shackle {
+  transform: translateY(-1.5px) rotate(6deg);
+}
+
 .lock-heading {
   display: flex;
   flex-direction: column;
@@ -3747,6 +3766,12 @@ code {
   .refresh-icon--busy,
   .lock-spinner {
     animation: none;
+  }
+
+  /* The open shackle is a state, not decoration, so it still moves — it just
+     arrives there rather than travelling. */
+  .lock-shackle {
+    transition: none;
   }
 }
 

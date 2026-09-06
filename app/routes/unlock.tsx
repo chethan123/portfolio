@@ -214,8 +214,19 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-/** What one press of Unlock is doing right now. */
-type Phase = "idle" | "confirming" | "dismissed" | "failed";
+/**
+ * What one press of Unlock is doing right now.
+ *
+ * `"confirming"` and `"verifying"` are two different facts about two
+ * different parties, and were one state until the padlock needed to tell them
+ * apart: `"confirming"` is the provider's own check, still open in front of
+ * the reader and answerable by cancelling it; `"verifying"` is the window
+ * after that check has answered, while the assertion it produced is with this
+ * instance and nothing on this screen can change the outcome any more. Only
+ * the second one has proved anything, which is why it is the only one the
+ * lock opens on ({@link LockMark}).
+ */
+type Phase = "idle" | "confirming" | "verifying" | "dismissed" | "failed";
 
 /** A submission this route could not even read — never a passkey problem, so it says so plainly. */
 const UNREADABLE_SUBMISSION_MESSAGE = "This submission could not be read. Reload the page and try again.";
@@ -246,6 +257,27 @@ const NO_CEREMONY_MESSAGE = `This browser cannot run the passkey check. Try ${OT
  * (turn scripting on) before the recoveries that apply when it cannot be.
  */
 const NOSCRIPT_MESSAGE = `This browser has scripting turned off, and unlocking needs it. Turn scripting on, or try ${OTHER_RECOVERIES}.`;
+
+/**
+ * The padlock, and whether it is drawn open.
+ *
+ * It opens on `"verifying"` and on nothing else. A press that has not yet
+ * produced an assertion has proved nothing — opening there would reward
+ * touching the button rather than passing the check — and an assertion this
+ * instance then refuses closes it again beside the refusal, which is exactly
+ * what happened. On the branch that succeeds the browser is already leaving,
+ * so the last frame this screen paints is a lock that opened and stayed open.
+ *
+ * Extracted for the reason {@link DismissedNote} is: `phase` is internal
+ * state, so no render assertion can drive the whole component into this one.
+ */
+function LockMark({ phase }: { phase: Phase }) {
+  return (
+    <span className={phase === "verifying" ? "lock-mark lock-mark--open" : "lock-mark"}>
+      <LockIcon />
+    </span>
+  );
+}
 
 /**
  * Shown while a check is actually in flight. The button dims and the arc
@@ -323,11 +355,14 @@ function UnlockControl({
 
   // The one condition, named once and used twice: what makes the button refuse
   // a press is exactly what makes it worth saying that something is happening.
-  // The arc is the app's existing spinner (`.lock-spinner`, sharing
-  // `refresh-spin` and its reduced-motion opt-out with the refresh control),
-  // not a second one invented here; `.button--block` because a lone action in
-  // a 420px card has no reason to be narrower than the card.
-  const busy = phase === "confirming" || revalidatorState !== "idle";
+  // `"verifying"` belongs here beside `"confirming"` — a second press while
+  // the first assertion is still with the server would spend a fresh
+  // challenge on a question already asked. The arc is the app's existing
+  // spinner (`.lock-spinner`, sharing `refresh-spin` and its reduced-motion
+  // opt-out with the refresh control), not a second one invented here;
+  // `.button--block` because a lone action in a 420px card has no reason to
+  // be narrower than the card.
+  const busy = phase === "confirming" || phase === "verifying" || revalidatorState !== "idle";
 
   return (
     <button type="button" className="button button--block" onClick={onUnlock} disabled={busy}>
@@ -451,6 +486,13 @@ async function runCeremony(
   const outcome = await requestAssertion(optionsJSON);
 
   if (outcome.status === "ok") {
+    // The provider has answered and this instance has not yet — the only
+    // window in which anything has been proved but nothing has been granted,
+    // and the one the padlock opens on ({@link LockMark}). Set before the
+    // await rather than after it, because after it the browser is either
+    // already navigating away or holding a refusal, and neither is a moment
+    // this state describes.
+    setPhase("verifying");
     await submit({ assertion: JSON.stringify(outcome.response), redirectTo }, { method: "post" });
     setPhase("idle");
     return;
@@ -520,9 +562,7 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
 
   return (
     <section className="panel lock-card">
-      <span className="lock-mark">
-        <LockIcon />
-      </span>
+      <LockMark phase={phase} />
 
       <div className="lock-heading">
         <h1 className="lock-title">Locked</h1>
@@ -572,6 +612,7 @@ export {
   shouldRunCeremony,
   UnlockControl,
   DismissedNote,
+  LockMark,
   WaitingNote,
   visibleRefusal,
   NO_CEREMONY_MESSAGE,
