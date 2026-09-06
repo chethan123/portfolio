@@ -22,6 +22,8 @@
  * with.
  */
 import { renderToStaticMarkup } from "react-dom/server";
+
+import type { Phase } from "../../app/routes/unlock.tsx";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";
@@ -52,6 +54,7 @@ const {
   NOSCRIPT_MESSAGE,
   UNREADABLE_SUBMISSION_MESSAGE,
   LockMark,
+  pressIsRefused,
   UnlockControl,
   WaitingNote,
   runCeremony,
@@ -62,6 +65,19 @@ const {
 const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { LOCK_COOKIE, verifyUnlock } = await import("~/lib/lock.server");
 const { RETURN_PARAM } = await import("~/lib/lock");
+
+/**
+ * Every phase there is. `satisfies` is the point of it: a sixth member of
+ * `Phase` becomes a type error here rather than a silent hole in the
+ * exhaustive lists below — which is how `"verifying"` slipped past four of
+ * them when it was added.
+ */
+const PHASES = ["idle", "confirming", "verifying", "dismissed", "failed"] as const satisfies readonly Phase[];
+
+/** Every phase but the ones named — for the lists that are "all except". */
+function everyPhaseExcept(...except: readonly Phase[]): { phase: Phase }[] {
+  return PHASES.filter((phase) => !except.includes(phase)).map((phase) => ({ phase }));
+}
 
 afterAll(closeTestDatabase);
 
@@ -446,6 +462,23 @@ describe("what the screen renders", () => {
   );
 
   it(
+    "mounts both live regions empty, so the sentences that land in them later are announced at all",
+    withDatabase(async ({ seedPasskey }) => {
+      await seedFixturePasskey(seedPasskey);
+      const loaderData = await loader(args(get("/unlock")));
+      const markup = renderRoute(Unlock, "/unlock", loaderData);
+
+      // Rendered on an idle screen with nothing to say: a live region that
+      // first appears already holding its text is one assistive technology
+      // commonly declines to announce, which would make every message here
+      // silent for the reader with the most need of it.
+      expect(markup).toContain('role="status"');
+      expect(markup).toContain('role="alert"');
+      expect(markup).not.toContain("did not complete");
+    }),
+  );
+
+  it(
     "carries a noscript message that says scripting is what is missing, not what this browser lacks",
     withDatabase(async ({ seedPasskey }) => {
       await seedFixturePasskey(seedPasskey);
@@ -502,6 +535,13 @@ describe("visibleRefusal — which phase may show which refusal (finding 10: a s
 
   it("shows nothing for a dismissed prompt — that is a note, not a refusal", () => {
     expect(visibleRefusal("dismissed", "server said no", "client said no")).toBeNull();
+  });
+
+  it("hides a previous attempt's refusal while this one's assertion is still being verified", () => {
+    // Without this, the tempting mutation — treating "verifying" like "idle",
+    // since neither has a client-side failure to report — puts an older
+    // server refusal on screen beside an open padlock.
+    expect(visibleRefusal("verifying", "an older server refusal", null)).toBeNull();
   });
 });
 
@@ -611,6 +651,44 @@ describe("UnlockControl — the unsupported-browser branch, and what the one but
     }
   });
 
+  it.for(everyPhaseExcept("confirming", "verifying"))(
+    // The other half of the rule, and the half nothing pinned: after a
+    // dismissed or failed attempt the button has to come back. Without this,
+    // the obvious simplification of `pressIsRefused` — `phase !== "idle"` —
+    // passes every other assertion in this file and leaves the screen dead
+    // after one cancelled prompt, with no way back but a reload.
+    "offers the button again once an attempt has settled into $phase",
+    ({ phase }) => {
+      const markup = renderToStaticMarkup(
+        UnlockControl({ supported: true, phase, revalidatorState: "idle", onUnlock: () => {} }),
+      );
+      expect(markup).not.toContain("disabled");
+      expect(markup).not.toContain("lock-spinner");
+    },
+  );
+});
+
+describe("pressIsRefused — one rule, stated once for the attribute and the handler", () => {
+  it.for(everyPhaseExcept("confirming", "verifying"))(
+    "accepts a press while $phase and nothing is in flight",
+    ({ phase }) => {
+      expect(pressIsRefused(phase, "idle")).toBe(false);
+    },
+  );
+
+  it.for([{ phase: "confirming" }, { phase: "verifying" }] as const)(
+    "refuses a press while $phase, so a second cannot spend a fresh challenge",
+    ({ phase }) => {
+      expect(pressIsRefused(phase, "idle")).toBe(true);
+    },
+  );
+
+  it.for([{ state: "loading" }, { state: "submitting" }] as const)(
+    "refuses a press while the revalidator is $state, whatever the phase says",
+    ({ state }) => {
+      expect(pressIsRefused("idle", state)).toBe(true);
+    },
+  );
 });
 
 describe("DismissedNote — finding 10's cancelled-prompt note", () => {
@@ -619,7 +697,7 @@ describe("DismissedNote — finding 10's cancelled-prompt note", () => {
     expect(markup).toContain("did not complete");
   });
 
-  it.for([{ phase: "idle" }, { phase: "confirming" }, { phase: "failed" }] as const)(
+  it.for(everyPhaseExcept("dismissed"))(
     "shows nothing while $phase",
     ({ phase }) => {
       expect(renderToStaticMarkup(DismissedNote({ phase }))).toBe("");
@@ -627,20 +705,23 @@ describe("DismissedNote — finding 10's cancelled-prompt note", () => {
   );
 });
 
-describe("WaitingNote — the only thing that says a check is in flight rather than refused", () => {
-  it("says a passkey is what it is waiting on, and does not raise it as an alert", () => {
-    const markup = renderToStaticMarkup(WaitingNote({ phase: "confirming" }));
-    expect(markup).toContain("Waiting for your passkey");
-    expect(markup).toContain('role="status"');
-    expect(markup).not.toContain('role="alert"');
+describe("WaitingNote — the sentence that says which of the two working states this is", () => {
+  it("names the passkey as what it is waiting on while the provider's prompt is open", () => {
+    expect(renderToStaticMarkup(WaitingNote({ phase: "confirming" }))).toContain("Waiting for your passkey");
   });
 
-  it.for([{ phase: "idle" }, { phase: "dismissed" }, { phase: "failed" }] as const)(
-    "shows nothing while $phase",
-    ({ phase }) => {
-      expect(renderToStaticMarkup(WaitingNote({ phase }))).toBe("");
-    },
-  );
+  it("stops claiming to wait for a passkey that has already been given", () => {
+    // The defect this phase exists to fix: between the provider answering and
+    // this instance agreeing, one sentence went on saying it was waiting for
+    // something the reader had already produced.
+    const markup = renderToStaticMarkup(WaitingNote({ phase: "verifying" }));
+    expect(markup).toContain("Checking that passkey with this instance");
+    expect(markup).not.toContain("Waiting for");
+  });
+
+  it.for(everyPhaseExcept("confirming", "verifying"))("shows nothing while $phase", ({ phase }) => {
+    expect(renderToStaticMarkup(WaitingNote({ phase }))).toBe("");
+  });
 });
 
 describe("LockMark — the padlock opens on a passed check, never on a press", () => {
@@ -649,7 +730,7 @@ describe("LockMark — the padlock opens on a passed check, never on a press", (
     expect(markup).toContain("lock-mark--open");
   });
 
-  it.for([{ phase: "idle" }, { phase: "confirming" }, { phase: "dismissed" }, { phase: "failed" }] as const)(
+  it.for(everyPhaseExcept("verifying"))(
     // "confirming" is the one that would be tempting and wrong: the prompt is
     // open, the reader has done something, and nothing has been proved yet.
     // "dismissed" and "failed" are the pins for a lock that must not stay

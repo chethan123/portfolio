@@ -273,8 +273,9 @@ export function LockIcon(props: IconProps) {
       <rect x="4.5" y="11" width="15" height="9.5" rx="2" />
       {/* Named so one caller can draw it open: the unlock screen lifts this
           path off the body while an assertion is being verified
-          (`.lock-shackle`, app.css). Inert everywhere else — no other
-          stylesheet rule matches it, and "Lock now" keeps a shut padlock. */}
+          (`.lock-shackle`, app.css). Every rule that names it is scoped to
+          that card's own mark, so nothing matches this path here and "Lock
+          now" keeps a shut padlock. */}
       <path className="lock-shackle" d="M8 11V7a4 4 0 0 1 8 0v4" />
     </Icon>
   );

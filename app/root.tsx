@@ -941,7 +941,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           // its single card sits in the middle of the viewport rather than
           // at the top of it, because there is nothing below it to scroll to
           // (`.app-main--lock`, app.css).
-          <div className="app">
+          <div className="app app--lock">
             <main className="app-main app-main--lock">{children}</main>
           </div>
         ) : (

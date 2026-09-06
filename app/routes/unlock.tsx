@@ -33,9 +33,10 @@
  * `app/app.css`). It carries no `.page-header`: a 48px display title above a
  * rule drawn across a 1216px column belongs to a screen someone navigates
  * around, and this one is left within seconds of arriving at it. Every
- * sentence it can print lands in that one region, reserved at two lines'
- * height, so a dismissal or a refusal never moves the button out from under a
- * finger already travelling toward it. What the screen *says* is untouched:
+ * sentence it can print lands in that one region, reserved at two lines of
+ * the refusal's own size, so neither the note after a dismissed prompt nor
+ * any refusal short enough to fit moves the button out from under a finger
+ * already travelling toward it. What the screen *says* is untouched:
  * `CONTEXT.md`'s vocabulary and the sentences ticket 04 settled are still the
  * copy, verbatim — only where they sit has changed.
  *
@@ -95,7 +96,7 @@
  * already carries the checklist item they answer, so checking it off there
  * with a note is one fact in one place rather than two copies free to drift.
  */
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { redirect, useRevalidator, useSubmit } from "react-router";
 
 import { LockIcon, SpinnerIcon } from "~/components/icons";
@@ -228,6 +229,17 @@ export async function action({ request }: Route.ActionArgs) {
  */
 type Phase = "idle" | "confirming" | "verifying" | "dismissed" | "failed";
 
+/**
+ * The subset of {@link Phase} an attempt can come to rest in. `"confirming"`
+ * and `"verifying"` are both in flight — something is still going to happen
+ * without anyone pressing anything — so a question of the form "what does
+ * settling here leave stale?" has no answer for them, and
+ * {@link shouldRevalidateBeforeRetry} takes this rather than `Phase` so the
+ * type refuses the question instead of the reader having to know it is never
+ * asked.
+ */
+type SettledPhase = Extract<Phase, "idle" | "dismissed" | "failed">;
+
 /** A submission this route could not even read — never a passkey problem, so it says so plainly. */
 const UNREADABLE_SUBMISSION_MESSAGE = "This submission could not be read. Reload the page and try again.";
 
@@ -280,26 +292,28 @@ function LockMark({ phase }: { phase: Phase }) {
 }
 
 /**
- * Shown while a check is actually in flight. The button dims and the arc
- * turns, but the dim is the shared `.button:disabled`, which
- * `docs/specs/lock-hardening/05` keeps deliberately ambiguous between
- * "refused" and "working" — so neither mark says which of the two this is.
- * On a phone the provider's own sheet covers the button outright, and this
- * line is the whole signal in the moment after it is dismissed while the
- * challenge is being refreshed and a press would still be turned away.
- * `role="status"` and not `role="alert"`: nothing has gone wrong here, and
- * interrupting a reader mid-prompt to tell them so would be its own small
- * refusal. Extracted for the same reason {@link DismissedNote} is — so that
- * dropping it fails a direct render assertion rather than a phase this suite
- * has no browser to reach.
+ * What is happening right now, for the two phases in which something is.
+ *
+ * The button dims for both, but the dim is the shared `.button:disabled`,
+ * which `docs/specs/lock-hardening/05` keeps deliberately ambiguous between
+ * "refused" and "working" — so it never says which, and never says which of
+ * the two working states this is. The sentences do, and they are the only
+ * thing that does for a reader who cannot see the padlock: `icons.tsx`
+ * promises every glyph in this app sits beside a real text label rather than
+ * standing in for one, and an open shackle with nothing written next to it
+ * would be the first to break that promise.
+ *
+ * `role="status"` and not `role="alert"`: nothing has gone wrong in either
+ * phase, and interrupting a reader mid-prompt to tell them so would be its
+ * own small refusal. The region that carries this is rendered whether or not
+ * it has a sentence in it ({@link Unlock}) — a live region assistive
+ * technology first meets already full of text is one it commonly declines to
+ * announce.
  */
 function WaitingNote({ phase }: { phase: Phase }) {
-  if (phase !== "confirming") return null;
-  return (
-    <p className="field-note" role="status">
-      Waiting for your passkey…
-    </p>
-  );
+  if (phase === "confirming") return <>Waiting for your passkey…</>;
+  if (phase === "verifying") return <>Checking that passkey with this instance…</>;
+  return null;
 }
 
 /**
@@ -311,11 +325,27 @@ function WaitingNote({ phase }: { phase: Phase }) {
  */
 function DismissedNote({ phase }: { phase: Phase }) {
   if (phase !== "dismissed") return null;
-  return (
-    <p className="field-note">
-      That passkey check did not complete. Nothing has changed here — press Unlock to try again.
-    </p>
-  );
+  return <>That passkey check did not complete. Nothing has changed here — press Unlock to try again.</>;
+}
+
+/**
+ * Whether a press right now would be refused — the single statement of a rule
+ * that has two enforcers, the button's `disabled` attribute and
+ * {@link Unlock}'s own click handler. They stated it separately until
+ * `"verifying"` split off `"confirming"` and only one of them learned about
+ * it; a browser cannot deliver a click to a disabled button, so the drift was
+ * unreachable rather than harmless, which is the kind that survives.
+ *
+ * Refused while a provider prompt is open (`"confirming"`) or an assertion is
+ * with this instance (`"verifying"`), because a second press would spend a
+ * fresh challenge on a question already asked; and refused while the
+ * revalidator is refreshing options a dismissal left stale, because accepting
+ * there would run `navigator.credentials.get()` after the click's own user
+ * activation had gone into waiting for the network
+ * ({@link shouldRevalidateBeforeRetry}).
+ */
+function pressIsRefused(phase: Phase, revalidatorState: "idle" | "loading" | "submitting"): boolean {
+  return phase === "confirming" || phase === "verifying" || revalidatorState !== "idle";
 }
 
 /**
@@ -353,16 +383,11 @@ function UnlockControl({
     return <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>;
   }
 
-  // The one condition, named once and used twice: what makes the button refuse
-  // a press is exactly what makes it worth saying that something is happening.
-  // `"verifying"` belongs here beside `"confirming"` — a second press while
-  // the first assertion is still with the server would spend a fresh
-  // challenge on a question already asked. The arc is the app's existing
-  // spinner (`.lock-spinner`, sharing `refresh-spin` and its reduced-motion
-  // opt-out with the refresh control), not a second one invented here;
-  // `.button--block` because a lone action in a 420px card has no reason to
-  // be narrower than the card.
-  const busy = phase === "confirming" || phase === "verifying" || revalidatorState !== "idle";
+  // The arc is the app's existing spinner (`.lock-spinner`, sharing
+  // `refresh-spin` and its reduced-motion opt-out with the refresh control),
+  // not a second one invented here; `.button--block` because a lone action in
+  // a 420px card has no reason to be narrower than the card.
+  const busy = pressIsRefused(phase, revalidatorState);
 
   return (
     <button type="button" className="button button--block" onClick={onUnlock} disabled={busy}>
@@ -420,7 +445,7 @@ function visibleRefusal(
  * see this file's own header on why a dismissed or failed attempt is the
  * only case that leaves them genuinely stale.
  */
-function shouldRevalidateBeforeRetry(phase: Phase): boolean {
+function shouldRevalidateBeforeRetry(phase: SettledPhase): boolean {
   return phase !== "idle";
 }
 
@@ -494,11 +519,26 @@ async function runCeremony(
     // this state describes.
     setPhase("verifying");
     await submit({ assertion: JSON.stringify(outcome.response), redirectTo }, { method: "post" });
-    setPhase("idle");
+    // `startTransition`, and this is the whole reason the padlock is honest.
+    // `submit` resolves in a microtask *after* React Router has scheduled the
+    // redirect's navigation and *before* React can render it — the router
+    // publishes that navigation inside a transition, and a transition cannot
+    // commit until the microtask queue drains. A plain `setPhase("idle")`
+    // here is an urgent update, so React would render it first: one committed
+    // frame of a shut padlock, no spinner and a live button, against the old
+    // route, and only then the destination. On anything slow enough to paint
+    // between the two the reader watches the lock close again on the way out,
+    // which is the exact opposite of what the last frame is supposed to say.
+    // Marking it a transition puts it in the same batch React is already
+    // holding, so it commits with the navigation or never — and on the
+    // refusal branch it lands after the router's own commit rather than
+    // before it, which also takes with it the frame that used to show the
+    // *previous* attempt's refusal beside fresh options.
+    startTransition(() => setPhase("idle"));
     return;
   }
 
-  const settledPhase: Phase = outcome.status === "dismissed" ? "dismissed" : "failed";
+  const settledPhase: SettledPhase = outcome.status === "dismissed" ? "dismissed" : "failed";
   if (outcome.status === "failed") setClientMessage(outcome.message);
   setPhase(settledPhase);
   if (shouldRevalidateBeforeRetry(settledPhase)) revalidate();
@@ -552,7 +592,7 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
   // effect above's `revalidator.state === "idle"` guard waits for it to
   // become so, exactly as it always has.
   function handleUnlock() {
-    if (phase === "confirming") return;
+    if (pressIsRefused(phase, revalidator.state)) return;
     ceremonyStarted.current = false;
     setClientMessage(null);
     setPhase("confirming");
@@ -581,17 +621,19 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
         />
 
         {/* One region for every sentence this screen can print, held open at
-            two lines whether or not it has one — see `.lock-message`. */}
+            two lines whether or not it has one — see `.lock-message`. Both
+            live regions are rendered unconditionally and filled later rather
+            than mounted with their text already in them: a region assistive
+            technology first meets already full is one it commonly declines to
+            announce, which would have made every sentence below silent to the
+            reader who most needs it read out. */}
         <div className="lock-message">
-          <WaitingNote phase={phase} />
+          <p className="field-note" role="status">
+            <WaitingNote phase={phase} />
+            <DismissedNote phase={phase} />
+          </p>
 
-          <DismissedNote phase={phase} />
-
-          {refusal ? (
-            <p className="form-error" role="alert">
-              {refusal}
-            </p>
-          ) : null}
+          <div role="alert">{refusal ? <p className="form-error">{refusal}</p> : null}</div>
 
           {/* Real HTML, not a React branch: this is only ever shown by a
               browser actually running with scripting off, the one case
@@ -614,6 +656,7 @@ export {
   DismissedNote,
   LockMark,
   WaitingNote,
+  pressIsRefused,
   visibleRefusal,
   NO_CEREMONY_MESSAGE,
   NOSCRIPT_MESSAGE,
