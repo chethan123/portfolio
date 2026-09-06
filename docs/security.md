@@ -107,9 +107,9 @@ stateDiagram-v2
 
 Two corrections to the mental model most people arrive with:
 
-**It is not necessarily a fingerprint.** WebAuthn's user verification is satisfied by whatever the
-authenticator accepts; a device passcode counts exactly as a face does. The guarantee is only as
-strong as whatever unlocks the passkey provider on that device.
+**It is not necessarily a fingerprint or a face.** WebAuthn's user verification is satisfied by
+whatever the authenticator accepts, and a device passcode counts for exactly as much. The guarantee
+is only as strong as whatever unlocks the passkey provider on that device.
 
 **Nothing is encrypted by the passkey.** This is the one most often assumed. The lock decides
 whether the server runs a route at all. It performs no encryption. Your accounts, holdings,
@@ -118,7 +118,7 @@ without ever meeting the lock. See §8.
 
 ## 4. The shape of the stack
 
-Seven services on seven networks. Four of those networks are `internal: true` with
+Seven services on seven networks ([`../compose.yaml`](../compose.yaml)). Four of those are `internal: true` with
 `gateway_mode_ipv4: isolated` — in Docker terms, no default route and no bridge address at all. Not
 a firewall rule that could be misread, but the absence of anywhere to send a packet.
 
@@ -207,7 +207,7 @@ the override adds no network and no variable to it — but note it also profiles
 so on that path the stack takes **no dumps at all**, and backing up the external database is yours.
 The first of this page's three claims is what you give up by taking it.
 
-## 5. The price fetcher
+## 5. The price worker
 
 `yahoo-finance2` is the one production dependency that opens a socket to the internet. The design
 assumes it will eventually be what goes wrong, and arranges for that to be survivable rather than
@@ -233,7 +233,7 @@ sequenceDiagram
     participant yahoo as Yahoo Finance
 
     app->>worker: POST /quotes over a unix socket
-    Note over app,worker: A 1 MB tmpfs volume carries the socket file,<br/>never the data. app dials; worker never dials back.
+    Note over app,worker: A 1 MB tmpfs volume carries the socket file,<br/>never the data — app dials, worker never dials back.
     worker->>proxy: CONNECT query1.finance.yahoo.com:443
     proxy->>proxy: On the allowlist? Port 443?<br/>Not an IP literal?<br/>DNS answer outside private ranges?
     proxy-->>worker: 200 Connection Established
@@ -245,11 +245,13 @@ sequenceDiagram
     Note over app: app alone writes to the database
 ```
 
-The proxy is hand-written Node in [`../server/egress-proxy.ts`](../server/egress-proxy.ts) —
+The socket is a 1 MB tmpfs volume defined in [`../compose.yaml`](../compose.yaml). The proxy is
+hand-written Node in [`../server/egress-proxy.ts`](../server/egress-proxy.ts) —
 `node:http`, `node:net`, `node:dns` and no other import, so it is not itself a third-party
 dependency. Four properties are worth knowing:
 
-1. **The allowlist is five Yahoo hostnames, compared exactly** — never as a suffix, so
+1. **The allowlist is five Yahoo hostnames** — a module constant in that file, counted there —
+   **compared exactly**, never as a suffix, so
    `query1.finance.yahoo.com.evil.test` does not match. It is a module constant rather than
    configuration, so a compromised process cannot widen it by setting an environment variable.
 2. **It never terminates TLS.** It reads the one unencrypted field in the handshake, the SNI, and
