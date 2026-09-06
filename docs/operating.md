@@ -29,15 +29,19 @@ The services defined in [`compose.yaml`](../compose.yaml), under the project nam
 | Service | What it is | Published port |
 |---|---|---|
 | `db` | Postgres. All persistent state, in `./volumes/db/data` beside `compose.yaml` | none |
+| `dump` | The nightly backup: dumps `db`, verifies the archive decodes, prunes old ones, into `./volumes/dumps` | none |
 | `app` | The application: pages, uploads, and the price refresh loop, in one process | none |
+| `worker` | Fetches quotes and historical closes from the price provider, reached from `app` over the `price-worker-sock` volume they share | none |
+| `egress-proxy` | The only route out of this stack: a forward proxy admitting `worker`'s calls to the price provider and nothing else | none |
 | `gate` | oauth2-proxy. Answers "may this request in?" against Google and the allowlist | none |
 | `caddy` | The ingress front door, and where the gate is enforced | **`80:8080`, on every interface** — host side still 80; 8080 is Caddy's own listener |
 
 A request goes browser → `caddy` → `gate` → `caddy` → `app` → `db`: Caddy asks the gate about every
 request except `/healthz` before it forwards anything. Only `caddy` is reachable from your LAN;
-`app`, `db` and `gate` are reachable only on the compose network. That is not a hardening extra — it
-is the assumption both the app's trust of `X-Forwarded-*` and the gate's own trust of them rest on,
-and [Security](#security) says what breaks if you publish either port yourself.
+`db`, `dump`, `app`, `worker`, `egress-proxy` and `gate` are reachable only on the compose network.
+That is not a hardening extra — it is the assumption both the app's trust of `X-Forwarded-*` and the
+gate's own trust of them rest on, and [Security](#security) says what breaks if you publish either
+port yourself.
 
 They start in dependency order: `app` waits for `db` to report healthy, and `caddy` waits for both
 `app` and `gate`.
@@ -54,16 +58,17 @@ whole of who may enter.
 **`app` is stateless and enforced as such.** It writes nothing to its own filesystem, so it can be
 destroyed and recreated freely, and every upgrade does exactly that.
 
-**Every service holds only the privileges it was proved to need.** All four drop every Linux
+**Every service holds only the privileges it was proved to need.** All seven drop every Linux
 capability, set `no-new-privileges`, and run on a read-only root filesystem, with a tmpfs over what
-each still writes to — `/tmp` for `app` and `gate`, Postgres's socket directory for `db`, `/config`
-and `/data` for `caddy`. Three run as an unprivileged uid: `app` as `node`, `db` as the
-image's `postgres` (70), `caddy` as 65532. Two capabilities are granted back, each argued in
-`compose.yaml` from a start failure without it: `DAC_READ_SEARCH` on `gate`, which is
-[still root](#security), so that it can open your allowlist whatever its mode and owner; and
-`NET_BIND_SERVICE` on `caddy`, which its binary needs in order to `exec` at all rather than to bind
-anything. `scripts/smoke-test.sh` asserts all of it against a running stack — nothing else would
-notice a container quietly regaining root.
+each still writes to — `/tmp` for `app`, `dump`, `gate`, `worker` and `egress-proxy`, Postgres's
+socket directory for `db`, `/config` and `/data` for `caddy`. Six of seven run as an unprivileged
+uid: `app`, `worker` and `egress-proxy` as the image's `node` (1000), `db` as the image's `postgres`
+(70), `dump` as the operator's own account (`DUMP_UID`/`DUMP_GID`), `caddy` as 65532 — only `gate`
+runs as root. Two capabilities are granted back, each argued in `compose.yaml` from a start failure
+without it: `DAC_READ_SEARCH` on `gate`, which is [still root](#security), so that it can open your
+allowlist whatever its mode and owner; and `NET_BIND_SERVICE` on `caddy`, which its binary needs in
+order to `exec` at all rather than to bind anything. `scripts/smoke-test.sh` asserts all of it
+against a running stack — nothing else would notice a container quietly regaining root.
 
 **`app` is pulled, not built.** The image is `ghcr.io/chethan123/portfolio-app`, published by CI
 for `linux/amd64` and `linux/arm64` when a version tag is pushed. `compose.yaml` has no `build:`
@@ -77,6 +82,12 @@ name, which Compose's local driver binds to that path — so `docker compose dow
 `docker compose down -v` now leaves it alone too: that removes the volume *record*, not the
 directory. Deleting the data is `rm -rf` and nothing else, which is a better place for the one
 irreversible act to sit than a flag on a routine command.
+
+**`price-worker-sock` is the other volume, and there is nothing on your host to look for.** It is a
+one-megabyte `tmpfs` — memory, not disk — that `worker` and `app` share only to meet at a unix
+socket: `worker` listens on it, `app` mounts the same volume read-only to dial it, and that socket is
+the whole of how the two talk. It holds no data and outlives nothing; a backup has nothing to take
+from it.
 
 ---
 
@@ -253,6 +264,12 @@ Set `DATABASE_URL` in `.env` to point at it. Four things that catch people:
   backups become your Postgres's problem, and [Backups](#backups) is then about `.env` and the
   allowlist only.
 
+**What this mode does and does not cost you.** The worker still holds no database credential and
+still shares no network with `app` or `gate` — nothing about pointing `DATABASE_URL` elsewhere
+touches it. What it does give up is `app`'s own no-egress guarantee: `external-db`, the network
+`compose.external-db.yaml` adds so `app` can reach a host outside this Compose project, is the one
+network in this stack that carries a default route, unlike every other network here.
+
 ### Verify it actually worked
 
 ```sh
@@ -260,13 +277,17 @@ docker compose ps
 curl -i http://localhost/healthz
 ```
 
-`db`, `app`, `worker`, `gate` and `caddy` all `running` and `healthy` — and `dump` too unless
-you set `DUMP_ENABLED=false`, which is meant to read as `Exited (0)` rather than as another
-healthy row. `caddy`'s own check requests `/healthz` through its full
+`db`, `app`, `worker`, `egress-proxy`, `gate` and `caddy` all `running` and `healthy` — and `dump`
+too unless you set `DUMP_ENABLED=false`, which is meant to read as `Exited (0)` rather than as
+another healthy row. `caddy`'s own check requests `/healthz` through its full
 proxy path to `app`, so a healthy `caddy` means the hop works and not merely that the process is up.
-Look for `worker` by name: nothing depends on it, so a command or a compose file that leaves it out
-starts everything else correctly and simply never starts it — no error, no unhealthy row, an *absent*
-one instead, the row nobody counts. And `/healthz` answering `200` with exactly:
+Look for `worker` and `egress-proxy` by name: nothing depends on either one, so a command or a
+compose file that leaves one out starts everything else correctly and simply never starts it — no
+error, no unhealthy row, an *absent* one instead, the row nobody counts. Leaving out `egress-proxy`
+alone is the quieter break of the two: `worker` still starts and still answers its own healthcheck
+green, and now sits on an internal network with nothing on the other end — every price fetch fails
+at the first hop, and nothing in `docker compose ps` says why. And `/healthz` answering `200` with
+exactly:
 
 ```json
 {"status":"ok","database":true,"migrations":"current","pendingMigrations":[]}
@@ -734,12 +755,14 @@ and these limits are the argument for it.
 
 ### One thing that leaves the house
 
-The app makes outbound requests to exactly one destination: the price provider. What goes out is the
-list of ticker symbols being priced, plus your public IP. Quantities, balances, account names, people
-and filenames do not. There is no analytics or error-reporting SDK anywhere in the image. It is still
-worth knowing that the symbol list reveals *what* is held, if not how much — an operator who objects
-can price instruments manually or block egress and accept permanently stale prices. The app degrades
-to the last known price, never to zeros.
+The app itself has no way out — `backend` and `caddy-app`, the only two networks it is on, are both
+internal. The worker is what leaves the house, and it makes outbound requests to exactly one
+destination: the price provider. What goes out is the list of ticker symbols being priced, plus your
+public IP. Quantities, balances, account names, people and filenames do not. There is no analytics or
+error-reporting SDK anywhere in the image. It is still worth knowing that the symbol list reveals
+*what* is held, if not how much — an operator who objects can price instruments manually or block
+egress and accept permanently stale prices. The app degrades to the last known price, never to
+zeros.
 
 **What actually enforces "exactly one destination" is `egress-proxy`, and it checks more than the
 hostname.** `worker`'s only network connects it to nothing but that proxy, which admits a `CONNECT`
@@ -1032,11 +1055,27 @@ stays up, keeps answering `/healthz` — which starts no threads — and fails t
 process start, so seeing it more than once is the process having started more than once — see
 [Logs](#logs).
 
+### The proxy's own healthcheck
+
+`egress-proxy` answers its own `GET /healthz` on `127.0.0.1:8888`, inside the container — no port is
+published, so nothing outside it, healthcheck included, dials this over the network at all. It is
+deliberately a `GET` and not a bare TCP connect. `egress-proxy` accepts at most eight connections at
+once, health checks sharing that same budget with every tunnel; past the eighth, Node itself accepts
+a ninth socket and closes it again within a couple of milliseconds, no error and no timeout — a TCP
+handshake that completes cleanly whether or not anything behind it still has room to work. Only a
+check that waits for a real HTTP response tells a proxy with a free slot apart from one whose eight
+are all held by stalled tunnels, which is why this healthcheck has to be a request the server itself
+answers rather than a connection alone. So "unhealthy" here means the proxy is saturated or wedged —
+never "Yahoo is down," which shows up instead as `worker` failing every call while both containers
+keep reporting healthy (see [Logs](#logs)). And the restart rule above still holds here too: nothing
+recreates `egress-proxy` on this failing, so an unhealthy row in `docker compose ps` is where you
+look, not something Compose resolves for you.
+
 ### Logs
 
 `docker compose logs -f app` is the entire pipeline; there is no metrics endpoint, no tracing and no
-log shipping. `docker compose logs -f worker` is a second stream worth watching even though nothing
-calls it yet: the restart-loop tell above shows up nowhere else. `docker compose logs -f gate` is the
+log shipping. `docker compose logs -f worker` is a second stream worth watching in its own right:
+the restart-loop tell above shows up nowhere else. `docker compose logs -f gate` is the
 second half of the pipeline proper, and the only place a refused sign-in is recorded at all — the
 application no longer sees one. The stems below are for grepping and may drift — the code owns the
 wording:
@@ -1255,6 +1294,9 @@ Stopping `app` first is what keeps it from writing to a database that is being r
 it — and the price refresh loop inside it is the connection holder that would otherwise make
 `dropdb` fail. `caddy` stays up throughout and answers `502` until `app` is back; that is the
 restore working, not a second fault.
+
+**The worker may keep running.** It holds no database connection and nothing about a restore
+reaches it, so `stop app` alone is what to type above — there is no `stop worker` line to add.
 
 **`docker compose stop app` survives a reboot.** `stop` records that you wanted it stopped, and
 `restart: unless-stopped` honours that across a daemon restart and across a host reboot. A restore
@@ -1713,11 +1755,13 @@ A per-service `logging` block overrides whatever the operator sets as the daemon
 journald or `local`).
 
 **Almost no resource limits are set** — no CPU limit anywhere, and no memory or process limit on
-any service but `worker`, which carries `mem_limit: 256m` and `pids_limit: 64` because it is the
-one container the design expects to be compromised. On a machine that runs only this, that is the
-right default. On a shared host it means one runaway query can still take the box; the flat
-`mem_limit` and `pids_limit` keys `worker` uses are where you would add them, and
-`docker compose up` honours those without a swarm.
+any service but `worker` and `egress-proxy`, which each carry `mem_limit: 256m` and
+`pids_limit: 64`: `worker` because it is the one container the design expects to be compromised,
+`egress-proxy` because it is reachable from that same compromised `worker` and is given no more
+trust than the thing it fences. On a machine that runs only this, that is the right default. On a
+shared host it means one runaway query can still take the box; the flat `mem_limit` and
+`pids_limit` keys these two use are where you would add them elsewhere, and `docker compose up`
+honours those without a swarm.
 
 **The design target is a target, not a measurement.**
 [`ARCHITECTURE.md` §10](../ARCHITECTURE.md#10-performance-and-scale-envelope) states it — one
