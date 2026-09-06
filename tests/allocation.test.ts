@@ -767,8 +767,7 @@ describe("the sheltered subtotal", () => {
 
 describe("the weighted yield", () => {
   it("divides what a group pays by what the group is worth", () => {
-    // $277.80 over $60,000 gross positive value — not the $36,000 net worth, not with
-    // the loan's value included.
+    // $277.80 over $60,000 gross positive value — not the $36,000 net worth, not with the loan's value included.
     expect(weightedYield(aHouseholdWithALoan())).toBe("0.004630");
   });
 
@@ -778,20 +777,17 @@ describe("the weighted yield", () => {
       holding({ accountKind: "liability", value: "-150000.0000", annualDividend: "0.0000" }),
     ];
 
-    // Net denominator (−50,000) would report −1.0% on a $500/yr payer — same fix as
-    // netWorthChange's abs(previous).
+    // Net denominator (−50,000) would report −1.0% on a $500/yr payer — same fix as netWorthChange's abs(previous).
     expect(weightedYield(holdings)).toBe("0.005000");
   });
 
   it("is absent, not zero, for a group with a dividend and no value", () => {
-    // Unquoted trust: quantity, no price — nothing for the dividend to be a fraction of.
-    // Zero rule applies to the dividend, never to its denominator.
+    // Unquoted trust: quantity, no price — nothing for the dividend to be a fraction of. Zero rule applies to the dividend, never to its denominator.
     expect(weightedYield([holding({ value: null, annualDividend: "120.0000" })])).toBeNull();
   });
 
   it("is absent, rather than throwing, when the value is exactly zero", () => {
-    // money.ts's divide raises RangeError on a zero denominator — a sold-out position
-    // must not 500 the page.
+    // money.ts's divide raises RangeError on a zero denominator — a sold-out position must not 500 the page.
     expect(weightedYield([holding({ value: "0.0000", annualDividend: "0.0000" })])).toBeNull();
   });
 
