@@ -1,16 +1,10 @@
-// app/lib/lock.server.ts: offers a WebAuthn challenge and judges the answer (docs/adr/0012,
-// docs/specs/lock/02-the-two-ceremonies.md). No browser, no route — every refusal is provoked
-// by varying either the server's expectation (wrong origin/RP id, spent/unknown/expired
-// challenge, via mocking ../server/config.ts) or the response's signed content (wrong RP id,
-// bumped counter, wrong public key, via tests/support/webauthn.ts's re-signing options). Never
-// by breaking a signature outright — that's webauthn.ts's own rule.
-// Five describe blocks — duplicate credential id, concurrent bootstrap registrations, counter
-// concurrency, passkey removed mid-verification, touchGrant deleted mid-touch — drive genuine
-// cross-connection races against the real database rather than withDatabase's rolled-back
-// transaction (same reason as lock-schema.test.ts's passkey_bootstrap_idx), each cleaning up
-// its own committed rows since they share webauthn.ts's one signable credential id. All but
-// duplicate credential id synchronise through waitUntilBlocked (polling real database state,
-// not a fixed delay); that one still sleeps, racing only how fast the driver dispatches a statement.
+// app/lib/lock.server.ts's WebAuthn ceremonies (docs/adr/0012, docs/specs/lock/02-the-two-ceremonies.md).
+// No browser, no route — refusals come from varying the server's expectation (mocked
+// ../server/config.ts) or the response's signed content (webauthn.ts's re-signing), never a
+// broken signature outright.
+// Five describe blocks below drive real cross-connection races against the database rather
+// than withDatabase's rolled-back transaction, synchronising through waitUntilBlocked except
+// "duplicate credential id", which still sleeps.
 import { generateKeyPairSync } from "node:crypto";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,8 +31,7 @@ import {
   transports,
 } from "./support/webauthn.ts";
 
-// Spied, not replaced — every other test needs the library's real verification. Hoisted
-// because vi.mock's factory runs before this file's top-level consts would otherwise exist.
+// Spied, not replaced — every other test needs the real verification; hoisted since vi.mock's factory runs first.
 const capturedAssertionOptions = vi.hoisted(
   () => [] as Array<{ requireUserVerification?: boolean }>,
 );
@@ -56,10 +49,7 @@ vi.mock("@simplewebauthn/server", async (importOriginal) => {
   };
 });
 
-/** lock.server.ts derives its RP expectation from getConfig().PUBLIC_ORIGIN fresh on every
- * call, not a parameter (§2 of the review). Mocking the config module the same way
- * @simplewebauthn/server is mocked above gives tests control without changing a signature
- * (server/config.ts memoises with no reset, db.server.ts's withDb comment's own principle). */
+/** Mocks getConfig() so PUBLIC_ORIGIN can vary per test — lock.server.ts reads it fresh on every call, not as a parameter. */
 const configOverride = vi.hoisted(() => ({ origin: undefined as string | undefined }));
 
 vi.mock("../server/config.ts", async (importOriginal) => {
@@ -73,13 +63,11 @@ vi.mock("../server/config.ts", async (importOriginal) => {
   };
 });
 
-/** Point every call the module makes at a different configured origin, until the next reset. */
 function mockPublicOrigin(origin: string): void {
   configOverride.origin = origin;
 }
 
-/** expectedOrigin with a different port — hostname (and the RP id lock.server.ts derives
- * from it) unchanged, isolating "wrong origin" from "wrong RP id". */
+/** expectedOrigin with a different port — same hostname/RP id, isolating "wrong origin" from "wrong RP id". */
 const DIFFERENT_PORT_ORIGIN = `${expectedOrigin}:8443`;
 
 const {
@@ -107,8 +95,7 @@ afterAll(closeTestDatabase);
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  // Every refusal logs its cause (§6 of the review) — silenced here so provoked refusals
-  // don't spam the run; inspected directly by the one test about logging itself.
+  // Silenced so provoked refusals don't spam the run; asserted directly by the logging test.
   consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -138,7 +125,6 @@ function unrelatedPublicKeyCose(): Uint8Array {
   );
 }
 
-/** The refusal a call produced, or a test failure if it did not refuse. */
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
     await run();
@@ -218,11 +204,8 @@ describe("listPasskeys", () => {
 });
 
 describe("transports encoding", () => {
-  // lock.server.ts and fixtures.ts's seedPasskey both import these from app/lib/lock.ts
-  // (§8 of the review) — pinned here as the module's own behavior, not restated per caller.
   it("joins no transports as null rather than an empty string", () => {
-    // Exact bug migration 0012's transports comment warns against: [].join(",") is "", and
-    // "".split(",") reads back as one bogus transport instead of none.
+    // [].join(",") is "" and "".split(",") reads back as one bogus transport (migration 0012).
     expect(joinTransports([])).toBeNull();
     expect(joinTransports(undefined)).toBeNull();
   });
@@ -238,9 +221,6 @@ describe("transports encoding", () => {
 });
 
 describe("the grant cookie", () => {
-  // Pinned like masking's (tests/masking.test.ts), same kind of test not the same values —
-  // this cookie carries a live unlock's id, not a preference, so it parts from masking's on
-  // the two attributes that matter (ticket 03).
   it("carries Secure, HttpOnly and the __Host- prefix, unlike masking's cookie", () => {
     const cookie = lockCookie("a-grant-id");
     expect(cookie).toMatch(/;\s*secure\b/i);
@@ -250,22 +230,16 @@ describe("the grant cookie", () => {
   });
 
   it("is SameSite=Lax, never Strict, because the gate's own sign-in bounce is a top-level cross-site return", () => {
-    // Strict would withhold this cookie on that navigation and re-lock every browser on
-    // the gate's weekly sign-in bounce (ADR-0012's first paragraph) — a random-looking bug,
-    // not anything this feature did.
+    // ADR-0012's first paragraph.
     expect(lockCookie("a-grant-id")).toMatch(/samesite=lax/i);
   });
 
   it("is scoped to the whole app, and to exactly that", () => {
-    // toContain("Path=/") alone also accepts Path=/settings, scoping the grant to one
-    // screen — the attribute has to end there.
+    // toContain("Path=/") alone would also pass "Path=/settings".
     expect(lockCookie("a-grant-id")).toMatch(/;\s*Path=\/(?:;|$)/);
   });
 
   it("carries no Domain, which the __Host- prefix forbids and a browser would reject the cookie over", () => {
-    // Absence of an attribute, unchecked elsewhere — a Domain= added to either builder
-    // makes every browser drop the cookie outright, refusing every request with no other
-    // assertion noticing.
     expect(lockCookie("a-grant-id")).not.toMatch(/;\s*domain=/i);
     expect(clearedLockCookie()).not.toMatch(/;\s*domain=/i);
   });
@@ -328,9 +302,7 @@ describe("grants", () => {
         expiresAt: new Date(Date.now() - 1000),
       });
 
-      // Minting has no exported entry point of its own (§4 of the review — not authority
-      // handed out on its own say-so) — reached here through a verified ceremony, like
-      // every real caller.
+      // No exported mint entry point — reached here through a verified ceremony, like every real caller.
       const options = await unlockOptions(db);
       await verifyUnlock(assertionResponse(options.challenge), db);
 
@@ -370,10 +342,7 @@ describe("grants", () => {
   );
 });
 
-/** touchGrant replaces the middleware's old readGrant-then-extendGrant pair with one atomic
- * read-and-maybe-extend statement (§2 of the review) — pins the same three outcomes now from
- * one call. The genuinely concurrent race (grant deleted while touchGrant reads it) has its
- * own two-connection test further down. */
+/** Atomic read-and-maybe-extend (§2 of the review); the read-while-deleted race has its own test below. */
 describe("touchGrant", () => {
   it(
     "reads nothing for an id past its expiry, and writes nothing",
@@ -385,8 +354,6 @@ describe("touchGrant", () => {
       });
 
       expect(await touchGrant(grant.id, db)).toBeUndefined();
-      // Never resurrected — touching an already-expired grant doesn't roll it forward
-      // just for being asked.
       expect(await readGrant(grant.id, db)).toBeUndefined();
     }),
   );
@@ -472,14 +439,11 @@ describe("unlocking", () => {
 
       expect(typeof grant.id).toBe("string");
       expect(grant.id.length).toBeGreaterThanOrEqual(32);
-      // Length check alone would pass a shorter, non-random encoding of the right character
-      // count; decoding to exactly 32 bytes kills a sequential or guessable id (migration
-      // 0012's reasoning).
+      // Byte length, not string length — a shorter, non-random encoding could pass a length-only check (migration 0012).
       expect(decodedByteLength(grant.id)).toBe(32);
       expect(grant.passkeyId).toBe(credentialId);
       expect(grant.expiresAt).toBeInstanceOf(Date);
-      // Idle window named in app/lib/lock.ts, not some other figure — a year-long grant
-      // would also satisfy every other assertion here.
+      // Bounded to the idle window itself — a year-long grant would pass every assertion above.
       expect(grant.expiresAt.getTime()).toBeGreaterThan(Date.now() + IDLE_WINDOW_MS - 5000);
       expect(grant.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + IDLE_WINDOW_MS + 5000);
       expect(await readGrant(grant.id, db)).toEqual(grant);
@@ -503,8 +467,6 @@ describe("unlocking", () => {
       await verifyUnlock(assertionResponse(options.challenge), db);
 
       expect(capturedAssertionOptions).toHaveLength(1);
-      // Left at the library's default (true), not restated — pins only that it wasn't
-      // restated; the signed assertion below pins the default actually being in force.
       expect(capturedAssertionOptions[0]?.requireUserVerification).toBeUndefined();
     }),
   );
@@ -512,17 +474,12 @@ describe("unlocking", () => {
   it(
     "refuses an assertion the authenticator signed without verifying anybody, writing nothing",
     withDatabase(async ({ db, seedPasskey }) => {
-      // Library defaults requireUserVerification: true (verifyAuthenticationResponse.js:24),
-      // refusing at :175-176. Signed with the bit cleared, not flipped after signing, so the
-      // refusal is the UV rule, not a broken signature — same re-signing as counter/rpID options.
+      // Library defaults requireUserVerification: true (verifyAuthenticationResponse.js:24), signed
+      // with the bit cleared rather than flipped after, so this is the UV refusal, not a broken signature.
       await seedFixturePasskey(seedPasskey, /* counter */ 3);
       const options = await unlockOptions(db);
 
-      // Counter ahead of stored, deliberately — library checks UV first (:175-176), counter
-      // after (:182-188). A counter at/below stored would refuse on the counter instead if UV
-      // enforcement ever went missing, pinning nothing; ahead of it, only the missing UV bit
-      // is left to refuse, and stored 3 below is what a wrongly-accepted assertion would have
-      // moved to 5.
+      // Counter ahead of stored (library checks UV before counter, :175-176/:182-188) so only the missing UV bit can refuse.
       const refusal = await refusalOf(() =>
         verifyUnlock(
           assertionResponse(options.challenge, { counter: 5, flags: NO_USER_VERIFICATION_FLAGS }),
@@ -530,10 +487,7 @@ describe("unlocking", () => {
         ),
       );
       expect(refusal).toBeInstanceOf(ValidationError);
-      // Which refusal, not just that there was one — every library throw collapses into the
-      // same ValidationError, so this pins the fixture actually signing non-default flags
-      // rather than a broken signature. Log carries the cause; the counter test below
-      // asserts it the same way.
+      // Log message, not just instanceof — every library throw collapses into the same ValidationError.
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("assertion (unlock)"),
         expect.objectContaining({ message: expect.stringContaining("User verification required") }),
@@ -614,16 +568,11 @@ describe("unlocking", () => {
       await seedFixturePasskey(seedPasskey);
       const first = await unlockOptions(db);
 
-      // 500 is lock.server.ts's own cap (§5 of the review) — map holds first plus 500 more,
-      // and eviction only runs on the next mint's sweep, so it takes one call past the cap
-      // to force first out.
+      // Cap is 500 (§5); eviction runs on the next mint's sweep, so it takes one call past the cap to evict.
       for (let i = 0; i < 501; i++) {
         await unlockOptions(db);
       }
 
-      // Evicted, not merely unspent — a spent-or-expired refusal would mean the cap didn't
-      // apply. This is unlock's own budget (finding 2's partition), isolated from the other
-      // three purposes.
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(first.challenge), db));
       expect(refusal.fieldErrors.form).toMatch(/never issued/);
     }),
@@ -636,14 +585,10 @@ describe("unlocking", () => {
       await seedFixturePasskey(seedPasskey);
       const enrol = await enrolmentAssertionOptions(db);
 
-      // Only purpose an un-granted browser can reach, flooded past its own budget —
-      // finding 2's repro against /unlock, minted straight against the domain module here.
       for (let i = 0; i < 501; i++) {
         await unlockOptions(db);
       }
 
-      // Not evicted — enrol challenge minted before the flood still verifies, rather than
-      // refusing "never issued" for a confirmation that really was issued.
       const { grant } = await beginEnrolment("Second phone", { assertion: assertionResponse(enrol.challenge) }, db);
       expect(grant).toBeDefined();
     }),
@@ -692,11 +637,6 @@ describe("unlocking", () => {
         verifyUnlock(assertionResponse(options.challenge, { rpID: "attacker.example.com" }), db),
       );
       expect(refusal).toBeInstanceOf(ValidationError);
-      // Generic sentence — catches the counter match being loosened: matching on
-      // instanceof Error alone would tell a household their passkey may have been copied.
-      // Not the sharpest guard available (a cleared-UV response throws six lines above the
-      // counter check, not thirty-three), but producing one needs a flags option ticket 02
-      // adds; this is what exists today.
       expect(refusal.fieldErrors.form).toBe("This passkey could not be verified. Try again.");
     }),
   );
@@ -709,20 +649,16 @@ describe("unlocking", () => {
 
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(options.challenge), db));
       expect(refusal).toBeInstanceOf(ValidationError);
-      // Counter going backwards is the one signal WebAuthn gives a household to act on —
-      // "Try again" reads as transient, inviting a retry loop until the idle window passes.
       expect(refusal.fieldErrors.form).toBe(
         "This passkey's counter went backwards, which can mean a copy of it exists somewhere. " +
           "The check was refused. Remove this passkey from Settings → Passkeys and enrol it again.",
       );
 
-      // Log still names the ceremony and carries the library's real cause, not swallowed silently.
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("assertion (unlock)"),
         expect.anything(),
       );
 
-      // Nothing written, the same as the wrong-key refusal below.
       const row = await db
         .selectFrom("passkey")
         .select(["counter", "last_used_at"])
@@ -742,9 +678,7 @@ describe("unlocking", () => {
 
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(options.challenge), db));
       expect(refusal).toBeInstanceOf(ValidationError);
-      // Generic sentence — wrong public key makes verifySignature answer false, not throw,
-      // so this is the !verified.verified branch, never reaching the catch. RP test above
-      // pins the counter branch's own reach.
+      // Wrong key makes verifySignature return false, not throw — the !verified branch, not the catch (RP test above pins that branch).
       expect(refusal.fieldErrors.form).toBe("This passkey could not be verified. Try again.");
 
       const row = await db
@@ -761,15 +695,11 @@ describe("unlocking", () => {
   );
 });
 
-/** Challenge map's own housekeeping — the two rules deciding whether a family member is told
- * something true when a ceremony goes wrong. Driven against the real module-level map. */
 describe("the challenge map's housekeeping", () => {
   it(
     "tells a reader their confirmation expired rather than that this instance never issued it",
     withDatabase(async ({ db }) => {
-      // Sweep used to delete on the instant of expiry — the next mint by anybody made a
-      // stale submission read as "never issued", true of the map but false (and more
-      // alarming) about what actually happened.
+      // Used to delete on the instant of expiry — a later mint then read a stale submission as "never issued".
       const base = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(base);
 
@@ -777,7 +707,7 @@ describe("the challenge map's housekeeping", () => {
         const stale = await unlockOptions(db);
 
         clock.mockReturnValue(base + CHALLENGE_TTL_MS + 1_000);
-        // A later ceremony, which is what sweeps.
+        // This later mint is what sweeps.
         await unlockOptions(db);
 
         const refusal = await refusalOf(() => verifyUnlock(assertionResponse(stale.challenge), db));
@@ -791,27 +721,21 @@ describe("the challenge map's housekeeping", () => {
   it(
     "drops a spent confirmation before an unspent one when a purpose is over its budget",
     withDatabase(async ({ db }) => {
-      // Eviction used to take the oldest regardless of state — a spend-and-retry flood
-      // evicted a confirmation somebody was mid-way through. Oldest here is unspent and
-      // must survive; the middle ones spent are what the budget should reclaim.
+      // Used to evict oldest regardless of state — a spend-and-retry flood could evict a confirmation mid-way through.
       const oldest = await unlockOptions(db);
       const spent: string[] = [];
 
       for (let i = 1; i < MAX_LIVE_CHALLENGES_PER_PURPOSE; i++) {
         const { challenge } = await unlockOptions(db);
-        // Spend a handful from the middle, well away from the oldest.
         if (i >= 400 && i < 405) {
           await refusalOf(() => verifyUnlock(assertionResponse(challenge), db));
           spent.push(challenge);
         }
       }
 
-      // Past the budget, so eviction runs.
       for (let i = 0; i < spent.length; i++) await unlockOptions(db);
 
       const refusal = await refusalOf(() => verifyUnlock(assertionResponse(oldest.challenge), db));
-      // Whatever else it says, not "never issued" — oldest is unspent, spent ones were
-      // there to be taken first.
       expect(refusal.fieldErrors.form).not.toMatch(/never issued/);
     }),
   );
@@ -819,9 +743,7 @@ describe("the challenge map's housekeeping", () => {
   it(
     "still answers a replayed confirmation with already-used once its purpose has filled its budget",
     withDatabase(async ({ db }) => {
-      // Other half of the rule, the one a single shared budget got wrong: keeping a spent
-      // entry only matters if the next 500 mints don't reclaim it — they have their own
-      // budget, so they don't.
+      // Other half of the same bug: a spent entry surviving only matters if its own budget's next mints don't reclaim it.
       const { challenge } = await unlockOptions(db);
       await refusalOf(() => verifyUnlock(assertionResponse(challenge), db));
 
@@ -862,8 +784,6 @@ describe("enrolling", () => {
 
       const completed = await completeRegistration(registrationResponse(begun.options.challenge), db);
       expect(completed.passkey.label).toBe("Kitchen iPad");
-      // Bootstrap case mints a grant — the enrolling browser must not be locked out by
-      // its own redirect back.
       expect(completed.grant).toBeDefined();
       expect(await isLocked(db)).toBe(true);
 
@@ -904,8 +824,6 @@ describe("enrolling", () => {
     withDatabase(async ({ db }) => {
       const refusal = await refusalOf(() => beginEnrolment("Kitchen\u0000iPad", { assertion: undefined, acknowledgement: "true" }, db));
       expect(refusal).toBeInstanceOf(ValidationError);
-      // Refused at this end, not after completeRegistration's own insert — browser never
-      // creates a credential.
       expect(await isLocked(db)).toBe(false);
     }),
   );
@@ -918,10 +836,7 @@ describe("enrolling", () => {
     }),
   );
 
-  // One example per class the label rule refuses beyond C0/C1: line/paragraph separators
-  // (the message already names), an override/isolate that can flip a row's reading order
-  // (wrong passkey removed), and a zero-width space that makes a label look blank or
-  // identical to another.
+  // One example per class beyond C0/C1: separators, an RTL override/isolate (flips reading order), a zero-width space (blank-looking label).
   it.each([
     ["a line separator", "Kitchen\u2028iPad"],
     ["a paragraph separator", "Kitchen\u2029iPad"],
@@ -941,10 +856,7 @@ describe("enrolling", () => {
   it(
     "trims a separator off either edge rather than refusing it, as it trims a space",
     withDatabase(async ({ db }) => {
-      // requiredText trims before this refinement sees the value — an edge separator never
-      // reaches the refinement or column, same as a stray space. Refusing it would make this
-      // the one field that rejects a pasted trailing newline; the middle (unreachable by
-      // trim) is refused above.
+      // requiredText trims before this refinement sees the value — an edge separator never reaches it, same as a stray space.
       const { options } = await beginEnrolment(
         "\u2029Kitchen iPad\u2028",
         { assertion: undefined, acknowledgement: "true" },
@@ -957,8 +869,7 @@ describe("enrolling", () => {
   it(
     "keeps a label whose emoji is held together by a zero width joiner",
     withDatabase(async ({ db }) => {
-      // Deliberate exception — a family emoji is a sequence joined by U+200D; refusing the
-      // joiner to catch invisible characters would refuse an ordinary chosen label.
+      // Emoji joined by U+200D — refusing it would also refuse an ordinary chosen label.
       const { options } = await beginEnrolment(
         "\u{1F469}\u200D\u{1F469}\u200D\u{1F467} phone",
         { assertion: undefined, acknowledgement: "true" },
@@ -1020,9 +931,7 @@ describe("enrolling", () => {
       const assertionOptions = await enrolmentAssertionOptions(db);
       const { options } = await beginEnrolment("Laptop", { assertion: assertionResponse(assertionOptions.challenge) }, db);
 
-      // Distinct credential id from the one proving the assertion above — "none"
-      // attestation carries no signature, so an unrelated public key needs no private key
-      // to register.
+      // "none" attestation carries no signature, so an unrelated public key needs no matching private key.
       const completed = await completeRegistration(
         registrationResponse(options.challenge, {
           credentialId: "second-devic",
@@ -1031,8 +940,6 @@ describe("enrolling", () => {
         db,
       );
 
-      // Assertion step already minted one — a second here would set two cookies on one
-      // request (module header).
       expect(completed.grant).toBeUndefined();
     }),
   );
@@ -1044,9 +951,7 @@ describe("enrolling", () => {
       await completeRegistration(registrationResponse(begun.options.challenge), db);
 
       const [row] = await listPasskeys(db);
-      // Fixture's signed authData carries the backup-eligible flag (webauthn.ts's
-      // backupEligible) — seeded rows alone can't prove the writer reads it off
-      // verification, not some other default.
+      // Fixture's signed authData carries backupEligible — a seeded row alone can't prove this was read off verification.
       expect(row?.backupEligible).toBe(backupEligible);
     }),
   );
@@ -1077,9 +982,7 @@ describe("enrolling", () => {
     withDatabase(async ({ db, seedPasskey }) => {
       const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
 
-      // Simulates a second bootstrap enrolment committing in between — ticket 01's
-      // passkey_bootstrap_idx closes the genuinely concurrent race; this is the simpler
-      // half, the conditional insert finding the table no longer empty.
+      // Simulates a second bootstrap landing in between — ticket 01's passkey_bootstrap_idx; the conditional insert finds the table no longer empty.
       await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, credentialId: "already-there", bootstrap: true });
 
       const refusal = await refusalOf(() =>
@@ -1101,10 +1004,7 @@ describe("enrolling", () => {
     withDatabase(async ({ db, seedPasskey }) => {
       const begun = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
 
-      // Twin of the test above, pinning the conditional insert alone. There the interloper
-      // is flagged bootstrap, so the partial index refuses first; here it's an ordinary
-      // passkey (the "bootstrap A, enrol B, remove A" state), so only where not exists is
-      // left to say no.
+      // Twin of the test above with an ordinary (non-bootstrap) interloper, so only where-not-exists can refuse, not the partial index.
       await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, credentialId: "already-there", bootstrap: false });
 
       const refusal = await refusalOf(() =>
@@ -1124,8 +1024,6 @@ describe("enrolling", () => {
   it(
     "does not authorise an enrolment with an assertion scoped to unlocking",
     withDatabase(async ({ db, seedPasskey }) => {
-      // Any enrolled passkey locks the household — beginEnrolment inspects the assertion
-      // instead of taking the bootstrap path.
       await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY });
       const unlockOpts = await unlockOptions(db);
       const scopedToUnlock = assertionResponse(unlockOpts.challenge);
@@ -1148,9 +1046,7 @@ describe("enrolling", () => {
   it(
     "refuses a registration presented against a challenge issued for unlocking, not for enrolling",
     withDatabase(async ({ db, seedPasskey }) => {
-      // Valid, issued, unspent challenge — just the wrong purpose. "Never issued" test
-      // above can't reach this branch: an unknown challenge is refused before purpose.kind
-      // is even read.
+      // Wrong purpose only — an unknown challenge refuses before purpose.kind is even read (see the "never issued" test above).
       await seedFixturePasskey(seedPasskey);
       const unlockOpts = await unlockOptions(db);
 
@@ -1212,9 +1108,7 @@ describe("removing", () => {
   it(
     "leaves the passkey, its grants and the assertion itself alone when a valid removal arrives without the acknowledgement",
     withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
-      // Every other test of this refusal sends no assertion — deleting the acknowledgement
-      // check would only change a message. This one sends an assertion that would
-      // otherwise succeed.
+      // Every other test of this refusal sends no assertion; this one sends one that would otherwise succeed.
       const passkey = await seedFixturePasskey(seedPasskey);
       const grant = await seedUnlockGrant({ passkeyId: passkey.credentialId });
       const options = await removalAssertionOptions(credentialId, db);
@@ -1229,11 +1123,9 @@ describe("removing", () => {
         await db.selectFrom("passkey").select("credential_id").where("credential_id", "=", credentialId).execute(),
       ).toHaveLength(1);
       expect(await readGrant(grant.id, db)).toBeDefined();
-      // Nothing minted: the assertion was never verified.
       expect(await db.selectFrom("unlock_grant").select("id").execute()).toHaveLength(1);
 
-      // Challenge never spent either (the other half of "still ahead of verification") —
-      // same assertion still works.
+      // Challenge unspent too — the same assertion still works below.
       const { grant: minted } = await removePasskey(credentialId, { assertion, confirmRemoval: "true" }, db);
       expect(minted.passkeyId).toBe(credentialId);
     }),
@@ -1250,7 +1142,6 @@ describe("removing", () => {
       );
       expect(refusal.fieldErrors.form).toMatch(/fresh confirmation/);
 
-      // The live grant bought no authority at all: still there afterward.
       expect(await readGrant(grant.id, db)).toBeDefined();
     }),
   );
@@ -1308,18 +1199,14 @@ describe("removing", () => {
         removePasskey("ghost", { assertion, confirmRemoval: "true" }, db),
       ).rejects.toThrow(NotFoundError);
 
-      // Target resolved before the assertion is verified (§7 of the review, matching
-      // closeAccount's precedent) — challenge never spent, no grant to show for it.
+      // Target resolved before verification (§7, matching closeAccount's precedent) — challenge never spent.
       const grants = await db.selectFrom("unlock_grant").select("id").execute();
       expect(grants).toHaveLength(0);
     }),
   );
 });
 
-/** What a registration may store. The library forwards two values from the client without
- * judging them — transports verbatim, attested credential id at whatever length claimed —
- * so these drive completeRegistration with answers no honest authenticator sends and assert
- * both the refusal and that nothing landed. */
+/** Library forwards two client values unjudged — transports verbatim, attested credential id at whatever length claimed. */
 describe("what a registration may store", () => {
   async function beginRegistration(db: Kysely<Database>): Promise<string> {
     const { options } = await beginEnrolment("Kitchen iPad", { assertion: undefined, acknowledgement: "true" }, db);
@@ -1379,8 +1266,7 @@ describe("what a registration may store", () => {
       );
       expect(refusal.fieldErrors.form).toMatch(/an identifier of a length/);
 
-      // The one that mattered — a stored "" would ride in every browser's allowCredentials
-      // from the next unlock on.
+      // The assertion that matters — a stored "" would ride in every browser's allowCredentials from the next unlock on.
       expect(await db.selectFrom("passkey").select("credential_id").execute()).toHaveLength(0);
     }),
   );
@@ -1407,8 +1293,7 @@ describe("what a registration may store", () => {
     withDatabase(async ({ db }) => {
       const challenge = await beginRegistration(db);
 
-      // Library compares id to rawId, neither to the attested bytes — this passes
-      // verification and would store an id no browser will ever send back.
+      // Library compares id to rawId, neither to the attested bytes — verification passes, storing an id no browser would send back.
       const refusal = await refusalOf(() =>
         completeRegistration(
           registrationResponse(challenge, { attestedCredentialId: new Uint8Array([9, 9, 9, 9]) }),
@@ -1422,13 +1307,9 @@ describe("what a registration may store", () => {
   );
 });
 
-/** WebAuthn response is client-submitted JSON — every exported function narrows the outer
- * shape it dereferences (id, client data) before reading it (CLAUDE.md's "Zod at the
- * boundaries only"). Each hostile shape here dereferenced straight into a TypeError before
- * that narrowing existed — must be a refusal, never a throw.
- * verifyUnlock carries all four shapes since every entry point narrows through the same two
- * functions (narrowAssertion, narrowRegistration); completeRegistration, beginEnrolment and
- * removePasskey each carry one, confirming every entry narrows, not just the one most tested. */
+/** Each hostile shape here threw a TypeError before narrowAssertion/narrowRegistration existed (CLAUDE.md's
+ * "Zod at the boundaries only") — must refuse, never throw. verifyUnlock carries all four shapes; the other
+ * three entry points carry one each, confirming every entry narrows. */
 describe("hostile responses", () => {
   it(
     "refuses an empty object rather than throwing when unlocking",
@@ -1466,9 +1347,7 @@ describe("hostile responses", () => {
       const refusal = await refusalOf(() =>
         verifyUnlock({ id: credentialId, response: { clientDataJSON: "@@@ not base64url @@@" } }, db),
       );
-      // Outer-shape check passes it through as a string — decodeChallenge's own
-      // pre-existing try/catch (unaffected by this narrowing) turns the decode failure
-      // into this refusal.
+      // decodeChallenge's own try/catch turns the decode failure into this refusal.
       expect(refusal.fieldErrors.form).toMatch(/client data could not be read/);
     }),
   );
@@ -1519,10 +1398,8 @@ describe("hostile responses", () => {
 });
 
 
-/** One browser, one live grant. Every verified assertion mints one, so before this rule an
- * unlock, an enrolment confirm and a removal left three live rows for one browser, and
- * "Lock now" (which deletes only the cookie's own row) ended only one of them. supersedes
- * is always the request's own cookie; these tests hand it down the way the routes do. */
+/** Every verified assertion mints one grant per browser; before this rule an unlock, an enrolment confirm and a
+ * removal left three live rows, and "Lock now" ended only one. supersedes is the request's own cookie, as routes hand it down. */
 describe("one live grant per browser", () => {
   it(
     "leaves one live grant behind an unlock, an enrolment confirm and a removal made by the same browser",
@@ -1542,8 +1419,7 @@ describe("one live grant per browser", () => {
       const second = begun.grant;
       if (second === undefined) throw new Error("An authorised enrolment must mint a grant.");
 
-      // Signer is the fixture credential, target is bystander — ordinary case, not the
-      // exception below.
+      // Signer is the fixture credential, target is bystander — ordinary case, not the exception below.
       const removal = await removalAssertionOptions("bystander", db);
       const { grant: third } = await removePasskey(
         "bystander",
@@ -1568,10 +1444,7 @@ describe("one live grant per browser", () => {
   it(
     "keeps the prior grant when the removal's signer is the passkey being removed, which is the one grant left",
     withDatabase(async ({ db, seedPasskey, seedUnlockGrant }) => {
-      // Browser is unlocked under mine (can't sign with it here); removal is signed by
-      // target, the passkey being removed, which ADR-0012 allows. Superseding mine's grant
-      // too would leave the browser with nothing live, against what the removal screen
-      // just promised.
+      // Removal signed by target (the passkey being removed), which ADR-0012 allows — superseding mine too would leave the browser with nothing live.
       const mine = await seedPasskey({ publicKey: BYSTANDER_PUBLIC_KEY, credentialId: "mine" });
       await seedFixturePasskey(seedPasskey);
       const prior = await seedUnlockGrant({ passkeyId: mine.credentialId });
@@ -1588,7 +1461,6 @@ describe("one live grant per browser", () => {
       );
 
       expect(await readGrant(prior.id, db)).toBeDefined();
-      // Cascaded away with the passkey that signed for it.
       expect(await readGrant(minted.id, db)).toBeUndefined();
 
       const live = await db.selectFrom("unlock_grant").select("id").execute();
@@ -1615,11 +1487,7 @@ describe("one live grant per browser", () => {
   );
 });
 
-/** Poll real, observable database state — never a fixed delay — until pid's backend is
- * genuinely waiting on a lock. The two-connection races below need to know transaction B
- * has reached its blocking statement before A resolves the race by committing; a fixed
- * sleep only guesses, and a loaded CI runner is exactly where that guess reads wrong.
- * Bounded so a genuine deadlock or broken assumption fails loudly rather than hanging the suite. */
+/** Polls real database state (never a fixed delay) until pid is genuinely blocked on a lock — bounded so a real deadlock fails loudly. */
 async function waitUntilBlocked(
   watcher: Kysely<Database>,
   pid: number,
@@ -1644,7 +1512,6 @@ async function waitUntilBlocked(
   }
 }
 
-/** The Postgres backend pid a given Kysely handle is running on. */
 async function backendPid(handle: Kysely<Database>): Promise<number> {
   const result = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(handle);
   return result.rows[0]!.pid;
@@ -1656,9 +1523,7 @@ describe("duplicate credential id", () => {
     async () => {
       const database = await testDatabase();
 
-      // Guards against a previous crashed run leaving this shared credential id behind —
-      // same reasoning as lock-schema.test.ts's before/after cleanup for its
-      // cross-connection race.
+      // Guards a crashed prior run's leftover row — same reasoning as lock-schema.test.ts's cleanup.
       await database.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
 
       const trxA = await database.startTransaction().execute();
@@ -1669,24 +1534,17 @@ describe("duplicate credential id", () => {
         const beginA = await beginEnrolment("Device A", { assertion: undefined, acknowledgement: "true" }, trxA);
         const beginB = await beginEnrolment("Device B", { assertion: undefined, acknowledgement: "true" }, trxB);
 
-        // A's bootstrap registration lands, uncommitted — a tentative row B can't yet know
-        // the fate of.
+        // A's registration lands, uncommitted — B can't yet know its fate.
         await completeRegistration(registrationResponse(beginA.options.challenge), trxA);
 
-        // B registers the identical credential (fixture only signs one) while A is still
-        // open — Postgres can't yet say if A's row will exist. Both rows flagged bootstrap,
-        // so this can conflict on either unique constraint — Postgres reports the primary
-        // key (passkey_pkey) first, not the partial index, which the old code's catch
-        // didn't recognize.
+        // B registers the same credential while A is open — Postgres reports passkey_pkey first, which the old code's catch didn't recognize.
         const blocked = completeRegistration(registrationResponse(beginB.options.challenge), trxB);
         blocked.catch(() => {});
 
-        // Gives B's insert time to reach Postgres and block on A's row before A commits —
-        // without it, this races the driver's dispatch speed, not the module's code.
+        // Lets B's insert reach Postgres and block before A commits — without it this races dispatch speed, not the module.
         await new Promise((resolve) => setTimeout(resolve, 100));
         await trxA.commit().execute();
 
-        // Whichever constraint fired, this must be a printable refusal, never the raw database error.
         const refusal = await refusalOf(() => blocked);
         expect(refusal.fieldErrors.form).toMatch(/already enrolled|no longer without one/);
       } catch (error) {
@@ -1713,11 +1571,7 @@ describe("concurrent bootstrap registrations", () => {
   it(
     "lets exactly one of two bootstrap registrations with distinct credential ids land",
     async () => {
-      // Partial index's half of the first-enrolment race, driven through the module not raw
-      // SQL. Duplicate-credential-id race above can't reach it (same id → primary key fires
-      // first). With distinct ids the primary key has nothing to say — only
-      // passkey_bootstrap_idx can refuse; the review's surviving mutation (bootstrap = false
-      // in the conditional insert) is red here.
+      // Partial index's half of the race — distinct ids leave the primary key nothing to say, only passkey_bootstrap_idx can refuse.
       const database = await testDatabase();
       const otherCredentialId = "second-devic";
       const both = [credentialId, otherCredentialId];
@@ -1734,8 +1588,7 @@ describe("concurrent bootstrap registrations", () => {
 
         await completeRegistration(registrationResponse(beginA.options.challenge), trxA);
 
-        // B's where not exists can't see A's uncommitted row — proceeds to insert, blocks
-        // on A's index entry.
+        // B's where-not-exists can't see A's uncommitted row — proceeds, then blocks on A's index entry.
         const blocked = completeRegistration(
           registrationResponse(beginB.options.challenge, {
             credentialId: otherCredentialId,
@@ -1745,10 +1598,7 @@ describe("concurrent bootstrap registrations", () => {
         );
         blocked.catch(() => {});
 
-        // Waited for, never guessed at — a fixed sleep might let A commit first, so B's own
-        // where not exists refuses instead (same message, different half), and the
-        // assertions below couldn't tell — the test would stop pinning the index. Polling
-        // for B actually blocked is what guarantees the interleaving claimed.
+        // Polled, not guessed — a fixed sleep could let A commit first, and B's own where-not-exists would refuse instead, pinning nothing.
         const pidB = await backendPid(trxB);
         await waitUntilBlocked(database, pidB);
         await trxA.commit().execute();
@@ -1809,28 +1659,20 @@ describe("counter concurrency", () => {
       try {
         const optionsA = await unlockOptions(trxA);
         const optionsB = await unlockOptions(trxB);
-        // B's own connection, watched below so this test knows (not guesses) the moment
-        // its UPDATE blocks.
+        // B's own connection — watched so the test knows, not guesses, when its UPDATE blocks.
         const pidB = await backendPid(trxB);
 
-        // A verifies against committed counter (0), signs a higher one — write lands
-        // uncommitted in trxA.
+        // A verifies against committed counter 0, signs higher — write lands uncommitted.
         await verifyUnlock(assertionResponse(optionsA.challenge, { counter: 9 }), trxA);
 
-        // B's verification issued while A is open — library reads the same committed
-        // counter (0) A did (the stale read this rule protects against); B's check passes,
-        // then its UPDATE blocks on A's uncommitted row.
+        // B reads the same committed counter 0 (the stale read this rule guards against); its check passes, then its UPDATE blocks on A's row.
         const blocked = verifyUnlock(assertionResponse(optionsB.challenge, { counter: 3 }), trxB);
         blocked.catch(() => {});
 
-        // Waits on B genuinely blocking on A's row, polled through a third connection
-        // (database) — a fixed delay would only guess B had time to reach Postgres, and a
-        // loaded runner is where that guess fails, pinning the wrong interleaving (or none).
+        // Polled via a third connection — a fixed delay would only guess B had time to reach Postgres.
         await waitUntilBlocked(database, pidB);
         await trxA.commit().execute();
-        // Unblocked, Postgres re-evaluates greatest(passkey.counter, 3) against A's
-        // now-committed row (READ COMMITTED's rule for a write that waited) — B's write
-        // doesn't throw, just re-affirms 9, so blocked resolves normally.
+        // Unblocked, greatest(counter, 3) re-evaluates against A's now-committed row (READ COMMITTED) — B's write re-affirms 9, doesn't throw.
         await blocked;
         await trxB.commit().execute();
 
@@ -1887,28 +1729,20 @@ describe("passkey removed mid-verification", () => {
 
       try {
         const optionsB = await unlockOptions(trxB);
-        // B's own connection, watched below so this test knows (not guesses) the moment
-        // its counter update blocks.
+        // B's own connection — watched so the test knows when its counter update blocks.
         const pidB = await backendPid(trxB);
 
-        // A removes the very passkey B is about to verify against, uncommitted — B can't
-        // yet know.
+        // A removes the very passkey B is about to verify against, uncommitted — B can't yet know.
         await trxA.deleteFrom("passkey").where("credential_id", "=", credentialId).execute();
 
-        // B's assertion verifies against the pre-delete snapshot (READ COMMITTED, A not
-        // yet committed) so verification succeeds; B's counter UPDATE is what blocks on
-        // the row A's delete already locks.
+        // B verifies against the pre-delete snapshot (READ COMMITTED) so it succeeds; its counter UPDATE then blocks on A's locked row.
         const blocked = verifyUnlock(assertionResponse(optionsB.challenge), trxB);
         blocked.catch(() => {});
 
         await waitUntilBlocked(database, pidB);
         await trxA.commit().execute();
 
-        // Unblocked, B's UPDATE re-evaluates against A's committed delete and matches zero
-        // rows silently. mintGrant's own insert is what discovers the passkey is gone (its
-        // header explains why catching that violation there, not a row-count check, closes
-        // this race regardless of timing) — a refusal, never the raw fkey violation
-        // escaping as a 500.
+        // Unblocked, B's UPDATE matches zero rows silently — mintGrant's own insert (not a row-count check) is what discovers the passkey gone, refusing rather than a raw fkey violation.
         const refusal = await refusalOf(() => blocked);
         expect(refusal.fieldErrors.form).toMatch(/removed while this confirmation/);
 
@@ -1942,8 +1776,7 @@ describe("touchGrant, deleted mid-touch", () => {
       const racePasskeyId = "touch-grant-race-passkey";
       const raceGrantId = "touch-grant-race-grant-000000000000000000000000";
 
-      // Guards against a previous crashed run leaving these rows behind — same reasoning
-      // as the other cross-connection races' before/after cleanup.
+      // Guards a crashed prior run's leftover rows — same cleanup reasoning as the races above.
       await database.deleteFrom("passkey").where("credential_id", "=", racePasskeyId).execute();
       await database
         .insertInto("passkey")
@@ -1973,24 +1806,20 @@ describe("touchGrant, deleted mid-touch", () => {
       let bodyFailed = false;
 
       try {
-        // B's own connection, watched below so this test knows (not guesses) the moment
-        // its read blocks.
+        // B's own connection — watched so the test knows when its read blocks.
         const pidB = await backendPid(trxB);
 
         // A deletes the very grant B is about to touch, uncommitted — B can't yet know.
         await trxA.deleteFrom("unlock_grant").where("id", "=", raceGrantId).execute();
 
-        // touchGrant blocks on its own SELECT ... FOR UPDATE — without that lock, B's read
-        // would snapshot before A's delete and report the grant live regardless — the
-        // stale answer this function exists to close off.
+        // touchGrant's SELECT ... FOR UPDATE blocks here — without that lock, B would snapshot before A's delete and report the grant live regardless.
         const blocked = touchGrant(raceGrantId, trxB);
         blocked.catch(() => {});
 
         await waitUntilBlocked(database, pidB);
         await trxA.commit().execute();
 
-        // Unblocked, B's FOR UPDATE re-checks the row's now-committed state (gone) — same
-        // re-check an UPDATE gets, not the pre-delete row it was blocked against.
+        // Unblocked, B's FOR UPDATE re-checks the row's now-committed (gone) state, not the pre-delete row it blocked against.
         expect(await blocked).toBeUndefined();
       } catch (error) {
         bodyFailed = true;
