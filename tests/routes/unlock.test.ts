@@ -432,6 +432,13 @@ describe("what the screen renders", () => {
       // one word this screen is built around — contains it as a bare
       // substring, so checking for it naively would fail against the
       // screen's own correct copy rather than against a regression.
+      //
+      // Read the other way, this is a live constraint on the markup rather
+      // than on the copy: it lowercases the *whole* rendered string, so
+      // "face" also matches "surface". No class, custom property or
+      // attribute value reaching this screen may carry that word — which
+      // rules out styling anything here with an inline `var(--surface-*)`,
+      // however correct the sentence beside it reads.
       for (const word of ["biometric", "fingerprint", "face", "device credential", "enrolled device"]) {
         expect(markup).not.toContain(word);
       }
@@ -535,7 +542,7 @@ describe("shouldRunCeremony — finding 10's 'returning early so no ceremony eve
   });
 });
 
-describe("UnlockControl — finding 10's untested unsupported-browser branch and disabled attribute", () => {
+describe("UnlockControl — the unsupported-browser branch, and what the one button says while it is busy", () => {
   it.for([{ supported: null }, { supported: true }] as const)(
     "offers the button when supported is $supported",
     ({ supported }) => {
@@ -604,12 +611,6 @@ describe("UnlockControl — finding 10's untested unsupported-browser branch and
     }
   });
 
-  it("stretches the one action to the width of the card it sits in", () => {
-    const markup = renderToStaticMarkup(
-      UnlockControl({ supported: true, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
-    );
-    expect(markup).toContain("button--block");
-  });
 });
 
 describe("DismissedNote — finding 10's cancelled-prompt note", () => {

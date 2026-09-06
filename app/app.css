@@ -2398,7 +2398,7 @@ code {
 /* The one reward this screen has to give. The shackle lifts and pivots on its
  * right foot for as long as an assertion is with the server, and settles back
  * if the server refuses it — so the movement means "your passkey checked out",
- * never "you pressed a button" ({@link LockMark}, `app/routes/unlock.tsx`).
+ * never "you pressed a button" (`LockMark`, `app/routes/unlock.tsx`).
  * `transform-box: fill-box` because an SVG child otherwise transforms about
  * the viewBox origin, which swings the shackle clean out of the circle. The
  * travel is deliberately small: 1.5px of lift and 6 degrees at a 24px drawing
