@@ -1,11 +1,6 @@
 /**
- * Recording who is in the household.
- *
- * Driven through `people.server.ts` against a real Postgres, seeded through the
- * fixture builder — the same seam the valuation tests use. Nothing here asserts
- * on a route, on rendered markup or on generated SQL: what is being protected is
- * that the module every screen writes through keeps its own rules, so a second
- * caller cannot get a different answer than the People screen does.
+ * Recording who is in the household, driven through `people.server.ts` against a real
+ * Postgres — protects that the module every screen writes through keeps one rule for all callers.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -25,7 +20,7 @@ import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/** The field messages from a refusal, or a failure if it was not refused. */
+// field messages from a refusal, or a failure if it wasn't refused
 async function refusalOf(action: Promise<unknown>): Promise<Record<string, string>> {
   try {
     await action;

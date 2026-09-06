@@ -191,30 +191,15 @@ function inTransaction<T>(
   return db.isTransaction ? body(db) : db.transaction().execute(body);
 }
 
-/**
- * Resolve every unresolved string in one submit, or refuse the whole
- * submission with a message per field. The rules (spec 0004 step 04):
- *
- * - every string must be resolved — no skip; a skipped row is a holding
- *   silently missing from the statement
- * - existing writes only the alias; create writes classification (when new),
- *   then instrument, then alias — a new classification typed twice in one
- *   submit is created once and shared, never refused against itself
- * - a new name colliding with a stored classification is a field refusal
- *   naming it (`classification.name` is unique and user-facing)
- * - `feed` requires a symbol; `manual` allows none (the trust case)
- * - creating a `feed` instrument probes its symbol once: non-USD refuses in
- *   the refresh guard's stem wording; a provider failure does not block —
- *   the next refresh marks it stale like any symbol that stops quoting
- * - concurrent drafts resolving the same string do not error: the alias
- *   insert tolerates the conflict and the existing row wins
- *
- * Refusals are keyed `${field}-${index}` over the screen's order, and nothing
- * is written unless everything passes — a refusal must re-render the same
- * list of questions it was asked about.
- *
- * @throws {ValidationError} with a message per bad field.
- */
+// Resolves every unresolved string in one submit, or refuses the whole with a message per
+// field (keyed ${field}-${index}), nothing written unless everything passes. Rules (spec 0004
+// step 04): no skip (a skipped row is a holding silently missing); create writes classification
+// (if new) then instrument then alias, a name typed twice in one submit is created once and
+// shared; a new name colliding with a stored classification is a field refusal; feed requires
+// a symbol, manual allows none; creating a feed instrument probes its symbol once (non-USD
+// refuses, a provider failure doesn't block — next refresh marks it stale); concurrent drafts
+// resolving the same string don't error, the alias insert tolerates the conflict and the
+// existing row wins.
 export async function resolveAll(
   resolutions: ReadonlyArray<ResolutionInput>,
   deps: ResolutionDeps,
@@ -225,9 +210,7 @@ export async function resolveAll(
     errors[`${field}-${index}`] ??= message;
   };
 
-  // ---- validation, all before any probe or write: three faults come back
-  // as three messages, not one per round trip (the columns form's precedent).
-
+  // Validation, all before any probe or write: three faults come back as three messages.
   const plans: Array<Plan | null> = [];
 
   for (const [index, { fields }] of resolutions.entries()) {
@@ -274,7 +257,7 @@ export async function resolveAll(
       faulted = true;
     }
 
-    // Feed and manual only: `fixed` belongs to the seeded USD row alone.
+    // Feed and manual only — fixed belongs to the seeded USD row alone.
     const priceSource = fields.priceSource;
     if (priceSource !== "feed" && priceSource !== "manual") {
       refuse(
@@ -348,8 +331,8 @@ export async function resolveAll(
     });
   }
 
-  // Referenced rows must exist: the options were rendered from the database,
-  // so a miss is a forged or stale post — still a sentence, not an FK fault.
+  // Options were rendered from the database, so a miss here is a forged/stale post — still a
+  // sentence, not an FK fault.
   const instrumentIds = [
     ...new Set(
       plans.flatMap((plan) => (plan?.kind === "existing" ? [plan.instrumentId] : [])),
@@ -402,9 +385,8 @@ export async function resolveAll(
     }
   }
 
-  // A new name colliding with a *stored* classification is a refusal naming
-  // it; two strings typing the same new name share one pending creation,
-  // checked against the database only.
+  // Colliding with a stored classification is a refusal; two strings typing the same new name
+  // share one pending creation and are only checked against the database.
   const pendingNames = [
     ...new Set(
       plans.flatMap((plan) =>
@@ -443,9 +425,8 @@ export async function resolveAll(
 
   if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
-  // ---- the USD probe, one call for every distinct feed symbol the
-  // submission creates (so two strings creating one ticker still cost one
-  // call), before any write: a non-USD refusal must leave nothing behind.
+  // One probe call per distinct feed symbol (two strings creating one ticker cost one call),
+  // before any write, so a non-USD refusal leaves nothing behind.
   const feedSymbols = [
     ...new Set(
       plans.flatMap((plan) =>
@@ -456,9 +437,7 @@ export async function resolveAll(
     ),
   ];
 
-  // A manual-only submission collects nothing here — the common case — and
-  // makes no provider call at all, by construction: over the socket a
-  // zero-symbol ask is a round trip the worker refuses anyway (§3.2).
+  // A manual-only submission (the common case) makes no provider call at all, by construction.
   const verdicts: Awaited<ReturnType<ProbeSymbols>> =
     feedSymbols.length > 0 ? await deps.probe(feedSymbols) : new Map();
 
@@ -467,15 +446,12 @@ export async function resolveAll(
       continue;
     }
 
-    // A symbol the map lacks is `unavailable` — the batched probe never
-    // throws, so this is a defensive fallback rather than an expected path.
+    // Defensive fallback — the batched probe never throws, so the map shouldn't lack an entry.
     const verdict = verdicts.get(plan.symbol) ?? { status: "unavailable" as const };
 
-    // `unavailable` does not block: created now, marked stale by the next
-    // refresh — a network hiccup must not hold a statement hostage.
+    // unavailable doesn't block: created now, marked stale by the next refresh — a network
+    // hiccup must not hold a statement hostage.
     if (verdict.status === "non-usd") {
-      // The refresh guard's stem with the tail adapted — two spellings of one
-      // refusal would be two rules (`CurrencyRefused`).
       refuse(
         index,
         "symbol",
@@ -487,22 +463,18 @@ export async function resolveAll(
 
   if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
-  /**
-   * What the probe said this symbol is, read from the verdict cache — probing
-   * again would be a second network call for something already known.
-   */
+  // Read from the verdict cache — probing again would be a second network call.
   const quoteTypeOf = (plan: { symbol: string | null }): string | null => {
     const verdict = plan.symbol === null ? undefined : verdicts.get(plan.symbol);
 
     return verdict?.status === "ok" ? verdict.quoteType : null;
   };
 
-  // ---- the writes: classification first when new, then instrument, then
-  // alias — one transaction, so a fault leaves no half-remembered vocabulary.
+  // Classification (if new), then instrument, then alias — one transaction, so a fault leaves
+  // no half-remembered vocabulary.
   return inTransaction(db, async (trx) => {
-    // Each new classification created once however many strings typed it.
-    // `doNothing` plus a re-read covers the race validation cannot: a
-    // concurrent submit landing the same name. Either way the stored id answers.
+    // doNothing + re-read covers the race validation can't: a concurrent submit landing the
+    // same name. Either way the stored id answers.
     const created = new Map<string, string>();
     for (const [index, plan] of plans.entries()) {
       if (plan?.kind !== "create" || plan.newClassification === null) continue;
@@ -544,12 +516,9 @@ export async function resolveAll(
           .values({
             symbol: plan.symbol,
             name: plan.name,
-            // Whatever the probe was told; null when it was told nothing (an
-            // unquoted symbol, a trust, a provider's bad day). The Analysis
-            // split reads this column (§4.4); the probe is the one moment the
-            // app both learns the answer and has a row to write it on, and a
-            // refresh backfills the rest. Null stays null, never a guess: the
-            // catch-all row is visible and counted, a misfiled equity is not.
+            // Whatever the probe was told; null if it was told nothing (unquoted symbol, a
+            // trust, a provider's bad day) — a refresh backfills the rest. Never guessed: the
+            // Analysis split (§4.4) treats a null as a visible catch-all, not a misfiled equity.
             quote_type: quoteTypeOf(plan),
             price_source: plan.priceSource,
             classification_id: classificationId,
@@ -560,8 +529,7 @@ export async function resolveAll(
         createdInstrument = true;
       }
 
-      // The alias tolerates a concurrent draft resolving the same string:
-      // `doNothing`, and the existing row wins.
+      // doNothing: a concurrent draft resolving the same string, and the existing row wins.
       const inserted = await trx
         .insertInto("instrument_alias")
         .values({ raw_string: raw, instrument_id: instrumentId })
@@ -576,10 +544,8 @@ export async function resolveAll(
           .where("raw_string", "=", raw)
           .executeTakeFirstOrThrow();
 
-        // The instrument created for this string lost the race and nothing
-        // points at it — deleted rather than left as a duplicate the select
-        // would offer forever. A new classification stays: it may serve other
-        // strings, and a label with no instruments is harmless vocabulary.
+        // Lost the race, nothing points at it — deleted rather than left as a duplicate the
+        // select would offer forever. A new classification stays: harmless even with no instruments.
         if (createdInstrument && winner.instrument_id !== instrumentId) {
           await trx.deleteFrom("instrument").where("id", "=", instrumentId).execute();
         }

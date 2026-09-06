@@ -266,43 +266,28 @@ export function rangeOptions(opts: {
   }));
 }
 
-/**
- * The `min` a custom date input carries for this surface. Distinct from
- * `earliestRecordableDate` (`input.server.ts`): that is a floor on writes;
- * this is the earliest date *this surface* has — a floor on reads, the same
- * date "All" and the disabled rule measure against.
- */
+// Distinct from earliestRecordableDate (input.server.ts): that's a floor on writes, this a
+// floor on reads — the same date "All" and the disabled rule measure against.
 export function customRangeMin(surface: Surface, earliest: SurfaceEarliest): IsoDate | null {
   return surfaceEarliestDate(surface, earliest);
 }
 
-/** Distinct from `MASKING_COOKIE` so the two cannot be confused in a header. */
 export const RANGE_COOKIE = "chart_range";
 
-/**
- * A year, unconditional — unlike masking's policy-dependent lifetime, this is
- * a convenience with nothing to protect by forgetting itself.
- */
+// A year, unconditional — unlike masking's policy-dependent lifetime, this has nothing to
+// protect by forgetting itself.
 const RANGE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
-/**
- * A fixed preset by its key, or a custom span as both dates — one format, so
- * the reader has exactly one thing to parse.
- */
 export function encodeRangeCookieValue(range: RangeKey, custom?: CustomSpan): string {
   if (range === "custom" && custom) return `custom:${custom.start}:${custom.end}`;
   return range;
 }
 
-/** The `Set-Cookie` value for a browser that just chose (or was defaulted to) a range. */
 export function rangeCookie(value: string): string {
   return `${RANGE_COOKIE}=${encodeURIComponent(value)}; Path=/; SameSite=Lax; Max-Age=${RANGE_COOKIE_MAX_AGE}`;
 }
 
-/**
- * What a stored cookie value decodes to, or null when it names no range this
- * control offers — the `Object.hasOwn` guard's refusal, not a guess.
- */
+// null when the value names no range this control offers, rather than a guess.
 export function decodeRangeCookieValue(
   value: string,
 ): { range: RangeKey; custom?: CustomSpan } | null {
@@ -316,39 +301,20 @@ export function decodeRangeCookieValue(
   return null;
 }
 
-/**
- * What this browser last chose, or undefined. Matched on the whole cookie
- * name through `cookies.ts`'s shared `readCookie` — this file used to
- * hand-roll the same loop a second time, which is exactly the drift that
- * module's header exists to stop — decoding the one thing `readCookie`
- * deliberately leaves alone: the value.
- */
 export function readRangeCookie(request: Request): string | undefined {
   const value = readCookie(request, RANGE_COOKIE);
   return value === undefined ? undefined : decodeURIComponent(value);
 }
 
-/** What a request asked for, and whether it asked explicitly. */
 export interface RequestedRange {
   range: RangeKey;
   custom?: CustomSpan;
-  /**
-   * Whether the URL itself named a range — the one flag a loader needs to
-   * decide whether to write the cookie: an explicit `?range=` wins and is
-   * written back; absent, the cookie; absent both, {@link DEFAULT_RANGE} with
-   * nothing written, so a browser that never chose does not have a choice
-   * invented for it.
-   */
+  // Whether the URL itself named a range — tells a loader whether to write the cookie back.
   explicit: boolean;
 }
 
-/**
- * The one place both routes read `?range=` (and `?start=`/`?end=`) against
- * the cookie, so the precedence — URL, cookie, default — is written once.
- * `Object.hasOwn`, not `in`: `in` walks the prototype chain, and a
- * hand-edited `?range=toString` must fall through rather than match
- * `RANGES.toString`.
- */
+// Precedence URL > cookie > default, written once for both routes. Object.hasOwn, not `in`
+// (which walks the prototype chain): a hand-edited "?range=toString" must not match RANGES.toString.
 export function readChartRange(request: Request): RequestedRange {
   const params = new URL(request.url).searchParams;
   const requested = params.get("range");
@@ -369,61 +335,31 @@ export function readChartRange(request: Request): RequestedRange {
   return { range: DEFAULT_RANGE, explicit: false };
 }
 
-/**
- * The payload block a loader spreads into its return — the same six keys,
- * names and values both routes used to assemble by hand before spec 0015:
- * `custom` still `undefined` off a resolved range that is not custom,
- * `customMax` still the `today` the caller passed in. Every field but those
- * two is derived from a type this file already declares rather than
- * restated by hand: `range` and `custom` from `RangeWindow`, `customMin`
- * from `customRangeMin`'s own return type, and `rangeOptions` from
- * {@link rangeOptions}'s — so none of the four can drift from what actually
- * produces them.
- */
+// The payload block a loader spreads into its return — both routes assembled this by hand
+// before spec 0015. Every field but custom/customMax is derived from a type this file already
+// declares, so none can drift from what actually produces it.
 export type ChartControls = Pick<RangeWindow, "range"> & {
-  /**
-   * Required, not optional — `undefined` off a resolved range that is not
-   * custom is a value this key always carries, never a key a caller can omit
-   * (route tests assert `toBeUndefined()`, not the key's absence).
-   */
+  // Required, not optional: always undefined off a non-custom range, never an omittable key
+  // (route tests assert toBeUndefined()).
   custom: RangeWindow["custom"];
-  /**
-   * Null on every range but 1D, which is how the chart is told which axis it
-   * is drawing (§7). The zone travels in, never read from configuration
-   * here — see {@link chartWindow}.
-   */
+  // Null on every range but 1D — tells the chart which axis it's drawing (§7).
   session: SessionAxis | null;
   rangeOptions: ReturnType<typeof rangeOptions>;
   customMin: ReturnType<typeof customRangeMin>;
   customMax: IsoDate;
 };
 
-/**
- * The window a surface's chart draws, and the control block a loader spreads
- * into its return — composed entirely from what this file already has, so
- * the pipeline downstream of a resolved range has one home rather than two
- * (spec 0015). Pure, like the rest of this module: the market time zone
- * arrives as `opts.timeZone` rather than read off configuration, which is
- * what keeps this file database-free and both loaders spell
- * `getConfig().MARKET_TIMEZONE` already, for `asOfView`.
- *
- * Takes `Surface`, not `ChartScope` (`chart-series.server.ts`): this reads
- * nothing, so it narrows nothing, and a required `reading` here would claim
- * a narrowing that never happens — the signature saying more than the code
- * does, which is worth less than saying nothing. `resolved` is returned
- * rather than folded away because both loaders still need it — the Overview
- * reads `resolved.since` for `netWorthChange` and bounds its hand-typed
- * prefix by it, and `resolved.session` decides whether that prefix is drawn
- * at all.
- */
+// The window a surface's chart draws, plus the control block a loader spreads into its
+// return (spec 0015). Pure: timeZone arrives as an option rather than read off configuration.
+// `resolved` is returned, not folded away, because the Overview loader still needs
+// resolved.since (netWorthChange) and resolved.session (whether its manual prefix is drawn).
 export function chartWindow(
   surface: Surface,
   opts: {
     request: Request;
     today: IsoDate;
     earliest: SurfaceEarliest;
-    /** From `latestObservedSession`. See {@link resolveRange}. */
-    session: IsoDate | null;
+    session: IsoDate | null; // from latestObservedSession; see resolveRange
     timeZone: string;
   },
 ): { resolved: RangeWindow; controls: ChartControls } {
@@ -451,35 +387,18 @@ export function chartWindow(
   };
 }
 
-/**
- * The three parameters this control owns; everything else in the address
- * belongs to the screen and is carried through untouched. Here rather than in
- * the component because these are exactly what {@link readChartRange} reads
- * back, and a vocabulary's read and write sides drift in different files.
- */
+// The three parameters this control owns; kept beside readChartRange so read/write can't drift.
 const RANGE_PARAMS = ["range", "start", "end"];
 
-/**
- * What a preset link and the Custom form have to re-emit — the address
- * stripped of this control's own vocabulary, in the order it already had.
- */
+// The address stripped of this control's own vocabulary, in its existing order.
 export function carriedParams(params: URLSearchParams): [string, string][] {
   return [...params].filter(([name]) => !RANGE_PARAMS.includes(name));
 }
 
-/**
- * The search string a preset points at: the rest of the query plus its own
- * `?range=` — the emit side of {@link readChartRange}, here for
- * `parseQuery`/`toSearch`'s reason. A whole search string, not React Router's
- * relative resolution: a `to` beginning with `?` replaces the *entire* query,
- * which is what silently dropped the `?uploaded=` receipt when a range was
- * picked. `start`/`end` are dropped, not carried — a preset never reads them,
- * and an address advertising a span nothing draws is worse than none.
- *
- * `next` is plain `URLSearchParams` output, unedited: `toOwnerParam`
- * (`owner-filter.ts`) now spells the owner parameter the same way
- * `URLSearchParams` itself would, so nothing here needs un-encoding.
- */
+// Rest of the query plus this preset's own "?range=". A whole search string, not React
+// Router's relative resolution: a `to` starting with "?" replaces the entire query, which
+// silently dropped "?uploaded=" when a range was picked. start/end dropped, not carried —
+// a preset never reads them.
 export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
   const next = new URLSearchParams(carriedParams(params));
   next.set("range", range);
@@ -487,36 +406,19 @@ export function rangeSearch(params: URLSearchParams, range: RangeKey): string {
   return `?${next.toString()}`;
 }
 
-/**
- * Remembers an explicit range choice in the cookie (spec 0008). A middleware,
- * not a header on the loader's return: both routes' tests call their loader
- * directly and read fields off the plain object, and wrapping in
- * `data(value, { headers })` only sometimes would make the result type a
- * union those tests never asked for. A middleware wraps the *response*,
- * leaving each loader one shape always; one factory so the two routes cannot
- * drift the way the range logic used to.
- *
- * What is remembered is the request's own `?range=`, not a database-resolved
- * effective value (spec 0008's wording; a middleware never sees what the
- * loader returned). An explicit but undrawable custom span persists as asked
- * and re-falls-back identically on every read — {@link resolveRange} applies
- * the same rule every time.
- */
+// Remembers an explicit range choice in the cookie (spec 0008). A middleware, not a header
+// on the loader's return, so each loader keeps one plain-object return shape for its tests.
+// Remembers the request's own "?range=", not a database-resolved effective value — a
+// middleware never sees what the loader returned.
 export function chartRangeMiddleware() {
-  // Untyped against react-router's `MiddlewareFunction`, deliberately: it and
-  // the routes' generated `Route.MiddlewareFunction` disagree on `next`'s
-  // return type and are not mutually assignable. Loose typing satisfies both
-  // generated types structurally (the reason `args()` in tests/support casts).
+  // Untyped against react-router's MiddlewareFunction: it and the routes' generated
+  // Route.MiddlewareFunction disagree on next's return type and aren't mutually assignable.
   return async ({ request }: { request: Request }, next: () => Promise<unknown>): Promise<Response> => {
     const response = (await next()) as Response;
     const requested = readChartRange(request);
 
-    // Not onto a redirect: since spec 0013 a loader may bounce to a canonical
-    // address, and a cookie on a response that is not the page is a header
-    // nobody reads. Every redirect lands somewhere this middleware also runs,
-    // so it is written for the page actually drawn. (A client-side navigation
-    // carries a redirect as a single-fetch 202, not a 3xx — harmless: the
-    // followed request writes the same value a moment later.)
+    // Not onto a redirect: a cookie on a response that isn't the page is a header nobody
+    // reads, and every redirect lands somewhere this middleware also runs.
     const redirecting = response.status >= 300 && response.status < 400;
 
     if (requested.explicit && !redirecting) {

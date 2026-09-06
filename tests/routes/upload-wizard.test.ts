@@ -1,18 +1,7 @@
-/**
- * Where a half-finished upload resumes, and where a finished one refuses to
- * land twice (ingest brief §2.1, §6.5, §7.4). The flow is four URLs and no
- * client state, so "how far did this draft get" must be answerable from the
- * row alone; `parseDraft` is that answer, these routes its only readers,
- * and it has no test of its own anywhere — the matrix below is what pins
- * it. Breaking any of this strands a reader rather than writing a wrong
- * number: a bookmarked review over a broken mapping would diff over
- * nothing; a resume guessing "review" would ask the household to confirm a
- * statement no mapping parsed. The one write-shaped risk is the re-POST
- * after a commit — 404, never a second recording, and no forged account id
- * carried to the page that links to it: `accountIdOf` is not exported, so
- * it is pinned at the end that is — what the action throws is what the
- * boundary reads.
- */
+// Where a half-finished upload resumes, and a finished one refuses to land twice (ingest brief §2.1, §6.5, §7.4). Four URLs,
+// no client state — "how far did this draft get" must read entirely off the row (parseDraft), which has no test of its
+// own; the matrix below pins it. Breaking this strands a reader rather than writing a wrong number. The one write-shaped
+// risk is the re-POST after commit: 404, never a second recording, never a forged account id in the link back.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { z } from "zod";
@@ -50,16 +39,8 @@ const AS_OF = "2026-06-30";
 
 type Staged = { draftId: string; accountId: string };
 
-/**
- * A draft that has passed the columns step.
- *
- * `resolved` decides which side of the fork it lands on: with the file's one
- * string already aliased, `rememberMapping` records that this draft raised no
- * first sighting and sends it to review; without, the string is a first
- * sighting and the instruments step is owed. That bit is written once, at this
- * moment, and nothing afterwards can recover it — which is why the fixture has
- * to choose before the mapping is saved rather than after.
- */
+// A draft that has passed the columns step. `resolved` picks the fork: aliased already → rememberMapping sends it straight
+// to review; not aliased → instruments step is owed. Written once at this moment, unrecoverable after — must choose before saving the mapping.
 async function stageDraft(
   ctx: Pick<
     TestContext,
@@ -107,13 +88,7 @@ const expiredPage = z.object({
   data: z.object({ accountId: z.string().nullable() }),
 });
 
-/**
- * The expired-page payload a review re-POST throws.
- *
- * `data()` produces neither a `Response` nor an `Error`, so `outcomeOf` would
- * rethrow it and `responseOf` would never see it. This is the one shape a test
- * has to unwrap for itself.
- */
+// data() throws neither a Response nor an Error, so outcomeOf/responseOf can't unwrap it — this does it directly.
 async function expiredPageOf(run: () => Promise<unknown>) {
   try {
     await run();
@@ -145,8 +120,6 @@ describe("a draft's bare address", () => {
   it(
     "sends a draft that has saved no mapping to the columns step",
     withDatabase(async ({ seedAccount, seedUploadDraft }) => {
-      // The ordinary arrival: the drop screen has just staged the bytes and
-      // redirected here, and nothing has been mapped yet.
       const account = await seedAccount({ kind: "brokerage" });
       const draft = await seedUploadDraft({ account, bytes: encode(CSV) });
 
@@ -159,9 +132,6 @@ describe("a draft's bare address", () => {
   it(
     "sends a mapped draft whose file still names an unknown instrument to the instruments step",
     withDatabase(async (ctx) => {
-      // A laptop closed on the resolution screen and reopened from a bookmark
-      // of the draft itself. The mapping is saved, so columns is behind it —
-      // the unresolved string is what is still owed.
       const { draftId } = await stageDraft(ctx, { resolved: false });
 
       expect(

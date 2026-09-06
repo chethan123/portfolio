@@ -48,15 +48,10 @@ stamp() { date -u +%Y%m%dT%H%M%SZ; }
 # bashism this shell does not have. Strip the zero instead.
 strip0() { v=${1#0}; printf '%s\n' "${v:-0}"; }
 
-# --- inputs -------------------------------------------------------------------
-
-# Everything here fails closed and names the variable, matching .env.example's
-# promise for the application's own settings. DUMP_UID/DUMP_GID are absent on
-# purpose: Compose applies them as the container's identity before this script
-# exists, so a malformed one fails `up` and never reaches us. What we can check
-# is the identity we actually got.
-# Checked on its own, before anything else can refuse: turning dumps off has to
-# work on an instance whose other inputs are wrong, or the switch is no switch.
+# Fails closed and names the variable (.env.example's promise). No
+# DUMP_UID/DUMP_GID here: Compose applies them as container identity before
+# this script runs, so a malformed one fails `up` and never reaches us.
+# Checked alone, first: turning dumps off must work even if other inputs are bad.
 validate_enabled() {
   case "$DUMP_ENABLED" in
     true|false) ;;
@@ -72,9 +67,8 @@ validate() {
   case "$DUMP_KEEP_DAYS" in
     ''|*[!0-9]*) die "DUMP_KEEP_DAYS must be a whole number of days, not '$DUMP_KEEP_DAYS'" ;;
   esac
-  # After stripping, so `00` is caught here rather than becoming a zero-day
-  # window, and `08` is caught here rather than as an invalid-octal arithmetic
-  # error hours later.
+  # After stripping, so `00` and `08` are caught here, not as a zero-day window
+  # or an invalid-octal arithmetic error later.
   [ "$(strip0 "$DUMP_KEEP_DAYS")" -ge 1 ] ||
     die "DUMP_KEEP_DAYS must be at least 1 — 0 would delete the dump just written"
   case "$DUMP_COMPRESS" in
@@ -84,17 +78,13 @@ validate() {
   [ "$(id -u)" != "0" ] ||
     die "refusing to run as root; set DUMP_UID and DUMP_GID to the account that owns $DUMP_DIR"
   [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is required"
-  # The bundled `db` service is the only database this can dump: an operator
-  # running against their own Postgres deletes `db` and this service with it
-  # (docs/operating.md, "Running against your own Postgres"), and a dump of a
-  # server we cannot reason about is worse than none.
+  # Only dumps the bundled `db` service — an operator on their own Postgres
+  # deletes `db` and this service with it (docs/operating.md).
   host=$(printf '%s' "$DATABASE_URL" | sed -n 's|^[a-z+]*://[^@]*@\([^:/?]*\).*|\1|p')
   [ "$host" = "db" ] ||
     die "DATABASE_URL names '$host'; this service only dumps the bundled db service"
-  # `hostaddr` is the destination libpq actually dials, and `host` alongside it
-  # becomes a name for certificate matching — so an authority of `db` with
-  # `?hostaddr=203.0.113.1` would send the bundled credential to a stranger and
-  # dump whatever answered. Refuse the whole class rather than reason about it.
+  # hostaddr is what libpq actually dials — an authority of `db` with
+  # `?hostaddr=203.0.113.1` would send the bundled credential to a stranger.
   case "$DATABASE_URL" in
     *hostaddr=*|*"?host="*|*"&host="*)
       die "DATABASE_URL carries a host or hostaddr parameter, which decides the connection independently of the URL's own host" ;;
@@ -103,11 +93,7 @@ validate() {
   [ -w "$DUMP_DIR" ] || die "$DUMP_DIR is not writable as $(id -u):$(id -g)"
 }
 
-# --- markers ------------------------------------------------------------------
-#
-# Written by us, read by us and by whatever collects the directory. Hand-rolled
-# JSON because the image has no jq and these are four flat fields.
-
+# Hand-rolled JSON: the image has no jq and these are four flat fields.
 marker() { printf '%s/%s' "$DUMP_DIR" "$1"; }
 
 # A field out of one of our own markers; empty when absent.
@@ -132,12 +118,8 @@ write_error() {
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" > "$(marker last-error.json)"
 }
 
-# --- retention ----------------------------------------------------------------
-#
-# Anchored on the name this service writes, so a hand-taken
-# `portfolio-2026-08-31.dump` parked in the same directory is not ours to
-# delete. Age comes from the name rather than mtime: copying a directory resets
-# mtimes and would silently re-age the archive.
+# Matches only this service's own stamp format, so a hand-taken dump parked
+# in the same directory is never ours to delete.
 is_ours() {
   case "$1" in
     portfolio-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.dump) return 0 ;;
@@ -145,9 +127,8 @@ is_ours() {
   esac
 }
 
-# The name's stamp as epoch seconds. Spelled out into the one form busybox
-# `date -d` actually parses; it rejects both the compact stamp and anything
-# relative.
+# Age from the name, not mtime — copying a directory resets mtimes and would
+# silently re-age the archive. Spelled into the one form busybox `date -d` parses.
 name_epoch() {
   s=${1#portfolio-}
   s=${s%.dump}
@@ -185,37 +166,30 @@ prune() {
   done
 }
 
-# --- verification -------------------------------------------------------------
-#
-# `pg_restore --list` reads a table of contents written at the FRONT of a
-# custom archive, so a dump truncated at five percent lists every object and
-# exits 0. Decoding to /dev/null reads every data block instead, needs no
-# server, and fails on a short read.
+# `pg_restore --list` reads only the table of contents at the front of a
+# custom archive — a dump truncated at 5% still lists everything and exits 0.
+# Decoding to /dev/null reads every data block instead.
 verify() {
   pg_restore -f /dev/null "$1" >/dev/null 2>&1
 }
-
-# --- one run ------------------------------------------------------------------
 
 db_query() { psql -d "$DATABASE_URL" -At -q -c "$1"; }
 
 free_bytes() { df -P "$DUMP_DIR" | awk 'NR==2 {print $4 * 1024}'; }
 
-# Bounded from the database rather than from the last archive: a first run has
-# no predecessor and a grown database outruns one. Twice its size because an
-# uncompressed dump is larger than the pages it came from — jsonb payloads are
-# TOAST-compressed in storage and expand on the way out.
+# Bounded from the database, not the last archive (a first run has no
+# predecessor). Twice the size: an uncompressed dump exceeds its source pages
+# since TOAST-compressed jsonb expands on the way out.
 room_for_dump() {
   size=$(db_query "select pg_database_size(current_database())") || size=""
-  # Not a space refusal: say so, or the ladder below would read a stale
-  # `stage=space` marker and skip every retry for a database that was merely
-  # unreachable for a minute.
+  # Distinct from a space refusal, or a stale `stage=space` marker would skip
+  # every retry for a database merely unreachable for a minute.
   if [ -z "$size" ]; then
     fail_run "database" "could not read the database size"
     return 1
   fi
-  # 2 below, 1 here: the two failures want different answers, and the caller
-  # must not have to re-read a marker file to tell them apart.
+  # Distinct exit code from the space refusal below (2), so the caller can
+  # tell them apart without re-reading a marker file.
   need=$(( size * 2 + FLOOR_BYTES ))
   have=$(free_bytes)
   [ "$have" -ge "$need" ] && return 0
@@ -235,10 +209,8 @@ too_small() {
   [ "$(( $1 * 2 ))" -lt "$prev_bytes" ]
 }
 
-# `set -e` does not apply inside a function invoked as the left operand of `||`,
-# which is exactly how the loop calls run_once — so every step below is checked
-# by hand. Without that, a failed `mv` would fall through to the success marker
-# and certify a dump that is not there.
+# `set -e` doesn't apply inside a function called as `||`'s left operand
+# (exactly how the loop calls run_once) — so every step below is checked by hand.
 fail_run() {
   log "$2"
   write_error "$1" "$2"
@@ -272,9 +244,8 @@ run_once() {
     rm -f "$part"; return 1
   fi
 
-  # A rename within one filesystem, which is why the staging file lives here
-  # and not on a tmpfs: a cross-device `mv` is a copy, and a collector reading
-  # this directory would see a half-written archive.
+  # Staging file lives here, not on a tmpfs, so this mv stays within one
+  # filesystem — a cross-device mv is a copy, exposing a half-written archive.
   mv "$part" "$final" || { fail_run "publish" "could not rename the archive into place"; rm -f "$part"; return 1; }
 
   sha=$(sha256sum "$final" | cut -d' ' -f1) || sha=""

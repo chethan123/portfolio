@@ -92,8 +92,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     return redirect(`/upload/${draft.id}/review`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
-      // module the client bundle must not drag in.
+      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       return { errors: fieldErrors, formError: formError ?? null, values };
     }
@@ -106,8 +105,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
   const { screen, nameColumn, newClassification } = loaderData;
 
   const errors = actionData?.errors;
-  // What was typed wins over every default on a refusal — a refusal must
-  // never cost an edit; `actionData` present means a refused submit.
+  // Typed wins over default on a refusal; `actionData` present means a refused submit.
   const values = actionData?.values;
 
   const fieldError = (name: string) =>
@@ -123,8 +121,6 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
   return (
     <section className="panel">
       <div className="panel-body form-intro">
-        {/* The count, stated plainly, then the one sentence of consequence:
-            this step is the flow's one early write. */}
         <p>
           <span className="u-data">{screen.unresolved.length}</span> of{" "}
           <span className="u-data">{screen.totalPositions}</span>{" "}
@@ -143,22 +139,16 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
         ) : null}
       </div>
 
-      {/* One form, one submit, no skip: a skipped string would be a holding
-          silently missing from the statement, and §5.2's "a missing row means
-          sold" turns that silence into a sale. */}
+      {/* No skip: a skipped string would go missing from the statement, and §5.2 reads a missing row as sold. */}
       <Form method="post">
         {screen.unresolved.map((item, index) => {
           const kind = values?.[`kind-${index}`];
 
           return (
             <div className="resolve-item" key={item.raw}>
-              {/* The raw string rides back with the answers, pairing them to
-                  this string however the unresolved list moves underneath. */}
               <input type="hidden" name={`raw-${index}`} value={item.raw} />
 
-              {/* Exactly as the file wrote it — the byte-exact string is the
-                  thing being resolved, and prettifying it would show something
-                  other than what the alias table will store. */}
+              {/* Byte-exact, as the file wrote it — prettifying would show something other than what the alias table stores. */}
               <h3 className="resolve-raw">{item.raw}</h3>
               <p className="cell-sub">
                 {item.name !== null && nameColumn !== null ? (
@@ -174,10 +164,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
 
               {fieldError(`kind-${index}`)}
 
-              {/* Both branches always render their controls: greying the
-                  unchosen one needs JavaScript, and a reader deciding needs
-                  to see what each asks. The unchosen branch's fields are
-                  ignored on submit. */}
+              {/* Both branches always render — greying the unchosen one needs JavaScript; its fields are ignored on submit. */}
               <label className="choice">
                 <input
                   type="radio"
@@ -244,9 +231,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     <input
                       id={`name-${index}`}
                       name={`name-${index}`}
-                      // Prefilled because the statement usually already says
-                      // it: the mapped name column's value, or the raw string
-                      // when no name column is mapped.
+                      // Prefilled from the mapped name column, or the raw string when none is mapped.
                       defaultValue={
                         values !== undefined
                           ? (values[`name-${index}`] ?? "")
@@ -307,9 +292,6 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                   {fieldError(`classificationId-${index}`)}
                 </div>
 
-                {/* Always rendered, like every conditionally relevant control
-                    in this flow: a reveal needs JavaScript, and the note costs
-                    one line. */}
                 <div>
                   <label htmlFor={`newClassificationName-${index}`}>
                     New classification

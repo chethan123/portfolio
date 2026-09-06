@@ -1,15 +1,8 @@
-/**
- * The rules `holding_valued` exists to keep every consumer agreeing on.
- *
- * Everything here is driven through the query module's public functions against
- * a real Postgres, seeded through the fixture builder. Nothing asserts on
- * generated SQL, on which joins the view uses, or on an index existing — those
- * are implementation and would fail on a harmless refactor.
- *
- * Every money assertion is an exact decimal string at the stored scale.
- * `toBeCloseTo` would hide precisely the driver-coercion regression this slice
- * was built to prevent.
- */
+// Rules holding_valued exists to keep every consumer agreeing on. Driven through the query
+// module's public functions against real Postgres. Nothing asserts on generated SQL, joins,
+// or index existence — implementation, would fail on a harmless refactor. Money assertions
+// are exact decimal strings at stored scale — toBeCloseTo would hide the driver-coercion
+// regression this slice prevents.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { currentHoldings, netWorth } from "~/lib/valuation.server";
@@ -42,8 +35,7 @@ describe("the valuation rule", () => {
         asOf: "2026-01-31",
         holdings: [{ instrument: usd, quantity: "12500.00000000" }],
       });
-      // The sign lives in quantity, against a positive price. There is no
-      // liability branch anywhere for this to travel down.
+      // Sign lives in quantity, against a positive price — no liability branch anywhere.
       await seedPositionSet({
         account: loan,
         asOf: "2026-01-31",
@@ -108,8 +100,7 @@ describe("the valuation rule", () => {
           unrealized: "5000.0000",
           isPriced: true,
           isStale: false,
-          // No rate on the quote, so the figure is a zero and not a null: the
-          // view's coalesce is the whole definition of it.
+          // No rate on the quote — zero, not null; view's coalesce is the whole definition.
           annualDividend: "0.0000",
         },
       ]);
@@ -122,10 +113,8 @@ describe("the valuation rule", () => {
       const owner = await seedPerson({ name: "Alice" });
       const usd = await usdInstrument();
 
-      // The number is not a view column — the reader joins `account` for it
-      // (ADR-0001) — so it needs its own assertion rather than inheriting the
-      // full-shape one above. What arrives is the tail, never the raw number:
-      // these rows are loader data, and loader data reaches the browser.
+      // Not a view column — reader joins account for it (ADR-0001), so it needs its own
+      // assertion. Tail arrives, never the raw number — this row is loader data, reaches the browser.
       const numbered = await seedAccount({
         name: "Fidelity Taxable",
         owner,
@@ -200,8 +189,7 @@ describe("which position set counts as current", () => {
         asOf: "2026-02-28",
         holdings: [{ instrument: usd, quantity: "250.00000000" }],
       });
-      // January's statement, found in a drawer and uploaded after February's.
-      // It is a later insert with a higher id, and it must lose.
+      // January's statement uploaded after February's — higher id, later insert, must still lose.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -225,8 +213,7 @@ describe("which position set counts as current", () => {
         asOf: "2026-01-31",
         holdings: [{ instrument: usd, quantity: "100.00000000" }],
       });
-      // The same statement re-uploaded after a mis-mapped column was fixed.
-      // Without a tie-break this is a coin flip; with one it is the correction.
+      // Same statement re-uploaded after a mis-mapped column fix — tie-break picks the correction.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -299,8 +286,7 @@ describe("partial data, told honestly", () => {
     "still shows a holding whose instrument has never been quoted, flagged unpriced",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
       const account = await seedAccount();
-      // A collective investment trust in a workplace plan: no public symbol, no
-      // quote on any retail API.
+      // Workplace-plan trust: no public symbol, no quote on any retail API.
       const trust = await seedInstrument({
         symbol: null,
         name: "Vanguard Target Retirement 2045 Trust II",
@@ -315,8 +301,8 @@ describe("partial data, told honestly", () => {
 
       const [holding] = await currentHoldings(ALL_OWNERS, db);
 
-      // The row is here rather than dropped: an inner join to `quote` would
-      // make it vanish and understate every total with no error anywhere.
+      // Row stays, not dropped — an inner join to quote would vanish it and understate
+      // every total silently.
       expect(holding).toMatchObject({
         instrumentName: "Vanguard Target Retirement 2045 Trust II",
         symbol: null,
@@ -349,9 +335,7 @@ describe("partial data, told honestly", () => {
         ],
       });
 
-      // 2,500 + 500, and the unpriced holding contributes nothing — but the
-      // count says so, so a screen can label "based on 2 of 3 holdings" rather
-      // than implying the total is complete.
+      // 2,500 + 500; unpriced holding contributes nothing but the count says so — "2 of 3 holdings".
       expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "3000.0000",
         coverage: { known: 2, total: 3 },
@@ -430,9 +414,7 @@ describe("what a holding is projected to pay", () => {
       const fund = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity ETF" });
       await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
 
-      // A dividend-reinvested holding against a rate carrying four decimals:
-      // scale 8 by scale 4, so the product is at scale 12 before the view's one
-      // cast brings it back to money.
+      // Scale 8 × scale 4 = scale 12 before the view's one cast brings it back to money scale.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -441,9 +423,8 @@ describe("what a holding is projected to pay", () => {
 
       const [holding] = await currentHoldings(ALL_OWNERS, db);
 
-      // 10.5 × 3.6000, exact and at the stored scale. `toBeCloseTo` would pass
-      // just as happily on a figure that had been through a double, which is
-      // the coercion this whole seam exists to keep out.
+      // 10.5 × 3.6000 exact at stored scale — toBeCloseTo would pass just as happily
+      // post-double-coercion.
       expect(holding).toMatchObject({ quantity: "10.50000000", annualDividend: "37.8000" });
     }),
   );
@@ -480,10 +461,9 @@ describe("what a holding is projected to pay", () => {
         ]),
       );
 
-      // Three unlike things arriving as one null, and deliberately flattened to
-      // one figure. Only the growth ETF genuinely pays nothing; the rule that
-      // says so about all three is why the total is a lower bound and why both
-      // screens have to label it one (DESIGN.md §14, limitation 9).
+      // Three unlike absences flattened to one zero — only the growth ETF genuinely pays
+      // nothing, which is why the total is a lower bound both screens must label as one
+      // (DESIGN.md §14, #9).
       expect(dividends).toEqual({
         "A growth ETF": "0.0000",
         "A workplace-plan trust": "0.0000",
@@ -496,9 +476,8 @@ describe("what a holding is projected to pay", () => {
     "reports a negative dividend for a negative quantity, so interest owed is not income",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
       const loan = await seedAccount({ name: "Margin loan", kind: "liability" });
-      // Nothing carries a rate against a negative position today. The rule has
-      // to hold before something does: the sign lives in quantity and there is
-      // no branch anywhere between it and this figure.
+      // Nothing carries a rate against a negative position today — rule must hold before
+      // something does; sign lives in quantity, no branch to this figure.
       const note = await seedInstrument({ symbol: "NOTE", name: "A note carrying a rate" });
       await seedQuote({ instrument: note, price: "100.0000", annualDividendPerShare: "5.0000" });
 
@@ -538,10 +517,8 @@ describe("what a holding is projected to pay", () => {
         holdings: [{ instrument: fund, quantity: "4.00000000" }],
       });
 
-      // Three holdings in, three rows out. `quote.instrument_id` is the primary
-      // key, so the left join the dividend is computed over stays one row per
-      // holding — a second quote row for one instrument would double the
-      // dividend-paying rows and silently double every total taken over them.
+      // Three in, three out — quote.instrument_id is the primary key, so the left join
+      // stays one row per holding; a second quote row would silently double every total.
       expect(await currentHoldings(ALL_OWNERS, db)).toHaveLength(3);
     }),
   );
@@ -580,8 +557,7 @@ describe("money crossing the database boundary", () => {
       const fund = await seedInstrument({ symbol: "VTI" });
       await seedQuote({ instrument: fund, price: "1000.0000" });
 
-      // Deliberately far past any real household balance: the figure needs more
-      // significant digits than a double carries for the guard to be visible.
+      // Far past any real balance — needs more significant digits than a double carries.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -591,8 +567,7 @@ describe("money crossing the database boundary", () => {
       const { amount } = await netWorth(ALL_OWNERS, db);
 
       expect(amount).toBe("1234567890123.4567");
-      // Proof the guarantee is load-bearing rather than decorative: the same
-      // figure through a JavaScript number is a different number.
+      // Proves the guarantee is load-bearing — the same figure through a JS number is different.
       expect(String(Number(amount))).not.toBe(amount);
     }),
   );
