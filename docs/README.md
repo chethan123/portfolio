@@ -116,8 +116,9 @@ one resolved term and one hard decision at a time, which is the intended pace.
   [`adr/0005`](adr/0005-auth-is-a-forward-auth-gate.md), [`adr/0009`](adr/0009-the-stack-takes-dumps-not-backups.md)
   and [`adr/0012`](adr/0012-a-browser-past-the-gate-is-shown-nothing.md). **`compose.yaml` is the
   one to believe** for anything about networks, published ports or container privilege — it enforces
-  them — and the audit under [`research/`](research/) is the one to believe for which weaknesses are
-  still open. Its closing "what you carry" list names operator actions `operating.md` already
+  them — and **`security.md`'s own "What this does not protect against" is the one to believe** for
+  which weaknesses are still open, the audit under [`research/`](research/) being a snapshot against
+  one commit, kept for the longer argument behind several of them. Its closing "what you carry" list names operator actions `operating.md` already
   documents — pinning the image and terminating TLS among them — because someone still deciding
   has not read that file yet; **`operating.md`'s "Upgrading" and "Reverse proxy and TLS" are the
   ones to believe** for how each is actually done. `security.md` links for every reason rather

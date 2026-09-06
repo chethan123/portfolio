@@ -82,9 +82,13 @@ jobs:
       # is the last place to execute the third-party code it is checking.
       - run: npm ci --ignore-scripts
 
-      # The only check that notices a pinned name+version republished with
-      # different contents. Everything in the lockfile is registry-signed
-      # today, so a gap here is a finding, not noise.
+      # `npm ci` above already refuses a tarball that does not match the
+      # lockfile's own SHA-512. This checks the other thing: the registry's
+      # signature over each name+version+hash, which is what a lockfile
+      # cannot attest — it only guarantees you keep getting the bytes it
+      # recorded, not that those were the bytes the registry published.
+      # Everything in the lockfile is registry-signed today, so a gap here
+      # is a finding, not noise.
       - name: Verify registry signatures
         run: npm audit signatures
 

@@ -14,14 +14,17 @@ Three claims shape the design. Each holds with exceptions, and the exceptions ar
 
 - **The containers holding your money data have no route to the internet.**
 - **The container that talks to the internet holds no database credential and cannot reach the database.**
-- **A browser that has gone idle is refused every screen until a passkey is checked.**
+- **Once the household has enrolled a passkey, a browser that has gone idle is refused every
+  screen until one is checked.** Before that, there is nothing to check and nothing is refused.
 
 Where this page and [`../compose.yaml`](../compose.yaml) disagree, believe `compose.yaml` — it
 enforces most of what follows, and its comments carry the reasoning.
 
 ## 1. What leaves the box
 
-Two things, to two companies, and neither of them is a number you care about.
+Two things while it runs, to two companies, and neither is a number you care about. Deploying
+adds one more kind of contact: the image registries learn when you pull. Nothing in either group is
+a figure.
 
 ```mermaid
 graph TB
@@ -55,8 +58,10 @@ graph TB
   filled, a date a week before the earliest you have held it.
 - **Nothing else.** No analytics, no error reporting, no CDN, no third-party script of any kind in
   the page — and no web font from anyone else's server: the one typeface is a file this box serves
-  itself. The service worker stores nothing on the device, so there is no cached copy of your
-  figures on the phone either.
+  itself. The service worker stores nothing on the device — no Cache Storage, no IndexedDB. That is
+  not the same as nothing being kept: every response carries `no-store`, but Chrome admits such a
+  page to its back/forward cache anyway for about three minutes, so a page already drawn can come
+  back on a swipe. §7 has the limit in full.
 - **Starting the stack contacts the image registries** — `ghcr.io`, Docker Hub, `quay.io`. The app's
   three containers are set to pull on every `docker compose up`, so those registries learn when you
   deploy, and nothing else.
@@ -65,19 +70,19 @@ graph TB
 
 | If this happens | What stops it | What still gets through |
 |---|---|---|
-| A device on your LAN dials the box | The **gate** — Google sign-in plus an address allowlist, enforced by this stack's own Caddy | `/healthz`, the one path that reaches the app without a check — it reports whether the database is reachable and the schema current, and names pending migration files when it is not. `/oauth2/*` goes past the check too, but only ever to the gate's own sign-in endpoints |
+| A device on your LAN dials the box | The **gate** — Google sign-in plus an address allowlist, enforced by this stack's own Caddy | `/healthz`, the one path that reaches the app without a check. It answers 200 only when the database is reachable and every migration is recorded, and names the pending files when it is not — with one weaker reading: if the migration ledger itself cannot be read, the answer is a 503 whose body still says `migrations: "current"`. Believe the status code over that field. `/oauth2/*` goes past the check too, but only ever to the gate's own sign-in endpoints |
 | Someone picks up a family phone that is already signed in | The **lock** — every screen refused until a passkey is checked | Pages already drawn stay drawn until that tab next asks the server for something |
 | A poisoned release of the market-data package | It runs in `worker`: no database credential, no shared network with `app` or `db`, one route out | It still sees the tickers — pricing them is its job. And it is in the app image too; see §5 |
-| A poisoned dependency inside the app itself | `app` sits on two internal networks with no default route; read-only root filesystem, every capability dropped | An application-layer relay out through `caddy` to `gate` — §4 |
+| A poisoned dependency inside the app itself | `app` sits on two internal networks with no default route; read-only root filesystem, every capability dropped | Everything. `app` holds the database credential, so it reads every figure — and although it has no route out of its own, it answers your browser through `caddy`, and no CSP constrains what that page may load or where it may post. **The browser is the way out.** The narrower relay through `caddy` to `gate` is §4's |
 | Someone gets the disk, a dump, or the database volume | Nothing | Everything. Data is plaintext at rest, by decision — §8 |
 | A script injected into a page | Nothing at the header layer | No CSP, HSTS, frame protection or `nosniff` is set anywhere — §7 |
 
 ## 3. The lock
 
 The gate decides which *person* may reach the instance. The lock decides which *browser* may read it
-once admitted. It exists because the gate holds its answer for seven days without rolling —
-oauth2-proxy's own default, which `compose.yaml` deliberately does not override — and there is no
-working sign-out. Without the lock, an unlocked family phone in someone else's hands is a week of
+once admitted. It exists because the gate holds its answer for seven days without rolling — the
+default in oauth2-proxy v7.15.4, the version this stack pins, which `compose.yaml` deliberately does
+not override — and there is no working sign-out. Without the lock, an unlocked family phone in someone else's hands is a week of
 unchallenged access.
 
 ```mermaid
@@ -92,6 +97,9 @@ stateDiagram-v2
     Unlocked --> Locked: that passkey removed
 ```
 
+- **A household with no passkey enrolled is not locked at all.** The lock's question is whether any
+  passkey exists, so until the first one is enrolled every request passes straight through. On a
+  fresh instance the gate is the only check there is.
 - The refusal happens before any page code runs. A locked browser is not shown a blanked page — the
   query that would have fetched your holdings is never made.
 - Unlocking writes a row in the database, the **grant**. Your browser gets a cookie holding nothing
@@ -145,7 +153,7 @@ graph TB
         worker["<b>worker</b><br/>asks Yahoo<br/>for prices"]
     end
 
-    subgraph out["Has a route out — holds no data"]
+    subgraph out["Has a route out — stores nothing"]
         caddy["<b>caddy</b><br/>the only<br/>published port"]
         gate["<b>gate</b><br/>Google sign-in<br/>+ allowlist"]
         proxy["<b>egress-proxy</b><br/>five hostnames"]
@@ -175,6 +183,11 @@ graph TB
 - **Only `caddy` publishes a port**, so no address on your LAN reaches `app` without passing the
   gate. `app` holds the database credential and `db` holds every byte of state; neither has a route
   out.
+- **`caddy` stores nothing, and reads everything.** It terminates plain HTTP in both directions, so
+  every rendered page of figures and both cookies pass through it in the clear — and it sits on
+  `ingress`, a plain bridge with a default route. A compromised `caddy` cannot reach the database,
+  but it can copy what is already on its way to a browser and send it out. "Stores nothing" in the
+  diagram means exactly that, and not that it sees nothing.
 - **`db` is reachable only from `app` and `dump`**, with no published port. Its password has no
   default; the stack refuses to start without one.
 - **`worker` shares no network with `app`, `gate` or `db`** — not a rule about what it may do, but no
@@ -219,8 +232,11 @@ of this page.
 assumes it will eventually be what goes wrong, and is built so that it survives.
 
 It runs in `worker`. What makes that safe is not the image but what the process is denied: no
-`DATABASE_URL` and no `PGPASSWORD` in its environment, no database client in its code at all, a
-capped process count and memory, a read-only root filesystem, and one route out.
+`DATABASE_URL` and no `PGPASSWORD` in its environment, no network any database is on, a capped
+process count and memory, a read-only root filesystem, and one route out. Not the absence of a
+database client — `pg` and the app's own pool module ride in the image like everything else, and
+only the entrypoint's import graph leaves them unloaded. What makes them useless is that `worker`
+sits alone with `egress-proxy`, shares no network with `db`, and holds no password to offer it.
 
 **The honest limit of that.** `app`, `worker` and `egress-proxy` are one image started three ways, so
 the package's files are physically present in the app container too. What keeps it out of your
@@ -272,11 +288,17 @@ learns.
 
 - `package-lock.json` is committed and every install path uses `npm ci`, so builds resolve to the
   exact versions and integrity hashes recorded, never to whatever the registry offers today.
-- CI runs `npm audit signatures` — the only check that notices a pinned name and version being
-  republished with different contents — and blocks on `npm audit --omit=dev --audit-level=high`.
-- CI **fails the build if any production package gains an install script, or an `os`/`cpu`
-  constraint**, and the image publish depends on that job. The production tree is held to pure
-  JavaScript with no install-time step, which removes the most common way a poisoned package runs.
+- `npm ci` fails when a tarball does not match the SHA-512 hash `package-lock.json` records for it,
+  so a pinned name and version republished with different contents is refused on every install path,
+  the image build included. CI adds `npm audit signatures`, which verifies the registry's own
+  signature over each package's name, version and hash — the thing a lockfile cannot do for you,
+  since a lockfile only guarantees you keep getting the bytes it recorded, whether or not those were
+  the bytes the registry published. CI also blocks on `npm audit --omit=dev --audit-level=high`.
+- CI **fails the build if any production entry in the lockfile declares `hasInstallScript`, `os` or
+  `cpu`**, and the image publish depends on that job. It removes the most common way a poisoned
+  package runs. It is a check on what the lockfile *declares*, not on what a tarball holds: a package
+  shipping a prebuilt native addon or a WASM blob and loading it at import time declares none of the
+  three and passes.
 - The release image prunes the dev tree and unreachable runtime dependencies, and deletes the
   TypeScript compiler.
 - The container hardening and the worker's quarantine, in §4 and §5.
@@ -317,9 +339,11 @@ learns.
 - **A passkey check does not prove someone was just there.** A device whose passkeys are already
   unlocked may answer without prompting anyone. That raises the cost of a borrowed phone; it does not
   close it.
-- **A household with exactly one passkey cannot recover a lost device by itself** — removing a
-  passkey requires checking one, and the only one that will do is on the missing device. That falls
-  back to you, at a shell. **Enrol a second passkey.**
+- **A household whose only passkey becomes unreachable cannot recover by itself** — removing a
+  passkey needs a check from a reachable one, and the only one that will do is the one that is gone.
+  That falls back to you, at a shell. A synced passkey may outlive the phone it was enrolled on: the
+  stack records whether each is backup-eligible and hands its transports back so a browser can offer
+  the cross-device flow. Do not plan on it. **Enrol a second passkey.**
 - **The documented external-Postgres path never requires TLS** to the database.
 - **This is not safe to publish on the open internet as it stands.** It is built for a box behind
   your own proxy, on your own network.
@@ -344,7 +368,11 @@ The stack cannot do these for you.
 6. **Keep the address allowlist short.** It is the whole of who may enter; there is no second check
    behind it.
 
-`operating.md`'s "Upgrading" and "Reverse proxy and TLS" sections say how each of these is done.
+[`operating.md`](operating.md) covers three of these and points somewhere useful for a fourth:
+"Reverse proxy and TLS" for terminating it yourself, its allowlist section for who may enter, and
+its recovery section for why the second passkey matters. The rest are genuinely yours — there is no
+disk-encryption procedure there, "Backups" says nothing about encrypting a dump or moving it off the
+host, and "Upgrading" documents the floating `APP_VERSION` tag rather than pinning to a digest.
 
 ## 9. Checking this yourself
 
@@ -356,11 +384,13 @@ docker version --format '{{.Server.Version}}'   # 28.0+, or §4's stronger half 
 # The worker holds no database credential — expect no output at all.
 docker compose exec worker env | grep -E 'DATABASE_URL|PGPASSWORD'
 
-# The app has no route out — expect a DNS or connect failure, not a page.
-docker compose exec app node -e "fetch('https://example.com').then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.cause?.message??e.message))"
+# The app has no route out — expect a refusal, not a page. The abort budget is
+# load-bearing: a SYN into a route that does not exist can hang far longer than
+# a DNS failure does.
+docker compose exec app node -e "fetch('https://example.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.cause?.message??e.message))"
 
 # The worker's route out is the allowlist only — expect a refusal for anything but Yahoo.
-docker compose exec worker node -e "fetch('https://example.com').then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.cause?.message??e.message))"
+docker compose exec worker node -e "fetch('https://example.com',{signal:AbortSignal.timeout(5000)}).then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.cause?.message??e.message))"
 
 # Only one published port in the whole stack: exactly one row shows a host
 # mapping (`->`). Bare entries like `3000/tcp` are ports nothing publishes.
