@@ -67,12 +67,24 @@ const { LOCK_COOKIE, verifyUnlock } = await import("~/lib/lock.server");
 const { RETURN_PARAM } = await import("~/lib/lock");
 
 /**
- * Every phase there is. `satisfies` is the point of it: a sixth member of
- * `Phase` becomes a type error here rather than a silent hole in the
- * exhaustive lists below — which is how `"verifying"` slipped past four of
- * them when it was added.
+ * Every phase there is, and the type is made to say so. A sixth member of
+ * `Phase` is a compile error here rather than a silent hole in the exhaustive
+ * lists below — which is how `"verifying"` slipped past four of them when it
+ * was added.
+ *
+ * Written through `Record<Phase, 0>` rather than the obvious
+ * `[...] as const satisfies readonly Phase[]`, which does not do this: that
+ * form only asks whether each element *is* a `Phase`, so it catches a typo or
+ * a member removed and never one added. It was tried first, and it passed
+ * against a deliberately widened union.
  */
-const PHASES = ["idle", "confirming", "verifying", "dismissed", "failed"] as const satisfies readonly Phase[];
+const PHASES = Object.keys({
+  idle: 0,
+  confirming: 0,
+  verifying: 0,
+  dismissed: 0,
+  failed: 0,
+} satisfies Record<Phase, 0>) as Phase[];
 
 /** Every phase but the ones named — for the lists that are "all except". */
 function everyPhaseExcept(...except: readonly Phase[]): { phase: Phase }[] {
@@ -472,7 +484,10 @@ describe("what the screen renders", () => {
       // first appears already holding its text is one assistive technology
       // commonly declines to announce, which would make every message here
       // silent for the reader with the most need of it.
-      expect(markup).toContain('role="status"');
+      // The pairing, not just the roles: the status region is the note
+      // paragraph itself, so moving a sentence out of it is a failure here
+      // rather than a silent loss of the announcement.
+      expect(markup).toContain('<p class="field-note" role="status">');
       expect(markup).toContain('role="alert"');
       expect(markup).not.toContain("did not complete");
     }),
@@ -745,6 +760,25 @@ describe("LockMark — the padlock opens on a passed check, never on a press", (
 });
 
 describe("runCeremony", () => {
+  /**
+   * Stands in for React's `startTransition` in the tests that are not about
+   * scheduling: runs the update immediately, which is what the real one does
+   * with its scope too — the lane it assigns is invisible from here.
+   */
+  const runTransition = (update: () => void) => update();
+
+  /** The same, but remembering what it was handed and in what order. */
+  function recordingTransition() {
+    const scheduled: (() => void)[] = [];
+    return {
+      scheduled,
+      scheduleAsTransition: (update: () => void) => {
+        scheduled.push(update);
+        update();
+      },
+    };
+  }
+
   const FAKE_OPTIONS = { challenge: "fixture-challenge" } as Parameters<typeof requestAssertion>[0];
 
   afterEach(() => {
@@ -761,7 +795,7 @@ describe("runCeremony", () => {
       const setClientMessage = vi.fn();
       const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/holdings", submit as never, setPhase, setClientMessage, revalidate);
+      await runCeremony(FAKE_OPTIONS, "/holdings", submit as never, setPhase, setClientMessage, revalidate, runTransition);
 
       expect(submit).toHaveBeenCalledWith(
         { assertion: JSON.stringify(response), redirectTo: "/holdings" },
@@ -790,10 +824,71 @@ describe("runCeremony", () => {
         return Promise.resolve(undefined);
       });
 
-      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, vi.fn(), vi.fn());
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, vi.fn(), vi.fn(), runTransition);
 
       expect(submit).toHaveBeenCalledOnce();
       expect(setPhase.mock.calls).toEqual([["verifying"], ["idle"]]);
+    },
+  );
+
+  it(
+    // Without this the repair is untestable and therefore undefended:
+    // `startTransition` runs its scope synchronously, so deleting the wrapper
+    // changes no assertion anywhere else in this file — while restoring, in a
+    // real browser, the committed frame of a shut padlock that the wrapper
+    // exists to remove.
+    "schedules the return to idle as a transition, so it cannot commit ahead of the redirect",
+    async () => {
+      vi.mocked(requestAssertion).mockResolvedValue({
+        status: "ok",
+        response: assertionResponse("fixture-challenge"),
+      });
+      const { scheduled, scheduleAsTransition } = recordingTransition();
+      const setPhase = vi.fn();
+
+      await runCeremony(
+        FAKE_OPTIONS,
+        "/",
+        vi.fn().mockResolvedValue(undefined) as never,
+        setPhase,
+        vi.fn(),
+        vi.fn(),
+        scheduleAsTransition,
+      );
+
+      expect(scheduled).toHaveLength(1);
+      // "verifying" is set outright — it has no router update to ride with —
+      // and only the reset is scheduled.
+      expect(setPhase.mock.calls).toEqual([["verifying"], ["idle"]]);
+    },
+  );
+
+  it.for([
+    { status: "dismissed", phase: "dismissed" },
+    { status: "failed", phase: "failed" },
+  ] as const)(
+    // The same defect on the branch that stays on this screen: settling the
+    // phase urgently commits a frame in which the button is live again, beside
+    // a note asking for a press, before the revalidation disables it.
+    "settles a $status outcome as a transition, and schedules it before starting the refresh",
+    async ({ status, phase }) => {
+      vi.mocked(requestAssertion).mockResolvedValue(
+        status === "dismissed" ? { status } : { status, message: "No authenticator found." },
+      );
+      const { scheduled, scheduleAsTransition } = recordingTransition();
+      const setPhase = vi.fn();
+      const revalidate = vi.fn().mockImplementation(() => {
+        // Scheduling has to have happened already: React resets the event's
+        // transition lane in a microtask, so an update queued after the
+        // router's own would land in a second batch and a second commit.
+        expect(scheduled).toHaveLength(1);
+        expect(setPhase).toHaveBeenCalledWith(phase);
+      });
+
+      await runCeremony(FAKE_OPTIONS, "/", vi.fn() as never, setPhase, vi.fn(), revalidate, scheduleAsTransition);
+
+      expect(revalidate).toHaveBeenCalledOnce();
+      expect(scheduled).toHaveLength(1);
     },
   );
 
@@ -813,7 +908,7 @@ describe("runCeremony", () => {
       const setClientMessage = vi.fn();
       const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate);
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate, runTransition);
 
       expect(submit).not.toHaveBeenCalled();
       expect(setPhase).toHaveBeenCalledWith("dismissed");
@@ -833,7 +928,7 @@ describe("runCeremony", () => {
       const setClientMessage = vi.fn();
       const revalidate = vi.fn();
 
-      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate);
+      await runCeremony(FAKE_OPTIONS, "/", submit as never, setPhase, setClientMessage, revalidate, runTransition);
 
       expect(submit).not.toHaveBeenCalled();
       expect(setClientMessage).toHaveBeenCalledWith("No authenticator found.");

@@ -343,8 +343,9 @@ a {
  * otherwise fight it: the document would be the *large* viewport tall while
  * its only child is the small one, which on a phone leaves the page
  * scrollable by exactly the height of a toolbar, with nothing under the card
- * to scroll to — and that scroll collapses the toolbar, which grows the
- * child, which slides the centred card down mid-gesture. */
+ * to scroll to. The child does not then move — `svh` is fixed — but the card
+ * is centred in the small viewport, so once that scroll has collapsed the bar
+ * it sits above the centre of what the reader can actually see. */
 .app--lock {
   min-height: 0;
 }
@@ -525,13 +526,15 @@ a {
  * rather than inventing a second one, and this only changes where its single
  * child sits inside it.
  *
- * `100svh`, not `100dvh`. The card is nowhere near tall enough to fall below
- * any fold — this height is only what the centring measures against — so the
- * hazard worth designing out is not overflow but movement: `dvh` grows as a
- * phone's toolbar collapses, sliding a centred card down the screen while the
- * reader is reaching for it. `svh` is the one unit that holds still while the
- * toolbar animates. `100vh` stays in front of it as the fallback a parser
- * that rejects `svh` keeps. */
+ * `100svh`, not `100dvh`. The hazard worth designing out here is movement
+ * rather than overflow: `dvh` grows as a phone's toolbar collapses, sliding a
+ * centred card down the screen while the reader is reaching for it. `vh` and
+ * `lvh` hold still too, but only `svh` also matches the viewport with the bar
+ * expanded, which is the one the reader arrives in. Overflow is not the
+ * concern because this is `min-height` — a card taller than the box grows it
+ * and the page scrolls rather than clipping, which is what a landscape phone
+ * does: 366px of card against roughly 330px of small viewport. `100vh` stays
+ * in front as the fallback a parser that rejects `svh` keeps. */
 .app-main--lock {
   min-height: 100vh;
   min-height: 100svh;
@@ -2375,7 +2378,7 @@ code {
 /* A card rather than a page (`app/routes/unlock.tsx`). It is a `.panel` first,
  * so ground, hairline, radius and the dark-mode flatness all arrive from
  * there; this adds only the measure and the centred stack. 420px is where the
- * lede breaks into four short lines instead of two long ones, and it is narrow
+ * lede sets in three short lines instead of two long ones, and it is narrow
  * enough that nothing printed inside needs a measure of its own —
  * `.form-error`'s 60ch box below exists for sentences with no panel around
  * them, and every sentence here has one. */
@@ -2479,9 +2482,12 @@ code {
  *
  * 40px is two lines at the refusal's 14/20, not at the note's 12/16: the
  * notes fit inside 32px but so do only the shortest refusals, and the two-line
- * ones are the common case. The single sentence longer than that — the
- * cloned-authenticator counter — is the one this reserve does not absorb,
- * and it is the rarest thing this screen ever says.
+ * ones are the common case. Three sentences still overflow it, each rarer than
+ * the last: the signature-counter refusal at four lines, "not issued for this
+ * action" at three on a phone, and whatever text a browser gives for a chunk
+ * that failed to load, which has no length at all. They move the button by
+ * half of what they overflow rather than by all of it, which is the most this
+ * reserve can promise without holding open more empty card than it saves.
  *
  * `overflow-wrap: anywhere` because one message here is not a sentence at
  * all: a chunk that fails to load surfaces the browser's own text, which
@@ -2499,9 +2505,11 @@ code {
   }
 }
 
-/* The one place in this file where the question is what is pointing at the
-   control rather than how wide the window is: a tablet in landscape is a
-   touch device at 1024px, and this is the only control on its screen. 48px is
+/* The first `pointer:` query in this file, though not the first to ask about
+   input at all — `@media (hover: none)` below reveals touch affordances the
+   same way. The question here is what is pointing at the control rather than
+   how wide the window is: a tablet in landscape is a touch device at 1024px,
+   and this is the only control on its screen. 48px is
    the target a thumb wants; `--control-h`'s 40px stays right for controls
    inside a form, which are aimed at with a caret already on the page. */
 @media (pointer: coarse) {
@@ -3814,8 +3822,13 @@ code {
 
   /* The refresh control's label reads "Refreshing…" while it turns, so a
      still icon beside it still says something. Unlock's label does not
-     change, so a frozen arc would be a mark with no meaning at all — the
-     dimmed button and the sentence under it carry this instead. */
+     change, so a frozen arc would be a mark with no meaning at all. What
+     carries the state instead is the sentence under the button in the two
+     phases that have one, and the shared disabled dim alone in the window
+     where a dismissed prompt's options are being refreshed — where the note
+     still reads "press Unlock to try again" while the button declines. That
+     window is one loader round trip, and a meaningless glyph is the worse of
+     the two. */
   .lock-spinner {
     display: none;
   }

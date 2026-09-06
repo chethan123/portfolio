@@ -507,6 +507,7 @@ async function runCeremony(
   setPhase: (phase: Phase) => void,
   setClientMessage: (message: string | null) => void,
   revalidate: () => void,
+  scheduleAsTransition: (update: () => void) => void,
 ): Promise<void> {
   const outcome = await requestAssertion(optionsJSON);
 
@@ -519,28 +520,41 @@ async function runCeremony(
     // this state describes.
     setPhase("verifying");
     await submit({ assertion: JSON.stringify(outcome.response), redirectTo }, { method: "post" });
-    // `startTransition`, and this is the whole reason the padlock is honest.
-    // `submit` resolves in a microtask *after* React Router has scheduled the
-    // redirect's navigation and *before* React can render it — the router
-    // publishes that navigation inside a transition, and a transition cannot
-    // commit until the microtask queue drains. A plain `setPhase("idle")`
-    // here is an urgent update, so React would render it first: one committed
-    // frame of a shut padlock, no spinner and a live button, against the old
-    // route, and only then the destination. On anything slow enough to paint
-    // between the two the reader watches the lock close again on the way out,
-    // which is the exact opposite of what the last frame is supposed to say.
-    // Marking it a transition puts it in the same batch React is already
-    // holding, so it commits with the navigation or never — and on the
-    // refusal branch it lands after the router's own commit rather than
-    // before it, which also takes with it the frame that used to show the
-    // *previous* attempt's refusal beside fresh options.
-    startTransition(() => setPhase("idle"));
+    // Scheduled as a transition, and this is the whole reason the padlock is
+    // honest. `submit` resolves once the router has published the redirect's
+    // navigation, which it does inside a transition — its subscriber wraps
+    // every state update that way — and React 19 renders
+    // the urgent lanes alone and ahead of any transition. A plain
+    // `setPhase("idle")` here is urgent, so it would commit by itself: one
+    // frame of a shut padlock, no spinner and a live button, against the route
+    // being left, and only then the destination. On anything slow enough to
+    // paint between the two, the last thing the reader sees is the lock
+    // closing again. Scheduled as a transition it joins the batch React is
+    // already holding — every pending transition lane renders together — so it
+    // commits with the navigation rather than ahead of it.
+    //
+    // This rests on the router publishing in a transition, which is
+    // `HydratedRouter`'s default and stays true only while this app has no
+    // `entry.client.tsx` passing `useTransitions={false}`. That would make the
+    // router's own update the urgent one and invert every sentence above.
+    scheduleAsTransition(() => setPhase("idle"));
     return;
   }
 
   const settledPhase: SettledPhase = outcome.status === "dismissed" ? "dismissed" : "failed";
-  if (outcome.status === "failed") setClientMessage(outcome.message);
-  setPhase(settledPhase);
+
+  // The lane argument above, for the outcome that stays on this screen.
+  // `revalidate()` publishes through the router, so it is a transition;
+  // leaving these two urgent renders them alone and first, in a frame where
+  // the phase has settled but `revalidator.state` has not moved yet — so
+  // `pressIsRefused` reports a live button, directly beside a note telling the
+  // reader to press it, and it then blinks out and back as the revalidation
+  // commits. Scheduled before `revalidate()`, which has not yet let React
+  // reset the event's transition lane, both land in the one commit.
+  scheduleAsTransition(() => {
+    if (outcome.status === "failed") setClientMessage(outcome.message);
+    setPhase(settledPhase);
+  });
   if (shouldRevalidateBeforeRetry(settledPhase)) revalidate();
 }
 
@@ -581,16 +595,27 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
     if (!shouldRunCeremony(phase, revalidator.state, ceremonyStarted.current)) return;
     ceremonyStarted.current = true;
 
-    void runCeremony(options, redirectTo, submit, setPhase, setClientMessage, revalidator.revalidate);
+    void runCeremony(
+      options,
+      redirectTo,
+      submit,
+      setPhase,
+      setClientMessage,
+      revalidator.revalidate,
+      startTransition,
+    );
   }, [phase, revalidator.state, revalidator.revalidate, options, redirectTo, submit]);
 
   // Never calls `revalidator.revalidate()` itself (finding: a retry run
   // outside its own user activation) — that already happened, if it needed
   // to, the moment the previous attempt settled into "dismissed" or "failed"
-  // (`runCeremony`'s own header). All this does is start a fresh press; by
-  // the time it runs, `loaderData.options` is either already fresh or the
-  // effect above's `revalidator.state === "idle"` guard waits for it to
-  // become so, exactly as it always has.
+  // (`runCeremony`'s own header). All this does is start a fresh press, and
+  // only when {@link pressIsRefused} says one is allowed — the same call the
+  // button's `disabled` makes, off the same committed `phase` and
+  // `revalidator.state`, so the attribute and this can no longer disagree.
+  // A press accepted here therefore already has fresh options in hand; the
+  // effect above's own `revalidator.state === "idle"` guard is what keeps
+  // that true rather than something this has to wait on.
   function handleUnlock() {
     if (pressIsRefused(phase, revalidator.state)) return;
     ceremonyStarted.current = false;
