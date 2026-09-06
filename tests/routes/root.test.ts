@@ -266,19 +266,9 @@ describe("the lock middleware", () => {
   it(
     "clears the grant cookie on a refusal that is itself a POST to /lock-now carrying that browser's own grant, since an outage must not strand a grant the reader asked to end",
     async () => {
-      // Finding 3: `/lock-now`'s own action already clears the cookie on
-      // every path through it (`lock-now.test.ts`'s own coverage), but an
-      // outage in `isLocked` refuses *here*, before that action ever runs —
-      // the exact case this middleware used to leave the cookie alone for,
-      // on the reasoning (right everywhere else) that a mere read failure
-      // is not proof the grant is gone. A reader who pressed "Lock now"
-      // during the outage, from a browser that still carries its own grant
-      // cookie, has already asked to end this browser's grant; once the
-      // database recovers, an uncleared cookie would admit them again —
-      // precisely the outcome pressing the control was supposed to rule
-      // out. The cookie is seeded here (finding 4) — a genuine same-origin
-      // "Lock now" press always carries it — so this test stays distinct
-      // from the cross-site shape just below, which never does.
+      // Finding 3: an outage in isLocked refuses here, before /lock-now's own action (which clears the cookie) ever
+      // runs — pressing "Lock now" during the outage must still end the grant, or the cookie survives to readmit once
+      // the DB recovers. Cookie seeded here (finding 4) since a genuine same-origin press always carries it.
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 
@@ -304,16 +294,9 @@ describe("the lock middleware", () => {
   it(
     "leaves the grant cookie alone on a refusal that is a POST to /lock-now during an outage, when the request carries no grant cookie at all — the cross-site forgery shape (finding 4, P1)",
     async () => {
-      // `SameSite=Lax` withholds `LOCK_COOKIE` from a cross-site form
-      // POST — the browser never sends it — so a request that reaches here
-      // with no cookie at all is exactly what an attacker's page
-      // auto-submitting a form to this instance's own `/lock-now` produces,
-      // indistinguishable by path and method alone from a real "Lock now"
-      // press made during an outage. Treating path-and-method as proof
-      // (the bug) cleared a cookie this request never named; requiring the
-      // cookie closes it without inventing a second CSRF mechanism beside
-      // the framework's own `Origin` check and this app's existing
-      // `SameSite=Lax` posture (ADR-0005).
+      // SameSite=Lax withholds LOCK_COOKIE from a cross-site form POST, so a request with no cookie at all is exactly
+      // what a forged auto-submit to /lock-now produces — indistinguishable by path+method from a real press during an
+      // outage. Requiring the cookie fixes this without a second CSRF mechanism beside Origin/SameSite=Lax (ADR-0005).
       const unreachable = createDatabase(UNREACHABLE_DATABASE_URL);
       let called = false;
 

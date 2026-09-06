@@ -290,8 +290,8 @@ describe("resolveAll — creating an instrument", () => {
             }),
           },
         ],
-        // A manual instrument has nothing to quote, so the probe must never
-        // run — the throwing stub is the assertion.
+        // Manual instrument has nothing to quote — probe must never run; the throwing
+        // stub is the assertion.
         { probe: forbiddenProbe },
         db,
       );
@@ -372,9 +372,9 @@ describe("resolveAll — the USD probe", () => {
         "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
       );
 
-      // Nothing for that string was written — no instrument, no
-      // classification, no alias. The refusal is atomic, so the sibling
-      // string's alias waits too and the screen re-renders every question.
+      // Nothing written for that string — no instrument, classification, or alias.
+      // Refusal is atomic, so the sibling string's alias waits too and the screen
+      // re-renders every question.
       const instrumentsAfter = await db.selectFrom("instrument").select("id").execute();
       expect(instrumentsAfter).toHaveLength(instrumentsBefore.length);
       const aliases = await db
@@ -415,11 +415,10 @@ describe("resolveAll — the USD probe", () => {
   it(
     "writes each created instrument the quote type its own symbol was answered with",
     withDatabase(async ({ db, seedClassification }) => {
-      // The write side of the same pairing. `quote_type` is the one place the
-      // provider's own vocabulary reaches a screen — it splits stocks from
-      // funds in unrealized gains — so a verdict read off the wrong plan
-      // misfiles an instrument with no error anywhere. Serially each plan
-      // read a cache its own call had filled; batched they share one map.
+      // Write side of the pairing: quote_type is the one place the provider's vocabulary
+      // reaches a screen (splits stocks from funds in unrealized gains) — a verdict off
+      // the wrong plan misfiles silently. Serially each plan filled its own cache; batched
+      // they share one map.
       const classification = await seedClassification();
       const probe: ProbeSymbols = async () =>
         new Map([
@@ -466,10 +465,9 @@ describe("resolveAll — the USD probe", () => {
   it(
     "refuses a lower-case symbol the probe answered non-USD for",
     withDatabase(async ({ db, seedClassification }) => {
-      // The probe is asked in one spelling and read back in another only if
-      // the two sites disagree. A symbol is stored as typed (any case), so
-      // asking for `VTI` and reading `vti` would lose the refusal silently
-      // and create an instrument this instance cannot hold.
+      // Probe asked in one spelling, read back in another only if the two sites disagree.
+      // Symbol is stored as typed (any case) — asking VTI but reading vti would silently
+      // lose the refusal.
       const classification = await seedClassification();
       const probe: ProbeSymbols = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
@@ -500,12 +498,10 @@ describe("resolveAll — the USD probe", () => {
   it(
     "refuses only the feed plan when a manual plan names the same refused ticker",
     withDatabase(async ({ db, seedClassification }) => {
-      // The guard that keeps a manual instrument out of the feed's currency
-      // rule is written twice — once where symbols are collected, once where
-      // verdicts are read — and each site's loss hides the other's. A probe
-      // that must never be called catches the collection site only: lose the
-      // read site instead and the symbol is never asked about, so the stub
-      // never fires while the refusal lands on a plan it does not govern.
+      // Guard keeping manual instruments out of the feed currency rule is written at two
+      // sites (collection, read) — each masks the other's loss. A never-called probe
+      // catches only the collection site; losing the read site instead would misfire a
+      // refusal onto the wrong plan without ever calling the probe.
       const classification = await seedClassification();
       const probe: ProbeSymbols = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
@@ -538,11 +534,9 @@ describe("resolveAll — the USD probe", () => {
   it(
     "never probes a manual instrument, even one carrying a symbol",
     withDatabase(async ({ db, seedClassification }) => {
-      // A manual instrument may carry a ticker for the person's own reference
-      // while its price is typed in. It is not feed-priced, so its currency is
-      // not the feed's to refuse — and the guard that says so is now written
-      // at two sites, the collection and the read, either of which would mask
-      // the other's loss.
+      // Manual instrument may carry a ticker for reference while priced by hand — not
+      // feed-priced, so its currency isn't the feed's to refuse. Guard is written at two
+      // sites (collection, read), either masking the other's loss.
       const classification = await seedClassification();
 
       await resolveAll(
@@ -568,8 +562,8 @@ describe("resolveAll — the USD probe", () => {
   it(
     "probes three tickers named by six strings in one call carrying three symbols, landing each verdict on the right plans",
     withDatabase(async ({ db, seedClassification }) => {
-      // Two strings per ticker — a mispairing here would either double the
-      // call or land a verdict meant for one ticker onto another's plans.
+      // Two strings per ticker — a mispairing would double the call or land a verdict on
+      // the wrong ticker's plans.
       const classification = await seedClassification();
       const calls: string[][] = [];
       const probe: ProbeSymbols = async (symbols) => {

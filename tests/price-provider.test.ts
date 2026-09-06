@@ -301,9 +301,7 @@ describe("the raw entry kept for the archive", () => {
 
 describe("probeVerdicts — the verdict logic a batched probe answers with", () => {
   it("lands an ok verdict on the asked symbol across a case difference", () => {
-    // The provider echoes its own spelling; the verdict must key on what was
-    // asked, `refreshQuotes`'s own matching rule, or a caller's map lookup by
-    // its own symbol would miss.
+    // verdict keys on what was asked, not the provider's echoed spelling (refreshQuotes's own matching rule)
     const verdicts = probeVerdicts(
       ["vti"],
       [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD" }],
@@ -314,10 +312,7 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("answers both spellings when one ticker was asked for twice", () => {
-    // Two rows of a statement can name one ticker two ways. Each used to be
-    // probed on its own and each got the answer; batched, one entry has to
-    // serve both asked symbols, or the second instrument is created with no
-    // quote type for a ticker the feed answered perfectly well.
+    // two statement rows can spell one ticker two ways — batched, one entry must serve both asked symbols
     const verdicts = probeVerdicts(
       ["vti", "VTI"],
       [{ symbol: "VTI", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" }],
@@ -343,10 +338,7 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("leaves a symbol unavailable when the only entry names a ticker nobody asked about", () => {
-    // The rule batching newly needs: serially the feed could only answer
-    // about the symbol in front of it, so any usable entry was that symbol's.
-    // One answer must not be spent on whichever symbol was asked first, or a
-    // refusal lands on an instrument the feed never spoke about.
+    // batching's new rule: one answer must not be spent on whichever symbol was asked first
     const verdicts = probeVerdicts(
       ["VTI", "VWRL"],
       [{ symbol: "ZZZ", regularMarketPrice: 1, currency: "GBp" }],
@@ -362,8 +354,7 @@ describe("probeVerdicts — the verdict logic a batched probe answers with", () 
   });
 
   it("matches an entry whose own spelling differs in case from the symbol asked", () => {
-    // The other half of the rule: the match key is taken on *both* sides, so
-    // the feed echoing its own casing still answers the symbol we asked.
+    // match key taken on both sides — the feed's own casing still answers the symbol we asked
     const verdicts = probeVerdicts(
       ["VTI"],
       [{ symbol: "vti", regularMarketPrice: 271.5, currency: "USD", quoteType: "ETF" }],

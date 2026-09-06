@@ -204,13 +204,7 @@ export function EditIcon(props: IconProps) {
   );
 }
 
-/**
- * An unmasked screen, the eye that can see (spec 0007). Named for the
- * glossary term: CONTEXT.md avoids *hidden* for masking, and `VisibleIcon`
- * is how that vocabulary drifts back one identifier at a time. Beside a
- * text label like every icon here, never instead of one — story 5: a reader
- * inferring state from a glyph is one click from revealing their balances.
- */
+// Named for the glossary term, not `VisibleIcon` — CONTEXT.md avoids "hidden" for masking.
 export function UnmaskedIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -220,7 +214,6 @@ export function UnmaskedIcon(props: IconProps) {
   );
 }
 
-/** A masked screen. The same eye, struck through. */
 export function MaskedIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -232,10 +225,7 @@ export function MaskedIcon(props: IconProps) {
   );
 }
 
-/** The busy mark: one open arc, drawn to be turned by `refresh-spin`
- * (app.css). Deliberately not `RefreshIcon` with its arrowheads — those say
- * "fetch this again", which is a thing the reader asked for, where this says
- * only "this control is working", which is a thing they are waiting on. */
+// Not `RefreshIcon` — that says "fetch this again", this says "working" (turned by `refresh-spin`, app.css).
 export function SpinnerIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -244,17 +234,11 @@ export function SpinnerIcon(props: IconProps) {
   );
 }
 
-/** "Lock now" (ticket 06): a closed padlock, its shackle drawn shut rather
- * than open — the one direction this control ever offers. */
 export function LockIcon(props: IconProps) {
   return (
     <Icon {...props}>
       <rect x="4.5" y="11" width="15" height="9.5" rx="2" />
-      {/* Named so one caller can draw it open: the unlock screen lifts this
-          path off the body while an assertion is being verified
-          (`.lock-shackle`, app.css). Every rule that names it is scoped to
-          that card's own mark, so nothing matches this path here and "Lock
-          now" keeps a shut padlock. */}
+      {/* Named so the unlock screen alone can lift this shackle open while an assertion verifies (`.lock-shackle`, app.css). */}
       <path className="lock-shackle" d="M8 11V7a4 4 0 0 1 8 0v4" />
     </Icon>
   );
