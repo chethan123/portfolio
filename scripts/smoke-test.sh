@@ -872,13 +872,20 @@ fi
 # the connection to the proxy itself is what fails.
 log "Checking the fetch fails while egress-proxy is stopped"
 docker compose stop egress-proxy >/dev/null || fail "could not stop egress-proxy"
-if stopped_output="$(docker compose exec -T worker node -e '
+# Exit 1 means the fetch itself failed, which is the assertion. Anything else —
+# 127 for a missing applet, or `docker compose exec` never starting at all —
+# would satisfy a bare `if` and read as proof, which is the shape
+# `expect_no_egress` above was written to avoid. Distinguished here the same way.
+stopped_status=0
+stopped_output="$(docker compose exec -T worker node -e '
   fetch("https://query2.finance.yahoo.com/", { signal: AbortSignal.timeout(10000) })
     .then(() => process.exit(0))
     .catch(() => process.exit(1));
-' 2>&1)"; then
+' 2>&1)" || stopped_status=$?
+((stopped_status != 0)) ||
   fail "worker reached Yahoo through the proxy while egress-proxy was stopped: ${stopped_output}"
-fi
+((stopped_status == 1)) ||
+  fail "could not test the stopped proxy from worker (exit ${stopped_status}): ${stopped_output}"
 printf 'worker: fetch through the proxy fails while egress-proxy is stopped\n'
 docker compose start egress-proxy >/dev/null || fail "could not restart egress-proxy"
 wait_for_healthy egress-proxy

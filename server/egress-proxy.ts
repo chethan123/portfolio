@@ -120,6 +120,14 @@ const STAGE_DEADLINE_MS = 5_000;
 /** An established tunnel silent this long, either direction, is torn down. */
 const IDLE_TEARDOWN_MS = 60_000;
 
+/**
+ * How often Node sweeps for a connection that has blown {@link STAGE_DEADLINE_MS}.
+ * A constructor-only option, and the default is 30 s — which would let a five
+ * second deadline bind anywhere up to thirty-five. `server/price-worker.ts`
+ * sets the same number for the same reason.
+ */
+const CONNECTIONS_CHECKING_INTERVAL_MS = 1_000;
+
 /** A ClientHello record — 5-byte header plus payload — past this size is refused unread. */
 const MAX_RECORD_BYTES = 16 * 1024;
 
@@ -204,7 +212,10 @@ function isPrivateAddress(address: string): boolean {
     // as "this host" and lands on loopback — measured. It is also what a
     // blackholing LAN resolver answers with by default, which is ADR-0005's
     // adversary arriving by the one route this guard exists to close.
-    bare.startsWith("0.")
+    bare.startsWith("0.") ||
+    // 100.64.0.0/10, RFC 6598 shared address space — not routable on the
+    // public internet, and a plausible answer from an ISP-supplied resolver.
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(bare)
   ) {
     return true;
   }
@@ -448,7 +459,11 @@ function parseServerName(handshake: Buffer): string {
         const nameType = u8(listEnd);
         const nameLength = u16(listEnd);
         need(listEnd, nameLength);
-        const name = handshake.subarray(offset, offset + nameLength).toString("ascii");
+        // `latin1`, never `ascii`: the `ascii` decoder masks the high bit, so
+        // bytes like 0xE6 0xE9 0xEE decode to "finance..." and would pass the
+        // comparison below while the record replayed upstream still carried
+        // the raw bytes — the edge would see a name the proxy never matched.
+        const name = handshake.subarray(offset, offset + nameLength).toString("latin1");
         offset += nameLength;
         if (nameType === 0) {
           count += 1;
@@ -578,12 +593,24 @@ export async function startEgressProxy(options: StartEgressProxyOptions = {}): P
     idleTeardownMs: options.idleTeardownMs ?? IDLE_TEARDOWN_MS,
   };
 
+  // `connectionsCheckingInterval` is the one that makes the two above mean
+  // what they say. Node sweeps for expired headers on that interval and the
+  // default is 30 s, so a 5 s deadline left alone binds anywhere up to 35 —
+  // measured here before it was set: a silent socket lived 30004 ms. That is
+  // the same trap `server/price-worker.ts` documents and sets past, and a
+  // looser bound here is a cheaper denial of the proxy's own healthcheck,
+  // which shares the `maxConnections` budget with every tunnel.
   const server = http.createServer(
-    { headersTimeout: deps.stageDeadlineMs, requestTimeout: deps.stageDeadlineMs },
+    {
+      headersTimeout: deps.stageDeadlineMs,
+      requestTimeout: deps.stageDeadlineMs,
+      connectionsCheckingInterval: CONNECTIONS_CHECKING_INTERVAL_MS,
+    },
     handleRequest,
   );
 
   server.maxConnections = 8;
+  server.timeout = deps.stageDeadlineMs;
 
   server.on("connect", (req, duplexSocket, head) => {
     // Typed `stream.Duplex` by @types/node (the same generality `upgrade`

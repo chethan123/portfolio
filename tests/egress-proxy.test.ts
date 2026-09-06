@@ -392,6 +392,19 @@ describe("resolving and connecting the upstream (step 2)", () => {
     for (const hung of hungSockets) hung.destroy();
   });
 
+  it("answers 403 when one address among several is private, not only when all are", async () => {
+    // A single-address answer cannot tell `some` from `every`, and a mutation
+    // to `every` — refusing only if the whole answer is private, the opposite
+    // of the rule — survived the suite before this case existed.
+    const port = await start({ dnsLookup: fakeDnsLookup(["93.184.216.34", "10.0.0.5"]) });
+    const socket = track(await connectRaw(port));
+
+    socket.write(connectLine(`${ALLOWED_HOST}:443`));
+    const { line } = await waitForStatusLine(socket);
+
+    expect(line).toContain("403");
+  });
+
   it("answers 403 when the whole answer contains a private address", async () => {
     const port = await start({ dnsLookup: fakeDnsLookup(["10.0.0.5"]) });
     const socket = track(await connectRaw(port));
@@ -400,6 +413,39 @@ describe("resolving and connecting the upstream (step 2)", () => {
     const { line } = await waitForStatusLine(socket);
 
     expect(line).toContain("403");
+  });
+
+  it("matches a lowercase server_name against an upper-case CONNECT host", async () => {
+    // The comparison has to be case-insensitive on *each side independently*.
+    // A case sending both in the same case cannot tell that apart from a
+    // case-sensitive compare, which is what a mutation to `!==` proved.
+    const { proxyPort, upstream } = await startWithUpstream();
+    const socket = track(await connectRaw(proxyPort));
+
+    socket.write(connectLine(`${ALLOWED_HOST.toUpperCase()}:443`));
+    await waitForStatusLine(socket);
+    socket.resume();
+    socket.write(clientHello([ALLOWED_HOST]));
+
+    await waitForData(socket);
+    expect(upstream.received.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a server_name whose bytes only mask to the host under a lossy decoder", async () => {
+    // `ascii` masks the high bit, so 0xE6 0xE9 0xEE… decodes to "finance…".
+    // Decoded losslessly they are not the host, and the record replayed
+    // upstream would have carried the raw bytes either way — so the edge
+    // would have seen a name the proxy never matched.
+    const { proxyPort, upstream } = await startWithUpstream();
+    const socket = track(await connectRaw(proxyPort));
+
+    socket.write(connectLine(`${ALLOWED_HOST}:443`));
+    await waitForStatusLine(socket);
+    const highBit = Array.from(ALLOWED_HOST, (ch) => String.fromCharCode(ch.charCodeAt(0) | 0x80)).join("");
+    socket.write(clientHello([highBit]));
+
+    await waitForClose(socket);
+    expect(upstream.received.length).toBe(0);
   });
 
   it.each([
@@ -577,9 +623,10 @@ describe("the concurrency bound", () => {
     await waitForClose(ninth);
     const elapsed = Date.now() - startedAt;
 
-    // The property this pins (T08 contract): a clean, fast close — not a
-    // timeout. A generous ceiling well under any deadline in this file
-    // still fails a mutant that made the ninth socket hang instead.
+    // The property this pins: a clean, fast close — not a timeout. Raising
+    // `maxConnections` does fail this case, but through vitest's own timeout
+    // rather than the ceiling below, since `waitForClose` never resolves for
+    // that mutant; the ceiling is what catches a close that arrives late.
     expect(elapsed).toBeLessThan(1000);
 
     for (const socket of held) socket.destroy();
