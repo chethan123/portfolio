@@ -384,26 +384,15 @@ export function applyFilters(holdings: ValuedHolding[], query: HoldingsQuery): V
   );
 }
 
-/**
- * What a set of holdings comes to, and how much could be computed. **Three
- * coverages, not one** — genuinely three counts: a 401k statement routinely
- * carries a price and no basis, so `basis` runs short where `value` is
- * complete, and `unrealized` needs both sides, shortest of the three. Each
- * figure is `null`, never `"0.0000"`, when nothing behind it was known: a
- * group nobody can price is not a group worth nothing.
- */
+// Three coverages, not one: a 401k statement routinely has a price and no basis, so basis
+// runs short where value is complete, and unrealized (needing both) is shortest of the three.
+// Each figure is null, never "0.0000", when nothing behind it was known.
 export type HoldingsTotal = {
   value: string | null;
   costBasis: string | null;
   unrealized: string | null;
-  /**
-   * Never null — the one figure that is not. The view coalesces a missing
-   * rate to zero in SQL, so no holding's payout is unknown (§14, limitation
-   * 9): a group where nothing pays is worth `$0` of dividend, and dashing it
-   * would read as "we could not work out what this group pays" on a group
-   * that pays nothing. Also why there is no dividend coverage — no unknowns
-   * to count.
-   */
+  // Never null: the view coalesces a missing rate to zero in SQL (§14.9), so a group where
+  // nothing pays is worth $0, not unknown — also why there's no dividend coverage.
   annualDividend: string;
   valueCoverage: Coverage;
   basisCoverage: Coverage;
@@ -425,10 +414,8 @@ function totalOf(holdings: ValuedHolding[]): { total: HoldingsTotal; units: bigi
       value: figure(value),
       costBasis: figure(basis),
       unrealized: figure(unrealized),
-      // Straight, not through `figure()`: that helper dashes a zero `known`
-      // count — right for the three above, wrong here (see
-      // {@link HoldingsTotal.annualDividend}). An empty group sums to `$0`,
-      // the truthful answer to "what does nothing pay".
+      // Straight, not through figure(): that helper dashes a zero known count, wrong here —
+      // an empty group truthfully sums to $0.
       annualDividend: render(dividend.amount, MONEY_SCALE),
       valueCoverage: { known: value.known, total: value.total },
       basisCoverage: { known: basis.known, total: basis.total },

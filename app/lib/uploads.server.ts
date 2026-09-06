@@ -343,121 +343,95 @@ export class DraftNotReadyError extends Error {
   }
 }
 
-/** What every diff row's instrument cell shows. */
 type DiffInstrument = {
   instrumentId: string;
-  /** Null for an instrument with no public ticker — no badge is drawn. */
+  // Null = no public ticker, no badge drawn.
   symbol: string | null;
   name: string;
-  /**
-   * The `.cell-sub` under the name: `holdingNote`'s words plus this row's own
-   * ("3 rows combined", "cost basis no longer reported") — composed here so
-   * two screens cannot spell one condition two ways.
-   */
+  // holdingNote's words plus this row's own ("3 rows combined", …), composed here so two
+  // screens can't spell one condition two ways.
   note: string;
 };
 
 export type DiffAdded = DiffInstrument & {
   quantity: string;
   costBasisPerShare: string | null;
-  /** At the current quote — context, not part of the write. Null when never priced. */
+  // At the current quote — context, not part of the write. Null when never priced.
   value: string | null;
 };
 
 export type DiffUpdated = DiffInstrument & {
-  /** As stored, `numeric(20, 8)`'s full scale — `formatQuantity` trims it. */
+  // As stored (numeric(20,8) full scale) — formatQuantity trims it.
   quantityBefore: string;
   quantityAfter: string;
   quantityChanged: boolean;
   costBasisBefore: string | null;
   costBasisAfter: string | null;
   basisChanged: boolean;
-  /** `figure → —`: quiet in exactly the place it should not be, so the note says it too. */
+  // "figure -> —" is quiet exactly where it shouldn't be, so the note says it too.
   basisDisappeared: boolean;
-  /** The after-state at the current quote. Null when never priced. */
   value: string | null;
 };
 
 export type DiffRemoved = DiffInstrument & {
-  /** The quantity the account holds now, which this file sells. */
+  // What the account holds now, which this file sells.
   quantity: string;
   costBasisPerShare: string | null;
-  /** The last known value — never `$0.00` for a holding nothing ever priced. */
+  // Never $0.00 for a holding nothing ever priced.
   value: string | null;
 };
 
-/**
- * What the review screen states: the staged file classified against what the
- * account holds now, removals in full, and the two flags the confirmation
- * grammar hangs off.
- */
 export type UploadDiff = {
   draftId: string;
   accountId: string;
   accountName: string;
-  /** For the identity strip — same reason as {@link UploadDraft.ownerName}. */
   ownerName: string;
   accountNumberTail: string | null;
   filename: string;
   added: DiffAdded[];
   updated: DiffUpdated[];
-  /** Every removed position individually — a count alone is how a filtered
-   *  export sells 28 holdings nobody read about (§5.2). */
+  // Every removed position individually — a count alone is how a filtered export sells 28
+  // holdings nobody read about (§5.2).
   removed: DiffRemoved[];
-  /** Unchanged rows are deliberately absent from the table; the count is all
-   *  an unchanged row has to say. */
+  // Unchanged rows are absent from the table; the count is all one has to say.
   unchangedCount: number;
-  /** How many positions the account holds now — the removal ratio's denominator. */
+  // Removal ratio's denominator.
   currentCount: number;
-  /** No statement yet: the file reads as "14 added", not a diff against nothing. */
+  // No statement yet: reads as "14 added", not a diff against nothing.
   firstStatement: boolean;
-  /** More than half of what the account holds is removed — the commit demands a tick. */
+  // More than half of current holdings removed — commit demands a tick.
   majorityRemoved: boolean;
   removesEverything: boolean;
-  /** Lines the parser left out for stating no quantity, for the intro to name. */
   skipped: Array<{ row: number; instrument: string }>;
-  /** Which of §6.3's two cases this statement is — the screen says it plainly. */
   asOf: { source: "file"; date: IsoDate } | { source: "asked" };
-  /**
-   * True when the columns step recorded no first sightings, so the strip dims
-   * its instruments entry "· none" (brief §2.1, §7.5). False both for a
-   * genuinely visited step and a pre-bit draft — dimming is a claim, and an
-   * unknown history does not get to make it.
-   */
+  // True only when columns recorded no first sightings (dims "· none"). False for both a
+  // genuinely visited step and a pre-bit draft — an unknown history doesn't get to claim it.
   instrumentsSkipped: boolean;
 };
 
-/** One row as the commit will write it, with the facts its guards read. */
 type FileRow = {
   instrumentId: string;
   name: string;
   quantity: string;
   costBasisPerShare: string | null;
   accountNumber: string | null;
-  /** The instrument's current quote, for the value column and the product guard. */
+  // For the value column and the product guard.
   price: string | null;
-  /**
-   * For the product guard alone — the diff renders no dividend column. Null
-   * where no refresh ever supplied one, which the view reads as zero.
-   */
+  // For the product guard alone (no dividend column rendered). Null = never refreshed, view reads as zero.
   annualDividendPerShare: string | null;
-  /** How many file lines fed this row — parser combines and spelling folds both. */
+  // File lines feeding this row — parser combines and spelling folds both.
   lineCount: number;
 };
 
-/** The diff plus what the commit needs and the screen does not. */
 type AssembledDiff = {
   diff: UploadDiff;
   rows: FileRow[];
-  /** The first account number the file carried, or null when it carried none. */
+  // First account number the file carried, or null if none.
   fileAccountNumber: string | null;
 };
 
-/**
- * Run `body` in a transaction unless one is already open — Kysely refuses
- * `.transaction()` on a handle that already is one, and the test seam *is* a
- * transaction (the same helper `instrument-resolution.server.ts` carries).
- */
+// Kysely refuses .transaction() on a transaction; the test seam is one (instrument-resolution.server.ts
+// carries the same helper).
 function inTransaction<T>(
   db: Kysely<Database>,
   body: (trx: Kysely<Database>) => Promise<T>,
@@ -465,12 +439,9 @@ function inTransaction<T>(
   return db.isTransaction ? body(db) : db.transaction().execute(body);
 }
 
-/**
- * `quantity × price` at the money scale — the diff's Value column for a row
- * the account does not hold yet, where `holding_valued` has no row to compute
- * it in SQL. The same digits the view produces: units of 10^-12 divided back
- * to money's 10^-4, rounded half away from zero.
- */
+// quantity x price at money scale, for a row holding_valued has no SQL row to compute yet.
+// Same digits the view produces: 10^-12 units divided back to money's 10^-4, rounded half away
+// from zero.
 function valueAt(quantity: string, price: string | null): string | null {
   if (price === null) return null;
 
@@ -484,13 +455,11 @@ function valueAt(quantity: string, price: string | null): string | null {
   );
 }
 
-/** Do two stored-or-parsed basis figures state the same fact, nulls included? */
 function sameBasis(before: string | null, after: string | null): boolean {
   if (before === null || after === null) return before === after;
   return toUnits(before, MONEY_SCALE) === toUnits(after, MONEY_SCALE);
 }
 
-/** Do a stored and a parsed quantity state the same count? */
 function sameQuantity(before: string, after: string): boolean {
   return toUnits(before, QUANTITY_SCALE) === toUnits(after, QUANTITY_SCALE);
 }

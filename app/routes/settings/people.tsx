@@ -5,12 +5,7 @@ import { createPerson, listPeople, removePerson, renamePerson } from "~/lib/peop
 
 import type { Route } from "./+types/people";
 
-/**
- * Settings → People — a thin wrapper, on purpose: read the form, hand raw
- * fields to `people.server.ts`, render what comes back. Every rule about
- * what a name is, and every reason a person cannot be removed, lives there,
- * so a second caller cannot get a different answer than this screen does.
- */
+// Thin wrapper on purpose — every rule lives in `people.server.ts`.
 export function meta() {
   return [{ title: "People · Settings · Portfolio" }];
 }
@@ -38,17 +33,11 @@ export async function action({ request }: Route.ActionArgs) {
         throw new Response(`Unknown intent ${JSON.stringify(intent)}.`, { status: 400 });
     }
 
-    // No payload: the loader re-runs on its own after an action, so the list
-    // below is the confirmation. Clearing the returned values is also what
-    // empties the add box on success.
+    // No payload — the loader re-run is the confirmation, and empties the add box.
     return null;
   } catch (error) {
-    // A refusal is an ordinary outcome, returned with what was typed so the
-    // form re-renders carrying it rather than making someone retype a name.
     if (error instanceof ValidationError) {
-      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
-      // module, and a component referencing it would drag the database into
-      // the client bundle. The action is stripped from that bundle.
+      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       return {

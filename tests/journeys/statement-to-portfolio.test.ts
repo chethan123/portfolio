@@ -1,22 +1,10 @@
-/**
- * A statement, from the file landing to the figures on the account page.
- * Every step is tested on its own with directly seeded state — the right
- * shape for one step's rule, and exactly why none can catch a seam: a step
- * writing the right row under the wrong key passes its own test and breaks
- * the flow. So nothing is seeded past the household: the file is posted to
- * the drop screen, every step driven by its own `action`, each redirect
- * followed to whatever the last one actually named. Two journeys, because
- * the second is the point of the first — the design's central promise
- * (§5.1, brief §5) is that the work is paid once, and the second statement
- * asserts it the only honest way: arriving at review without being asked
- * anything.
- */
+// A statement, file to account-page figures. Every step is unit-tested against directly seeded state, which is exactly why
+// none can catch a seam (a step writing the right row under the wrong key passes its own test and breaks the flow) — so
+// nothing here is seeded past the household; every redirect is followed for real. Two journeys: the second proves the
+// design's central promise (§5.1, brief §5) that the work is paid once — it arrives at review asking nothing.
 import { afterAll, describe, expect, it } from "vitest";
 
-// The drop screen asks the configuration for its size limit before it reads a
-// byte, so this file needs a valid environment the same way the container does.
-// `getConfig()` memoises on first call rather than on import, and nothing here
-// calls it until a test body runs, so assigning at module scope is in time.
+// Drop screen reads its size limit from config before any byte; getConfig() memoises on first call, not on import, so this is in time.
 process.env.DATABASE_URL ??=
   process.env.TEST_DATABASE_URL ?? "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test";
 
@@ -102,14 +90,7 @@ function createAnswers(raws: readonly string[]): Record<string, string> {
   return fields;
 }
 
-/**
- * The review screen's data, or a failure naming where it sent the reader.
- *
- * The loader returns a redirect instead of data when the draft is not ready
- * for a review — so a journey that has arrived here legitimately wants the
- * data, and a redirect means the previous step did not leave the draft the way
- * it claimed to. Narrowed rather than cast, so that failure reads as itself.
- */
+/** The review screen's data, or a failure naming where it redirected instead — a redirect here means a prior step lied about the draft's state. */
 async function reviewPage(draftId: string) {
   const outcome = await reviewScreen(args(get(`/upload/${draftId}/review`), { draftId }));
 

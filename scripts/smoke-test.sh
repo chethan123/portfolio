@@ -127,21 +127,15 @@ fi
   fail "compose refused without the expected message: ${refusal}"
 printf 'compose refused: %s\n' "$refusal"
 
-# Exported here, ahead of the gate check below, so that check tests only what
-# it means to: unexported, `db`'s own `${POSTGRES_PASSWORD:?}` would still be
-# missing and the gate check would fail naming this variable instead of any
-# gate one. Real for the rest of the run — the bundled `db` boots on it like
-# any other password.
+# Exported ahead of the gate check below, so that check isolates only the
+# gate variables — otherwise it would fail naming this one instead.
 export POSTGRES_PASSWORD="smoke-test-postgres-password"
 
-# Unconfigured, compose must stop rather than bring up an ungated instance.
-# `config`, not `up`: interpolation is `up`'s first step and needs no daemon.
-# `--env-file /dev/null` so a developer's own .env cannot quietly satisfy the
-# variables and green this assertion for the wrong reason. `env -u` unsets
-# all four gate variables at once regardless of what is exported above, and
-# `POSTGRES_PASSWORD` is real by now (exported just above) — so this stays as
-# clean an isolation as the check it follows, just of four names instead of
-# one.
+# `config`, not `up`: interpolation is up's first step and needs no daemon.
+# `--env-file /dev/null` so a developer's own .env can't quietly satisfy the
+# variables. `env -u` unsets all four gate variables regardless of what's
+# exported above; POSTGRES_PASSWORD is already real, keeping this as clean an
+# isolation as the check above, just of four names instead of one.
 log "Checking the stack refuses to start without gate credentials"
 if refusal="$(env -u GATE_CLIENT_ID -u GATE_CLIENT_SECRET -u GATE_COOKIE_SECRET \
   -u PUBLIC_ORIGIN docker compose --env-file /dev/null config --quiet 2>&1)"; then
@@ -152,9 +146,7 @@ fi
   fail "compose refused without naming the missing variable: ${refusal}"
 printf 'compose refused: %s\n' "$refusal"
 
-# Asked of compose rather than repeated here: the image `empty_db_dir` borrows a
-# root `find` from. Resolvable only now — `config` interpolates the whole file,
-# gate variables included.
+# Resolvable only now: `config` interpolates the whole file, gate variables included.
 DB_IMAGE="$(docker compose config --images db)"
 readonly DB_IMAGE
 

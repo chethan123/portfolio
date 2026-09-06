@@ -1,17 +1,8 @@
 /**
- * The coverage gap, as a question about rows.
- *
- * A backfill exists because a statement describes its own date: the first
- * upload of any instrument new to the system predates that instrument's first
- * close, so `holding_valued_at` finds nothing to price it with and the chart
- * draws cash minus loans for the whole era before the instance was installed
- * (ADR-0011). What decides which instruments are in that state is a query, and
- * a query is only testable against a real database — which is where the risk
- * is, in the `numeric` and `date` handling a mock would erase.
- *
- * The ledger's `check` constraints are tested the same way and for the same
- * reason: they are the only thing that stops a count and an outcome disagreeing
- * years later, and TypeScript cannot enforce a rule Postgres holds.
+ * A backfill exists because a statement describes its own date: an instrument new to the
+ * system predates its own first close, so `holding_valued_at` finds nothing to price it with
+ * before the instance was installed (ADR-0011). Which instruments are in that state is a query,
+ * testable only against real Postgres — same reason the ledger's `check` constraints are here.
  */
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -43,13 +34,8 @@ import type { Database } from "~/lib/db.server";
 import type { HistoryRange, PriceProvider, ProviderHistory, ProviderQuote } from "~/lib/price-provider.server";
 import type { YahooClient } from "../server/yahoo-client.ts";
 
-/**
- * `socketProvider()` reads the socket path through `getConfig()`, which
- * memoises its first read — set before any test in this file can reach it,
- * `tests/price-poller.test.ts:37`'s precedent for `DATABASE_URL`. Only one
- * case below ever calls `socketProvider()`, so one fixed path for the whole
- * file is enough: that case starts and stops its own worker on it.
- */
+// socketProvider() reads the socket path through getConfig(), which memoises its first read —
+// set before any test can reach it (tests/price-poller.test.ts:37's precedent for DATABASE_URL)
 process.env.PRICE_WORKER_SOCKET = join(tmpdir(), `pb-${randomBytes(4).toString("hex")}.sock`);
 
 afterAll(closeTestDatabase);
