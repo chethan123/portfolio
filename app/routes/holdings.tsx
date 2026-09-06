@@ -185,11 +185,10 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-// Inputs live in `Row`, apart from this form — joined only by `form=`.
 const EDITOR = "revise-position";
 
-// Canonical view plus one transient row (edit/saved) — kept out of `toSearch`
-// since it's request-only, never part of a link built from the view.
+// Canonical view plus one transient row (edit/saved) — kept out of `toSearch` since it's
+// request-only, never part of a link built from the view.
 function withRow(
   search: string,
   param: "edit" | "saved",
@@ -219,7 +218,6 @@ const COLUMNS: ReadonlyArray<Column> = [
   { key: "annualDividend", label: "Annual dividend", numeric: true },
 ];
 
-// Money columns a subtotal/grand total render figures for.
 const FIGURES = 4;
 
 /** Owner/account grouping hides its own column — repeating the heading on every row wastes width. */
@@ -277,8 +275,8 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
     values: actionData?.values,
   };
 
-  // Clears only this screen's filters, not grouping/sort (how you read, not
-  // what). Owner filter is separate — "Show everyone" is its own control.
+  // Clears only this screen's filters, not grouping/sort (how you read, not what); owner
+  // filter is separate — "Show everyone" is its own control.
   const cleared = toSearch({ ...query, filters: new Map() }, owners) || ".";
   const columns = columnsFor(group);
   // +1 for the row's Edit control — no `SortKey`, so not a `Column`.
@@ -340,8 +338,7 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
         ) : (
           <>
             <div className="data-table-scroll">
-              {/* Explicit roles: below 768px this table reflows to cards and
-                  browsers drop the implicit ARIA roles. */}
+              {/* Explicit roles: below 768px this table reflows to cards and browsers drop the implicit ARIA roles. */}
                 <table className="data-table data-table--holdings" role="table">
                 <thead role="rowgroup">
                   <tr role="row">
@@ -403,10 +400,8 @@ export default function Holdings({ loaderData, actionData }: Route.ComponentProp
 }
 
 /**
- * Why the table is empty, in words. Owner filter takes precedence over this
- * screen's own selects (unreadable owner, then owner holding nothing, then
- * the selects' overlap) — each in the order it stops being the reader's
- * problem.
+ * Why the table is empty, in words. Owner filter takes precedence over this screen's own
+ * selects (unreadable owner, then owner holding nothing, then the selects' overlap).
  */
 function describe({
   filters,
@@ -477,8 +472,8 @@ function Header({
   );
 }
 
-// Hidden fields for the owner control — a GET form submits only its own,
-// else switching owner drops sort/grouping/filters. `edit`/`saved` excluded (see loader).
+// Hidden fields for the owner control — a GET form submits only its own, else switching owner
+// drops sort/grouping/filters. `edit`/`saved` excluded (see loader).
 function hiddenFields(query: HoldingsQuery): Record<string, string> {
   const fields: Record<string, string> = {};
 
@@ -632,8 +627,7 @@ function Figures({ total }: { total: Total }) {
       </span>
     );
 
-  // Figure and caption share a wrapper: below 768px this becomes a flex row
-  // and needs two items, not three, to stay right-aligned (§7.3).
+  // Figure and caption share a wrapper: below 768px this becomes a flex row and needs two items, not three, to stay right-aligned (§7.3).
   return (
     <>
       <td className="is-numeric" role="cell" data-label="Value">
@@ -654,8 +648,7 @@ function Figures({ total }: { total: Total }) {
           {note(total.unrealizedCoverage)}
         </div>
       </td>
-      {/* No caption: rate coalesces to zero, complete by construction. No
-          weighted yield either — that's a different figure, Income's to show. */}
+      {/* No caption: rate coalesces to zero, complete by construction. No weighted yield either — that's Income's figure to show. */}
       <td className="is-numeric" role="cell" data-label="Annual dividend">
         <Amount value={total.annualDividend} />
       </td>
@@ -725,9 +718,9 @@ type Editor = {
 };
 
 /**
- * One holding, with (at most one at a time) its inline correction (§5.4).
- * Inputs sit in a row beneath, joined by `form=` — a `<form>` can't wrap a
- * `<tr>`. Price/Value/Unrealized keep showing stored figures while open, since correction is made against them.
+ * One holding, with (at most one at a time) its inline correction (§5.4). Inputs sit in a row
+ * beneath, joined by `form=` — a `<form>` can't wrap a `<tr>`. Price/Value/Unrealized keep
+ * showing stored figures while open, since correction is made against them.
  */
 function Row({
   holding,
@@ -840,9 +833,7 @@ function Row({
         <td className="is-numeric" role="cell" data-label="Unrealized">
           {holding.unrealized === null ? "—" : <Delta amount={holding.unrealized} />}
         </td>
-        {/* $0, not a dash: `quote` can't tell "pays nothing" from "nobody
-            asked" (§14 limitation 9). Plain `Amount`, not `Delta` — a payout
-            isn't a movement. */}
+        {/* $0, not a dash: `quote` can't tell "pays nothing" from "nobody asked" (§14 limitation 9). Plain `Amount`, not `Delta` — a payout isn't a movement. */}
         <td className="is-numeric" role="cell" data-label="Annual dividend">
           <div>
             <Amount value={holding.annualDividend} />
@@ -931,9 +922,8 @@ function Row({
 }
 
 /**
- * What the totals were computed from (§8.2). Three separate counts — a
- * workplace plan has a price but no cost basis, an unquotable one is the
- * reverse; one count would misreport the others.
+ * What the totals were computed from (§8.2). Three separate counts — a workplace plan has a
+ * price but no cost basis, an unquotable one is the reverse; one count would misreport the others.
  */
 function Coverage({ total, grouped }: { total: Total; grouped: boolean }) {
   const { valueCoverage: value, unrealizedCoverage: unrealized } = total;
