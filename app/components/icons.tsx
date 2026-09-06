@@ -1,13 +1,4 @@
-/**
- * The icon set, inline — replacing the Stitch screens' CDN Material Symbols
- * for the reasons the fonts are self-hosted (DESIGN.md §13.7): an
- * offline-capable PWA cannot need a network round trip to render its own
- * navigation, and a household finance app should not announce each visit to
- * a third party. Every icon inherits `currentColor` on a 24px grid, 1.75px
- * stroke, round caps (§13.1 — mitred corners read as a different drawing).
- * Decorative throughout: each is `aria-hidden` and sits beside a real text
- * label rather than standing in for one.
- */
+// Icon set, inline — no CDN font, no network round trip (DESIGN.md §13.7). 24px grid, 1.75px stroke, round caps (§13.1). Decorative: `aria-hidden`, always beside a text label.
 
 type IconProps = { className?: string };
 
@@ -29,8 +20,6 @@ function Icon({ className, children }: IconProps & { children: React.ReactNode }
   );
 }
 
-/** Refresh: two arcs chasing each other — the shape every browser already
- * uses for "fetch this again". */
 export function RefreshIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -42,7 +31,6 @@ export function RefreshIcon(props: IconProps) {
   );
 }
 
-/** Overview. Four panes — the dashboard itself. */
 export function DashboardIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -54,7 +42,6 @@ export function DashboardIcon(props: IconProps) {
   );
 }
 
-/** Holdings. Bars against an axis. */
 export function HoldingsIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -66,7 +53,6 @@ export function HoldingsIcon(props: IconProps) {
   );
 }
 
-/** Analysis. The mock's `analytics` — a ring with a slice taken out. */
 export function AnalysisIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -76,7 +62,6 @@ export function AnalysisIcon(props: IconProps) {
   );
 }
 
-/** Income. A coin with a rising mark. */
 export function IncomeIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -87,7 +72,6 @@ export function IncomeIcon(props: IconProps) {
   );
 }
 
-/** Upload. A statement going in. */
 export function UploadIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -117,7 +101,6 @@ export function SettingsIcon(props: IconProps) {
   );
 }
 
-/** A brokerage or investment account — the mock's `account_balance`. */
 export function AccountBalanceIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -129,7 +112,6 @@ export function AccountBalanceIcon(props: IconProps) {
   );
 }
 
-/** A cash or bank account — the mock's `savings`. */
 export function SavingsIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -140,7 +122,6 @@ export function SavingsIcon(props: IconProps) {
   );
 }
 
-/** A retirement account — the mock's `business_center`. */
 export function RetirementIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -151,7 +132,6 @@ export function RetirementIcon(props: IconProps) {
   );
 }
 
-/** A liability. A card with a downward mark — debt, not a holding. */
 export function LiabilityIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -180,8 +160,7 @@ export function TrendingDownIcon(props: IconProps) {
   );
 }
 
-/** No movement. The mock's `horizontal_rule`, kept so a flat row still carries
- * a mark rather than reading as a missing one. */
+// Kept so a flat row still carries a mark rather than reading as a missing one.
 export function TrendingFlatIcon(props: IconProps) {
   return (
     <Icon {...props}>

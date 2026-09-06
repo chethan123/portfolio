@@ -163,25 +163,19 @@ describe("the yield unit hazard", () => {
   });
 
   it("drops a per-share rate too large for its own column, as it does a yield", () => {
-    // The asymmetry migration 0006 turned into a hazard. `yield_pct` has been
-    // bounded since it was added; `annual_dividend_per_share` was written
-    // straight through, and it is `numeric(20, 4)` in the same transaction — so
-    // a provider answering with a figure that is not a rate would abort the
-    // refresh and roll back every other instrument's price, the exact loss the
-    // yield ceiling above exists to prevent.
-    //
-    // Sixteen integer digits is the first figure the column cannot hold.
+    // migration 0006's asymmetry: yield_pct has been bounded since added; annual_dividend_per_share
+    // is written straight through at numeric(20,4) in the same transaction — an unbounded figure
+    // aborts the whole refresh. 16 integer digits is the first it can't hold.
     const quote = quoteFor({
       symbol: "GARBAGE",
       regularMarketPrice: 100,
       dividendRate: 1e16,
     });
 
-    // The price is real and is kept: one unusable field does not discard a quote.
+    // one unusable field doesn't discard a quote
     expect(quote?.price).toBe("100.0000");
     expect(quote?.annualDividendPerShare).toBeNull();
-    // Null, never clamped — a rate at the ceiling would read on the Holdings
-    // table as a projected payout somebody could act on.
+    // null, never clamped — a clamped rate would read as a real projected payout on Holdings
     expect(quote?.yieldPct).toBeNull();
   });
 
@@ -198,9 +192,7 @@ describe("the yield unit hazard", () => {
   });
 
   it("reads an ETF's dividend from trailingAnnualDividendRate", () => {
-    // An ETF payload carries no `dividendRate` — that field is declared on
-    // equities and mutual funds only. Reading just it leaves every ETF in a
-    // taxable brokerage account with a null annual dividend.
+    // ETF payloads carry no dividendRate (equities/mutual funds only) — reading just it nulls every ETF's dividend
     const quote = quoteFor({
       symbol: "VTI",
       quoteType: "ETF",
@@ -209,14 +201,12 @@ describe("the yield unit hazard", () => {
     });
 
     expect(quote?.annualDividendPerShare).toBe("3.3900");
-    // And it derives the yield from the same figure: 3.39 / 271.5 * 100.
+    // derives the yield from the same figure: 3.39 / 271.5 * 100
     expect(quote?.yieldPct).toBe("1.248619");
   });
 
   it("reports no yield when the provider offers neither field", () => {
-    // Ordinary: a growth fund pays nothing. Null, never zero — §8.2's rule is
-    // to label coverage, and a zero would claim the fund pays no dividend
-    // rather than that nobody said.
+    // null, never zero — §8.2: zero would claim the fund pays nothing rather than that nobody said
     const quote = quoteFor({ symbol: "GROWTH", regularMarketPrice: 42 });
 
     expect(quote?.yieldPct).toBeNull();
@@ -226,8 +216,7 @@ describe("the yield unit hazard", () => {
 
 describe("the currency guard", () => {
   it("refuses a quote that is not in USD", () => {
-    // §6.1: the guard exists so a foreign listing cannot silently sum GBP into
-    // a USD total. There is no currency column to store the difference in.
+    // §6.1: stops a foreign listing summing GBP silently into a USD total — no column stores the difference
     expect(() => quoteFor({ symbol: "VOD.L", regularMarketPrice: 71.5, currency: "GBP" })).toThrow(
       CurrencyRefused,
     );
@@ -245,8 +234,7 @@ describe("the currency guard", () => {
   });
 
   it("accepts a quote whose currency is absent, since USD is the only thing stored", () => {
-    // Not every payload carries a currency. Refusing on absence would stop
-    // pricing an instrument over a field nobody promised.
+    // refusing on absent currency would stop pricing an instrument over a field nobody promised
     expect(quoteFor({ symbol: "VTI", regularMarketPrice: 271.5 })?.price).toBe("271.5000");
   });
 });
@@ -270,9 +258,7 @@ describe("the instant a price was struck", () => {
   });
 
   it("falls back to the fetch time rather than inventing a trading day", () => {
-    // Safe rather than lossy: the quote is being written now, so "now" is at
-    // worst a few hours late on a NAV, and it never files a price under a day
-    // the market did not trade.
+    // safe not lossy: "now" is at worst hours late on a NAV, never files under a day that didn't trade
     const quote = quoteFor({
       symbol: "VTI",
       regularMarketPrice: 271.5,
@@ -286,9 +272,7 @@ describe("the instant a price was struck", () => {
     const struck = new Date("2026-06-05T20:00:00Z");
     const quote = quoteFor({ symbol: "VTI", regularMarketPrice: 271.5, regularMarketTime: struck });
 
-    // Two different facts, and the observation log files under the first while
-    // recording the second (ADR-0006). A seam carrying only one of them would
-    // make an evening NAV indistinguishable from a morning fetch of it.
+    // two facts (ADR-0006) — losing either makes an evening NAV indistinguishable from a morning fetch of it
     expect(quote?.asOf).toEqual(struck);
     expect(quote?.fetchedAt).toEqual(FETCHED_AT);
   });
@@ -300,8 +284,7 @@ describe("the raw entry kept for the archive", () => {
       symbol: "VTI",
       regularMarketPrice: 271.5,
       currency: "USD",
-      // Neither of these is in the schema above, and that is the point: the
-      // archive exists for what the typed parse throws away (ADR-0006).
+      // neither field is in the schema above — the archive exists for what the typed parse throws away (ADR-0006)
       marketState: "REGULAR",
       fiftyTwoWeekHigh: 280.1,
     };
@@ -310,9 +293,7 @@ describe("the raw entry kept for the archive", () => {
   });
 
   it("archives nothing for an entry it refused, because there is no quote to archive it against", () => {
-    // The rule stated the other way round: a payload is stored only when the
-    // typed parse succeeded, so a shape change stays a refusal rather than
-    // becoming a stored surprise.
+    // stored only when the typed parse succeeded — a shape change stays a refusal, not a stored surprise
     expect(quoteFor({ nothing: "useful" })).toBeNull();
     expect(quoteFor({ symbol: "DELISTED", currency: "USD" })).toBeNull();
   });

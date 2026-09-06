@@ -1,14 +1,7 @@
-/**
- * Resolving first sightings, and the writes that remember them forever
- * (spec 0004 step 04).
- *
- * Against real Postgres, because what is at risk lives there: the byte-exact
- * `collate "C"` lookup, the unique classification name, and the alias
- * conflict a concurrent draft plants. The USD probe is always a stub — the
- * seam exists so no test touches the network — and the stubs count their
- * calls, because "probed once per created feed instrument" is a rule, not an
- * implementation detail.
- */
+// Resolving first sightings, and the writes that remember them forever (spec 0004 step 04).
+// Real Postgres — byte-exact collate "C" lookup, unique classification name, concurrent-draft
+// alias conflict. USD probe is always a stub (no test touches the network); stubs count calls
+// since "probed once per created feed instrument" is a rule, not an implementation detail.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { ValidationError } from "~/lib/input.server";
@@ -28,15 +21,10 @@ import type { ProbeSymbols } from "~/lib/price-provider.server";
 
 afterAll(closeTestDatabase);
 
-/**
- * A probe that answers `ok` for every symbol asked and counts the calls —
- * each call carries every symbol it was asked in one go, so "probed once per
- * created feed instrument" is checked on the call list, not a call count.
- *
- * `quoteType` is what the provider would have said, because the created row
- * stores it (§4.4) — a stub answering null here would pass while telling the
- * screen every instrument is unclassifiable.
- */
+/** Probe answering ok for every symbol, counting calls — each call carries every symbol
+ * asked in one go, so "probed once" is checked on the call list, not a count. quoteType
+ * mirrors what a provider says (§4.4) — null here would pass while telling the screen
+ * everything is unclassifiable. */
 function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbols; calls: string[][] } {
   const calls: string[][] = [];
   return {
@@ -115,8 +103,8 @@ describe("resolveAll — pointing at an existing instrument", () => {
         .executeTakeFirstOrThrow();
       expect(alias.instrument_id).toBe(vti.id);
 
-      // No instrument was created, and the string now resolves — the same
-      // brokerage's next export passes through silently.
+      // No instrument created, string now resolves — next export from the same brokerage
+      // passes silently.
       const after = await db.selectFrom("instrument").select("id").execute();
       expect(after).toHaveLength(before.length);
       await expect(
@@ -136,8 +124,8 @@ describe("resolveAll — pointing at an existing instrument", () => {
         db,
       );
 
-      // The round trip through resolution keeps `collate "C"` honest: the
-      // respelling is still a first sighting, the exact bytes are not.
+      // Round trip keeps collate "C" honest — respelling is still a first sighting, exact
+      // bytes are not.
       await expect(unresolvedStrings(["VTI ", "VTI", "vti "], db)).resolves.toEqual([
         "VTI",
         "vti ",
@@ -166,10 +154,8 @@ describe("resolveAll — creating an instrument", () => {
   it(
     "stores null when the provider named no type, rather than guessing one",
     withDatabase(async ({ db }) => {
-      // A quote that came back without the field. The catch-all row that
-      // receives this on the Analysis screen is visible and counted; an
-      // instrument filed as an equity because nobody said otherwise would not
-      // be.
+      // Quote came back without the field — Analysis screen's catch-all row is visible
+      // and counted; filing it as equity by default would not be.
       const { probe } = okProbe(null);
       await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
 
@@ -209,9 +195,8 @@ describe("resolveAll — creating an instrument", () => {
       expect(instrument.name).toBe("Vanguard Total International Stock ETF");
       expect(instrument.price_source).toBe("feed");
       expect(instrument.classification_id).toBe(classification.id);
-      // The probe already asked the provider what this is; the created row is
-      // where that answer goes, and the Analysis screen's stocks-versus-funds
-      // split is what reads it back.
+      // Probe already asked the provider what this is — created row stores that answer;
+      // Analysis's stocks-vs-funds split reads it back.
       expect(instrument.quote_type).toBe("EQUITY");
 
       const alias = await db

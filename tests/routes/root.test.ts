@@ -57,8 +57,6 @@ describe("the shell's loader", () => {
   it(
     "reports the step the instance is actually on when the database answers",
     withDatabase(async ({ seedPerson }) => {
-      // The counterpart, and what keeps the test above from passing on a
-      // loader that had stopped asking the question at all.
       await seedPerson();
 
       expect((await loader(args(get("/")))).firstRun).toBe("accounts");
@@ -83,23 +81,12 @@ describe("the shell's loader", () => {
 });
 
 describe("the shell's loader on /unlock — the household's setup state must not reach the hydration payload", () => {
-  /**
-   * React Router serialises whatever this function returns, whatever
-   * `Layout` goes on to render with it — so the object this asserts against
-   * *is* the payload, not a proxy for it. A markup assertion would pass
-   * whether or not this fix existed, since `Layout` never prints any of
-   * these fields for `/unlock` either way (this file's own header on
-   * `isUnlockPath`) — which is exactly the gap the finding this test pins
-   * named: hiding the chrome hid the consumers, not the data.
-   */
+  // Asserted on the loader's returned object, not markup — Layout never prints these fields for /unlock either way,
+  // so a markup assertion would pass whether or not this fix existed (hiding the chrome hid the consumers, not the data).
   it(
     "answers gated, firstRun, masked, maskingPolicy and hasPasskey with fixed neutral values, never the household's real ones",
     withDatabase(async ({ db, seedPasskey, seedPerson }) => {
-      // Real state that would answer differently for every field below, had
-      // this loader read any of it for `/unlock`: a person with no account
-      // yet answers "accounts" for `/`, AUTH_GATE defaults to "none" in this
-      // suite (vitest.config.ts), which answers `gated: false` for `/`, and a
-      // seeded passkey answers `hasPasskey: true` for `/`.
+      // Real state that would answer differently below for /unlock, had this loader read any of it there.
       await seedPerson();
       await seedPasskey({ publicKey: new Uint8Array([2, 2, 2]) });
       await saveMaskingPolicy({ maskingPolicy: "unmasked" }, db);
@@ -146,13 +133,7 @@ describe("the shell's loader on /unlock — the household's setup state must not
   it(
     "still starts the price poller on a request to /unlock — the one route every render passes through before anyone has unlocked anything",
     withDatabase(async () => {
-      // `SLOT` is a `Symbol.for` registry key (`price-poller.server.ts`'s own
-      // header on why), so it names the identical global from here without
-      // importing anything internal, and without ever forcing a real tick —
-      // `requestRefresh()` would reach the live Yahoo provider by default,
-      // which a test must not do. Undefined until something starts the
-      // poller; `afterEach(stopPricePoller)` above deletes it again after
-      // every test in this file, this one included.
+      // Symbol.for registry key (price-poller.server.ts) names the identical global without importing anything internal or forcing a real tick.
       const POLLER_SLOT = Symbol.for("portfolio.pricePoller");
       const host = globalThis as unknown as Record<symbol, unknown>;
       expect(host[POLLER_SLOT]).toBeUndefined();
@@ -191,16 +172,13 @@ describe("the lock middleware", () => {
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
       let called = false;
 
-      // The assertion that bites: not that the response carries no figure —
-      // a refusal renders nothing, so that would pass whatever the
-      // middleware did — but that `next` was never invoked at all.
       await responseOf(() =>
         servedThrough(middleware, get("/holdings"), {}, () => {
           called = true;
         }),
       );
 
-      expect(called).toBe(false);
+      expect(called).toBe(false); // next never invoked — not merely "response carries no figure", which a refusal renders vacuously
     }),
   );
 
@@ -215,10 +193,7 @@ describe("the lock middleware", () => {
 
       const target = new URL(location, "http://portfolio.local");
       expect(target.pathname).toBe("/unlock");
-      // Exactly one parameter, and no literal `&` anywhere in the address —
-      // the whole point: the gate's own sign-in redirect truncates a target
-      // at the first ampersand (ADR-0012, docs/specs/0019-the-lock.md), and
-      // an owner filter beside a chart range is exactly such a target.
+      // The whole point: the sign-in redirect truncates a target at the first & (ADR-0012, docs/specs/0019-the-lock.md).
       expect([...target.searchParams.keys()]).toEqual(["redirectTo"]);
       expect(target.searchParams.get("redirectTo")).toBe("/holdings?owner=2&range=5y");
       expect(location).not.toContain("&");
@@ -230,9 +205,7 @@ describe("the lock middleware", () => {
     withDatabase(async ({ seedPasskey }) => {
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
 
-      // `/masking` exports an action only — exactly the route this rule
-      // exists for: a return address built from its pathname would send an
-      // unlocked reader to `GET /masking`, a 400.
+      // /masking exports an action only — a return address built from its pathname would send GET /masking, a 400.
       const location = await redirectTo(() => servedThrough(middleware, post("/masking", {})));
 
       expect(location).toBe("/unlock");
@@ -252,15 +225,11 @@ describe("the lock middleware", () => {
         ),
       );
 
-      // Refused exactly like an ordinary "no grant" case — a redirect to the
-      // unlock screen — and never treated as "no passkey enrolled", which is
-      // a different answer this middleware must not collapse it into.
+      // Refused exactly like an ordinary "no grant" — never collapsed into "no passkey enrolled", a different answer.
       expect(called).toBe(false);
       expect(response.status).toBeGreaterThanOrEqual(300);
       expect(response.status).toBeLessThan(400);
-      // A read that merely failed to answer is not proof the cookie's grant
-      // is gone, so nothing here is cleared.
-      expect(response.headers.get("Set-Cookie")).toBeNull();
+      expect(response.headers.get("Set-Cookie")).toBeNull(); // a failed read is not proof the cookie's grant is gone
     } finally {
       await unreachable.destroy();
     }
@@ -269,12 +238,8 @@ describe("the lock middleware", () => {
   it(
     "refuses rather than continues when the grant check itself cannot reach the database",
     withDatabase(async ({ seedPasskey }) => {
-      // Distinct from the previous test: `isLocked` answers normally here (a
-      // real, seeded passkey against the real test database) and only the
-      // *second* read — the grant check `touchGrant` used to split across
-      // `readGrant` then `extendGrant`, now one call — fails. A single
-      // unreachable database cannot isolate this: `isLocked` is the first
-      // read this middleware makes, and it would refuse first.
+      // Distinct from above: isLocked answers normally (real seeded passkey) and only the second read (touchGrant) fails —
+      // a single unreachable DB can't isolate this since isLocked would refuse first.
       await seedPasskey({ publicKey: A_PUBLIC_KEY });
       let called = false;
       touchGrantOverride.impl = async () => {
@@ -291,9 +256,7 @@ describe("the lock middleware", () => {
         expect(called).toBe(false);
         expect(response.status).toBeGreaterThanOrEqual(300);
         expect(response.status).toBeLessThan(400);
-        // A read that merely failed to answer is not proof the cookie's
-        // grant is gone, so nothing here is cleared.
-        expect(response.headers.get("Set-Cookie")).toBeNull();
+        expect(response.headers.get("Set-Cookie")).toBeNull(); // a failed read is not proof the grant is gone
       } finally {
         touchGrantOverride.impl = undefined;
       }
