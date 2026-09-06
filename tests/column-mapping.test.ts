@@ -75,8 +75,6 @@ describe("headerFingerprint", () => {
   });
 
   it("distinguishes the same columns in a different order, deliberately", () => {
-    // A reordered export costs one re-map, which is cheaper than a mapping
-    // that silently follows a column that moved.
     expect(headerFingerprint(["Symbol", "Quantity"])).not.toBe(
       headerFingerprint(["Quantity", "Symbol"]),
     );
@@ -105,8 +103,6 @@ describe("findMapping and upsertMapping", () => {
       await upsertMapping("Fidelity", fingerprint, MAPPING, db);
 
       await expect(findMapping("Fidelity", fingerprint, db)).resolves.toEqual(MAPPING);
-      // Scope is the pair — another institution's identical header, or this one's different
-      // header, is not this answer.
       await expect(findMapping("Schwab", fingerprint, db)).resolves.toBeNull();
       await expect(
         findMapping("Fidelity", headerFingerprint(["Quantity", "Symbol"]), db),
@@ -143,7 +139,6 @@ describe("findMapping and upsertMapping", () => {
     withDatabase(async ({ db }) => {
       const fingerprint = headerFingerprint(["Symbol", "Quantity"]);
 
-      // Row predating a shape change, or hand-written — screen must open unfilled, never 500.
       await upsertMapping(
         "Fidelity",
         fingerprint,
@@ -158,8 +153,6 @@ describe("findMapping and upsertMapping", () => {
   it(
     "auto-applies across files: a later export with the same header finds the saved mapping",
     withDatabase(async ({ db }) => {
-      // The first upload: a preamble, then the header the mapping was built
-      // against, then that quarter's data.
       const first = readCsv(
         new TextEncoder().encode(
           "Account positions as of 06/30/2026\n\n" +
@@ -174,7 +167,6 @@ describe("findMapping and upsertMapping", () => {
         db,
       );
 
-      // Next quarter: different data, header cells re-cased/padded — no column's meaning changed.
       const second = readCsv(
         new TextEncoder().encode(
           "Account positions as of 09/30/2026\n\n" +
@@ -202,8 +194,8 @@ describe("rememberMapping", () => {
   it(
     "sends the reader to the step it just wrote onto the draft, both ways round",
     withDatabase(async ({ db, seedAccount, seedUploadDraft, seedInstrument }) => {
-      // Bug this replaces: the bit and the redirect came from two separate reads, so an
-      // alias written between them left the step strip lying. One answer must serve both.
+      // Bug this replaces: bit and redirect from two separate reads could disagree if an
+      // alias landed between them.
       const account = await seedAccount({ kind: "brokerage" });
       const instrument = await seedInstrument({ symbol: "VTI" });
       await plantAlias(db, instrument, "VTI");
@@ -226,7 +218,6 @@ describe("rememberMapping", () => {
       });
       expect((await requireDraft(quiet.id, db)).hadFirstSightings).toBe(false);
 
-      // The mapping itself lands too — a later step reads it back off the row.
       expect((await requireDraft(quiet.id, db)).mapping).toEqual(SIMPLE);
     }),
   );
@@ -234,8 +225,6 @@ describe("rememberMapping", () => {
   it(
     "refuses an instrument column that is empty on every row, naming that column",
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
-      // Refused here, not two screens later as an empty diff — the column choice is the
-      // fix, and this screen holds it.
       const account = await seedAccount({ kind: "brokerage" });
       const draft = await seedUploadDraft({
         account,
@@ -251,7 +240,6 @@ describe("rememberMapping", () => {
       }
 
       expect(refusal?.fieldErrors.instrument).toMatch(/"Symbol"/);
-      // Refused means refused: no mapping landed on the draft.
       expect((await requireDraft(draft.id, db)).mapping).toBeNull();
     }),
   );
@@ -267,16 +255,12 @@ describe("rememberMapping", () => {
 
       const outcome = await rememberMapping(draft.id, SIMPLE, db);
 
-      // Structured, not sentences — columns screen hangs aria-invalid off each problem's
-      // column; flattening to messages would lose that.
       expect("problems" in outcome).toBe(true);
       const problems = "problems" in outcome ? outcome.problems : [];
       expect(problems).toHaveLength(1);
       expect(problems[0]?.column).toBe("Quantity");
       expect(problems[0]?.row).toBe(1);
 
-      // Nothing written — a draft with a mapping its own file can't parse would bounce
-      // every later step back to columns anyway.
       const stored = await requireDraft(draft.id, db);
       expect(stored.mapping).toBeNull();
       expect(stored.hadFirstSightings).toBeNull();
@@ -286,8 +270,6 @@ describe("rememberMapping", () => {
   it(
     "remembers the mapping for the institution, under its own header's fingerprint",
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
-      // Convenience cache the next upload's columns screen prefills from — written here
-      // since this is where a mapping is known good.
       const account = await seedAccount({ kind: "brokerage", institution: "Fidelity" });
       const draft = await seedUploadDraft({
         account,
@@ -304,8 +286,6 @@ describe("rememberMapping", () => {
   it(
     "refuses a draft that is gone with the same 404 every dead draft URL gets",
     withDatabase(async ({ db }) => {
-      // Throw, not a returned problem — columns.tsx turns this into a 404 Response,
-      // not a blank form-error screen.
       await expect(rememberMapping("999999", MAPPING, db)).rejects.toThrow(NotFoundError);
     }),
   );

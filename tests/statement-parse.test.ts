@@ -1,15 +1,8 @@
 /**
- * Applying a mapping to a file's rows (spec 0004, step 02).
- *
- * Two kinds of test share this file. The fixture tests run whole
- * brokerage-shaped exports through `readCsv` and `parseStatement` together,
- * because the point of a pure parser is that a real institution's file is a
- * test rather than a surprise. The inline tests pin each rule of the contract
- * one row at a time — every refusal, every skip, every scale.
- *
- * Every money and quantity assertion is an exact decimal string, for the
- * reason `money.test.ts` gives: the module exists so no figure passes through
- * a float, and a tolerant assertion would not notice if one did.
+ * Applying a mapping to a file's rows (spec 0004, step 02). Fixture tests run whole
+ * brokerage-shaped exports through readCsv + parseStatement together, since a real
+ * institution's file is the point of a pure parser. Inline tests pin each contract rule one
+ * row at a time. Every money/quantity assertion is an exact decimal string (money.test.ts's reasoning).
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -52,9 +45,8 @@ describe("parseStatement on the fixtures", () => {
 
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(4);
-    // The footer disclaimers — including the quoted sentence full of commas —
-    // never reach the positions, and are not worth reporting either: their
-    // rows carry nothing under the symbol column.
+    // footer disclaimers (including the quoted sentence full of commas) never reach positions —
+    // not worth reporting either, their rows carry nothing under symbol
     expect(parsed.skipped).toEqual([]);
 
     const aapl = parsed.positions[0];
@@ -64,8 +56,7 @@ describe("parseStatement on the fixtures", () => {
     expect(aapl?.costBasisPerShare).toBe("170.6600");
     expect(aapl?.accountNumber).toBe("Z12-345678");
 
-    // A quoted quantity with a thousands separator, and an `n/a` basis that
-    // lands as null — never zero, which would report the cash as free money.
+    // quoted quantity with thousands separator; n/a basis lands as null, never zero (would report free money)
     const spaxx = parsed.positions[3];
     expect(spaxx?.quantity).toBe("2450.10");
     expect(spaxx?.costBasisPerShare).toBeNull();
@@ -97,13 +88,11 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.positions[0]?.costBasisPerShare).toBe("170.6600");
     // $9,875.50 over 25.
     expect(parsed.positions[1]?.costBasisPerShare).toBe("395.0200");
-    // A short position: the parenthesised total over the negative quantity is
-    // the positive per-share fact a price is — the sign stays in the quantity.
+    // short position: parenthesised total over negative quantity — sign stays in the quantity, price stays positive
     expect(parsed.positions[2]?.quantity).toBe("-10");
     expect(parsed.positions[2]?.costBasisPerShare).toBe("26.5000");
 
-    // The cash and total lines name something but state no quantity: skipped,
-    // and reported so the review screen can say so rather than staying silent.
+    // cash/total lines name something but state no quantity — skipped and reported so the review screen can say so
     expect(parsed.skipped).toEqual([
       { row: 6, instrument: "Cash & Cash Investments" },
       { row: 7, instrument: "Account Total" },
@@ -121,13 +110,11 @@ describe("parseStatement on the fixtures", () => {
 
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(3);
-    // No cost basis column mapped at all: null for every row, which Holdings'
-    // three separate coverages already report honestly (§8.2).
+    // no cost basis column mapped — null for every row, which Holdings' coverages already report honestly (§8.2)
     for (const position of parsed.positions) {
       expect(position.costBasisPerShare).toBeNull();
     }
-    // The collective trusts have no ticker; the fund name is the instrument
-    // string that resolution will see.
+    // collective trusts have no ticker — the fund name is the instrument string resolution will see
     expect(parsed.positions[0]?.instrument).toBe("Vanguard Target Retirement 2045 Trust II");
     expect(parsed.positions[0]?.quantity).toBe("412.51230000");
 
@@ -152,19 +139,18 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(2);
 
-    // 100 + 200 + 112.5 lots, basis weighted by quantity at the columns'
-    // scales: (100×95.10 + 200×110.25 + 112.5×123.40) / 412.5 = 110.16363…,
-    // rounded half away from zero at numeric(20, 4).
+    // 100+200+112.5 lots, basis weighted by quantity: (100×95.10 + 200×110.25 + 112.5×123.40)
+    // / 412.5 = 110.16363…, rounded half away from zero at numeric(20,4)
     const vtsax = parsed.positions[0];
     expect(vtsax?.quantity).toBe("412.50000000");
     expect(vtsax?.costBasisPerShare).toBe("110.1636");
     expect(vtsax?.row).toBe(1);
 
-    // The single-lot fund passes through untouched, at the file's own scale.
+    // single-lot fund passes through untouched, at the file's own scale
     expect(parsed.positions[1]?.quantity).toBe("50.0000");
     expect(parsed.positions[1]?.costBasisPerShare).toBe("72.8000");
 
-    // Reported for the review screen to print as its own line, not a count.
+    // reported for the review screen to print as its own line, not a count
     expect(parsed.combined).toEqual([
       { instrument: "VTSAX", rowCount: 3, quantity: "412.50000000" },
     ]);
@@ -180,8 +166,7 @@ describe("parseStatement on the fixtures", () => {
       }),
     );
 
-    // A position set holds one row per instrument, so the duplicate cannot
-    // pass through silently — it is named, with the row it recurs on.
+    // a position set holds one row per instrument — the duplicate can't pass silently, named with the row it recurs on
     expect(parsed.problems).toHaveLength(1);
     expect(parsed.problems[0]?.message).toMatch(/"VTSAX" appears on 3 lines/);
     expect(parsed.problems[0]?.row).toBe(2);
@@ -207,8 +192,7 @@ describe("parseStatement on the fixtures", () => {
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(1);
 
-    // The file says 14,500.00 owed; §2 puts the sign in the quantity, and the
-    // mapping's checkbox is where the direction was decided.
+    // file says 14,500.00 owed; §2 puts the sign in the quantity, decided by the mapping's checkbox
     const loan = parsed.positions[0];
     expect(loan?.instrument).toBe("Auto Loan 60 months");
     expect(loan?.quantity).toBe("-14500.00");
@@ -293,7 +277,7 @@ describe("row handling", () => {
 
     expect(parsed.problems).toEqual([]);
     expect(parsed.positions).toHaveLength(1);
-    // Not reported either: a spacer names nothing worth telling the reader.
+    // not reported either — a spacer names nothing worth telling the reader
     expect(parsed.skipped).toEqual([]);
   });
 
@@ -313,8 +297,7 @@ describe("row handling", () => {
   });
 
   it("refuses a row with an instrument and an unparseable quantity, naming the row", () => {
-    // A disclaimer line that happens to sit under the symbol column must not
-    // become a position — and must not vanish either.
+    // a disclaimer line under the symbol column must not become a position — and must not vanish either
     const parsed = parseStatement(
       [
         ["Symbol", "Qty"],
@@ -396,7 +379,7 @@ describe("cost basis", () => {
       mapping({ columns, costBasisIs: "total" }),
     );
 
-    // 100 / 3 at numeric(20, 4): rounded half away from zero, never floated.
+    // 100/3 at numeric(20,4): rounded half away from zero, never floated
     expect(parsed.positions[0]?.costBasisPerShare).toBe("33.3333");
   });
 
@@ -468,10 +451,9 @@ describe("owedAsPositive", () => {
 
     expect(parsed.positions.map((position) => position.quantity)).toEqual([
       "-14500.00",
-      // "−0.00" is a debt of nothing written as though it were something.
+      // "-0.00" is a debt of nothing written as though it were something
       "0.00",
-      // Negation, not "make negative": a credit on a loan statement counts
-      // for the household.
+      // negation, not "make negative" — a credit on a loan statement counts for the household
       "25.00",
     ]);
   });
@@ -491,8 +473,7 @@ describe("duplicate rows", () => {
   const columns = { instrument: "Symbol", quantity: "Qty", costBasis: "Basis" };
 
   it("combines on the raw string as written, so two spellings stay two entries", () => {
-    // Resolution in step 04 is byte-exact against the alias table; combining
-    // across spellings here would guess what resolution decides.
+    // resolution in step 04 is byte-exact against the alias table — combining across spellings here would guess what resolution decides
     const parsed = parseStatement(
       [
         ["Symbol", "Qty", "Basis"],
@@ -517,15 +498,14 @@ describe("duplicate rows", () => {
     );
 
     expect(parsed.problems).toEqual([]);
-    // Stored as zero, so the row stays addressable — not dropped.
+    // stored as zero, so the row stays addressable — not dropped
     expect(parsed.positions[0]?.quantity).toBe("0.00000000");
     expect(parsed.positions[0]?.costBasisPerShare).toBeNull();
     expect(parsed.combined).toEqual([{ instrument: "XYZ", rowCount: 2, quantity: "0.00000000" }]);
   });
 
   it("keeps a null basis when any combined lot's own basis is unknown", () => {
-    // A blended figure over a gap would be fake precision — the same reason
-    // `sumMoney` counts its nulls instead of zeroing them.
+    // a blended figure over a gap would be fake precision — same reason sumMoney counts its nulls instead of zeroing them
     const parsed = parseStatement(
       [
         ["Symbol", "Qty", "Basis"],
@@ -575,8 +555,7 @@ describe("the as-of date", () => {
   });
 
   it("reads the US date shapes real exports carry as the ISO date", () => {
-    // The spelling is normalised; the rules — a real calendar date, no later
-    // than tomorrow — are still `recordedDate`'s, unchanged.
+    // spelling is normalised; the rules (real calendar date, no later than tomorrow) are still recordedDate's
     const padded = parseStatement(
       [
         ["Symbol", "Qty", "As Of"],
@@ -627,9 +606,7 @@ describe("the as-of date", () => {
   });
 
   it("refuses a file that dates itself before the first day anything can be priced", () => {
-    // The floor reaches the parser through the shared validator, so a statement
-    // dating itself 1969 refuses here rather than committing a set the chart
-    // can never price. An intended behaviour change, so it gets a case.
+    // floor reaches the parser through the shared validator — 1969 refuses here rather than committing a set the chart can never price
     const parsed = parseStatement(
       [
         ["Symbol", "Qty", "As of"],
@@ -644,8 +621,7 @@ describe("the as-of date", () => {
   });
 
   it("validates the date by the same rule a typed one faces", () => {
-    // `recordedDate`'s rules, unchanged: the spelling, the calendar, and the
-    // future — a statement dated 2126 would pin the account until 2126.
+    // recordedDate's rules, unchanged: spelling, calendar, future — dated 2126 would pin the account until 2126
     const spelled = parseStatement(
       [
         ["Symbol", "Qty", "As Of"],

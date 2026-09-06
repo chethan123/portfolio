@@ -36,17 +36,14 @@ function okProbe(quoteType: string | null = "EQUITY"): { probe: ProbeSymbols; ca
   };
 }
 
-/** A probe whose provider is having a bad day, whatever the symbols. */
 const unavailableProbe: ProbeSymbols = async (symbols) =>
   new Map(symbols.map((symbol) => [symbol, { status: "unavailable" } as const]));
 
-/** A probe that quotes every symbol in the given currency. */
 const foreignProbe =
   (currency: string): ProbeSymbols =>
   async (symbols) =>
     new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency } as const]));
 
-/** A probe that must never be reached — pointing at existing, manual creates. */
 const forbiddenProbe: ProbeSymbols = async (symbols) => {
   throw new Error(`The probe was called for ${symbols.join(", ")}, and this path must not probe.`);
 };
@@ -103,8 +100,6 @@ describe("resolveAll — pointing at an existing instrument", () => {
         .executeTakeFirstOrThrow();
       expect(alias.instrument_id).toBe(vti.id);
 
-      // No instrument created, string now resolves — next export from the same brokerage
-      // passes silently.
       const after = await db.selectFrom("instrument").select("id").execute();
       expect(after).toHaveLength(before.length);
       await expect(
@@ -124,8 +119,6 @@ describe("resolveAll — pointing at an existing instrument", () => {
         db,
       );
 
-      // Round trip keeps collate "C" honest — respelling is still a first sighting, exact
-      // bytes are not.
       await expect(unresolvedStrings(["VTI ", "VTI", "vti "], db)).resolves.toEqual([
         "VTI",
         "vti ",
@@ -154,8 +147,6 @@ describe("resolveAll — creating an instrument", () => {
   it(
     "stores null when the provider named no type, rather than guessing one",
     withDatabase(async ({ db }) => {
-      // Quote came back without the field — Analysis screen's catch-all row is visible
-      // and counted; filing it as equity by default would not be.
       const { probe } = okProbe(null);
       await resolveAll([{ raw: "VXUS", fields: createFields() }], { probe }, db);
 
@@ -195,8 +186,6 @@ describe("resolveAll — creating an instrument", () => {
       expect(instrument.name).toBe("Vanguard Total International Stock ETF");
       expect(instrument.price_source).toBe("feed");
       expect(instrument.classification_id).toBe(classification.id);
-      // Probe already asked the provider what this is — created row stores that answer;
-      // Analysis's stocks-vs-funds split reads it back.
       expect(instrument.quote_type).toBe("EQUITY");
 
       const alias = await db
@@ -290,8 +279,6 @@ describe("resolveAll — creating an instrument", () => {
             }),
           },
         ],
-        // Manual instrument has nothing to quote — probe must never run; the throwing
-        // stub is the assertion.
         { probe: forbiddenProbe },
         db,
       );
@@ -335,7 +322,6 @@ describe("resolveAll — creating an instrument", () => {
         /"Growth" is already a classification/,
       );
 
-      // Refused before anything was written.
       const aliases = await db
         .selectFrom("instrument_alias")
         .select("raw_string")
@@ -367,14 +353,11 @@ describe("resolveAll — the USD probe", () => {
         ),
       );
 
-      // The refresh guard's stem wording, with only its tail adapted.
       expect(refusal.fieldErrors["symbol-1"]).toBe(
         "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
       );
 
-      // Nothing written for that string — no instrument, classification, or alias.
-      // Refusal is atomic, so the sibling string's alias waits too and the screen
-      // re-renders every question.
+      // Atomic across the submission — FCASH's alias waits too.
       const instrumentsAfter = await db.selectFrom("instrument").select("id").execute();
       expect(instrumentsAfter).toHaveLength(instrumentsBefore.length);
       const aliases = await db
@@ -415,10 +398,6 @@ describe("resolveAll — the USD probe", () => {
   it(
     "writes each created instrument the quote type its own symbol was answered with",
     withDatabase(async ({ db, seedClassification }) => {
-      // Write side of the pairing: quote_type is the one place the provider's vocabulary
-      // reaches a screen (splits stocks from funds in unrealized gains) — a verdict off
-      // the wrong plan misfiles silently. Serially each plan filled its own cache; batched
-      // they share one map.
       const classification = await seedClassification();
       const probe: ProbeSymbols = async () =>
         new Map([
@@ -465,9 +444,6 @@ describe("resolveAll — the USD probe", () => {
   it(
     "refuses a lower-case symbol the probe answered non-USD for",
     withDatabase(async ({ db, seedClassification }) => {
-      // Probe asked in one spelling, read back in another only if the two sites disagree.
-      // Symbol is stored as typed (any case) — asking VTI but reading vti would silently
-      // lose the refusal.
       const classification = await seedClassification();
       const probe: ProbeSymbols = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
@@ -498,10 +474,6 @@ describe("resolveAll — the USD probe", () => {
   it(
     "refuses only the feed plan when a manual plan names the same refused ticker",
     withDatabase(async ({ db, seedClassification }) => {
-      // Guard keeping manual instruments out of the feed currency rule is written at two
-      // sites (collection, read) — each masks the other's loss. A never-called probe
-      // catches only the collection site; losing the read site instead would misfire a
-      // refusal onto the wrong plan without ever calling the probe.
       const classification = await seedClassification();
       const probe: ProbeSymbols = async (symbols) =>
         new Map(symbols.map((symbol) => [symbol, { status: "non-usd", currency: "GBP" } as const]));
@@ -534,9 +506,6 @@ describe("resolveAll — the USD probe", () => {
   it(
     "never probes a manual instrument, even one carrying a symbol",
     withDatabase(async ({ db, seedClassification }) => {
-      // Manual instrument may carry a ticker for reference while priced by hand — not
-      // feed-priced, so its currency isn't the feed's to refuse. Guard is written at two
-      // sites (collection, read), either masking the other's loss.
       const classification = await seedClassification();
 
       await resolveAll(
@@ -562,8 +531,6 @@ describe("resolveAll — the USD probe", () => {
   it(
     "probes three tickers named by six strings in one call carrying three symbols, landing each verdict on the right plans",
     withDatabase(async ({ db, seedClassification }) => {
-      // Two strings per ticker — a mispairing would double the call or land a verdict on
-      // the wrong ticker's plans.
       const classification = await seedClassification();
       const calls: string[][] = [];
       const probe: ProbeSymbols = async (symbols) => {
@@ -599,11 +566,8 @@ describe("resolveAll — the USD probe", () => {
         ),
       );
 
-      // One call, three distinct symbols — not six, and not three calls.
       expect(calls).toEqual([["VTI", "VWRL", "ZZZZ"]]);
 
-      // Only the two strings naming the refused ticker are refused; ok and unavailable
-      // tickers' strings are untouched.
       expect(Object.keys(refusal.fieldErrors)).toEqual(["symbol-2", "symbol-3"]);
       expect(refusal.fieldErrors["symbol-2"]).toBe(
         "VWRL is quoted in GBP. This instance holds USD only, so it was not created.",
@@ -617,10 +581,7 @@ describe("resolveAll — the USD probe", () => {
   it(
     "creates the instrument when the probe answered nothing about its symbol",
     withDatabase(async ({ db, seedClassification }) => {
-      // Probe may answer fewer symbols than asked (not hypothetical — a symbol failing
-      // the worker's pattern check is dropped before the call). Absent verdict reads as
-      // unavailable (created, priced/staled by the next refresh) — a refusal here would
-      // block a statement over a symbol nobody judged.
+      // Not hypothetical — a symbol failing the worker's pattern check is dropped before the call.
       const classification = await seedClassification();
       const silentProbe: ProbeSymbols = async () => new Map();
 
@@ -656,9 +617,7 @@ describe("resolveAll — the USD probe", () => {
   it(
     "resolves a manual-only submission with a probe stub that was never called",
     withDatabase(async ({ db, seedClassification }) => {
-      // Call counter is the assertion — a manual-only submission (the common case) must
-      // make no provider call at all; a zero-symbol ask over the socket is a round trip
-      // the worker refuses.
+      // Zero-symbol ask over the socket is a round trip the worker refuses anyway.
       const classification = await seedClassification();
       const calls: string[][] = [];
       const probe: ProbeSymbols = async (symbols) => {
@@ -708,7 +667,7 @@ describe("resolveAll — the whole submission", () => {
 
       expect(refusal.fieldErrors["kind-1"]).toMatch(/silently missing/);
 
-      // Answered string isn't written either — refusal re-renders the same list of questions.
+      // Answered string is not written either — refusal is atomic across the submission.
       const aliases = await db
         .selectFrom("instrument_alias")
         .select("raw_string")
@@ -743,8 +702,6 @@ describe("resolveAll — the whole submission", () => {
         db,
       );
 
-      // Result points at the winner, not what this submit tried to create — the losing
-      // instrument isn't left behind for the point-at-existing select to offer forever.
       expect(resolved).toEqual([
         { raw: "CASH & CASH INVESTMENTS", instrumentId: cash.id },
       ]);
@@ -830,8 +787,6 @@ describe("resolutionScreen", () => {
         db,
       );
 
-      // Resolved string is absent; misses keep file order and carry the name/quantity
-      // the screen shows.
       expect(screen.totalPositions).toBe(3);
       expect(screen.unresolved).toEqual([
         {
@@ -842,7 +797,6 @@ describe("resolutionScreen", () => {
         { raw: "CASH & CASH INVESTMENTS", name: null, quantity: "4210.55" },
       ]);
 
-      // The selects' raw material: every instrument and classification.
       expect(screen.instruments.map((entry) => entry.id)).toContain(vti.id);
       expect(
         screen.classifications.find((entry) => entry.id === growth.id),
@@ -882,8 +836,7 @@ describe("resolutionFieldsAt", () => {
 
 describe("sameRawStrings", () => {
   it("reads LF, CRLF and bare CR spellings of one cell as the same string", () => {
-    // HTML form serialisation rewrites a lone LF/CR in a posted value to CRLF — a quoted
-    // multi-line cell echoed through a hidden field would fail byte-exact checks on every submit.
+    // HTML form serialisation rewrites a lone LF/CR to CRLF on submit.
     expect(sameRawStrings("FUND\nCLASS A", "FUND\r\nCLASS A")).toBe(true);
     expect(sameRawStrings("FUND\rCLASS A", "FUND\nCLASS A")).toBe(true);
     expect(sameRawStrings("FUND\r\nCLASS A", "FUND\r\nCLASS A")).toBe(true);
@@ -927,8 +880,6 @@ describe("unresolvedStrings", () => {
       await expect(
         unresolvedStrings(["VTI", "Vanguard Total Stock Market ETF", "VTI"], db),
       ).resolves.toEqual([]);
-      // Empty file asks nothing, rather than reaching the database to find out it has
-      // nothing to ask.
       await expect(unresolvedStrings([], db)).resolves.toEqual([]);
     }),
   );
@@ -947,9 +898,8 @@ describe("unresolvedStrings", () => {
   it(
     "reads an alias written for one institution's statement when another's names the same string",
     withDatabase(async ({ db, seedInstrument, seedInstrumentAlias }) => {
-      // instrument_alias is deliberately global (one raw_string, one instrument, no
-      // institution column) — Fidelity writing CASH resolves it for Schwab too. Replaces a
-      // brittle information_schema assertion about the schema file, not what the schema does.
+      // Replaces a brittle information_schema assertion about the schema file, not what
+      // the schema does.
       const usd = await seedInstrument({ symbol: "USD", name: "US Dollar" });
       await seedInstrumentAlias({ instrument: usd, rawString: "CASH" });
 

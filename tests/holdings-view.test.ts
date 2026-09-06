@@ -93,8 +93,6 @@ describe("parseQuery", () => {
   });
 
   it("ignores a parameter it does not recognise rather than failing on it", () => {
-    // Stale bookmark, hand-edited URL, crawler — none should error; all produce the
-    // unfiltered table.
     const parsed = query("group=favourite&sort=vibes&dir=sideways&colour=blue");
 
     expect(parsed.group).toBeNull();
@@ -104,27 +102,20 @@ describe("parseQuery", () => {
   });
 
   it("treats an empty select as `all`, not as a filter for the empty key", () => {
-    // This is what a GET form submits for a `<select>` nobody touched.
     expect(query("account=&kind=").filters.size).toBe(0);
   });
 
   it("accepts the dividend column as a sort", () => {
-    // Not framework behavior — a key missing from SORT_KEYS is ignored, not refused;
-    // forgetting to list one would silently order by value with the caret on the wrong column.
     expect(query("sort=annualDividend").sort).toBe("annualDividend");
   });
 
   it("keeps a filter key no holding carries", () => {
-    // Dropping it would silently widen the request (one account → whole portfolio); it
-    // survives as an empty, explained result.
     expect(query("account=999").filters.get("account")).toBe("999");
   });
 });
 
 describe("the dimensions", () => {
   it("offers exactly the six a select can narrow by, owner no longer among them", () => {
-    // Literal list, not a count — a count passes with the wrong dimension missing. owner is
-    // excluded: narrowing by owner is household-wide now, and a second way to ask is two answers.
     expect(DIMENSIONS.map((dimension) => dimension.id)).toEqual([
       "account",
       "institution",
@@ -144,7 +135,6 @@ describe("the dimensions", () => {
 
   it("still parses `group=owner`, so a bookmarked grouping keeps working", () => {
     expect(query("group=owner").group).toBe("owner");
-    // And it is no longer read as a filter, whatever the URL says.
     expect(query("owner=2").filters.size).toBe(0);
   });
 });
@@ -161,17 +151,12 @@ describe("toSearch", () => {
   });
 
   it("emits the owner filter first, as a repeated key, so one view has one spelling", () => {
-    // First, since this is the canonical Holdings URL the loader redirects to. Repeated
-    // key (toOwnerParam's spelling), not joined — a hand-joined owner=1,3 gets respelled
-    // owner=1%2C3 by react-router's request rebuild, which would be a second URL for one view.
+    // Joined owner=1,3 gets respelled owner=1%2C3 by react-router — would be a second URL for one view.
     expect(toSearch(query("group=kind"), ["1", "3"])).toBe("?owner=1&owner=3&group=kind");
     expect(toSearch(query(), ["3"])).toBe("?owner=3");
   });
 
   it("is a fixed point, so the route's canonical redirect cannot loop", () => {
-    // Route bounces to toSearch(parseQuery(x), readOwnerFilter(x)) whenever the URL
-    // differs — every form submit, since GET sends &kind=&tax= for untouched selects. If a
-    // second pass changed the string again, that bounce would loop instead of tidy up.
     for (const messy of [
       "owner=1&account=&institution=&kind=&tax=&classification=&assetClass=",
       "sort=value&dir=desc&group=",
@@ -192,8 +177,7 @@ describe("toSearch", () => {
 
 describe("availableFilters", () => {
   it("does not offer a filter that cannot discriminate", () => {
-    // One person, one brokerage — facts about the household, not choices; a select
-    // implying otherwise costs more than it saves (DESIGN.md §13.7).
+    // DESIGN.md §13.7.
     const controls = availableFilters(
       [holding({ classification: "US equity" }), holding({ classification: "Bonds" })],
       query(),
@@ -215,8 +199,7 @@ describe("availableFilters", () => {
   });
 
   it("never offers an owner select, however many owners the holdings carry", () => {
-    // Narrowing by owner is household-wide (ADR-0008) — two ways to ask one question is
-    // two answers available at once.
+    // ADR-0008.
     const controls = availableFilters(
       [
         holding({ ownerId: "1", ownerName: "Alice", institution: "Fidelity" }),
@@ -229,8 +212,6 @@ describe("availableFilters", () => {
   });
 
   it("builds its options from the holdings, never from the enumeration", () => {
-    // A household with no Roth account is not offered "Tax-free": choosing it
-    // could only ever produce an empty table.
     const [tax] = availableFilters(
       [
         holding({ taxTreatment: "taxable" }),
@@ -243,7 +224,6 @@ describe("availableFilters", () => {
   });
 
   it("keeps a selected filter drawn even once it has narrowed to one value", () => {
-    // Otherwise the control you narrowed with vanishes and there is no way back.
     const rows = [holding({ institution: "Fidelity" })];
     const controls = availableFilters(rows, query("institution=Fidelity"));
 
@@ -252,8 +232,6 @@ describe("availableFilters", () => {
   });
 
   it("gives a selected key nothing carries an option of its own", () => {
-    // Otherwise defaultValue finds no match, select falls back to its first option, and
-    // every filter reads "All" above an empty table with no clue what was filtered.
     const [account] = availableFilters(
       [holding({ accountId: "1" }), holding({ accountId: "2" })],
       query("account=999"),
@@ -261,14 +239,11 @@ describe("availableFilters", () => {
 
     expect(account?.selected).toBe("999");
     expect(account?.options[0]).toEqual({ value: "999", label: "Not in this portfolio" });
-    // Flagged so the empty result can say "this link predates a change" instead of implying an overlap.
     expect(account?.selectedIsAbsent).toBe(true);
     expect(account?.selectedPhrase).toBeNull();
   });
 
   it("spells an account option as name, number tail, then institution", () => {
-    // Tail rides in the option whenever a number is recorded, not only when names collide
-    // (CONTEXT.md); no account keeps bare dots for a number nobody recorded.
     const [account] = availableFilters(
       [
         holding({ accountId: "1", accountName: "Roth IRA", accountNumberTail: "····3910" }),
@@ -284,10 +259,6 @@ describe("availableFilters", () => {
   });
 
   it("offers an account type in the self-explaining form, not the short one", () => {
-    // Register split this module owns: table cell prints "Workplace plan" (below), dropdown
-    // spells out which accounts — same dimension, so they can't name different sets, though
-    // liability proves it's not always long-form-minus-parenthetical. Last assertion of the
-    // long form now that Analysis matches the table.
     const [kind] = availableFilters(
       [
         holding({ accountKind: "401k" }),
@@ -305,8 +276,6 @@ describe("availableFilters", () => {
   });
 
   it("phrases a selection as a sentence fragment, not as its field caption", () => {
-    // "brokerage Chase and asset class Equity" isn't English — caption above a select and
-    // prose need different words.
     const controls = availableFilters(
       [
         holding({ institution: "Chase", accountKind: "liability" }),
@@ -322,8 +291,6 @@ describe("availableFilters", () => {
   });
 
   it("distinguishes two people who share a name, wherever owner is still read", () => {
-    // Owner is a grouping now, not a filter, but still keyed on id — two people can share
-    // a first name; merging them would be invisibly wrong.
     const groups = groupHoldings(
       [
         holding({ ownerId: "1", ownerName: "Sam", value: "10.0000" }),
@@ -357,21 +324,16 @@ describe("applyFilters", () => {
   });
 
   it("returns nothing for a combination the household does not hold", () => {
-    // Distinct from an empty portfolio, and the screen says so differently.
     expect(applyFilters(rows, query("assetClass=bond&institution=Fidelity"))).toEqual([]);
   });
 
   it("no longer narrows on owner, whatever the URL says", () => {
-    // Owner filter is household-wide, applied in SQL — a leftover ?owner= here must not
-    // narrow twice.
     expect(applyFilters(rows, query("owner=1"))).toHaveLength(rows.length);
   });
 });
 
 describe("sortHoldings", () => {
   it("orders money by magnitude, not by the digits as text", () => {
-    // Catches string sort: "9.0000" > "10.0000" as text would put the ninth-largest
-    // holding first.
     const sorted = sortHoldings(
       [
         holding({ instrumentName: "Nine", value: "9.0000" }),
@@ -399,7 +361,6 @@ describe("sortHoldings", () => {
   });
 
   it("keeps the unpriced holdings last in both directions", () => {
-    // Ascending by value must not drag unpriced holdings to the top — unknown isn't small.
     const rows = [
       holding({ instrumentName: "Unpriced", value: null }),
       holding({ instrumentName: "Small", value: "1.0000" }),
@@ -461,8 +422,6 @@ describe("sortHoldings", () => {
   });
 
   it("keeps a missing price, cost basis or unrealized last on its own column", () => {
-    // value gets exercised everywhere else; the other three take the same path, unchecked
-    // until now.
     for (const key of ["price", "costBasis", "unrealized"] as const) {
       const rows = [
         holding({ instrumentName: "Missing", [key]: null }),
@@ -475,10 +434,7 @@ describe("sortHoldings", () => {
   });
 
   it("orders the dividend by magnitude, and a holding that pays nothing is not missing", () => {
-    // Two rules — the second is what a copy of the value column would get wrong. Dividend
-    // has no isMissing case (view coalesces a missing rate to zero, so $0 is a real figure)
-    // — sorted ascending, an unpriced holding leads here (pays least), unlike Value where
-    // it's pinned last.
+    // Unlike Value, an unpriced holding leads ascending here (pays least) rather than being pinned last.
     const rows = [
       holding({ instrumentName: "Nine", annualDividend: "9.0000" }),
       holding({ instrumentName: "Ten", annualDividend: "10.0000" }),
@@ -519,8 +475,6 @@ describe("summarise", () => {
   });
 
   it("counts value, cost basis and unrealized as three separate coverages", () => {
-    // 401k line: priced, no cost basis. ETF: basis, no price. Neither figure covers what
-    // the other does.
     const total = summarise([
       holding({ value: "1000.0000", costBasis: "800.0000", unrealized: "200.0000" }),
       holding({ value: "500.0000", costBasis: null, unrealized: null }),
@@ -550,8 +504,6 @@ describe("summarise", () => {
   });
 
   it("adds the dividend over rows the value total cannot cover", () => {
-    // Column complete beside one that isn't — unquoted trust contributes nothing to value
-    // but a real $0 to dividend, so this carries no coverage caption while value does.
     const total = summarise([
       holding({ value: "27000.0000", annualDividend: "340.0000" }),
       holding({ value: "3000.0000", annualDividend: "0.1000" }),
@@ -564,18 +516,13 @@ describe("summarise", () => {
   });
 
   it("is `$0` of dividend where nothing pays, never an unknown amount", () => {
-    // Only figure not nulled when known=0. totalOf's figure() dashes a zero-known sum,
-    // right for the other three, wrong here: nothing paying is $0, not "couldn't work out"
-    // (DESIGN.md §14, #9). Empty set is the sharpest case — every other figure on it is null.
+    // DESIGN.md §14, #9.
     expect(summarise([]).annualDividend).toBe("0.0000");
     expect(summarise([]).value).toBeNull();
     expect(summarise([holding(), holding()]).annualDividend).toBe("0.0000");
   });
 
   it("nets a liability's interest against what the assets pay", () => {
-    // Taxable brokerage + car loan with a rate came out negative (negative quantity × rate
-    // is money going out) — the subtotal on the group households care most about can go
-    // below zero.
     const total = summarise([
       holding({ value: "27000.0000", annualDividend: "340.0000" }),
       holding({ accountKind: "liability", value: "-14500.0000", annualDividend: "-522.2000" }),
@@ -618,8 +565,7 @@ describe("groupHoldings", () => {
   });
 
   it("shares out of the gross positive total, so a liability's share is negative", () => {
-    // allocation.ts's denominator argument: net total makes shares explode near-cancelling
-    // debts and flips every sign in net debt.
+    // allocation.ts's denominator argument.
     const groups = groupHoldings(
       [
         holding({ accountKind: "brokerage", value: "10000.0000" }),
@@ -632,14 +578,13 @@ describe("groupHoldings", () => {
       DEFAULT_DIRECTION,
     );
 
-    // Three groups, not one, whose share would trivially be 1.000000. Each third rounds to
-    // 0.333333 alone; three of those are a millionth short. The lost unit goes to the first
-    // tied remainder in sort order, so groups add up the same way every time.
+    // Each third rounds to 0.333333 alone (three are a millionth short); lost unit goes to
+    // the first tied remainder in sort order.
     expect(groups.map((group) => [group.label, group.share])).toEqual([
       ["Bank", "0.333334"],
       ["Brokerage", "0.333333"],
       ["Workplace plan", "0.333333"],
-      // −20,000 of the 30,000 owned, not the 10,000 net — debt isn't a piece of the pie.
+      // −20,000 of 30,000 owned, not the 10,000 net.
       ["Liability", "-0.666667"],
     ]);
 
@@ -655,8 +600,6 @@ describe("groupHoldings", () => {
   });
 
   it("has no share to report when nothing is positive", () => {
-    // Loan-only household: no gross-asset base for a fraction. Null, not 0.000000 — zero
-    // would read as "none of the portfolio" when the question has no denominator.
     const groups = groupHoldings(
       [holding({ accountKind: "liability", value: "-20000.0000" })],
       "kind",
@@ -683,14 +626,10 @@ describe("groupHoldings", () => {
 
     expect(unpriced?.total.value).toBeNull();
     expect(unpriced?.total.valueCoverage).toEqual({ known: 0, total: 1 });
-    // Share is null for the same reason value is — unpriced group isn't 0%, it's unknown.
     expect(unpriced?.share).toBeNull();
   });
 
   it("subtotals the dividend, and the grand total is the sum of the subtotals", () => {
-    // Screen prints rows, subtotals, and total from one array — asserts the arithmetic
-    // that makes them unable to disagree, not three figures that happen to match. Third
-    // group pays nothing and subtotals to $0, not a dash.
     const paying = [
       holding({ ownerId: "1", ownerName: "Alice", value: "27000.0000", annualDividend: "340.0000" }),
       holding({ ownerId: "1", ownerName: "Alice", value: "3000.0000", annualDividend: "0.1000" }),
@@ -750,8 +689,7 @@ describe("holdingNote", () => {
   });
 
   it("distinguishes a price that is old from one that never existed", () => {
-    // §6.2: stale price still shown and counted; never-quoted holding excluded from every
-    // total. Only one is fixed by waiting.
+    // §6.2.
     expect(holdingNote(holding({ isStale: true }))).toBe("Equity · price is stale");
     expect(holdingNote(holding({ value: null }))).toBe("Equity · never priced");
   });
@@ -764,22 +702,18 @@ describe("holdingYield", () => {
   });
 
   it("has no percentage for a holding nobody can price", () => {
-    // Unquoted trust: quantity, no price, $0 dividend with nothing to be a fraction of —
-    // 0.0% under a blank Value would claim something about an unvaluable holding.
     expect(holdingYield({ annualDividend: "0.0000", value: null })).toBeNull();
   });
 
   it("has no percentage for a holding worth zero, and does not throw on one", () => {
-    // Crash this guards against: money.ts's divide raises RangeError on a zero denominator,
-    // and a sold-out position arrives as "0.0000" — unguarded, one row takes down the whole table.
+    // money.ts's divide raises RangeError on a zero denominator — one bad row would take
+    // down the whole table unguarded.
     expect(() => holdingYield({ annualDividend: "0.0000", value: "0.0000" })).not.toThrow();
     expect(holdingYield({ annualDividend: "0.0000", value: "0.0000" })).toBeNull();
     expect(holdingYield({ annualDividend: "5.0000", value: "0.0000" })).toBeNull();
   });
 
   it("reads a liability's two negatives as the rate it is charged at", () => {
-    // Loan's negative quantity makes both figures negative, fraction comes out positive —
-    // row reads −$522.20 at 3.6%, the rate it costs, not a 3.6% payout.
     expect(holdingYield({ annualDividend: "-522.0000", value: "-14500.0000" })).toBe("0.036000");
   });
 });
@@ -791,8 +725,6 @@ describe("formatQuantity", () => {
   });
 
   it("groups thousands and uses the U+2212 minus, like every figure beside it", () => {
-    // Catches a second copy of this function drifting — a hyphen with no separators would
-    // render the same loan differently on two screens.
     expect(formatQuantity("-14500.00000000")).toBe("−14,500");
     expect(formatQuantity("1234567.00000000")).toBe("1,234,567");
   });
@@ -804,8 +736,6 @@ describe("formatQuantity", () => {
 
 describe("addressing one row", () => {
   it("names a row by the pair that survives an upload, not by a holding id", () => {
-    // holding row's id changes on every upload — an ?edit= built on one would rot while
-    // still pointing at a real row. Account + instrument is what the reader means.
     expect(rowKey({ accountId: "12", instrumentId: "7" })).toBe("12.7");
   });
 
@@ -826,14 +756,12 @@ describe("addressing one row", () => {
     "a.b",
     "-1.7",
     "12.7 ",
-    // Leading zeros name the same pair as "1.2" but would survive the canonical check
-    // while matching no row's key.
+    // Leading zeros ("0001.0002") name the same pair as "1.2" but would dodge the canonical check.
     "0001.0002",
     "01.2",
     "9999999999999999999.7",
   ])("reads %j as no row at all", (value) => {
-    // Silent about failure, like parseQuery elsewhere — mangled edit= closes the editor
-    // rather than raising, and keeps a non-numeric id away from a ::bigint cast (which would 500).
+    // Keeps a non-numeric id away from a ::bigint cast, which would 500.
     expect(parseRowKey(value)).toBeNull();
   });
 });

@@ -22,7 +22,7 @@ afterAll(closeTestDatabase);
 
 const CSV = new TextEncoder().encode("Symbol,Quantity\nVTI,100\n");
 
-/** The refusal a call produced, or a failure if it did not refuse. */
+// the refusal a call produced, or a failure if it did not refuse
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
     await run();
@@ -46,8 +46,8 @@ describe("createDraft", () => {
 
       expect(draft.accountId).toBe(account.id);
 
-      // The row holds everything a later step needs — the bytes byte-exact,
-      // and the progress markers still null because no step has been passed.
+      // row holds everything a later step needs — bytes byte-exact, progress markers still
+      // null since no step has been passed
       const stored = await requireDraft(draft.id, db);
       expect(stored.filename).toBe("Positions_2026-06-30.csv");
       expect(stored.accountName).toBe(account.name);
@@ -60,14 +60,10 @@ describe("createDraft", () => {
   it(
     "keeps a draft exactly 24 hours old and sweeps one a second older",
     withDatabase(async ({ db, seedAccount, seedUploadDraft }) => {
-      // "Older than 24 hours" is a strict comparison, pinned at the second.
-      // Deterministic because `now()` is fixed for the whole transaction the
-      // test runs in: the backdate below and the sweep's own cutoff read the
-      // same instant, so "exactly 24 hours" is exact, not racy.
-      //
-      // The `createDraft` below is also what proves the sweep has no scheduler
-      // behind it: staging the next upload is the thing that clears the
-      // abandoned one, and the draft on the line survives it.
+      // "older than 24 hours" is a strict comparison, pinned at the second — deterministic
+      // because now() is fixed for the whole test transaction, so the backdate and the sweep's
+      // cutoff read the same instant. createDraft below also proves the sweep has no scheduler:
+      // staging the next upload is what clears the abandoned one.
       const account = await seedAccount({ kind: "brokerage" });
       const onTheLine = await seedUploadDraft({ account });
       const justPast = await seedUploadDraft({ account });
@@ -135,7 +131,7 @@ describe("requireDraft", () => {
 
       await expect(requireDraft(draft.id, db)).resolves.toMatchObject({ id: draft.id });
 
-      // Closed through the domain function, exactly as Settings closes one.
+      // closed through the domain function, exactly as Settings closes one
       await closeAccount(account.id, { confirmClose: "true" }, db);
 
       await expect(requireDraft(draft.id, db)).rejects.toThrow(NotFoundError);
@@ -145,8 +141,7 @@ describe("requireDraft", () => {
   it(
     "answers the same 404 for an id that is not an id, never a driver error",
     withDatabase(async ({ db }) => {
-      // "abc" reaching Postgres would fail as a malformed bigint — a 500
-      // wearing a bookmark, on a URL anyone can mistype.
+      // "abc" reaching Postgres would fail as a malformed bigint — a 500 wearing a bookmark
       await expect(requireDraft("abc", db)).rejects.toThrow(NotFoundError);
       await expect(requireDraft("", db)).rejects.toThrow(NotFoundError);
     }),

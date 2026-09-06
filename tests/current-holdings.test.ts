@@ -35,14 +35,12 @@ describe("the valuation rule", () => {
         asOf: "2026-01-31",
         holdings: [{ instrument: usd, quantity: "12500.00000000" }],
       });
-      // Sign lives in quantity, against a positive price — no liability branch anywhere.
       await seedPositionSet({
         account: loan,
         asOf: "2026-01-31",
         holdings: [{ instrument: usd, quantity: "-8000.00000000" }],
       });
 
-      // 25,000 + 12,500 − 8,000
       expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "29500.0000",
         coverage: { known: 3, total: 3 },
@@ -100,7 +98,6 @@ describe("the valuation rule", () => {
           unrealized: "5000.0000",
           isPriced: true,
           isStale: false,
-          // No rate on the quote — zero, not null; view's coalesce is the whole definition.
           annualDividend: "0.0000",
         },
       ]);
@@ -113,8 +110,6 @@ describe("the valuation rule", () => {
       const owner = await seedPerson({ name: "Alice" });
       const usd = await usdInstrument();
 
-      // Not a view column — reader joins account for it (ADR-0001), so it needs its own
-      // assertion. Tail arrives, never the raw number — this row is loader data, reaches the browser.
       const numbered = await seedAccount({
         name: "Fidelity Taxable",
         owner,
@@ -189,7 +184,6 @@ describe("which position set counts as current", () => {
         asOf: "2026-02-28",
         holdings: [{ instrument: usd, quantity: "250.00000000" }],
       });
-      // January's statement uploaded after February's — higher id, later insert, must still lose.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -213,7 +207,6 @@ describe("which position set counts as current", () => {
         asOf: "2026-01-31",
         holdings: [{ instrument: usd, quantity: "100.00000000" }],
       });
-      // Same statement re-uploaded after a mis-mapped column fix — tie-break picks the correction.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -238,7 +231,7 @@ describe("which position set counts as current", () => {
         createdAt: "2026-02-02T09:00:00Z",
         holdings: [{ instrument: usd, quantity: "175.00000000" }],
       });
-      // Inserted second — so it has the higher id — but created first.
+      // Inserted second, created first.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -286,7 +279,6 @@ describe("partial data, told honestly", () => {
     "still shows a holding whose instrument has never been quoted, flagged unpriced",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet }) => {
       const account = await seedAccount();
-      // Workplace-plan trust: no public symbol, no quote on any retail API.
       const trust = await seedInstrument({
         symbol: null,
         name: "Vanguard Target Retirement 2045 Trust II",
@@ -301,8 +293,6 @@ describe("partial data, told honestly", () => {
 
       const [holding] = await currentHoldings(ALL_OWNERS, db);
 
-      // Row stays, not dropped — an inner join to quote would vanish it and understate
-      // every total silently.
       expect(holding).toMatchObject({
         instrumentName: "Vanguard Target Retirement 2045 Trust II",
         symbol: null,
@@ -335,7 +325,6 @@ describe("partial data, told honestly", () => {
         ],
       });
 
-      // 2,500 + 500; unpriced holding contributes nothing but the count says so — "2 of 3 holdings".
       expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "3000.0000",
         coverage: { known: 2, total: 3 },
@@ -350,7 +339,6 @@ describe("partial data, told honestly", () => {
       const fund = await seedInstrument({ symbol: "VTI" });
       await seedQuote({ instrument: fund, price: "250.0000" });
 
-      // A 401k statement that omits cost basis, which is the common case.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -359,15 +347,12 @@ describe("partial data, told honestly", () => {
 
       const [holding] = await currentHoldings(ALL_OWNERS, db);
 
-      // Zero here would report a $25,000 gain on a position whose basis is
-      // simply not known.
       expect(holding).toMatchObject({
         value: "25000.0000",
         costBasisPerShare: null,
         costBasis: null,
         unrealized: null,
       });
-      // The price is known, so the holding is still fully counted in net worth.
       expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "25000.0000",
         coverage: { known: 1, total: 1 },
@@ -380,7 +365,6 @@ describe("partial data, told honestly", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
       const account = await seedAccount();
       const fund = await seedInstrument({ symbol: "VTI" });
-      // A failed refresh keeps the last known price and marks it stale.
       await seedQuote({ instrument: fund, price: "250.0000", isStale: true });
 
       await seedPositionSet({
@@ -397,7 +381,6 @@ describe("partial data, told honestly", () => {
         isPriced: true,
         isStale: true,
       });
-      // Last known value, not a zero and not a null.
       expect(await netWorth(ALL_OWNERS, db)).toEqual({
         amount: "25000.0000",
         coverage: { known: 1, total: 1 },
@@ -414,7 +397,7 @@ describe("what a holding is projected to pay", () => {
       const fund = await seedInstrument({ symbol: "SCHD", name: "Schwab US Dividend Equity ETF" });
       await seedQuote({ instrument: fund, price: "27.5000", annualDividendPerShare: "3.6000" });
 
-      // Scale 8 × scale 4 = scale 12 before the view's one cast brings it back to money scale.
+      // Scale 8 × scale 4 = 12 before the view casts back to money scale (4).
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -423,8 +406,6 @@ describe("what a holding is projected to pay", () => {
 
       const [holding] = await currentHoldings(ALL_OWNERS, db);
 
-      // 10.5 × 3.6000 exact at stored scale — toBeCloseTo would pass just as happily
-      // post-double-coercion.
       expect(holding).toMatchObject({ quantity: "10.50000000", annualDividend: "37.8000" });
     }),
   );
@@ -434,10 +415,8 @@ describe("what a holding is projected to pay", () => {
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote, usdInstrument }) => {
       const account = await seedAccount();
       const usd = await usdInstrument();
-      // The provider answered, and its answer carried no dividend fields.
       const growth = await seedInstrument({ symbol: "VUG", name: "A growth ETF" });
       await seedQuote({ instrument: growth, price: "400.0000" });
-      // Nobody ever asked: no symbol, so no `quote` row at all.
       const trust = await seedInstrument({
         symbol: null,
         name: "A workplace-plan trust",
@@ -461,9 +440,7 @@ describe("what a holding is projected to pay", () => {
         ]),
       );
 
-      // Three unlike absences flattened to one zero — only the growth ETF genuinely pays
-      // nothing, which is why the total is a lower bound both screens must label as one
-      // (DESIGN.md §14, #9).
+      // DESIGN.md §14, #9.
       expect(dividends).toEqual({
         "A growth ETF": "0.0000",
         "A workplace-plan trust": "0.0000",
@@ -476,8 +453,6 @@ describe("what a holding is projected to pay", () => {
     "reports a negative dividend for a negative quantity, so interest owed is not income",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote }) => {
       const loan = await seedAccount({ name: "Margin loan", kind: "liability" });
-      // Nothing carries a rate against a negative position today — rule must hold before
-      // something does; sign lives in quantity, no branch to this figure.
       const note = await seedInstrument({ symbol: "NOTE", name: "A note carrying a rate" });
       await seedQuote({ instrument: note, price: "100.0000", annualDividendPerShare: "5.0000" });
 
@@ -517,8 +492,6 @@ describe("what a holding is projected to pay", () => {
         holdings: [{ instrument: fund, quantity: "4.00000000" }],
       });
 
-      // Three in, three out — quote.instrument_id is the primary key, so the left join
-      // stays one row per holding; a second quote row would silently double every total.
       expect(await currentHoldings(ALL_OWNERS, db)).toHaveLength(3);
     }),
   );
@@ -532,7 +505,6 @@ describe("money crossing the database boundary", () => {
       const fund = await seedInstrument({ symbol: "VTI" });
       await seedQuote({ instrument: fund, price: "250.0000" });
 
-      // A dividend-reinvested holding: eight decimal places, exact.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -557,7 +529,6 @@ describe("money crossing the database boundary", () => {
       const fund = await seedInstrument({ symbol: "VTI" });
       await seedQuote({ instrument: fund, price: "1000.0000" });
 
-      // Far past any real balance — needs more significant digits than a double carries.
       await seedPositionSet({
         account,
         asOf: "2026-01-31",
@@ -567,7 +538,6 @@ describe("money crossing the database boundary", () => {
       const { amount } = await netWorth(ALL_OWNERS, db);
 
       expect(amount).toBe("1234567890123.4567");
-      // Proves the guarantee is load-bearing — the same figure through a JS number is different.
       expect(String(Number(amount))).not.toBe(amount);
     }),
   );
