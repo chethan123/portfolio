@@ -1166,16 +1166,13 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a silent connection within the injected timeout", async () => {
-    // headersTimeout/requestTimeout pinned far above the wait below: on this
-    // platform a byte-less connection is *also* within `checkConnections`'s
-    // reach (contrary to the general rule for a connection that has sent
-    // something — research §8.9), so a small headersTimeout here would let
-    // that mechanism close the connection and leave `server.timeout` itself
-    // unexercised, which is what this case is pinning.
+    // headersTimeout/requestTimeout pinned far above the wait: on this platform a byte-less
+    // connection is also within checkConnections's reach (research §8.9), so a small
+    // headersTimeout would leave server.timeout itself unexercised, which is what's pinned here
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, headersTimeout: 10_000, requestTimeout: 10_000 });
 
     const socket = await connectSocket(currentSocketPath);
-    socket.resume(); // a paused socket never notices the peer closing (module header)
+    socket.resume(); // a paused socket never notices the peer closing
 
     const startedAt = Date.now();
     await new Promise<void>((resolve) => socket.once("close", resolve));
@@ -1184,11 +1181,9 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a connection whose headers never complete within headersTimeout plus one checking interval", async () => {
-    // `server.timeout` pinned far out of reach, and `requestTimeout`
-    // disabled (0) rather than merely left alone: for a connection that has
-    // sent no complete request, both header deadlines are in Node's reach at
-    // once (verified on Node 24.12.0), so leaving requestTimeout at its
-    // normal value would let it — not headersTimeout — be what closes this.
+    // requestTimeout disabled (0), not merely left alone: for a connection with no complete
+    // request both header deadlines are in Node's reach at once (verified on Node 24.12.0),
+    // so leaving it at its normal value could let requestTimeout be what closes this instead
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000, requestTimeout: 0 });
 
     const socket = await connectSocket(currentSocketPath);
@@ -1204,17 +1199,14 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("closes a connection whose body never completes within requestTimeout plus one checking interval", async () => {
-    // The mirror case, pinning `requestTimeout` alone. `headersTimeout` must
-    // be disabled with 0 rather than pinned far out of reach: Node throws
-    // ERR_OUT_OF_RANGE at server construction when a *nonzero* headersTimeout
-    // exceeds requestTimeout (verified on Node 24.12.0), so 0 — which Node
-    // exempts from that check — is the only way to hold it out of reach here.
+    // mirror case, pinning requestTimeout alone. headersTimeout must be 0, not merely far out
+    // of reach: Node throws ERR_OUT_OF_RANGE when a nonzero headersTimeout exceeds
+    // requestTimeout (verified on Node 24.12.0); 0 is exempt from that check.
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, timeout: 30_000, headersTimeout: 0 });
 
     const socket = await connectSocket(currentSocketPath);
     socket.resume();
-    // Headers complete (the terminating blank line is sent); the declared
-    // body never arrives.
+    // headers complete (terminating blank line sent); the declared body never arrives
     socket.write("POST /quotes HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n");
     socket.write("partial-body");
 
@@ -1227,21 +1219,16 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("installs its SIGTERM handler before the socket is connectable", async () => {
-    // The unit-level counterpart to the entry-point case below: that one
-    // proves the handler works end to end, this one proves it is there in the
-    // instant that matters. `listen` makes the socket connectable through the
-    // kernel's backlog while `chmod` is still an await away, and that gap is
-    // under two milliseconds wide, so it is gated here rather than raced —
-    // `chmod` waits on a promise this case holds open, widening the gap to
-    // exactly as long as the assertion needs.
+    // unit-level counterpart to the entry-point case below: that proves the handler works end
+    // to end, this proves it's there in the instant that matters. `listen` makes the socket
+    // connectable via the kernel backlog while `chmod` is still an await away — that gap is
+    // under 2ms, so it's gated here (chmod waits on a promise this case holds open) rather than raced.
     const before = process.listeners("SIGTERM");
     let releaseChmod = (): void => {};
     const chmodGate = new Promise<void>((resolve) => {
       releaseChmod = resolve;
     });
-    // The real `chmod` is not needed once the gate has done its job: this case
-    // asserts on a listener, never on the mode, and `afterEach` removes the
-    // socket either way.
+    // real chmod isn't needed once the gate's done its job — this case asserts on a listener, never the mode
     chmodOverride.impl = async () => {
       await chmodGate;
     };
@@ -1255,24 +1242,20 @@ describe("the socket file and its lifecycle", () => {
     try {
       await waitForSocket(currentSocketPath);
 
-      // The listener it added, not merely a bigger count: this file's cases
-      // each start a server, so the number alone would not say whose.
+      // the listener it added, not just a bigger count — this file's cases each start a server
       const added = process.listeners("SIGTERM").filter((fn) => !before.includes(fn));
       expect(added).toHaveLength(1);
     } finally {
       releaseChmod();
-      // Through the shared `currentServer`, so `afterEach` closes it and the
-      // `close` handler takes the listener back off — which is the removal
-      // `startWorker` relies on to keep one listener per live server rather
-      // than one per case.
+      // through the shared currentServer, so afterEach closes it and the close handler takes
+      // the listener back off — the removal startWorker relies on for one listener per server
       currentServer = await starting;
     }
   });
 
   it("takes its SIGTERM handler back off and closes the server when chmod fails", async () => {
-    // The one failure path with a live server behind it: `listen` has already
-    // succeeded, so unlike a failed `listen` there is something still bound to
-    // the path, answering on a socket the caller was told it never got.
+    // the one failure path with a live server behind it — listen already succeeded, so
+    // something is still bound to the path, answering on a socket the caller was told it never got
     const before = process.listeners("SIGTERM");
     chmodOverride.impl = () =>
       Promise.reject(Object.assign(new Error("chmod failed"), { code: "ENOENT" }));
@@ -1282,21 +1265,16 @@ describe("the socket file and its lifecycle", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(process.listeners("SIGTERM").filter((fn) => !before.includes(fn))).toHaveLength(0);
-    // `close()` unlinks the path, so the socket is not merely refusing —
-    // it is gone, and `ENOENT` is what says the teardown ran rather than the
-    // server simply having stopped accepting.
+    // close() unlinks the path — ENOENT says the teardown ran, not merely that the server stopped accepting
     await expect(rawRequest(currentSocketPath, "GET", "/healthz")).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
 
   it("takes its SIGTERM handler back off when listen throws rather than emits", async () => {
-    // `listen` reports most failures by emitting `error`, and the reject path
-    // above takes the listener off for those. It does not report all of them
-    // that way: Node reads a `socketPath` that parses as a number as a TCP
-    // port, and an out-of-range one throws `ERR_SOCKET_BAD_PORT` synchronously
-    // — out of the promise executor, past the `error` listener entirely. That
-    // is the same shape of miss as the `chmod` path above, one call earlier.
+    // listen usually fails by emitting error, and the reject path above handles that. Node
+    // reads a numeric socketPath as a TCP port, and an out-of-range one throws
+    // ERR_SOCKET_BAD_PORT synchronously — past the error listener entirely, same shape of miss as chmod above
     const before = process.listeners("SIGTERM");
 
     await expect(
@@ -1307,12 +1285,10 @@ describe("the socket file and its lifecycle", () => {
   });
 
   it("exits on SIGTERM even while every connection it admits is held open", async () => {
-    // Spawned rather than called, because an exit code is the assertion and
-    // only a child process has one.
-    // A stop has to finish inside Docker's ten-second grace, and `close()`
-    // waits for every connection: a socket that has sent nothing is not
-    // *idle* in Node's sense, so closing only the idle ones leaves exactly
-    // the eight a compromised app would hold and the stop becomes a SIGKILL.
+    // spawned, not called: an exit code is the assertion, only a child process has one. Stop
+    // must finish inside Docker's ten-second grace; close() waits for every connection, and a
+    // socket that's sent nothing isn't "idle" in Node's sense — closing only idle ones would
+    // leave exactly the eight a compromised app holds, and the stop becomes a SIGKILL.
     const socketPath = await freshEntryPointSocket("pw-term-");
     const child = spawn(process.execPath, [WORKER_ENTRY], {
       env: { ...process.env, PRICE_WORKER_SOCKET: socketPath },
@@ -1351,8 +1327,7 @@ describe("the socket file and its lifecycle", () => {
     socket.on("data", (chunk: Buffer) => chunks.push(chunk));
 
     socket.write("GET /healthz HTTP/1.1\r\nHost: x\r\n\r\nGET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
-    // Node answers the excess pipelined request itself (a 503, past
-    // `maxRequestsPerSocket`) — this only asserts on the first answer.
+    // Node answers the excess pipelined request itself (503, past maxRequestsPerSocket) — this only asserts on the first
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const raw = Buffer.concat(chunks).toString("utf8");

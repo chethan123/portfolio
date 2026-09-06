@@ -1,25 +1,12 @@
-/**
- * Where two independent queries answer one question, and must not disagree
- * (§8.2's weakest point). Most of the mitigation is structural and needs no
- * test — the readers all sum the same already-rounded `value` column, and
- * asserting that would assert `sum` is `sum`. What is left is the pairs
- * whose *shapes* genuinely differ — two SQL statements, SQL against a
- * JavaScript reduction, two reductions over one array — which can come
- * apart under an edit with nothing else noticing. The last two blocks are
- * both of that kind, and both about grouping: Holdings against Income by tax
- * treatment, and Holdings against Analysis on all four of the cuts that
- * screen draws. Each pair groups through a different reduction and agrees
- * only because both read `holdings-view.ts`'s one dimension accessor — these
- * tests are what keep that structural rather than lucky.
- *
- * **Deliberately not asserted:** `netWorth` and `netWorthAt(…, today)` do
- * not agree and must not be made to — the current view prices from
- * `quote.price`, the as-of from `price_daily.close`
- * (`0002_holding_valued.sql` against `0003_holding_valued_at.sql`), so
- * 482.10 against 480.00 answers 48210.0000 and 48000.0000, and no
- * `price_daily` row at all answers 0.0000 over zero coverage. Pairing them
- * would only pass by seeding both prices equal — a fixture, not a rule.
- */
+// Where two independent queries answer one question and must not disagree (§8.2's weakest point). Most mitigation is
+// structural and needs no test (readers sum the same rounded value column). What's left is pairs whose *shapes* genuinely
+// differ — two SQL statements, SQL vs JS reduction, two reductions over one array — which can drift under an edit
+// unnoticed. The last two blocks (Holdings/Income by tax, Holdings/Analysis on all four cuts) agree only because both
+// read holdings-view.ts's one dimension accessor; these tests keep that structural, not lucky.
+//
+// Deliberately not asserted: netWorth and netWorthAt(…, today) disagree by design — current prices from quote.price, as-of
+// from price_daily.close (0002 vs 0003) — 482.10 vs 480.00, or 0.0000-over-zero-coverage with no price_daily row at all.
+// Pairing them would only pass by seeding both prices equal, a fixture not a rule.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { loader as analysis } from "../../app/routes/analysis.tsx";
@@ -44,13 +31,7 @@ import { args, get } from "../support/routes.ts";
 
 import type { TestContext } from "../support/database.ts";
 
-/**
- * The two screens' loaders, unfiltered.
- *
- * Both read the owner filter off the request now (spec 0013), so they take
- * route arguments like every other loader this suite drives. The invariants
- * below are about the household, so the address carries no filter.
- */
+// Both loaders read the owner filter off the request (spec 0013); invariants below are household-wide, so no filter in the address.
 const analysisPage = () => analysis(args(get("/analysis")));
 const incomePage = () => income(args(get("/income")));
 
@@ -60,14 +41,8 @@ afterAll(closeTestDatabase);
 const sumOf = (amounts: ReadonlyArray<string>): bigint =>
   amounts.reduce((total, amount) => total + toUnits(amount, MONEY_SCALE), 0n);
 
-/**
- * A portfolio whose arithmetic does not come out evenly.
- *
- * Fractional quantities against prices that do not divide into the money scale,
- * one liability, and one holding that has never been quoted — so every figure
- * below is the product of a rounding decision rather than of numbers chosen to
- * be tidy.
- */
+// Fractional quantities against prices that don't divide into the money scale, one liability, one never-quoted holding —
+// every figure below is a rounding decision, not a tidy number chosen for the test.
 async function anAwkwardPortfolio(ctx: TestContext) {
   const owner = await ctx.seedPerson({ name: "Alice" });
   const brokerage = await ctx.seedAccount({ owner, kind: "brokerage", name: "Fidelity" });
@@ -87,8 +62,7 @@ async function anAwkwardPortfolio(ctx: TestContext) {
     holdings: [
       { instrument: vti, quantity: "0.33333333" },
       { instrument: vxus, quantity: "7.77777777" },
-      // Never quoted: present in the coverage count, absent from every sum.
-      { instrument: unquoted, quantity: "125.00000000" },
+      { instrument: unquoted, quantity: "125.00000000" }, // never quoted: in the coverage count, absent from every sum
     ],
   });
   await ctx.seedPositionSet({
@@ -105,14 +79,11 @@ describe("the total for a date, asked two different ways", () => {
     "reads the same from the series as from the point query",
     withDatabase(async (ctx) => {
       const { vti, vxus } = await anAwkwardPortfolio(ctx);
-      // The series carries its own prices: `holding_valued_at` reads
-      // `price_daily`, so a date with no closes is a date with no value.
+      // holding_valued_at reads price_daily — a date with no closes is a date with no value.
       await ctx.seedDailyClose({ instrument: vti, date: "2026-06-30", close: "3.1111" });
       await ctx.seedDailyClose({ instrument: vxus, date: "2026-06-30", close: "70.7070" });
 
-      // Two genuinely different statements for one fact: `readTotal` aggregates
-      // the function directly, while `readSeries` left-join-laterals it per date
-      // and counts the joined column rather than the row. Nothing couples them.
+      // Genuinely different statements: readTotal aggregates directly; readSeries left-join-laterals per date and counts the joined column, not the row.
       const [point, [series]] = await Promise.all([
         netWorthAt(ALL_OWNERS, "2026-06-30", ctx.db),
         netWorthSeries(ALL_OWNERS, ["2026-06-30"], ctx.db),
@@ -120,9 +91,7 @@ describe("the total for a date, asked two different ways", () => {
 
       expect(series?.amount).toBe(point.amount);
       expect(series?.coverage).toEqual(point.coverage);
-      // Not a tautology over an empty portfolio: there is a real figure here,
-      // and one holding of the three is deliberately unpriced.
-      expect(point.coverage).toEqual({ known: 3, total: 4 });
+      expect(point.coverage).toEqual({ known: 3, total: 4 }); // one of three deliberately unpriced
     }),
   );
 
@@ -131,9 +100,7 @@ describe("the total for a date, asked two different ways", () => {
     withDatabase(async (ctx) => {
       await anAwkwardPortfolio(ctx);
 
-      // The left join manufactures an all-null row per uncovered date, which is
-      // exactly where a `count(*)` would score it as one holding. The point
-      // query has no such row to miscount, so this is the pair's sharpest case.
+      // The left join manufactures an all-null row per uncovered date — count(*) would score it as one holding; the point query has no such row to miscount.
       const [point, [series]] = await Promise.all([
         netWorthAt(ALL_OWNERS, "2026-06-29", ctx.db),
         netWorthSeries(ALL_OWNERS, ["2026-06-29"], ctx.db),
@@ -149,14 +116,9 @@ describe("the Analysis screen's own arithmetic", () => {
   it(
     "slices a total it did not compute, and the slices add back up to it",
     withDatabase(async (ctx) => {
-      // `analysis.tsx` issues two queries — `currentHoldings` for the slices,
-      // `netWorth` for the headline — and nothing couples them: a filter on
-      // either side, or a grouping dropping a row, puts a total on screen
-      // that its own breakdown contradicts (§8.2's failure exactly). Summed
-      // as `BigInt` over the stored strings — `Number` is how a test of
-      // decimal arithmetic passes for the wrong reason. This half cannot see
-      // a never-priced row (null contributes nothing to any sum); the
-      // coverage test below is the complement, and neither suffices alone.
+      // analysis.tsx issues two uncoupled queries (currentHoldings for slices, netWorth for the headline) — a filter or
+      // dropped row on either side would contradict the other (§8.2). BigInt over stored strings, not Number. Can't see
+      // a never-priced row (null contributes nothing to a sum) — the coverage test below is the complement.
       await anAwkwardPortfolio(ctx);
 
       const page = await analysisPage();
@@ -174,18 +136,14 @@ describe("the Analysis screen's own arithmetic", () => {
         });
       }
 
-      // A household in net debt: the liability outweighs the securities, so the
-      // total is negative and the slices still have to reconstruct it.
-      expect(page.total.startsWith("-")).toBe(true);
+      expect(page.total.startsWith("-")).toBe(true); // net debt — liability outweighs securities, slices still reconstruct it
     }),
   );
 
   it(
     "counts the same holdings the headline's coverage counted",
     withDatabase(async (ctx) => {
-      // The counts come off the rows already in hand; the coverage comes out of
-      // SQL. Two counts of one thing, and the loader's own comment says two
-      // counts of one thing are two things that can disagree.
+      // Counts come off the rows already in hand; coverage comes out of SQL — two counts of one thing that can disagree.
       await anAwkwardPortfolio(ctx);
 
       const [page, headline] = await Promise.all([analysisPage(), netWorth(ALL_OWNERS, ctx.db)]);
@@ -195,20 +153,9 @@ describe("the Analysis screen's own arithmetic", () => {
   );
 });
 
-/**
- * A portfolio that pays, across all three tax treatments.
- *
- * The taxable side nets **negative**: a car loan whose note carries a rate sits
- * in the same tax treatment as the brokerage, so $360.00 of dividend arrives
- * against $522.00 of interest. That is the case the Income screen's sheltered
- * sentence and the ring's unfilled row both exist for, and it only appears when
- * a liability account is given a rate — which is why it is seeded here rather
- * than assumed.
- *
- * The workplace plan holds an unquoted trust: a dividend of `0.0000` against a
- * *null* value, which is the group that has a figure and nothing to state it as
- * a fraction of.
- */
+// Pays across all three tax treatments. Taxable side nets negative: a car loan's rate sits in the same treatment as the
+// brokerage, $360 dividend against $522 interest — the case Income's sheltered sentence and the ring's unfilled row exist
+// for, only appearing when a liability account has a rate. Workplace plan holds an unquoted trust: dividend 0.0000 against a null value.
 async function aPortfolioThatPays(ctx: TestContext) {
   const owner = await ctx.seedPerson({ name: "Alice" });
 
@@ -244,8 +191,7 @@ async function aPortfolioThatPays(ctx: TestContext) {
 
   await ctx.seedQuote({ instrument: vti, price: "200.0000", annualDividendPerShare: "3.6000" });
   await ctx.seedQuote({ instrument: schd, price: "27.5000", annualDividendPerShare: "1.0400" });
-  // The note's rate, on the instrument the debt is a position in.
-  await ctx.seedQuote({ instrument: usd, price: "1.0000", annualDividendPerShare: "0.0360" });
+  await ctx.seedQuote({ instrument: usd, price: "1.0000", annualDividendPerShare: "0.0360" }); // the note's rate, on the instrument the debt positions in
 
   await ctx.seedPositionSet({
     account: brokerage,
@@ -277,14 +223,9 @@ describe("the Income screen and the Holdings table", () => {
   it(
     "group by tax treatment identically, holding for holding",
     withDatabase(async (ctx) => {
-      // The pair this test exists for. Holdings groups through
-      // `groupHoldings`, which sums its own subtotals; Income groups through
-      // `annualDividendBy`, which sums `BigInt` units in `allocation.ts`. Two
-      // reductions, two label lookups, one array — and the *reason* they cannot
-      // disagree is that both read `holdings-view.ts`'s one dimension accessor.
-      // A third copy of the labels would let them group identically and label
-      // differently, which is what this assertion catches and nothing else
-      // would.
+      // Holdings groups through groupHoldings, summing its own subtotals; Income groups through annualDividendBy,
+      // summing BigInt units in allocation.ts. They can't disagree because both read holdings-view.ts's one dimension
+      // accessor — a third copy of the labels would let them group identically and label differently, uncaught elsewhere.
       await aPortfolioThatPays(ctx);
 
       const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ALL_OWNERS, ctx.db)]);
@@ -306,10 +247,7 @@ describe("the Income screen and the Holdings table", () => {
         ]),
       );
 
-      // Not a tautology over an empty portfolio, and not two ways of writing
-      // one expression: the figures are real, one slice is negative, and the
-      // order the two arrive in genuinely differs — Holdings ranks its groups
-      // by value and Income ranks its slices by what they pay.
+      // Real figures, one negative, differing arrival order — Holdings ranks groups by value, Income ranks slices by what they pay.
       expect(page.byTaxTreatment.map((slice) => [slice.label, slice.amount])).toEqual([
         ["Tax-free", "312.0000"],
         ["Tax-deferred", "0.0000"],
@@ -325,9 +263,7 @@ describe("the Income screen and the Holdings table", () => {
 
       const [page, holdings] = await Promise.all([incomePage(), currentHoldings(ALL_OWNERS, ctx.db)]);
 
-      // $360.00 + $0.00 + $312.00 − $522.00. The headline, the Holdings total
-      // row, and the slices under the ring are three renderings of one sum, so
-      // any of them drifting is one of them being computed a second way.
+      // $360+$0+$312−$522. Headline, Holdings total row, and slices under the ring are three renderings of one sum.
       expect(page.total).toBe("150.0000");
       expect(page.total).toBe(summarise(holdings).annualDividend);
       expect(sumOf(page.byTaxTreatment.map((slice) => slice.amount))).toBe(
@@ -346,9 +282,7 @@ describe("the Income screen and the Holdings table", () => {
 
       const page = await incomePage();
 
-      // The two do not add up to the $150.00 in the centre of the ring, and
-      // they are not meant to: the taxable side is below zero, so a sentence
-      // dividing one by the other would read "$312 of $150 is sheltered".
+      // Deliberately don't add up to the $150 centre — taxable is below zero, so dividing one by the other would read "$312 of $150 is sheltered".
       expect(page.sheltered).toEqual({ sheltered: "312.0000", taxable: "-162.0000" });
     }),
   );
@@ -360,25 +294,15 @@ describe("the Income screen and the Holdings table", () => {
 
       const page = await incomePage();
 
-      // $150.00 over the $28,250.00 that is worth something — not over the
-      // $13,750.00 the household is worth, which would report 1.1%, and not
-      // over a denominator the unquoted trust could drag to nothing.
+      // $150 over the $28,250 that's worth something — not over the $13,750 household net worth (would report 1.1%).
       expect(page.weightedYield).toBe("0.005310");
     }),
   );
 });
 
-/**
- * A household that actually varies on all four of Analysis's cuts.
- *
- * `aPortfolioThatPays` above is shaped for the dividend, and on three of the
- * four cuts every bucket there holds exactly one row — which would let the
- * comparison below pass on a set of singletons. Here two people hold five
- * rows: two instruments share one classification (so a bucket sums more than
- * it counts), and the bond fund has never been quoted, so on *every* cut one
- * whole group is unpriced — the case where the two sides genuinely say
- * different things, `null` against `"0.0000"`.
- */
+// aPortfolioThatPays above is shaped for the dividend, and on three of four cuts every bucket holds one row — a
+// comparison against singletons proves little. Here two people hold five rows: two instruments share a classification
+// (a bucket sums more than it counts), and the bond fund is never quoted, so every cut has one unpriced group — null vs "0.0000".
 async function aPortfolioCutFourWays(ctx: TestContext) {
   const [alice, bob] = await Promise.all([
     ctx.seedPerson({ name: "Alice" }),
@@ -391,8 +315,7 @@ async function aPortfolioCutFourWays(ctx: TestContext) {
     ctx.seedAccount({ owner: bob, kind: "ira", name: "Roth IRA" }),
   ]);
 
-  // One classification over two instruments: `seedInstrument` mints a fresh
-  // one per call, and a cut where every bucket is a singleton tests nothing.
+  // One classification over two instruments — seedInstrument mints a fresh one per call otherwise, testing nothing but singletons.
   const usEquity = await ctx.seedClassification({ name: "US equity", assetClass: "equity" });
   const bonds = await ctx.seedClassification({ name: "Bond fund", assetClass: "bond" });
 
@@ -434,18 +357,10 @@ describe("the Analysis screen and the Holdings table", () => {
   it(
     "cut the household into the same buckets, by the same names, on every dimension",
     withDatabase(async (ctx) => {
-      // What this does and does not claim. That the *labels* match is
-      // structural now — both sides call the one accessor `groupingBy(id)`
-      // returns — and that is the point of the refactor rather than a gap in
-      // the test: what would break it is Analysis growing a private label
-      // table again, which is exactly how the two screens came to print
-      // "Workplace plan (401k, 403b)" and "Workplace plan" for one bucket.
-      // The *amounts* and *counts* are independent: `allocation.ts` sums
-      // `BigInt` units and counts `isPriced`, `holdings-view.ts` sums its own
-      // subtotals and counts non-null values. The share is the sharpest of
-      // the three: both sides rank their buckets and hand the rounding
-      // remainder to the first, so they agree only while they also break ties
-      // the same way, which is why one `compareText` serves both.
+      // Labels match structurally now (both sides call the one groupingBy(id) accessor) — what would break it is
+      // Analysis growing a private label table again, how the two screens once printed "Workplace plan (401k, 403b)"
+      // vs "Workplace plan" for one bucket. Amounts/counts are independent (allocation.ts vs holdings-view.ts). Share is
+      // sharpest: both rank buckets and hand the rounding remainder to the first, agreeing only if ties break the same way (one compareText serves both).
       await aPortfolioCutFourWays(ctx);
 
       const [page, holdings] = await Promise.all([
@@ -461,8 +376,7 @@ describe("the Analysis screen and the Holdings table", () => {
       ] as const) {
         const groups = groupHoldings(holdings, dimension, DEFAULT_SORT, DEFAULT_DIRECTION);
 
-        // Sorted on the key, never compared positionally: the two rank their
-        // buckets differently, and their tie-breaks differ again.
+        // Sorted on the key, never compared positionally — the two rank buckets, and break ties, differently.
         expect({
           dimension,
           cut: byKey(slices).map((slice) => [
@@ -477,18 +391,14 @@ describe("the Analysis screen and the Holdings table", () => {
           cut: byKey(groups).map((group) => [
             group.key,
             group.label,
-            // A group nothing could be priced from is `null` in a table cell
-            // and zero in a sum. Both are right for their screen; reconciling
-            // them is not this invariant's business.
-            group.total.value ?? "0.0000",
+            group.total.value ?? "0.0000", // null in a table cell, zero in a sum — both right for their screen
             group.share ?? "0.000000",
             group.total.valueCoverage,
           ]),
         });
       }
 
-      // Not a set of singletons, and not all priced — the two ways this
-      // comparison could hold while proving nothing.
+      // Not singletons, and not all priced — the two ways this could hold while proving nothing.
       expect(page.byClassification.map((slice) => [slice.label, slice.coverage])).toEqual([
         ["US equity", { known: 2, total: 2 }],
         ["Bond fund", { known: 0, total: 1 }],
