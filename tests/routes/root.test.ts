@@ -10,14 +10,8 @@ import { saveMaskingPolicy } from "~/lib/settings.server";
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-/**
- * A seam onto `touchGrant`, mocked so one test can make the *grant* check
- * itself fail independently of the *lock* check (`isLocked`) — the two
- * database reads this middleware makes, which a single unreachable-database
- * URL cannot fail one at a time, since the first one reached (`isLocked`)
- * would already refuse. `undefined` (every test but one) defers to the real
- * function; the one test that sets `impl` restores it in a `finally`.
- */
+// Seam onto touchGrant so one test can fail the grant check independently of isLocked — a single unreachable DB can't fail
+// one without the other, since isLocked (read first) would already refuse. undefined defers to the real function.
 const touchGrantOverride = vi.hoisted(() => ({
   impl: undefined as ((id: string, db?: unknown) => Promise<unknown>) | undefined,
 }));
@@ -39,13 +33,8 @@ const { stopPricePoller } = await import("~/lib/price-poller.server");
 /** Refused immediately, which is how "the database is down" arrives here. */
 const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
-/**
- * This loader also starts the refresh loop (§6.2), because it is the one
- * server-side path every page render passes through — so calling it here
- * creates a real fifteen-minute interval holding the live Yahoo provider. It is
- * `unref`'d, so it cannot hold vitest open, but it would outlive this file for
- * the rest of the run. Stopped after every test rather than left to that.
- */
+// This loader also starts the refresh loop (§6.2) — a real 15-minute interval holding the live Yahoo provider, unref'd
+// but otherwise outliving this file. Stopped after every test.
 afterEach(stopPricePoller);
 
 afterAll(closeTestDatabase);
@@ -57,21 +46,9 @@ describe("the shell's loader", () => {
     try {
       const data = await withDb(unreachable, () => loader(args(get("/"))));
 
-      // Null, which the shell renders as "no prompt" — not a thrown Response,
-      // and not an error page over every screen in the application.
-      expect(data.firstRun).toBeNull();
-
-      // The masking read is down the same well and has the same duty, with one
-      // extra: of the two ways to be wrong while the database is unreachable,
-      // this is the one that cannot put a household's balances on a screen
-      // (spec 0007).
-      expect(data.masked).toBe(true);
-
-      // The lock-now control's own read (ticket 06) has a different duty:
-      // failing this shut costs a family member one control on the chrome,
-      // never a figure, so the fail-safe answer here is "no control" rather
-      // than "show one that clears a grant which may not exist".
-      expect(data.hasPasskey).toBe(false);
+      expect(data.firstRun).toBeNull(); // "no prompt", not a thrown Response or an error page
+      expect(data.masked).toBe(true); // fail-safe: cannot put balances on screen while unreachable (spec 0007)
+      expect(data.hasPasskey).toBe(false); // fail-safe: no control, rather than one clearing a grant that may not exist
     } finally {
       await unreachable.destroy();
     }

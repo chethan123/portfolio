@@ -804,9 +804,8 @@ describe("formatQuantity", () => {
 
 describe("addressing one row", () => {
   it("names a row by the pair that survives an upload, not by a holding id", () => {
-    // A `holding` row's id changes every time a statement lands, so an `?edit=`
-    // built on one would rot on the next upload while still pointing at a real
-    // row somewhere. The account and the instrument are what the reader means.
+    // holding row's id changes on every upload — an ?edit= built on one would rot while
+    // still pointing at a real row. Account + instrument is what the reader means.
     expect(rowKey({ accountId: "12", instrumentId: "7" })).toBe("12.7");
   });
 
@@ -827,16 +826,14 @@ describe("addressing one row", () => {
     "a.b",
     "-1.7",
     "12.7 ",
-    // Leading zeros name the same pair as "1.2" and would otherwise survive the
-    // loader's canonical check while matching no row's key on the page.
+    // Leading zeros name the same pair as "1.2" but would survive the canonical check
+    // while matching no row's key.
     "0001.0002",
     "01.2",
     "9999999999999999999.7",
   ])("reads %j as no row at all", (value) => {
-    // Silent about failure, the way `parseQuery` is about everything else in
-    // this query string: a mangled `edit=` closes the editor rather than
-    // raising. It also keeps a non-numeric id away from a `::bigint` cast,
-    // which reaches a reader as a 500 rather than as a closed editor.
+    // Silent about failure, like parseQuery elsewhere — mangled edit= closes the editor
+    // rather than raising, and keeps a non-numeric id away from a ::bigint cast (which would 500).
     expect(parseRowKey(value)).toBeNull();
   });
 });

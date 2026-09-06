@@ -121,8 +121,7 @@ describe("the yield unit hazard", () => {
   });
 
   it("derives the yield from the rate and the price when no percentage is given", () => {
-    // $2.50 a share against a $100 price is 2.5%. Both operands are in the
-    // quote's own currency, so the unit cannot be mistaken.
+    // $2.50/$100 = 2.5%; both operands share the quote's currency, so the unit can't be mistaken
     const quote = quoteFor({
       symbol: "DIVIDEND",
       regularMarketPrice: 100,
@@ -136,14 +135,12 @@ describe("the yield unit hazard", () => {
   it("reports no yield rather than dividing by zero", () => {
     const quote = quoteFor({ symbol: "ZERO", regularMarketPrice: 0, dividendRate: 2.5 });
 
-    // A zero price is not a price at all, so there is no quote to carry a yield.
+    // a zero price is not a price at all — no quote to carry a yield
     expect(quote).toBeNull();
   });
 
   it("prefers dividendYield when both yield fields disagree", () => {
-    // The fixture the whole hazard is about: both present, mutually
-    // inconsistent, and only one of them right. A future edit reaching for the
-    // fraction gets 0.0234 here instead of 2.34.
+    // both fields present, mutually inconsistent — a future edit reaching for the fraction gets 0.0234 instead of 2.34
     const quote = quoteFor({
       symbol: "BOTH",
       regularMarketPrice: 100,
@@ -155,18 +152,13 @@ describe("the yield unit hazard", () => {
   });
 
   it("drops a derived yield too large for the column rather than losing the batch", () => {
-    // $2.50 a share against a $0.02 price is 12500%, and `yield_pct` is
-    // numeric(10,6) — max 9999.999999. Postgres answers an overflow by aborting
-    // the statement, and the statement is inside the refresh transaction, so one
-    // mispriced listing would roll back every other instrument's price and the
-    // stale-marking with it.
+    // $2.50/$0.02 = 12500%, over yield_pct's numeric(10,6) ceiling — an overflow would abort
+    // the whole refresh transaction
     const quote = quoteFor({ symbol: "DISTRESSED", regularMarketPrice: 0.02, dividendRate: 2.5 });
 
     expect(quote?.price).toBe("0.0200");
     expect(quote?.yieldPct).toBeNull();
-    // The per-share amount is a real figure and stays. $2.50 against the widest
-    // legal quantity is 2.5 × 10^12, nowhere near the money column's 10^16, so
-    // dropping it would trade a true rate for a $0 lower bound and buy nothing.
+    // per-share amount stays real — 2.5×10^12 at the widest legal quantity is nowhere near the 10^16 ceiling
     expect(quote?.annualDividendPerShare).toBe("2.5000");
   });
 
