@@ -119,6 +119,14 @@ so are its rows.
 The page shows one sentence and no panels. No rings, no zeros, no empty frames — a net worth of
 zero and an instance with nothing in it are different things. Start at [upload.md](upload.md).
 
+## On a phone
+
+![Net worth by owner on a phone: the ring above its table](images/analysis-mobile.png)
+
+Each panel stacks what a wide screen sets side by side: the ring first, full width, then its table
+underneath rather than beside it. The ring itself is unchanged — same colours, same rank — there is
+just no room left to put it next to the numbers it explains.
+
 ---
 
 **Next:** [Income](income.md) — what the same portfolio is projected to pay over the coming year.

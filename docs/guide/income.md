@@ -127,6 +127,14 @@ The page shows one sentence and nothing else — no ring, no zeros, no empty fra
 genuinely pays nothing and an instance nothing has been recorded in yet are different things, and
 they do not get the same screen. Start at [upload.md](upload.md).
 
+## On a phone
+
+![Annual dividend by tax treatment on a phone, the ring above its table](images/income-mobile.png)
+
+Same figures, same two panels, but each one stacks: the ring first, full width, its table below
+rather than beside it — the same reflow [Analysis](analysis.md#on-a-phone) uses for its own rings,
+since this screen draws them.
+
 ---
 
 **Next:** [Overview](overview.md) — the whole household at a glance, and the chart's two lines.
