@@ -52,9 +52,8 @@ import { getConfig } from "../../server/config.ts";
 import type { Route } from "./+types/holdings";
 
 /**
- * Every position across every account, grouped/filterable (DESIGN.md §8.1).
- * One query + `holdings-view.ts` do all filtering/sorting/totals — no second
- * DB touch. No client state: view is the query string; `?edit=` opens a row.
+ * Every position across every account, grouped/filterable (DESIGN.md §8.1). One query +
+ * holdings-view.ts do all filtering/sorting/totals; view is the query string, `?edit=` opens a row.
  */
 export function meta() {
   return [{ title: "Holdings · Portfolio" }];
@@ -70,13 +69,13 @@ export async function loader({ request }: Route.LoaderArgs) {
     query.direction = DEFAULT_DIRECTION;
   }
 
-  // `edit`/`saved` excluded from `HoldingsQuery`/`view` so filtering can't
-  // carry a half-typed correction. Re-parsed, not echoed — mangled `edit=` just closes.
+  // `edit`/`saved` excluded from `HoldingsQuery`/`view` so filtering can't carry a half-typed
+  // correction; re-parsed, not echoed — mangled `edit=` just closes.
   const editing = parseRowKey(url.searchParams.get("edit"));
   const saved = parseRowKey(url.searchParams.get("saved"));
 
-  // Owner filter is household-wide (ADR-0008). `toSearch` re-serializes
-  // rather than echoes, so `parseQuery(toSearch(q))` is `q` — a bounce cannot loop.
+  // Owner filter is household-wide (ADR-0008). `toSearch` re-serializes rather than echoes, so
+  // `parseQuery(toSearch(q))` is `q` — a bounce cannot loop.
   const link = (owners: OwnerFilter) => toSearch(query, owners);
   const { reading, owner } = await ownerReading(request, {
     request: (owners) =>
@@ -94,16 +93,16 @@ export async function loader({ request }: Route.LoaderArgs) {
     asOfView(getConfig().MARKET_TIMEZONE),
   ]);
 
-  // Narrowed in SQL via the same predicate every screen reads through — not
-  // by filtering `household` here, a second implementation free to disagree.
+  // Narrowed in SQL via the same predicate every screen reads through — not by filtering
+  // `household` here, a second implementation free to disagree.
   const holdings = isFiltered(owners) ? await currentHoldings(reading) : household;
 
   // Built from every holding, not the filtered set, or a vanished option would leave no way to widen back.
   const filters = availableFilters(household, query);
   const visible = applyFilters(holdings, query);
 
-  // Receipt quotes the database, not the URL — `?saved=` only names the row;
-  // figures come from `household` so a hand-typed id can't fabricate one.
+  // Receipt quotes the database, not the URL — `?saved=` only names the row; figures come from
+  // `household` so a hand-typed id can't fabricate one.
   const open = saved === null ? editing : null;
 
   const written =
@@ -158,9 +157,8 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 /**
- * Restates one position; `positions.server.ts` owns what lands (§5.4). Row
- * id comes from the URL, not a hidden field, so it can't disagree with the
- * page it was submitted from.
+ * Restates one position; positions.server.ts owns what lands (§5.4). Row id comes from the
+ * URL, not a hidden field, so it can't disagree with the page it was submitted from.
  */
 export async function action({ request }: Route.ActionArgs) {
   const url = new URL(request.url);
