@@ -111,6 +111,18 @@ There is no reopen control in this version, so close an account only when it is 
 The reasoning behind closing rather than deleting, and behind the three-way tax treatment, is in
 [Settings — people and accounts](../../README.md#settings--people-and-accounts).
 
+## On a phone
+
+![Settings → People, empty, on a phone](images/first-run-people-mobile.png)
+
+The tab strip wraps onto a second line instead of scrolling, so every tab — Overview, People,
+Accounts, Tax, Prices, Display, Passkeys — stays reachable without a sideways swipe.
+
+![Settings → Accounts with nobody recorded yet, on a phone](images/first-run-accounts-mobile.png)
+
+Everything below the tabs is otherwise the same page, narrower: the same empty-state sentence, the
+same link back to People.
+
 ---
 
 **Next:** [Recording your first statement](first-statement.md) — the four-step upload, end to end.

@@ -107,6 +107,15 @@ control.
 
 A household with only one owner gets no control at all: there is nothing to choose between.
 
+## On a phone
+
+![The owner menu open on a phone, floating over the filters underneath](images/holdings-owner-mobile.png)
+
+The control works the same way — tick names, press Apply — but the menu it opens floats over
+whatever is below it rather than pushing it down the page, wide enough to cover the filter bar
+underneath. Ticking a name and pressing **Apply** closes it the same as on a wide screen; there is
+nothing to scroll past to reach it.
+
 ---
 
 **Next:** [Uploading a statement](upload.md) — the filter never touches recording; this is every

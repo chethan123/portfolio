@@ -16,6 +16,23 @@ light, and the guide says so once rather than doubling a set that already has to
 The application follows your system's setting and has no in-app toggle, so a reader on a dark system
 sees a darker version of the same screen — same layout, same words, same figures.
 
+## Almost every shot has a phone companion, and the lock screen is shot for the first time
+
+Almost every screenshot in this guide now has a `*-mobile.png` beside it. `overview-mobile.png` used
+to be the only one; the rest of the guide's screens have since caught up to what its own "On a
+phone" section already did. The one deliberate exception is `upload-2-columns-blank.png`: the six
+mapping selects it is captioned as showing sit below the fold on a phone in both the blank and the
+mapped state, so a `upload-2-columns-blank-mobile.png` would be pixel-for-pixel indistinguishable
+from `upload-2-columns-mapped-mobile.png` and was not kept.
+
+The locked screen is new here too: `unlock.png` and `unlock-mobile.png` are the first shots of it
+this guide has ever had. Every other shot in this file is of an already-unlocked browser; these two
+are the one deliberate exception — the capture script plants a real passkey and then visits
+`/unlock` carrying none of the grant every other pass mints for itself, so what renders is the
+actual locked screen a household would see, not a mock of one. Both are framed on the card alone
+rather than the page around it, because there is no page around it — no header, no navigation,
+nothing behind **Unlock** to draw.
+
 ## The warning strip stays in, and it is no longer about a password
 
 The yellow strip across the top of most shots is the application warning that nothing in front of it
@@ -58,9 +75,13 @@ work out which of two controls had done which; it is grouped and nothing else no
 
 ## Sizes
 
-Desktop shots are 1600×1000 at `deviceScaleFactor: 2`, full page. `overview-mobile.png` is 390×900,
+Desktop shots are 1600×1000 at `deviceScaleFactor: 2`, full page. Every `*-mobile.png` is 390×900,
 `isMobile`, and **not** full page: the bottom navigation is `position: fixed`, so a full-page capture
-paints it across the middle of the image instead of at the foot of the screen where a phone shows it.
+paints it across the middle of the image instead of at the foot of the screen where a phone shows
+it. That is the limit `overview-mobile.png` accepted first, and every mobile shot since carries it —
+one screenful, at whatever scroll position that shot calls for (the top of the page, most of the
+time; scrolled to the row or form the shot is actually of, a few times), never the whole page at
+once.
 
 `holdings-edit.png` is scoped to the table rather than the page. At this width a whole-page capture
 renders the two open boxes too small to read, and the point of that image is the boxes sitting in
