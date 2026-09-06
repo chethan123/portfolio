@@ -54,11 +54,7 @@ describe("the canonical bounce", () => {
       const destination = await redirectTo(() => loader(args(get(submitted))));
       expect(destination).toBe(`/holdings?owner=${owner.id}`);
 
-      // The assertion this file is really for. Anything that makes the target
-      // of the bounce disagree with `toSearch` — a parameter written in a
-      // different order, a default spelled out, a filter dropped and re-added —
-      // turns this screen into a redirect loop, and the loop is invisible in a
-      // test that only looks at the first hop.
+      // The real point: a bounce target disagreeing with toSearch is a redirect loop invisible to a test that only checks the first hop.
       const settled = await loader(args(get(destination)));
       expect(settled.view).toBe(`?owner=${owner.id}`);
     }),
@@ -69,10 +65,7 @@ describe("the canonical bounce", () => {
     withDatabase(async (ctx) => {
       await seedOnePosition(ctx);
 
-      // Grouping by owner puts the name in the heading and removes the column,
-      // so `sort=owner` would leave the table ordered by a heading with no
-      // caret, no `aria-sort` and no control to reverse it — and the URL would
-      // go on claiming a sort nobody can see or undo.
+      // sort=owner with the column removed by grouping would order by a heading with no caret, no aria-sort, no way to undo it.
       expect(await redirectTo(() => loader(args(get("/holdings?group=owner&sort=owner&dir=asc"))))).toBe(
         "/holdings?group=owner",
       );
@@ -80,8 +73,7 @@ describe("the canonical bounce", () => {
       const fallen = await loader(args(get("/holdings?group=owner")));
       expect([fallen.sort, fallen.direction]).toEqual(["value", "desc"]);
 
-      // A sort the grouping does *not* hide is left exactly as asked, so the
-      // fallback is a repair of one case and not a blanket reset.
+      // Left exactly as asked when grouping doesn't hide the sort — a repair of one case, not a blanket reset.
       const kept = await loader(args(get("/holdings?group=owner&sort=quantity")));
       expect([kept.sort, kept.direction]).toEqual(["quantity", "desc"]);
     }),
@@ -92,36 +84,23 @@ describe("the canonical bounce", () => {
     withDatabase(async (ctx) => {
       const { rowKey } = await seedOnePosition(ctx);
 
-      // `edit` and `saved` are re-serialised from the pair they parse to rather
-      // than echoed, so a spelling `rowKey` would never produce cannot survive.
-      // `0001.0002` names the same row as `1.2` and would otherwise sit in a
-      // URL claiming an open editor beside a table where no row's key matches.
+      // edit/saved are re-serialised from the parsed pair, not echoed — 0001.0002 names the same row as 1.2 and a spelling rowKey never produces can't survive.
       expect(await redirectTo(() => loader(args(get("/holdings?edit=0001.0002"))))).toBe("/holdings");
 
-      // A receipt is where the write redirects to and the row it names has just
-      // been closed, so the two never share an address.
+      // A receipt's row has just been closed, so edit and saved never share an address.
       expect(await redirectTo(() => loader(args(get(`/holdings?edit=${rowKey}&saved=${rowKey}`))))).toBe(
         `/holdings?saved=${rowKey}`,
       );
 
-      // And a well-formed pair on its own is already canonical — otherwise
-      // opening an editor would bounce, and bounce back.
       const open = await loader(args(get(`/holdings?edit=${rowKey}`)));
       expect(open.editing).toBe(rowKey);
     }),
   );
 });
 
-/**
- * Three owners, one priced position each, and an instrument only Bob holds —
- * so a dimension value can be present in the household and absent from the
- * narrowed set, which is what the facet rule is about.
- *
- * Three rather than two, so that a selection naming two people is a real
- * narrowing. With two, "both owners" *is* the household: every assertion about
- * a multi-owner filter would pass against a screen that ignored the filter
- * entirely, and the all-roster collapse would redirect it away besides.
- */
+// Three owners (not two) so a two-person selection is a real narrowing — with two, "both owners" is the household and
+// the all-roster collapse would redirect it away. Each has one priced position; only Bob holds BND, so a dimension
+// value can be present in the household and absent from a narrowed set (the facet rule).
 async function seedTwoOwners(
   ctx: Pick<
     TestContext,
@@ -175,9 +154,7 @@ describe("reading the table as an owner", () => {
       ]);
       expect(hers.total.value).toBe("25000.0000");
 
-      // Two of three, so this is a narrowing and not the household spelled a
-      // second way — and the two figures below have to differ, or the
-      // assertion would pass against a screen ignoring the filter.
+      // Two of three, a real narrowing — the figures below must differ or this'd pass against a screen ignoring the filter.
       const two = await at(`?${ownerParam(alice.id, bob.id)}`);
       expect(two.rows).toHaveLength(2);
       expect(two.total.value).toBe("27800.0000");
@@ -191,16 +168,11 @@ describe("reading the table as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx);
 
-      // The reproducing case. `filtered` used to count `query.filters`, which
-      // is now zero for an owner-only narrowing — and without the notice a
-      // filtered table looks like the whole portfolio to anyone who did not
-      // set the filter, including you a day later following your own bookmark.
+      // Reproducing case: filtered used to count query.filters, zero for an owner-only narrowing — an unmarked filtered table looks like the whole portfolio.
       const data = await loader(args(get(`/holdings?owner=${alice.id}`)));
 
       expect(data.active).toEqual([]);
-      // N is the household's, not the narrowed set's: the same number has to
-      // mean one thing whichever control you touched.
-      expect(data.totalHoldings).toBe(3);
+      expect(data.totalHoldings).toBe(3); // the household's N, not the narrowed set's
 
       const markup = renderRoute(Holdings, "/holdings", data);
       expect(markup).toContain("filtered from 3");
@@ -213,9 +185,7 @@ describe("reading the table as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice, hers, his, theirs } = await seedTwoOwners(ctx);
 
-      // Bob's and Carol's accounts have to stay on offer while the table is
-      // narrowed to Alice: options that vanished as you narrowed would leave
-      // no way to widen again.
+      // Bob's/Carol's accounts must stay on offer while narrowed to Alice, or there's no way to widen again.
       const data = await loader(args(get(`/holdings?owner=${alice.id}`)));
       const accounts = data.filters.find((filter) => filter.id === "account");
 
@@ -234,19 +204,15 @@ describe("reading the table as an owner", () => {
       const filtered = `?owner=${alice.id}`;
       const data = await loader(args(get(`/holdings${filtered}&group=kind&sort=quantity`)));
 
-      // The canonical view every Cancel and every control is built from.
-      expect(data.view).toBe(`${filtered}&group=kind&sort=quantity`);
+      expect(data.view).toBe(`${filtered}&group=kind&sort=quantity`); // canonical view every control builds from
 
       const markup = renderRoute(Holdings, "/holdings", data);
-      // A column header, a group chip, and the filter bar's hidden field.
       expect(markup).toContain(
         `href="/holdings?owner=${alice.id}&amp;group=kind&amp;sort=asset&amp;dir=asc"`,
       );
       expect(markup).toContain(`href="/holdings?owner=${alice.id}&amp;sort=quantity"`);
       expect(markup).toContain(`type="hidden" name="owner" value="${alice.id}"`);
-      // And Show everyone drops it while keeping the rest, which is the one
-      // link on the screen that should.
-      expect(markup).toContain('href="/holdings?group=kind&amp;sort=quantity"');
+      expect(markup).toContain('href="/holdings?group=kind&amp;sort=quantity"'); // Show everyone: the one link that should drop it
     }),
   );
 
@@ -257,9 +223,7 @@ describe("reading the table as an owner", () => {
       const search = `?owner=${alice.id}&account=${hers.id}`;
       const data = await loader(args(get(`/holdings${search}`)));
 
-      // Clear filters is a screen-local control and the owner filter is
-      // household-wide: clearing it from here would reach out and change what
-      // Overview shows next.
+      // Clear filters is screen-local; owner is household-wide — clearing from here would change what Overview shows next.
       const markup = renderRoute(Holdings, "/holdings", data);
       expect(markup).toContain(`href="/holdings?owner=${alice.id}"`);
       expect(markup).not.toContain('href="/holdings"');
@@ -273,14 +237,10 @@ describe("reading the table as an owner", () => {
       const both = ownerParam(alice.id, bob.id);
       const data = await loader(args(get(`/holdings?${both}&group=owner`)));
 
-      // Two groups, not three: Carol is in the household and out of this view.
-      expect(data.groups?.map((group) => group.label)).toEqual(["Alice", "Bob"]);
+      expect(data.groups?.map((group) => group.label)).toEqual(["Alice", "Bob"]); // two, not three — Carol is out of this view
 
       const markup = renderRoute(Holdings, "/holdings", data);
-      // Grouping by owner puts the name in the heading, so repeating it on
-      // every row beneath says nothing and costs the Asset column its width.
-      // Asserted on the header's sort link rather than on the word, which the
-      // control's own legend also carries.
+      // Asserted on the sort link, not the word "owner" — the legend also carries that word.
       expect(markup).not.toContain("sort=owner");
     }),
   );
@@ -297,8 +257,7 @@ describe("reading the table as an owner", () => {
         action(args(post(`/holdings?owner=${alice.id}&edit=${key}`, { quantity: "120" }))),
       );
 
-      // No hidden field carries it: the form posts back to the address that
-      // opened it, so the filter travels the way the row's identity does.
+      // No hidden field carries it — the form posts back to the address that opened it.
       expect(destination).toBe(`/holdings?owner=${alice.id}&saved=${key}`);
     }),
   );
@@ -308,16 +267,13 @@ describe("reading the table as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice, bob, carol } = await seedTwoOwners(ctx);
 
-      // ADR-0008: selecting every owner is spelled the same as selecting none.
-      // A `<Form method="get">` of checkboxes cannot decline to submit, so
-      // ticking all three arrives here and is bounced — one view, one URL.
+      // ADR-0008: every owner selected = none selected — a checkbox <Form> can't decline to submit, so this bounces.
       expect(
         await redirectTo(() =>
           loader(args(get(`/holdings?${ownerParam(alice.id, bob.id, carol.id)}&group=kind`))),
         ),
       ).toBe("/holdings?group=kind");
 
-      // Two of three is a real narrowing and stays.
       const two = await loader(args(get(`/holdings?${ownerParam(alice.id, bob.id)}`)));
       expect(two.owners).toHaveLength(2);
     }),
@@ -331,16 +287,13 @@ describe("reading the table as an owner", () => {
       const row = narrowed.rows?.[0];
       const key = `${hers.id}.${row?.instrumentId ?? ""}`;
 
-      // Ticking every owner box after correcting a row used to spell a
-      // different bounce than the one the row's own edit already keeps
-      // `saved` through — one speller for both closes that gap.
+      // Ticking every owner box used to spell a different bounce than the one saved= already keeps — one speller now closes that gap.
       const destination = await redirectTo(() =>
         loader(args(get(`/holdings?${ownerParam(alice.id, bob.id, carol.id)}&saved=${key}`))),
       );
       expect(destination).toBe(`/holdings?saved=${key}`);
 
-      // And the receipt still renders: `written` is looked up in the whole
-      // household, so it survives the collapse to the unfiltered view.
+      // written is looked up household-wide, so the receipt survives the collapse to the unfiltered view.
       const settled = await loader(args(get(destination)));
       expect(settled.written?.key).toBe(key);
     }),
@@ -351,10 +304,7 @@ describe("reading the table as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice, his } = await seedTwoOwners(ctx);
 
-      // The selects are built from every holding, so Bob's account is on offer
-      // while the table is narrowed to Alice. Choosing it must not produce
-      // "nothing in the portfolio is in Bob Roth" — the portfolio holds
-      // something there; this reading does not.
+      // Bob's account is offered while narrowed to Alice — choosing it must say Alice holds nothing there, not that the portfolio does.
       const data = await loader(args(get(`/holdings?owner=${alice.id}&account=${his.id}`)));
       const markup = renderRoute(Holdings, "/holdings", data);
 
@@ -371,8 +321,7 @@ describe("the number tail beside an account", () => {
       const owner = await ctx.seedPerson({ name: "Alice" });
       const usd = await ctx.usdInstrument();
 
-      // Two accounts, or the account filter is not offered at all; free-form
-      // number, as the column is — the tail is its last four *characters*.
+      // Two accounts, or the account filter isn't offered; free-form number — tail is the last four characters.
       const numbered = await ctx.seedAccount({
         name: "Fidelity Taxable",
         institution: "Fidelity",
@@ -400,17 +349,12 @@ describe("the number tail beside an account", () => {
       const data = await loader(args(get("/holdings")));
       const markup = renderRoute(Holdings, "/holdings", data);
 
-      // The cell: the dots are decoration a screen reader skips, and the same
-      // fact is said as words instead.
       expect(markup).toContain('<span class="number-tail" aria-hidden="true">····3910</span>');
       expect(markup).toContain('<span class="visually-hidden">ending in 3910</span>');
 
-      // An <option> holds no markup, so the tail rides in the label itself.
-      expect(markup).toContain("Fidelity Taxable ····3910 · Fidelity");
+      expect(markup).toContain("Fidelity Taxable ····3910 · Fidelity"); // <option> holds no markup, tail rides in the label
 
-      // An account with no recorded number keeps its bare name — no dots
-      // standing in for a number nobody recorded, in cell or option alike.
-      expect(markup).toContain("Checking · Chase");
+      expect(markup).toContain("Checking · Chase"); // no recorded number, no dots standing in for one
       expect(markup).not.toContain("Checking ····");
     }),
   );
@@ -435,9 +379,7 @@ describe("the three empty states", () => {
     withDatabase(async (ctx) => {
       const { alice, bob, carol } = await seedTwoOwners(ctx);
 
-      // The control is a disclosure: what the header spends is one summary
-      // whatever the household's size, and the summary has to say enough that a
-      // filter set two screens ago is legible without opening it.
+      // A disclosure control: the summary must say enough that a filter set two screens ago is legible unopened.
       const everyone = renderRoute(
         Holdings,
         "/holdings",
@@ -445,9 +387,7 @@ describe("the three empty states", () => {
       );
       expect(everyone).toContain("<details");
       expect(everyone).toContain("Everyone");
-      // Nothing applied, so the summary itself is not marked as set — the page
-      // has other `aria-current` of its own, so this asserts on the tag.
-      expect(everyone).toContain("<summary>");
+      expect(everyone).toContain("<summary>"); // nothing applied, so unmarked — asserted on the tag since aria-current appears elsewhere too
 
       const one = renderRoute(
         Holdings,
@@ -464,9 +404,7 @@ describe("the three empty states", () => {
       );
       expect(two).toContain("Alice and Bob");
 
-      // Past two it is a count, because four names spelled out would put the
-      // header back where the row of checkboxes left it. A fourth owner, so the
-      // selection of three is not the whole household and does not collapse.
+      // Past two, a count — spelling out names again is what the checkboxes already show. Fourth owner so three doesn't collapse to "everyone".
       const dana = await ctx.seedPerson({ name: "Dana" });
       await ctx.seedAccount({ name: "Dana Bank", owner: dana, kind: "bank" });
 
@@ -485,20 +423,14 @@ describe("the three empty states", () => {
     withDatabase(async (ctx) => {
       await seedTwoOwners(ctx);
 
-      // An id naming nobody, and an owner whose accounts have all been closed,
-      // are the same sentence and the same fix to a reader.
       const data = await loader(args(get("/holdings?owner=999999999")));
 
       expect(data.unknownOwner).toBe(true);
       const markup = renderRoute(Holdings, "/holdings", data);
-      // "There is no data yet" is a false claim here — the instance is full of
-      // it — so this state goes through the panel's own empty note rather than
-      // through `EmptyState`, which is the distinction `holdings.tsx` has
-      // always drawn for a question with no answer.
+      // "There is no data yet" is false here — goes through the panel's own empty note, not EmptyState, for a question with no answer.
       expect(markup).not.toContain("There is no data yet");
       expect(markup).toContain("no longer be read as");
       expect(markup).toContain(">3</span> holdings are recorded in all");
-      // Two ways out, and the filter can be cleared from the screen it emptied.
       expect(markup).toContain('aria-label="Filter by owner"');
       expect(markup).toContain("Show everyone");
     }),
@@ -508,8 +440,7 @@ describe("the three empty states", () => {
     "says an owner holds nothing without sounding like an error, and keeps the control",
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx);
-      // Alice opens a second account and her first is closed out from under
-      // her: she is still in the roster, and holds nothing.
+      // Alice's first account is closed and her new one is empty — still in the roster, holds nothing.
       const empty = await ctx.seedAccount({ name: "Alice Cash", owner: alice, kind: "bank" });
       await ctx.seedPositionSet({ account: empty, asOf: "2026-02-28", holdings: [] });
       await ctx.db
@@ -524,8 +455,7 @@ describe("the three empty states", () => {
       expect(data.unknownOwner).toBe(false);
       const markup = renderRoute(Holdings, "/holdings", data);
       expect(markup).not.toContain("There is no data yet");
-      // Names her, because this is not an error and must not read as one.
-      expect(markup).toContain("Alice holds nothing that has been recorded here");
+      expect(markup).toContain("Alice holds nothing that has been recorded here"); // named, not read as an error
       expect(markup).toContain('aria-label="Filter by owner"');
       expect(markup).toContain("Show everyone");
     }),
@@ -537,24 +467,15 @@ describe("the three empty states", () => {
       await seedOnePosition(ctx);
       const data = await loader(args(get("/holdings")));
 
-      // One name is not a choice, and a select with one option is furniture.
-      expect(data.roster).toHaveLength(1);
+      expect(data.roster).toHaveLength(1); // one name is not a choice
       expect(renderRoute(Holdings, "/holdings", data)).not.toContain('aria-label="Filter by owner"');
     }),
   );
 });
 
 describe("the canonical bounce, through a real URL", () => {
-  /**
-   * The invariant the loader depends on, asserted the way the loader meets
-   * it: through `new Request`, so every re-encoding of URL parsing is in
-   * the picture. `holdings-view.test.ts` checks `toSearch` is a fixed point
-   * of *itself* — weaker, and blind to exactly this: the URL parser and the
-   * form-urlencoded serialiser each respell characters the other leaves
-   * bare, and a request reaches a loader through both, so an address could
-   * differ from its canonical spelling forever and the busiest table would
-   * redirect until the browser gave up.
-   */
+  // Asserted through new Request (every URL re-encoding in the picture), unlike holdings-view.test.ts's toSearch-is-a-fixed-point-
+  // of-itself check — weaker, blind to the URL parser and form-urlencoded serialiser each respelling what the other leaves bare.
   const settles = async (search: string): Promise<void> => {
     const first = await outcomeOf(() => loader(args(get(`/holdings${search}`))));
     if (!(first instanceof Response)) return;
@@ -574,35 +495,19 @@ describe("the canonical bounce, through a real URL", () => {
       const { alice, bob } = await seedTwoOwners(ctx);
       const both = [alice.id, bob.id].sort((a, b) => Number(a) - Number(b)).join(",");
 
-      // Not only settling: the percent-encoded separator must actually bounce
-      // to this application's real canonical spelling — the repeated key,
-      // never the comma this test once expected back (`owner-filter.ts`'s
-      // `toOwnerParam` doc says why that spelling stopped being canonical). A
-      // comparison blind to encoding settles this pair perfectly while
-      // quietly keeping two URLs for one view.
+      // Must bounce to the real canonical spelling — the repeated key, never the comma (owner-filter.ts's toOwnerParam says why).
       expect(
         await redirectTo(() => loader(args(get(`/holdings?owner=${both.replace(",", "%2C")}`)))),
       ).toBe(`/holdings?${ownerParam(alice.id, bob.id)}`);
 
-      // The owner-only spellings — reversed ids, the encoded separator, the
-      // apostrophe, a space either way, a repeated parameter, the bare
-      // filter — are the default grammar `ownerReading` speaks on every
-      // screen, and `tests/owner-reading.test.ts` follows that chain once for
-      // all four rather than here per screen. What stays here is what proves
-      // *this* screen's own grammar: a GET form's untouched selects, grouping
-      // before the owner parameter, and the row parameters this screen alone
-      // carries.
+      // Owner-only spellings (ownerReading's default grammar) are owner-reading.test.ts's to cover once for all screens;
+      // what stays here proves this screen's own grammar: untouched selects, grouping before owner, this screen's row params.
       for (const search of [
         `?owner=${alice.id}&account=&institution=&kind=&tax=&classification=&assetClass=`,
         `?group=kind&owner=${alice.id}`,
         `?owner=${alice.id}&sort=quantity&dir=asc&edit=1.2`,
-        // Two owners, not one: every other case above stops at a single id,
-        // so this screen's own grammar — grouping and the row parameters
-        // alongside `owner` — had never actually had a multi-owner chain
-        // followed past its first hop. Comma-spelled on purpose: that is the
-        // legacy input `readOwnerFilter` still reads, and it is `get`'s own
-        // rebuild through the server runtime (`tests/support/routes.ts`),
-        // not a client, that respells it before this loader ever sees it.
+        // Two owners, not one — this screen's grammar (grouping/row params alongside owner) never had a multi-owner chain
+        // followed past its first hop. Comma-spelled: the legacy input readOwnerFilter reads, respelled by get()'s server-runtime rebuild before the loader sees it.
         `?owner=${both}`,
         `?group=kind&owner=${both}`,
       ]) {
@@ -618,10 +523,7 @@ describe("correcting one row", () => {
     withDatabase(async (ctx) => {
       const { account, instrument } = await seedOnePosition(ctx);
 
-      // A POST with no `?edit=` is a mangled address rather than a bad figure:
-      // there is no row to re-render a message beside, and no row to write to.
-      // Guessing one here would restate whichever position the form's numbers
-      // happened to fit.
+      // A POST with no ?edit= is a mangled address, not a bad figure — no row to re-render beside or write to; guessing one would restate whatever the numbers fit.
       const response = await responseOf(() =>
         action(args(post("/holdings", { quantity: "1", costBasisPerShare: "" }))),
       );
@@ -637,18 +539,11 @@ describe("correcting one row", () => {
     "rebuilds the redirect from the parsed query, so a write can only ever land on a Holdings view",
     withDatabase(async (ctx) => {
       const { owner, account, instrument, rowKey } = await seedOnePosition(ctx);
-      // A second person owning a second account, so that naming one owner is a
-      // narrowing rather than the household under another name — which the
-      // loader would collapse back to `/holdings` before this could assert on
-      // it. Nothing of theirs is held, which is enough.
+      // Second owner so naming one is a real narrowing, not the household under another name (which the loader would collapse).
       const other = await ctx.seedPerson({ name: "Bob" });
       await ctx.seedAccount({ name: "Bob Roth", owner: other, kind: "ira" });
 
-      // The address the editor posts back to is whatever the reader was looking
-      // at, and that can carry anything a bookmark or a hand-edit put there.
-      // The redirect is built by `toSearch` from the parsed query rather than
-      // from the string that arrived, so the only search this can answer with
-      // is one this screen already speaks.
+      // Redirect is built by toSearch from the parsed query, not the arriving string — the only search it can answer with is one this screen already speaks.
       const destination = await redirectTo(() =>
         action(
           args(
@@ -662,9 +557,7 @@ describe("correcting one row", () => {
 
       expect(destination).toBe(`/holdings?owner=${owner.id}&saved=${rowKey}`);
 
-      // Following it proves both halves at once: the write landed, and the
-      // confirmation quotes `currentHoldings(ALL_OWNERS)` rather than the parameter — so
-      // the sentence beside it can only describe what the account now holds.
+      // Following it proves both halves: the write landed, and the confirmation quotes currentHoldings(ALL_OWNERS), not the posted parameter.
       const confirmed = await loader(args(get(destination)));
       expect(confirmed.written).toMatchObject({
         key: rowKey,

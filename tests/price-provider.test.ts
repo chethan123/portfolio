@@ -1,15 +1,8 @@
 /**
- * The boundary between an unofficial API and a `numeric` column.
- *
- * Everything here exercises `toProviderQuote`, which is the whole of the
- * translation: what arrives is a JSON object shaped however Yahoo felt like
- * shaping it, and what leaves is decimal strings the write path can hand
- * straight to Postgres. No network, no database — the point of the seam
- * DESIGN.md §6.1 mandates is that this can be tested without either.
- *
- * The yield cases are the ones that matter most. A hundredfold error in
- * `yield_pct` produces an Income page where every figure is individually
- * plausible and the total is nonsense, with nothing in the logs.
+ * The boundary between an unofficial API and a `numeric` column — everything here exercises
+ * `toProviderQuote`, translating Yahoo's JSON into decimal strings Postgres can take directly
+ * (DESIGN.md §6.1). The yield cases matter most: a hundredfold error in `yield_pct` produces
+ * an Income page where every figure looks plausible and the total is nonsense, silently.
  */
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -31,13 +24,8 @@ import { startWorker } from "../server/price-worker.ts";
 import type { ChartRequest, YahooClient } from "../server/yahoo-client.ts";
 import type http from "node:http";
 
-/**
- * `socketProvider()`/`socketProbe` read the socket path through
- * `getConfig()`, which memoises its first read — set before any test in this
- * file can reach it (`tests/price-poller.test.ts:37`'s precedent for
- * `DATABASE_URL`). One fixed path for the whole file: every case below
- * starts and stops its own worker on it, never two at once.
- */
+// socketProvider()/socketProbe read the socket path through getConfig(), memoised on first
+// read — set before any test can reach it (price-poller.test.ts:37's precedent for DATABASE_URL)
 const SOCKET_PATH = join(tmpdir(), `pp-${randomBytes(4).toString("hex")}.sock`);
 process.env.PRICE_WORKER_SOCKET = SOCKET_PATH;
 
@@ -75,26 +63,19 @@ describe("reading a price", () => {
   });
 
   it("declines a payload with no price rather than inventing one", () => {
-    // Yahoo drops delisted and unknown symbols. The caller's answer is to keep
-    // the last known price and mark it stale, which needs no quote at all.
+    // Yahoo drops delisted/unknown symbols; caller keeps the last known price and marks it stale
     expect(quoteFor({ symbol: "DELISTED", currency: "USD" })).toBeNull();
   });
 
   it("drops a price at the ceiling rather than clamping it", () => {
-    // `quote.price` is numeric(20, 4) — sixteen integer digits is the first
-    // figure it cannot hold, and an overflow would abort the refresh
-    // transaction for every instrument, not just this one. Dropped, not
-    // clamped: the quote comes back absent and the symbol goes stale exactly
-    // as it does when no price arrives at all.
+    // quote.price is numeric(20,4); 16 integer digits overflows and would abort the whole
+    // refresh transaction. Dropped, not clamped — same as no price arriving at all.
     expect(quoteFor({ symbol: "GARBAGE", regularMarketPrice: 1e16 })).toBeNull();
   });
 
   it("refuses a foreign currency even when the price is over the ceiling", () => {
-    // The two guards meet on one quote, and their order decides what a person
-    // creating the instrument is told. Dropped for its size first, the quote
-    // comes back absent, `probeVerdicts` reads that as `unavailable`, and the
-    // resolver creates the instrument — where `non-usd` refuses it. Spec 0018
-    // §1 lists that refusal among the things this slice does not change.
+    // order matters: size-drop happens first (making the quote "unavailable"), letting the
+    // resolver create the instrument where non-usd would refuse it — spec 0018 §1
     expect(() =>
       toProviderQuote(
         { symbol: "VWRL.L", currency: "GBP", regularMarketPrice: 10 ** 16 },
@@ -104,8 +85,7 @@ describe("reading a price", () => {
   });
 
   it("keeps a price that sits just below the ceiling", () => {
-    // The ceiling bounds what cannot be stored and nothing else — a guard
-    // that rounded honest data away would be the more expensive bug.
+    // ceiling bounds only what can't be stored — rounding honest data away would be the worse bug
     const quote = quoteFor({ symbol: "WIDE", regularMarketPrice: 9999999999999998 });
 
     expect(quote?.price).toBe("9999999999999998.0000");
@@ -118,8 +98,7 @@ describe("reading a price", () => {
 
 describe("the yield unit hazard", () => {
   it("reads dividendYield as the percentage it is", () => {
-    // 2.34 means 2.34%, and must not be multiplied or divided by a hundred on
-    // the way to a `numeric(10,6)` column.
+    // 2.34 means 2.34% — must not be multiplied/divided by 100 on the way to numeric(10,6)
     const quote = quoteFor({
       symbol: "SCHD",
       regularMarketPrice: 100,
@@ -130,10 +109,8 @@ describe("the yield unit hazard", () => {
   });
 
   it("ignores trailingAnnualDividendYield even when it is the only yield offered", () => {
-    // The field carries the same quantity as a fraction while the library's own
-    // doc comment calls it a percentage. Reading it would put 0.0234 into a
-    // column whose other rows hold 2.34. Deriving from the rate is preferred
-    // precisely because it cannot be misread.
+    // library's doc comment calls this a percentage, but the value is a fraction — reading it
+    // would put 0.0234 where other rows hold 2.34
     const quote = quoteFor({
       symbol: "AMBIGUOUS",
       regularMarketPrice: 100,

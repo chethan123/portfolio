@@ -526,10 +526,9 @@ describe("the shape a past date returns", () => {
             unrealized: "5000.0000",
             isPriced: true,
             isStale: false,
-            // Written out rather than left off. `toEqual` reads a missing
-            // property as equal to an undefined one, so omitting this would
-            // pass just as happily on a function that emitted no such column —
-            // which is the failure ADR-0001 exists to keep out.
+            // Written out, not left off — toEqual treats a missing property as undefined,
+            // so omitting this would pass even if the function emitted no such column
+            // (the failure ADR-0001 guards against).
             annualDividend: null,
           },
         ]);
@@ -557,8 +556,7 @@ describe("the shape a past date returns", () => {
         quantity: "0.12345678",
         value: "30.8642",
         costBasis: "24.6901",
-        // Literally value − cost_basis, rounded once, so the two can never
-        // disagree by a fraction of a cent.
+        // value − cost_basis, rounded once — the two can never disagree by a fraction of a cent.
         unrealized: "6.1741",
       });
     }),
@@ -578,8 +576,8 @@ describe("what the observation log may not touch", () => {
           holdings: [{ instrument: fund, quantity: "10.00000000" }],
         });
 
-        // The finished day, and a third price the feed reported during it. The
-        // observation is real and correctly filed; it is simply not history.
+        // Finished day, plus a third price the feed reported during it — real, correctly
+        // filed, just not history.
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
         await seedObservation({
           instrument: fund,
@@ -588,8 +586,8 @@ describe("what the observation log may not touch", () => {
           price: "300.0000",
         });
 
-        // ADR-0006's historical-line invariant, from its second front: a line
-        // already drawn cannot move because a new tier arrived under it.
+        // ADR-0006's historical-line invariant: an already-drawn line can't move because a
+        // new tier arrived under it.
         expect(await netWorthAt(ALL_OWNERS, "2026-02-13", db)).toEqual({
           amount: "2500.0000",
           coverage: { known: 1, total: 1 },
@@ -611,9 +609,8 @@ describe("what the observation log may not touch", () => {
         });
         await seedDailyClose({ instrument: fund, date: "2026-02-13", close: "250.0000" });
 
-        // Tuesday's session, running. Every fifteen minutes it writes another
-        // observation, and none of them is a fact about the Friday before —
-        // which is a line already drawn, and stays drawn.
+        // Tuesday's session running, writing an observation every 15 minutes — none of
+        // them a fact about the Friday before, an already-drawn line that stays drawn.
         for (const [minute, price] of [
           ["14:30", "300.0000"],
           ["15:30", "310.0000"],

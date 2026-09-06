@@ -401,16 +401,14 @@ async function readSeries(
 
   const rows = await db
     .selectFrom(sql<{ date: string }>`unnest(cast(${dates} as date[]))`.as("d"))
-    // LEFT, not INNER: a date before the first upload has no rows, and an
-    // inner join would drop it silently rather than report it uncovered —
-    // "nothing was recorded" versus "we did not mention it".
+    // LEFT, not INNER: a date before the first upload has no rows, and INNER would drop it
+    // silently instead of reporting it uncovered.
     .leftJoinLateral(
       (join) => {
         const held = join.selectFrom(sql`holding_valued_at(d.date)`.as("v")).selectAll();
 
-        // Narrowing goes inside the lateral, never the outer WHERE: out there
-        // it runs after the join, rejects the all-null row, and takes the
-        // uncovered date down with it.
+        // Inside the lateral, never the outer WHERE: out there it runs after the join and
+        // takes the uncovered date's all-null row down with it.
         return (where === undefined ? held : held.where(where)).as("v");
       },
       (join) => join.onTrue(),
@@ -419,8 +417,7 @@ async function readSeries(
       sql<string>`cast(d.date as text)`.as("date"),
       sql<string>`cast(coalesce(sum(v.value), 0) as numeric(20, 4))`.as("amount"),
       sql<string>`count(*) filter (where v.is_priced)`.as("known"),
-      // The joined column, not the row: the left join manufactures one
-      // all-null row per uncovered date, and `count(*)` would score it as 1.
+      // Joined column, not the row: count(*) would score the manufactured all-null row as 1.
       sql<string>`count(v.instrument_id)`.as("total"),
     ])
     .groupBy(sql`d.date`)
@@ -434,29 +431,19 @@ async function readSeries(
   }));
 }
 
-/**
- * Net worth at each of `dates`, one round trip. A date before the first
- * upload is `0.0000` over zero coverage, which the caller must not draw as a
- * real zero (DESIGN.md §7) — `coverage.total` says where the line starts.
- */
+// A date before the first upload is 0.0000 over zero coverage — not a real zero (§7) —
+// coverage.total says where the line starts.
 export async function netWorthSeries(
   filter: OwnerFilter,
   dates: IsoDate[],
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthPoint[]> {
-  // `v` is the lateral's alias — the narrowing goes inside it (readSeries).
+  // v is the lateral's alias — narrowing goes inside it (readSeries).
   return readSeries(db, dates, ownedBy("v.owner_id", filter));
 }
 
-/**
- * One account's value at each of `dates`, same terms, same round trip, same
- * {@link NetWorthPoint} shape — an account's line and the household's are one
- * measure over different rows, so one chart code path draws both. Dates
- * before its first statement and after it closed come back `0.0000` over zero
- * coverage, reported rather than skipped: the chart starts where history
- * starts, not out of a fictional zero (DESIGN.md §7), provided the caller
- * reads `coverage.total`.
- */
+// Same terms as netWorthSeries: dates before its first statement or after it closed come back
+// 0.0000 over zero coverage, reported rather than skipped (§7).
 export async function accountSeries(
   accountId: string,
   dates: IsoDate[],
@@ -465,27 +452,18 @@ export async function accountSeries(
   return readSeries(db, dates, isAccount("v.account_id", accountId));
 }
 
-/** One point on an intra-session line: the instant it describes, and the value then. */
 export type SessionPoint = {
-  /**
-   * An ISO instant, not a date — hence `at`. A signpost inside this module,
-   * not a guarantee across it: the chart widens its own `date` to hold either
-   * and is told which it is drawing rather than inferring it (`ChartPoint`).
-   */
+  // ISO instant, not a date — hence "at". The chart widens its own date to hold either and is
+  // told which it's drawing rather than inferring it (ChartPoint).
   at: string;
   amount: string;
   coverage: Coverage;
 };
 
-/**
- * The most recent observed session, or null when nothing was ever observed.
- * Read off the log, not the calendar (ADR-0006): `max(market_date)` is
- * stamped at write time by the same rule that files a daily close, so the
- * UTC-today/market-day seam never decides what 1D shows, a weekend answers
- * with Friday's session, and a half-day ends where its observations end.
- * Matched by `price_observation_market_date_idx` — a backward scan stopping
- * at row one.
- */
+// Read off the log, not the calendar (ADR-0006): max(market_date) is stamped at write time by
+// the same rule that files a daily close, so a weekend answers with Friday's session and a
+// half-day ends where its observations end. Matched by price_observation_market_date_idx — a
+// backward scan stopping at row one.
 export async function latestObservedSession(
   db: Kysely<Database> = getDb(),
 ): Promise<IsoDate | null> {
@@ -497,56 +475,29 @@ export async function latestObservedSession(
   return row?.session ?? null;
 }
 
-/**
- * What a surface was worth at each instant a session was observed at — the
- * only thing that values anything from the observation log (§4.2's
- * single-site rule extended to the third tier). Three unobvious decisions:
- *
- * **The instants come from the log as a whole, not the surface.** A cash-only
- * account observes nothing; asking it for its own instants would draw an
- * empty chart where the honest answer is "it did not move". Both surfaces
- * plot the same moments; the surface narrows only whose holdings are valued.
- *
- * **Each point values the positions held now at the price known then**, so an
- * upload during the session leaves the chart consistent with the headline:
- * same positions, only the price moves.
- *
- * **The fallback carries forward the last close *strictly before* the
- * session.** The session's own `price_daily` row is provisional and converges
- * on the day's last observation — including it would price the open at the
- * close. Reaching past it prices cash (a dollar since 1970), hand-priced
- * trusts, failed fetches and the minutes before the first quote correctly.
- *
- * One case the fallback cannot answer, and does not pretend to: an instrument
- * whose first close of any kind is the session's own — bought this morning,
- * or first priced today. Before its first observation there is genuinely no
- * price, so it contributes no value and is out of `known`: a step in the
- * line, reported per-point by `coverage`. And an account closed *during* the
- * session is absent from the whole 1D line ("positions held now"), while
- * `holding_valued_at` still counts it that day — 1D and 1W may disagree about
- * it, the price of valuing today's positions rather than the day's.
- *
- * The line is a **running total**, not a valuation repeated per instant: a
- * holding's price is a step function that moves only when its instrument is
- * observed, so the value at an instant is the opening value plus, over every
- * observation at or before it, that holding's new rounded value less its
- * previous rounded value. The differences telescope exactly in `numeric` and
- * the rounding stays per holding, which is what makes this the same sum to
- * the character rather than merely close to it.
- *
- * Arithmetic is `numeric` throughout and never leaves SQL (§5.6).
- *
- * @param session `YYYY-MM-DD`, from {@link latestObservedSession}.
- */
+// What a surface was worth at each observed instant of session (the only thing that values
+// anything from the observation log, §4.2 extended to the third tier). Instants come from the
+// log as a whole, not the surface: a cash-only account observes nothing, and both surfaces must
+// plot the same moments (the surface narrows only whose holdings are valued). Each point values
+// positions held now at the price known then, so an upload mid-session stays consistent with
+// the headline. Fallback carries forward the last close strictly before the session — the
+// session's own price_daily row is provisional and converges on the day's last observation, so
+// including it would price the open at the close; reaching past it correctly prices cash,
+// hand-priced trusts, and failed fetches. Unhandled by design: an instrument first priced today
+// has no price before its own first observation, so it's a step in the line (out of `known`,
+// per-point coverage says so); an account closed during the session is absent from the whole 1D
+// line while holding_valued_at still counts it that day (1D/1W may disagree, the price of
+// valuing today's positions rather than the day's). The line is a running total, not a
+// valuation repeated per instant: value at an instant is the opening value plus, over every
+// observation at or before it, that holding's new rounded value less its previous rounded value
+// — telescoping exactly in numeric since rounding stays per holding. Arithmetic never leaves SQL (§5.6).
 async function readSessionSeries(
   db: Kysely<Database>,
   session: IsoDate,
   where?: RawBuilder<SqlBool>,
 ): Promise<SessionPoint[]> {
-  // The narrowing sits in the holdings CTE, never the outer WHERE: the
-  // instants are the log's and are unioned onto the same timeline as the
-  // price changes, so an instant at which this surface holds nothing — or
-  // holds nothing that was observed — is still a point on the line.
+  // Narrowing sits in the holdings CTE, never the outer WHERE: an instant where this surface
+  // holds nothing observed is still a point on the line.
   const narrowing = where === undefined ? sql`true` : where;
 
   const rows = await sql<{ at: Date; amount: string; known: string; total: string }>`
@@ -556,9 +507,8 @@ async function readSessionSeries(
       where market_date = ${session}::date
     ),
 
-    -- The positions held now, one row per holding. The grain is the point:
-    -- deltas and opening_total below round per holding, as every other reader
-    -- does, which is what keeps this total equal to the ones they report.
+    -- Positions held now, one row per holding — deltas/opening_total round per holding below,
+    -- same as every other reader, which is what keeps totals equal.
     held as (
       select h.id, h.instrument_id, h.quantity
       from account a
@@ -567,10 +517,8 @@ async function readSessionSeries(
         and ${narrowing}
     ),
 
-    -- The price in force as the session opens — the same three-way rule every
-    -- point applies: the latest observation before the first instant, from
-    -- any date; else the last close strictly before the session (see the
-    -- docstring for why strictly); else null, and the holding is unpriced.
+    -- Price as the session opens: latest observation before the first instant (any date), else
+    -- the last close strictly before the session, else null (unpriced).
     opening as (
       select
         h.id, h.instrument_id, h.quantity,
@@ -586,20 +534,13 @@ async function readSessionSeries(
       from held h
     ),
 
-    -- Every observation of a held instrument inside the session's span, with
-    -- the price it replaces: that holding's previous observation in the span,
-    -- else its opening price. previous is null only for a holding priced for
-    -- the first time ever, which is the one case known moves.
-    --
-    -- Bounded by the span and not by market_date, so "same answer" holds on
-    -- any rows the table can hold rather than only on those stamped under
-    -- today's MARKET_TIMEZONE. The bounds are scalar subqueries and not a
-    -- joined one-row CTE: through a join the span reaches this scan as a
-    -- join condition, which the planner does not turn into an index
-    -- condition, and it seq-scans the whole log — materialised or not. As
-    -- scalar subqueries they are init-plan parameters, which do go into the
-    -- index condition on price_observation_pkey: one scan per holding, and
-    -- the log's growth stops mattering.
+    -- Every observation of a held instrument in the session's span, with the price it replaces
+    -- (previous observation in span, else opening price; null previous = priced for the first
+    -- time ever, the one case known moves). Bounded by the span, not market_date, so it holds on
+    -- any rows regardless of today's MARKET_TIMEZONE. Bounds are scalar subqueries, not a joined
+    -- CTE: a join would make the span a join condition the planner won't turn into an index
+    -- condition (seq-scans the whole log); scalar subqueries are init-plan params that do hit
+    -- the index on price_observation_pkey — one scan per holding.
     changes as (
       select
         o.as_of,
@@ -613,8 +554,8 @@ async function readSessionSeries(
        and o.as_of <= (select max(as_of) from instants)
     ),
 
-    -- What the observations at one instant add to the total and to the priced
-    -- count, rounded per holding exactly as the total is.
+    -- What the observations at one instant add to the total and the priced count, rounded per
+    -- holding like the total.
     deltas as (
       select
         as_of,
@@ -633,11 +574,9 @@ async function readSessionSeries(
       from opening
     ),
 
-    -- Instants and deltas on one timeline. A plotted instant has to take
-    -- every delta at or before it, ties included, and the default RANGE frame
-    -- of sum(...) over (order by as_of) includes the current row's peers —
-    -- which is o.as_of <= instants.as_of restated, with no ordering needed
-    -- between the two kinds of row.
+    -- Instants and deltas on one timeline. A plotted instant takes every delta at or before it,
+    -- ties included — the default RANGE frame of sum(...) over (order by as_of) does exactly
+    -- that, no ordering needed between the two row kinds.
     timeline as (
       select
         as_of, true as plotted,
@@ -656,12 +595,9 @@ async function readSessionSeries(
       from timeline
     )
 
-    -- The plotted filter sits out here, one step after the window rather than
-    -- inside running: a WHERE is evaluated before window functions and would
-    -- drop the delta rows before they were summed. known is cast back to
-    -- bigint because bigint + sum(bigint) is numeric in Postgres, and a
-    -- coverage count that changed type between two readers of one row shape
-    -- is the drift the row contract exists to refuse.
+    -- plotted filter sits here, after the window, not inside running: a WHERE runs before
+    -- window functions and would drop delta rows before they're summed. known is cast back to
+    -- bigint since bigint + sum(bigint) is numeric in Postgres, and coverage must stay one type.
     select
       r.as_of                                              as at,
       cast(ot.amount + r.value_delta as numeric(20, 4))    as amount,
@@ -674,34 +610,24 @@ async function readSessionSeries(
   `.execute(db);
 
   return rows.rows.map((row) => ({
-    // UTC, deterministically — the chart labels on the market's clock and
-    // must reach the browser saying what the server rendered.
     at: row.at.toISOString(),
     amount: row.amount,
-    // Cardinalities of holdings, not money.
     coverage: { known: Number(row.known), total: Number(row.total) },
   }));
 }
 
-/**
- * Net worth at each instant of the session — the Overview's 1D line. No
- * observations returns an empty series, not a flat one: "nothing was
- * observed" is not "nothing moved".
- */
+// No observations returns an empty series, not a flat one: "nothing observed" isn't "nothing moved".
 export async function netWorthSessionSeries(
   filter: OwnerFilter,
   session: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<SessionPoint[]> {
-  // `a` is the account alias in the `held` CTE, where the narrowing goes.
+  // a is the account alias in the held CTE, where the narrowing goes.
   return readSessionSeries(db, session, ownedBy("a.owner_id", filter));
 }
 
-/**
- * One account at each instant of the same session, same terms. A cash-only
- * account draws a flat line rather than an empty one: the instants are the
- * log's, so every account answers at the same moments.
- */
+// A cash-only account draws a flat line, not an empty one: instants are the log's, so every
+// account answers at the same moments.
 export async function accountSessionSeries(
   accountId: string,
   session: IsoDate,
@@ -710,11 +636,8 @@ export async function accountSessionSeries(
   return readSessionSeries(db, session, isAccount("a.id", accountId));
 }
 
-/**
- * The hand-typed prefix series (DESIGN.md §7), raw and unmerged: rule 2 —
- * computed wins on overlap, manual only fills gaps — is a display rule about
- * two lines, not a fact about either one.
- */
+// The hand-typed prefix series (DESIGN.md §7), raw and unmerged — the overlap rule (computed
+// wins, manual fills gaps) is a display rule about two lines, not a fact about either.
 export async function manualNetWorth(
   db: Kysely<Database> = getDb(),
 ): Promise<ManualPoint[]> {
@@ -727,32 +650,23 @@ export async function manualNetWorth(
   return rows.map((row) => ({ date: row.date, amount: String(row.amount) }));
 }
 
-/**
- * The headline's "+$14,921.00 / +1.2%" pair, computed in SQL in `numeric`
- * (§4.1): the difference of two six-figure balances is exactly where float
- * drift shows, and the percentage inherits it. Divides by `abs(previous)` so
- * a household climbing out of net debt reports a rise as a rise — a signed
- * negative would report recovery as `-x%`, the wrong sign on the one figure a
- * person reads fastest.
- */
+// Headline's "+$14,921.00 / +1.2%" pair, in SQL numeric (§4.1) — the difference of two
+// six-figure balances is exactly where float drift shows. Divides by abs(previous) so a
+// household climbing out of net debt reports a rise as a rise, not "-x%".
 export type NetWorthChange = {
   current: string;
   previous: string;
   difference: string;
-  /**
-   * Null when `previous` is zero: a change from nothing is undefined, not 0%
-   * and not infinite — the screen omits it rather than inventing one.
-   */
+  // Null when previous is zero: undefined, not 0% or infinite.
   percent: string | null;
 };
 
-/** @param since `YYYY-MM-DD`, the start of the window being reported. */
 export async function netWorthChange(
   filter: OwnerFilter,
   since: IsoDate,
   db: Kysely<Database> = getDb(),
 ): Promise<NetWorthChange> {
-  // Both ends, or the delta compares one owner against the whole household.
+  // Both ends narrowed, or the delta compares one owner against the whole household.
   const owned = ownedBy("holding_valued.owner_id", filter);
   const narrow = <T extends { where(w: RawBuilder<SqlBool>): T }>(qb: T): T =>
     owned === undefined ? qb : qb.where(owned);
@@ -786,13 +700,9 @@ export async function netWorthChange(
   };
 }
 
-/**
- * The earliest date any statement records — day zero (DESIGN.md §7) — or null
- * on an instance with none. The "All" range needs it: a fixed wide window
- * would spend most samples on uncovered pre-app years. Read from
- * `position_set`, not the view: this is when history *begins*, a fact about
- * uploads, and it stays correct when every account has since closed.
- */
+// Day zero (DESIGN.md §7), or null on an instance with none — the "All" range needs it, else a
+// fixed wide window wastes most samples on uncovered pre-app years. Read from position_set, not
+// the view: a fact about uploads, correct even once every account has since closed.
 export async function firstRecordedDate(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -801,9 +711,8 @@ export async function firstRecordedDate(
     .selectFrom("position_set")
     .select(sql<string | null>`cast(min(as_of_date) as text)`.as("date"));
 
-  // `position_set` carries an account, never an owner (§4.2), so the
-  // narrowing reaches the owner through a subquery — one spanning *closed*
-  // accounts, deliberately: their statements are still history.
+  // position_set carries an account, never an owner (§4.2) — narrowing reaches the owner via
+  // a subquery spanning closed accounts too, deliberately: their statements are still history.
   const owned = isFiltered(filter)
     ? sql<SqlBool>`position_set.account_id in (
         select id from account where ${isOneOf("owner_id", filter)}
@@ -815,12 +724,8 @@ export async function firstRecordedDate(
   return row?.date ?? null;
 }
 
-/**
- * The earliest date *this account's* own statements record, or null (spec
- * 0008) — from `position_set` for {@link firstRecordedDate}'s reason: a fact
- * about uploads, correct even when every statement predates today. Falling
- * back to the household-wide date understated how new an account is.
- */
+// This account's own earliest date, or null (spec 0008) — from position_set, same reason as
+// firstRecordedDate. Falling back to the household-wide date would understate how new an account is.
 export async function accountFirstRecordedDate(
   accountId: string,
   db: Kysely<Database> = getDb(),

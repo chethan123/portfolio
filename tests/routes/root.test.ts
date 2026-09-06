@@ -1,19 +1,7 @@
-/**
- * The one loader, and — since ticket 03 — the one middleware, that runs on
- * every page render. The loader's first-run read is a hint, not data, and
- * nothing but this test enforces that: `firstRunStep()` throws when Postgres
- * is unreachable, and propagated from *this* loader that is an error
- * boundary on every route — a database merely restarting would answer every
- * screen with an error page while `/healthz` reported the real cause to
- * nobody. One `try` is the difference, and a `try` is the easiest thing in a
- * file to tidy away. The environment is configured before the import
- * because `getConfig()` memoises its first read.
- *
- * The middleware describe block below is the boundary's own test: every
- * refusal is proven on `next()` never being invoked (`servedThrough`'s
- * `onNext` parameter), never on inspecting a response a refusal never
- * produced — the vacuous shape ticket 03 is written to forbid.
- */
+// The one loader and (ticket 03) one middleware that run on every page render. firstRunStep() throws when Postgres is
+// unreachable and this loader is an error boundary on every route, so a database merely restarting would error-page
+// every screen — one try is the fix, and the easiest thing to tidy away. Every middleware refusal below is proven on
+// next() never being invoked (servedThrough's onNext), never on inspecting a response a refusal never produced.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";

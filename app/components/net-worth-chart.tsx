@@ -372,9 +372,7 @@ export function NetWorthChart({
         </div>
       </div>
 
-      {/* Under the plot, not over it: the y labels can overlay their own rules
-          because they sit in the margin the padding leaves, and the x labels
-          have no such margin to sit in. */}
+      {/* Under the plot — x labels have no padding margin to overlay, unlike the y labels. */}
       <div className="chart-ticks" aria-hidden="true">
         {ticks.map((tick, index) => (
           <span key={index}>{tick}</span>
@@ -385,29 +383,18 @@ export function NetWorthChart({
 }
 
 /**
- * The one sentence about an empty chart panel that used to be spelled twice,
- * word for word, under two separately-worded comments (spec 0015): a
- * session with one observed moment is real state between the poller's first
- * attempt and its second, nothing to do with how many statements a screen
- * has, on either surface — 1D draws the same instants whichever chart is
- * asking. Guarded on there being a moment at all: with none, nothing has
- * been uploaded and no waiting for prices changes that, so `children` — the
- * caller's own fallback — is the true sentence instead. `moments` and
- * `children` do **not** converge the same way: a caller passes its own
- * `computed.length` and its own wording, because the fallback genuinely
- * differs between an instance with no chart at all and a range that is
- * merely thin, and only the account page's is reachable with none.
+ * One shared sentence for an empty chart panel (spec 0015) — a session with
+ * one observed moment is real state between the poller's attempts, nothing
+ * to do with how many statements exist. Guarded on there being a moment at
+ * all: with none, `children` (the caller's own fallback) is the true sentence instead.
  */
 export function ChartEmptyNote({
   session,
   moments,
   children,
 }: {
-  /** The session this chart would draw, or null when it draws days. */
   session: SessionAxis | null;
-  /** The caller's own `computed.length` — how many moments this session holds so far. */
   moments: number;
-  /** The caller's own fallback, shown everywhere the session sentence does not apply. */
   children: ReactNode;
 }) {
   if (session !== null && moments > 0) {
