@@ -47,13 +47,31 @@
  * and why neither screen's copy for this outcome claims to know which one
  * happened.
  *
- * **A registration's own `InvalidStateError`** — "the authenticator was
- * previously registered" — falls to the same generic `"failed"` branch
- * {@link requestRegistration} gives every non-dismissal: it is the client-side
- * half of `lock.server.ts`'s `excludeCredentials` (an authenticator the
- * server already knows about refuses to create a second credential for this
- * relying party), and the server's own `DUPLICATE_PASSKEY_MESSAGE` is the
- * other half, for whatever reaches it anyway.
+ * **A registration's own `InvalidStateError`** — the client-side half of
+ * `lock.server.ts`'s `excludeCredentials`, an authenticator the server
+ * already knows about refusing to create a second credential for this
+ * relying party — has an outcome of its own rather than falling to the
+ * generic `"failed"` branch. It has to: the generic branch prints the
+ * library's own message, and "The authenticator was previously registered"
+ * is a sentence about authenticators rather than about what this household
+ * should do next. `identifyRegistrationError.js`'s `InvalidStateError`
+ * branch sets `code: "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED"` and passes
+ * no `name` override, and `webAuthnError.js`'s constructor is
+ * `this.name = name ?? cause.name` — so the thrown error's `.name` really is
+ * the platform's own `"InvalidStateError"`, which is what this matches on;
+ * matching the name is exactly as broad as matching the library's `code`,
+ * since that branch keys on the same thing.
+ *
+ * **Not a guarantee that the name means only this.** Nothing in the
+ * specification reserves `InvalidStateError` for the exclude-list case
+ * (w3c/webauthn#1566 asks precisely that and does not settle it), and
+ * Credential Management already rejects `create()` with it for a document
+ * that is not fully active — which only happens on a page nobody is looking
+ * at, so no family member reads the sentence for that reason. If a browser
+ * ever overloads it further, this branch would name a cause it does not
+ * have, and the sentence would need to soften rather than the match widen.
+ * The server's `DUPLICATE_PASSKEY_MESSAGE` is still the other half, for
+ * whatever reaches it anyway.
  */
 import type {
   AuthenticationResponseJSON,
@@ -139,6 +157,10 @@ export async function requestAssertion(
 export type RegistrationOutcome =
   | { status: "ok"; response: RegistrationResponseJSON }
   | { status: "dismissed" }
+  // The provider already holds a passkey for this app and will not make a
+  // second — a dead end for this attempt rather than a failure to retry, so
+  // it carries no message and the screen supplies its own.
+  | { status: "alreadyRegistered" }
   | { status: "failed"; message: string };
 
 /**
@@ -161,6 +183,12 @@ export async function requestRegistration(
   } catch (error) {
     if (error instanceof Error && error.name === "NotAllowedError") {
       return { status: "dismissed" };
+    }
+    // Its own outcome rather than the generic branch — see this file's header
+    // for why `.name` here is the platform's own signal and not the library's
+    // invention.
+    if (error instanceof Error && error.name === "InvalidStateError") {
+      return { status: "alreadyRegistered" };
     }
     return {
       status: "failed",
