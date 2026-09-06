@@ -246,11 +246,12 @@ Resolving a new instrument is the same form, stacked: **Symbol** and **Name** ea
 line instead of sharing a row, and **Price source** and **Classification** follow underneath rather
 than beside them.
 
-![Step four on a phone: added, updated and removed grouped in one column](images/upload-4-review-mobile.png)
+![Step four on a phone: the added/updated/removed counts above the start of the diff](images/upload-4-review-mobile.png)
 
-The diff reads the same top to bottom as it does side by side on a wider screen — **Added**,
-**Updated** and **Removed** stay in that order, each group heading above its own rows rather than
-beside them.
+The table is already one column on a wider screen, so nothing here reflows — the counts, then
+**Added**, **Updated** and **Removed** in that order, each a heading above its own rows. A phone
+screen just reaches less of it before running out of room; scrolling is how you see **Updated** and
+**Removed**.
 
 ## Two things that do not exist
 

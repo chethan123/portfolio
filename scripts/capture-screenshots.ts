@@ -536,7 +536,27 @@ async function walkUpload(
   await page.waitForURL(/\/columns/);
   await page.evaluate(() => document.fonts.ready);
 
-  if (shots.columnsBlank) await shoot(page, shots.columnsBlank, fullPage);
+  // Every step in this flow is reached by a form submit, never a fresh
+  // `visit()` — unlike every other shot in this file, nothing here calls
+  // `page.goto()` between steps, and this app has no scroll-to-top-on-
+  // navigate of its own. On a phone, whichever control the previous step
+  // needed clicked (a button below the fold, a `<select>` `selectOption`
+  // scrolls into view to set) can leave the page scrolled, and that offset
+  // then carries into the *next* step's own page, which starts at whatever
+  // height it happens to be rather than at its own top —
+  // `upload-4-review-mobile.png` used to be almost entirely blank for
+  // exactly this reason, and `upload-mapping-mobile-*.png` used to render
+  // with its own header and the bottom navigation both displaced, before
+  // this scrolled every mobile shot in the flow back to (0, 0) first.
+  // Desktop never shows this: every desktop shot here is short enough, at
+  // 1600 wide, that no step before it ever needed to scroll at all.
+  async function shootStep(file: string | undefined): Promise<void> {
+    if (file === undefined) return;
+    if (!fullPage) await page.evaluate(() => window.scrollTo(0, 0));
+    await shoot(page, file, fullPage);
+  }
+
+  await shootStep(shots.columnsBlank);
 
   for (const [name, value] of [
     ["instrument", "Symbol"],
@@ -547,7 +567,7 @@ async function walkUpload(
   ] as const) {
     await page.selectOption(`select[name="${name}"]`, value);
   }
-  if (shots.columnsMapped) await shoot(page, shots.columnsMapped, fullPage);
+  await shootStep(shots.columnsMapped);
 
   await page.getByRole("button", { name: /save mapping and continue/i }).click();
   await page.waitForURL(/\/(instruments|review)/);
@@ -563,25 +583,13 @@ async function walkUpload(
       .nth(1)
       .getAttribute("value");
     await page.selectOption('select[name="classificationId-0"]', classification!);
-    if (shots.instruments) await shoot(page, shots.instruments, fullPage);
+    await shootStep(shots.instruments);
     await page.getByRole("button", { name: /save and continue/i }).click();
     await page.waitForURL(/\/review/);
     await page.evaluate(() => document.fonts.ready);
   }
 
-  // Each step above is a step *this flow* navigates to with a form submit
-  // rather than a fresh `visit()` — unlike every other shot in this file,
-  // nothing here calls `page.goto()` between steps, and this app has no
-  // scroll-to-top-on-navigate of its own. A phone that scrolled down to
-  // reach a button on one step therefore lands on the next one already
-  // scrolled, at whatever offset the previous page happened to be that
-  // tall — `upload-4-review-mobile.png` used to be almost entirely blank
-  // for exactly this reason, carrying the Instruments step's own scroll
-  // position into a Review page that starts well above it. Desktop never
-  // shows this: every desktop shot here is short enough, at 1600 wide, that
-  // the step before it never needed to scroll at all.
-  if (!fullPage) await page.evaluate(() => window.scrollTo(0, 0));
-  if (shots.review) await shoot(page, shots.review, fullPage);
+  await shootStep(shots.review);
 
   await forgetWalkWrites(pool, watermark);
 }
@@ -729,14 +737,23 @@ async function captureUnlock(
   desktopFile: string,
   mobileFile: string,
 ): Promise<void> {
+  // Cropped to the card (`.lock-card`, `unlock.tsx`), on both devices —
+  // never a full-page/full-viewport shot the way most of this file's
+  // captures are. The screen renders with no app chrome at all (no rail, no
+  // strip, no bottom nav — `unlock.tsx`'s own header says why), so a
+  // full-viewport capture is mostly the bare background either side of one
+  // small centred card, on desktop and on a phone alike; the card itself is
+  // the whole of what this screen is a screenshot of.
   const desktop = await open(browser, theme, false, false, false);
   await visit(desktop, "/unlock");
-  await shoot(desktop, desktopFile);
+  await desktop.locator(".lock-card").screenshot({ path: desktopFile });
+  console.log(`  ${desktopFile}`);
   await desktop.close();
 
   const mobile = await open(browser, theme, true, false, false);
   await visit(mobile, "/unlock");
-  await shoot(mobile, mobileFile, false);
+  await mobile.locator(".lock-card").screenshot({ path: mobileFile });
+  console.log(`  ${mobileFile}`);
   await mobile.close();
 }
 
@@ -849,11 +866,20 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     // below does (finding 2's exception is about the *masking* cookie, not
     // the viewport), and every navigation already tears down the last
     // screen's state the same way the desktop loop's own `page` does.
+    // Closed, unlike the desktop pair above. `.owner-filter-menu` is
+    // `position: absolute` on every screen that has one (`app/app.css`) —
+    // opening it never pushes anything, it overlays whatever sits where it
+    // renders — but on Overview that happens to be exactly the narrowed
+    // headline and the "Showing … only" sentence this shot exists to
+    // prove still work on a phone: the panel opens right under the chip,
+    // which is right where the headline starts. Holdings' own equivalent
+    // shot (`holdings-owner-mobile.png`) keeps the menu open because there
+    // the same overlay lands on empty space above the table, not on the
+    // one thing that shot is of.
     await visitAndShootMobile(
       phone,
       `/?owner=${ownerId}&range=all`,
       `docs/screenshots/overview-owner-mobile-${theme}.png`,
-      { prepare: openOwnerFilter },
     );
     await visitAndShootMobile(phone, "/?range=1d", `docs/screenshots/overview-1d-mobile-${theme}.png`);
     await visitAndShootMobile(
@@ -1019,7 +1045,12 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
     csv,
     brokerage,
     {
-      columnsBlank: "docs/guide/images/upload-2-columns-blank-mobile.png",
+      // No `columnsBlank` here (unlike the desktop walk above): the six
+      // mapping selects that make `upload-2-columns-blank.png` and
+      // `upload-2-columns-mapped.png` a pair sit below the fold on a 390px
+      // phone in both states, so a scrolled-to-top mobile shot of "blank"
+      // is indistinguishable from one of "mapped" — this walk takes the
+      // one phone shot of this step instead of two identical ones.
       columnsMapped: "docs/guide/images/upload-2-columns-mapped-mobile.png",
       instruments: "docs/guide/images/upload-3-instruments-mobile.png",
       review: "docs/guide/images/upload-4-review-mobile.png",

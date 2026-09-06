@@ -115,8 +115,8 @@ The reasoning behind closing rather than deleting, and behind the three-way tax 
 
 ![Settings → People, empty, on a phone](images/first-run-people-mobile.png)
 
-The tab strip wraps onto a second line instead of scrolling, so every tab — People, Accounts, Tax,
-Prices, Display, Passkeys — stays reachable without a sideways swipe.
+The tab strip wraps onto a second line instead of scrolling, so every tab — Overview, People,
+Accounts, Tax, Prices, Display, Passkeys — stays reachable without a sideways swipe.
 
 ![Settings → Accounts with nobody recorded yet, on a phone](images/first-run-accounts-mobile.png)
 

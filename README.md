@@ -352,9 +352,9 @@ instance already is: nobody is locked out by a lock nobody can still satisfy.
 
 Once anybody has enrolled a passkey, every browser that reaches the app — however recently it
 signed in through Google — is refused every other screen until it clears this one. One button, one
-action: pressing Unlock hands the challenge to the browser's own passkey provider, and only an
-assertion this instance actually verifies opens the padlock — never the press itself, and never a
-second time for an attempt that was dismissed or timed out.
+action: pressing Unlock hands the challenge to the browser's own passkey provider, and the padlock
+opens the moment that provider's own check passes — never on the press itself, and closed again
+beside the message if this instance goes on to refuse the assertion that check produced.
 
 - **A fact about the browser, at that moment — never about the household.** Unlocking a phone does
   nothing for a laptop, or for anyone else's phone; each stays exactly as locked as it already was.
@@ -418,7 +418,7 @@ control all stay — and each ring sits above the table it is drawn from.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-owner-mobile-dark.png">
-  <img alt="The owner filter narrowed to one owner, on a phone: the disclosure open above a smaller headline and the sentence naming who is shown" width="390" src="docs/screenshots/overview-owner-mobile-light.png">
+  <img alt="The owner filter narrowed to one owner, on a phone: the closed OWNER chip naming who is selected, immediately above the smaller headline and the sentence saying Showing Alex Rivera only" width="390" src="docs/screenshots/overview-owner-mobile-light.png">
 </picture>
 
 <picture>
@@ -444,32 +444,32 @@ boxes, and the line above Save still says what saving will record.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/income-mobile-dark.png">
-  <img alt="Income on a phone: the headline and weighted yield above the two stacked donut-and-table breakdowns" width="390" src="docs/screenshots/income-mobile-light.png">
+  <img alt="Income on a phone: the headline and weighted yield above the first donut, by tax treatment" width="390" src="docs/screenshots/income-mobile-light.png">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/account-detail-mobile-dark.png">
-  <img alt="A brokerage account on a phone: its header, its chart and its holdings stacked in one column" width="390" src="docs/screenshots/account-detail-mobile-light.png">
+  <img alt="A brokerage account on a phone: its identity block, its total and the start of its own chart" width="390" src="docs/screenshots/account-detail-mobile-light.png">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/account-balance-mobile-dark.png">
-  <img alt="A loan account's set balance form, on a phone" width="390" src="docs/screenshots/account-balance-mobile-light.png">
+  <img alt="A loan account on a phone, above its Set balance button" width="390" src="docs/screenshots/account-balance-mobile-light.png">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-mobile-dark.png">
-  <img alt="Settings on a phone: the tab strip above the account list and the add-account form, stacked" width="390" src="docs/screenshots/settings-mobile-light.png">
+  <img alt="Settings on a phone: the tab strip wrapped to two rows, above the start of the account list" width="390" src="docs/screenshots/settings-mobile-light.png">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-passkeys-mobile-dark.png">
-  <img alt="Settings → Passkeys on a phone: the enrolled passkey above the add-a-passkey form" width="390" src="docs/screenshots/settings-passkeys-mobile-light.png">
+  <img alt="Settings → Passkeys on a phone: the one enrolled passkey and its own removal checkbox" width="390" src="docs/screenshots/settings-passkeys-mobile-light.png">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/unlock-mobile-dark.png">
-  <img alt="The Locked screen on a phone: the same single card, centred in a narrower viewport" width="390" src="docs/screenshots/unlock-mobile-light.png">
+  <img alt="The Locked screen's card on a phone: the same heading, sentence and button, at full width" width="390" src="docs/screenshots/unlock-mobile-light.png">
 </picture>
 
 <picture>
@@ -479,12 +479,12 @@ boxes, and the line above Save still says what saving will record.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/upload-mapping-mobile-dark.png">
-  <img alt="The columns screen, on a phone: the file's own sample rows above a select per column" width="390" src="docs/screenshots/upload-mapping-mobile-light.png">
+  <img alt="The columns screen, on a phone: the header-row picker above the file's own sample rows, shown verbatim" width="390" src="docs/screenshots/upload-mapping-mobile-light.png">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/upload-review-mobile-dark.png">
-  <img alt="The review screen, on a phone: added, updated and removed positions stacked in one column" width="390" src="docs/screenshots/upload-review-mobile-light.png">
+  <img alt="The review screen, on a phone: the added/updated/removed counts above the start of the diff, the Added group's first row in frame" width="390" src="docs/screenshots/upload-review-mobile-light.png">
 </picture>
 
 Every screen above has its phone shot here rather than beside its desktop one, so the two are easy

@@ -99,7 +99,10 @@ arguing that a handful stands in for the rest.
 file carries a live grant (`ensureCapturePasskey`, `captureGrant`) so the screens behind the lock are
 what gets photographed; this is the one page that exists only for a browser without one, and its own
 context is opened without the grant cookie on purpose (`captureUnlock`, `open`'s `withGrant`
-parameter) rather than reusing any other shot's context.
+parameter) rather than reusing any other shot's context. It is also, like `holdings-edit-*.png`,
+cropped to one element (`.lock-card`) rather than the page: the screen renders with no app chrome at
+all, so a full-page or full-viewport capture would be mostly bare background either side of one
+small centred card.
 
 Research screenshots of the *Stitch mock* are a different thing entirely and live in
 [`../research/stitch-2026-08/`](../research/stitch-2026-08/).

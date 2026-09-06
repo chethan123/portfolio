@@ -95,7 +95,7 @@ the foot of the page, and **Set balance** in the header jumps to it.
 
 ![A bank account showing the Set balance form](images/set-balance.png)
 
-![The same account on a phone: Upload statement full width, Set balance and Edit details sharing the row beneath it](images/set-balance-mobile.png)
+![The same account on a phone: Upload statement above Set balance and Edit details, sharing the row beneath it](images/set-balance-mobile.png)
 
 **Only bank and loan accounts are offered it.** A brokerage, IRA or workplace plan holds individual
 positions, and typing one cash figure against it would record everything else it holds as sold — so

@@ -168,7 +168,7 @@ the sign-in at the front door keeps a person out while the lock keeps a browser 
 
 ![Each enrolled passkey, with its label, when it was enrolled and last used, and whether it can sync to other devices](images/settings-passkeys.png)
 
-![The same list on a phone, the checkbox and Remove button stacked under the sentence they belong to](images/settings-passkeys-mobile.png)
+![The same list on a phone: the checkbox and its sentence to the left, Remove to the right, the same row as on a wider screen but narrower](images/settings-passkeys-mobile.png)
 
 What can unlock a browser, once the household holds one. Enrol another, see which can sync to other
 devices, and remove one that is gone for good — the full explanation, in the household's own words
@@ -182,8 +182,9 @@ the one doing it, immediately.
 
 ![Settings on a phone: the seven tabs wrapped to two rows, the accounts table scrolled sideways](images/settings-accounts-mobile.png)
 
-The tab strip wraps to a second row instead of scrolling, which is the one strip in this guide that
-does — the seven tabs stay in view together rather than hiding some off to the side. The tables on
+The tab strip wraps to a second row instead of scrolling — the seven tabs stay in view together
+rather than hiding some off to the side, the way [the upload flow's own step
+strip](upload.md#on-a-phone) does too. The tables on
 this screen keep their columns and scroll sideways to see them all, the way every table but
 Holdings does; **Tax treatment** and the closed/open status are there, just past the edge shown
 here.
