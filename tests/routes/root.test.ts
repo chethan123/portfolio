@@ -178,7 +178,7 @@ describe("the lock middleware", () => {
         }),
       );
 
-      expect(called).toBe(false); // next never invoked — not merely "response carries no figure", which a refusal renders vacuously
+      expect(called).toBe(false);
     }),
   );
 
@@ -256,7 +256,7 @@ describe("the lock middleware", () => {
         expect(called).toBe(false);
         expect(response.status).toBeGreaterThanOrEqual(300);
         expect(response.status).toBeLessThan(400);
-        expect(response.headers.get("Set-Cookie")).toBeNull(); // a failed read is not proof the grant is gone
+        expect(response.headers.get("Set-Cookie")).toBeNull();
       } finally {
         touchGrantOverride.impl = undefined;
       }

@@ -555,7 +555,7 @@ describe("the receipt a balance write redirects to", () => {
       );
 
       expect(to).toContain("range=1m");
-      expect(to).toContain("owner=7"); // a write doesn't end a reading, either
+      expect(to).toContain("owner=7");
       expect(to).toContain("recorded=");
     }),
   );

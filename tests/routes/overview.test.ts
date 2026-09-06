@@ -133,7 +133,7 @@ describe("the Overview read as an owner", () => {
         ["Alice Brokerage", "10000.0000"],
       ]);
       expect(hers.holdingCount).toBe(1);
-      expect(hers.computed.at(-1)?.amount).toBe("10000.0000"); // the line itself, not just the headline above it
+      expect(hers.computed.at(-1)?.amount).toBe("10000.0000");
 
       expect(renderRoute(Overview, "/", hers)).toContain("Showing <b>Alice</b> only."); // ADR-0008: filter surviving navigation
 
@@ -252,7 +252,7 @@ describe("the Overview read as an owner", () => {
       const markup = renderRoute(Overview, `/${search}`, data);
 
       expect(markup).toContain(`href="/?owner=${alice.id}&amp;range=1w"`); // the bug ticket 00 fixed
-      expect(markup).toContain('type="hidden" name="range" value="1m"'); // applying an owner mustn't throw away a chosen span
+      expect(markup).toContain('type="hidden" name="range" value="1m"');
     }),
   );
 
@@ -784,7 +784,7 @@ describe("the number tail on the account rows", () => {
         '<div class="alloc-label"><span>Fidelity Taxable <span class="number-tail" aria-hidden="true">····3910</span>',
       );
 
-      expect(markup).toContain("Checking"); // no recorded number, no dots standing in for one
+      expect(markup).toContain("Checking");
       expect(markup).not.toContain("Checking ·");
     }),
   );

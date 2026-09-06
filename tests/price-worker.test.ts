@@ -1101,7 +1101,7 @@ describe("the socket file and its lifecycle", () => {
     await start(fakeYahoo(), { ...TEST_TIMEOUTS, headersTimeout: 10_000, requestTimeout: 10_000 });
 
     const socket = await connectSocket(currentSocketPath);
-    socket.resume(); // a paused socket never notices the peer closing
+    socket.resume();
 
     const startedAt = Date.now();
     await new Promise<void>((resolve) => socket.once("close", resolve));

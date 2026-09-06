@@ -204,7 +204,7 @@ describe("reading the table as an owner", () => {
       const filtered = `?owner=${alice.id}`;
       const data = await loader(args(get(`/holdings${filtered}&group=kind&sort=quantity`)));
 
-      expect(data.view).toBe(`${filtered}&group=kind&sort=quantity`); // canonical view every control builds from
+      expect(data.view).toBe(`${filtered}&group=kind&sort=quantity`);
 
       const markup = renderRoute(Holdings, "/holdings", data);
       expect(markup).toContain(
@@ -387,7 +387,7 @@ describe("the three empty states", () => {
       );
       expect(everyone).toContain("<details");
       expect(everyone).toContain("Everyone");
-      expect(everyone).toContain("<summary>"); // nothing applied, so unmarked — asserted on the tag since aria-current appears elsewhere too
+      expect(everyone).toContain("<summary>"); // nothing applied, so unmarked
 
       const one = renderRoute(
         Holdings,

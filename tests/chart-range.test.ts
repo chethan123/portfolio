@@ -311,7 +311,7 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
 
   it("decays from `until` itself, not from the real current date, for a window ending in the past", () => {
     const pastUntil = "2020-06-15";
-    const since = daysBefore(pastUntil, 900); // well over the budget
+    const since = daysBefore(pastUntil, 900);
 
     const { dates } = spanOf(since, pastUntil);
 

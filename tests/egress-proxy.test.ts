@@ -460,7 +460,7 @@ describe("the ClientHello check (steps 3-6)", () => {
     socket.write(connectLine(`${ALLOWED_HOST}:443`));
     const { line, rest } = await waitForStatusLine(socket);
     expect(line).toContain("200 Connection Established");
-    expect(rest.length).toBe(0); // nothing pipelined in this case
+    expect(rest.length).toBe(0);
 
     socket.resume();
     socket.write(clientHello([ALLOWED_HOST]));
@@ -498,7 +498,7 @@ describe("the ClientHello check (steps 3-6)", () => {
     socket.write(clientHello(["mail.yahoo.com"]));
     await waitForClose(socket);
 
-    expect(upstream.received.length).toBe(0); // never written to before the check passed
+    expect(upstream.received.length).toBe(0);
   });
 
   it("tears the socket down when the ClientHello carries no server_name extension", async () => {

@@ -119,7 +119,7 @@ export type Fixtures = {
     startedAt: Date | string;
     outcome: BackfillOutcome;
     rangeFrom?: string;
-    rangeUntil?: string; // exclusive, must be later than rangeFrom
+    rangeUntil?: string;
     written?: number;
     error?: string;
   }): Promise<void>;

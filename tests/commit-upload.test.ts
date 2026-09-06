@@ -1,8 +1,6 @@
-// Diff, commit, and receipt (docs/specs/ingest/05, DESIGN.md §5.1, §5.2). Real Postgres — the
-// risk is transactional: whole-or-nothing commit, same-date re-upload tie-break, guards against
-// a filtered export silently selling holdings. Grouped around silent failures: a misclassified
-// diff row, a half-applied commit, a guard letting through what it refuses. Every money
-// assertion is an exact decimal string.
+// Diff, commit, and receipt (docs/specs/ingest/05, DESIGN.md §5.1, §5.2). Real Postgres — the risk
+// is transactional: whole-or-nothing commit, same-date re-upload tie-break, guards against a
+// filtered export silently selling holdings. Every money assertion is an exact decimal string.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { sql } from "kysely";
@@ -536,8 +534,8 @@ describe("commitUpload", () => {
   );
 
   it("applies nothing at all when a write fails mid-transaction", async () => {
-    // Outside withDatabase: a mid-transaction fault would abort the shared transaction.
-    // Cleans up manually; safe since the suite runs serially (fileParallelism: false).
+    // Outside withDatabase: a mid-transaction fault would abort the shared transaction. Cleans up
+    // manually; safe since the suite runs serially (fileParallelism: false).
     const db = await testDatabase();
     const fixtures = makeFixtures(db);
     const marker = `commit-upload-atomicity-${Date.now()}`;
@@ -700,8 +698,7 @@ describe("commitUpload", () => {
       const account = await seedAccount({ kind: "brokerage" });
       const fund = await seedInstrument({ symbol: "PNY", name: "Penny Income Trust" });
       await seedInstrumentAlias({ instrument: fund, rawString: "PNY" });
-      // Small enough that quantity×price is legal; quantity×dividend rate is what
-      // overflows (migration 0006).
+      // Small enough that quantity×price is legal; quantity×dividend rate is what overflows (migration 0006).
       await seedQuote({
         instrument: fund,
         price: "0.0001",
@@ -716,8 +713,7 @@ describe("commitUpload", () => {
       expect(refusal.fieldErrors.form).toMatch(/Penny Income Trust/);
       expect(refusal.fieldErrors.form).toMatch(/dividend rate/);
 
-      // Uncommitted — a landed row would make holding_valued raise numeric field
-      // overflow on every read, taking down the only screen to fix it from.
+      // Uncommitted — a landed row would make holding_valued raise numeric field overflow on every read.
       const sets = await db
         .selectFrom("position_set")
         .select("id")

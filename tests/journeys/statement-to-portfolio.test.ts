@@ -1,7 +1,7 @@
-// A statement, file to account-page figures. Every step is unit-tested against directly seeded state, which is exactly why
-// none can catch a seam (a step writing the right row under the wrong key passes its own test and breaks the flow) — so
-// nothing here is seeded past the household; every redirect is followed for real. Two journeys: the second proves the
-// design's central promise (§5.1, brief §5) that the work is paid once — it arrives at review asking nothing.
+// A statement, file to account-page figures. Every step is unit-tested against directly seeded state, which is why
+// none can catch a seam (a step writing the right row under the wrong key passes its own test and breaks the flow) —
+// so nothing here is seeded past the household; every redirect is followed for real. Two journeys: the second proves
+// the design's central promise (§5.1) that the work is paid once — it arrives at review asking nothing.
 import { afterAll, describe, expect, it } from "vitest";
 
 // Drop screen reads its size limit from config before any byte; getConfig() memoises on first call, not on import, so this is in time.

@@ -1026,7 +1026,7 @@ describe("enrolling the first passkey", () => {
             response: JSON.stringify(
               registrationResponse(begun.options.challenge, {
                 credentialId: "second-devic",
-                publicKey: unrelatedPublicKeyCose(), // well-formed, not a 4-byte stand-in, or this refuses before reaching the rule under test (finding 6)
+                publicKey: unrelatedPublicKeyCose(),
               }),
             ),
           }),

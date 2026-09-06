@@ -59,7 +59,7 @@ async function anAwkwardPortfolio(ctx: TestContext) {
     holdings: [
       { instrument: vti, quantity: "0.33333333" },
       { instrument: vxus, quantity: "7.77777777" },
-      { instrument: unquoted, quantity: "125.00000000" }, // never quoted: in the coverage count, absent from every sum
+      { instrument: unquoted, quantity: "125.00000000" },
     ],
   });
   await ctx.seedPositionSet({
@@ -133,7 +133,7 @@ describe("the Analysis screen's own arithmetic", () => {
         });
       }
 
-      expect(page.total.startsWith("-")).toBe(true); // net debt — liability outweighs securities, slices still reconstruct it
+      expect(page.total.startsWith("-")).toBe(true); // net debt — liability outweighs securities
     }),
   );
 
