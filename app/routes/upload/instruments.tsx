@@ -22,14 +22,10 @@ import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
 
 /**
- * Step three — resolve the file's first sightings (ingest brief §5). Every
- * distinct instrument-column string was looked up byte-exact against the
- * alias table; the misses land here, each resolved once and remembered
- * forever — pointed at an existing instrument or created, both paths
- * writing the alias, so the same brokerage's next export passes silently.
- * The flow's one early write: resolving records vocabulary, not the
- * statement, which waits for review. Reached only with at least one miss —
- * otherwise the loader redirects straight to review and the step dims.
+ * Step three — resolve the file's first sightings (ingest brief §5): misses
+ * against the alias table, pointed at an existing instrument or created —
+ * both paths write the alias so the next export passes silently. The
+ * flow's one early write; reached only with at least one miss.
  */
 export function meta() {
   return [{ title: "New instruments · Upload · Portfolio" }];
@@ -39,18 +35,14 @@ export async function loader({ params }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
 
-    // `parseDraft` owns the resume rule: a mapping that no longer parses
-    // clean bounces to columns, and a file with nothing unresolved skips by
-    // redirect, never an empty screen — a step with nothing to do would
-    // charge a click for no decision (brief §7.5).
+    // `parseDraft` owns the resume rule — nothing unresolved skips by redirect, never an empty screen (brief §7.5).
     const result = await parseDraft(draft);
     if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
     if (result.step === null) return redirect(`/upload/${draft.id}/review`);
 
     const screen = await resolutionScreen(result.parsed.positions);
 
-    // Everything resolved between the two reads — a concurrent draft's
-    // submit — is the same skip the redirect above performs.
+    // A concurrent draft's submit resolving everything is the same skip as above.
     if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review`);
 
     return {
@@ -60,11 +52,7 @@ export async function loader({ params }: Route.LoaderArgs) {
         instrumentsSkipped: draft.hadFirstSightings === false,
       } satisfies UploadStepsData,
       screen,
-      // The file's own name column, for the context line's caption —
-      // "Description: Vanguard Total…" — when one is mapped.
       nameColumn: result.mapping.columns.name ?? null,
-      // The sentinel rides down with the data, because the route's component
-      // cannot import a `.server` module (the columns screen's precedent).
       newClassification: NEW_CLASSIFICATION,
     };
   } catch (error) {
@@ -81,17 +69,13 @@ export async function action({ params, request }: Route.ActionArgs) {
     const result = await parseDraft(draft);
     if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
 
-    // A double submit — two tabs, the back button — finds everything already
-    // resolved and simply moves on, exactly as the loader would have.
+    // A double submit finds everything already resolved and moves on, as the loader would.
     if (result.step === null) return redirect(`/upload/${draft.id}/review`);
 
     const { unresolved } = result;
 
-    // Posted answers pair with the current unresolved strings by index, and
-    // each group carries its raw string in a hidden field so a stale form —
-    // another draft resolved one of these strings meanwhile — cannot land an
-    // answer on the wrong string. Compared through `sameRawStrings`: the
-    // browser rewrites a multi-line cell's line endings to CRLF in transit.
+    // Each posted group carries its raw string so a stale form can't land an
+    // answer on the wrong one. `sameRawStrings`: browser rewrites CRLF in transit.
     if (unresolved.some((raw, index) => !sameRawStrings(values[`raw-${index}`] ?? "", raw))) {
       throw ValidationError.form(
         "The file's first sightings changed while this page was open — " +
@@ -99,9 +83,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       );
     }
 
-    // `raw` is the draft's own parsed string, never the posted hidden-field
-    // copy — the alias must store the bytes the file wrote, and the copy may
-    // have been CRLF-mangled by the form round trip.
+    // `raw` is the draft's own parsed string, never the posted copy — the alias stores the file's own bytes.
     await resolveAll(
       unresolved.map((raw, index) => ({ raw, fields: resolutionFieldsAt(values, index) })),
       { probe: socketProbe },
@@ -110,8 +92,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     return redirect(`/upload/${draft.id}/review`);
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
-      // module the client bundle must not drag in.
+      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
       return { errors: fieldErrors, formError: formError ?? null, values };
     }
@@ -124,8 +105,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
   const { screen, nameColumn, newClassification } = loaderData;
 
   const errors = actionData?.errors;
-  // What was typed wins over every default on a refusal — a refusal must
-  // never cost an edit; `actionData` present means a refused submit.
+  // Typed wins over default on a refusal; `actionData` present means a refused submit.
   const values = actionData?.values;
 
   const fieldError = (name: string) =>
@@ -141,8 +121,6 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
   return (
     <section className="panel">
       <div className="panel-body form-intro">
-        {/* The count, stated plainly, then the one sentence of consequence:
-            this step is the flow's one early write. */}
         <p>
           <span className="u-data">{screen.unresolved.length}</span> of{" "}
           <span className="u-data">{screen.totalPositions}</span>{" "}
@@ -161,22 +139,16 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
         ) : null}
       </div>
 
-      {/* One form, one submit, no skip: a skipped string would be a holding
-          silently missing from the statement, and §5.2's "a missing row means
-          sold" turns that silence into a sale. */}
+      {/* No skip: a skipped string would go missing from the statement, and §5.2 reads a missing row as sold. */}
       <Form method="post">
         {screen.unresolved.map((item, index) => {
           const kind = values?.[`kind-${index}`];
 
           return (
             <div className="resolve-item" key={item.raw}>
-              {/* The raw string rides back with the answers, pairing them to
-                  this string however the unresolved list moves underneath. */}
               <input type="hidden" name={`raw-${index}`} value={item.raw} />
 
-              {/* Exactly as the file wrote it — the byte-exact string is the
-                  thing being resolved, and prettifying it would show something
-                  other than what the alias table will store. */}
+              {/* Byte-exact, as the file wrote it — prettifying would show something other than what the alias table stores. */}
               <h3 className="resolve-raw">{item.raw}</h3>
               <p className="cell-sub">
                 {item.name !== null && nameColumn !== null ? (
@@ -192,10 +164,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
 
               {fieldError(`kind-${index}`)}
 
-              {/* Both branches always render their controls: greying the
-                  unchosen one needs JavaScript, and a reader deciding needs
-                  to see what each asks. The unchosen branch's fields are
-                  ignored on submit. */}
+              {/* Both branches always render — greying the unchosen one needs JavaScript; its fields are ignored on submit. */}
               <label className="choice">
                 <input
                   type="radio"
@@ -262,9 +231,7 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                     <input
                       id={`name-${index}`}
                       name={`name-${index}`}
-                      // Prefilled because the statement usually already says
-                      // it: the mapped name column's value, or the raw string
-                      // when no name column is mapped.
+                      // Prefilled from the mapped name column, or the raw string when none is mapped.
                       defaultValue={
                         values !== undefined
                           ? (values[`name-${index}`] ?? "")
@@ -325,9 +292,6 @@ export default function Instruments({ loaderData, actionData }: Route.ComponentP
                   {fieldError(`classificationId-${index}`)}
                 </div>
 
-                {/* Always rendered, like every conditionally relevant control
-                    in this flow: a reveal needs JavaScript, and the note costs
-                    one line. */}
                 <div>
                   <label htmlFor={`newClassificationName-${index}`}>
                     New classification

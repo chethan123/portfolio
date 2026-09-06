@@ -7,14 +7,7 @@ import { listPeople } from "~/lib/people.server";
 
 import type { Route } from "./+types/account";
 
-/**
- * One account: correct it, or close it. Closing is a separate submission
- * with its own button and warning — a save fixes what an account is, a close
- * changes which dates it counts on — and since closing is one-way in this
- * version, the domain refuses a close whose acknowledgement was not ticked,
- * so a stray activation changes nothing. Nothing on this page deletes;
- * there is no delete affordance in the application at all.
- */
+// One account: correct it, or close it. Closing is a separate one-way submission requiring a ticked acknowledgement.
 export function meta({ data }: Route.MetaArgs) {
   return [{ title: `${data?.account.name ?? "Account"} · Settings · Portfolio` }];
 }
@@ -35,8 +28,6 @@ export async function action({ params, request }: Route.ActionArgs) {
   try {
     if (values.intent === "close") {
       await closeAccount(params.accountId, values);
-      // Back to the list, where the account now reads as closed. Staying here
-      // would leave a form open on an account that has just been retired.
       throw redirect("/settings/accounts");
     }
 
@@ -44,9 +35,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     return { saved: true, errors: undefined, values: undefined, closeError: undefined };
   } catch (error) {
     if (error instanceof ValidationError) {
-      // A refused close reports beside its own checkbox and leaves the save
-      // form alone: the close POST carries no account fields, so echoing it as
-      // `values` would blank every box above.
+      // Close POST carries no account fields — echoing it as `values` would blank every box above.
       if (values.intent === "close") {
         return {
           saved: false,
@@ -65,7 +54,7 @@ export async function action({ params, request }: Route.ActionArgs) {
 export default function AccountDetail({ loaderData, actionData }: Route.ComponentProps) {
   const { account, people } = loaderData;
 
-  // What was typed wins over what is stored, so a refusal never costs an edit.
+  // Typed wins over stored, so a refusal never costs an edit.
   const values = actionData?.values ?? {
     name: account.name,
     institution: account.institution,
@@ -103,9 +92,6 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
         </p>
       ) : null}
 
-      {/* One panel, two forms: the danger zone carries the hairline that
-          separates it from the fields above — its own card would leave that
-          rule floating at the top of an empty edge. */}
       <section className="panel">
         <Form method="post" className="panel-form">
           <AccountFields
@@ -129,9 +115,7 @@ export default function AccountDetail({ loaderData, actionData }: Route.Componen
                 never deleted, so closing is how one is retired.
               </p>
             </div>
-            {/* The acknowledgement `closeAccount` requires before its one-way
-                write — the tick carries the decision, the weight the upload
-                review gives a majority removal. */}
+            {/* Acknowledgement `closeAccount` requires before its one-way write. */}
             <label className="choice">
               <input type="checkbox" name="confirmClose" value="true" />
               <strong>

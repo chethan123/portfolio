@@ -81,10 +81,10 @@ written this ticket over-scopes `docs/operating.md` and under-scopes `ARCHITECTU
 | `docs/developing.md:564-571` | `:595-612` | the `.env`-is-read-by bullets |
 | `README.md:592-600` | `:617-627` | Where prices come from; the two false sentences are `:619-620` and `:626-627` |
 | `README.md:458` | `:464-485` | the mermaid block; the `app -.-> yahoo` edge is `:484` |
-| `app/lib/price-poller.server.ts:174` | `:175` | `:174` is the first half of the same template literal |
+| `app/lib/price-poller.server.ts:102` | `:175` | `:174` is the first half of the same template literal |
 
 **And three of its instructions are already carried out, or cannot be.** `ARCHITECTURE.md`'s
-§4.2 import row already names `server/yahoo-client.ts:121`; Appendix A already lists four of the
+§4.2 import row already names `server/yahoo-client.ts:47`; Appendix A already lists four of the
 six modules it says to add, leaving only `provider-socket.server.ts` and `egress-proxy.ts`
 genuinely missing — though two of the rows that *are* there still say "**Nothing calls it yet**"
 (`:2067`) and "until ticket 06" (`:2069`). **PR #220 is merged**, so "if still open, is
@@ -226,14 +226,14 @@ and only that clause.
       and the only importer of `yahoo-finance2` is `server/yahoo-client.ts`; the deployment diagram
       (`:458`) gains the worker and the proxy, with the socket edge between `app` and `worker`
 - [x] Two lines [01](01-one-refresh-and-the-batch-abort.md) left level-inconsistent, which that
-      ticket's own file list did not reach. `app/lib/price-poller.server.ts:174` appends "The batch
+      ticket's own file list did not reach. `app/lib/price-poller.server.ts:102` appends "The batch
       itself failed; see the error above." to the batch summary; since 01 the line above it is a
       *warning* whenever the provider could not be reached, so the sentence points at a level that
       is not there — "see the line above" is the whole fix. `docs/operating.md`'s backfill bullet
       was corrected in 01, along with the sentence that told an operator to grep the retired
       `Manual price refresh failed` stem; re-read both against whatever the worker's arrival makes
       true
-- [x] `server/db.ts:59-61`: the lock client now spans the socket round trip to the worker rather
+- [x] `server/db.ts:41`: the lock client now spans the socket round trip to the worker rather
       than the app's own provider network work. `app/lib/price-poller.server.ts:2-6` and
       `compose.yaml:1-2` no longer argue against a worker; re-read. PR #220, if still open, is
       re-pointed from spec 0015 to 0018 and ADR-0010. `docs/specs/README.md`: re-check that the

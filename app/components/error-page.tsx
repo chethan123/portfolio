@@ -1,20 +1,11 @@
 import { Link, isRouteErrorResponse } from "react-router";
 
 /**
- * The page a thrown error lands on, wherever it is caught. The wording is
- * ours and the status alone picks it, because the transport's own strings
- * vary by throw path — `statusText` is the router's for an unmatched route
- * and empty for a `data()` throw; `error.data` is a developer sentence
- * (quoted URL, `Error:` prefix) or a loader's bare words — which once gave
- * the two 404s this app produces two different pages. Nothing the throwing
- * code wrote is printed: a message naming an internal cause is not something
- * a household member on a phone can act on.
- *
- * The `.empty-state` under the header offers the route back every other
- * empty screen offers (DESIGN.md §8.4). Deliberately not restored: the
- * open-instance banner — a claim about the deployment that root's loader
- * establishes, and a URL matching no route never runs that loader; printing
- * it on faith would call a gated instance open.
+ * Wording is ours; status alone picks it — the transport's own strings vary
+ * by throw path and once gave this app's two 404s two different pages.
+ * Nothing the throwing code wrote is printed. No open-instance banner: a
+ * URL matching no route never runs root's loader, so printing it on faith
+ * would call a gated instance open.
  */
 export function ErrorPage({ error }: { error: unknown }) {
   const notFound = isRouteErrorResponse(error) && error.status === 404;

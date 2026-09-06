@@ -1,16 +1,5 @@
-/**
- * The one field the Tax settings form is built from (DESIGN.md §8.4).
- *
- * Pure — no Postgres — because the rules being checked are about text, and
- * because the alternative is what this file exists to fix: the rate's
- * validation was reachable only through `settings.server.ts`, so a CI run
- * without a database said nothing about it at all.
- *
- * Every assertion is an exact string. A rate multiplies money, so the digits
- * that come out have to be the digits that went in — `toBe("23.812345")` is
- * the point, and a test that accepted `23.8123` would be accepting the silent
- * rounding the screens were fixed for.
- */
+/** Tax settings' one field (DESIGN.md §8.4). Pure — validation used to be reachable only through
+ * settings.server.ts, so a database-less CI run said nothing about it. Assertions are exact strings. */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -18,7 +7,7 @@ import { ValidationError, parseInput, percentRate } from "~/lib/input.server";
 
 const rate = z.object({ rate: percentRate("A capital gains rate") });
 
-/** What the field parsed to, or undefined if it was refused. */
+// what the field parsed to, or undefined if refused
 function parsed(raw: string): string | undefined {
   try {
     return parseInput(rate, { rate: raw }).rate;
@@ -28,7 +17,7 @@ function parsed(raw: string): string | undefined {
   }
 }
 
-/** The message a refusal put under the field, or undefined if it passed. */
+// the message a refusal put under the field, or undefined if it passed
 function refusal(raw: string): string | undefined {
   try {
     parseInput(rate, { rate: raw });
@@ -43,11 +32,10 @@ describe("percentRate", () => {
   it("takes a percentage the way a person writes one", () => {
     expect(parsed("23.8")).toBe("23.8");
     expect(parsed(" 23.8 ")).toBe("23.8");
-    // The percent sign a paste out of a tax table brings with it.
+    // the percent sign a paste out of a tax table brings with it
     expect(parsed("23.8%")).toBe("23.8");
     expect(parsed("+23.8")).toBe("23.8");
-    // `bareDecimal`'s generosity, shared with the money fields: an unambiguous
-    // shorthand is completed rather than refused.
+    // bareDecimal's generosity, shared with money fields: unambiguous shorthand is completed, not refused
     expect(parsed(".5")).toBe("0.5");
     expect(parsed("20.")).toBe("20");
   });
@@ -65,8 +53,7 @@ describe("percentRate", () => {
   });
 
   it("refuses a negative rate, however it was typed", () => {
-    // Both the hyphen a keyboard produces and the U+2212 a rendered document
-    // does — the same pair the money fields refuse.
+    // hyphen from a keyboard, U+2212 from a rendered document — same pair the money fields refuse
     expect(refusal("-5")).toMatch(/negative/);
     expect(refusal("−5")).toMatch(/negative/);
   });
@@ -75,8 +62,7 @@ describe("percentRate", () => {
     expect(refusal("")).toMatch(/required/);
     expect(refusal("   ")).toMatch(/required/);
     expect(refusal("a quarter")).toMatch(/percentage/);
-    // A lone point is a stray keystroke, not a zero — the bug `bareDecimal`'s
-    // lookarounds exist for.
+    // a lone point is a stray keystroke, not a zero — the bug bareDecimal's lookarounds exist for
     expect(refusal(".")).toMatch(/percentage/);
   });
 });

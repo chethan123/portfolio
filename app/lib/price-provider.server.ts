@@ -1,71 +1,8 @@
 /**
- * Where prices come from, and the one shape the rest of the app knows them
- * in. DESIGN.md §6.1 fixed the interface at a single batched method;
- * ADR-0011 adds a second. The seam now has two implementations, and only one
- * of them imports the library: the worker process (`server/price-worker.ts`)
- * reaches `yahoo-finance2` through `server/yahoo-client.ts`, its one importer
- * (ARCHITECTURE.md §4.2); this process's own, `socketProvider()`
- * (`app/lib/provider-socket.server.ts`), dials the worker's unix socket and
- * never touches the package at all (spec 0018 §3.3, §3.8). This module sits
- * behind both — every schema, every conversion, every refusal a response can
- * produce — so `socketProvider()` runs the very same `toProviderHistory` a
- * direct call to the library would have, ADR-0011's split arithmetic
- * included. `yahoo-finance2` is named below only in comments, documenting
- * the shape the worker's payload is still expected to hold — swapping the
- * library there is still a day's work, and this module's schemas are why.
- * The interface is also the test seam: CI never reaches the network.
- *
- *   getQuotes        every symbol at once — the batching is why Yahoo was chosen
- *   getDailyCloses   one symbol, one range — history is per instrument, and the
- *                    endpoint offers no batch for it
- *
- * **Everything numeric leaves here as a decimal string.** The provider hands
- * back floats — exactly what §4.1 refuses near a money column — and the
- * conversion happens once, here, at the boundary.
- *
- * **The split convention the history method rests on, and what was checked.**
- * Yahoo's chart endpoint restates `close` through later splits — `adjclose` is
- * the split *and* dividend adjusted figure, and is not read. Statements record
- * shares as held on the day, so a pre-split close taken as stored would value a
- * position at a fraction of its worth, by exactly the split factor, with every
- * figure looking plausible. {@link toProviderHistory} therefore multiplies each
- * close back by the ratio of every split later than it (ADR-0011).
- *
- * That convention is stated nowhere in yahoo-finance2 4.0.2 — the installed
- * package documents adjustment on exactly one field, `historical.d.ts:89-92`'s
- * `adjClose` ("accounts for splits/dividends"), and says nothing about `close`.
- * ADR-0011 requires it be observed once against a real split, and **that check
- * has not been run**: the environment this landed in refuses every
- * `*.finance.yahoo.com` host at CONNECT, so no figure here was read from Yahoo.
- * It ships unverified as a signed-off decision rather than an oversight; the
- * recipe ticket 05 adds to `docs/developing.md` is where the next person runs
- * it. It is one call — `NVDA` over a range spanning 2024-06-10 with
- * `events: "split"` — and **three** things to record:
- *
- *  1. `events.splits` carries a 10:1 dated 2024-06-10. If it does not, the
- *     symbol or the range is wrong and nothing below was tested.
- *  2. The closes for the week before sit near $120 (adjusted) rather than near
- *     $1,200 (as struck). **Near $1,200 means the arithmetic below is wrong**,
- *     and the fallback ADR-0011 fixes applies: answer `split-unresolved` for
- *     any response carrying a split inside the range, emit the rest as
- *     received, and say so here.
- *  3. The raw instant on that split event — `events.splits[0].date` before any
- *     formatting. {@link toProviderHistory} files a split under
- *     `marketDateOf(split.date, zone)` on the assumption that Yahoo stamps it
- *     at the session open, as it stamps a daily bar. A split stamped at UTC
- *     midnight instead resolves to the *previous* New York date, and the bar
- *     genuinely on the split's own day would then be multiplied when it should
- *     not be — some rows right and some wrong, which is the outcome this
- *     module otherwise refuses outright. Nothing here detects that; only the
- *     recorded instant can settle it.
- *
- * The error class an unknown symbol throws was read out of the installed
- * package rather than observed, for the same reason. `yahooFinanceFetch.js:131-133`
- * builds the class name from Yahoo's own `code` with the spaces removed, looks
- * it up among the five classes `lib/errors.js:78-84` registers, and falls back
- * to a plain `Error` — of which only `"Bad Request"` ever resolves, so the
- * `"Not Found"` a delisted or unknown symbol answers is a plain `Error`. That
- * is why {@link isMissingHistory} matches the message and never the class.
+ * Provider interface + Yahoo parsers (DESIGN.md §6.1, ADR-0011). Numeric leaves as decimal string.
+ * Yahoo restates `close` through later splits, so {@link toProviderHistory} multiplies each back by
+ * every later split's ratio. Never verified against a real split (`docs/developing.md`) — NVDA
+ * closes near $1,200 rather than $120 across 2024-06-10 means the arithmetic here is wrong.
  */
 import { z } from "zod";
 
@@ -73,72 +10,30 @@ import { marketDateOf, type IsoDate } from "./market-hours.ts";
 import { MONEY_SCALE, divide, render, toUnits } from "./money.ts";
 import { matchKey } from "./prices.server.ts";
 
-/**
- * One instrument's price, as the application understands it. `price` is
- * required and the rest are not: a provider that cannot say what a fund
- * yields is ordinary, one that cannot say what it costs is a failure — a
- * missing yield writes null (§8.2); a missing price means the symbol did not
- * resolve, and the caller keeps the last known price and marks it stale (§6.2).
- */
+/** One instrument's price. Only `price` is required; missing means the symbol did not resolve (§6.2). */
 export type ProviderQuote = {
-  /** As sent. The caller matches on this to find the instrument again. */
   symbol: string;
-  /** Decimal string, scale 4. Never a number. */
   price: string;
-  /** The provider's own vocabulary, stored unconstrained — theirs, not ours (§4.1). */
+  /** The provider's own vocabulary, stored unconstrained (§4.1). */
   quoteType: string | null;
   /** Annual dividend yield as a percentage. Decimal string, scale 6. */
   yieldPct: string | null;
   /** Annual dividend per share. Decimal string, scale 4. */
   annualDividendPerShare: string | null;
-  /**
-   * The instant the provider struck this price — a genuine instant, so a
-   * `Date` (§4.1 leaves `timestamptz` alone). Load-bearing: it decides which
-   * `price_daily` row this quote becomes, and which `price_observation` row —
-   * one per instrument per instant, what makes an unchanged quote write
-   * nothing (`marketDateOf`, ADR-0006).
-   */
+  /** Instant the price was struck — decides its `price_daily` and `price_observation` row (ADR-0006). */
   asOf: Date;
-  /**
-   * When we learned this price, as distinct from when it was struck. Required,
-   * unlike `payload`, because it is a fact about *us* — every implementation
-   * and fake knows what time it asked. Archived, computed from by nothing.
-   */
+  /** When we learned the price, as against when it was struck. Archived, computed from by nothing. */
   fetchedAt: Date;
-  /**
-   * The provider's raw entry, kept opaque. Optional because it is a fact
-   * about the *provider* — a fake has none to hand over. Present only when
-   * the typed parse succeeded, so a shape change stays a refusal rather than
-   * a stored surprise. `unknown` on purpose (ADR-0006): an archive, never an
-   * operand — nothing may compute from it, so nothing may need its type.
-   */
+  /** Raw archive, never an operand (ADR-0006). Present only when the typed parse succeeded. */
   payload?: unknown;
 };
 
-/** The span a history call asks for. `until` is exclusive. */
 export type HistoryRange = { from: IsoDate; until: IsoDate };
 
-/**
- * One finished trading day, ready for the spine. `close` is **already
- * un-adjusted for splits** — the figure the shares were actually worth on the
- * day, scale 4. The arithmetic happens here, in {@link toProviderHistory}, on
- * `money.ts`'s units; the writer inserts what it is handed and multiplies
- * nothing.
- */
+/** One finished trading day, already un-adjusted for splits (scale 4); the writer multiplies nothing. */
 export type ProviderDailyClose = { date: IsoDate; close: string };
 
-/**
- * What one history call can say — a closed set in the shape {@link SymbolProbe}
- * already uses, because the caller's answers are fixed: write the closes, or
- * record one of three reasons there are none. A call that *fails* throws
- * instead, and the caller records the text.
- *
- * The three refusals map one-to-one onto the ledger's outcome vocabulary
- * (`prices.server.ts`'s `BACKFILL_OUTCOMES`). That is a deliberate duplication:
- * one is the provider's answer in this module's own shape, the other is a
- * `check` constraint's literals, and the mapping between them is one object in
- * the batch rather than a vocabulary shared across the boundary.
- */
+/** Refusals map one-to-one onto `BACKFILL_OUTCOMES`; a call that *fails* throws instead. */
 export type ProviderHistory =
   | {
       status: "ok";
@@ -149,17 +44,7 @@ export type ProviderHistory =
   | { status: "non-usd"; currency: string }
   | { status: "split-unresolved" };
 
-/**
- * The provider contract. Two methods, and the asymmetry is the endpoint's:
- * `getQuotes` takes every symbol at once — the batching is why Yahoo was
- * chosen, one HTTP call for a hundred symbols rather than a hundred calls or a
- * per-symbol bill — while a range is a property of one instrument and there is
- * no batch form for it, so history is one symbol per call.
- *
- * `getDailyCloses` is required, not optional: a provider that cannot answer
- * history is not this application's provider, and an optional method would let
- * the write path skip a batch with nothing saying so.
- */
+/** `getQuotes` batches — why Yahoo was chosen. History has no batch form: one symbol per call. */
 export type PriceProvider = {
   getQuotes(symbols: string[]): Promise<ProviderQuote[]>;
   getDailyCloses(
@@ -169,29 +54,12 @@ export type PriceProvider = {
   ): Promise<ProviderHistory>;
 };
 
-/**
- * The provider process could not be reached at all — not a rate limit, not a
- * shape change, not an unknown symbol, every one of which the caller already
- * has an answer for (ledgered per attempt, or an absent quote). This means
- * there was no answer to have. `backfillCloses` treats it specially because of
- * what it would otherwise cost: a socket-backed provider (a later slice)
- * restarts independently of this process, so "unreachable right now" is a
- * deploy-time event rather than the endpoint's own trouble, and ledgering it
- * per candidate would defer up to a batch's worth of instruments a full day
- * each for a worker that came back a minute later. The Yahoo adapter never
- * throws it — nothing here can tell "the library failed" from "the process
- * behind it is gone," so it exists for the provider that can.
- */
+/** No answer to be had. `backfillCloses` skips the ledger: ledgering would defer a batch a day each. */
 export class ProviderUnreachable extends Error {
   override readonly name = "ProviderUnreachable";
 }
 
-/**
- * A quote in a currency we cannot hold. §6.1 puts this guard at instrument
- * resolution; it is enforced here too because the failure it prevents is the
- * worst available — no error anywhere, GBP quietly summed into a USD net
- * worth. Carries symbol and currency so the log line names both.
- */
+/** Duplicates §6.1's resolution guard: the failure is silent — GBP summed into a USD net worth. */
 export class CurrencyRefused extends Error {
   override readonly name = "CurrencyRefused";
   readonly symbol: string;
@@ -209,140 +77,56 @@ export class CurrencyRefused extends Error {
 /** The only currency this application can store. There is no currency column. */
 const USD = "USD";
 
-/**
- * A float from the provider as a decimal string. `toFixed`, not a decimal
- * library: the input is already a float through JSON, so there is no
- * precision left to preserve — the job is only to stop the float going any
- * further. Null for anything not a usable finite number, so `null`, `NaN` or
- * a string never reaches a `numeric` column.
- */
+/** `toFixed`, not a decimal library: JSON already lost the precision. Job is to stop the float here. */
 function decimal(value: unknown, scale: number): string | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return value.toFixed(scale);
 }
 
-/** The widest yield `quote.yield_pct` holds — `numeric(10,6)`, 9999.999999%. */
+/** `quote.yield_pct` is `numeric(10,6)` — 9999.999999%. */
 const YIELD_CEILING = 10000;
 
-/**
- * The widest rate `quote.annual_dividend_per_share` holds — `numeric(20, 4)`,
- * sixteen integer digits. No security pays near it, which is the point: a
- * figure this big is not a rate, and the ceiling exists so one such figure
- * cannot abort a refresh — not to express a view about dividends.
- */
+/** `quote.annual_dividend_per_share` is `numeric(20,4)`. A figure this big is not a rate. */
 const RATE_CEILING = 10 ** 16;
 
-/**
- * The widest close `price_daily.close` holds — `numeric(20, 4)`, the same
- * sixteen integer digits, and the same reasoning as {@link RATE_CEILING}: a
- * figure this big is not a price, and an overflow would abort the transaction a
- * whole batch of backfilled closes is committing in. It bounds the un-adjusted
- * *product* as well as the figure that arrived, because the product is what
- * reaches the column — and because `toFixed` switches to exponential notation
- * at 1e21, which `money.ts`'s digit parser cannot read.
- */
+/** `price_daily.close` is `numeric(20,4)`. Bounds the product too; `toFixed` goes exponential at 1e21. */
 const CLOSE_CEILING = 10 ** 16;
 
-/**
- * The widest price `quote.price` holds — `numeric(20, 4)`, the same sixteen
- * integer digits as {@link RATE_CEILING} and {@link CLOSE_CEILING}, and the
- * same reasoning: a figure this big is not a price, and Postgres answers the
- * overflow by aborting the statement inside the refresh transaction — every
- * instrument stale for one bad symbol, not just the one that carried the
- * figure. Dropped, not clamped, so the quote itself is absent and the symbol
- * goes stale exactly as it does when no price arrives at all.
- *
- * What this does not guard, and cannot: the reader's `quantity × price`
- * product (`0006_annual_dividend.sql:149`). `quantity` is `numeric(20, 8)`
- * (`0001_initial_schema.sql:186`), so a legal price under this ceiling can
- * still overflow the product against the widest legal quantity;
- * `fitsTheMoneyColumn` (`app/lib/positions.server.ts:206`) guards that product
- * where the quantity is written, and spec 0018 §8 keeps the gap as a residual
- * rather than a bug this ceiling could close.
- */
+/** `quote.price` is `numeric(20,4)`. The `quantity × price` product is guarded in `positions.server.ts`. */
 const PRICE_CEILING = 10 ** 16;
 
-/**
- * A figure the bound `numeric` column can actually store, or null. A
- * distressed instrument — a $0.02 price still carrying a $2.50 rate —
- * derives a 12500% yield, and Postgres answers overflow by aborting the
- * statement inside the refresh transaction: one bad symbol would cost the
- * whole household its refresh, the outcome the per-symbol currency guard
- * exists to prevent. Dropped, not clamped: a yield at the ceiling is a wrong
- * number presented as real, and §8.2's rule is to report the unknown as
- * unknown.
- */
+/** Overflow aborts the refresh transaction — one bad symbol would cost the household its refresh. */
 function inRange(value: string | null, ceiling: number): string | null {
   if (value === null) return null;
   return Math.abs(Number(value)) < ceiling ? value : null;
 }
 
-/**
- * The subset of Yahoo's payload this application reads, validated. Zod rather
- * than the library's own types: those describe what the endpoint returned
- * when they were written; this describes what we require, failing loudly at
- * the boundary instead of producing `undefined` three layers in — and it
- * documents how small the dependency on an unofficial API is. Everything but
- * `symbol` is optional: Yahoo omits fields per instrument type.
- */
+/** What *we* require, not the library's types. All but `symbol` optional: Yahoo omits fields per type. */
 const yahooQuote = z.object({
   symbol: z.string(),
   currency: z.string().optional(),
   quoteType: z.string().optional(),
   regularMarketPrice: z.number().optional(),
   regularMarketTime: z.union([z.date(), z.number(), z.string()]).optional(),
-  /**
-   * Annual dividend yield as a percentage — 2.34 meaning 2.34%. What is *not*
-   * read: `trailingAnnualDividendYield`, the same quantity as a fraction
-   * (0.0234) though the library's doc calls it a percentage too — taking the
-   * wrong one is a silent hundredfold error on the Income page with every
-   * figure looking plausible. Where this is absent the yield is derived below
-   * from rate over price, which cannot be misread in either unit.
-   */
+  /** Percentage, 2.34 = 2.34%. NOT `trailingAnnualDividendYield`, a fraction — silent 100x error. */
   dividendYield: z.number().optional(),
-  /**
-   * Annual dividend per share, declared on equities and mutual funds. An ETF
-   * carries no `dividendRate` at all — its per-share figure arrives as
-   * `trailingAnnualDividendRate` — so reading only this one would leave the
-   * column null for every ETF a household holds.
-   */
+  /** Equities and mutual funds only; an ETF's per-share figure arrives as the field below. */
   dividendRate: z.number().optional(),
-  /**
-   * The ETF spelling of the field above, and unambiguous where its `…Yield`
-   * sibling is not: an amount of money, no percent-versus-fraction question.
-   */
+  /** The ETF spelling, and unambiguous: an amount of money, no percent-versus-fraction question. */
   trailingAnnualDividendRate: z.number().optional(),
 });
 
 type YahooQuote = z.infer<typeof yahooQuote>;
 
-/**
- * Yahoo's `regularMarketTime` as an instant. The library hands back a `Date`
- * but has shipped epoch seconds before, so all three plausible shapes are
- * accepted; anything unrecognised falls back to fetch time — the lesser
- * error, not a safe one: "now" is at worst hours late on a NAV (the next poll
- * corrects it), and can file a close against a non-trading day when
- * `isMarketOpen` wrongly called it open — a spurious row rather than a wrong
- * price, versus discarding a real price over missing metadata.
- */
+/** Falls back to fetch time: hours late and corrected next poll beats discarding a real price. */
 function instantOf(value: YahooQuote["regularMarketTime"], fetchedAt: Date): Date {
   return parseInstant(value) ?? fetchedAt;
 }
 
-/**
- * The three plausible shapes of a Yahoo timestamp, or null. The library hands
- * back a `Date` and the raw endpoint sends epoch seconds; both have shipped.
- *
- * Separate from {@link instantOf} so the *parsing* is shared and the fallback
- * is not. A quote with an unreadable timestamp falls back to fetch time,
- * because the price is real and the day is at worst hours late. A daily bar
- * cannot: its whole meaning is which day it is, so an unreadable one is dropped
- * rather than filed under today.
- */
+/** The three shapes a Yahoo timestamp takes, or null. No fallback: a daily bar is never filed under today. */
 function parseInstant(value: unknown): Date | null {
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
 
-  // Epoch *seconds*, which is what the raw endpoint sends.
   if (typeof value === "number" && Number.isFinite(value)) return new Date(value * 1000);
 
   if (typeof value === "string") {
@@ -353,66 +137,38 @@ function parseInstant(value: unknown): Date | null {
   return null;
 }
 
-/**
- * Yahoo's payload as a {@link ProviderQuote}, or a refusal.
- *
- * Exported for the tests, which need to assert the unit handling and the
- * currency guard without a network round trip.
- *
- * @throws {CurrencyRefused} when the quote is not in USD.
- */
+/** Yahoo's payload as a {@link ProviderQuote}, or null. @throws {CurrencyRefused} when not in USD. */
 export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | null {
   const parsed = yahooQuote.safeParse(raw);
   if (!parsed.success) return null;
 
   const quote = parsed.data;
 
-  // A non-positive price is not a price: zero is what the endpoint returns
-  // for a symbol it half-knows, and storing it would value the holding at
-  // nothing (§6.2's "never zero into a sum"); the sign of a position lives in
-  // its quantity, never its price (§2).
+  // Zero is what the endpoint returns for a symbol it half-knows, and would value the holding at
+  // nothing (§6.2); a position's sign lives in its quantity, never its price (§2).
   const quoted =
     typeof quote.regularMarketPrice === "number" && quote.regularMarketPrice > 0
       ? quote.regularMarketPrice
       : undefined;
 
-  // No usable price is not an error — Yahoo drops delisted and unknown
-  // symbols. The caller's answer is: keep the last price, mark it stale.
   const quotedPrice = decimal(quoted, 4);
   if (quotedPrice === null) return null;
 
-  // Checked only once there is a price to refuse, and *before* the ceiling
-  // below: a quote can be both foreign and absurd, and dropping it for its
-  // size first would lose the refusal the person creating the instrument
-  // acts on — `probeVerdicts` reads an absent quote as `unavailable`, which
-  // creates the instrument, where `non-usd` refuses it (spec 0018 §1).
+  // Before the ceiling below: a quote can be both foreign and absurd, and dropping it for its size
+  // first loses the refusal `probeVerdicts` needs — an absent quote creates the instrument (spec 0018 §1).
   if (quote.currency !== undefined && quote.currency.toUpperCase() !== USD) {
     throw new CurrencyRefused(quote.symbol, quote.currency.toUpperCase());
   }
 
-  // Bounded like the rate and the close columns, and for the identical
-  // reason: `quote.price` is `numeric(20, 4)`, so an unbounded figure aborts
-  // the refresh transaction for every instrument, not just this one. Dropped,
-  // not clamped, so the symbol comes back absent and goes stale.
   const price = inRange(quotedPrice, PRICE_CEILING);
   if (price === null) return null;
 
-  // The equity/mutual-fund spelling first, then the ETF one — both amounts
-  // per share in the quote's currency, so preferring either is a matter of
-  // which the payload carries, not of units.
   const perShare = quote.dividendRate ?? quote.trailingAnnualDividendRate;
 
-  // Bounded like the yield, same reason: written to `numeric(20, 4)` inside
-  // the refresh transaction, and a not-a-rate figure would abort it for
-  // everyone. What this does NOT bound is the product: quantity reaches
-  // 10^12, so `quantity × rate` can still pass the view's cast — that product
-  // is checked where the quantity is chosen (`fitsTheMoneyColumn`). Dropped,
-  // not clamped: a null rate coalesces to $0 in the view (§14 limitation 9, a
-  // labelled lower bound), where a clamped rate would read as real.
+  // Bounded like the yield; `quantity × rate` is checked where the quantity is chosen. A null rate
+  // reads as $0, a labelled lower bound (§14 limitation 9), where a clamped one would read as real.
   const annualDividendPerShare = inRange(decimal(perShare, 4), RATE_CEILING);
 
-  // The unambiguous field first; otherwise derived — rate over price divides
-  // two numbers in the same currency, so the unit cannot be mistaken.
   const yieldPct =
     inRange(decimal(quote.dividendYield, 6), YIELD_CEILING) ??
     (perShare !== undefined && quoted !== undefined
@@ -427,85 +183,40 @@ export function toProviderQuote(raw: unknown, fetchedAt: Date): ProviderQuote | 
     annualDividendPerShare,
     asOf: instantOf(quote.regularMarketTime, fetchedAt),
     fetchedAt,
-
-    // The entry as it arrived, not the parsed narrowing: the archive's point
-    // is everything this module does not read. Attached past every refusal,
-    // so a payload is only stored for a quote that parsed — ADR-0006.
     payload: raw,
   };
 }
 
-/**
- * The subset of Yahoo's chart payload this application reads, validated for
- * *shape*: `quotes` is an array of things, `events.splits` is an array of
- * things, `meta` is an object. The leaves stay `unknown` on purpose — the two
- * narrowings that matter, {@link decimal} for a figure and {@link parseInstant}
- * for an instant, already refuse anything they cannot use, and each refusal has
- * a defined answer here (a bar is skipped, a split makes the whole response
- * `split-unresolved`). Typing the leaves in Zod would collapse all of those
- * into one whole-payload rejection.
- *
- * The library validates the response against its own schema first and throws
- * `FailedYahooValidationError` if it fails, so a real shape change arrives as a
- * throw and is ledgered with its text. This is the second line: what *we*
- * require, in a shape the library's own types are not a promise about.
- */
+/** Shape only. Leaves stay `unknown` so each refusal keeps its own answer, not one whole-payload one. */
 const yahooChart = z.object({
-  // `.nullish()` is load-bearing: Zod 4 requires the *key* to be present even
-  // where the value may be anything (Zod 3 treated `unknown` as implicitly
-  // optional), and Yahoo omits fields per instrument type. `string` rather than
-  // `unknown` so a currency we cannot read refuses the payload rather than
-  // being taken for an absent one — the quote path's `z.string().optional()`
-  // has exactly that effect, and this is the guard where guessing is worst.
+  // `.nullish()` is load-bearing: Zod 4 requires the key to be present even where the value may be
+  // anything, and Yahoo omits fields per instrument type. `string`, not `unknown`, so a currency we
+  // cannot read refuses the payload rather than passing for an absent one.
   meta: z.object({ currency: z.string().nullish() }).nullish(),
   events: z.unknown().optional(),
   quotes: z.array(z.object({}).passthrough()),
 });
 
-/**
- * The events block, read separately from the payload around it. Its own parse
- * because the two failures mean different things: a chart we cannot read at all
- * has no closes to offer, while an *events* block we cannot read may be hiding
- * a split — and a close un-adjusted by a split nobody saw is the wrong figure
- * this module exists to prevent.
- */
+/** Own parse: an unreadable events block may hide a split, and an unadjusted close is the wrong figure. */
 const yahooEvents = z.object({
   splits: z.array(z.object({}).passthrough()).nullish(),
 });
 
-/** One split, reduced to what the arithmetic needs. */
 type Split = { date: IsoDate; numerator: bigint; denominator: bigint };
 
-/**
- * A split's side as an exact integer, or null. `BigInt` because the products
- * below are multiplied across every split in the range and must not round;
- * positive because a zero or negative side is not a ratio, and dividing by one
- * would be the silent wrong answer the refusal exists to avoid.
- */
+/** `BigInt`: the products multiply across every split in the range and must not round. */
 function positiveInteger(value: unknown): bigint | null {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return null;
   return BigInt(value);
 }
 
-/**
- * One close as it stood on its own day, undoing every split that came after it.
- *
- * This is money arithmetic, so it happens on `money.ts`'s units and never as a
- * float (ARCHITECTURE.md §5.6): the scale-4 string becomes `BigInt` counts of
- * its last place, is multiplied by the cumulative numerator, divided by the
- * cumulative denominator half away from zero, and reassembled — one rounding,
- * at the end.
- *
- * A reverse split needs no case of its own: it is the same product with the
- * ratio the other way round.
- */
+/** One close as it stood on its own day. `money.ts` units, one rounding at the end (ARCHITECTURE.md §5.6). */
 function unadjusted(close: string, date: IsoDate, splits: readonly Split[]): string {
   let numerator = 1n;
   let denominator = 1n;
 
   for (const split of splits) {
-    // Strictly later: a bar on the split's own day already trades at the new
-    // price, so it is the first row the split does not touch.
+    // Strictly later: a bar on the split's own day already trades at the new price.
     if (split.date > date) {
       numerator *= split.numerator;
       denominator *= split.denominator;
@@ -517,22 +228,7 @@ function unadjusted(close: string, date: IsoDate, splits: readonly Split[]): str
   return render(divide(toUnits(close, MONEY_SCALE) * numerator, denominator, 0), MONEY_SCALE);
 }
 
-/**
- * Yahoo's chart payload as a {@link ProviderHistory}: one close per trading day
- * the response carried, each filed under the day inside its own timestamp and
- * each un-adjusted for the splits after it.
- *
- * Exported for the tests, which need to assert the arithmetic and the date rule
- * against a hand-written payload — hand-written rather than captured, because
- * the point is the arithmetic and a captured payload would make the test depend
- * on what Yahoo said one afternoon.
- *
- * Never throws: every refusal is one of the closed statuses, so the caller's
- * ledger has something to record. A payload whose shape is not the one above
- * answers `no-history`, which is also what a response of nothing but nulls
- * answers — from the caller's side those are the same fact, that there are no
- * closes to write and the instrument is worth one more try tomorrow.
- */
+/** One close per trading day, un-adjusted. Never throws: every refusal is a status the ledger records. */
 export function toProviderHistory(
   raw: unknown,
   range: HistoryRange,
@@ -543,18 +239,13 @@ export function toProviderHistory(
 
   const chart = parsed.data;
 
-  // Before a figure is read, as the quote path checks it before refusing a
-  // price. Absent is not a refusal: Yahoo omits it per instrument type, and the
-  // quote path proceeds on the same reasoning.
   const currency = chart.meta?.currency;
   if (typeof currency === "string" && currency.toUpperCase() !== USD) {
     return { status: "non-usd", currency: currency.toUpperCase() };
   }
 
-  // An events block that is present and unreadable is not "no splits": it may
-  // carry one, and a close un-adjusted by a split nobody saw is the silent
-  // wrong figure. `no-history` would also be a lie the ledger repeats — its
-  // meaning there is an unknown or delisted ticker.
+  // A present but unreadable events block is not "no splits" — it may carry one. `no-history`
+  // would be a lie the ledger repeats: there it means an unknown or delisted ticker.
   const events =
     chart.events === undefined || chart.events === null
       ? { splits: null }
@@ -562,8 +253,8 @@ export function toProviderHistory(
 
   if (events === undefined) return { status: "split-unresolved" };
 
-  // All or nothing: some rows right and some wrong is the outcome worth
-  // refusing, because every figure would look plausible.
+  // All or nothing: some rows right and some wrong is the outcome worth refusing, because every
+  // figure would look plausible.
   const splits: Split[] = [];
   for (const split of events.splits ?? []) {
     const instant = parseInstant(split.date);
@@ -577,9 +268,6 @@ export function toProviderHistory(
     splits.push({ date: marketDateOf(instant, marketTimeZone), numerator, denominator });
   }
 
-  // Keyed by trading day: the library notes Yahoo inserts extra bars at event
-  // times, and two bars under one day are one day — the later instant wins,
-  // being the nearer thing to a close.
   const byDate = new Map<IsoDate, { instant: Date; close: string }>();
 
   for (const bar of chart.quotes) {
@@ -588,35 +276,20 @@ export function toProviderHistory(
 
     const date = marketDateOf(instant, marketTimeZone);
 
-    // `until` is exclusive, and the cut is here rather than on `period2` for
-    // the reason the adapter gives for leaving `period2` absent: the request
-    // deliberately fetches past the range, and this is the rule.
+    // `until` is exclusive, and the cut is here rather than on `period2`: the request deliberately
+    // fetches past the range.
     if (date >= range.until) continue;
 
-    // The mirror image at the other end. `writeBackfilledCloses` inserts
-    // where absent, so a hostile or merely wrong bar dated 1971 would land as
-    // a row — and the gap predicate `NO_CLOSE_BY_FIRST_HELD`
-    // (`prices.server.ts:281-286`) is satisfied by any row at or before
-    // first-held, so that one row would take the instrument out of the
-    // candidate set for good while the ledger says `filled`: the real gap,
-    // first-held back to the spine's true start, is never filled. ADR-0011
-    // forbids overwriting a close and nothing in the app deletes
-    // `price_daily`, so the recovery would be `psql`. An honest answer never
-    // carries a bar before `period1`, which is `from`, so the cut costs
-    // nothing.
+    // The mirror image at the other end. A bar dated 1971 would insert a row satisfying the gap
+    // predicate `NO_CLOSE_BY_FIRST_HELD` (`prices.server.ts`), dropping the instrument from the
+    // candidate set for good while the ledger says `filled`, with `psql` the only recovery.
     if (date < range.from) continue;
 
-    // A non-positive close is not a close, for the reason `toProviderQuote`
-    // refuses one: zero is what the endpoint returns for a symbol it half
-    // knows, and storing it would value the holding at nothing.
     const quoted = typeof bar.close === "number" && bar.close > 0 ? bar.close : undefined;
     const close = inRange(decimal(quoted, MONEY_SCALE), CLOSE_CEILING);
 
-    // `> 0` is not enough on its own: anything under half a ten-thousandth
-    // renders as `"0.0000"` and passes the guard above as a string. On the
-    // quote path that row is rewritten by the next tick; here the write is
-    // insert-where-absent on a finished day, so a zero close would be
-    // permanent and nothing in the application could correct it.
+    // `> 0` is not enough: under half a ten-thousandth renders as "0.0000" and passes as a string.
+    // The write is insert-where-absent on a finished day, so a zero close would be permanent.
     if (close === null || toUnits(close, MONEY_SCALE) === 0n) continue;
 
     const held = byDate.get(date);
@@ -627,13 +300,9 @@ export function toProviderHistory(
 
   const closes: ProviderDailyClose[] = [...byDate.entries()]
     .map(([date, bar]) => ({ date, close: unadjusted(bar.close, date, splits) }))
-    // The product can exceed what the column holds where the figure that
-    // arrived did not — a penny stock through a century of reverse splits —
-    // and an overflow inside the batch's transaction would cost every other
-    // close in it.
+    // The product can exceed the column where the figure that arrived did not — a penny stock
+    // through a century of reverse splits — and an overflow would cost every other close in the batch.
     .filter((close): close is ProviderDailyClose => inRange(close.close, CLOSE_CEILING) !== null)
-    // Ascending, so the insert reads in the order the days happened rather than
-    // in whatever order the response listed them.
     .sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0));
 
   if (closes.length === 0) return { status: "no-history" };
@@ -641,63 +310,25 @@ export function toProviderHistory(
   return { status: "ok", closes };
 }
 
-/**
- * What one probe can say — a closed set, because the caller's three answers
- * are fixed by the spec: create, refuse naming the currency, or create anyway
- * and let the next refresh mark it stale.
- */
+/** What one probe can say — a closed set, because the caller's three answers are fixed by the spec. */
 export type SymbolProbe =
   | {
       status: "ok";
-      /**
-       * What the provider calls the thing, carried out rather than discarded:
-       * the moment a symbol is confirmed to quote is the one moment the app
-       * has this fact and a row to put it on. Null when omitted — "the
-       * provider did not say" is a real answer.
-       */
       quoteType: string | null;
     }
   | { status: "non-usd"; currency: string }
   | { status: "unavailable" };
 
-/**
- * The probe as the resolution step receives it — every symbol at once,
- * keyed by the symbol as asked, so a test stub is one async arrow. Where the
- * client (or the socket) comes from is the implementation's own business,
- * never this type's: over the socket ([06](../../docs/specs/price-worker/06-the-app-cutover.md))
- * a serial probe would be a round trip, so `provider-socket.server.ts`'s
- * `socketProbe` batches, one call answering every symbol an upload creates.
- */
 export type ProbeSymbols = (symbols: string[]) => Promise<Map<string, SymbolProbe>>;
 
-/**
- * Do these symbols quote, and in a currency we can hold? The verdict logic
- * behind `socketProbe` (`app/lib/provider-socket.server.ts`) — pure, so it
- * can be shared without the caller owning the transport.
- *
- * Built on the raw entries and not on `getQuotes`, because that seam
- * collapses a refusal into an absence by design (§6.1's reasoning, restated
- * just below) — the probe needs the refusal named. A non-array
- * `raw` answers every symbol `unavailable`, the same as Yahoo dropping a
- * symbol it never heard of.
- *
- * A quote lands on the asked symbol whose {@link matchKey} equals
- * `matchKey(quote.symbol)` — `refreshQuotes`'s own matching rule
- * (`prices.server.ts`'s `bySymbol`/`matched`) — never on whichever symbol
- * happened to be asked first; a `CurrencyRefused` lands the same way, on the
- * symbol the error names. A symbol no entry claims, or whose only entry
- * parsed to no usable price, is `unavailable`: a provider failure must not
- * block creation, because the next refresh marks the instrument stale
- * anyway.
- */
+/** On raw entries, not `getQuotes`, which collapses a refusal into an absence — the probe needs it named. */
 export function probeVerdicts(
   symbols: string[],
   raw: unknown,
   fetchedAt: Date,
 ): Map<string, SymbolProbe> {
-  // Each entry read once, under its own match key. Not-an-array equals empty:
-  // Yahoo drops unknown symbols entirely, so absence is the ordinary spelling
-  // of "never heard of it".
+  // Not-an-array equals empty: Yahoo drops unknown symbols entirely, so absence is the ordinary
+  // spelling of "never heard of it".
   const answers: Array<{ key: string; verdict: SymbolProbe }> = [];
 
   for (const entry of Array.isArray(raw) ? raw : []) {
@@ -719,10 +350,8 @@ export function probeVerdicts(
     }
   }
 
-  // Then one verdict per symbol *asked*, which is what the caller looks up.
-  // Driven from the asked list rather than from the answers, so two spellings
-  // of one ticker — `vti` on one row, `VTI` on another — both get the answer
-  // the feed gave, as they did when each was probed on its own.
+  // Driven from the asked list, not the answers, so two spellings of one ticker — `vti` and `VTI`
+  // — both get the answer the feed gave.
   const verdicts = new Map<string, SymbolProbe>();
   for (const symbol of symbols) {
     const answer = answers.find(({ key }) => key === matchKey(symbol));
@@ -732,41 +361,7 @@ export function probeVerdicts(
   return verdicts;
 }
 
-/**
- * The two live implementations — the creation-time probe and the refresh
- * provider — both moved to `app/lib/provider-socket.server.ts` in the price-
- * worker cutover (spec 0018 §3.3): `socketProbe` and `socketProvider()` now
- * dial the worker's unix socket instead of taking a `YahooClient` directly,
- * but every rule stated above them here is unchanged — `socketProvider()`'s
- * `getQuotes` still logs and skips a `CurrencyRefused` exactly as this
- * module's former `yahooPriceProvider` did, and its `getDailyCloses` still
- * runs {@link toProviderHistory} and answers `no-history` for whatever
- * {@link isMissingHistory} matches. `probeSymbols`, the function this
- * replaced, is gone rather than kept alongside it: nothing under `app/`
- * calls the direct client any more (`npm run build`'s own gate), and a second
- * implementation nothing calls is a trap the next reader trips on, not a
- * safety net.
- */
-
-/**
- * The two things Yahoo says when it has no history to give: an unknown or
- * delisted ticker ("No data found, symbol may be delisted") and a `period1`
- * before the listing ("Data doesn't exist for startDate = …").
- *
- * Matched on the message of *any* thrown error, never on its class — the class
- * is chosen from Yahoo's own error `code` with the spaces removed, and only
- * `"Bad Request"` resolves to one the library defines, so the `"Not Found"`
- * these answer arrives as a plain `Error` (module header). The library's own
- * documented example matches the same way (`chart.d.ts:112`).
- *
- * A stem that stops matching degrades gracefully rather than lying: the ledger
- * records `provider_failed` with the text, and the instrument is retried daily.
- *
- * Exported for `app/lib/provider-socket.server.ts`, which runs the identical
- * check against the text an `ask("history", …)` refusal carries — the worker
- * answers with Yahoo's own message untouched (`server/price-worker.ts`'s
- * `providerErrorText`), so the same stems still apply.
- */
+/** Matched on message, never class: only `"Bad Request"` resolves to a class the library defines. */
 export function isMissingHistory(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return NO_HISTORY_STEMS.some((stem) => message.includes(stem));

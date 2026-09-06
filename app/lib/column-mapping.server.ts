@@ -1,13 +1,7 @@
-/**
- * Saved column mappings — a brokerage's export format remembered once and
- * applied to every later file (DESIGN.md §5.3, spec 0004 step 03). Keyed by
- * `(account.institution, headerFingerprint)`; the fingerprint is
- * order-sensitive on purpose — a reordered export costs one re-map, cheaper
- * than silently following a moved column — but case- and padding-insensitive:
- * retitling `SYMBOL` as `Symbol` changes no column's meaning. Also owns the
- * columns screen's form contract ({@link parseMappingForm}), so the route
- * stays the thin translator every other route is.
- */
+// Saved column mappings — a brokerage's export format remembered once, applied to later files
+// (DESIGN.md §5.3, spec 0004 step 03). Keyed by (institution, header fingerprint): order-sensitive
+// (reordered export = re-map) but case/padding-insensitive. Also owns the columns form contract
+// (parseMappingForm) so the route stays a thin translator.
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
@@ -19,21 +13,12 @@ import { statementMapping, type StatementMapping } from "./statement.ts";
 import type { Delimiter } from "./csv.ts";
 import type { Kysely } from "kysely";
 
-/**
- * What an optional column's `<select>` posts for "deliberately not in this
- * file" — distinct from `""`, the unchosen placeholder: both land as `null`,
- * but only the deliberate answer survives a save, and a saved mapping
- * preselects this option. The columns route reads it from loader data —
- * this is a `.server` module and the option renders client-side.
- */
+// "Deliberately not in this file", distinct from "" (unchosen placeholder): both map to null via
+// chosenColumn, but only this one survives a save and preselects on a saved mapping.
 export const NOT_IN_FILE = "__none__";
 
-/**
- * SHA-256 hex over the header row's cells: trimmed, lowercased, internal
- * whitespace collapsed, joined with a literal U+001F, in file order. Header
- * row only — data rows never affect it, so next quarter's export fingerprints
- * the same however the positions moved.
- */
+// SHA-256 over header cells (trimmed, lowercased, whitespace collapsed), concatenated in file
+// order. Header row only — data rows never affect it.
 export function headerFingerprint(cells: readonly string[]): string {
   const canonical = cells
     .map((cell) => cell.trim().toLowerCase().replace(/\s+/g, " "))
@@ -42,12 +27,7 @@ export function headerFingerprint(cells: readonly string[]): string {
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
-/**
- * The mapping saved for this institution and header, or null — null for a
- * malformed stored row too, via {@link statementMapping} on the way out: a
- * mapping that no longer matches the shape must read as "map it again",
- * never a 500 on the screen whose whole job is re-mapping.
- */
+// Null for a malformed stored row too (via statementMapping) — reads as "map it again", never a 500.
 export async function findMapping(
   institution: string,
   fingerprint: string,
@@ -66,11 +46,7 @@ export async function findMapping(
   return parsed.success ? parsed.data : null;
 }
 
-/**
- * Remember a mapping for this institution and header. Upsert on
- * `column_mapping_one_per_fingerprint`: a corrected mapping replaces the
- * wrong one rather than accumulating a row the constraint would refuse.
- */
+// Upsert on column_mapping_one_per_fingerprint: a corrected mapping replaces the wrong one.
 export async function upsertMapping(
   institution: string,
   fingerprint: string,
@@ -88,7 +64,7 @@ export async function upsertMapping(
     .execute();
 }
 
-/** The six selects, in the order the screen draws them, with their captions. */
+// The six selects, in the order the screen draws them, with their captions.
 const COLUMN_FIELDS = [
   { field: "instrument", label: "Instrument", required: true },
   { field: "quantity", label: "Quantity", required: true },
@@ -100,16 +76,11 @@ const COLUMN_FIELDS = [
 
 type ColumnField = (typeof COLUMN_FIELDS)[number]["field"];
 
-/** The chosen column, or null — absent field, placeholder and deliberate
- * absence all read as "no column chosen". */
+// Absent field, placeholder and deliberate absence all read as "no column chosen".
 const chosenColumn = (value: string | undefined): string | null =>
   value === undefined || value === "" || value === NOT_IN_FILE ? null : value;
 
-/**
- * The columns form, validated field by field against the file's own header.
- * Every check lives in one `superRefine` so a submission with three faults
- * comes back with three messages rather than one per round trip.
- */
+// One superRefine so a submission with three faults reports three messages, not one per round trip.
 const mappingForm = (header: ReadonlyArray<string>) =>
   z
     .object({
@@ -142,15 +113,13 @@ const mappingForm = (header: ReadonlyArray<string>) =>
           continue;
         }
 
-        // The options are the header cells verbatim, so anything else is a
-        // forged post, not a slip a reader could make.
+        // Options are header cells verbatim: a mismatch is a forged post, not a UI slip.
         if (!header.includes(value)) {
           refuse(field, `"${value.trim()}" is not a column of this file's header row.`);
           continue;
         }
 
-        // Trim-compared, matching how `parseStatement` finds a column: two
-        // header cells differing only in padding are the same column.
+        // Trim-compared like parseStatement: padding-only difference is the same column.
         const twin = chosen.find((earlier) => earlier.column.trim() === value.trim());
         if (twin !== undefined) {
           refuse(
@@ -172,25 +141,13 @@ const mappingForm = (header: ReadonlyArray<string>) =>
       }
     });
 
-/**
- * The columns screen's submission, assembled into the mapping JSON.
- *
- * @param fields the posted string fields — the six selects, the `costBasisIs`
- *        radio, the `owedAsPositive` checkbox and the hidden `headerRow`.
- * @param rows the draft file's rows, so every chosen column is checked
- *        against the header it claims to name.
- * @param delimiter the delimiter those rows were read with, recorded in the
- *        mapping so a later re-read never depends on the sniff agreeing twice.
- * @throws {ValidationError} a message per bad field; form-level only for the
- *         hidden header row, which no reader typed.
- */
+// delimiter is recorded in the mapping so a later re-read never depends on re-sniffing agreeing.
 export function parseMappingForm(
   fields: Record<string, string>,
   rows: ReadonlyArray<ReadonlyArray<string>>,
   delimiter: Delimiter,
 ): StatementMapping {
-  // The header row rides in a hidden field, so a bad one is a forged or stale
-  // post rather than a control to hang a message under.
+  // Hidden field: a bad header row is a forged/stale post, not a control to hang a message under.
   const headerRow = /^\d+$/.test(fields.headerRow ?? "") ? Number(fields.headerRow) : null;
   const header = headerRow === null ? undefined : rows[headerRow];
   if (headerRow === null || header === undefined) {
@@ -208,9 +165,7 @@ export function parseMappingForm(
     headerRow,
     delimiter,
     columns: {
-      // The refinement already refused these unchosen, so the fallbacks are
-      // for the compiler; an empty string here would be `parseStatement`'s
-      // "names no instrument column" problem, never a silent pass.
+      // superRefine already refused these if unchosen — fallback is for the type checker only.
       instrument: column("instrument") ?? "",
       quantity: column("quantity") ?? "",
       name: column("name"),
@@ -219,12 +174,10 @@ export function parseMappingForm(
       accountNumber: column("accountNumber"),
     },
     costBasisIs: input.costBasisIs === "total" ? "total" : "per_share",
-    // A checkbox posts its value or nothing at all; nothing means unticked,
-    // which keeps the file's own sign (the overdraft case, DESIGN.md §14.8).
+    // Unticked (absent) keeps the file's own sign — the overdraft case (DESIGN.md §14.8).
     owedAsPositive: input.owedAsPositive === "true",
-    // No screen control: combining is what the spec's lot-level story
-    // promises; only a hand-authored mapping turns it off, and
-    // `parseStatement` still refuses duplicates for exactly that mapping.
+    // No screen control — only a hand-authored mapping disables this, and parseStatement
+    // still refuses duplicates for that mapping.
     combineDuplicateRows: true,
   };
 }

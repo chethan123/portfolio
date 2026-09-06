@@ -1,16 +1,5 @@
-/**
- * The four breakdowns Analysis draws, and the two Income draws beside them
- * (DESIGN.md §8.1) — all six now one function over `holdings-view.ts`'s
- * dimension registry, so these read `groupingBy(id)` exactly as the screens
- * do; a local accessor here would let this file pass while the screens
- * disagree. No database: `allocation.ts` is pure by design, so these are
- * unit tests over a fixture function. Pinned: the grouping, and
- * the arithmetic — every money assertion an exact decimal string, including
- * the cases a float gets wrong, because this module adds money outside SQL
- * and exactness is its whole justification. The gross-positive-denominator
- * rule is pinned twice — a household that nearly cancels out, and one in
- * net debt — both where the obvious denominator produces nonsense.
- */
+// Four Analysis breakdowns + two Income ones (DESIGN.md §8.1), via holdings-view.ts's groupingBy.
+// Pure unit tests, no database; money assertions are exact decimal strings.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -29,32 +18,19 @@ import { SHARE_SCALE, toUnits } from "~/lib/money";
 
 import type { ValuedHolding } from "~/lib/valuation.server";
 
-/**
- * The positive shares totalled on their digits.
- *
- * `Number()` is what let the old version of this assertion pass while the
- * shares came to 0.999999: summed as floats, a millionth short of a whole is
- * still `1` once the addition has rounded. `BigInt` over the exact strings
- * cannot hide it.
- */
+/** Sum of positive shares. BigInt over exact strings — Number() let 0.999999 read as 1 once floats rounded the sum. */
 function wholePie(slices: ReadonlyArray<{ share: string }>): bigint {
   return slices
     .filter((slice) => !slice.share.startsWith("-"))
     .reduce((sum, slice) => sum + toUnits(slice.share, SHARE_SCALE), 0n);
 }
 
-/** One whole, at the scale a share is written to. */
+/** 1.0 at share scale. */
 const WHOLE = toUnits("1.000000", SHARE_SCALE);
 
 let sequence = 0;
 
-/**
- * One row shaped as `holding_valued` would have produced it.
- *
- * `isPriced` is derived rather than passed: the view cannot emit a row where a
- * null value and a true `is_priced` disagree, so deriving it keeps a test from
- * asserting on a row the database could never hand over.
- */
+/** Row shaped like holding_valued's output. isPriced is derived — the view never emits null value + true is_priced. */
 function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
   const merged: ValuedHolding = {
     accountId: "1",
@@ -79,8 +55,7 @@ function holding(overrides: Partial<ValuedHolding> = {}): ValuedHolding {
     unrealized: null,
     isPriced: true,
     isStale: false,
-    // Zero rather than null, because that is what the view emits for a holding
-    // whose instrument carries no rate: the coalesce is in the SQL.
+    // Zero, not null — view coalesces a rateless instrument's dividend in SQL.
     annualDividend: "0.0000",
     ...overrides,
   };
@@ -130,7 +105,6 @@ describe("the cut by owner", () => {
       groupingBy("owner"),
     );
 
-    // Merging them would be wrong in a way nobody would ever notice on screen.
     expect(slices.map((slice) => [slice.key, slice.amount])).toEqual([
       ["2", "2000.0000"],
       ["1", "1000.0000"],
@@ -150,11 +124,7 @@ describe("the cut by owner", () => {
   });
 
   it("breaks it the way a person reads the labels, not by code unit", () => {
-    // `"apple" < "Banana"` is false — capitals sort first by code unit — and
-    // the Holdings table has always ranked equal groups by `localeCompare`.
-    // Two spellings would put the same two buckets in different orders on two
-    // screens, and `allocateShares` hands the rounding remainder to whichever
-    // came first, so the percentages would differ too.
+    // Code-unit sort puts capitals first; Holdings ranks by localeCompare — wrong order also flips which tied slice gets the rounding remainder.
     const slices = allocationBy(
       [
         holding({ classification: "Banana fund", value: "1000.0000" }),
@@ -181,19 +151,15 @@ describe("the cut by account type", () => {
       groupingBy("kind"),
     );
 
-    // The sign survives — no absolute value anywhere — and it sorts last by
-    // construction rather than by a branch (§2).
+    // Sign survives (no abs anywhere); sorts last by construction, not a branch (§2).
     expect(slices.map((slice) => [slice.key, slice.amount, slice.share])).toEqual([
       ["brokerage", "28000.0000", "0.691358"],
       ["bank", "12500.0000", "0.308642"],
-      // −8,000 of 40,500 owned. Not of the 32,500 net, which is what makes the
-      // figure stable as the net moves.
+      // −8,000 of 40,500 owned, not of the 32,500 net — stable as net moves.
       ["liability", "-8000.0000", "-0.197531"],
     ]);
 
-    // The positive slices still make a whole pie. These two round to it on
-    // their own — 0.691358 + 0.308642 — which is why this case never caught
-    // anything; the equal slices below are the ones that do not.
+    // These two round to a whole pie on their own; the equal-slices case below doesn't.
     expect(wholePie(slices)).toBe(WHOLE);
   });
 
@@ -207,10 +173,7 @@ describe("the cut by account type", () => {
       groupingBy("kind"),
     );
 
-    // A third rounded on its own is 0.333333, and three of those come to
-    // 0.999999 — the hairline gap the analysis ring drew, since it adds no
-    // residual wedge. The spare unit goes to the first of the tied remainders
-    // in sort order, so which slice carries it is the same on every render.
+    // Three thirds round to 0.999999 alone; spare unit goes to the first tied remainder in sort order, staying stable across renders.
     expect(slices.map((slice) => [slice.label, slice.share])).toEqual([
       ["Bank", "0.333334"],
       ["Brokerage", "0.333333"],
@@ -230,10 +193,7 @@ describe("the cut by account type", () => {
       groupingBy("kind"),
     );
 
-    // The liability is the same magnitude as each asset group, and the asset
-    // group holding the spare unit reads 0.333334. The liability does not: it
-    // is a negative fraction of the 30,000 owned, not a piece of the pie being
-    // shared out, so nothing is ever handed to it.
+    // Liability is the same magnitude as each asset group but gets no rounding remainder — it's a negative fraction of the 30,000 owned, not a piece of the pie being shared.
     expect(slices.map((slice) => [slice.label, slice.share])).toEqual([
       ["Bank", "0.333334"],
       ["Brokerage", "0.333333"],
@@ -272,10 +232,7 @@ describe("the cut by asset class", () => {
       holding({ ownerId: "2", accountKind: "liability", assetClass: "cash", value: "-8000.0000" }),
     ];
 
-    // `Number` is the test's own arithmetic, never the module's: three
-    // groupings of one array must partition it, and this is the cheapest way to
-    // say so. The module's own sums are asserted as exact strings everywhere
-    // else in this file.
+    // Number() here is the test's own math, not the module's — cheapest way to check three groupings partition one array (module's own sums are asserted as exact strings elsewhere).
     const sum = (slices: { amount: string }[]): number =>
       slices.reduce((total, slice) => total + Number(slice.amount), 0);
 
@@ -290,9 +247,7 @@ describe("coverage", () => {
     const slices = allocationBy(
       [
         holding({ assetClass: "equity", value: "2500.0000" }),
-        // A 401k trust that has never been quoted. Dropping it would understate
-        // the slice silently; zeroing it would understate it and call the result
-        // complete.
+        // Never-quoted 401k trust: dropping it understates silently; zeroing it understates and claims complete.
         holding({ assetClass: "equity", value: null }),
       ],
       groupingBy("assetClass"),
@@ -318,8 +273,7 @@ describe("coverage", () => {
       groupingBy("assetClass"),
     );
 
-    // "$0.00, based on 0 of 2 holdings" — which a screen must render as unknown
-    // rather than as an empty slice.
+    // "$0.00 based on 0 of 2 holdings" — unknown, not an empty slice.
     expect(slices[0]?.amount).toBe("0.0000");
     expect(slices[0]?.coverage).toEqual({ known: 0, total: 2 });
   });
@@ -335,8 +289,7 @@ describe("the arithmetic", () => {
       groupingBy("owner"),
     );
 
-    // 0.1 + 0.2 = 0.30000000000000004 in a float. This is the regression the
-    // whole decimal-string rule exists to prevent, at the scale it is visible.
+    // 0.1 + 0.2 = 0.30000000000000004 as a float — the regression decimal strings prevent.
     expect(slices[0]?.amount).toBe("0.3000");
   });
 
@@ -353,9 +306,7 @@ describe("the arithmetic", () => {
   });
 
   it("rounds a value finer than the money scale half away from zero", () => {
-    // The view stores numeric(20, 4) and cannot produce this; the rule is
-    // written down so that a caller handing over something finer gets the same
-    // rounding `format.ts` displays with, rather than a silent truncation.
+    // numeric(20,4) can't produce this — pins the rounding rule for a finer caller instead of a silent truncation.
     const [up] = allocationBy([holding({ value: "0.00005" })], groupingBy("owner"));
     const [down] = allocationBy([holding({ value: "-0.00005" })], groupingBy("owner"));
 
@@ -386,8 +337,7 @@ describe("what a negative slice is a share of", () => {
       groupingBy("kind"),
     );
 
-    // Against the net 10,000 the house would be 5,000% of the portfolio and
-    // the mortgage −4,900%. Against the 500,000 owned, both stay readable.
+    // Net 10,000 denominator would read 5,000% / −4,900%; against 500,000 owned, both stay readable.
     expect(slices.map((slice) => slice.share)).toEqual(["1.000000", "-0.980000"]);
   });
 
@@ -400,9 +350,7 @@ describe("what a negative slice is a share of", () => {
       groupingBy("kind"),
     );
 
-    // A signed net denominator of −50,000 would make the savings −200%: the
-    // same wrong sign on the fastest-read figure that `netWorthChange` avoids
-    // by dividing by `abs(previous)`.
+    // Signed net denominator (−50,000) would read savings as −200% — same fix as netWorthChange's abs(previous).
     expect(slices.map((slice) => [slice.key, slice.share])).toEqual([
       ["bank", "1.000000"],
       ["liability", "-1.500000"],
@@ -415,8 +363,7 @@ describe("what a negative slice is a share of", () => {
       groupingBy("kind"),
     );
 
-    // There is no base to be a fraction of. The zero is not a claim that the
-    // loan is nothing — the amount beside it says what it is.
+    // No base to be a fraction of — zero share isn't a claim the loan is nothing.
     expect(slices).toEqual([
       {
         key: "liability",
@@ -456,19 +403,7 @@ describe("sharePercent", () => {
   });
 });
 
-/**
- * The fourth cut: unrealized gains by asset type, and the tax a taxable one
- * would attract (DESIGN.md §4.5, §8.1).
- *
- * The rate is passed as a percentage string throughout, the way the column
- * stores it and the way the screen prints it, so these tests would fail if
- * anything on the path quietly started treating it as a fraction.
- *
- * What is pinned beyond the grouping: that a gain in a tax-exempt account stays
- * in the table and out of the tax; that a bucket nobody recorded a cost basis
- * for is an em dash rather than $0.00; and that the tax arithmetic is exact on
- * the digits, including at the half where a float rounds the other way.
- */
+// Unrealized gains by asset type and the tax attracted (DESIGN.md §4.5, §8.1); rate is a percentage string throughout, matching the column/screen.
 const RATE = "23.800000";
 
 describe("unrealized gains by asset type", () => {
@@ -504,8 +439,7 @@ describe("unrealized gains by asset type", () => {
   });
 
   it("files cash, a liability and an unquoted trust under the last row rather than dropping them", () => {
-    // The seeded USD instrument every bank balance and every loan is a holding
-    // of, and a workplace-plan trust that no provider quotes.
+    // Seeded USD instrument (every bank/loan holding) plus an unquoted workplace-plan trust.
     const { rows, total } = unrealizedByAssetType(
       [
         holding({ quoteType: "EQUITY", unrealized: "1000.0000" }),
@@ -544,7 +478,6 @@ describe("unrealized gains by asset type", () => {
       RATE,
     );
 
-    // The gain is the whole $10,000; only the taxable $1,000 is taxed.
     expect(rows[0]?.unrealized).toBe("10000.0000");
     expect(rows[0]?.taxable).toBe("1000.0000");
     expect(rows[0]?.tax).toBe("238.0000");
@@ -575,7 +508,6 @@ describe("unrealized gains by asset type", () => {
     expect(rows[1]?.unrealized).toBeNull();
     expect(rows[1]?.tax).toBeNull();
     expect(rows[1]?.coverage).toEqual({ known: 0, total: 2 });
-    // A row nobody can compute does not drag the total to unknown.
     expect(total?.unrealized).toBe("1000.0000");
     expect(total?.coverage).toEqual({ known: 1, total: 3 });
   });
@@ -603,17 +535,12 @@ describe("unrealized gains by asset type", () => {
     );
 
     expect(rows.map((row) => row.tax)).toEqual(["23800.0000", null]);
-    // Not 23.8% of the netted $60,000 — a total smaller than the row above it
-    // reads as an arithmetic fault, and the screen names the limitation
-    // instead.
+    // Not 23.8% of the netted $60,000 — a total smaller than the row above would read as a fault.
     expect(total?.tax).toBe("23800.0000");
   });
 
   it("rounds each row's tax to the cent, so the printed column adds up", () => {
-    // 22,652.22 × 23.8% is 5,391.228360 and 48,151.16 × 23.8% is
-    // 11,459.976080. Carried to four places those print as $5,391.23 and
-    // $11,459.98 over a total of $16,851.20 — two figures that do not sum to
-    // the third in front of the reader. Rounded where they are made, they do.
+    // 22,652.22×23.8%=5,391.22836, 48,151.16×23.8%=11,459.97608 — unrounded these mismatch on screen; rounded per-row, they add up.
     const { rows, total } = unrealizedByAssetType(
       [
         holding({ quoteType: "EQUITY", unrealized: "22652.2200" }),
@@ -627,10 +554,7 @@ describe("unrealized gains by asset type", () => {
   });
 
   it("nets the total's base while the total's tax stays the sum of the rows", () => {
-    // The one place the two figures on the total row do not describe each
-    // other: dividing the tax by the base gives a rate nobody set, which is
-    // why the screen does not print the base on that row and says the rule in
-    // words instead.
+    // Total row's tax/base don't describe each other — dividing gives a rate nobody set, so the screen states the rule in words instead of printing the base.
     const { total } = unrealizedByAssetType(
       [
         holding({ quoteType: "EQUITY", unrealized: "100000.0000" }),
@@ -646,9 +570,7 @@ describe("unrealized gains by asset type", () => {
   });
 
   it("shows a gain with no tax where the taxable holdings cannot be computed", () => {
-    // Taxable holdings exist, so the row is not tax-exempt; none of them has a
-    // gain that could be computed, so there is nothing to tax. Two different
-    // absences, and neither is a zero.
+    // Taxable holdings exist (not tax-exempt) but none has a computable gain — two absences, neither a zero.
     const { rows } = unrealizedByAssetType(
       [
         holding({ quoteType: "EQUITY", taxTreatment: "tax_free", unrealized: "1000.0000" }),
@@ -663,9 +585,7 @@ describe("unrealized gains by asset type", () => {
   });
 
   it("counts an unpriced holding the same way as an untracked cost basis", () => {
-    // `holding_valued` nulls `unrealized` when either side is missing, so a
-    // trust nobody quotes lands in coverage exactly as a missing basis does —
-    // which is why the screen's note names both.
+    // holding_valued nulls unrealized when either side is missing — unquoted trust lands in coverage same as missing cost basis.
     const { rows } = unrealizedByAssetType(
       [
         holding({ quoteType: "EQUITY", unrealized: "500.0000" }),
@@ -680,15 +600,11 @@ describe("unrealized gains by asset type", () => {
 
   it("multiplies exactly, including where a float would not", () => {
     const cases: ReadonlyArray<[string, string, string]> = [
-      // The classic float: 0.1 + 0.2 territory, done on digits instead.
-      // 1,234,567.89 × 23.8% is 293,827.157820 exactly, and the half-cent
-      // rounds away from zero.
+      // 1,234,567.89 × 23.8% = 293,827.15782 exactly; half-cent rounds away from zero.
       ["1234567.8900", "23.8", "293827.1600"],
-      // A rate is allowed six places and all six count: 238.12345 to the
-      // nearest cent, rounded down because the tenth of a cent is below the
-      // half.
+      // Rate allows six places, all count: 238.12345 rounds down (below the half).
       ["1000.0000", "23.812345", "238.1200"],
-      // Half a cent up, and a hair under it down.
+      // Half a cent up, a hair under it down.
       ["1000.0000", "23.805", "238.0500"],
       ["100.0000", "0", "0.0000"],
     ];
@@ -712,9 +628,7 @@ describe("formatRate", () => {
   });
 
   it("rounds nothing, so the heading and the settings box cannot disagree", () => {
-    // `formatPercent` would make all three of these read 3.8%, 23.8% and
-    // 15.3% — a screen contradicting the figure a person typed, and a box that
-    // writes the rounded version back on the next save.
+    // formatPercent would round these to 3.8%/23.8%/15.3%, contradicting what was typed — and re-saving would persist the rounded value.
     expect(formatRate("3.750000")).toBe("3.75%");
     expect(formatRate("23.812345")).toBe("23.812345%");
     expect(formatRate("15.250000")).toBe("15.25%");
@@ -728,16 +642,8 @@ describe("formatRate", () => {
   });
 });
 
-/**
- * A household whose taxable side pays *out*.
- *
- * The shape both edges were found in, seeded against a real database and kept
- * here as an array: a taxable brokerage beside a car loan whose note carries a
- * rate, so the taxable slice nets to −522.20 — a liability account still has a
- * tax treatment, and the interest lands in the same group as the dividend. And
- * a tax-deferred group whose only holding is an unquoted trust, which has a
- * dividend and no value at all.
- */
+// A household whose taxable side nets negative: brokerage + car loan (a liability has a tax
+// treatment too, so interest lands in the dividend group), plus a tax-deferred group holding only an unquoted, valueless trust.
 function aHouseholdWithALoan(): ValuedHolding[] {
   return [
     holding({
@@ -761,8 +667,7 @@ function aHouseholdWithALoan(): ValuedHolding[] {
       accountName: "Rollover IRA",
       accountKind: "ira",
       taxTreatment: "tax_deferred",
-      // An unquoted trust: a quantity, no price, and a dividend the view
-      // coalesced to zero.
+      // Unquoted trust — quantity, no price, dividend coalesced to zero.
       value: null,
       annualDividend: "0.0000",
     }),
@@ -779,10 +684,7 @@ function aHouseholdWithALoan(): ValuedHolding[] {
 
 describe("the annual dividend, grouped", () => {
   it("cuts three ways by tax treatment, with the labels Holdings shows", () => {
-    // The accessor comes from `holdings-view.ts` rather than from a grouping
-    // written here, because that is the arrangement under test: one label
-    // table, read by both screens. A copy in this file would let the test pass
-    // while the two screens labelled the same grouping differently.
+    // groupingBy comes from holdings-view.ts, not a local copy — a local one could pass while the two screens' labels drifted apart.
     const slices = annualDividendBy(aHouseholdWithALoan(), groupingBy("tax"));
 
     expect(slices).toEqual([
@@ -801,9 +703,7 @@ describe("the annual dividend, grouped", () => {
         coverage: { known: 1, total: 1 },
       },
       {
-        // The edge the ring has to survive: a whole slice below zero, on the
-        // group the household cares most about. −$1,422.20 of interest against
-        // $900.00 of dividend, both taxable.
+        // Whole slice below zero — −$1,422.20 interest against $900.00 dividend, both taxable.
         key: "taxable",
         label: "Taxable",
         amount: "-522.2000",
@@ -815,10 +715,7 @@ describe("the annual dividend, grouped", () => {
   });
 
   it("counts every holding as known, because the zero rule leaves no unknowns", () => {
-    // The reason the Income tables carry no coverage caption. `isPriced` is
-    // false for the unquoted trust and its dividend is still a figure, so a
-    // dividend breakdown that reused the value predicate would report
-    // "3 of 4 holdings" on a column that is complete by construction.
+    // Why Income tables show no coverage caption: isPriced is false for the unquoted trust but its dividend is still known — reusing the value predicate would misreport "3 of 4".
     const slices = annualDividendBy(aHouseholdWithALoan(), groupingBy("tax"));
 
     expect(slices.every((slice) => slice.coverage.known === slice.coverage.total)).toBe(true);
@@ -827,8 +724,7 @@ describe("the annual dividend, grouped", () => {
   it("cuts the same array by account, off the same accessor", () => {
     const slices = annualDividendBy(aHouseholdWithALoan(), groupingBy("account"));
 
-    // Keyed on the account's id and labelled with its own name — the second
-    // breakdown answers "which statement does this land in".
+    // Keyed on account id, labelled by name — answers "which statement does this land in".
     expect(slices.map((slice) => [slice.key, slice.label, slice.amount])).toEqual([
       ["1", "Fidelity", "900.0000"],
       ["4", "Roth IRA", "800.0000"],
@@ -838,9 +734,7 @@ describe("the annual dividend, grouped", () => {
   });
 
   it("groups a dividend, not a value, off the same rows", () => {
-    // The failure this adapter exists to prevent: `allocationBy` defaults to
-    // value, so an Income panel built on the default would render two rings of
-    // net worth under dividend headings.
+    // allocationBy defaults to value — without this adapter, Income would render net-worth rings under dividend headings.
     const holdings = aHouseholdWithALoan();
 
     expect(annualDividendBy(holdings, groupingBy("tax")).map((slice) => slice.amount)).not.toEqual(
@@ -853,23 +747,17 @@ describe("the sheltered subtotal", () => {
   it("states the two amounts separately rather than as a fraction", () => {
     const { sheltered, taxable } = shelteredSubtotal(aHouseholdWithALoan());
 
-    // Tax-deferred and tax-free added together, and the taxable side left
-    // alone. "$800 of $277.80 is sheltered" is the sentence this shape refuses
-    // to make possible: the parts are larger than the total they came from,
-    // and neither figure is wrong.
+    // Tax-deferred + tax-free, taxable kept separate — refuses to make "$800 of $277.80 sheltered" possible when the parts exceed the total.
     expect({ sheltered, taxable }).toEqual({ sheltered: "800.0000", taxable: "-522.2000" });
   });
 
   it("keeps the taxable amount negative rather than flooring it at zero", () => {
-    // The screen reads the sign and says "a figure going out"; coercing it here
-    // would leave that sentence with nothing to switch on.
+    // Screen reads the sign to say "a figure going out" — flooring at zero removes that signal.
     expect(shelteredSubtotal(aHouseholdWithALoan()).taxable.startsWith("-")).toBe(true);
   });
 
   it("is $0 rather than an absence when nothing pays", () => {
-    // The zero rule, in the subtotal: a household whose holdings all pay
-    // nothing is a household paid $0, not one nobody could work the figure out
-    // for.
+    // Zero rule: a pays-nothing household is $0, not "unknown".
     expect(shelteredSubtotal([holding({ taxTreatment: "tax_free" })])).toEqual({
       sheltered: "0.0000",
       taxable: "0.0000",
@@ -879,9 +767,7 @@ describe("the sheltered subtotal", () => {
 
 describe("the weighted yield", () => {
   it("divides what a group pays by what the group is worth", () => {
-    // $277.80 of dividend over $60,000 of gross positive value. Not over the
-    // $36,000 the household is actually worth, and not over the four holdings'
-    // values summed with the loan's included.
+    // $277.80 over $60,000 gross positive value — not the $36,000 net worth, not with the loan's value included.
     expect(weightedYield(aHouseholdWithALoan())).toBe("0.004630");
   });
 
@@ -891,25 +777,17 @@ describe("the weighted yield", () => {
       holding({ accountKind: "liability", value: "-150000.0000", annualDividend: "0.0000" }),
     ];
 
-    // A net denominator of −50,000 would report −1.0% on a portfolio that pays
-    // $500 a year: the same wrong sign on the fastest-read figure that
-    // `netWorthChange` avoids by dividing by `abs(previous)`.
+    // Net denominator (−50,000) would report −1.0% on a $500/yr payer — same fix as netWorthChange's abs(previous).
     expect(weightedYield(holdings)).toBe("0.005000");
   });
 
   it("is absent, not zero, for a group with a dividend and no value", () => {
-    // The tax-deferred group in the fixture above, on its own: an unquoted
-    // trust has a quantity and no price, so there is nothing for the dividend
-    // to be a fraction of. `0.0%` here would be a claim about a holding nobody
-    // can price — the zero rule applies to the dividend, never to the value it
-    // is divided by.
+    // Unquoted trust: quantity, no price — nothing for the dividend to be a fraction of. Zero rule applies to the dividend, never to its denominator.
     expect(weightedYield([holding({ value: null, annualDividend: "120.0000" })])).toBeNull();
   });
 
   it("is absent, rather than throwing, when the value is exactly zero", () => {
-    // Nothing in the schema stops a quantity or a price being zero, and
-    // `money.ts`'s `divide` raises `RangeError` on a zero denominator. One
-    // sold-out position would otherwise take the whole page down.
+    // money.ts's divide raises RangeError on a zero denominator — a sold-out position must not 500 the page.
     expect(weightedYield([holding({ value: "0.0000", annualDividend: "0.0000" })])).toBeNull();
   });
 

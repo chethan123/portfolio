@@ -1,18 +1,7 @@
-/**
- * Where a half-finished upload resumes, and where a finished one refuses to
- * land twice (ingest brief §2.1, §6.5, §7.4). The flow is four URLs and no
- * client state, so "how far did this draft get" must be answerable from the
- * row alone; `parseDraft` is that answer, these routes its only readers,
- * and it has no test of its own anywhere — the matrix below is what pins
- * it. Breaking any of this strands a reader rather than writing a wrong
- * number: a bookmarked review over a broken mapping would diff over
- * nothing; a resume guessing "review" would ask the household to confirm a
- * statement no mapping parsed. The one write-shaped risk is the re-POST
- * after a commit — 404, never a second recording, and no forged account id
- * carried to the page that links to it: `accountIdOf` is not exported, so
- * it is pinned at the end that is — what the action throws is what the
- * boundary reads.
- */
+// Where a half-finished upload resumes, and a finished one refuses to land twice (ingest brief §2.1, §6.5, §7.4). Four URLs,
+// no client state — "how far did this draft get" must read entirely off the row (parseDraft), which has no test of its
+// own; the matrix below pins it. Breaking this strands a reader rather than writing a wrong number. The one write-shaped
+// risk is the re-POST after commit: 404, never a second recording, never a forged account id in the link back.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { z } from "zod";
@@ -50,16 +39,8 @@ const AS_OF = "2026-06-30";
 
 type Staged = { draftId: string; accountId: string };
 
-/**
- * A draft that has passed the columns step.
- *
- * `resolved` decides which side of the fork it lands on: with the file's one
- * string already aliased, `rememberMapping` records that this draft raised no
- * first sighting and sends it to review; without, the string is a first
- * sighting and the instruments step is owed. That bit is written once, at this
- * moment, and nothing afterwards can recover it — which is why the fixture has
- * to choose before the mapping is saved rather than after.
- */
+// A draft that has passed the columns step. `resolved` picks the fork: aliased already → rememberMapping sends it straight
+// to review; not aliased → instruments step is owed. Written once at this moment, unrecoverable after — must choose before saving the mapping.
 async function stageDraft(
   ctx: Pick<
     TestContext,
@@ -107,13 +88,7 @@ const expiredPage = z.object({
   data: z.object({ accountId: z.string().nullable() }),
 });
 
-/**
- * The expired-page payload a review re-POST throws.
- *
- * `data()` produces neither a `Response` nor an `Error`, so `outcomeOf` would
- * rethrow it and `responseOf` would never see it. This is the one shape a test
- * has to unwrap for itself.
- */
+// data() throws neither a Response nor an Error, so outcomeOf/responseOf can't unwrap it — this does it directly.
 async function expiredPageOf(run: () => Promise<unknown>) {
   try {
     await run();
@@ -145,8 +120,6 @@ describe("a draft's bare address", () => {
   it(
     "sends a draft that has saved no mapping to the columns step",
     withDatabase(async ({ seedAccount, seedUploadDraft }) => {
-      // The ordinary arrival: the drop screen has just staged the bytes and
-      // redirected here, and nothing has been mapped yet.
       const account = await seedAccount({ kind: "brokerage" });
       const draft = await seedUploadDraft({ account, bytes: encode(CSV) });
 
@@ -159,9 +132,6 @@ describe("a draft's bare address", () => {
   it(
     "sends a mapped draft whose file still names an unknown instrument to the instruments step",
     withDatabase(async (ctx) => {
-      // A laptop closed on the resolution screen and reopened from a bookmark
-      // of the draft itself. The mapping is saved, so columns is behind it —
-      // the unresolved string is what is still owed.
       const { draftId } = await stageDraft(ctx, { resolved: false });
 
       expect(
@@ -173,25 +143,17 @@ describe("a draft's bare address", () => {
   it(
     "sends a file that raised no first sighting straight to review, with the strip saying so",
     withDatabase(async (ctx) => {
-      // The second statement from a brokerage already mapped and already
-      // resolved: the instruments step has nothing to ask, so it is not a
-      // screen this reader ever stands on.
       const { draftId } = await stageDraft(ctx, { resolved: true });
 
       expect(
         await redirectTo(() => resumeDraft(args(get(`/upload/${draftId}`), { draftId }))),
       ).toBe(`/upload/${draftId}/review`);
 
-      // Skipped, not merely passed. An alias does not say which draft wrote
-      // it, so by the time review renders, the only record that this file
-      // asked nothing is the bit the columns step wrote (brief §7.5).
+      // Skipped, not merely passed — an alias doesn't say which draft wrote it, so instrumentsSkipped (columns step, brief §7.5) is the only record.
       const page = await reviewPage(draftId);
       expect(page.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
 
-      // The date control's two boundaries reach the screen from the validator,
-      // so the picker cannot offer a date the commit then refuses. The floor
-      // matters more than the ceiling here: without it a mistyped millennium
-      // is a position set a thousand years back that nothing can reach.
+      // Boundaries come from the validator so the picker can't offer a date the commit then refuses; the floor matters most (a mistyped millennium is unreachable history otherwise).
       expect(page.earliestAsOf).toBe(earliestRecordableDate());
       expect(page.latestAsOf).toBe(latestRecordableDate());
       expect(page.earliestAsOf).toBe("1970-01-01");
@@ -205,26 +167,20 @@ describe("a review over a draft that is not ready for one", () => {
     withDatabase(async (ctx) => {
       const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
 
-      // Written straight onto the row on purpose: `rememberMapping` refuses to
-      // store a mapping its own file cannot parse, so the only way a row like
-      // this exists is a stored value that predates a rule or was edited by
-      // hand — which is the case `parseDraft` guards and nothing else covers.
+      // Written straight onto the row: rememberMapping refuses an unparseable mapping, so this row can only exist via a rule predating it, or a hand edit — parseDraft's own guard.
       await ctx.db
         .updateTable("upload_draft")
         .set({ mapping: JSON.stringify({ headerRow: 0, delimiter: "," }) })
         .where("id", "=", draftId)
         .execute();
 
-      // The bookmark.
       expect(
         await redirectTo(() =>
           reviewLoader(args(get(`/upload/${draftId}/review`), { draftId })),
         ),
       ).toBe(`/upload/${draftId}/columns`);
 
-      // And the form beneath it, which is the half that matters: a POST that
-      // fell through to the commit would be recording a statement no mapping
-      // had parsed.
+      // The half that matters: a POST falling through to commit would record a statement no mapping had parsed.
       expect(
         await redirectTo(() =>
           reviewAction(
@@ -245,9 +201,7 @@ describe("a review re-posted after its statement landed", () => {
       const { draftId, accountId } = await commitStaged(ctx);
       const recorded = await lastRecorded(accountId, ctx.db);
 
-      // The back button after success, or a tab resubmitted from history. The
-      // draft the commit deleted is the guard: there is nothing left to read a
-      // second set out of.
+      // The commit already deleted this draft — nothing left to read a second set out of.
       const refusal = await expiredPageOf(() =>
         reviewAction(
           args(post(`/upload/${draftId}/review`, { asOf: AS_OF, accountId }), { draftId }),
@@ -255,8 +209,7 @@ describe("a review re-posted after its statement landed", () => {
       );
 
       expect(refusal.init.status).toBe(404);
-      // Same set still the account's latest — a second commit would have
-      // outranked it and left the household reading a duplicate statement.
+      // Same set still latest — a second commit would have outranked it into a duplicate statement.
       expect(await lastRecorded(accountId, ctx.db)).toEqual(recorded);
     }),
   );
@@ -273,9 +226,7 @@ describe("a review re-posted after its statement landed", () => {
       );
       expect(honest.data.accountId).toBe(accountId);
 
-      // The field arrives from a posted form and is read back into a link, so
-      // the id is validated as one here rather than trusted for having been in
-      // a hidden input a moment ago.
+      // Posted field read back into a link — validated here, not trusted for having been a hidden input a moment ago.
       const forged = await expiredPageOf(() =>
         reviewAction(
           args(

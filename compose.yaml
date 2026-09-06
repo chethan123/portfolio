@@ -1,84 +1,13 @@
-# The whole deployment — DESIGN.md §10.1. The price poller still runs
-# in-process in `app`, but since ticket 06's cutover it no longer calls Yahoo
-# itself: it dials `worker` — the same image, reached over a socket in a
-# shared volume, and holding no credential of its own — for every price
-# fetch, and `worker` in turn reaches Yahoo only through `egress-proxy`, which
-# admits a `CONNECT` to five hosts and checks the TLS server name inside the
-# tunnel against the host it was opened to — the worker's own network reaches
-# nothing else at all. The one scheduled
-# service is `dump`, argued in ADR-0009 — a dump that stops when the app is
-# down is worthless, and `pg_dump` belongs to the database's image. `caddy`
-# is the ingress front door and the only service that publishes a port;
-# everything else exists only on the compose network.
-#
-# `docker compose up -d` deliberately does NOT produce a working instance with
-# zero manual steps: that promise meant an instance open to anything on a home
-# LAN. Google sign-in at `gate` replaces it, and a gate skippable by
-# forgetting to configure it is no gate — the `${VAR:?}` interpolations stop
-# `up` naming the first missing variable rather than start half-protected.
-#
-# The two manual steps, each done once: create a Google OAuth client and put
-# its credentials in `.env` (copy .env.example; docs/google-sign-in.md walks
-# it), and `mkdir -p ./volumes/db/data ./volumes/dumps` — the database (the
-# `db-store` volume at the bottom explains why that one has to pre-exist and be
-# empty) and the directory the nightly dump lands in, which belongs to the
-# operator rather than to a container, and is why `dump` runs as their uid.
-# Every other setting, the worker's included, has a working default —
-# `POSTGRES_PASSWORD` now joins the gate's variables in having none,
-# deliberately and for the same reason (`db`, below).
-#
-# Privilege posture, every service: cap_drop ALL + no-new-privileges +
-# read-only rootfs; unprivileged uid pinned everywhere but `gate` (root argued
-# there). Both cap_adds were proved by a start failure without them.
-# scripts/smoke-test.sh asserts all of it — nothing else would notice a
-# container quietly regaining root.
-#
-# Docker Engine 28.0 is the floor, declared at the release before this one
-# where `worker` brought the first non-default network, and load-bearing from
-# this release on, now that `backend`, `caddy-app` and `caddy-gate` below are
-# the first *isolated* ones — check with `docker version --format
-# '{{.Server.Version}}'`: 26 ignores `gateway_mode_ipv4` silently and leaves a
-# host address reachable on the bridge; 27 refuses the option outright.
-# Docker Compose 2.31.0 or newer is the second floor, beside it — but not, in
-# this release, a load-bearing one: `up` only recreates a network whose
-# definition drifted when it can compare against a config hash it recorded on
-# the live one, and nothing here asks it to. The five an upgrade already has —
-# `backend`, `caddy-app`, `caddy-gate`, `egress-gate` and `ingress` — keep the
-# definition they were created with, and the two this release brings are new
-# names, so neither kind is a drifted network. `egress-worker` — the one network
-# that used to carry over byte-identical from release to release — is
-# deleted outright by ticket 08 rather than turned `internal` in place
-# (Docker cannot flip a plain bridge to `internal` on a live network, which
-# is why `worker-proxy` below is a new name rather than a reuse). So no
-# network in this release makes the plain-bridge-to-`internal` transition
-# this floor is about, on an operator's box or in CI — an older Compose
-# reconciles nothing and reports success correctly either way. The floor
-# stays declared anyway,
-# because it is cheap and it will bite the first release that does turn a
-# live network `internal`, at which point an old Compose would leave it plain
-# and still report success — which is why docs/operating.md, Installing puts
-# `docker compose version --short` beside the Engine check rather than
-# leaving it to CI. Until that release, say plainly that it does not bite
-# today, so an operator on a NAS is not sent to upgrade a plugin they do not
-# yet need. That is the opposite of the Engine floor above, which IS
-# load-bearing today: without it the isolation this file declares silently
-# does not take, on a fresh network exactly as on an existing one.
-# scripts/smoke-test.sh checks the Engine floor and not this one: CI creates
-# every network from nothing, so the reconciler's recreate path this floor
-# guards never runs there either, in this release or the next. A runner
-# below the Engine floor reads as "too old" here, not as a topology bug
-# several checks downstream.
+# The whole deployment — DESIGN.md §10.1.
+# Not turnkey: Google OAuth credentials in `.env` and `mkdir -p ./volumes/db/data
+# ./volumes/dumps` first. `${VAR:?}` fails `up` rather than start half-protected.
 
 name: portfolio
 
-# One tag for the two services that speak Postgres. `pg_dump` refuses a server
-# newer than itself, so bumping `db` alone would leave `dump` failing every
-# night with nothing tying it to the tag that moved.
+# pg_dump refuses a server newer than itself — `db` and `dump` share one tag.
 x-postgres-image: &postgres-image postgres:17-alpine
 
-# One request line every ten seconds from the app's healthcheck and another
-# from Caddy's — ~17k lines a day, ~0.5 GB/year under json-file with no cap.
-# 10m x 3 files bounds every container at ~30 MB. Issue #192.
+# Healthchecks alone log ~17k lines/day, ~0.5 GB/year uncapped. Issue #192.
 x-logging: &container-logging
   driver: json-file
   options:
@@ -90,22 +19,14 @@ services:
     image: *postgres-image
     restart: unless-stopped
     logging: *container-logging
-    # The image's postgres account (70:70 in postgres:17-alpine), pinned so no
-    # root process ever exists — skips the entrypoint's root-then-gosu drop.
-    # Fresh volumes initdb fine (image data dir already postgres-owned), and a
-    # volume from an older root run also starts: that entrypoint chowned PGDATA
-    # to postgres on every boot.
+    # The image's postgres account, pinned so no root process ever exists —
+    # skips the entrypoint's root-then-gosu drop.
     user: "70:70"
     environment:
-      # Reachable only on the Compose network — no published port, so this
-      # password never faces the LAN. It no longer lives in DATABASE_URL:
-      # change it here, then with `alter role` on the running server (docs/
-      # operating.md, Upgrading) — `PGPASSWORD` on `app` and `dump` below
-      # picks up the new value unchanged, no compose edit needed there.
+      # Not in DATABASE_URL: change here, then `alter role` on the running server.
       POSTGRES_USER: portfolio
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD — see docs/operating.md, Upgrading}"
       POSTGRES_DB: portfolio
-      # Storage is UTC regardless; this makes logs and `now()` defaults agree.
       TZ: UTC
       PGTZ: UTC
     command:
@@ -115,8 +36,6 @@ services:
       - -c
       - log_timezone=UTC
     volumes:
-      # The cluster — ./volumes/db/data on the host, via the bound name below.
-      # Still the single backup target (DESIGN.md §10, `pg_dump`).
       - db-store:/var/lib/postgresql/data
     networks:
       - backend
@@ -124,15 +43,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # All state lives in the mount above; pg_dump/pg_restore stream over exec
-    # and write nothing in-container.
     read_only: true
     tmpfs:
-      # The one scratch path Postgres still needs: unix socket + lock file.
-      # A tmpfs inherits its mount point's mode — this dir is 3777 in-image so
-      # uid 70 can write; `/run` (0755 root) would not do. The entrypoint's
-      # chmod here logs `Operation not permitted` each boot: its own `|| :`,
-      # cosmetic.
+      # Socket + lock file, 3777 in-image so uid 70 can write; `/run` (0755) would not — chmod here logs harmlessly.
       - /var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
@@ -140,66 +53,37 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
-    # No `ports:` by design: the app reaches Postgres over the Compose
-    # network; publishing would put the database on the host for nothing.
 
-  # The nightly dump — spec docs/specs/0014-scheduled-dump.md, decided in
-  # ADR-0009. It prunes, checks there is room, dumps, proves the archive decodes
-  # end to end, and leaves it in ./volumes/dumps for whatever the operator uses
-  # to take it off this machine. It never reaches off the host itself, and holds
-  # no credential the stack does not already have.
+  # Nightly dump — docs/specs/0014-scheduled-dump.md, ADR-0009.
   dump:
-    # The database's own image: pg_dump must match the server it dumps, which is
-    # a fact about `db` rather than about this service — hence the shared tag.
     image: *postgres-image
-    # `on-failure`, not `unless-stopped` like everything else here: a crash or a
-    # bad knob must come back, but DUMP_ENABLED=false exits 0 and has to STAY
-    # exited, so that turning dumps off reads as `Exited (0)` under
-    # `docker compose ps -a` rather than as another healthy-looking row.
+    # Not `unless-stopped`: DUMP_ENABLED=false exits 0 and must stay exited.
     restart: on-failure
     logging: *container-logging
     depends_on:
       db:
-        # A cold boot must not race initdb. This is also what ties the service
-        # to the bundled database: an operator running against their own
-        # Postgres deletes `db`, and deletes this service with it.
         condition: service_healthy
-    # The operator's own account, because the directory is theirs: whatever uid
-    # a container runs as, Docker creates a missing bind source root-owned, so
-    # no choice here rescues an absent directory — `mkdir -p` does, and then the
-    # files have to be readable to whatever collects them. Required rather than
-    # defaulted: 1000 would silently collide with `app`'s uid, and shared uids
-    # share bind-mount rights (see `caddy` below).
+    # The operator's own account so dumps stay readable to whatever collects them; required, not defaulted (1000 collides with `app`).
     user: "${DUMP_UID:?set DUMP_UID to the account owning ./volumes/dumps — `id -u`}:${DUMP_GID:?set DUMP_GID to that account's group — `id -g`}"
     environment:
-      # No password in the URL any more — PGPASSWORD below carries it, read by
-      # libpq (and so by pg_dump) whenever the URL's own password is absent.
+      # Password via PGPASSWORD, not the URL — libpq reads it when the URL has none.
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio@db:5432/portfolio}
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      # Recorded beside each dump, so the archive says which image wrote it —
-      # the half of a rollback that a dump alone cannot tell you.
       APP_VERSION: ${APP_VERSION:-1}
-      # `-` rather than `:-`: an *unset* knob takes the default, an explicitly
-      # empty one is passed through so the script can refuse it by name. With
-      # the colon form `DUMP_ENABLED=` would silently mean `true`.
+      # `-` not `:-`: an empty value passes through so the script refuses it by
+      # name; the colon form would read `DUMP_ENABLED=` as true.
       DUMP_ENABLED: ${DUMP_ENABLED-true}
       DUMP_AT: ${DUMP_AT-02}
       DUMP_KEEP_DAYS: ${DUMP_KEEP_DAYS-7}
       DUMP_COMPRESS: ${DUMP_COMPRESS-0}
-      # Pinned, not `${TZ:-UTC}` like the others: DUMP_AT is documented as a UTC
-      # hour, and inheriting the operator's zone would quietly move the window.
+      # Pinned, not ${TZ:-UTC}: DUMP_AT is a UTC hour.
       TZ: UTC
-    # An entrypoint rather than a command, because `docker compose run dump
-    # verify <file>` REPLACES the command — with the script as the command the
-    # image would try to execute `verify` itself. `sh` in front so a lost
-    # executable bit cannot break the deployment.
+    # Entrypoint, not command, so `compose run dump verify <file>` can replace it.
     entrypoint: ["sh", "/usr/local/bin/dump-loop.sh"]
     command: ["loop"]
     volumes:
-      # Long syntax for `create_host_path: false` on both, same as the gate's
-      # allowlist: a missing script or a missing dumps directory stops `up` with
-      # a message naming the path, rather than creating a root-owned directory
-      # this service then cannot write.
+      # create_host_path: false — a missing path stops `up` naming it, rather
+      # than creating a root-owned directory this service cannot write.
       - type: bind
         source: ./scripts/dump-loop.sh
         target: /usr/local/bin/dump-loop.sh
@@ -213,89 +97,47 @@ services:
           create_host_path: false
     networks:
       - backend
-    # No ports, no egress, and nothing written outside the bind above.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     read_only: true
     tmpfs:
-      # pg_dump's stderr is captured here; the archive itself is written
-      # straight into /dumps, never staged on a tmpfs — a cross-device `mv` is
-      # a copy, and a collector would see the half of it that had landed.
+      # pg_dump stderr only; the archive goes straight to /dumps, never staged
+      # here — a cross-device `mv` is a copy a collector could catch half-landed.
       - /tmp
     healthcheck:
-      # The age of the newest dump, not the last exit status: a run that
-      # succeeded three weeks ago exited 0 too. Nothing acts on the result —
-      # restart policies react to a process exiting, not to health — so this is
-      # for a human reading `docker compose ps`, and the marker files in
-      # ./volumes/dumps are what reach the operator's own monitoring.
       test: ["CMD", "sh", "/usr/local/bin/dump-loop.sh", "healthcheck"]
       interval: 5m
       timeout: 10s
       retries: 3
-      # A first dump on a large database takes minutes, and the directory is
-      # empty until it lands.
       start_period: 15m
   app:
-    # Pulled, never built here. Published to GHCR by ci.yml's `publish` job on
-    # a `v*` tag; the floating major puts every v1.x.y on `1` — set APP_VERSION
-    # to a full version to pin or roll back. Deliberately no `build:` stanza: a
-    # deploy that cannot reach the registry must fail loudly, not quietly build
-    # a multi-minute image on some NAS. Building is `compose.dev.yaml`'s job.
+    # No `build:` on purpose: a deploy that cannot reach the registry must fail
+    # loudly, not build for minutes on some NAS. compose.dev.yaml builds.
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
-    # What makes `up -d` an upgrade: under the default `missing` policy a
-    # floating tag is fetched once and never again — a new release would land
-    # only on machines that never ran the old one, silently.
+    # What makes `up -d` an upgrade: the default `missing` fetches a floating tag once only.
     pull_policy: always
     restart: unless-stopped
     logging: *container-logging
     depends_on:
       db:
-        # A cold boot must not fail on a startup race. `required: false`
-        # belongs in compose.external-db.yaml, not here: the bundled install
-        # this file describes on its own needs `db` to exist and reach
-        # healthy, full stop — that override is the one install where a
-        # reference to a service Compose profiled out has to still render.
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://portfolio@db:5432/portfolio}
-      # No password in the URL any more — read instead as PGPASSWORD by
-      # libpq (research note §4.1), same as `dump` above.
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      # One variable, two services — deliberately, not by accident. `gate`
-      # builds its Google redirect from this same value below; the app
-      # derives the lock's relying-party id from it (docs/adr/0012). Fail-
-      # closed like `gate`'s own required settings: a missing value names
-      # itself before any container starts, rather than the app crash-looping
-      # behind a Caddy that is already refusing everything.
+      # Also `gate`'s redirect base below, and the lock's relying-party id (ADR-0012).
       PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?missing PUBLIC_ORIGIN — see .env.example, the entry beside DATABASE_URL, not the gate section}"
-      # A fact in this file, not a switch: `gate` fronts the app, so the app
-      # must not draw its unprotected-instance banner. It still authenticates
-      # nobody — `server/config.ts` has the argument.
+      # `gate` fronts the app: suppresses the unprotected-instance banner, and
+      # authenticates nobody (server/config.ts).
       AUTH_GATE: external
       PORT: ${PORT:-3000}
       MARKET_TIMEZONE: ${MARKET_TIMEZONE:-America/New_York}
       TZ: ${TZ:-UTC}
-    # No `ports:`, same as `db` — only `caddy` faces outside; the app is
-    # reached at `app:${PORT}`. Writes nothing to its own filesystem;
-    # `read_only` enforces that rather than merely intending it.
     volumes:
-      # The worker's socket: since ticket 06's cutover, `app` dials it for
-      # every price fetch (app/lib/provider-socket.server.ts) instead of
-      # calling Yahoo in-process. `:ro`: the volume is `worker`'s one
-      # writable path, not `app`'s (research §8.3).
+      # `:ro` — this volume is `worker`'s one writable path, not `app`'s.
       - price-worker-sock:/run/price-worker:ro
-    # `backend` to reach `db`; `caddy-app` because that, not the default
-    # bridge, is now the only path `caddy` has to it. Neither carries a
-    # default route, so `app` has no route off these networks at IP level —
-    # forwarding needs `CAP_NET_ADMIN`, and `cap_drop: ALL` denies it, which
-    # is the part of requirement 1 this file actually closes. It is not the
-    # whole claim: spec 0018 §2.1 and §8 name the relay that remains — a
-    # compromised `app` still reaches `caddy` on `caddy-app`, and `caddy`
-    # proxies `/oauth2/*` to `gate`, which has egress — an application-layer
-    # path, known rather than closed. compose.external-db.yaml adds a third
-    # network, `external-db`, to installs that need one.
+    # Neither carries a default route off them at IP level; `app` still reaches `gate` through Caddy's `/oauth2/*` (spec 0018 §2.1).
     networks:
       - backend
       - caddy-app
@@ -317,68 +159,36 @@ services:
       retries: 5
       start_period: 20s
 
-  # The internet-facing half of spec 0018: `yahoo-finance2` behind a unix
-  # socket, same image as `app` with its `CMD` replaced by the worker
-  # entrypoint. Since ticket 06's cutover `app` above dials this socket for
-  # every price fetch instead of calling Yahoo in-process; no other container
-  # fetches a price. Ticket 08 (`egress-proxy`, below) took the route out
-  # away from this container entirely: `worker` now reaches Yahoo only
-  # through that proxy, over the `HTTPS_PROXY` set below, and has no
-  # resolver and no default route of its own. `gate` still has a route out
-  # of its own, on `egress-gate`, for its token exchange with Google, and its
-  # own comment below says so.
+  # yahoo-finance2 behind a unix socket — spec 0018. No resolver, no default route of its own.
   worker:
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
     pull_policy: always
-    # Also drops the image `CMD`: neither the migration step nor
-    # `react-router-serve` runs here, only the worker.
     entrypoint: ["node", "./server/price-worker.ts"]
     restart: unless-stopped
     logging: *container-logging
-    # No `depends_on`: no database, no other service — startup needs nothing
-    # to exist but the volume below, and Compose creates that itself.
     environment:
-      # Both the runtime's, never `server/config.ts`'s (spec 0018 §3.7,
-      # ticket 08): `server/egress-proxy.ts` reads no environment at all, and
-      # neither does this worker's own code — Node's `fetch`/undici is what
-      # consults these two, and only when `NODE_USE_ENV_PROXY` is exactly
-      # `1` (measured: unset or `0` routes direct). `app` sets neither — its
-      # calls to this worker travel the unix socket below, a path no proxy
-      # setting touches. Still no `DATABASE_URL`, no `PGPASSWORD`, no
-      # `MARKET_TIMEZONE`, and no `TZ` — the worker reads no clock, and the
-      # image already sets `TZ=UTC` (Dockerfile:94-96). `PRICE_WORKER_SOCKET`
-      # is a development-only knob (spec 0018 §3.3); this file wires it into
-      # neither service, so both `worker` and `app` run the fixed default
-      # path the healthcheck below also uses.
+      # Read by undici, never by server/config.ts, and only when
+      # NODE_USE_ENV_PROXY is exactly `1` (spec 0018 §3.7).
       NODE_USE_ENV_PROXY: "1"
       HTTPS_PROXY: http://egress-proxy:8888
     volumes:
       - price-worker-sock:/run/price-worker
     networks:
       - worker-proxy
-    # Hardening copied from `app` above: no-new-privileges, cap_drop: ALL,
-    # read_only; the image's `node` user (uid 1000, no `user:` line needed);
-    # no `ports:` — the worker has no TCP listener to publish. Plus the
-    # bounds `app` does not carry: this is the container the design expects
-    # to be compromised, and nothing today stops a fork bomb, a memory
-    # balloon, or a `dd` into an unsized `/tmp` from driving the host into
-    # the OOM killer, whose usual victim is Postgres.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     read_only: true
+    # This is the container the design expects to be compromised: unbounded, a
+    # fork bomb or memory balloon reaches the OOM killer, whose victim is Postgres.
     pids_limit: 64
     mem_limit: 256m
     tmpfs:
       - /tmp:size=64m
     healthcheck:
-      # GET /healthz over the socket, run as the container's own uid — the
-      # right party to prove the socket's permissions (research §8.10).
-      # Nothing restarts an unhealthy container; this is for a human reading
-      # `docker compose ps`. "unhealthy" here means the worker is not
-      # accepting requests on its socket — never "Yahoo is failing": a Yahoo
-      # outage still answers `/healthz` fine.
+      # Over the socket as the container's own uid — the right party to prove the
+      # socket's permissions. Unhealthy = not accepting requests, never "Yahoo down".
       test:
         - CMD
         - node
@@ -389,34 +199,16 @@ services:
       retries: 3
       start_period: 10s
 
-  # `worker`'s only way out — spec 0018 §3.7, ticket 08. A ~150-line
-  # `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`
-  # (server/egress-proxy.ts), admitting exactly the five Yahoo hosts
-  # `yahoo-finance2` 4.0.2 contacts, and only once the TLS ClientHello inside
-  # the tunnel names that same host — the module's own header carries the
-  # allowlist and the ordering argument (the `200` is written before the
-  # hello is ever read, so a mismatch fails at the TLS layer, not with a
-  # `403`). Same image as `app` and `worker` above, `CMD` replaced a third
-  # way. Yes, this service and the `egress-proxy` network below share a
-  # name — the ticket's own choice, not a typo here.
+  # `worker`'s only way out — spec 0018 §3.7. CONNECT-only, five Yahoo hosts, ClientHello must match (server/egress-proxy.ts).
   egress-proxy:
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
     pull_policy: always
     entrypoint: ["node", "./server/egress-proxy.ts"]
     restart: unless-stopped
     logging: *container-logging
-    # A compromised worker can flood this with refusals; still bounded by
-    # the same 30 MB *container-logging caps everything else at.
     networks:
       - worker-proxy
       - egress-proxy
-    # Hardening identical to `worker`'s: no-new-privileges, cap_drop: ALL,
-    # read_only, the image's `node` user (uid 1000, no `user:` line needed),
-    # and the same bounds ticket 05 settled on for `worker` — this container
-    # is reachable from a compromised `worker` over `worker-proxy`, so it
-    # gets no more trust than the thing it fences. No `ports:`: nothing
-    # outside `worker-proxy` ever dials it, and the healthcheck below asks
-    # its own `:8888`, in-container.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -427,11 +219,7 @@ services:
     tmpfs:
       - /tmp:size=64m
     healthcheck:
-      # GET /healthz, not a bare connect: with all eight `maxConnections`
-      # slots held by stalled tunnels the accept queue still completes a TCP
-      # handshake, so only a request the HTTP server itself answers proves
-      # the proxy is not saturated — the same reasoning `worker`'s own
-      # healthcheck above is built on.
+      # A request, not a bare connect: with all eight `maxConnections` held by stalled tunnels, the accept queue still completes a handshake.
       test:
         - CMD
         - node
@@ -443,103 +231,61 @@ services:
       start_period: 10s
 
   gate:
-    # oauth2-proxy: the forward-auth sidecar `caddy` asks before any request
-    # reaches `app` (Caddyfile). Pinned to an exact release — unlike `app`,
-    # nobody watches this image for breaking changes, and it guards everything.
-    # `-alpine` because the default distroless image has no wget for the
-    # healthcheck (a healthcheck runs inside the container it checks).
-    # Stateless — the session is an encrypted browser cookie — hence no volume.
+    # Pinned exactly: nobody watches this image and it guards everything.
+    # `-alpine` because the distroless default has no wget for the healthcheck.
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
     restart: unless-stopped
     logging: *container-logging
     environment:
       OAUTH2_PROXY_PROVIDER: google
-      # Fail-closed: `:?` is evaluated before any container starts, so a
-      # missing credential is a message naming the variable, not a sidecar
-      # crash-looping behind a Caddy already refusing everything on :80.
       OAUTH2_PROXY_CLIENT_ID: "${GATE_CLIENT_ID:?missing GATE_CLIENT_ID — see the gate section of .env.example}"
       OAUTH2_PROXY_CLIENT_SECRET: "${GATE_CLIENT_SECRET:?missing GATE_CLIENT_SECRET — see the gate section of .env.example}"
       OAUTH2_PROXY_COOKIE_SECRET: "${GATE_COOKIE_SECRET:?missing GATE_COOKIE_SECRET — see the gate section of .env.example}"
-      # Google redirects the *browser* here: the origin the house proxy serves,
-      # never a compose-network address — and character-for-character the
-      # redirect URI registered on the OAuth client, or Google refuses.
+      # Character-for-character the redirect URI registered on the OAuth client.
       OAUTH2_PROXY_REDIRECT_URL: "${PUBLIC_ORIGIN:?missing PUBLIC_ORIGIN — see .env.example, the entry beside DATABASE_URL, not the gate section}/oauth2/callback"
-      # The default 127.0.0.1:4180 is unreachable from `caddy` inside a container.
+      # The default 127.0.0.1:4180 is unreachable from `caddy`.
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
-      # Believe Caddy's X-Forwarded-* headers — without it the sidecar builds
-      # sign-in redirects from the container-internal host. Also what makes the
-      # missing `ports:` below load-bearing: the sidecar trusts these headers
-      # from whatever reaches it, so "only Caddy can" has to hold.
+      # Trusts X-Forwarded-* from whatever reaches it — what makes the missing
+      # `ports:` below load-bearing.
       OAUTH2_PROXY_REVERSE_PROXY: "true"
-      # X-Auth-Request-Email on the /oauth2/auth response; the Caddyfile copies
-      # it onto the forwarded request. The app ignores it today: attribution
-      # for later, never permission.
+      # X-Auth-Request-Email, copied on by the Caddyfile. Attribution, never permission.
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
-      # Skip the sidecar's own sign-in page — the only sign-in screen is Google's.
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
-      # The entire authorization policy, one address per line. `email_domains`
-      # deliberately unset: the narrowest domain admitting the family admits
-      # every other Gmail account on earth.
+      # The entire authorization policy. `email_domains` unset on purpose: the
+      # narrowest domain admitting the family admits every Gmail account on earth.
       OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/allowed-emails.txt
-      # Spelled out, not inherited — the image leaves SameSite unset. SameSite=Lax
-      # is the instance's entire CSRF posture, and it still is: the app's own
-      # lock (ADR-0012, app/lib/lock.server.ts) issues a cookie of its own now,
-      # but that one is SameSite=Lax too, for the identical reason — a `Strict`
-      # grant cookie would be withheld on the gate's own cross-site sign-in
-      # bounce and re-lock every browser on its schedule. Secure restates a
-      # deployment claim: the browser only meets this instance over the house
-      # proxy's TLS. Expiry keeps the seven-day default, which makes sign-in
-      # once per device.
+      # Lax, not Strict: a Strict cookie is withheld on the bounce back from Google.
       OAUTH2_PROXY_COOKIE_SAMESITE: lax
       OAUTH2_PROXY_COOKIE_SECURE: "true"
       TZ: ${TZ:-UTC}
     volumes:
-      # Long syntax purely for `create_host_path: false`: the short form
-      # creates a *directory* at a missing source path — a crash-looping
-      # sidecar plus a junk dir. This way a missing allowlist stops `up` with
-      # a message, like every other missing input.
+      # create_host_path: false — the short form creates a *directory* at a
+      # missing source: a crash-looping sidecar plus a junk dir.
       - type: bind
         source: ./allowed-emails.txt
         target: /etc/oauth2-proxy/allowed-emails.txt
         read_only: true
         bind:
           create_host_path: false
-    # `caddy-gate` to be reached by `caddy`; `egress-gate` for the one call
-    # this sidecar makes outbound, the token exchange against
-    # `www.googleapis.com` (`accounts.google.com` is the browser's own
-    # redirect, never a connection from this container). Neither network
-    # reaches `app`, `db` or `worker`. `egress-gate` is a plain bridge, so
-    # the residual is the same one the worker's own comment states plainly:
-    # unrestricted egress and, through the bridge's gateway, a route to the
-    # host and so to every host service bound on `0.0.0.0` — worth naming
-    # here because this is the container that runs as root and is the one
-    # thing in the stack that faces Google.
+    # Neither reaches `app`, `db` or `worker`. `egress-gate` is a plain bridge, unrestricted
+    # egress plus a route to the host — worth naming because this is the one container running as root.
     networks:
       - caddy-gate
       - egress-gate
-    # No `ports:` — here enforcement, not tidiness (see REVERSE_PROXY above).
-    # Read-only like `app`: no state on disk, failing loudly if that changes.
-    # It DOES run as root, unlike `app`: the published image sets no USER, and
-    # pinning one would silently decide the allowlist's file mode on the
-    # operator's behalf — discovered as a sidecar that won't start. Root in a
-    # read-only container with no port and no volume is the smaller risk.
+    # Root, unlike `app`: the image sets no USER, and pinning one would decide the
+    # allowlist's file mode on the operator's behalf.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Root's power to open a file it does not own IS this capability. Without
-    # it cap_drop ALL breaks the promise above (allowlist of any mode/owner):
-    # measured as the sidecar crash-looping on `failed opening
-    # authenticated-emails-file: permission denied`. Nothing else here needs a
-    # capability — a Go binary on a high port.
+    # Root's power to open a file it does not own IS this capability; without it
+    # the sidecar crash-loops on `failed opening authenticated-emails-file`.
     cap_add:
       - DAC_READ_SEARCH
     read_only: true
     tmpfs:
       - /tmp
     healthcheck:
-      # `/ping`: the sidecar's own liveness endpoint, not routed through Caddy
-      # — reachable only from inside this container.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4180/ping"]
       interval: 10s
       timeout: 5s
@@ -550,34 +296,20 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     logging: *container-logging
-    # Own uid, not the app's 1000: shared uids share bind-mount rights, and the
-    # one LAN-reachable service is the worst to join. 65532 = the distroless
-    # "nonroot" convention; nothing in this image owns it.
+    # Own uid, not `app`'s 1000 — shared uids share bind-mount rights, and this is the worst service to join. 65532 = distroless "nonroot".
     user: "65532:65532"
     depends_on:
       app:
         condition: service_healthy
-      # Caddy refuses whatever the gate hasn't vouched for, so opening the
-      # front door early means down-not-open — still worth avoiding.
       gate:
         condition: service_healthy
     environment:
-      # Substituted into the Caddyfile; kept in sync with the app's listen port.
       APP_PORT: ${PORT:-3000}
-    # The only published port — the single place the gate can be enforced.
-    # Plain HTTP: TLS and the public hostname belong to the operator's
-    # house-wide Caddy in front.
-    #
-    # Host side stays 80 (the daemon binds it, not this uid); container side
-    # is 8080, the Caddyfile's site address. Change one, change both.
+    # The only published port, so the only place the gate can be enforced. Plain HTTP — TLS and hostname belong to the house-wide Caddy in front.
     ports:
       - "80:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    # `caddy-app` to reach `app`, `caddy-gate` to consult `gate` on every
-    # request (forward_auth, Caddyfile), `ingress` to carry the published
-    # port. Caddy makes no outbound call of its own — no `tls`, no ACME, a
-    # bare `:8080` site (Caddyfile:27) — so `ingress` needs nothing else.
     networks:
       - caddy-app
       - caddy-gate
@@ -586,25 +318,15 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Not for binding — 8080 needs nothing. The image ships /usr/bin/caddy
-    # with file capability cap_net_bind_service=ep, and the kernel refuses to
-    # exec a binary whose effective file caps the bounding set cannot supply:
-    # with ALL dropped the container dies at `exec … operation not permitted`
-    # before reading any config. Granted back, it goes unused on a high port.
+    # Not for binding — 8080 needs nothing. /usr/bin/caddy's file capability cap_net_bind_service=ep needs it in the bounding set to exec.
     cap_add:
       - NET_BIND_SERVICE
     read_only: true
     tmpfs:
-      # XDG_CONFIG_HOME / XDG_DATA_HOME: autosave.json and the cert cache land
-      # here. mode is load-bearing — a tmpfs inherits its mount point's mode,
-      # and both dirs are root 0755 in-image, unwritable to the pinned uid.
-      # Functionally optional (read-only caddy still serves); they buy clean logs.
+      # Both dirs are root 0755 in-image; a tmpfs inherits that mode, so the pinned uid could not write them otherwise. Buys clean logs only.
       - /config:mode=1777
       - /data:mode=1777
     healthcheck:
-      # One request proves config adapted, port bound, and the proxy path to
-      # `app` — /healthz is the only route answering without a Google session.
-      # busybox wget, same trick as `gate`; a 5xx exits non-zero.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
@@ -612,59 +334,16 @@ services:
       start_period: 10s
 
 volumes:
-  # The cluster lives at ./volumes/db/data, beside the checkout, rather than in
-  # an opaque directory under /var/lib/docker: one path to snapshot, move
-  # between machines, or point a backup at.
-  #
-  # A bound *name* rather than a plain bind mount, for the one thing a bind
-  # cannot do — ownership. `db` runs as 70:70 and Docker creates a missing bind
-  # source root-owned 0755, which stops initdb dead ("could not change
-  # permissions of directory ... Operation not permitted"). A volume mounted
-  # over an *empty* directory takes the image's ownership and mode for it
-  # (70:70, 1777) before Postgres looks, so `mkdir -p ./volumes/db/data` is the
-  # whole setup and wants no root. Empty is load-bearing: any file in there
-  # first — a .gitkeep, a half-copied backup — skips that step and initdb
-  # refuses the directory.
-  #
-  # Not called db-data any more: reusing that name over an existing instance's
-  # volume makes `up` stop and offer to recreate it (destroying it). The old
-  # volume is left alone instead; docs/operating.md has the one-time copy.
+  # Bound name, not a bind, for ownership: an *empty* dir takes the image's 70:70 before initdb looks. Not `db-data` — that name over an existing volume makes `up` offer to destroy it.
   db-store:
     driver: local
     driver_opts:
       type: none
       o: bind
-      # Relative to this file — Compose resolves it against the project
-      # directory, and has since 1.27.4. The directory must exist: a missing one
-      # fails the mount naming the path, rather than quietly starting an
-      # instance whose data goes somewhere else.
+      # Resolved against the project directory. Must already exist.
       device: ./volumes/db/data
 
-  # A tmpfs, not `local`'s bind form like `db-store` above: the socket file is
-  # the only content this ever holds, and it must not outlive the host — a
-  # data volume here would be a lie about what's worth keeping.
-  #
-  # `uid=1000,gid=1000` because `app` and `worker` both run as the image's
-  # `node` user (research §8.4), so the socket the worker creates at `0660`
-  # inside this `0770` directory is connectable by uid 1000 or gid 1000 — and
-  # by root regardless, through `CAP_DAC_OVERRIDE` (research §8.5). The mode
-  # is not the fence: `app`'s mount is `:ro` (line 281), so it cannot `chmod`
-  # the directory or unlink the socket — a read-only mount refuses both with
-  # `EROFS` before any ownership check runs. The fence is still the mount
-  # set: only `app` and `worker` mount this volume at all, which
-  # scripts/smoke-test.sh asserts.
-  #
-  # `size=1m`: a socket needs no blocks, and a *data*-full tmpfs would not
-  # stop `bind()` anyway — the failure modes that do are spent inodes
-  # (`nr_inodes` defaults from RAM, not from `size`) or a directory squatting
-  # the path (research §8.8). Either is a refresh outage recovered by
-  # recreating the volume, never a data loss.
-  #
-  # `driver_opts` are read once, at creation, and a name-matched volume is
-  # reused untouched (research §8.2) — so, exactly as for `db-store` above, a
-  # release that changes the `o:` string below changes this volume's *name*,
-  # never `docker compose down -v`, which would take `db-store`'s record with
-  # it too.
+  # tmpfs, not a bind: socket must not outlive the host. uid/gid 1000 is `app`/`worker`'s node user; the mount set is the fence (`app` mounts `:ro`, scripts/smoke-test.sh asserts it). `driver_opts` read once at creation — changing `o:` needs a new volume *name*, never `down -v`.
   price-worker-sock:
     driver: local
     driver_opts:
@@ -673,56 +352,12 @@ volumes:
       o: "size=1m,uid=1000,gid=1000,mode=0770"
 
 networks:
-  # Every service above carries an explicit `networks:` list now; none is
-  # left on the implicit `default` bridge. `enable_ipv6: false` is written on
-  # all seven rather than left to the daemon's default, which an unset value
-  # would hand off install to install.
-  #
-  # `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are
-  # `internal: true`: no default route, and the daemon drops traffic
-  # forwarded to or from any other network. Each also carries
-  # `gateway_mode_ipv4: isolated`, which closes the escape an internal
-  # bridge otherwise still keeps: without it, every container on the network
-  # gets an address on the host and can reach it — a route to whatever else
-  # the house binds on `0.0.0.0`, a reverse proxy, SSH, a resolver on `:53`
-  # — isolated or not. Docker Engine 28.0 is needed for
-  # `gateway_mode_ipv4: isolated` to take effect at all, fresh network or
-  # existing one alike — 26 ignores the option silently, 27 refuses it
-  # outright. Docker Compose 2.31.0 or newer is the separate floor for an
-  # *existing* plain bridge specifically: only that Compose recreates one
-  # whose definition drifted, rather than leaving it plain (the header above
-  # has the argument for both, and why this release does not yet need the
-  # second one).
-  #
-  # `backend` is `db` and `dump`'s only network, and `app`'s first — the
-  # database reaches nothing, by construction rather than by firewall rule.
-  # `caddy-app` and `caddy-gate` are kept apart on purpose, never one network
-  # carrying both `app` and `gate`: it closes the direct `gate:4180` path a
-  # shared network would otherwise give `app` — the container this design
-  # distrusts most. It does not make the Caddyfile's `trusted_proxies`
-  # invariant true on its own: `trusted_proxies static private_ranges`
-  # (Caddyfile:19) believes any private address, and `app`'s own bridge
-  # address is private, so `app` can still forge `X-Forwarded-*` *through*
-  # Caddy. The split's real gain is narrower — removing the direct route to
-  # `gate` — and that is the only claim made for it.
-  #
-  # `worker-proxy` is `worker` and `egress-proxy`'s shared network, `worker`
-  # alone on it. Unlike the plain `egress-worker` bridge it replaces, it
-  # allocates no gateway either — closing the one path out of ticket 07's
-  # fence that release still left open: any container with a route to the
-  # host still reached the host's *published* ports, so `worker` reached
-  # Caddy's `:80` on `egress-worker` regardless of the gate. `worker`'s only
-  # way anywhere now is the `CONNECT` tunnel `egress-proxy` (the service)
-  # answers on this same network, and `worker` shares no network at all with
-  # `app`, `gate` or `db` — unreachable from each by name and by IP, both
-  # asserted in scripts/smoke-test.sh.
-  #
-  # `egress-proxy`, `egress-gate` and `ingress` are plain bridges: carrying a
-  # default route is the point of the first two, and the third is only where
-  # the published port lives. `egress-proxy` (the network — the service
-  # sharing its name is the ticket's own choice, spec 0018 §3.7) is
-  # `egress-proxy`'s one route to Yahoo's edge; `egress-gate` is `gate`'s,
-  # for its token exchange with Google.
+  # Docker Engine 28.0+ required and load-bearing: 26 ignores `gateway_mode_ipv4` silently, 27 refuses it.
+  # Without it every container on an `internal` network still gets a host route. scripts/smoke-test.sh checks the floor.
+  # `caddy-app`/`caddy-gate` kept apart to deny `app` a direct route to `gate:4180` — `trusted_proxies static private_ranges`
+  # (Caddyfile:19) still lets `app` forge X-Forwarded-* through Caddy.
+  # `worker-proxy` allocates no gateway, so `worker` cannot reach the host's published ports either.
+  # Plain bridges (`egress-proxy`, `egress-gate`, `ingress`) carry the default route or published port these deny.
   backend:
     internal: true
     enable_ipv6: false

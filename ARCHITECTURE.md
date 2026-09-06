@@ -382,8 +382,8 @@ grep. They come in three tiers.
 
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
-| Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. The price worker builds none at all — its whole import set (`server/price-worker.ts:16-23`) is `node:http`, `node:fs/promises`, `zod`, `./config.ts`, `./yahoo-client.ts` and `./symbol-pattern.ts`: no `pg`, no Kysely, nothing under `app/`. |
-| Importing `yahoo-finance2` | `server/yahoo-client.ts:121` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
+| Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. The price worker builds none at all — its whole import set (`server/price-worker.ts:7-17`) is `node:http`, `node:fs/promises`, `zod`, `./config.ts`, `./yahoo-client.ts` and `./symbol-pattern.ts`: no `pg`, no Kysely, nothing under `app/`. |
+| Importing `yahoo-finance2` | `server/yahoo-client.ts:47` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
 | Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). The price worker writes no price at all — it holds no database credential and answers only what it is asked (spec 0018 §2.5). |
 | Enforcing the lock | `app/root.tsx`'s `middleware` export — `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it — the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
 | Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes — which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. |
@@ -392,8 +392,8 @@ grep. They come in three tiers.
 
 | Invariant | The owner | The obligation |
 |---|---|---|
-| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. Two variables sit outside this rule entirely, by design: `PGPASSWORD` (`compose.yaml:178`, `:265`) is read by libpq, inside the driver, and `NODE_USE_ENV_PROXY`/`HTTPS_PROXY` (`compose.yaml:353-354`) by Node's own `fetch`/undici — neither `server/config.ts` nor any application code reads either. |
-| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
+| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. Two variables sit outside this rule entirely, by design: `PGPASSWORD` (`compose.yaml:71`, `:265`) is read by libpq, inside the driver, and `NODE_USE_ENV_PROXY`/`HTTPS_PROXY` (`compose.yaml:172-173`) by Node's own `fetch`/undici — neither `server/config.ts` nor any application code reads either. |
+| The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:42`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
 | Settling the owner-filter reading — the address, the roster, `reading` | `app/lib/owner-reading.server.ts` | The four owner-filter screens call `ownerReading` once, first, for the settled address and for `reading` — what a household-scoped reader on that screen narrows by. The module does not call the household-scoped readers itself: the obligation is on the callers, which still take the owner filter as a required, undefaulted first argument by hand (the "Whose money a screen is reading" row below) and pass `reading` to it — or, for the chart's reads, name it to the module that makes them, which §6.3 sets out — so whose money a loader reads stays visible in review rather than hidden inside this one. |
@@ -402,13 +402,13 @@ grep. They come in three tiers.
 
 | Invariant | The primitive | The exceptions |
 |---|---|---|
-| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:276` rounds the overflow-guard product inline instead of calling `divide`. |
+| Money representation and its rounding | `app/lib/money.ts` | Several modules do `BigInt` arithmetic on `money.ts`'s units, which is the intent. What is meant to exist once is the *rounding rule*, and it is spelled twice: `positions.server.ts:125` rounds the overflow-guard product inline instead of calling `divide`. |
 | Valuing holdings | `app/lib/valuation.server.ts` over `holding_valued` | The ones below, each real. The failure this guards is the one DESIGN.md §8.2 names as the weakest point in the design: two pages showing different totals, with no error anywhere. |
 | Whose money a screen is reading | The readers' own signatures — the **owner filter** is a required first argument with no default on every household-scoped read (ADR-0008, and §6.3 on where the narrowing then goes) | The account-scoped readers, which do not take it because an account already has exactly one owner, and `manualNetWorth` and `latestObservedSession`, which are out for their own reasons — both given in `manualNetWorth`'s own docstring, where the line falls. Three household-scoped reads keep the signature but are no longer called by the screen: `chart-series.server.ts` makes them, off a filter the loader still names, and §6.3 gives the shape. The argument cannot make the filter impossible to skip — a new screen can pass `ALL_OWNERS` and draw no control — only **visible in review** rather than invisible by omission, which is the most a signature can do. The same trick, for the same reason, as the chart's required `masked` prop. |
 
 **The valuation exceptions, stated rather than buried:**
 
-- `prices.server.ts:1264` (`priceFreshness`) selects from `holding_valued` — not to value anything,
+- `prices.server.ts:783` (`priceFreshness`) selects from `holding_valued` — not to value anything,
   but to scope the "as of" line to instruments held in an open account, filtered to `price_source =
   'feed'`. It reads `quote.as_of` and counts distinct instruments; it computes no money.
 - `prices.server.ts` (`selectBackfillCandidates`, `backfillGaps`) each hand-write the join over
@@ -419,12 +419,12 @@ grep. They come in three tiers.
   is a fact about the instance's price history rather than about anyone's net worth, and Settings is
   household-wide as `listAccounts` is (ADR-0008 scopes the *readers of holdings' value*, which these
   are not).
-- `uploads.server.ts:584` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
+- `uploads.server.ts:389` (`valueAt`) computes `quantity × price` **in JavaScript**, for the review
   diff's Value column — a row the account does not hold yet has no `holding_valued` row to compute it
   in. It deliberately mirrors the view's digits (units of 10⁻¹² divided back to 10⁻⁴, half away from
   zero) and is never summed into a total. This is the one place a valuation figure is produced outside
   the view, and it is worth watching.
-- `valuation.server.ts:687` (`readSessionSeries`) values holdings from `price_observation` rather
+- `valuation.server.ts:417` (`readSessionSeries`) values holdings from `price_observation` rather
   than through `holding_valued` — the 1D chart's line, and the only valuation anywhere that reads the
   observation log. Not an escape from the invariant but an extension of it: the same module owns
   both, so the rule stays "one module values holdings" rather than becoming "one view does". It
@@ -446,8 +446,8 @@ a real boundary, not a naming preference:
   screen component call `allocationBy()` on loader data, and the upload wizard render its
   asset-class options from the same list the resolver validates against.
 
-**One file breaks this today.** `app/lib/statement.ts:32` imports `recordedDate` from
-`input.server.ts` as a **value**, not a type, and uses it at `:608`. It stays out of the client bundle
+**One file breaks this today.** `app/lib/statement.ts:15` imports `recordedDate` from
+`input.server.ts` as a **value**, not a type, and uses it at `:460`. It stays out of the client bundle
 only because `parseStatement` is reachable from loaders and actions alone and is tree-shaken away;
 nothing enforces that. A component-side call to `parseStatement` would drag `input.server.ts` across
 the boundary. Worth fixing before that happens rather than after.
@@ -456,7 +456,7 @@ the boundary. Worth fixing before that happens rather than after.
 
 A representative read — `GET /holdings?owner=2&group=account` — end to end. The parameter order
 matters: `toSearch` builds a canonical search string, and a URL that does not match it is bounced
-before any database work happens (`holdings.tsx:144`), so `?group=account&owner=2` would 302 first.
+before any database work happens (`holdings.tsx:75`), so `?group=account&owner=2` would 302 first.
 
 ```mermaid
 sequenceDiagram
@@ -501,7 +501,7 @@ Three properties of this path are deliberate:
 2. **Filtering and grouping are pure functions over one array**, not seven new SQL predicates. The
    screen's table and the subtotals under it are computed from the same rows, so agreement is
    structural rather than something to keep true. Nothing the table displays costs a second query;
-   an open `?edit=` row costs exactly one more read (`holdings.tsx:257`), for the date the correction
+   an open `?edit=` row costs exactly one more read (`holdings.tsx:148`), for the date the correction
    will be filed under.
 3. **Numbers never become numbers.** The rows leave Postgres as decimal strings and stay that way
    through grouping, subtotalling and rendering.
@@ -518,14 +518,14 @@ rather than a number to notice.
 | Commit an upload | `uploads.server.ts` → `commitUpload` | `position_set` + `holding`s, deletes the draft, captures `account.external_account_number` when still null | Yes — a new set |
 | Set a balance | `balances.server.ts` → `setBalance` | `position_set` + one `USD` `holding` | Yes — a new set |
 | Correct a position | `positions.server.ts` → `revisePosition` | `position_set` + the whole account copied forward with one row changed | Yes — a new set |
-| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:639`) |
+| Resolve an instrument | `instrument-resolution.server.ts` → `resolveAll` | `classification`, `instrument`, `instrument_alias` | Yes, with one compensating delete: an instrument that loses the alias race is removed rather than left as a duplicate (`instrument-resolution.server.ts:528`) |
 | Refresh quotes | `prices.server.ts` → `refreshQuotes` | `quote` (upsert), `price_daily` (upsert), `instrument.quote_type` | No — the intraday tier is overwritten by design |
 | Backfill closes | `prices.server.ts` → `backfillCloses` | `price_daily` (insert where absent), `price_backfill` | Yes — it fills what is absent and never rewrites a close the instance recorded live (ADR-0011) |
 
 **This is not every write in the application.** The management surface updates rows in place, as
-CRUD should: `accounts.server.ts:246` edits an account and `:376` closes one, `people.server.ts:213`
-renames a person and `:248` deletes one outright when they own no accounts, `settings.server.ts:88`
-writes the tax rate, `column-mapping.server.ts:96` upserts a saved mapping, and `uploads.server.ts`
+CRUD should: `accounts.server.ts:161` edits an account and `:238` closes one, `people.server.ts:117`
+renames a person and `:138` deletes one outright when they own no accounts, `settings.server.ts:29`
+writes the tax rate, `column-mapping.server.ts:50` upserts a saved mapping, and `uploads.server.ts`
 inserts, updates and sweeps drafts. The append-only rule is a rule about **history**, not about the
 database: a position set, once written, is never edited, because `holding_valued_at` reads it for
 every date the chart plots.
@@ -568,8 +568,8 @@ as-of function, or any total.
 
 There is exactly one place the sign is read: the allocation denominator. A slice's share is computed
 against the gross *positive* total rather than the net, because $8,000 of debt and $8,000 of assets
-are not the same slice of anything (argued at `allocation.ts:45-52`, applied in `allocateShares` at
-`:216-250`), and the Analysis screen prints that caveat to the reader.
+are not the same slice of anything (argued at `allocation.ts:12-13`, applied in `allocateShares` at
+`:56-90`), and the Analysis screen prints that caveat to the reader.
 
 Four seed rows in `migrations/0001_initial_schema.sql` are what make this hold end to end: a `Cash`
 classification, a `USD` instrument with `price_source = 'fixed'`, a `quote` of `1.00`, and — the
@@ -731,7 +731,7 @@ split is exact and each side is a decision:
 **Which half of this table the application ever triggers is a rule, not a count to keep current by
 hand.** Above `unlock_grant`'s own row, every referencing delete describes something no screen
 performs: a person who owns no accounts (`people.server.ts`'s `removePerson`) and a just-created, never-held
-instrument that lost an alias race (`instrument-resolution.server.ts:639`) are the only two
+instrument that lost an alias race (`instrument-resolution.server.ts:528`) are the only two
 application deletes reaching that half, there is no account delete and no position-set delete
 anywhere in `app/`, and the rest is a standing guarantee about someone with a `psql` session, not
 about a screen. `passkey` and `unlock_grant` (§4.8) are the other half, and the application deletes
@@ -781,7 +781,7 @@ generated always as identity` precisely so that "tie-break by id descending" mea
 wins" — a random UUID would make it arbitrary. The ordering matches `position_set_account_as_of_idx`
 exactly, so this is an index scan stopping at the first row.
 
-One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:1180`) needs the
+One caller re-states that ordering on purpose. `uploadReceipt` (`uploads.server.ts:812`) needs the
 *predecessor* of a given set — "what did this account hold before this upload landed" — which the
 function cannot express, so it repeats the `order by` with a citation back to it. That is the only
 second copy, and it is the exception that keeps "defined once" meaningful rather than aspirational.
@@ -826,7 +826,7 @@ anywhere.
 | `position_set_account_as_of_idx` | `(account_id, as_of_date desc, created_at desc, id desc)` | `latest_position_set` — matched exactly, so the tie-break is an index scan stopping at row one. The index every valuation read goes through. |
 | `holding_one_row_per_instrument` | unique `(position_set_id, instrument_id)` | The lot-folding contract: a statement exporting one fund as three tax lots must arrive as **one** holding (`foldLots` in `statement.ts`). Also the `Index Cond` every valuation read resolves `latest_position_set` into, since `0011_latest_position_set_cost.sql` priced the call out of a hash join. |
 | `holding_instrument_id_idx` | `(instrument_id)` | The instrument → holdings direction: which accounts hold this fund. |
-| `instrument_symbol_idx` | `(symbol)` | Resolving which row is cash (`current-statement.server.ts:80-86`) — on every `setBalance` write, and on every kind change into a kind that holds one balance. The lookup conjoins `price_source = 'fixed'`, which no index covers; `symbol` is the selective half. Also the refresh loop's `order by symbol`, which never looks a symbol up by value — it selects all feed instruments and matches in memory. |
+| `instrument_symbol_idx` | `(symbol)` | Resolving which row is cash (`current-statement.server.ts:30-36`) — on every `setBalance` write, and on every kind change into a kind that holds one balance. The lookup conjoins `price_source = 'fixed'`, which no index covers; `symbol` is the selective half. Also the refresh loop's `order by symbol`, which never looks a symbol up by value — it selects all feed instruments and matches in memory. |
 | `instrument_alias_instrument_id_idx` | `(instrument_id)` | Which raw strings point at this instrument. |
 | `account_owner_id_idx` | `(owner_id)` | Grouping by person. |
 | `instrument_classification_id_idx` | `(classification_id)` | Grouping by classification and asset class. |
@@ -838,7 +838,7 @@ anywhere.
 
 ### 5.6 The numeric boundary
 
-The single most consequential line of infrastructure in the codebase is in `server/db.ts:43-47`:
+The single most consequential line of infrastructure in the codebase is in `server/db.ts:11-15`:
 
 ```ts
 const STRING_TYPE_OIDS = [
@@ -883,10 +883,10 @@ Three rules follow, and the codebase holds all three:
 
 - **Never `Number()`, `parseFloat`, or JSON round-trip a money value.** Almost every `Number()` call
   in `app/lib` is on a cardinality — a row count, a header index, a clock minute. There are exactly
-  two deliberate exceptions, and both are narrow enough to state: `format.ts:203` (`toPlotValue`)
+  two deliberate exceptions, and both are narrow enough to state: `format.ts:139` (`toPlotValue`)
   floats a money value to position a chart point, where the result is multiplied by a pixel height
   and rounded to a screen coordinate — never use it for a figure that is shown, compared or summed;
-  and `price-provider.server.ts:269` floats a yield or a per-share dividend rate only to decide
+  and `price-provider.server.ts:99` floats a yield or a per-share dividend rate only to decide
   whether the column it is bound for can hold it, returning the original string when it fits and
   null when it does not.
 - **Do the arithmetic in SQL, or on `money.ts`'s units.** There is no third option and no decimal
@@ -955,7 +955,7 @@ button and a bookmarked half-finished upload all behave, and it is why the mappi
 delimiter rather than letting a second sniff reach a different verdict.
 
 **Lots are folded twice, for different reasons.** `parseStatement` folds by the *raw string*, so three
-tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:683`) folds
+tax-lot rows of one fund collapse into one position. `assembleDiff` (`uploads.server.ts:413`) folds
 again by the *resolved instrument*, so two spellings of one fund — `FCASH` and `CASH & CASH
 INVESTMENTS` — collapse once the alias table says they are the same thing. The parser cannot do the
 second fold because it does not know about aliases.
@@ -977,7 +977,7 @@ Two invariants everything downstream leans on:
 
 **`parseStatement` returns refusals as data, not throws.** Each problem carries the row and the column
 that caused it. The *column* is what the screen uses structurally — `problemFieldsOf`
-(`columns.tsx:213`) marks the offending `<select>` as invalid, because remapping is the fix; the row
+(`columns.tsx:179`) marks the offending `<select>` as invalid, because remapping is the fix; the row
 travels inside the message the reader sees ("on line 12"). A thrown error could name only the first
 fault, and a screen cannot point at a stack trace.
 
@@ -985,7 +985,7 @@ Problems present means the file must not be committed. Whether anything is still
 what went wrong, and the distinction matters: a *row's* problem does not discard the rows around it,
 so the screen has something to show beside the complaint. A problem with the **mapping itself** — a
 required column not named, a column name the header row does not carry — returns no positions at all
-(`statement.ts:322`), because nothing below it could be trusted. The second case is the ordinary
+(`statement.ts:192`), because nothing below it could be trusted. The second case is the ordinary
 one: a saved mapping meeting a renamed column.
 
 #### The step machine
@@ -1025,7 +1025,7 @@ be a fifth step nobody asked to stand on.
 belonging-to-a-closed-account all reach the same expired-or-recorded boundary, because the reader's
 next move — start again from `/upload` — is the same in every case. The one variation is deliberate: a
 re-POSTed review knows which account the statement already landed in, so it throws
-`data({ accountId }, { status: 404 })` (`review.tsx:100`) and that rendering adds a second link to the
+`data({ accountId }, { status: 404 })` (`review.tsx:87`) and that rendering adds a second link to the
 account. Every other step throws a plain-string 404 and gets the single link.
 
 #### Column mapping: how a brokerage is remembered
@@ -1149,7 +1149,7 @@ Three of those deserve emphasis:
 **The account number is a guard, never a selector.** A file naming an account different from the one
 the draft targets is refused; it is never silently rerouted to the account it names. It is also
 *captured*, inside the same transaction: when the account has no number recorded and the committed
-file carries one, the commit writes it onto the account (`uploads.server.ts:1123-1129`, guarded by
+file carries one, the commit writes it onto the account (`uploads.server.ts:776-782`, guarded by
 `where external_account_number is null` so a concurrent upload cannot be overwritten). The guard arms
 itself on the first upload, and every later statement is checked against it.
 
@@ -1475,7 +1475,7 @@ has none by definition.
 the data holds two or more distinct values for it, so a household with one brokerage is never shown
 an Institution select that could only mean "all of them". One exception, and it is the right one: a
 dimension that already carries a selection is returned anyway, with a "Not in this portfolio" option
-synthesised if the selected key matches nothing (`holdings-view.ts:566`). A stale bookmark from before an account
+synthesised if the selected key matches nothing (`holdings-view.ts:334`). A stale bookmark from before an account
 closed therefore shows an empty table the reader can *see and clear*, rather than being silently
 widened behind their back.
 
@@ -1508,14 +1508,14 @@ data-modifying CTE, so the set and its rows exist together or not at all.
 the write as ordinary pre-checks, so the form can refuse politely and name what is in the way. Those
 reads race. The checks that do not are inside the writes themselves: `revisePosition`'s `source` CTE
 selects `latest_position_set(...)` *and* requires the instrument still be in it
-(`positions.server.ts:410-425`), and `setBalance`'s `guard` CTE requires that same set to hold
-nothing but the cash row it is replacing (`balances.server.ts:215-234`). Both inserts select from
+(`positions.server.ts:220-235`), and `setBalance`'s `guard` CTE requires that same set to hold
+nothing but the cash row it is replacing (`balances.server.ts:122-141`). Both inserts select from
 those CTEs, so an account that changed underneath an open form produces no rows at all — no position
 set, no holding — and "nothing landed" is what becomes the refusal.
 
 **Why `setBalance` cannot trust the kind its own form was mounted from.** The panel is drawn from
-`account.kind` alone (`account.tsx:215`), and a `bank` account can be holding securities with no kind
-change behind it — `createDraft` (`uploads.server.ts:218`) reads only whether the account is closed,
+`account.kind` alone (`account.tsx:127`), and a `bank` account can be holding securities with no kind
+change behind it — `createDraft` (`uploads.server.ts:120`) reads only whether the account is closed,
 so an upload lands wherever it is pointed. Hiding the panel in that state would leave the page with
 no write control and nothing saying why; drawing it earns a refusal that names what is in the way.
 
@@ -1540,7 +1540,7 @@ Three error types, and the layer each one is answered at.
 | Type | Raised by | Carries | Answered by | Becomes |
 |---|---|---|---|---|
 | `ValidationError` | domain modules | `FieldErrors` — a message per field, plus `FORM_ERROR` for submission-level ones | the route's `catch` | the same form re-rendered, message beside the box that caused it, every other box keeping what was typed |
-| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `upload/review.tsx:100` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
+| `NotFoundError` | domain modules | a sentence | the route's `catch` | `throw new Response(message, { status: 404 })`. One exception: `upload/review.tsx:87` throws `data({ accountId }, { status: 404 })` so the expired page can link back to the account |
 | `DraftNotReadyError` | `uploads.server.ts` | the step still owed | the upload routes | a redirect to that step |
 
 **A refusal is an ordinary outcome of a form submission — never a 500.** That rule is what keeps
@@ -1563,13 +1563,13 @@ still-shutting-down container, and a determined operator can run two.
 | Race | Guard | Where |
 |---|---|---|
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
-| Two refreshes anywhere — a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's — the checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:59-61`) | `prices.server.ts` (`withRefreshLock`) |
+| Two refreshes anywhere — a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's — the checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:41`) | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
 | Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
-| A form posted against a position that moved | The write's own `source` CTE requires the position still be in the latest set; zero rows written *is* the refusal. `currentPosition` at `:321` is the earlier, racing pre-check | `positions.server.ts:410-425` |
-| A balance typed against a statement that changed under it | The same shape: the write's own `guard` CTE requires the latest set to list nothing but the cash row being replaced, so a statement that landed in the gap leaves both inserts nothing to select from. `currentStatement` at `:170` is the earlier, racing pre-check | `balances.server.ts:215-234` |
-| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock, because what the gap can cost is a label briefly disagreeing with the rows — never a row. The writer that could lose rows is the one carrying the in-write guard above, which is why this one needs no transaction | `accounts.server.ts:269` |
+| A form posted against a position that moved | The write's own `source` CTE requires the position still be in the latest set; zero rows written *is* the refusal. `currentPosition` at `:159` is the earlier, racing pre-check | `positions.server.ts:220-235` |
+| A balance typed against a statement that changed under it | The same shape: the write's own `guard` CTE requires the latest set to list nothing but the cash row being replaced, so a statement that landed in the gap leaves both inserts nothing to select from. `currentStatement` at `:95` is the earlier, racing pre-check | `balances.server.ts:122-141` |
+| A statement landing while a kind change is in flight | **Unguarded, deliberately.** `updateAccount` reads the statement and then writes with no lock, because what the gap can cost is a label briefly disagreeing with the rows — never a row. The writer that could lose rows is the one carrying the in-write guard above, which is why this one needs no transaction | `accounts.server.ts:161` |
 | An account closed while a draft sat open | Checked *before* field validation, in every write path | all three writers |
 
 The advisory lock keys are arbitrary constants that must not change, and must not collide. They are
@@ -1611,10 +1611,10 @@ one household's instance and the operator reads `docker compose logs`.
 | Signal | Where |
 |---|---|
 | `GET /healthz` (`app`) | Database reachability **and** migration currency. 200 or 503, `Cache-Control: no-store`, never authenticated. Never crosses the socket — silent on whether `worker` or `egress-proxy` are even running |
-| Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound — `Price worker listening on <path>` (`server/price-worker.ts:622`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:778`) |
+| Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound — `Price worker listening on <path>` (`server/price-worker.ts:400`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:556`) |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
 | Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
-| Provider failure | Still `Price provider failed` at error level, every selected instrument marked stale — the one stem now covers four distinct shapes rather than a single one: a dead or unstarted worker (`no worker listening … ENOENT`/`ECONNREFUSED`), a dead or unreachable proxy (`ECONNREFUSED`/`getaddrinfo ENOTFOUND egress-proxy`), a healthy proxy that cannot itself reach Yahoo (`Proxy response (502)`/`504`), and a healthy proxy refusing a host whose TLS server name does not match the tunnel it was opened for. `egress-proxy` logs its own line for a refusal it issues — stem `Egress proxy`, e.g. `Egress proxy: refused CONNECT <host> — <reason>` (`server/egress-proxy.ts:527`) — and `docs/operating.md`'s Logs section tells the four shapes apart by exact text |
+| Provider failure | Still `Price provider failed` at error level, every selected instrument marked stale — the one stem now covers four distinct shapes rather than a single one: a dead or unstarted worker (`no worker listening … ENOENT`/`ECONNREFUSED`), a dead or unreachable proxy (`ECONNREFUSED`/`getaddrinfo ENOTFOUND egress-proxy`), a healthy proxy that cannot itself reach Yahoo (`Proxy response (502)`/`504`), and a healthy proxy refusing a host whose TLS server name does not match the tunnel it was opened for. `egress-proxy` logs its own line for a refusal it issues — stem `Egress proxy`, e.g. `Egress proxy: refused CONNECT <host> — <reason>` (`server/egress-proxy.ts:358`) — and `docs/operating.md`'s Logs section tells the four shapes apart by exact text |
 | Refused sign-in | Not the app's. The gate logs it; `docker compose logs gate` is where a refusal is read, and the runbook is what indexes it by symptom |
 | Freshness, in the UI | The "as of" line, driven by the *oldest* `quote.as_of` among held feed instruments |
 
@@ -1624,11 +1624,11 @@ the lock (ADR-0012) checks its own `LOCK_EXEMPT_PATHS` in `app/root.tsx` before 
 a loader, and `/healthz` is on that list beside `/unlock` (§7.6) — pulling the app-side entry, even
 with the `Caddyfile`'s own exemption left in place, would lock monitoring out.
 
-**Three healthchecks now, and no two of them prove the same thing.** `app`'s (`compose.yaml:309-318`)
-is the `/healthz` above, over HTTP on `PORT`. `worker`'s (`compose.yaml:375-390`) is `GET /healthz`
+**Three healthchecks now, and no two of them prove the same thing.** `app`'s (`compose.yaml:151`)
+is the `/healthz` above, over HTTP on `PORT`. `worker`'s (`compose.yaml:189`) is `GET /healthz`
 over the unix socket, run as the container's own uid — the right party to prove the socket's
 permissions — and it proves only that the worker is accepting requests on its socket: a Yahoo outage
-still answers it `200`. `egress-proxy`'s (`compose.yaml:429-443`) asks its own `127.0.0.1:8888`,
+still answers it `200`. `egress-proxy`'s (`compose.yaml:221`) asks its own `127.0.0.1:8888`,
 deliberately not a bare TCP connect: with all eight `maxConnections` slots held by stalled tunnels the
 accept queue still completes a handshake, so only a request the HTTP server itself answers proves the
 proxy is not saturated. None restarts a container on failure — all three are for a human reading
@@ -1647,7 +1647,7 @@ actually works; `docs/operating.md`'s "Verify it actually worked" has the one co
                     ▼                        ▼
         socketProvider()               the tests' fake
         dials the worker's socket      implements both and nothing else;
-        (provider-socket.server.ts:389) no test reaches the network
+        (provider-socket.server.ts:213) no test reaches the network
 ```
 
 One seam, two implementations either side of a process boundary — not the two boxes above, which are
@@ -1664,7 +1664,7 @@ importer of the library (ARCHITECTURE.md §4.2's single-site table), reached onl
 [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moved the app behind the unix socket:
 `socketProvider()` above never imports the library at all. Both methods are required, not optional: a
 provider that cannot answer history is not this application's provider, and an optional method would
-let a batch be skipped with nothing saying so. Two tests (`tests/yahoo-client.test.ts:83`, `:105`) pin
+let a batch be skipped with nothing saying so. Two tests (`tests/yahoo-client.test.ts:66`, `:81`) pin
 the static-versus-instance shape the client depends on — `yahoo-finance2`'s default export is the
 `YahooFinance` *class*, whose own static
 `quote`/`chart` type-check and throw the moment either runs, before any network access. The first
@@ -1708,7 +1708,7 @@ allowlist does.
 | What makes it airtight | `app` publishes no port. Not tidiness: it is the reason there is no path to a loader that skips the check. A `ports:` line on `app` would not weaken the gate, it would end it |
 | Network segmentation | Seven Compose networks, not one (§3.1): `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal, with no default route out of the stack at all; `egress-proxy` and `egress-gate` are the only two that carry one, and each belongs to a single container. `app` and `worker` share none of them — a compromised `app` has no IP path to `worker`, `gate` or the internet, and a compromised `worker` has no IP path to `app`, `db` or `gate`, both directions asserted in `scripts/smoke-test.sh` |
 | The worker's egress | `worker`'s only route anywhere is `egress-proxy` (`server/egress-proxy.ts`), a `CONNECT`-only forward proxy admitting exactly the five hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host it was opened to. A compromised worker can still open a tunnel to an admitted host and send it whatever it likes — the allowlist is on the host, never on the bytes |
-| The shared volume | `price-worker-sock`, a `tmpfs` holding nothing but the socket `worker` binds. `app`'s mount is `:ro` (`compose.yaml:288`), so it can dial the socket but cannot `chmod` the directory or unlink the file — a read-only mount refuses both with `EROFS` before any ownership check runs. Only `app` and `worker` mount it at all, which `scripts/smoke-test.sh` asserts |
+| The shared volume | `price-worker-sock`, a `tmpfs` holding nothing but the socket `worker` binds. `app`'s mount is `:ro` (`compose.yaml:139`), so it can dial the socket but cannot `chmod` the directory or unlink the file — a read-only mount refuses both with `EROFS` before any ownership check runs. Only `app` and `worker` mount it at all, which `scripts/smoke-test.sh` asserts |
 | Session revocation | Two grains, both the operator's. Removing an address from the allowlist ends that person's sessions everywhere — the gate re-checks each request's email against the file, which it watches for changes. Rotating the gate's cookie secret ends everyone's at once. There is no per-device revocation, and no sign-out control (DESIGN.md §14) |
 | Session storage | The gate's encrypted cookie for *who* is admitted; nothing else on that question. The lock (ADR-0012) stores a different fact in Postgres — a minted unlock grant, addressed by the grant cookie above — never a file: both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in. Not one row per browser: `mintGrant` inserts unconditionally, so a browser that loses its cookie and unlocks again leaves the old row live beside the new one until its own expiry sweeps it |
 | Cookie attributes | `SameSite=Lax` and `Secure` on the gate's cookie, pinned in `compose.yaml` rather than inherited. **The app now issues one of its own** — the lock's grant cookie (ADR-0012), `__Host-` prefixed, `Secure`, `HttpOnly`, and `SameSite=Lax`, never `Strict`: the gate's own sign-in bounce returns as a top-level, cross-site navigation, and `Strict` would withhold the grant cookie on that very trip and re-lock every browser on the gate's own schedule. The instance's CSRF posture is still `SameSite=Lax` on every cookie here; that no longer follows from the app carrying none of its own, since it now does |
@@ -1828,8 +1828,8 @@ they enter no bundle. It is their *dependencies* that have to survive both, whic
 constraint arriving by one path instead of two. `yahoo-client.ts`, `price-worker.ts` and
 `egress-proxy.ts` are reached only the second way, by the two alternate entrypoints above; nothing
 under `app/` imports them, so `npm run build`'s server bundle never carries them. `symbol-pattern.ts`
-is the one exception, reached both ways: the worker imports it directly (`price-worker.ts:61`), and
-`app/lib/provider-socket.server.ts:45` imports the same file, so Vite bundles it into the app too —
+is the one exception, reached both ways: the worker imports it directly (`price-worker.ts:13`), and
+`app/lib/provider-socket.server.ts:11` imports the same file, so Vite bundles it into the app too —
 the two sides of the socket sharing one guard rather than each keeping its own copy (Appendix A).
 
 ### 8.2 CI
@@ -1979,7 +1979,7 @@ gets in the way of server-module tests.
   `seedUploadDraft`, `seedManualNetWorth`, and `usdInstrument`. Raw `INSERT` statements belong in
   the builder and nowhere else — that is what keeps
   a schema change from rewriting every test. One live exception, now stale: `plantAlias` in
-  `column-mapping.test.ts:53` inserts aliases directly, justified by a domain writer that did not
+  `column-mapping.test.ts:43` inserts aliases directly, justified by a domain writer that did not
   exist at the time and does now (§11.3).
 - **Test what would hurt to break**: domain rules, money and quantity maths, ingest and parsing edges,
   and a reproducing case for every bug fixed. Tests that assert framework behaviour, restate the
@@ -2115,9 +2115,9 @@ still live in the current code:
 
 - **`MAX_UPLOAD_MB` is not wired through `compose.yaml`**, so under the documented deployment the cap
   is permanently 10 MB whatever an operator puts in `.env` (§3.3).
-- **`statement.ts:32` imports a `.server` module as a value** (§4.3). It stays out of the client
+- **`statement.ts:15` imports a `.server` module as a value** (§4.3). It stays out of the client
   bundle only by tree-shaking.
-- **`plantAlias` in `column-mapping.test.ts:53`** inserts fixtures raw, on a justification that has
+- **`plantAlias` in `column-mapping.test.ts:43`** inserts fixtures raw, on a justification that has
   since expired — both the domain writer and a `seedInstrumentAlias` builder now exist.
 
 ### 11.4 Where the next feature probably goes
@@ -2146,7 +2146,7 @@ still live in the current code:
 | `validate-config.ts` | The startup gate — fails fast, naming every bad variable |
 | `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). `app/lib/provider-socket.server.ts` dials it for every price fetch since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md); nothing under `app/` reaches `yahoo-finance2` directly any more |
 | `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/`, reached only from `price-worker.ts` |
-| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now — the worker (`price-worker.ts:61`) and `app/lib/provider-socket.server.ts:45` — while `instrument-resolution.server.ts:314`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable — the worker's check is the one that binds, the app's a courtesy |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now — the worker (`price-worker.ts:13`) and `app/lib/provider-socket.server.ts:11` — while `instrument-resolution.server.ts:314`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable — the worker's check is the one that binds, the app's a courtesy |
 | `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host — the `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
 
 ### `app/lib/` — domain (`.server`) and pure

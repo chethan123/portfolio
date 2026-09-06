@@ -1,40 +1,12 @@
 /**
- * The refresh loop (DESIGN.md §6.2), in the app's own process, on the cadence
- * chosen at Settings → Prices. §10 kept the scheduler here — one timer to
- * arm, one cadence to read — accepting that a restart mid-session misses a
- * poll until the next tick. The fetch itself no longer runs here: every tick
- * reaches the price feed by dialling `worker` over the socket the two
- * containers share ({@link socketProvider}), and this process holds no
- * network path to it at all.
+ * The refresh loop (DESIGN.md §6.2), in the app's own process (§10). Cadence is a row
+ * (`0008_refresh_cadence.sql`), re-read each tick and re-armed — a save needs no restart.
+ * Market hours gate only quotes (ADR-0011): a weekend tick still runs the backfill batch, and
+ * writes no `price_poll` row because it attempted no quotes.
  *
- * **The cadence is a row, not an environment variable**
- * (`0008_refresh_cadence.sql`): a tick re-reads it and re-arms when it moved —
- * the whole of how a save takes effect, no restart, no signal; every process
- * converges within one old cadence.
- *
- * **A weekend is no longer free of database traffic** (ADR-0011). The
- * market-hours check used to return before the tick touched anything; it now
- * decides only whether *quotes* are asked for, because a refresh is quotes and
- * then one bounded backfill batch, and a statement uploaded on a Saturday
- * should be valued by Monday's open rather than after it. So a weekend tick
- * costs the cadence read and the gap query, and a request to the feed only when
- * there is a gap to fill. It writes no `price_poll` row: a poll is an attempt
- * at quotes, and this one attempted none.
- *
- * The three hazards a background timer brings, handled rather than assumed
- * away. **Two timers in one process**: `react-router dev` re-executes the
- * server module graph per edit, so the usual module-scope `??=` singleton
- * would leak a timer per save — the handle is pinned to `globalThis`, which
- * Vite does not reset, and disposed on hot update. **Two timers in two
- * processes**: a restart can overlap a still-shutting-down container, so each
- * tick takes the advisory-lock guard `server/migrations.ts` uses, different
- * key. **A tick that outlives its interval**: ticks are serialised by a flag
- * and a colliding tick is dropped, not queued — a queue of pending fetches
- * against an unofficial API is how an instance gets rate-limited.
- *
- * `/healthz` reports none of this, for `app/routes/healthz.ts`'s reason: a
- * health check failing during a third-party outage would have Compose restart
- * a perfectly healthy app.
+ * Hazards handled: Vite HMR strands timers, so the handle sits on `globalThis`; two processes can
+ * overlap, so each tick takes an advisory lock; a tick that outruns its interval is dropped, never
+ * queued — queued fetches against an unofficial API are how an instance gets rate-limited.
  */
 import { getConfig } from "../../server/config.ts";
 import { isMarketOpen } from "./market-hours.ts";
@@ -45,45 +17,27 @@ import { readRefreshCadence } from "./settings.server.ts";
 import type { BackfillReport } from "./prices.server.ts";
 import type { PriceProvider } from "./price-provider.server.ts";
 
-/**
- * Where the timer is kept: a `Symbol.for` slot on `globalThis`, because a
- * module-scope binding does not survive Vite's HMR invalidation (module
- * comment). In production, simply a global written once.
- */
+/** `globalThis` slot: a module-scope binding does not survive Vite's HMR invalidation. */
 const SLOT = Symbol.for("portfolio.pricePoller");
 
-/**
- * Assumed cadence until a tick reads the row — the value
- * `0008_refresh_cadence.sql` seeds, kept in step by hand (`masking.ts`'s
- * arrangement). Reading the row here would put an async database call on the
- * first render's path; the first tick corrects the assumption.
- */
+/** What `0008_refresh_cadence.sql` seeds, kept in step by hand; the first tick corrects it. */
 const SEEDED_CADENCE_MINUTES = 15;
 
 type PollerState = {
-  /** Undefined only in the moment between construction and arming, which the
-   * tick's closure needs the state object to exist for. */
   timer: ReturnType<typeof setInterval> | undefined;
   /** What the current timer was armed with, so a tick can tell a moved dial. */
   minutes: number;
   running: boolean;
-  /**
-   * The injected provider, on the slot rather than only in the `setInterval`
-   * closure: {@link requestRefresh} has to reach it from outside a tick that
-   * is already armed.
-   */
+  /** On the slot, not only in the tick's closure: {@link requestRefresh} reaches it from outside. */
   provider: PriceProvider;
 };
 
 type PollerHost = typeof globalThis & { [SLOT]?: PollerState };
 
 /**
- * Re-arm at a cadence the household just moved. Replacing the interval resets
- * its phase — the next tick lands one *new* cadence after the one that
- * noticed, as the Settings form promises. The identity check keeps a re-arm
- * from resurrecting a stopped poller: a tick in flight when `stopPricePoller`
- * ran holds a state object the slot has forgotten, and arming a timer on it
- * would poll forever with no handle left to clear it by.
+ * Re-arm at a moved cadence; replacing the interval resets its phase, as the Settings form
+ * promises. The identity check stops a tick that was in flight when `stopPricePoller` ran from
+ * arming a timer on a forgotten state — it would poll forever with no handle to clear it by.
  */
 function retime(state: PollerState, minutes: number): void {
   if ((globalThis as PollerHost)[SLOT] !== state) return;
@@ -94,13 +48,7 @@ function retime(state: PollerState, minutes: number): void {
   state.minutes = minutes;
 }
 
-/**
- * Run one refresh, if this process is the one that should. Every failure path
- * is a warning and a return, never a throw: called from a timer with no
- * caller to catch it, and an unhandled rejection would take the process down
- * over a third-party outage — what owning `price_daily` protects against
- * (§6.1).
- */
+/** Every failure path warns and returns: a timer has no caller to catch a throw (§6.1). */
 async function tick(state: PollerState, quotesRegardless: boolean): Promise<void> {
   if (state.running) return;
 
@@ -109,34 +57,21 @@ async function tick(state: PollerState, quotesRegardless: boolean): Promise<void
   try {
     const config = getConfig();
 
-    // The calendar decides only whether to spend a request on *quotes*; being
-    // wrong cannot corrupt anything (`market-hours.ts`). It no longer decides
-    // whether the tick runs: the backfill batch below rides a tick at any hour,
-    // and the cadence read has come out from behind the gate with it — the
-    // round trip a weekend must not cost is no longer avoidable, because the
-    // gap query is one too.
+    // The calendar gates quotes only, and being wrong cannot corrupt anything (`market-hours.ts`).
     const quotes = quotesRegardless || isMarketOpen(new Date(), config.MARKET_TIMEZONE);
 
-    // Read with its own catch: a briefly unreachable database fails the refresh
-    // below in its own well-handled way, and a failed read must not change the
-    // cadence — the last known value stands until the row says otherwise.
+    // Own catch: a failed read must not move the cadence — the last known value stands.
     const minutes = await readRefreshCadence().catch((error: unknown) => {
       console.error("Refresh cadence could not be read; keeping the current one:", error);
       return state.minutes;
     });
     if (minutes !== state.minutes) retime(state, minutes);
 
-    // `runRefresh` owns the lock and the catch around `refreshPrices` itself
-    // (issue #159): `busy` (another caller — the other container, or a
-    // pressed Refresh — is already doing it) and `error` (the database or the
-    // lock; `runRefresh` has already logged its own line) need nothing further
-    // here. Only a `done` run has a report to log.
+    // `runRefresh` owns the lock, and logs `busy`/`error` itself; only `done` has a report.
     const run = await runRefresh({ quotes }, state.provider);
     if (run.status === "done") {
-      // One line per attempt at quotes, always: "prices stopped updating" must
-      // be answerable from `docker compose logs` alone, and a log that only
-      // speaks on failure cannot tell a healthy quiet loop from a dead one.
-      // Stale > 0 logs as a warning — the line an operator is looking for.
+      // One line per attempt at quotes, always: a log that speaks only on failure cannot tell a
+      // quiet loop from a dead one. Stale > 0 warns — the line an operator greps for.
       if (run.report.quotes !== null) {
         const quoted = run.report.quotes;
         const summary = `Price refresh: ${quoted.priced} of ${quoted.requested} priced, ${quoted.stale} stale, ${quoted.closes} closes written, ${quoted.observed} new.`;
@@ -154,19 +89,9 @@ async function tick(state: PollerState, quotesRegardless: boolean): Promise<void
 }
 
 /**
- * The batch's own line, written only when the batch attempted or failed
- * something.
- *
- * Narrower than the quotes' line above, which speaks on every attempt: a tick
- * at any hour whose gap query found nothing would otherwise write a line, and
- * "no price line in the log" would stop meaning what `docs/operating.md` says
- * it means.
- *
- * "Failed" is the count of attempts whose *call* failed, and not of the three
- * refusals — a delisted ticker, a foreign listing and an unapplied split are
- * answers rather than failures, and the ledger names each one for the person
- * reading Settings → Prices. A failure of either kind is a warning, which is
- * the line an operator greps for.
+ * Only written when the batch attempted or failed something: a line on every idle tick would
+ * stop "no price line in the log" meaning what `docs/operating.md` says it means.
+ * "Failed" counts calls that failed, not the three refusals, which are answers.
  */
 function logBackfill(report: BackfillReport): void {
   const failed = report.outcomes.provider_failed;
@@ -181,27 +106,16 @@ function logBackfill(report: BackfillReport): void {
 }
 
 /**
- * Start the loop, once per process. Idempotent and cheap after the first
- * call, because the natural call site is a request path — no server entry
- * file to hook under `react-router-serve` (§9); `app/root.tsx`'s loader is
- * every route's ancestor, so the first render starts the timer and each call
- * after is a property lookup. Deliberately no immediate poll: a crash-looping
- * container would fetch on every boot, and the first tick is at most one
- * interval away.
- *
- * @param provider injected for the tests; defaults to the live one —
- * `socketProvider()`, evaluated fresh per call the way this default
- * parameter always is, and which must not throw merely being built
- * (`provider-socket.server.ts`'s own header).
+ * Start the loop, once per process. Idempotent because the call site is a request path — there is
+ * no server entry file to hook under `react-router-serve` (§9), so `app/root.tsx`'s loader starts
+ * it. No immediate poll: a crash-looping container would fetch on every boot.
+ * The `socketProvider()` default must not throw merely being built (`provider-socket.server.ts`).
  */
 export function startPricePoller(provider: PriceProvider = socketProvider()): void {
   const host = globalThis as PollerHost;
   if (host[SLOT] !== undefined) return;
 
   try {
-    // Armed at the seeded cadence: reading the row here would put an async
-    // database call on a render's path. The first tick re-arms if the
-    // household had moved the dial.
     const state: PollerState = {
       running: false,
       minutes: SEEDED_CADENCE_MINUTES,
@@ -210,48 +124,29 @@ export function startPricePoller(provider: PriceProvider = socketProvider()): vo
     };
     state.timer = setInterval(() => void tick(state, false), SEEDED_CADENCE_MINUTES * 60 * 1000);
 
-    // Node holds the event loop open for a pending interval, which would keep
-    // a container alive through a shutdown it was already asked to perform.
+    // A pending interval holds the event loop open, keeping a container alive through shutdown.
     state.timer.unref?.();
 
     host[SLOT] = state;
   } catch (error) {
-    // Swallowed on purpose: the caller is a page render, and a refresh loop
-    // failing to start is not a reason a family member cannot see their net
-    // worth.
+    // Swallowed: the caller is a page render, and a family member must still see their net worth.
     console.error("Price poller did not start; prices will not refresh:", error);
   }
 }
 
 /**
- * Run a refresh now, off the timer's schedule — what an upload asks for once
- * its transaction has committed, so the statement it just landed is priced
- * without waiting for the next tick.
+ * Run a refresh now, off the schedule — what an upload asks for once its transaction commits.
+ * The tick's own body with quotes forced, not a second copy: same flag, same lock, same log lines.
  *
- * The tick's own body with quotes forced, not a second copy of it: the same
- * `running` flag, the same lock, the same log lines. Quotes regardless of the
- * calendar, because the person who just uploaded is present and a request is
- * what they are implicitly asking for.
- *
- * **Returns nothing and never rejects.** Nothing registers an
- * `unhandledRejection` handler and Node 24 exits the process on one, so a
- * request that cannot be honoured returns rather than throwing. Two ways it is
- * not honoured, both of which cost at most one more tick: a tick or another
- * request is already running, which is dropped **silently**, exactly as an
- * overlapping tick is — a line per dropped request would make a busy instance
- * noisier without telling anyone anything they can act on; and the poller has
- * not been started in this process, which does log, because
- * it is the one an operator might otherwise wonder about: a fresh process sees
- * it when an action runs before any loader has started the poller
- * (`app/root.tsx` starts it from one), and so does every test that never starts
- * it — which is what keeps a test from reaching a provider through this.
+ * Never rejects (nothing handles `unhandledRejection`, and Node 24 exits on one). Dropped silently
+ * when a tick is already running; logged when the poller was never started in this process, which
+ * is the case an operator would otherwise wonder about.
  */
 export function requestRefresh(): void {
   const state = (globalThis as PollerHost)[SLOT];
 
   if (state === undefined) {
-    // Deliberately not the `Price refresh` stem `docs/operating.md` reserves
-    // for a refresh the poller actually ran; nothing ran here.
+    // Not the `Price refresh` stem `docs/operating.md` reserves for a refresh that ran.
     console.info(
       "A refresh was requested before the price poller started in this process; " +
         "it was dropped, and a later tick will do the work.",
@@ -262,11 +157,7 @@ export function requestRefresh(): void {
   void tick(state, true);
 }
 
-/**
- * Stop the loop and forget it. Exported for the hot-update hook below and for
- * tests, which must not leave a timer running across files — `vitest` would
- * hold the process open.
- */
+/** Exported for the hot-update hook and for tests — a stray timer holds vitest's process open. */
 export function stopPricePoller(): void {
   const host = globalThis as PollerHost;
   const state = host[SLOT];
@@ -276,9 +167,7 @@ export function stopPricePoller(): void {
   delete host[SLOT];
 }
 
-// Dev only, and erased from the production bundle. Without it, every save
-// during `react-router dev` would strand the previous module's timer — still
-// holding a closure over the old code, still polling.
+// Dev only, erased from the production bundle: without it every save strands the old timer.
 if (import.meta.hot) {
   import.meta.hot.dispose(() => stopPricePoller());
 }

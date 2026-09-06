@@ -8,17 +8,10 @@ import { closeTestDatabase, withDatabase } from "./support/database.ts";
 import { renderRoute } from "./support/render.tsx";
 import { args, get } from "./support/routes.ts";
 
-/**
- * The two date controls carry the boundaries the validator refuses by.
- *
- * The rule is stated once and read twice — a picker offering a date the write
- * then rejects, or hiding one it would accept, is the drift this exists to
- * catch. Asserting the loader fields is not enough: both `min` and `max` could
- * be deleted from the markup with every loader test still passing, which is
- * exactly what happened before this file existed.
- *
- * Rendered from the real loader's output, not a fixture — see `renderRoute`.
- */
+// The two date controls carry the boundaries the validator refuses by — a picker offering a
+// date the write then rejects, or hiding one it would accept, is the drift this catches.
+// Asserting loader fields isn't enough: min/max could vanish from markup with loader tests
+// still green. Rendered from the real loader's output (see renderRoute).
 afterAll(closeTestDatabase);
 
 const FLOOR = 'min="1970-01-01"';
@@ -28,8 +21,7 @@ describe("the set-balance date control", () => {
   it(
     "carries the floor and the ceiling",
     withDatabase(async ({ seedAccount }) => {
-      // A bank account, because the panel is drawn only for a kind whose whole
-      // balance is one typed number.
+      // Bank account — panel only draws for a kind whose whole balance is one typed number.
       const account = await seedAccount({ kind: "bank", name: "Everyday Current" });
 
       const markup = renderRoute(
@@ -49,9 +41,8 @@ describe("the review screen's statement-date control", () => {
   it(
     "carries the floor and the ceiling when the file does not date itself",
     withDatabase(async (ctx) => {
-      // Only rendered on this branch: a file that dates itself gets a stated
-      // date and no editor, because overriding a fact with an opinion is not
-      // what the control is for.
+      // Only rendered here — a self-dating file gets a stated date and no editor
+      // (no overriding a fact with an opinion).
       const account = await ctx.seedAccount({ kind: "brokerage" });
       const fund = await ctx.seedInstrument({ symbol: "DCB", name: "Boundary Fund" });
       await ctx.seedInstrumentAlias({ instrument: fund, rawString: "DCB" });

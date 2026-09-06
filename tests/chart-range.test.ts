@@ -1,12 +1,5 @@
-/**
- * The range-resolution math both routes' loaders read (spec 0008), including
- * the sampler's density rule since spec 0009 / ADR-0003.
- *
- * Pure — no Postgres and no render — for `masking.test.ts`'s reason: this is
- * the domain rule itself, `AGENTS.md` asks for a domain rule to be tested as
- * itself, and exhausting nine presets and their edge cases through
- * database-backed renders would be slow and would prove less.
- */
+// Range-resolution math both routes' loaders read (spec 0008), plus the sampler's density
+// rule (spec 0009/ADR-0003). Pure, no Postgres/render — this is the domain rule itself.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -39,8 +32,7 @@ const TODAY = "2026-08-26";
 describe("each preset's boundary against a fixed today", () => {
   const NO_DATA = { earliest: { positionSet: null }, surface: "household" as Surface, today: TODAY };
 
-  // 1D is excluded: it is the one preset whose boundary is not a calendar
-  // offset from today but the session the observation log last carried.
+  // 1D excluded — its boundary is the observation log's last session, not a calendar offset.
   const BOUNDARIES: Record<Exclude<RangeKey, "1d" | "all" | "custom">, string> = {
     "1w": "2026-08-19",
     "1m": "2026-07-26",
@@ -61,14 +53,11 @@ describe("each preset's boundary against a fixed today", () => {
   });
 
   it("rolls a month-end trailing boundary into the next month, rather than clamping", () => {
-    // 31 March minus one month: `Date` has no 31 February, so this is the
-    // accepted edge rather than a special case.
+    // Date has no 31 February — JS Date rolls it into the next month automatically.
     expect(resolveRange("1m", { ...NO_DATA, today: "2026-03-31" }).since).toBe("2026-03-03");
   });
 
   it("3M resolves as an ordinary, first-class preset", () => {
-    // Not dead code left over from the old four-option set: it appears in the
-    // vocabulary, and it resolves like every other calendar-offset preset.
     expect(RANGES["3m"]).toEqual({ label: "3M" });
     expect(resolveRange("3m", NO_DATA).since).toBe("2026-05-26");
   });
@@ -84,9 +73,6 @@ describe("the per-surface data-source rule, applied to every preset", () => {
     for (const range of ["all", "5y", "1y"] as RangeKey[]) {
       const window = resolveRange(range, { today: TODAY, earliest: EARLIEST, surface: "household" });
 
-      // "All" is measured from the earlier date directly; the fixed presets'
-      // own boundary is unaffected, but the same earlier date is what the
-      // disabled rule below measures every one of them against.
       if (range === "all") expect(window.since).toBe(EARLIEST.manual);
     }
 
@@ -105,9 +91,6 @@ describe("the per-surface data-source rule, applied to every preset", () => {
     const household = resolveRange("all", { today: TODAY, earliest: empty, surface: "household" });
     const defaulted = resolveRange(DEFAULT_RANGE, { today: TODAY, earliest: empty, surface: "household" });
 
-    // The width matches the default preset's, but the identity does not: "All"
-    // never degrades into reporting itself as "1Y" the way an unusable custom
-    // span does below — it is a real, explicit selection either way.
     expect(household.since).toBe(defaulted.since);
     expect(household.dates).toEqual(defaulted.dates);
     expect(household.range).toBe("all");
@@ -118,13 +101,12 @@ describe("the disabled-state rule", () => {
   const earliest = { positionSet: "2026-06-01" as const };
 
   it("disables a preset whose start falls before the surface's earliest date", () => {
-    // 5Y's boundary (2021-08-26) is well before an account eight months old.
+    // 5Y's boundary (2021-08-26) predates an 8-month-old account.
     expect(isRangeDisabled("5y", { today: TODAY, earliest, surface: "account" })).toBe(true);
   });
 
   it("does not disable a preset whose start lands exactly on the earliest date", () => {
-    // YTD opened on January 1st or 2nd: an account or household whose data
-    // starts that same day must show thin data, not a disabled control.
+    // YTD opens Jan 1st/2nd — data starting the same day shows thin, not disabled.
     expect(
       isRangeDisabled("ytd", { today: "2026-01-02", earliest: { positionSet: "2026-01-01" }, surface: "household" }),
     ).toBe(false);
@@ -146,11 +128,7 @@ describe("the disabled-state rule", () => {
   });
 
   it("disables nothing but 1D on an instance with no data at all", () => {
-    // The empty state renders instead of a chart, so this is academic for the
-    // date-bounded presets — but one must not read as disabled before there is
-    // anything to compare it against. 1D is the exception because it is not
-    // bounded by a date at all: with an empty observation log there is no
-    // session to draw, which is a different claim from "your history is short".
+    // Other presets aren't disabled by "no data" itself — empty state pre-empts them; only 1D reads the log, not a calendar boundary.
     const noData = { today: TODAY, earliest: { positionSet: null }, surface: "account" as Surface };
 
     for (const range of Object.keys(RANGES) as RangeKey[]) {
@@ -159,9 +137,7 @@ describe("the disabled-state rule", () => {
   });
 
   it("offers 1D once anything at all has been observed, however little", () => {
-    // One observation is not two points and the panel says so in words — but
-    // the chip is not the place to say it. Story 13 disables it only where the
-    // log is empty outright.
+    // Story 13 disables the chip only when the log is empty outright.
     const observed = { ...NO_DATA, session: "2026-08-26" };
 
     expect(isRangeDisabled("1d", observed)).toBe(false);
@@ -186,23 +162,15 @@ describe("1D, the preset that is a session rather than a span", () => {
 
     expect(window.range).toBe("1d");
     expect(window.session).toBe("2026-08-25");
-    // Empty on purpose: the points come from the log's own instants, and the
-    // day-granularity sampler is bypassed entirely. A loader that missed
-    // `session` and read the day series draws nothing rather than the wrong
-    // thing.
     expect(window.dates).toEqual([]);
   });
 
   it("measures its change from the day before the session, never from the session itself", () => {
-    // Today's own `price_daily` row converges on the last observation of the
-    // day, so measuring against it would report every session as flat. The day
-    // before, carried forward, is the previous close.
+    // Today's price_daily row converges on the last observation — measuring against it would show every session flat.
     expect(resolveRange("1d", { ...HOUSEHOLD, session: "2026-08-25" }).since).toBe("2026-08-24");
   });
 
   it("names the latest session it was given, whatever today is", () => {
-    // A Sunday. 1D shows Friday's session because Friday is what was observed —
-    // the session comes from the log, never from the calendar.
     const window = resolveRange("1d", { ...HOUSEHOLD, today: "2026-08-30", session: "2026-08-28" });
 
     expect(window.session).toBe("2026-08-28");
@@ -210,8 +178,6 @@ describe("1D, the preset that is a session rather than a span", () => {
   });
 
   it("falls back to the default preset when nothing has been observed", () => {
-    // The same fallback an undrawable custom span takes, and reported back the
-    // same way: a caller cannot caption a chart "1D" from a session it never had.
     for (const session of [null, undefined]) {
       const window = resolveRange("1d", { ...HOUSEHOLD, session });
 
@@ -226,8 +192,6 @@ describe("1D, the preset that is a session rather than a span", () => {
   });
 
   it("is remembered and re-read like any other preset key", () => {
-    // The whole of what 1D inherits unchanged: the URL parameter, the cookie
-    // and the segmented control know it as one more key.
     expect(encodeRangeCookieValue("1d")).toBe("1d");
     expect(decodeRangeCookieValue("1d")).toEqual({ range: "1d" });
     expect(readChartRange(new Request("https://x/?range=1d"))).toEqual({ range: "1d", explicit: true });
@@ -237,7 +201,6 @@ describe("1D, the preset that is a session rather than a span", () => {
   });
 
   it("leaves every other preset resolving exactly as it did", () => {
-    // The new key must not reach a range that is already history.
     const withSession = resolveRange("1m", { ...HOUSEHOLD, session: "2026-08-25" });
     const without = resolveRange("1m", HOUSEHOLD);
 
@@ -245,13 +208,7 @@ describe("1D, the preset that is a session rather than a span", () => {
   });
 });
 
-/**
- * `until` minus `days` calendar days, for building spans of an exact `D`.
- *
- * Deliberately its own arithmetic rather than the module's `addDays`, which is
- * not exported: a test that measured spans with the same helper the code under
- * test builds them from could not catch that helper being wrong.
- */
+/** `until` minus `days` — deliberately not the module's own addDays, so a bug there can't hide behind reuse. */
 function daysBefore(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - days);
@@ -275,12 +232,7 @@ function dayGap(a: string, b: string): number {
   );
 }
 
-/**
- * The gaps between consecutive sampled dates, in the order `dates` runs —
- * ascending, so `gaps[0]` is the oldest gap and `gaps.at(-1)` the one at the
- * anchor. Walked with a carried `previous` rather than by index, so no element
- * access has to be asserted non-null past `noUncheckedIndexedAccess`.
- */
+/** Gaps between consecutive sampled dates, ascending. Walked with a carried `previous`, not by index, to avoid noUncheckedIndexedAccess asserts. */
 function gapsOf(dates: readonly string[]): number[] {
   const gaps: number[] = [];
   let previous: string | undefined;
@@ -297,8 +249,7 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
   it("returns every calendar day, ascending, both ends included, for a short window", () => {
     const { dates } = resolveRange("1w", { today: TODAY, earliest: { positionSet: null }, surface: "household" });
 
-    // A week is 8 distinct calendar days, all of them, exactly — no decay and
-    // nothing deduped away, unlike the fixed-count sampler this replaces.
+    // No decay here — unlike the fixed-count sampler this replaces.
     expect(dates).toEqual([
       "2026-08-19",
       "2026-08-20",
@@ -318,8 +269,7 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
     expect(dates.length).toBe(SAMPLE_BUDGET);
     expect(dates[0]).toBe(since);
     expect(dates.at(-1)).toBe(TODAY);
-    // Every calendar day, so every gap is exactly one — no off-by-one at the
-    // seam from this side of it.
+    // Every gap exactly one — no off-by-one at the seam from this side.
     expect(gapsOf(dates)).toEqual(Array(SAMPLE_BUDGET - 1).fill(1));
   });
 
@@ -327,8 +277,6 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
     const since = daysBefore(TODAY, SAMPLE_BUDGET);
     const { dates } = spanOf(since, TODAY);
 
-    // Still exactly the budget's worth of dates — one more day of span did
-    // not add an extra sample, it triggered decay instead.
     expect(dates.length).toBe(SAMPLE_BUDGET);
     expect(new Set(dates).size).toBe(SAMPLE_BUDGET);
     expect(dates).toEqual([...dates].sort());
@@ -343,25 +291,16 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
     expect(dates.length).toBe(SAMPLE_BUDGET);
     expect(new Set(dates).size).toBe(SAMPLE_BUDGET);
     expect(dates).toEqual([...dates].sort());
-    // The earliest sample lands exactly on `since` — the ratio was solved so
-    // the accumulated gaps sum to precisely the span, not merely close to it.
+    // Ratio solved so decay gaps sum to exactly the span, landing precisely on `since`.
     expect(dates[0]).toBe("2021-08-26");
     expect(dates.at(-1)).toBe(TODAY);
 
     const gaps = gapsOf(dates);
 
-    // The gap right at the anchor is fixed at one calendar day, for every
-    // budget-exceeding span, regardless of how wide it is.
+    // Anchor gap is fixed at one calendar day for every budget-exceeding span, any width.
     expect(gaps.at(-1)).toBe(1);
 
-    // Growth is asserted as a trend across quarters of the span, NOT pair by
-    // adjacent pair, deliberately. Spec 01 says "gaps strictly increasing
-    // walking backward", but a solved ratio of ~1.02 rounded to whole days
-    // is not monotonic step to step — measured on this span, 56 of 178
-    // adjacent pairs increase, 100 are equal, 22 decrease by a day. The
-    // property the chart depends on, and the one the spec was reaching for,
-    // is dense near the anchor and coarse far from it; the literal wording
-    // is unachievable for any budget/span whose ratio is near one.
+    // Not monotonic step to step (~1.02 ratio rounds to whole days: 56 pairs increase, 100 equal, 22 decrease) — dense-to-coarse is a quarter-bucket trend, not a pairwise one.
     const bucket = (from: number, to: number) =>
       gaps.slice(from, to).reduce((sum, gap) => sum + gap, 0) / (to - from);
     const quarter = Math.floor(gaps.length / 4);
@@ -372,37 +311,26 @@ describe("sampling: every calendar day inside the budget, geometric decay beyond
 
   it("decays from `until` itself, not from the real current date, for a window ending in the past", () => {
     const pastUntil = "2020-06-15";
-    const since = daysBefore(pastUntil, 900); // well over the budget
+    const since = daysBefore(pastUntil, 900);
 
     const { dates } = spanOf(since, pastUntil);
 
     expect(dates.length).toBe(SAMPLE_BUDGET);
     expect(dates[0]).toBe(since);
     expect(dates.at(-1)).toBe(pastUntil);
-    // The one-day anchor gap holds relative to `pastUntil`, proving the decay
-    // took no implicit dependency on the wall clock beyond what was passed in.
     expect(gapsOf(dates).at(-1)).toBe(1);
   });
 
   it("keeps two samples on or after a household's own history on every budget-exceeding preset — the spec 0009 regression", () => {
-    // The reported bug, set up as reported: a household that uploaded its
-    // first statement yesterday, so its whole recorded history is one calendar
-    // day old. `positionSet` is that history, not null, so this is the real
-    // household shape rather than a bare date comparison — the preset's own
-    // boundary ignores it (only "All" and "Custom" measure from the earliest
-    // date), which is exactly why the sampler had to be the thing that fixed
-    // this.
+    // Reported bug: preset boundaries ignore a one-day-old history (only All/Custom measure from earliest) — the sampler is what has to fix this.
     const historyStart = daysBefore(TODAY, 1);
     const earliest = { positionSet: historyStart };
 
-    // Every preset whose span outruns the budget, not just the default: 5Y and
-    // All regressed the same way, one order of magnitude less visibly (spec
-    // 0009, "Testing Decisions").
+    // 5Y and All regressed the same way, less visibly (spec 0009).
     for (const range of ["1y", "5y", "all"] as RangeKey[]) {
       const { dates } = resolveRange(range, { today: TODAY, earliest, surface: "household" });
 
-      // Two points is the whole bug: one is what the old sampler left, and one
-      // point cannot draw a line.
+      // Two points is the whole bug — one point can't draw a line.
       expect(dates.filter((date) => date >= historyStart).length).toBeGreaterThanOrEqual(2);
     }
   });
@@ -557,17 +485,10 @@ describe("the address a range control points at", () => {
   const at = (search: string) => new URLSearchParams(search);
 
   it("keeps every parameter the control does not own", () => {
-    // The bug this exists to fix: a bare `?range=1m` is a whole query string,
-    // and React Router resolves it as one — so picking a range on the account
-    // page dropped the `?uploaded=` receipt the reader was looking at.
+    // Bug this fixes: bare `?range=1m` resolves as a whole query string in React Router —
+    // dropped `?uploaded=` on the account page.
     expect(rangeSearch(at("?uploaded=42"), "1m")).toBe("?uploaded=42&range=1m");
-    // A repeated key, not a comma: `?owner=1&owner=3` is this application's
-    // canonical spelling for a multi-valued parameter (spec 0013,
-    // `owner-filter.ts`'s `toOwnerParam`). `carriedParams` reads it as two
-    // `owner` entries and `URLSearchParams` reproduces a repeated key
-    // unchanged — there is no separator here for a second serialiser to
-    // spell differently, which a joined `owner=1,3` could not have said (see
-    // `toOwnerParam`'s doc for why that spelling looped instead).
+    // Repeated key, not comma-joined (spec 0013, toOwnerParam) — URLSearchParams reproduces it unchanged, no separator for another serialiser to misread.
     expect(rangeSearch(at("?owner=1&owner=3&sort=value"), "1m")).toBe(
       "?owner=1&owner=3&sort=value&range=1m",
     );
@@ -579,8 +500,7 @@ describe("the address a range control points at", () => {
   });
 
   it("carries a repeated parameter as many times as the address holds it", () => {
-    // `URLSearchParams.get` would keep one and discard the rest, which is a
-    // link that quietly edits the address it was only meant to add to.
+    // URLSearchParams.get would keep one and discard the rest — quietly editing the address.
     expect(rangeSearch(at("?tag=a&tag=b"), "1m")).toBe("?tag=a&tag=b&range=1m");
     expect(carriedParams(at("?tag=a&tag=b"))).toEqual([
       ["tag", "a"],
@@ -605,10 +525,7 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
       ...shared,
     });
 
-    // Literal, not `resolveRange("1y", ...)`: that would assert the function
-    // under test against itself. 1Y's own boundary math and the sampler's
-    // decay are already exhausted above; `dates` itself is 180 entries and
-    // not usefully spelled out here, so only its shape is asserted.
+    // Literal values, not resolveRange(...) — that would test the function against itself; boundary/decay math is covered above.
     expect(resolved.range).toBe("1y");
     expect(resolved.since).toBe("2025-08-26");
     expect(resolved.custom).toBeUndefined();
@@ -620,19 +537,15 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
     expect(controls).toEqual({
       range: "1y",
       custom: undefined,
-      // Off 1D: the control block carries no session even though one was
-      // observed — `resolved.session` is what says so, not `shared.session`.
+      // Off 1D: session stays null here even though one was observed (resolved.session, not shared.session).
       session: null,
-      // Literal, not `rangeOptions(...)`: every preset is on, because
-      // 2020-01-01 (the manual point, earlier than the position set) predates
-      // every fixed boundary and a session was observed for 1D.
+      // Literal, not rangeOptions(...) — every preset is on since 2020-01-01 (manual) predates every boundary and 1D has a session.
       rangeOptions: (Object.keys(RANGES) as RangeKey[]).map((key) => ({
         key,
         label: RANGES[key].label,
         disabled: false,
       })),
-      // The earlier of the household's two dates (`surfaceEarliestDate`),
-      // not the account's.
+      // Earlier of the household's two dates (surfaceEarliestDate), not the account's.
       customMin: "2020-01-01",
       customMax: TODAY,
     });
@@ -647,10 +560,7 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
       ...shared,
     });
 
-    // Same reasoning as the household case above: a literal, not
-    // `resolveRange(DEFAULT_RANGE, ...)`. The unset `?range=` falls back to
-    // 1Y (`DEFAULT_RANGE`), which happens to resolve to the same boundary as
-    // the explicit case, because both share this file's `TODAY`.
+    // Unset ?range= falls back to 1Y, same boundary as the explicit case above (same TODAY).
     expect(resolved.range).toBe(DEFAULT_RANGE);
     expect(resolved.since).toBe("2025-08-26");
     expect(resolved.custom).toBeUndefined();
@@ -663,10 +573,7 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
       range: DEFAULT_RANGE,
       custom: undefined,
       session: null,
-      // Literal, not `rangeOptions(...)`: 1D is disabled (`session: null`
-      // above, nothing observed), and so are 3M, YTD, 1Y and 5Y, whose fixed
-      // boundaries all fall before this account's own 2026-06-01 — 1W and 1M
-      // land after it, and All and Custom are never disabled.
+      // 1D disabled (no session); 3M/YTD/1Y/5Y disabled (before 2026-06-01); 1W/1M land after it; All/Custom never disabled.
       rangeOptions: [
         { key: "1d", label: "1D", disabled: true },
         { key: "1w", label: "1W", disabled: false },
@@ -678,8 +585,7 @@ describe("chartWindow: the window and the control block a loader spreads (spec 0
         { key: "all", label: "All", disabled: false },
         { key: "custom", label: "Custom", disabled: false },
       ],
-      // The account's own earliest date — there is no manual series on this
-      // surface to fall back to.
+      // Account's own earliest date — no manual series on this surface to fall back to.
       customMin: "2026-06-01",
       customMax: TODAY,
     });

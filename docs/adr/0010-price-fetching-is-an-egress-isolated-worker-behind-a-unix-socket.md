@@ -44,7 +44,7 @@ called the library before, across a channel rather than a function call.
   two things this design has to guarantee — no route from the worker to the database, no route from
   the worker to the app's own screens — hold by construction rather than by a rule to keep.
 - **Passwords stop travelling in connection URLs.** `POSTGRES_PASSWORD` loses its default and is
-  required to start the stack at all (`compose.yaml:106`); `pg`, libpq and `pg_dump` all read
+  required to start the stack at all (`compose.yaml:28`); `pg`, libpq and `pg_dump` all read
   `PGPASSWORD` when the URL carries none, and `DATABASE_URL`'s defaults name a user and a host and
   nothing else. A database unreachable from the internet but guessable from its own network was
   isolated in name only.

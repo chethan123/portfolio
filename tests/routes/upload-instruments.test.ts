@@ -1,15 +1,7 @@
-/**
- * Step three's action — where an answer is paired with the string it
- * answers (ingest brief §5, §7.5). The rules underneath are
- * `instrument-resolution.test.ts`'s; what lives only here is the *pairing*:
- * posted answers line up with the draft's unresolved strings by index, and
- * the hidden `raw-N` field proves the index still means what it meant when
- * the page was drawn. Worth its own file because a mispairing is global and
- * permanent — point "VANGUARD TOTAL INTL" at the wrong instrument once and
- * every future export resolves to it silently, with no screen that ever
- * asks again. The window is real (two tabs, a concurrent draft) and the
- * guard is one `some` over an index.
- */
+// Step three's action pairs a posted answer with the string it answers by index (ingest brief §5, §7.5) — the hidden raw-N
+// field proves the index still means what it meant when drawn. Worth its own file: a mispairing is global and permanent
+// (point a string at the wrong instrument once, every future export resolves to it silently). Domain rules are
+// instrument-resolution.test.ts's.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { action, loader } from "../../app/routes/upload/instruments.tsx";
@@ -78,9 +70,7 @@ describe("the stale-form guard", () => {
     withDatabase(async (ctx) => {
       const draftId = await stageDraft(ctx);
 
-      // The page was drawn when VTI and VXUS were both unresolved. While it sat
-      // open, another draft resolved VTI — so the screen's index 0 is now VXUS,
-      // and the answer typed for VTI would land on it.
+      // Page drawn with VTI/VXUS both unresolved; another draft resolves VTI while it sits open — index 0 is now VXUS.
       await resolveAll(
         [
           {
@@ -96,8 +86,7 @@ describe("the stale-form guard", () => {
             },
           },
         ],
-        // Manual, so the probe must never actually be reached — a stub
-        // answering an empty map is enough to satisfy the required param.
+        // Manual: probe must never be reached; empty-map stub satisfies the required param.
         { probe: async () => new Map() },
       );
 
@@ -113,14 +102,12 @@ describe("the stale-form guard", () => {
         ),
       );
 
-      // A form-level refusal, not a field one: no single select is wrong, the
-      // page is.
+      // Form-level refusal, not a field one — the page is wrong, not one select.
       expect(outcome).toMatchObject({
         formError: expect.stringContaining("changed while this page was open"),
       });
 
-      // The point of refusing wholesale — VXUS is untouched rather than
-      // resolved to the answer typed for VTI.
+      // The point of refusing wholesale — VXUS untouched, not resolved to VTI's answer.
       expect(await unresolvedStrings(["VXUS"], ctx.db)).toEqual(["VXUS"]);
     }),
   );
@@ -128,10 +115,7 @@ describe("the stale-form guard", () => {
   it(
     "accepts answers whose hidden copy came back with the browser's line endings",
     withDatabase(async (ctx) => {
-      // A brokerage that writes a multi-line description cell. The browser
-      // rewrites the newline to CRLF on the way through the hidden field, so a
-      // byte comparison here would refuse every submission for that file —
-      // which is why the guard compares through `sameRawStrings`.
+      // The browser rewrites \n to \r\n through the hidden field, so a byte comparison would refuse every such submission — guard compares via sameRawStrings.
       const draftId = await stageDraft(
         ctx,
         ['Symbol,Quantity', '"BRK\nCLASS B",10'].join("\n"),
@@ -149,7 +133,7 @@ describe("the stale-form guard", () => {
       );
 
       expect(destination).toBe(`/upload/${draftId}/review`);
-      // Stored as the file wrote it, never as the form round trip returned it.
+      // Stored as the file wrote it, never the form round trip's spelling.
       expect(await unresolvedStrings([raw], ctx.db)).toEqual([]);
     }),
   );
@@ -159,9 +143,7 @@ describe("a step with nothing left to ask", () => {
   it(
     "sends a resolved draft on to review rather than drawing an empty screen",
     withDatabase(async (ctx) => {
-      // Charging a click for a screen with no decision on it is the thing the
-      // brief refuses (§7.5). Reached by the back button, or by a second tab
-      // that resolved everything a moment ago.
+      // A screen with no decision on it is what §7.5 refuses — reached via back button or a second tab that just resolved everything.
       const draftId = await stageDraft(ctx, ["Symbol,Quantity", "VTI,100"].join("\n"));
 
       await resolveAll(
@@ -179,8 +161,6 @@ describe("a step with nothing left to ask", () => {
             },
           },
         ],
-        // Manual, so the probe must never actually be reached — a stub
-        // answering an empty map is enough to satisfy the required param.
         { probe: async () => new Map() },
       );
 
@@ -193,7 +173,7 @@ describe("a step with nothing left to ask", () => {
   it(
     "answers 404 for a draft id that matches no row",
     withDatabase(async () => {
-      // A swept draft — they expire after 24 hours — reached from a stale tab.
+      // A swept draft (24h expiry), reached from a stale tab.
       const response = await outcomeOf(() =>
         loader(args(get("/upload/999999/instruments"), { draftId: "999999" })),
       );

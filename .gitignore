@@ -1,22 +1,13 @@
-# --- Portfolio Tracker --------------------------------------------------------
-
-# React Router build output; rebuilt by `npm run build` and the Dockerfile.
 build/
-
-# Generated route types; `npm run typecheck` regenerates them.
 .react-router/
 
-# This instance's secrets; `.env.example` is the committed, documented surface.
 .env
 .env.local
 
-# The gate's allowlist — the family's real addresses, never committed.
-# `allowed-emails.example.txt` shows the format (different filename on purpose).
+# The family's real addresses; allowed-emails.example.txt shows the format.
 allowed-emails.txt
 
-# This instance's database. compose.yaml's `db-store` binds ./volumes/db/data,
-# so a running instance leaves the whole cluster here — owned by the
-# container's uid 70, and never something to commit.
+# compose.yaml's `db-store` binds ./volumes/db/data: the whole cluster, uid 70.
 volumes/
 
 logs

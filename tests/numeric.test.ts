@@ -5,21 +5,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabase, type Database } from "~/lib/db.server";
 import type { Kysely } from "kysely";
 
-/**
- * The regression these tests exist for: `node-postgres` parses `numeric` into a
- * JavaScript number by default, which silently rounds. Asserting on strings is
- * the point — `toBeCloseTo` would hide exactly the bug being guarded against.
- *
- * Requires a real Postgres. See `compose.test.yaml`:
- *   docker compose -f compose.test.yaml up -d
- */
+// node-postgres parses numeric into a JS number by default, silently rounding — asserting on
+// strings is the point. Real Postgres required: docker compose -f compose.test.yaml up -d
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test";
 
 describe("numeric type parsing", () => {
   it("registers a string parser for numeric globally, not per query", () => {
-    // 1700 is `numeric`. Any pool anywhere in the process inherits this.
+    // 1700 = numeric OID; any pool in the process inherits this parser
     expect(pg.types.getTypeParser(pg.types.builtins.NUMERIC)("12345.6789")).toBe("12345.6789");
   });
 
@@ -30,16 +24,13 @@ describe("numeric type parsing", () => {
   });
 
   it("registers a string parser for date, which the default parses at local midnight", () => {
-    // 1082 is `date`. A calendar date is not an instant: the default parser
-    // builds a JS Date at *local* midnight, so formatting it back anywhere west
-    // of UTC yields the previous day — and a statement's as-of date shifting by
-    // one day selects the wrong position set.
+    // 1082 = date OID. Default parser builds a JS Date at local midnight — formatting west of
+    // UTC yields the previous day, shifting a statement's as-of date to the wrong position set
     expect(pg.types.getTypeParser(pg.types.builtins.DATE)("2026-01-31")).toBe("2026-01-31");
   });
 
   it("leaves timestamptz alone, since those are genuine instants", () => {
-    // `created_at`, `closed_at` and `quote.as_of` are moments in time, compared
-    // in SQL. A Date is the right shape for them.
+    // created_at/closed_at/quote.as_of are instants compared in SQL — Date is the right shape
     expect(typeof pg.types.getTypeParser(pg.types.builtins.TIMESTAMPTZ)("2026-01-31 12:00:00+00")).not.toBe(
       "string",
     );
@@ -67,20 +58,13 @@ describe("numeric values crossing the database boundary", () => {
     await db?.destroy();
   });
 
-  // One table rather than five near-identical `select cast(...)` bodies. The
-  // parser registration itself is already proved without a database at the top
-  // of this file; what a query adds is that the registration survives the pool
-  // this application actually builds, which is one assertion repeated, not
-  // five separate rules.
-  //
-  // Scales are the ones the schema really uses — `numeric(20, 4)` for money and
-  // `numeric(20, 8)` for quantity — so a case cannot pass against a width no
-  // column has.
+  // one table, not five near-identical selects — parser registration is proved above; this
+  // proves it survives the real pool. Scales match the schema: numeric(20,4) money, numeric(20,8) qty.
   it.each([
     ["a value at full scale", "12345.6789", "numeric(20, 4)", "12345.6789"],
-    // Stored scale is 4, so the string keeps its zeros. `Number` would give 25000.
+    // stored scale 4 keeps trailing zeros; Number would give 25000
     ["trailing zeros a number cannot carry", "25000", "numeric(20, 4)", "25000.0000"],
-    // How a liability is encoded: the sign lives on the quantity.
+    // sign lives on the quantity — how a liability is encoded
     ["a negative quantity", "-412000.0000", "numeric(20, 4)", "-412000.0000"],
     ["a fractional share", "0.12345678", "numeric(20, 8)", "0.12345678"],
   ])("returns %s as the decimal string Postgres sent", async (_case, literal, type, expected) => {
@@ -99,12 +83,12 @@ describe("numeric values crossing the database boundary", () => {
     `.execute(db);
 
     expect(result.rows[0]?.amount).toBe("123456789012345678.87654321");
-    // Proof the guard is load-bearing rather than decorative.
+    // proof the guard is load-bearing, not decorative
     expect(String(Number(enormous))).not.toBe(enormous);
   });
 
   it("keeps a numeric a string through a round trip into a real column", async () => {
-    // In one transaction so the temporary table and the read share a connection.
+    // one transaction so the temporary table and the read share a connection
     const amount = await db.transaction().execute(async (trx) => {
       await sql`
         create temporary table numeric_round_trip (amount numeric(20, 4) not null)
@@ -123,8 +107,7 @@ describe("numeric values crossing the database boundary", () => {
   });
 
   it("returns a date as the calendar date Postgres sent, not a Date at local midnight", async () => {
-    // Through a real `date` column, so this covers the driver's behaviour on
-    // the column type `position_set.as_of_date` and `price_daily.date` use.
+    // real date column — covers the driver behavior position_set.as_of_date and price_daily.date use
     const asOf = await db.transaction().execute(async (trx) => {
       await sql`
         create temporary table date_round_trip (as_of_date date not null) on commit drop

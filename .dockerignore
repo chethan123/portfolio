@@ -1,5 +1,5 @@
-# Nothing reaches the build context unless the Dockerfile asks, but the
-# explicit list keeps it small and secrets/node_modules impossible to include.
+# Explicit list: keeps the context small, and secrets and node_modules impossible
+# to include.
 .git
 .github
 .claude
@@ -11,16 +11,14 @@ coverage
 docs
 tests
 scripts
-# ...except the one the build stage runs to trim the production tree.
+# ...except the one the build stage runs.
 !scripts/prune-unreachable-deps.mjs
 *.md
 LICENSE
 .env
 .env.*
-# The running instance's database (compose.yaml's `db-store`). Excluded for
-# more than size: it is 0700 uid 70, so for a non-root operator a build from a
-# checkout that has ever run dies sending the context — `error from sender: open
-# volumes/db/data: permission denied` — before the first stage.
+# 0700 uid 70, so for a non-root operator a build from a checkout that has ever
+# run dies sending the context, before the first stage.
 volumes
 compose.yaml
 compose.dev.yaml

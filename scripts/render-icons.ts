@@ -1,21 +1,11 @@
 /**
- * The committed PWA icons, retaken in one command. `public/icon.svg` is the
- * source of truth; the PNGs under `public/icons/` are its rasterizations,
- * committed so the build stays a build and artifacts change only when someone
- * means them to. After editing the SVG:
+ * Regenerates committed PWA icons from public/icon.svg (source of truth).
+ * Run after editing the SVG: `node ./scripts/render-icons.ts`
  *
- *   node ./scripts/render-icons.ts
- *
- * The manifest's `icons` array is this script's to write, as `data:` URIs —
- * the rest of `public/manifest.webmanifest` stays hand-written. Inlined
- * because Android's WebAPK icon hasher fetches manifest icons with no cookies
- * (Chromium `webapk_single_icon_hasher.cc`): behind the gate an icon URL gets
- * the sign-in redirect and install greys out. A `data:` URI leaves nothing to
- * fetch and keeps every path gated.
- *
- * The maskable variant is the same drawing minus the corner radius: Android
- * crops its own shape from a full-bleed square, guaranteeing only a centred
- * 40%-radius circle, and the glyph already sits well inside it.
+ * Manifest icons inline as data: URIs — Android's WebAPK hasher fetches them
+ * cookie-less, so a bare URL hits the sign-in redirect behind the gate.
+ * Maskable variant drops the corner radius: Android crops its own centred
+ * 40%-radius circle from the full-bleed square; the glyph already fits.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 

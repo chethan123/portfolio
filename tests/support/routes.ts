@@ -1,52 +1,17 @@
 /**
- * Calling a route the way the framework calls it. Route modules import
- * cleanly under vitest — their one framework-shaped import, `./+types/*`,
- * is types-only and erased — so a loader or action is an ordinary async
- * function taking `{ request, params }`, and these helpers are the ceremony
- * around that: building the request, catching the `Response` a route throws
- * instead of returning. Only the route's own contribution is tested here —
- * redirects, guards, error mapping, the shape handed to the component; the
- * rules underneath are `app/lib/*`'s. Pairs with `withDatabase`, which
- * scopes `getDb()` to the test's transaction, so an argument-less loader
- * query reads the seeded rows and rolls back with everything else.
- *
- * "The way the framework calls it" includes a step it is tempting to skip:
- * every request a loader or action sees has already been rebuilt once by
- * `callRouteHandler`, which can respell its query string along the way
- * (`throughRouteHandler` below says how and why). A builder here that
- * returned the bare `new Request(url)` a hand-typed address parses to would
- * be testing a request no route ever actually receives.
+ * Calls a route the way react-router calls it — builds the Request, catches the Response a
+ * loader/action throws for redirects/404s. Pairs with withDatabase (getDb() resolves to the test's transaction).
  */
 import { RouterContextProvider } from "react-router";
 
-/**
- * The `Cookie` header a browser would send, or nothing.
- *
- * Optional because almost no route reads one. The masking work (spec 0007) is
- * the exception: whether a screen is masked is resolved from a cookie on the
- * way in, so a test that cannot send one cannot drive the feature at all.
- * Taking a bare value keeps the call sites reading as the question they are
- * asking — `get("/", MASKED)` — rather than as header construction.
- */
 function withCookie(request: Request, cookie?: string): Request {
   if (cookie !== undefined) request.headers.set("Cookie", cookie);
   return request;
 }
 
-/**
- * The `RequestInit` react-router's own strippers pass to `new Request`,
- * widened by the one field `lib.dom.d.ts` does not yet type: `duplex` is
- * required by the Fetch spec whenever `body` is a stream rather than `null`,
- * which is exactly the branch a POST takes below.
- */
+// `duplex` is required by the Fetch spec once body is a stream; lib.dom.d.ts doesn't type it yet.
 type StreamingRequestInit = RequestInit & { duplex?: "half" };
 
-/**
- * Rebuild a request from a (possibly just-mutated) `URL`, carrying its body,
- * headers and signal across unchanged — the half both of react-router's own
- * strippers share, pulled out here rather than repeated per the way the
- * source does it.
- */
 function rebuild(url: URL, request: Request): Request {
   const init: StreamingRequestInit = {
     method: request.method,
@@ -60,15 +25,8 @@ function rebuild(url: URL, request: Request): Request {
 }
 
 /**
- * `stripIndexParam`, copied from react-router 7.18.2's
- * `lib/server-runtime/data.ts` rather than reimplemented from what it is
- * "supposed" to do: the one behaviour this whole file exists to reproduce is
- * a `URLSearchParams.delete` re-serialising the query even when the deleted
- * key was never present, and that is a fact about the form-urlencoded
- * serialiser, not a rule worth restating in fresh words that could quietly
- * stop matching it. (A same-named `stripIndexParam` also lives in
- * react-router's client bundle, for single-fetch navigation — a different
- * function, taking a `URL` rather than a `Request`, not this one.)
+ * Copied from react-router 7.18.2's callRouteHandler (server-runtime/data.ts): URLSearchParams.delete
+ * re-serialises the whole query even for an absent key (`,`→`%2C`, space→`+`), so a hand-typed URL doesn't match what a route actually sees.
  */
 function stripIndexParam(request: Request): Request {
   const url = new URL(request.url);
@@ -79,7 +37,7 @@ function stripIndexParam(request: Request): Request {
   return rebuild(url, request);
 }
 
-/** `stripRoutesParam`, same source, same reason above. */
+/** Same reproduction as stripIndexParam, for `_routes`. */
 function stripRoutesParam(request: Request): Request {
   const url = new URL(request.url);
   url.searchParams.delete("_routes");
@@ -88,53 +46,23 @@ function stripRoutesParam(request: Request): Request {
 }
 
 /**
- * The request as a loader or action is actually handed it. react-router
- * 7.18.2's `callRouteHandler` (`lib/server-runtime/data.ts`) rebuilds every
- * request through `stripRoutesParam(stripIndexParam(...))` before a route
- * ever sees it, and a `delete` of an **absent** key still marks
- * `URLSearchParams` dirty, so Node re-derives `.search` from the
- * form-urlencoded serialiser rather than returning the original string
- * untouched — `,` becomes `%2C`, a space becomes `+`. A helper that skipped
- * this handed a loader the URL parser's spelling, which is not the spelling
- * either a `curl` or a browser's fetch ever produces once react-router has
- * touched the request, and a test built on it settles on paper while the real
- * thing loops: the settle chain in `tests/owner-reading.test.ts` was green
- * against exactly that loop before this rebuild existed.
- *
- * This mirrors 7.18.2 behaviour, not a documented contract. Under
- * `future.v8_passThroughRequests` the framework stops rebuilding and hands a
- * loader `args.request` exactly as sent — not the fix, since it only moves
- * the fixed-point question from this serialiser to whichever one the
- * transport that sent the request used. Whoever flips that flag here must
- * delete `throughRouteHandler` and its two strippers rather than trust them
- * to still be reproducing anything real.
+ * The request a loader/action is actually handed, after react-router's own stripRoutesParam(stripIndexParam(...))
+ * rebuild. Under future.v8_passThroughRequests that rebuild goes away — delete both strippers with it.
  */
 function throughRouteHandler(request: Request): Request {
   return stripRoutesParam(stripIndexParam(request));
 }
 
-/** A GET, with search params if the route reads any, and a cookie if it reads one. */
 export function get(path: string, cookie?: string): Request {
   return withCookie(throughRouteHandler(new Request(`http://portfolio.local${path}`)), cookie);
 }
 
-/**
- * A POST of form fields, encoded as a browser encodes them, then rebuilt the
- * same way a GET is — the server wraps an action in the identical
- * `callRouteHandler`, so a POST that skipped it would be faithful to nothing
- * that reads a query parameter, even though no action here reads one the
- * form serialiser would respell.
- */
 export function post(
   path: string,
   fields: Record<string, string | string[]>,
   cookie?: string,
-  // Headers a browser would attach that no other test needs to state.
-  // `Origin` is the one there is now a rule about
-  // (`crossOriginMutationMiddleware`, `app/root.tsx`), and leaving it out is
-  // itself a case that rule decides — so it is an option here rather than a
-  // default, and every builder call that omits it keeps sending no `Origin`
-  // at all.
+  // Origin: crossOriginMutationMiddleware (app/root.tsx) cares whether it's set;
+  // omitting it is itself a case that rule decides.
   headers?: Record<string, string>,
 ): Request {
   const body = new FormData();
@@ -152,16 +80,7 @@ export function post(
   return request;
 }
 
-/**
- * A POST carrying a file part, as the upload screen's form does.
- *
- * `formFields` drops file parts by design, so the drop screen reads the file
- * off the `FormData` itself — which means a journey through it has to send a
- * real one rather than a filename in a text field. Rebuilt through the same
- * `throughRouteHandler` as the other two builders: this one used to build its
- * `Request` by hand and skip it, which made it the one builder in this file
- * still lying about what a loader is handed.
- */
+/** POST with a real file part — the drop screen reads the file off FormData, not a filename field. */
 export function postFile(
   path: string,
   file: { name: string; content: string; type?: string },
@@ -179,25 +98,12 @@ export function postFile(
   return throughRouteHandler(new Request(`http://portfolio.local${path}`, { method: "POST", body }));
 }
 
-/**
- * The arguments a loader or action destructures.
- *
- * No route in this application reads `context`, and the ones that read
- * `params` read only the values in the URL — so this is the whole surface.
- * Cast at the call site, because the generated `Route.LoaderArgs` carries the
- * framework's full shape and none of the rest of it is reachable from here.
- */
+/** {request, params} only — no route here reads context. Cast at the call site; generated Route.LoaderArgs isn't reachable here. */
 export function args(request: Request, params: Record<string, string> = {}) {
   return { request, params } as never;
 }
 
-/**
- * Run a route function and return whatever it produced — thrown or returned.
- *
- * React Router routes signal a redirect or a 404 by throwing a `Response`, and
- * report a validation failure by returning data. Both are ordinary outcomes of
- * a correct route, so a test wants them in one place rather than in a `try`.
- */
+/** Runs a route fn; routes signal redirects/404s by throwing a Response, so both outcomes land here rather than in a try. */
 export async function outcomeOf<T>(run: () => Promise<T>): Promise<T | Response> {
   try {
     return await run();
@@ -207,13 +113,6 @@ export async function outcomeOf<T>(run: () => Promise<T>): Promise<T | Response>
   }
 }
 
-/**
- * The `Response` a route threw, or a failure if it did not throw one.
- *
- * Use where the redirect *is* the rule under test, so that a route which
- * quietly starts returning data fails here rather than several assertions later
- * against `undefined`.
- */
 export async function responseOf(run: () => Promise<unknown>): Promise<Response> {
   const outcome = await outcomeOf(run);
 
@@ -225,7 +124,6 @@ export async function responseOf(run: () => Promise<unknown>): Promise<Response>
   return outcome;
 }
 
-/** Where a redirect points, which is the only part of one a test cares about. */
 export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
   const response = await responseOf(run);
 
@@ -235,58 +133,12 @@ export async function redirectTo(run: () => Promise<unknown>): Promise<string> {
   return response.headers.get("Location") ?? "";
 }
 
-/**
- * Runs a route's middleware chain the way the framework does, around a
- * stand-in response.
- *
- * A route's middleware wraps the *response*, not the loader's return value —
- * `chart-range.ts`'s `chartRangeMiddleware` works this way, precisely so its
- * loaders keep returning the plain object every other test in this suite reads
- * fields off directly. What a
- * middleware adds to (or refuses) that response is what this helper is for;
- * what the loader underneath it returns is `loader(args(...))`'s question,
- * not this one's. A middleware step may throw a `Response` instead of
- * returning one — `outcomeOf`/`responseOf` above are what unwrap that.
- *
- * **`onNext`, for a middleware whose whole point is refusing before `next()`
- * runs** (the lock, `app/root.tsx`'s `middleware`). Asserting "the markup
- * contains no figure" against a refusal that renders nothing passes
- * unconditionally — the vacuous test that boundary exists to forbid — so a
- * caller proving a refusal passes a callback here and asserts it was never
- * invoked, rather than inspecting the response `next()` would have produced.
- * Optional and side-effect-only, so every existing caller — which reads the
- * response `chartRangeMiddleware` decorated and has no reason to care whether
- * `next` ran, since it always does — is unaffected.
- *
- * **One thing this does not reproduce.** `callRouteHandler`'s rebuild is a
- * loader/action-only step — the pipeline calls middleware with the request as
- * it arrived, before `throughRouteHandler` above would ever touch it — so
- * `servedThrough(middleware, get(...))` hands a middleware the request
- * builders' already-rebuilt (form-normal) spelling where the real pipeline
- * would still hand it the URL parser's. Harmless today: `chartRangeMiddleware`
- * reads only `range`, which no owner-filter respelling touches. Worth stating
- * rather than leaving for whoever adds the next middleware to discover cold.
- *
- * **A second thing it does not reproduce, now that an array can hold two.**
- * The real pipeline nests: `next()` recurses into the following middleware
- * and the handler runs only past the last one
- * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:4843-4891`),
- * and it calls `next()` *itself* for a middleware that returns nothing
- * (`:4884`). The loop below is flat instead: each step gets the same
- * stand-in `next`, and a step that returns nothing leaves `response`
- * undefined for the next step to overwrite. So `onNext` answers "did any
- * step call `next`", never "which one", and *order* cannot be asserted here
- * directly — a caller proving that one middleware runs before another has to
- * arrange for the two to answer differently and assert which answer came
- * back, as `tests/routes/root.test.ts`'s cross-origin refusal does against
- * an unreachable database.
- */
+/** Runs a route's middleware chain around a stand-in response (middleware wraps the response, not the loader's
+ * return value). `onNext` asserts a pre-next() refusal short-circuited — "no figure in the markup" passes
+ * vacuously against a refusal too. Flat loop, not nested: can't assert order between two middleware directly,
+ * and doesn't reproduce callRouteHandler's request rebuild. */
 export async function servedThrough(
-  // Untyped against a generated `Route.MiddlewareFunction[]`, deliberately —
-  // there are as many of those types as there are routes, one per generated
-  // `+types` module, and no single import here could name all of them. Cast
-  // at the call site instead, for `args()`'s own reason above.
-  middleware: readonly unknown[],
+  middleware: readonly unknown[], // untyped against generated Route.MiddlewareFunction[]; cast at call site
   request: Request,
   params: Record<string, string> = {},
   onNext?: () => void,
@@ -308,14 +160,7 @@ export async function servedThrough(
   return response;
 }
 
-/**
- * The canonical, repeated-key owner parameter for two or more ids — sorted
- * numerically the way `canonicalise` (`owner-filter.ts`) orders them — for
- * asserting a bounce target or building a request that is already canonical.
- * Hand-built, deliberately not calling `toOwnerParam`: a test pinning the
- * canonical spelling by calling the function under test would pass no matter
- * what that function produced.
- */
+/** Canonical sorted owner= param for 2+ ids. Hand-built, not via toOwnerParam, so a test can't pass by matching the function it's testing. */
 export function ownerParam(...ids: string[]): string {
   return [...ids]
     .sort((a, b) => Number(a) - Number(b))

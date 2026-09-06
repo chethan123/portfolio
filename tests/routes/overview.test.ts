@@ -1,18 +1,6 @@
-/**
- * Where the two net worth series meet (DESIGN.md §7). The computed and
- * hand-typed series are read by two query functions that know nothing of
- * each other — `manualNetWorth` returns rows raw and unmerged, because
- * "computed wins on overlapping dates" is a statement about a chart — and
- * this loader is the only place that statement is written down, as one
- * `filter` over two comparisons. Getting it wrong draws a lie in the shape
- * of a fact: a hand-typed annual dot blended into the computed line reads
- * as a real daily curve through an unrecorded period; a duplicate date
- * draws a vertical cliff. Neither throws, neither looks broken. The other
- * rules are the loader's own: what a junk `?range` falls back to, and —
- * through the one render — that the allocation bars measure against the
- * gross positive total, so a mortgage bigger than the portfolio gets no
- * negative bar.
- */
+// Where the two net worth series meet (DESIGN.md §7). manualNetWorth returns rows raw and unmerged — "computed wins on
+// overlapping dates" is a chart-level statement this loader alone writes. Getting it wrong draws a lie that never
+// throws: a blended hand-typed dot reads as a real daily curve, a duplicate date draws a cliff.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Overview, { loader, middleware } from "../../app/routes/overview.tsx";
@@ -25,33 +13,18 @@ import { args, get, ownerParam, redirectTo, servedThrough } from "../support/rou
 
 import type { TestContext } from "../support/database.ts";
 
-/**
- * Set before any loader runs: `overview.tsx` reads `MARKET_TIMEZONE` through
- * `getConfig()` to tell the chart which clock a session's instants are read on,
- * and `getConfig()` validates the whole environment when it is first asked.
- * `MARKET_TIMEZONE` itself defaults; the database URL is the one variable with
- * no default, and it is the same one the harness already connects with.
- */
+// getConfig() validates the whole environment on first read (overview.tsx reads MARKET_TIMEZONE through it) — set before any loader runs.
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 afterAll(closeTestDatabase);
 
 const DAY_MS = 86_400_000;
 
-/**
- * A date `days` before today, in UTC — the zone the loader samples in, and the
- * only one in which "today" is the same day for the test and for the sampler.
- */
+// In UTC, the only zone where "today" is the same day for the test and the sampler.
 const daysAgo = (days: number): string =>
   new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
 
-/**
- * One brokerage account holding one priced fund, as of `asOf`.
- *
- * That date is day zero for the instance: every sample from it forward is
- * covered, and everything before it is the stretch the manual series exists to
- * cover.
- */
+// `asOf` is day zero for the instance — everything before it is the stretch the manual series exists to cover.
 async function seedDayZero(
   ctx: Pick<
     TestContext,
@@ -71,17 +44,8 @@ async function seedDayZero(
   });
 }
 
-/**
- * Three owners, each with one account, priced so their headlines differ and
- * sum to a fourth — and with a different day zero for Alice, so a narrowed
- * chart's reach is a different date rather than the household's seen twice.
- *
- * Alice: 100 VTI at 100.0000 from `hers` days ago. Bob: 40 BND at 50.0000 and
- * Carol: 25 VXUS at 20.0000, both from `his`. Three rather than two, because
- * with two "both owners" is the household — every assertion about a multi-owner
- * filter would pass against a screen ignoring it, and the all-owners collapse
- * would bounce the URL away besides.
- */
+// Three owners (not two, else "both" is the household and the all-owners collapse would bounce it away), each priced so
+// headlines differ and sum to a fourth. Alice's day zero (`hers`) differs from Bob/Carol's (`his`) so a narrowed chart's reach is a distinct date.
 async function seedTwoOwners(
   ctx: Pick<
     TestContext,
@@ -135,13 +99,7 @@ async function seedTwoOwners(
   return { alice, bob, carol, vti };
 }
 
-/**
- * The middleware around the loader itself, rather than around a stand-in.
- *
- * `servedThrough` runs the chain over `new Response("the page")`, which is the
- * right shape for asking what the middleware does with a page — and cannot see
- * a redirect the loader threw, which is the only thing this file needs it for.
- */
+// The middleware around the loader itself, not a stand-in — servedThrough's stand-in Response can't see a loader-thrown redirect, which is what this file needs.
 async function servedAround(path: string): Promise<Response> {
   const request = get(path);
   const run = middleware[0] as unknown as (
@@ -175,25 +133,14 @@ describe("the Overview read as an owner", () => {
         ["Alice Brokerage", "10000.0000"],
       ]);
       expect(hers.holdingCount).toBe(1);
-      // The line, not only the figure above it. A headline that narrowed over a
-      // household line is the exact failure this screen is worst at showing,
-      // and nothing else here would catch it.
       expect(hers.computed.at(-1)?.amount).toBe("10000.0000");
 
-      // Named beside the figure, in words. ADR-0008 attaches that condition to
-      // the filter surviving navigation, and deleting the sentence broke no
-      // other assertion.
-      expect(renderRoute(Overview, "/", hers)).toContain("Showing <b>Alice</b> only.");
+      expect(renderRoute(Overview, "/", hers)).toContain("Showing <b>Alice</b> only."); // ADR-0008: filter surviving navigation
 
       const his = await at(`?owner=${bob.id}`);
       expect(his.change.current).toBe("2000.0000");
 
-      // Two of three, loaded together: exact decimal strings at the stored
-      // scale, and the parts adding to the whole is the only check that catches
-      // a predicate narrowing one reader and not another. Called through
-      // `loader` directly rather than `redirectTo`, so the address has to
-      // already be canonical — `toOwnerParam`'s repeated key, sorted, not a
-      // joined string — or this throws the bounce instead of the data.
+      // Called through loader directly, not redirectTo — the address must already be canonical (toOwnerParam's repeated key), or this throws the bounce instead of the data.
       const two = await at(`?${ownerParam(alice.id, bob.id)}`);
       expect(two.change.current).toBe("12000.0000");
       expect(two.computed.at(-1)?.amount).toBe("12000.0000");
@@ -207,27 +154,19 @@ describe("the Overview read as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(100), his: daysAgo(100) });
 
-      // Alice's account was created long before its first upload — an empty
-      // statement then, real positions later. So her history *begins* at 700
-      // days and her line only *starts* at 100, and the gap between them is
-      // where a hand-typed point can land. Without the rule below it would be
-      // drawn: the household's pre-app net worth, on a line labelled Alice.
+      // Alice's account is older than its first upload (empty then, positions later) — history begins at 700 days, line at 100, and the gap between is where a hand-typed point could wrongly land under "Alice".
       const older = await ctx.seedAccount({ kind: "bank", name: "Alice Savings", owner: alice });
       await ctx.seedPositionSet({ account: older, asOf: daysAgo(700), holdings: [] });
       await ctx.seedManualNetWorth({ date: daysAgo(400), amount: "5000.00" });
 
-      // Unfiltered, exactly what it is today: the prefix fills the gap ahead of
-      // the computed line, which is DESIGN.md §7 rule 2.
+      // Unfiltered: prefix fills the gap ahead of the computed line (DESIGN.md §7 rule 2).
       const household = await loader(args(get("/?range=all")));
       expect(household.manual.map((point) => point.date)).toEqual([daysAgo(400)]);
 
-      // Narrowed, not drawn. The series is the household's net worth from
-      // before there were accounts to attribute it to; there is no owner on it
-      // and no honest way to invent one (§7 rule 3).
+      // Narrowed, not drawn — this net worth predates any account to attribute it to, no honest owner to invent (§7 rule 3).
       const hers = await loader(args(get(`/?owner=${alice.id}&range=all`)));
       expect(hers.manual).toEqual([]);
 
-      // And said, rather than left as a line that starts suspiciously late.
       expect(renderRoute(Overview, "/", hers)).toContain(
         "hand-typed history before this instance existed",
       );
@@ -240,12 +179,9 @@ describe("the Overview read as an owner", () => {
   it(
     "shortens the reachable past to the selected owners' own history",
     withDatabase(async (ctx) => {
-      // Bob's history is eight months old; Alice's is three weeks. The
-      // household reaches back to Bob's, and a chart narrowed to Alice cannot.
+      // Bob's history is eight months old, Alice's three weeks — household reaches back to Bob's, narrowed-to-Alice cannot.
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(21), his: daysAgo(240) });
-      // Earlier than every position set, so it moves the household's reach —
-      // and so a filtered screen that kept reading it would keep reaching back
-      // through it, which is the regression this test exists for.
+      // Earlier than every position set — a filtered screen that kept reading it would keep reaching back through it.
       await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "1000.00" });
       const disabled = (data: Awaited<ReturnType<typeof loader>>, key: string) =>
         data.rangeOptions.find((option) => option.key === key)?.disabled;
@@ -257,8 +193,7 @@ describe("the Overview read as an owner", () => {
       expect(disabled(hers, "3m")).toBe(true);
       expect(hers.customMin).toBe(daysAgo(21));
 
-      // Disabled, and drawn as a span rather than as a link the loader would
-      // only fall back from.
+      // Disabled, drawn as a span rather than a link the loader would only fall back from.
       const markup = renderRoute(Overview, "/", hers);
       expect(markup).not.toContain("range=3m");
       expect(markup).toMatch(/<span[^>]*aria-disabled="true"[^>]*>3M</);
@@ -270,12 +205,7 @@ describe("the Overview read as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice, bob } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
 
-      // Bob's accounts all close, taking him off the roster — while
-      // `holding_valued_at` deliberately still reads an account closed after
-      // the date it is asked about, so his past is reachable to any read that
-      // is handed his id. A stale bookmark naming him alongside Alice must not
-      // put that past into a chart whose sentence says "Showing Alice only":
-      // the loader resolves what it reads by against the roster (§14).
+      // Bob's accounts all close (off the roster), but holding_valued_at still reads a closed account for dates before its closure, so a stale bookmark naming him must not sneak into "Showing Alice only" (§14).
       await ctx.db
         .updateTable("account")
         .set({ closed_at: new Date() })
@@ -283,16 +213,11 @@ describe("the Overview read as an owner", () => {
         .execute();
 
       const hers = await loader(args(get(`/?owner=${alice.id}&range=all`)));
-      // Called through `loader` directly, so this has to be the address
-      // `ownerReading` already accepts unchanged — the repeated key, not a
-      // joined string (`toOwnerParam`'s doc says why the joined form bounces
-      // now instead of settling).
       const stale = await loader(args(get(`/?${ownerParam(alice.id, bob.id)}&range=all`)));
 
       expect(stale.unknownOwner).toBe(true);
       expect(renderRoute(Overview, "/", stale)).toContain("Showing <b>Alice</b> only.");
-      // The figures are the sentence's, exactly: the same line, the same
-      // delta, the same reach as the address that never named Bob.
+      // Same figures as the sentence claims — the address that never named Bob.
       expect(stale.computed).toEqual(hers.computed);
       expect(stale.change).toEqual(hers.change);
       expect(stale.customMin).toBe(hers.customMin);
@@ -305,17 +230,14 @@ describe("the Overview read as an owner", () => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
       await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "5000.00" });
 
-      // A 1M window omits a 900-day-old point unfiltered too, so the note
-      // would name the filter as the cause of an omission the range imposes —
-      // the same wrong sentence the 1D case already refuses.
+      // 1M omits a 900-day-old point unfiltered too — naming the filter as cause would be the same wrong sentence 1D already refuses.
       const month = await loader(args(get(`/?owner=${alice.id}&range=1m`)));
       expect(month.manualWithheld).toBe(false);
       expect(renderRoute(Overview, "/", month)).not.toContain(
         "hand-typed history before this instance existed",
       );
 
-      // **All** unfiltered reaches back through every hand-typed point, so
-      // there the omission is the filter's and the note stands.
+      // All reaches back through every hand-typed point unfiltered, so here the omission is genuinely the filter's.
       const all = await loader(args(get(`/?owner=${alice.id}&range=all`)));
       expect(all.manualWithheld).toBe(true);
     }),
@@ -329,11 +251,7 @@ describe("the Overview read as an owner", () => {
       const data = await loader(args(get(`/${search}`)));
       const markup = renderRoute(Overview, `/${search}`, data);
 
-      // The range links carry the owner param — the bug ticket 00 fixed, seen
-      // from the side it was fixed for.
-      expect(markup).toContain(`href="/?owner=${alice.id}&amp;range=1w"`);
-      // And the control carries the range back, as a hidden field, so applying
-      // an owner does not throw away a chosen span.
+      expect(markup).toContain(`href="/?owner=${alice.id}&amp;range=1w"`); // the bug ticket 00 fixed
       expect(markup).toContain('type="hidden" name="range" value="1m"');
     }),
   );
@@ -349,14 +267,10 @@ describe("the Overview read as an owner", () => {
         `/?${ownerParam(...ids)}&range=1m`,
       );
 
-      // This screen's first thrown redirect, and it runs inside the range
-      // middleware. Remembering a choice on a response that is not the page is
-      // a header on a bounce nobody reads; the browser follows it and the range
-      // is still explicit in the address it follows to.
+      // First thrown redirect, running inside the range middleware — a header on a bounce nobody reads is wasted, and the range is still explicit in the address followed to.
       expect((await servedAround(messy)).headers.get("Set-Cookie")).toBeNull();
 
-      // The cookie is still written for the page itself, or this would be a
-      // fix that quietly removed the feature it was ordering itself against.
+      // Still written for the page itself, or this fix would have quietly removed the feature it was ordering against.
       const settled = await servedAround(`/?${ownerParam(...ids)}&range=1m`);
       expect(settled.headers.get("Set-Cookie")).toContain(RANGE_COOKIE);
     }),
@@ -370,15 +284,10 @@ describe("the Overview read as an owner", () => {
         his: daysAgo(200),
       });
       await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "5000.00" });
-      // Already the canonical repeated key, sorted: this test is after the
-      // everyone-*collapse* bounce in isolation, not the respelling bounce a
-      // joined string would hit first now (`toOwnerParam`'s doc says why).
+      // Already canonical (repeated key, sorted) — isolates the everyone-collapse bounce from the respelling bounce.
       const everyone = ownerParam(alice.id, bob.id, carol.id);
 
-      // Not merely a second URL for one view, which is what it is on the other
-      // screens: a narrowed chart drops the pre-app history, so ticking every
-      // box would have quietly cost the reader every year before the first
-      // upload while the headline stayed identical.
+      // Not merely a second URL for one view (as on other screens): a narrowed chart drops pre-app history, so ticking every box would silently cost every year before the first upload.
       expect(await redirectTo(() => loader(args(get(`/?${everyone}&range=all`))))).toBe(
         "/?range=all",
       );
@@ -390,12 +299,7 @@ describe("the Overview read as an owner", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
 
-      // No hand-typed rows: nothing is being withheld, and a note naming a
-      // cause the instance does not have is how a note stops being read — the
-      // rule the allocation panel's own notes keep two panels down. Under
-      // **All**, deliberately: the one range where an existing point is always
-      // the filter's omission and never the window's, so the absence here can
-      // only mean the instance has nothing to withhold.
+      // No hand-typed rows — a note naming a cause the instance doesn't have is how notes stop being read. Under All deliberately: the one range where an existing point's omission is always the filter's, never the window's.
       const quiet = await loader(args(get(`/?owner=${alice.id}&range=all`)));
       expect(quiet.manualWithheld).toBe(false);
       expect(renderRoute(Overview, "/", quiet)).not.toContain(
@@ -420,9 +324,7 @@ describe("the Overview read as an owner", () => {
       expect(data.roster).toHaveLength(1);
       const markup = renderRoute(Overview, "/", data);
       expect(markup).not.toContain('aria-label="Filter by owner"');
-      // And no header strip either, which would otherwise be an empty row with
-      // its own gap above a headline that is already the page's title.
-      expect(markup).not.toContain("page-header--bare");
+      expect(markup).not.toContain("page-header--bare"); // no empty-row strip above a headline that's already the page's title
     }),
   );
 });
@@ -433,9 +335,7 @@ describe("what a filtered address must not lose", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
 
-      // An emptied screen is exactly where a reader changes owner, and the
-      // control there emitted no hidden fields at all — so widening also threw
-      // away the span they had chosen.
+      // An emptied screen used to emit no hidden fields at all, so widening also threw away the chosen span.
       const data = await loader(args(get(`/?owner=999999999&range=3m`)));
       const markup = renderRoute(Overview, "/", data);
 
@@ -451,9 +351,7 @@ describe("what a filtered address must not lose", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
 
-      // Spec 0013 names this round trip as the price of the account exemption:
-      // the account page ignores the filter, so without a return address
-      // Overview → a row → back lands on the whole household silently.
+      // Spec 0013's account exemption: the account page ignores the filter, so without a return address the round trip silently lands on the whole household.
       const data = await loader(args(get(`/?owner=${alice.id}`)));
       const markup = renderRoute(Overview, "/", data);
 
@@ -468,11 +366,10 @@ describe("what a filtered address must not lose", () => {
       const { alice, vti } = await seedTwoOwners(ctx, { hers: daysAgo(200), his: daysAgo(200) });
       await ctx.seedManualNetWorth({ date: daysAgo(900), amount: "100000.00" });
 
-      // Under every other range the note is the whole point.
       const dated = await loader(args(get(`/?owner=${alice.id}&range=all`)));
       expect(dated.manualWithheld).toBe(true);
 
-      // A session to plot, or 1D falls back and there is nothing to assert.
+      // A session to plot, or 1D falls back and there's nothing to assert.
       const today = new Date().toISOString().slice(0, 10);
       for (const minute of ["14:30", "15:30", "20:00"]) {
         await ctx.seedObservation({
@@ -483,9 +380,7 @@ describe("what a filtered address must not lose", () => {
         });
       }
 
-      // Under 1D the note would name the filter as the cause of an omission the
-      // range imposes, and say the line begins at first recorded holdings where
-      // a session begins at its first observed instant. Both wrong at once.
+      // Under 1D the note would wrongly blame the filter for the range's own omission, and misstate where the line begins.
       const session = await loader(args(get(`/?owner=${alice.id}&range=1d`)));
       expect(session.session).not.toBeNull();
       expect(session.manualWithheld).toBe(false);
@@ -500,10 +395,7 @@ describe("what a filtered address must not lose", () => {
       const markup = renderRoute(Overview, "/", data);
 
       expect(data.roster).toHaveLength(1);
-      // The strip is suppressed — an empty row with its own gap above a
-      // headline that is already the page's title — but the heading is the
-      // page's, not the strip's, and a screen with no `h1` cannot be navigated
-      // by heading.
+      // The strip is suppressed, but the heading is the page's, not the strip's — a screen with no h1 can't be navigated by heading.
       expect(markup).not.toContain("page-header--bare");
       expect(markup).toContain("<h1");
       expect(markup).toContain("Overview</h1>");
@@ -520,19 +412,14 @@ describe("the Overview's three empty states", () => {
       const markup = renderRoute(Overview, "/", data);
 
       expect(markup).toContain("Nothing has been uploaded to this instance yet");
-      // With nothing below it there is no headline to be the page's name, so
-      // this is the one state where the title is drawn.
-      expect(markup).toContain('<h1 class="page-title">Overview</h1>');
+      expect(markup).toContain('<h1 class="page-title">Overview</h1>'); // no headline below, so this is the one state where the title is drawn
     }),
   );
 
   it(
     "says nothing has been uploaded even when the address carries an owner filter",
     withDatabase(async (ctx) => {
-      // A bookmarked `/?owner=1` opened against a fresh instance is a filtered
-      // address *and* an empty instance. Branching on the filter alone answered
-      // it with "set to an owner the household can no longer be read as", which
-      // sends the reader hunting for a roster on a database that has none.
+      // A bookmarked owner param against a fresh instance is filtered *and* empty — branching on the filter alone wrongly said "can no longer be read as", sending the reader hunting for a roster on a database that has none.
       await ctx.seedPerson({ name: "Alice" });
       const data = await loader(args(get("/?owner=999999999")));
 
@@ -554,8 +441,7 @@ describe("the Overview's three empty states", () => {
       expect(unknownMarkup).toContain("no longer be read as");
       expect(unknownMarkup).toContain('aria-label="Filter by owner"');
 
-      // Alice keeps an open account holding nothing: still in the roster, so
-      // this is a fact about the household rather than an error.
+      // Alice keeps an open, empty account — still in the roster, not an error.
       const empty = await ctx.seedAccount({ name: "Alice Cash", owner: alice, kind: "bank" });
       await ctx.seedPositionSet({ account: empty, asOf: daysAgo(1), holdings: [] });
       await ctx.db
@@ -591,16 +477,12 @@ describe("the Overview's three empty states", () => {
         holdings: [{ instrument: vti, quantity: "10" }],
       });
 
-      // Dana is recorded and owns no open account, so `?owner=` naming Alice
-      // does not cover everybody recorded and cannot collapse — while the
-      // roster offers one name, which used to mean no control at all: the nav
-      // carried the filter onward and no screen could clear it.
+      // Dana owns no open account, so ?owner= naming Alice doesn't cover everybody and can't collapse — but the roster offers one name, which used to mean no control at all, stranding the filter with no way to clear it.
       const data = await loader(args(get(`/?owner=${alice.id}`)));
       const markup = renderRoute(Overview, "/", data);
       expect(markup).toContain('aria-label="Filter by owner"');
       expect(markup).toContain("Show everyone");
 
-      // Unfiltered, the one-name household still draws no control.
       expect(renderRoute(Overview, "/", await loader(args(get("/"))))).not.toContain(
         'aria-label="Filter by owner"',
       );
@@ -614,21 +496,16 @@ describe("the two series on one chart", () => {
     withDatabase(async (ctx) => {
       await seedDayZero(ctx, daysAgo(60));
 
-      // Today is always the last sample and is always covered once anything
-      // has been uploaded, so this is a date the computed line already speaks
-      // for — with a figure nothing in the database agrees with.
+      // Today is always covered once anything's uploaded, a date the computed line already speaks for — with a figure nothing agrees with.
       await ctx.seedManualNetWorth({ date: daysAgo(0), amount: "999999.0000" });
-      // Ahead of day zero and inside the window: the gap the manual series is
-      // the whole reason for.
-      await ctx.seedManualNetWorth({ date: daysAgo(75), amount: "50000.0000" });
+      await ctx.seedManualNetWorth({ date: daysAgo(75), amount: "50000.0000" }); // ahead of day zero, inside the window — the gap the manual series exists for
 
       const data = await loader(args(get("/?range=3m")));
 
       expect(data.manual).toEqual([{ date: daysAgo(75), amount: "50000.0000" }]);
       expect(data.computed.map((point) => point.date)).toContain(daysAgo(0));
 
-      // The rule stated as the chart reads it: no x carries a point from both
-      // series, whatever the sampler chose.
+      // No x carries a point from both series, whatever the sampler chose.
       const computed = new Set(data.computed.map((point) => point.date));
       expect(data.manual.filter((point) => computed.has(point.date))).toEqual([]);
     }),
@@ -644,8 +521,7 @@ describe("the two series on one chart", () => {
 
       const data = await loader(args(get("/?range=1m")));
 
-      // A month-long chart carrying a point from seven months ago would squeeze
-      // the month it was asked for into the last few pixels of its own axis.
+      // A 7-month-old point on a month-long chart would squeeze the asked-for month into the last few pixels of its own axis.
       expect(data.manual).toEqual([{ date: daysAgo(20), amount: "50000.0000" }]);
     }),
   );
@@ -655,10 +531,7 @@ describe("the range in the query string", () => {
   it(
     "falls back to the default year when the range is not one the page offers",
     withDatabase(async () => {
-      // Reached by a hand-edited URL or a stale bookmark. `6m` was never one
-      // of the eight the control offers, before or after spec 0008 widened it
-      // from four — unlike `ytd`, which spec 0008 turned from an unrecognised
-      // key into a real preset.
+      // 6m was never one of the offered presets, before or after spec 0008 widened them from four — unlike ytd, which spec 0008 made real.
       expect((await loader(args(get("/?range=6m")))).range).toBe("1y");
       expect((await loader(args(get("/?range=")))).range).toBe("1y");
       expect((await loader(args(get("/?range=1m")))).range).toBe("1m");
@@ -670,11 +543,7 @@ describe("the range in the query string", () => {
     "does not mistake %s for a range, however much it looks like a key",
     (inherited) =>
       withDatabase(async () => {
-        // The gate was `requested in RANGES`, and `in` walks the prototype
-        // chain — so every one of these passed it, `RANGES[requested].days`
-        // read `undefined`, and the window arithmetic reached
-        // `isoDate(NaN)` and threw. A 500 on the home page, from a query
-        // string, with no authentication needed to send it.
+        // `in` walks the prototype chain — each of these passed requested in RANGES, read undefined days, and threw isoDate(NaN): an unauthenticated 500.
         expect((await loader(args(get(`/?range=${inherited}`)))).range).toBe("1y");
       })(),
   );
@@ -774,9 +643,7 @@ describe("a custom range", () => {
       expect(data.customMin).toBe(daysAgo(200));
       expect(data.customMax).toBe(daysAgo(0));
 
-      // Not just the loader's own field — the two date inputs the reader
-      // actually sees have to carry the same bounds, or a picker that let
-      // through a date the loader would then reject.
+      // Not just the loader's field — the two date inputs the reader actually sees must carry the same bounds, or the picker could let through a date the loader then rejects.
       const markup = renderRoute(Overview, "/", data);
       expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="start"`);
       expect(markup).toContain(`min="${daysAgo(200)}" max="${daysAgo(0)}" name="end"`);
@@ -813,10 +680,7 @@ describe("a custom range", () => {
 
       const markup = renderRoute(Overview, "/", await loader(args(get("/"))));
 
-      // The picker is a native popover: the chip is its invoker, and the form it
-      // names is what the browser lifts into the top layer — which is how the
-      // picker escapes the phone strip's overflow. React emits the prop's
-      // camelCase text on the server; HTML attribute names are case-insensitive.
+      // Native popover: the form the chip names is what the browser lifts into the top layer, escaping the phone strip's overflow.
       const [, id] = markup.match(/<button[^>]*\bpopovertarget="([^"]+)"/i) ?? [];
       expect(id).toBeDefined();
       const [form] = markup.match(/<form[^>]*\bpopover="auto"[^>]*>/) ?? [];
@@ -829,18 +693,14 @@ describe("a preset before this household's earliest data", () => {
   it(
     "renders disabled, with no working link, rather than silently acting like All",
     withDatabase(async (ctx) => {
-      // Eight months of history: 5Y and All measure the same window, and 5Y
-      // must say so rather than let a click do nothing and leave the reader
-      // guessing why.
+      // Eight months of history: 5Y and All measure the same window — 5Y must say so, not let a click do nothing.
       await seedDayZero(ctx, daysAgo(240));
 
       const data = await loader(args(get("/")));
       expect(data.rangeOptions.find((option) => option.key === "5y")?.disabled).toBe(true);
 
       const markup = renderRoute(Overview, "/", data);
-      // On the resolved href, not on the relative `to`: a `<Link>` renders
-      // the address it resolves to, so the old assertion against `href="?…"`
-      // could never have failed whether the preset linked or not.
+      // On the resolved href, not the relative `to` — a <Link> renders the resolved address.
       expect(markup).not.toContain("range=5y");
       expect(markup).toMatch(/<span[^>]*aria-disabled="true"[^>]*>5Y</);
     }),
@@ -849,9 +709,7 @@ describe("a preset before this household's earliest data", () => {
   it(
     "does not disable a preset whose start lands exactly on the earliest date",
     withDatabase(async (ctx) => {
-      // 1W's own boundary is exactly seven days ago; seeding day zero there
-      // makes the two land on the same date rather than one falling before
-      // the other.
+      // 1W's own boundary is exactly seven days ago — lands the two on the same date rather than one before the other.
       await seedDayZero(ctx, daysAgo(7));
 
       const data = await loader(args(get("/")));
@@ -866,10 +724,7 @@ describe("the allocation bars", () => {
     withDatabase(async (ctx) => {
       await seedDayZero(ctx, daysAgo(30));
 
-      // A mortgage larger than the portfolio it sits beside. Net worth is
-      // -$40,000, and a share of *that* is where the arithmetic goes wrong:
-      // 10,000 / -40,000 is a bar drawn at -25% of its track, or NaN once the
-      // two cancel exactly.
+      // Mortgage bigger than the portfolio: net worth -$40,000, and a share of *that* is where the arithmetic breaks (10,000/-40,000 = -25% bar, or NaN if they cancel exactly).
       const usd = await ctx.usdInstrument();
       const mortgage = await ctx.seedAccount({ kind: "liability", name: "Mortgage" });
       await ctx.seedPositionSet({
@@ -880,20 +735,13 @@ describe("the allocation bars", () => {
 
       const data = await loader(args(get("/")));
 
-      // The one rule in this file that lives in the component rather than the
-      // loader, so it is the one that pays for a render.
-      // Through the shared helper, which puts a root route above the page
-      // carrying the masking state every amount reads (spec 0007). Rendered
-      // unmasked, because the figures below are what this test is about.
+      // The one rule here living in the component, not the loader — the one that pays for a render. Rendered unmasked.
       const markup = renderRoute(Overview, "/", data);
 
-      // One bar, the whole track wide: the only account that holds anything.
-      expect(markup).toContain("width:100.0%");
+      expect(markup).toContain("width:100.0%"); // one bar, whole track — the only account holding anything
       expect(markup).not.toMatch(/width:\s*-/);
       expect(markup).not.toContain("NaN");
-      // The debt is not silently missing — it is in the accounts list at its
-      // own sign (a real minus, U+2212, which is what `formatMoney` writes),
-      // with the note beside the bars saying why it has no share.
+      // Debt isn't silently missing — it's in the accounts list at its own sign (real minus, U+2212, formatMoney), with a note explaining no share.
       expect(markup).toContain("−$50,000.00");
       expect(markup).toContain("has no bar.");
     }),
@@ -907,7 +755,7 @@ describe("the number tail on the account rows", () => {
       const owner = await ctx.seedPerson({ name: "Alice" });
       const usd = await ctx.usdInstrument();
 
-      // Free-form, as the column is: the tail is the last four *characters*.
+      // Free-form column: tail is the last four characters, not digits.
       const numbered = await ctx.seedAccount({
         name: "Fidelity Taxable",
         owner,
@@ -928,19 +776,14 @@ describe("the number tail on the account rows", () => {
 
       const markup = renderRoute(Overview, "/", await loader(args(get("/"))));
 
-      // The accounts panel: the dots are decoration a screen reader skips,
-      // and the same fact is said as words instead.
       expect(markup).toContain('<span class="number-tail" aria-hidden="true">····3910</span>');
       expect(markup).toContain('<span class="visually-hidden">ending in 3910</span>');
 
-      // The allocation bar carries the same arrangement, wrapped in one span
-      // so the flex row keeps label and figure apart.
+      // Allocation bar carries the same arrangement, wrapped in one span so the flex row keeps label and figure apart.
       expect(markup).toContain(
         '<div class="alloc-label"><span>Fidelity Taxable <span class="number-tail" aria-hidden="true">····3910</span>',
       );
 
-      // An account with no recorded number keeps its bare name: no dots
-      // standing in for a number nobody recorded.
       expect(markup).toContain("Checking");
       expect(markup).not.toContain("Checking ·");
     }),
@@ -948,13 +791,7 @@ describe("the number tail on the account rows", () => {
 });
 
 describe("the 1D range on the Overview", () => {
-  /**
-   * Day zero, plus a session of observations on `session`.
-   *
-   * The daily close on the day before is what an unobserved instant carries
-   * forward from, and the quote is what the headline reads — both written the
-   * way one refresh writes them, which is the path story 8 is about.
-   */
+  // Day zero, plus a session of observations. Daily close the day before is what an unobserved instant carries forward from; the quote is what the headline reads — both written the way one refresh writes them (story 8).
   async function seedSession(ctx: TestContext, session: string, previous: string): Promise<void> {
     const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
     const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
@@ -1006,9 +843,7 @@ describe("the 1D range on the Overview", () => {
 
       const data = await loader(args(get("/?range=1d")));
 
-      // Story 8, and the reason the refresh writes the quote and the
-      // observation in one transaction: the screen never shows two totals that
-      // disagree.
+      // Story 8: the refresh writes quote and observation in one transaction so the screen never shows two disagreeing totals.
       expect(data.computed.at(-1)?.amount).toBe(data.change.current);
     }),
   );
@@ -1020,9 +855,7 @@ describe("the 1D range on the Overview", () => {
 
       const data = await loader(args(get("/?range=1d")));
 
-      // Yesterday's close was $100 a share, and the session ended at $110 —
-      // "today's change" in the sense a brokerage means it. Measured against
-      // the session's own provisional close it would read zero.
+      // Yesterday's close was $100/share, session ended at $110 — "today's change" a brokerage's sense; the session's own provisional close would read zero.
       expect(data.change.previous).toBe("10000.0000");
       expect(data.change.difference).toBe("1000.0000");
     }),
@@ -1033,8 +866,7 @@ describe("the 1D range on the Overview", () => {
     withDatabase(async (ctx) => {
       await seedSession(ctx, daysAgo(1), daysAgo(2));
 
-      // The market's zone, never the reader's: the axis has to say the same
-      // thing on the server and in the browser after hydration.
+      // The market's zone, never the reader's — the axis must say the same thing server-side and after hydration.
       expect((await loader(args(get("/?range=1d")))).session).toEqual({
         timeZone: "America/New_York",
       });
@@ -1048,9 +880,7 @@ describe("the 1D range on the Overview", () => {
       await seedSession(ctx, daysAgo(1), daysAgo(2));
       await ctx.seedManualNetWorth({ date: daysAgo(400), amount: "50000.0000" });
 
-      // §7's series is the household's net worth before day zero. Dropping a
-      // point from last year onto a line of this morning's instants would claim
-      // a session that never happened.
+      // §7's series predates day zero — dropping last year's point onto this morning's instants would claim a session that never happened.
       expect((await loader(args(get("/?range=1d")))).manual).toEqual([]);
       expect((await loader(args(get("/?range=all")))).manual).not.toEqual([]);
     }),
@@ -1078,9 +908,7 @@ describe("the 1D range on the Overview", () => {
 
       const data = await loader(args(get("/?range=1d")));
 
-      // Reported back as what was actually drawn, the way an undrawable custom
-      // span already is — a chart captioned 1D from a session that never
-      // existed is the thing being refused.
+      // Reported back as what was actually drawn (as an undrawable custom span already is) — never caption 1D over a session that never existed.
       expect(data.range).toBe("1y");
       expect(data.session).toBeNull();
     }),
@@ -1093,9 +921,7 @@ describe("the 1D range on the Overview", () => {
 
       const response = await servedThrough(middleware, get("/?range=1d"));
       expect(response.headers.get("Set-Cookie")).toContain(`${RANGE_COOKIE}=1d`);
-
-      // Story 11: the app reopens on the view in use.
-      expect((await loader(args(get("/", `${RANGE_COOKIE}=1d`)))).range).toBe("1d");
+      expect((await loader(args(get("/", `${RANGE_COOKIE}=1d`)))).range).toBe("1d"); // story 11: app reopens on the view in use
     }),
   );
 
@@ -1105,8 +931,7 @@ describe("the 1D range on the Overview", () => {
       await seedDayZero(ctx, daysAgo(60));
       const before = await loader(args(get("/?range=1m")));
 
-      // Observations and nothing else — no new close, no new position set — so
-      // the only thing that changed between the two reads is the new tier.
+      // Observations only — no new close, no new position set — so the new tier is the only thing that changed.
       const vti = await ctx.seedInstrument({ symbol: "VTI", priceSource: "feed" });
       for (const minute of ["13:30", "17:00", "20:00"]) {
         await ctx.seedObservation({
@@ -1119,8 +944,7 @@ describe("the 1D range on the Overview", () => {
 
       const after = await loader(args(get("/?range=1m")));
 
-      // Story 19. A new tier under the chart must change nothing about a line
-      // that is already history — the day series reads `price_daily` alone.
+      // Story 19: a new tier must change nothing about a line already history — the day series reads price_daily alone.
       expect(after.computed).toEqual(before.computed);
       expect(after.change).toEqual(before.change);
     }),

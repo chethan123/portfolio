@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { ConfigError, loadConfig, loadWorkerConfig } from "../server/config.ts";
 
-/**
- * The documented default (spec 0018 §3.2, `.env.example`), spelled out
- * literally rather than imported: comparing against the module's own
- * exported constant would make a changed default invisible to these tests.
- */
+/** Documented default (spec 0018 §3.2, .env.example), spelled literally — comparing against the
+ * module's own constant would hide a changed default. */
 const DEFAULT_PRICE_WORKER_SOCKET = "/run/price-worker/worker.sock";
 
 const MINIMAL = {
@@ -50,10 +47,7 @@ describe("configuration validation", () => {
       loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://portfolio.example.com" }).PUBLIC_ORIGIN,
     ).toBe("https://portfolio.example.com");
 
-    // Each of these parses cleanly as a URL — the only thing that has ever
-    // validated this value before — but none is the exact string the browser
-    // sends, or the string the gate concatenates its callback from, so each
-    // has to be refused by name rather than silently canonicalised.
+    // Each parses cleanly as a URL (the old validation) but isn't the exact string the browser sends.
     const nonCanonical = [
       "https://portfolio.example.com/", // trailing slash
       "HTTPS://Portfolio.Example.COM", // upper case
@@ -74,8 +68,7 @@ describe("configuration validation", () => {
   });
 
   it("refuses a plain http origin that is not localhost", () => {
-    // The Secure Contexts carve-out is `localhost`-shaped, not scheme-shaped:
-    // nothing else gets to skip TLS.
+    // Secure Contexts carve-out is localhost-shaped, not scheme-shaped — nothing else skips TLS.
     expect(() =>
       loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "http://portfolio.example.com" }),
     ).toThrow(/PUBLIC_ORIGIN/);
@@ -100,10 +93,7 @@ describe("configuration validation", () => {
   });
 
   it("refuses a value carrying a path", () => {
-    // compose.yaml builds the gate's own redirect as PUBLIC_ORIGIN +
-    // "/oauth2/callback"; a value that already carries a path would make that
-    // concatenation a URL Google never registered, and it is not a valid
-    // WebAuthn expected origin either.
+    // compose.yaml builds the redirect as PUBLIC_ORIGIN + "/oauth2/callback" — a path here would make that a URL Google never registered.
     expect(() =>
       loadConfig({ ...MINIMAL, PUBLIC_ORIGIN: "https://portfolio.example.com/oauth2/callback" }),
     ).toThrow(/PUBLIC_ORIGIN/);
@@ -128,8 +118,7 @@ describe("configuration validation", () => {
     expect(config.MARKET_TIMEZONE).toBe("America/New_York");
     expect(config.TZ).toBe("UTC");
 
-    // "Nothing is in front of me" is the honest default: it is what a checkout
-    // is, and it is the answer that leaves the warning banner showing.
+    // "Nothing in front of me" is the honest default — what a fresh checkout is, and it leaves the warning banner showing.
     expect(config.AUTH_GATE).toBe("none");
   });
 
@@ -145,8 +134,7 @@ describe("configuration validation", () => {
   it("parses the upload cap and refuses anything that is not a whole megabyte count", () => {
     expect(loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "25" }).MAX_UPLOAD_MB).toBe(25);
 
-    // "2.5" and "ten" are both refused as non-integers; "0" trips the minimum,
-    // because a cap of zero megabytes is an upload form that accepts nothing.
+    // "2.5"/"ten" refused as non-integers; "0" trips the minimum — a zero-MB cap accepts nothing.
     expect(() => loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "2.5" })).toThrow(/MAX_UPLOAD_MB/);
     expect(() => loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "ten" })).toThrow(/MAX_UPLOAD_MB/);
     expect(() => loadConfig({ ...MINIMAL, MAX_UPLOAD_MB: "0" })).toThrow(/MAX_UPLOAD_MB/);
@@ -156,10 +144,7 @@ describe("configuration validation", () => {
     expect(loadConfig({ ...MINIMAL, AUTH_GATE: "external" }).AUTH_GATE).toBe("external");
     expect(loadConfig({ ...MINIMAL, AUTH_GATE: "none" }).AUTH_GATE).toBe("none");
 
-    // A typo, and a plausible guess at a boolean. Both have to fail loudly:
-    // silently reading either as "a gate fronts me" would hide the warning on
-    // an instance with nothing in front of it, which is the one wrong answer
-    // this setting can give.
+    // Typo and a plausible boolean guess — both must fail loudly, or the misread hides the warning.
     expect(() => loadConfig({ ...MINIMAL, AUTH_GATE: "externl" })).toThrow(/AUTH_GATE/);
     expect(() => loadConfig({ ...MINIMAL, AUTH_GATE: "true" })).toThrow(/AUTH_GATE/);
   });
@@ -181,12 +166,8 @@ describe("configuration validation", () => {
   });
 });
 
-/**
- * The worker's own schema (spec 0018 §3.5): one key, and the point of the
- * first case is what it does *not* need — `loadWorkerConfig({})` throwing
- * nothing is the assertion that the worker starts with no database and no
- * origin, unlike {@link loadConfig}'s empty-environment case above.
- */
+/** Worker's own schema (spec 0018 §3.5): one key. First case's point is what it doesn't need —
+ * loadWorkerConfig({}) throwing nothing means no database/origin required. */
 describe("the price worker's configuration", () => {
   it("answers the default socket path for an empty environment, needing neither database nor origin", () => {
     expect(loadWorkerConfig({}).PRICE_WORKER_SOCKET).toBe(DEFAULT_PRICE_WORKER_SOCKET);
@@ -195,8 +176,7 @@ describe("the price worker's configuration", () => {
   it("takes an override for the socket path, and ignores everything else in the environment", () => {
     const config = loadWorkerConfig({
       PRICE_WORKER_SOCKET: "/tmp/w.sock",
-      // Present, but not this schema's business: a `DATABASE_URL` reaching
-      // the worker is ignored rather than validated (module header).
+      // Present, but not this schema's business — DATABASE_URL reaching the worker is ignored, not validated.
       DATABASE_URL: "not a postgres url at all",
     });
 

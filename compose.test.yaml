@@ -1,11 +1,6 @@
-# Throwaway Postgres for the test suite, published on the host so `npm test`
-# can reach it. Separate from compose.yaml on purpose: the deployment file
-# must never publish a database port, and tests must never touch real data.
-# The suite's default TEST_DATABASE_URL matches what this publishes.
-#
-#   docker compose -f compose.test.yaml up -d --wait
-#   npm test
-#   docker compose -f compose.test.yaml down -v
+# Throwaway Postgres for the test suite, published on the host so `npm test` can
+# reach it — the suite's default TEST_DATABASE_URL matches. Never in
+# compose.yaml: the deployment file must not publish a database port.
 
 name: portfolio-test
 
@@ -18,9 +13,9 @@ services:
       POSTGRES_DB: portfolio_test
       TZ: UTC
       PGTZ: UTC
-      # Load-bearing: the tmpfs below lands root-owned, uid 70 cannot chmod a
-      # dir it does not own, initdb dies. A child of the mount is created by
-      # the entrypoint as uid 70, and initdb locks it 0700 as it insists.
+      # Load-bearing: the tmpfs below lands root-owned, uid 70 cannot chmod a dir
+      # it does not own, initdb dies. A child of the mount is created by the
+      # entrypoint as uid 70 instead.
       PGDATA: /var/lib/postgresql/data/pgdata
     command:
       - postgres
@@ -30,22 +25,20 @@ services:
       - fsync=off
       - -c
       - full_page_writes=off
-    # The image's postgres uid, pinned — no root process ever, rather than
-    # root-then-drop. Started this way Postgres needs zero capabilities:
-    # checked against a running container, not assumed.
+    # The image's postgres uid, pinned — no root process ever. Started this way
+    # Postgres needs zero capabilities.
     user: "70:70"
     cap_drop:
       - ALL
     security_opt:
       - "no-new-privileges:true"
-    # Loopback only: trivial fixed creds are fine for a database only this
-    # machine can reach — the unqualified bind offered a superuser to the LAN.
+    # Loopback only: trivial fixed creds are fine for a database only this machine
+    # can reach; the unqualified bind offered a superuser to the LAN.
     ports:
       - "127.0.0.1:55432:5432"
     read_only: true
-    # In-memory: the whole point is that nothing here survives. The second
-    # entry is the socket + lock dir a read-only Postgres still needs, same as
-    # compose.yaml.
+    # Nothing here survives. Second entry is the socket + lock dir a read-only
+    # Postgres still needs.
     tmpfs:
       - /var/lib/postgresql/data
       - /var/run/postgresql

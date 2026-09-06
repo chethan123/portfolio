@@ -1,25 +1,10 @@
-/**
- * The closed vocabularies a form offers and the domain validates — account
- * kinds, tax treatments, asset classes — once each. Not a `.server` module,
- * deliberately: the domain module validates against these values and the
- * form renders options from them, and a list written twice is free to drift
- * from the schema's check constraints (`account_kind_valid`,
- * `account_tax_treatment_valid`, `classification_asset_class_valid`). Plain data and
- * pure functions, no database. The type imports are erased, so this pulls no
- * server code into the client bundle.
- *
- * The name says accounts because accounts came first; what the module owns is
- * the vocabulary, whatever a value is stored against.
- */
+// Closed vocabularies (account kinds, tax treatments, asset classes) shared by forms and
+// domain validation — one list each, kept in sync with the schema's check constraints by hand.
 import type { AccountKind, AssetClass, TaxTreatment } from "./valuation.server.ts";
 
-/** A stored value and the label a person reads for it. */
 export type Option<Value extends string> = { readonly value: Value; readonly label: string };
 
-/**
- * The values match `account_kind_valid` in the initial migration exactly.
- * Adding a kind is a migration plus a line here, in that order.
- */
+// Must match account_kind_valid in the initial migration.
 export const ACCOUNT_KINDS: ReadonlyArray<Option<AccountKind>> = [
   { value: "brokerage", label: "Brokerage" },
   { value: "401k", label: "Workplace plan (401k, 403b)" },
@@ -28,23 +13,14 @@ export const ACCOUNT_KINDS: ReadonlyArray<Option<AccountKind>> = [
   { value: "liability", label: "Loan or other liability" },
 ];
 
-/**
- * Three-way, never a boolean (DESIGN.md §4.5) — the labels say what each one
- * means for a figure, because that distinction is the entire reason the column
- * is not a boolean.
- */
+// Three-way, never a boolean — DESIGN.md §4.5.
 export const TAX_TREATMENTS: ReadonlyArray<Option<TaxTreatment>> = [
   { value: "taxable", label: "Taxable — tax due on gains" },
   { value: "tax_deferred", label: "Tax-deferred — tax due on withdrawal (Traditional)" },
   { value: "tax_free", label: "Tax-free — no tax on qualified withdrawal (Roth, HSA)" },
 ];
 
-/**
- * The four-way rollup every classification maps onto (CONTEXT.md). Its values
- * match `classification_asset_class_valid`; unlike its two neighbours nothing
- * renders it in an account form, but the upload wizard's instruments step
- * offers exactly these and the resolver refuses anything else.
- */
+// Matches classification_asset_class_valid; offered by the upload wizard's instruments step.
 export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
   { value: "equity", label: "Equity" },
   { value: "bond", label: "Bonds" },
@@ -52,7 +28,6 @@ export const ASSET_CLASSES: ReadonlyArray<Option<AssetClass>> = [
   { value: "other", label: "Other" },
 ];
 
-/** The stored values alone, in the shape Zod's `enum` wants. */
 export const accountKindValues = ACCOUNT_KINDS.map((kind) => kind.value) as [
   AccountKind,
   ...AccountKind[],
@@ -63,21 +38,13 @@ export const taxTreatmentValues = TAX_TREATMENTS.map((treatment) => treatment.va
   ...TaxTreatment[],
 ];
 
-/**
- * Whether a posted string is one of the four — a narrowing, not a values list
- * a caller has to assert against. No Zod tuple like the two above, because
- * the upload resolver refuses field by field so it can name every bad field
- * at once, rather than parsing the step as a whole.
- */
+// No Zod tuple like the two above: the upload resolver refuses field by field,
+// naming every bad field at once, rather than parsing the step as a whole.
 export function isAssetClass(value: string | undefined): value is AssetClass {
   return ASSET_CLASSES.some((assetClass) => assetClass.value === value);
 }
 
-/**
- * The label a stored value wears on screen. Falls back to the value itself
- * rather than throwing: a row written before a kind was renamed renders as
- * the raw slug — ugly and legible — rather than taking the page down.
- */
+// Falls back to the raw value rather than throwing, so a row predating a rename still renders.
 export function labelOf<Value extends string>(
   options: ReadonlyArray<Option<Value>>,
   value: Value,
@@ -85,13 +52,8 @@ export function labelOf<Value extends string>(
   return options.find((option) => option.value === value)?.label ?? value;
 }
 
-/**
- * Which kinds hold their whole position in one number. An exhaustive record,
- * not a list or predicate: adding a kind to the schema becomes a compile
- * error here, exactly where someone must decide whether a single `USD` row
- * is the truth about it — a list would quietly not contain the new kind,
- * and quietly not containing it is the answer that loses a portfolio.
- */
+// Exhaustive record, not a list: adding a kind forces a compile error here instead
+// of silently defaulting a new kind to the wrong answer.
 const SINGLE_POSITION: Record<AccountKind, boolean> = {
   brokerage: false,
   "401k": false,
@@ -100,10 +62,7 @@ const SINGLE_POSITION: Record<AccountKind, boolean> = {
   liability: true,
 };
 
-/**
- * Which direction a kind's balance runs. Only consulted for the kinds
- * {@link SINGLE_POSITION} admits; securities accounts never reach it.
- */
+// Only consulted for kinds SINGLE_POSITION admits; securities accounts never reach it.
 const OWES: Record<AccountKind, boolean> = {
   brokerage: false,
   "401k": false,
@@ -112,24 +71,13 @@ const OWES: Record<AccountKind, boolean> = {
   liability: true,
 };
 
-/**
- * Can this kind's balance be set by hand? Here rather than in
- * `balances.server.ts`, where it was written, because both writers need it:
- * `setBalance` asks it of the account, `updateAccount` of the kind — and the
- * second cannot import the first (`balances.server.ts` already imports
- * `accounts.server.ts`). The two tables are the kind vocabulary as much as
- * the labels are.
- */
+// Lives here, not balances.server.ts, because updateAccount needs it too and can't
+// import balances.server.ts (which already imports accounts.server.ts).
 export function acceptsSetBalance(kind: AccountKind): boolean {
   return SINGLE_POSITION[kind];
 }
 
-/**
- * Does a balance on this kind count against the household? Exported so the
- * form can caption its box with the direction it will apply — "Amount owed"
- * over a box whose contents become a negative quantity; a screen saying
- * "Balance" while storing the opposite is a lie told by omission.
- */
+// Lets the form caption its box "Amount owed" vs "Balance" to match the sign it will store.
 export function isOwed(kind: AccountKind): boolean {
   return OWES[kind];
 }

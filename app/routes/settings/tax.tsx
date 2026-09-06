@@ -6,12 +6,7 @@ import { readCapitalGainsRate, saveCapitalGainsRate } from "~/lib/settings.serve
 
 import type { Route } from "./+types/tax";
 
-/**
- * Settings → Tax — a thin wrapper over `settings.server.ts`, as People and
- * Accounts are over theirs: read the form, hand raw fields down, render what
- * comes back. What a rate may be lives in that module; why it is a row and
- * not an environment variable is `0005_app_setting.sql`.
- */
+// Thin wrapper over `settings.server.ts` — a row, not an env var (`0005_app_setting.sql`).
 export function meta() {
   return [{ title: "Tax · Settings · Portfolio" }];
 }
@@ -26,14 +21,11 @@ export async function action({ request }: Route.ActionArgs) {
   try {
     await saveCapitalGainsRate(values);
 
-    // No payload: the loader re-runs after an action, so the box showing the
-    // stored rate is the confirmation.
+    // No payload — the loader re-run shows the stored rate as confirmation.
     return null;
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
-      // module, and a component referencing it would drag the database into
-      // the client bundle.
+      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       return { errors: fieldErrors, formError: formError ?? null, values };
@@ -65,9 +57,6 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
         </header>
 
         <Form method="post" className="panel-form">
-          {/* Close to unreachable with one field — exactly why it must not
-              be the refusal that goes unrendered: a form that did nothing
-              and said nothing. */}
           {actionData?.formError ? (
             <p className="form-error" role="alert">
               {actionData.formError}
@@ -81,10 +70,7 @@ export default function Tax({ loaderData, actionData }: Route.ComponentProps) {
                 id="capital-gains-rate"
                 name="capitalGainsRate"
                 inputMode="decimal"
-                // What was typed survives a refusal; otherwise the stored
-                // rate, padding off, nothing rounded — rounding would
-                // round-trip: 3.75 shown as 3.8, and the next save quietly
-                // stores a figure nobody edited.
+                // Nothing rounded — rounding would round-trip: 3.75 shown as 3.8, then quietly saved as that.
                 defaultValue={
                   error
                     ? (actionData?.values.capitalGainsRate ?? "")

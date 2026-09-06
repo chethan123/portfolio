@@ -1,12 +1,5 @@
-/**
- * Recording who is in the household.
- *
- * Driven through `people.server.ts` against a real Postgres, seeded through the
- * fixture builder — the same seam the valuation tests use. Nothing here asserts
- * on a route, on rendered markup or on generated SQL: what is being protected is
- * that the module every screen writes through keeps its own rules, so a second
- * caller cannot get a different answer than the People screen does.
- */
+/** Recording who is in the household, driven through `people.server.ts` against a real Postgres —
+ * protects that the module every screen writes through keeps one rule for all callers. */
 import { afterAll, describe, expect, it } from "vitest";
 
 import { NotFoundError, ValidationError } from "~/lib/input.server";
@@ -25,7 +18,7 @@ import { closeTestDatabase, withDatabase } from "./support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/** The field messages from a refusal, or a failure if it was not refused. */
+// field messages from a refusal, or a failure if it wasn't refused
 async function refusalOf(action: Promise<unknown>): Promise<Record<string, string>> {
   try {
     await action;
@@ -69,7 +62,7 @@ describe("recording people", () => {
 
       const people = await listPeople(db);
       expect(people).toHaveLength(2);
-      // Distinct rows, so an account can belong to one of them and not the other.
+      // distinct rows — an account can belong to one and not the other
       expect(people[0]?.id).not.toBe(people[1]?.id);
     }),
   );
@@ -97,13 +90,11 @@ describe("recording people", () => {
 });
 
 describe("refusing bad input", () => {
-  // One table rather than five transactions: these are `requiredText`'s rules,
-  // and what `createPerson` adds to them is the same on every row.
+  // one table, not five transactions — these are requiredText's rules; createPerson adds the same thing to each
   it.each([
     ["an empty name", { name: "" }, /name is required/i],
     ["a name that is only whitespace", { name: "   " }, /required/i],
-    // A form that never sent the field at all is the same mistake to a person
-    // as one that sent it blank, and must not be a 500.
+    // missing field = same mistake as a blank one to whoever filled it — must not 500
     ["a field that never arrived", {}, /required/i],
     ["a name too long to be one", { name: "a".repeat(121) }, /120 characters/],
   ])("refuses %s", (_case, input, message) =>
@@ -111,8 +102,7 @@ describe("refusing bad input", () => {
       const errors = await refusalOf(createPerson(input, db));
 
       expect(errors.name).toMatch(message);
-      // Under `name`, and under nothing else, so the form can put the message
-      // beside the box rather than at the top of the page.
+      // only under `name` — lets the form put the message beside the box, not atop the page
       expect(Object.keys(errors)).toEqual(["name"]);
     })(),
   );
@@ -120,8 +110,7 @@ describe("refusing bad input", () => {
   it(
     "writes nobody when it refuses",
     withDatabase(async ({ db }) => {
-      // The half this cannot be a pure test for: a refusal that still inserted
-      // would leave a person nobody typed.
+      // guards against a refusal that still inserts a row nobody typed
       await refusalOf(createPerson({ name: "" }, db));
 
       expect(await listPeople(db)).toEqual([]);
@@ -182,9 +171,7 @@ describe("who the household can be read as (spec 0013)", () => {
 
       const [person] = await listPeople(ctx.db);
 
-      // `accountCount` means open and closed alike, because a person who owns a
-      // closed account still cannot be removed — narrowing it in place would
-      // have let that delete through.
+      // accountCount counts open+closed alike — a closed-account owner still can't be removed
       expect(person).toMatchObject({ name: "Alice", accountCount: 2, openAccountCount: 1 });
       await expect(removePerson(alice.id, ctx.db)).rejects.toThrow();
     }),
@@ -201,15 +188,12 @@ describe("who the household can be read as (spec 0013)", () => {
       await ctx.seedAccount({ name: "Bob Roth", owner: bob });
       await ctx.seedAccount({ name: "Carol Old", owner: carol, closedAt: "2026-01-31" });
 
-      // Carol is recorded and cannot be filtered by: `holding_valued` excludes
-      // closed accounts, so selecting her would empty every screen with nothing
-      // saying why. Leaving her out makes her id one the roster does not name,
-      // which is a state the screens already have a sentence for.
+      // Carol can't be selected — holding_valued excludes closed accounts, so picking her would silently empty every screen.
       const roster = async () =>
         (await ownerRoster(ALL_OWNERS, ctx.db)).people.map((person) => person.name);
       expect(await roster()).toEqual(["Alice", "Bob"]);
 
-      // And a person who owns nothing at all is out for the same reason.
+      // a person who owns nothing at all is out for the same reason
       await ctx.seedPerson({ name: "Dana" });
       expect(await roster()).toEqual(["Alice", "Bob"]);
     }),
@@ -229,12 +213,8 @@ describe("the roster a selection is resolved against", () => {
       expect((await ownerRoster([alice.id, bob.id], ctx.db)).coversEveryone).toBe(true);
       expect((await ownerRoster([alice.id], ctx.db)).coversEveryone).toBe(false);
 
-      // Carol owns only a closed account, so she is not offered — but she is
-      // still in the household, and `holding_valued_at` still values her
-      // holdings on every date before the closure. Ticking every box a reader
-      // can see is therefore a narrower reading than the household's, and
-      // collapsing it to the unfiltered URL would hand back a chart carrying
-      // the history they had just excluded.
+      // Carol owns only a closed account (not offered) but holding_valued_at still values her pre-closure holdings —
+      // ticking every visible box is narrower than the household, so it must not collapse to the unfiltered URL.
       const carol = await ctx.seedPerson({ name: "Carol" });
       await ctx.seedAccount({ name: "Carol Old", owner: carol, closedAt: "2026-01-31" });
 
@@ -243,7 +223,7 @@ describe("the roster a selection is resolved against", () => {
       expect(everyBox.coversEveryone).toBe(false);
       expect(everyBox.unknownOwner).toBe(false);
 
-      // Naming Carol as well is the household, and does collapse.
+      // naming Carol as well is the household, and does collapse
       expect((await ownerRoster([alice.id, bob.id, carol.id], ctx.db)).coversEveryone).toBe(true);
     }),
   );
@@ -256,8 +236,7 @@ describe("the roster a selection is resolved against", () => {
       await ctx.seedAccount({ name: "Alice Brokerage", owner: alice });
       await ctx.seedAccount({ name: "Bob Roth", owner: bob });
 
-      // As long as a two-person household, and not it. Collapsing here would
-      // hide the one state that exists to say a stale address is stale.
+      // a padded selection isn't the household — collapsing here would hide the one signal that it's stale
       const stale = await ownerRoster([alice.id, "999999999"], ctx.db);
       expect(stale.coversEveryone).toBe(false);
       expect(stale.unknownOwner).toBe(true);

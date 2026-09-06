@@ -1,42 +1,9 @@
 /**
- * A seeded demo database: one plausible household portfolio, generated so the
- * UI can be looked at against data shaped like real data — several accounts
- * and institutions, two people, three years of statements, a price history
- * with a drawdown, one unquotable instrument, a loan summing negative. Every
- * branch a dashboard renders is represented; everything-priced-with-basis is
- * only the easy case.
- *
- * Run from the repository root, against a throwaway database:
- *
- *   printf 'DATABASE_URL=postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_demo\nPUBLIC_ORIGIN=http://localhost:5173\n' > .env.demo
- *   node --env-file=.env.demo ./server/migrate.ts
- *   node --env-file=.env.demo ./scripts/seed-demo.ts
- *
- * Two properties outrank the data. **Idempotent**: guard, wipe and insert in
- * one transaction — a second run replaces the first, and a mid-run failure
- * leaves the database exactly as it was. **Refuses data it did not create**:
- * the first run stamps a `demo_seed` marker; without it the database must be
- * pristine (migrated, holding only `0001_initial_schema.sql`'s seed rows) or
- * the script exits non-zero having written nothing. No `--force` — this must
- * never be a way to lose a real portfolio.
- *
- * **Deliberately unlocked.** This script writes no `passkey` row, so
- * `isLocked()` is false on everything it seeds and a developer following
- * docs/developing.md's "Seeing it with real-shaped data" reaches every
- * screen with nothing to unlock. `scripts/capture-screenshots.ts` plants its
- * own passkey and grant directly against a database this script has already
- * seeded — it is the one caller with a story for why an assertion never has
- * to happen (that script's own header on `mintCaptureGrant`), which this
- * script does not have: a placeholder credential here would satisfy
- * `isLocked()` while no authenticator anywhere held its private half, so
- * nobody could ever unlock it. `passkey` and `unlock_grant` stay in the
- * WIPE list below regardless, so a re-seed clears whatever a previous
- * capture run planted.
- *
- * Money is generated as JS numbers and leaves as decimal strings at column
- * scale. Not a violation of DESIGN.md §4.1: invented figures, not measured
- * ones, and every *reported* total is computed in SQL, in `numeric`, by the
- * same view the application reads.
+ * Seeds one plausible demo household: accounts, two people, three years of statements, a price
+ * drawdown, an unquotable instrument, a negative-summing loan — every branch a dashboard renders.
+ * Idempotent: guard+wipe+insert in one transaction, refusing anything but its own marker or a pristine
+ * database (no `--force`). Deliberately unlocked — capture-screenshots.ts plants its own passkey afterward.
+ * Money here is generated as JS numbers, not a DESIGN.md §4.1 violation — totals are computed in SQL.
  */
 import { isMarketOpen, marketDateOf } from "../app/lib/market-hours.ts";
 import { ConfigError, loadConfig } from "../server/config.ts";
@@ -54,15 +21,8 @@ type TaxTreatment = "taxable" | "tax_deferred" | "tax_free";
 type PriceSource = "feed" | "fixed" | "manual";
 
 /**
- * How an instrument gets its price history.
- *
- *   * `walk`  — a close per weekday: `beta` of the shared market factor plus
- *               `alpha` of its own annual drift over it.
- *   * `fixed` — one close carried forward for ever: the `USD` seed row's
- *               trick, and the honest model for a $1.00 money market NAV.
- *   * `none`  — no close, no quote, ever: the workplace-plan collective
- *               investment trust, no public symbol (DESIGN.md §4.3). What
- *               makes the coverage line render.
+ * How an instrument gets its price history: walk (per-weekday close, market beta + own drift),
+ * fixed (one close forever — USD, $1 money-market NAV), none (no close ever, DESIGN.md §4.3).
  */
 type Pricing =
   | { kind: "walk"; start: number; alpha: number; beta: number; noise: number }
@@ -87,27 +47,16 @@ type InstrumentSeed = {
 };
 
 /**
- * How a holding's quantity moves across the statements.
- *
- *   * `accumulate` — shares sized so the newest statement is worth `endValue`,
- *                    `growth` of the final count bought over the window.
- *                    Contributions, not trades.
- *   * `units`      — the same, for an instrument with no price to size against.
- *   * `balance`    — cash drifting up with noise; a savings account is not
- *                    monotonic.
- *   * `amortise`   — loan principal walking toward zero, negative throughout:
- *                    the sign lives in quantity (DESIGN.md §2).
+ * How a holding's quantity moves across statements: accumulate (grown to hit endValue —
+ * contributions, not trades), units (same, no price to size against), balance (cash drifting
+ * with noise, not monotonic), amortise (loan principal to zero, negative — sign lives in quantity, DESIGN.md §2).
  */
 type Sizing =
   | {
       model: "accumulate";
       endValue: number;
       growth: number;
-      /**
-       * Opening-lot cost as a multiple of the day-zero close: below 1 =
-       * accumulated over prior years, above 1 = bought into a peak — the
-       * source of the loss-reporting holdings the screen needs for red.
-       */
+      /** Multiple of day-zero close: below 1 = accumulated over years, above 1 = bought into a peak (source of the loss-showing holdings). */
       openingFactor: number;
     }
   | { model: "units"; endUnits: number; growth: number }
@@ -117,11 +66,7 @@ type Sizing =
 type HoldingSeed = {
   instrument: string;
   sizing: Sizing;
-  /**
-   * False for both 401(k)s and every cash position — the real distribution,
-   * and why the unrealized figure is labelled as covering only part of the
-   * portfolio.
-   */
+  /** False for 401(k)s and cash — the real distribution; why unrealized gain is labelled as covering only part of the portfolio. */
   reportsCostBasis: boolean;
 };
 
@@ -142,10 +87,7 @@ type AccountSeed = {
 
 const PEOPLE = ["Alex Rivera", "Jordan Rivera"];
 
-/**
- * The user's labels over the fixed rollup (DESIGN.md §4.4). `Cash` is absent:
- * the initial migration seeds it, unique by name, and `USD` points at it.
- */
+/** User labels over the fixed rollup (DESIGN.md §4.4). No `Cash`: the migration seeds it and `USD` points at it. */
 const CLASSIFICATIONS: { name: string; assetClass: AssetClass }[] = [
   { name: "Total US market", assetClass: "equity" },
   { name: "S&P 500", assetClass: "equity" },
@@ -180,8 +122,7 @@ const INSTRUMENTS: InstrumentSeed[] = [
     quoteType: "ETF", priceSource: "feed", classification: "Real estate",
     pricing: { kind: "walk", start: 82.4, alpha: -0.05, beta: 0.9, noise: 0.006 },
     yieldPct: "3.850000",
-    // The one stale price: a failed refresh keeps its last known value and
-    // says so, rather than falling to zero (§6.2).
+    // Failed refresh keeps its last known value rather than falling to zero (§6.2).
     stale: true,
   },
   {
@@ -258,8 +199,7 @@ const INSTRUMENTS: InstrumentSeed[] = [
     yieldPct: "4.200000",
   },
   {
-    // No symbol, no quote, no price, ever: a workplace-plan collective
-    // investment trust (DESIGN.md §4.3) — why totals read "17 of 18 holdings".
+    // Workplace CIT, no public symbol (DESIGN.md §4.3) — why totals read "17 of 18 holdings".
     key: "PLT2045", symbol: null,
     name: "Principal LifeTime 2045 Collective Investment Trust",
     quoteType: null, priceSource: "manual", classification: "Target date fund",
@@ -299,8 +239,7 @@ const ACCOUNTS: AccountSeed[] = [
     cadence: "quarterly",
     source: "upload",
     filePrefix: "empower-balances",
-    // No cost basis anywhere: 401(k) statements routinely omit it, and an
-    // invented zero would report a fake gain equal to the position.
+    // 401(k) statements routinely omit cost basis; an invented zero would report a fake gain.
     holdings: [
       { instrument: "VIIIX", reportsCostBasis: false, sizing: { model: "accumulate", endValue: 168_000, growth: 0.28, openingFactor: 0.7 } },
       { instrument: "VTSNX", reportsCostBasis: false, sizing: { model: "accumulate", endValue: 52_000, growth: 0.3, openingFactor: 0.85 } },
@@ -347,8 +286,7 @@ const ACCOUNTS: AccountSeed[] = [
     owner: "Jordan Rivera",
     taxTreatment: "taxable",
     externalAccountNumber: "4402996311",
-    // Typed into the "set balance" form monthly: source `manual`, no file
-    // behind it (DESIGN.md §5.2).
+    // Typed into the "set balance" form monthly, no file behind it (DESIGN.md §5.2).
     cadence: "monthly",
     source: "manual",
     filePrefix: null,
@@ -361,8 +299,7 @@ const ACCOUNTS: AccountSeed[] = [
     institution: "Chase",
     kind: "liability",
     owner: "Alex Rivera",
-    // No fourth value for "not an asset": a liability is an account whose
-    // positions sum negative, nothing else.
+    // A liability is just an account whose positions sum negative.
     taxTreatment: "taxable",
     externalAccountNumber: null,
     cadence: "monthly",
@@ -374,12 +311,7 @@ const ACCOUNTS: AccountSeed[] = [
   },
 ];
 
-/**
- * The hand-typed series prefixing the chart (DESIGN.md §7), as fractions of
- * day-zero net worth — multiplied out **in SQL** against what the as-of
- * function actually reports, so the dashed prefix meets the solid line
- * whenever this re-runs, whatever the generated prices did.
- */
+/** Hand-typed chart prefix (DESIGN.md §7), as fractions of day-zero net worth — scaled **in SQL** so the dashed prefix always meets the solid line. */
 const MANUAL_PREFIX_FACTORS = [0.44, 0.5, 0.58, 0.67, 0.78, 0.71, 0.79, 0.92];
 
 const DAY_MS = 86_400_000;
@@ -390,18 +322,10 @@ const STATEMENT_LAG_DAYS = 4;
 /** Closes start before day zero, so an as-of query on it has a price to find. */
 const PRICE_LEAD_DAYS = 45;
 
-/**
- * The cadence the demo pretends to have run at, in minutes — the seeded
- * default (`app_setting.refresh_cadence_minutes`), so the 1D line has the
- * granularity a fresh instance actually produces.
- */
+/** Demo's pretend refresh cadence, matching the seeded app_setting.refresh_cadence_minutes default. */
 const SESSION_CADENCE_MINUTES = 15;
 
-/**
- * How long ago the stale instrument last answered. Three places must agree:
- * its quote's `as_of`, its quote's price, and where its daily spine stops — a
- * spine running to today would show a close no refresh could have written.
- */
+/** How long the stale instrument has been silent — its quote's as_of, price, and daily-spine end must all agree. */
 const STALE_QUOTE_DAYS = 3;
 
 const isoOf = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
@@ -444,9 +368,7 @@ function buildCalendar(now: Date): Calendar {
     [2, 5, 8, 11].includes(new Date(msOf(date)).getUTCMonth());
 
   const quarterEnds = monthEnds.filter(isQuarterEnd);
-  // Day zero is the first quarter end; monthly accounts are trimmed to start
-  // there too — a lone bank point a month earlier would turn the chart's
-  // first year into a cliff.
+  // First quarter end — monthly accounts trim here too, or a lone earlier bank point turns year one into a cliff.
   const dayZero = at(quarterEnds, 0);
 
   const priceDates: IsoDate[] = [];
@@ -475,13 +397,8 @@ function buildCalendar(now: Date): Calendar {
 }
 
 /**
- * The instants a session was observed at, latest trading day first found.
- * Walked backwards because a weekday can be a market holiday — `isMarketOpen`
- * then refuses every instant and the session simply is not that day. Built
- * through `isMarketOpen`, not hours-from-midnight, for the reason
- * `market-hours.ts` exists: New York is UTC-4 in August and UTC-5 in December.
- * The close is appended by hand: `isMarketOpen` is a half-open window, and
- * 16:00 — not "open" — is exactly when a day's last price is struck.
+ * Latest trading day with a session, walked backwards (a weekday can be a market holiday). Built
+ * through isMarketOpen, not hours-from-midnight (NY is UTC-4/5 across the year); close appended by hand — isMarketOpen is half-open.
  */
 function findSession(
   priceDates: readonly IsoDate[],
@@ -509,13 +426,8 @@ function findSession(
   return null;
 }
 
-/**
- * One instrument's session prices, ending exactly on its close, with the same
- * seeded noise as the daily series so the line has shape. The last value is
- * the close itself, not an interpolation: refresh writes observation and
- * quote in one transaction, so the 1D line's last point and the headline are
- * the same figure (issue #94, story 8) — missing by a cent would picture a bug.
- */
+/** Session prices ending exactly on the close, not an interpolation: refresh writes observation and
+ * quote in one transaction, so the 1D line's last point and headline must match (issue #94). */
 function walkSession(from: number, to: number, instants: number, gauss: () => number): number[] {
   const prices: number[] = [];
 
@@ -546,11 +458,7 @@ function makeGaussian(random: () => number): () => number {
 
 const SEED = 20260318;
 
-/**
- * A second seed for the session walk alone, so the two draw orders cannot
- * interfere: three years of closes and quantities must not move because the
- * intra-session line was retuned.
- */
+/** Separate seed from SEED, so retuning the session walk never reshuffles three years of closes and quantities. */
 const SESSION_SEED = 20260828;
 const MARKET_DRIFT = 0.2;
 const MARKET_VOL = 0.0068;
@@ -573,11 +481,8 @@ function closeAt(series: Series, date: IsoDate): number | null {
 }
 
 /**
- * A close per weekday per priced instrument, correlated through one market
- * factor. Independent walks look wrong — fourteen unrelated squiggles average
- * into a shapeless net worth line. One shared factor with a per-instrument
- * beta gives the household line its drawdown and recovery, and leaves the
- * bond funds nearly flat through both, as bond funds are.
+ * Correlated closes through one market factor + per-instrument beta — independent walks average
+ * into a shapeless line; one shared factor gives the drawdown/recovery and keeps bonds flat.
  */
 function buildPrices(calendar: Calendar, gauss: () => number): Map<string, Series> {
   const dates = calendar.priceDates;
@@ -601,16 +506,12 @@ function buildPrices(calendar: Calendar, gauss: () => number): Map<string, Serie
     if (pricing.kind === "none") continue;
 
     if (pricing.kind === "fixed") {
-      // One row carried forward for ever — the migration's 1970-01-01 `USD`
-      // close, same reason.
+      // Carried forward forever, same as the migration's 1970-01-01 USD close.
       prices.set(instrument.key, [{ date: at(dates, 0), close: pricing.price }]);
       continue;
     }
 
-    // `alpha` is drift *over* the market, not instead of it: subtracting the
-    // market's drift back out (the obvious "total return" reading) cancels
-    // both falling stretches from every instrument. The noise term keeps
-    // `alpha` the log drift it claims to be, not that plus half a variance.
+    // alpha is drift *over* the market — subtracting market drift back out would cancel downturns too.
     const drift = pricing.alpha / TRADING_DAYS - (pricing.noise * pricing.noise) / 2;
     const series: Series = [];
     let price = pricing.start;
@@ -627,16 +528,8 @@ function buildPrices(calendar: Calendar, gauss: () => number): Map<string, Serie
 }
 
 /**
- * The quantity on each statement and the cost basis beside it. Quantities
- * move only on statement dates — not a simplification but the model:
- * positions are constant between uploads (DESIGN.md §3), so between two
- * statements everything the chart does is price.
- *
- * Basis accumulates the way a real one does: the opening lot at a factor of
- * the day-zero price (standing in for buying that predates the app; above 1 =
- * bought into a peak, whence the loss-showing holdings), each later
- * contribution at that quarter's close — so unrealized gain looks like
- * unrealized gain rather than a typed percentage.
+ * Quantity moves only on statement dates (DESIGN.md §3). Basis accumulates like a real one:
+ * opening lot at a factor of day-zero price, each later contribution at that quarter's close.
  */
 function buildQuantities(
   holding: HoldingSeed,
@@ -652,8 +545,7 @@ function buildQuantities(
     for (let index = 0; index <= last; index++) {
       const progress = index / last;
       const straight = sizing.startValue + (sizing.endValue - sizing.startValue) * progress;
-      // A savings balance is not a ramp; a loan principal is. Endpoints exact
-      // either way, so the newest statement lands on the figure asked for.
+      // A savings balance isn't a ramp; a loan principal is. Endpoints exact either way.
       const noise =
         sizing.model === "balance" && index > 0 && index < last
           ? sizing.swing * (random() * 2 - 1)
@@ -709,11 +601,7 @@ function requirePrice(series: Series | undefined, date: IsoDate, key: string): n
 
 const MARKER_TABLE = "demo_seed";
 
-/**
- * What the initial migration leaves behind — the definition of "pristine".
- * Anything else belongs to somebody, and this script does not get to decide
- * it is disposable.
- */
+/** What a pristine, migration-only database looks like — anything else belongs to somebody. */
 const PRISTINE_PROBE = `
   select
     (select count(*) from person)                                              as people,
@@ -768,25 +656,10 @@ async function assertSafeToSeed(client: PoolClient): Promise<boolean> {
 }
 
 /**
- * Everything this script has ever written, removed in dependency order:
- * `unlock_grant` before `passkey` — `unlock_grant.passkey_id` references
- * `passkey.credential_id`, and this list stays a plain dependency order
- * throughout rather than leaning on that foreign key's `on delete cascade` to
- * cover for it — then `position_set` (cascades holdings, releases the
- * RESTRICTs on account and instrument), `classification` last (instruments
- * hold it back). `USD`, its `Cash` classification, its quote and its
- * load-bearing 1970 close belong to the initial migration and survive.
- *
- * `passkey` and `unlock_grant` stay in this list even though this script
- * writes neither: `capture-screenshots.ts` plants a passkey and mints a
- * grant directly against a database this script has already seeded (that
- * script's own header explains the licence), so a re-seed that skipped them
- * would leave a previous capture run's placeholder credential in place —
- * tripping `passkey_bootstrap_idx` (migration 0012's one-live-bootstrap-row
- * rule) the next time a capture plants its own — or a grant naming a passkey
- * this wipe is about to delete anyway. Clearing both here is what keeps a
- * re-seed handing back the plain, unlocked household this script promises,
- * whatever a previous capture run left behind.
+ * Dependency order: unlock_grant before passkey, then position_set (cascades holdings, releases
+ * RESTRICTs), classification last (instruments hold it back). USD/Cash and its 1970 close survive
+ * (belong to the initial migration). passkey/unlock_grant stay even though this script writes
+ * neither — capture-screenshots.ts plants them, so a re-seed must clear a previous capture run's leftovers too.
  */
 const WIPE = [
   `delete from unlock_grant`,
@@ -861,9 +734,7 @@ async function seed(
 ): Promise<Written[]> {
   const random = makeRandom(SEED);
   const prices = buildPrices(calendar, makeGaussian(random));
-  // Its own stream: drawing the session walk from `random` would spend draws
-  // before `buildQuantities`, silently re-rolling every bank balance — and
-  // again on any future tweak to the walk.
+  // Own stream: drawing from `random` here would spend draws before buildQuantities, re-rolling every bank balance.
   const sessionGauss = makeGaussian(makeRandom(SESSION_SEED));
   const written: Written[] = [];
 
@@ -877,7 +748,7 @@ async function seed(
   }
   written.push({ table: "person", rows: people.size });
 
-  /* classifications — plus the `Cash` row the migration already seeded */
+  // classification also holds Cash, already seeded by the migration.
   await client.query(
     `insert into classification (name, asset_class) select * from unnest($1::text[], $2::text[])`,
     [CLASSIFICATIONS.map((c) => c.name), CLASSIFICATIONS.map((c) => c.assetClass)],
@@ -923,7 +794,7 @@ async function seed(
   byKey.set("USD", usd.id);
   written.push({ table: "instrument", rows: INSTRUMENTS.length });
 
-  /* aliases — every string a CSV has ever been seen to carry (§4.3) */
+  // Every alias a CSV has been seen to carry (§4.3).
   const aliasStrings: string[] = [];
   const aliasIds: string[] = [];
   const pushAlias = (raw: string, id: string): void => {
@@ -948,7 +819,6 @@ async function seed(
   );
   written.push({ table: "instrument_alias", rows: aliasStrings.length });
 
-  /* the daily spine */
   const closeIds: string[] = [];
   const closeDates: IsoDate[] = [];
   const closeValues: string[] = [];
@@ -957,10 +827,7 @@ async function seed(
       (instrument) => instrument.key,
     ),
   );
-  // The last day the stale instrument's fetch succeeded. One refresh writes
-  // quote and close together, so a three-day-old quote cannot sit beside a
-  // close from this morning. Trimming the tail keeps "stale" meaning the same
-  // in every tier — including the observation log's silence (ADR-0006).
+  // Last day the stale instrument's fetch succeeded, so "stale" stays consistent everywhere (ADR-0006).
   const staleThrough = isoOf(Date.now() - STALE_QUOTE_DAYS * DAY_MS);
 
   for (const [key, series] of prices) {
@@ -986,7 +853,6 @@ async function seed(
   }
   written.push({ table: "price_daily", rows: closeIds.length });
 
-  /* the intraday tier: the last close, plus the one instrument left stale */
   const quoteIds: string[] = [];
   const quotePrices: string[] = [];
   const quoteYields: (string | null)[] = [];
@@ -999,8 +865,7 @@ async function seed(
     const series = prices.get(instrument.key);
     const id = byKey.get(instrument.key);
     if (series === undefined || id === undefined) continue;
-    // The last price it actually answered with: today's if refreshed, the
-    // pre-stale one if not — §6.2's "the last known price is kept and used".
+    // Last price it actually answered with — §6.2's "last known price is kept and used".
     const answered =
       instrument.stale === true
         ? (series.findLast((point) => point.date <= staleThrough) ?? at(series, series.length - 1))
@@ -1012,7 +877,6 @@ async function seed(
     quoteYields.push(percent ?? null);
     // Derived from the price rather than typed beside it, so the two agree.
     quoteDividends.push(percent === undefined ? null : ((close * Number(percent)) / 100).toFixed(4));
-    // A stale quote is one that failed to refresh: the price is old, and used.
     quoteAsOf.push(
       new Date(nowMs - (instrument.stale === true ? STALE_QUOTE_DAYS * DAY_MS : 12 * 60 * 1000)),
     );
@@ -1026,7 +890,7 @@ async function seed(
   );
   written.push({ table: "quote", rows: quoteIds.length });
 
-  /* the observation log and the poll record (ADR-0006) — one session of them */
+  // ADR-0006
   const session = findSession(calendar.priceDates, timeZone);
 
   if (session !== null) {
@@ -1040,16 +904,13 @@ async function seed(
       const id = byKey.get(instrument.key);
       if (series === undefined || id === undefined) continue;
 
-      // The stale instrument never came back today, so it observed nothing —
-      // the demo's picture of the carry-forward an unobserved holding gets.
+      // Stale instrument never came back today, so it observed nothing.
       if (instrument.stale === true) continue;
 
       const close = at(series, series.length - 1).close;
       const previous = at(series, Math.max(0, series.length - 2)).close;
 
-      // A mutual fund strikes one NAV after the close (DESIGN.md §6.2).
-      // ADR-0006 accepts the largely flat 1D line a plan-heavy household
-      // therefore sees; the demo pictures it honestly rather than prettily.
+      // A mutual fund strikes one NAV after the close (DESIGN.md §6.2, ADR-0006).
       const instants =
         instrument.quoteType === "MUTUALFUND"
           ? [at(session.instants, session.instants.length - 1)]
@@ -1062,7 +923,6 @@ async function seed(
         observationAsOf.push(instant);
         observationPrices.push(at(walk, index).toFixed(4));
         // A few seconds later: a poll learns a price after it was struck.
-        // Distinct columns because distinct facts.
         observationFetched.push(new Date(instant.getTime() + 4000));
       }
     }
@@ -1076,12 +936,7 @@ async function seed(
     );
     written.push({ table: "price_observation", rows: observationIds.length });
 
-    // No payloads: nothing real to archive, and an invented one would be the
-    // demo's one fake shape (ADR-0006 makes it nullable for exactly this).
-    // Counts are over the *feed* instruments — the only ones a refresh asks
-    // about. Counting the price map would include the fixed-price fund the
-    // feed never sees, the errors would cancel into `stale: 0`, and the one
-    // table whose job is making silence interpretable would lie.
+    // No payloads (ADR-0006 makes it nullable). Counts are over *feed* instruments only — the fixed-price fund would cancel into `stale: 0` otherwise.
     const feed = INSTRUMENTS.filter((instrument) => instrument.priceSource === "feed");
     const requested = feed.length;
     const priced = feed.filter(
@@ -1161,8 +1016,7 @@ async function seed(
         holdingSets.push(setId);
         holdingInstruments.push(instrumentId);
         holdingQuantities.push(at(quantity, index).toFixed(6));
-        // Never defaulted to zero: that would report a fake gain equal to the
-        // whole untracked position.
+        // Never defaulted to zero: would report a fake gain equal to the whole untracked position.
         holdingBases.push(basis === null ? null : basis.toFixed(4));
       }
     }
@@ -1183,7 +1037,6 @@ async function seed(
   written.push({ table: "position_set", rows: sets });
   written.push({ table: "holding", rows: holdingSets.length });
 
-  /* the hand-typed prefix, scaled off day zero in SQL */
   await client.query(
     `insert into manual_networth (date, amount)
      select t.date,

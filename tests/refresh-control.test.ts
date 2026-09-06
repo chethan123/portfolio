@@ -1,7 +1,5 @@
-/**
- * The two pure pieces the "Refresh now" control stands on: the stamp it renders
- * and the guard on where a press may send the browser back to.
- */
+/** The two pure pieces the "Refresh now" control stands on: the stamp it renders and the guard
+ * on where a press may send the browser back to. */
 import { describe, expect, it } from "vitest";
 
 import { marketStampOf } from "../app/lib/market-hours.ts";
@@ -11,9 +9,7 @@ const NEW_YORK = "America/New_York";
 
 describe("the as-of stamp", () => {
   it("names the zone the close was filed under, and follows it across the DST boundary", () => {
-    // The same wall-clock close, six months apart. A fixed offset would print
-    // one of these an hour out; the abbreviation is what makes it checkable at
-    // a glance rather than a subtraction the reader has to trust.
+    // same wall-clock close, six months apart — a fixed offset would print one an hour out
     expect(marketStampOf(new Date("2026-08-28T20:00:00Z"), NEW_YORK)).toBe(
       "28 Aug 2026, 4:00 PM EDT",
     );
@@ -23,9 +19,7 @@ describe("the as-of stamp", () => {
   });
 
   it("reads an evening instant as that evening rather than the next UTC day", () => {
-    // 21:30 New York on the 5th is 01:30 UTC on the 6th. A caption taken off the
-    // UTC clock would date this a day ahead of the `price_daily` row the same
-    // instant is filed under.
+    // 21:30 NY on the 5th = 01:30 UTC on the 6th — a UTC caption would date this a day ahead of its price_daily row
     expect(marketStampOf(new Date("2026-06-06T01:30:00Z"), NEW_YORK)).toBe(
       "5 Jun 2026, 9:30 PM EDT",
     );
@@ -40,8 +34,7 @@ describe("where a press may send the browser", () => {
   });
 
   it("refuses a backslash the URL parser reads as a slash", () => {
-    // The trap a `startsWith("/")` guard walks into: one forward slash, and the
-    // WHATWG parser still resolves it off-site for a special scheme.
+    // the trap a startsWith("/") guard walks into — WHATWG still resolves a backslash off-site for a special scheme
     expect(safeReturn("/\\evil.test")).toBe("/");
     expect(safeReturn("/\\/evil.test")).toBe("/");
   });
@@ -51,14 +44,8 @@ describe("where a press may send the browser", () => {
     expect(safeReturn("https://evil.test/holdings")).toBe("/");
   });
 
-  // The origin check alone passes every one of these: a `.` or `..` segment
-  // contributes no segment of its own, so the empty segment that follows it
-  // becomes the path's first and each resolves to
-  // `http://return.invalid//evil.test` — our origin, and a pathname a browser
-  // reads as a host. The bare `/..//` is the same trick with nothing after it:
-  // it serialised as `//` before this rule, and the second parse now refuses
-  // it by throwing rather than by answering an origin, which is the branch
-  // nothing else here would reach.
+  // origin check alone passes all of these: a "." or ".." segment contributes nothing, so the empty
+  // segment after it becomes the path's first, resolving to a pathname a browser reads as a host.
   it.each([
     "/..//evil.test",
     "/%2e%2e//evil.test",
