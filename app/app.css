@@ -339,6 +339,17 @@ a {
   min-height: 100vh;
 }
 
+/* Paired with `.app-main--lock` below. The shell's own `100vh` would
+ * otherwise fight it: the document would be the *large* viewport tall while
+ * its only child is the small one, which on a phone leaves the page
+ * scrollable by exactly the height of a toolbar, with nothing under the card
+ * to scroll to. The child does not then move — `svh` is fixed — but the card
+ * is centred in the small viewport, so once that scroll has collapsed the bar
+ * it sits above the centre of what the reader can actually see. */
+.app--lock {
+  min-height: 0;
+}
+
 .app-rail {
   position: fixed;
   inset: 0 auto 0 0;
@@ -505,6 +516,30 @@ a {
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
+}
+
+/* The unlock screen is the one page that is not a document: no header, no
+ * panels down the column, one card carrying one control
+ * (`app/routes/unlock.tsx`). So it centres in the viewport instead of starting
+ * at the top of the 1280px column every other screen shares — still
+ * `.app-main`, because the bare shell in `app/root.tsx` reuses that column
+ * rather than inventing a second one, and this only changes where its single
+ * child sits inside it.
+ *
+ * `100svh`, not `100dvh`. The hazard worth designing out here is movement
+ * rather than overflow: `dvh` grows as a phone's toolbar collapses, sliding a
+ * centred card down the screen while the reader is reaching for it. `vh` and
+ * `lvh` hold still too, but only `svh` also matches the viewport with the bar
+ * expanded, which is the one the reader arrives in. Overflow is not the
+ * concern because this is `min-height` — a card taller than the box grows it
+ * and the page scrolls rather than clipping, which is what a landscape phone
+ * does: 366px of card against roughly 330px of small viewport. `100vh` stays
+ * in front as the fallback a parser that rejects `svh` keeps. */
+.app-main--lock {
+  min-height: 100vh;
+  min-height: 100svh;
+  align-items: center;
+  justify-content: center;
 }
 
 /* The mobile top bar and bottom bar exist only below 1024px; the rail is what
@@ -2338,6 +2373,151 @@ code {
   gap: var(--space-sm);
 }
 
+/* --- The unlock screen --------------------------------------------------- */
+
+/* A card rather than a page (`app/routes/unlock.tsx`). It is a `.panel` first,
+ * so ground, hairline, radius and the dark-mode flatness all arrive from
+ * there; this adds only the measure and the centred stack. 420px is where the
+ * lede sets in three short lines instead of two long ones, and it is narrow
+ * enough that nothing printed inside needs a measure of its own —
+ * `.form-error`'s 60ch box below exists for sentences with no panel around
+ * them, and every sentence here has one. */
+.lock-card {
+  width: 420px;
+  max-width: 100%;
+  padding: var(--space-lg);
+  align-items: center;
+  gap: var(--space-md);
+  text-align: center;
+}
+
+/* The screen's subject, so that what has happened is legible before the
+ * heading is read. 48px is the smallest circle the 24px glyph sits in without
+ * crowding, and the ground is `--secondary-container` — the same tone the
+ * active nav item carries, so this screen introduces no colour of its own. */
+.lock-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--secondary-container);
+  color: var(--primary);
+  flex: none;
+}
+
+.lock-mark svg {
+  width: 24px;
+  height: 24px;
+  overflow: visible;
+}
+
+/* The one reward this screen has to give. The shackle lifts and pivots on its
+ * right foot for as long as an assertion is with this instance, and settles
+ * back if the instance refuses it — so the movement means "your passkey
+ * checked out", never "you pressed a button" (`LockMark`,
+ * `app/routes/unlock.tsx`).
+ *
+ * `transform-box: fill-box` because an SVG child otherwise transforms about
+ * the viewBox origin rather than its own box. With its own, the origin lands
+ * on the shackle's bottom-right — the right leg's foot — so a positive
+ * rotation lifts the left leg and leaves the right one seated: a padlock
+ * hinging open rather than one sliding upward.
+ *
+ * The numbers are measured rather than chosen. The path's fill box is
+ * (8,3)-(16,11), so at 14 degrees the left foot rises 3.44px and clears the
+ * body's stroke by 1.69px — about one stroke width, which is the least
+ * daylight that reads as open at a 24px drawing — while the right foot stays
+ * 0.25px inside it. The arc's outer edge then sits 0.22px past the viewBox,
+ * which is why `.lock-mark svg` is `overflow: visible`: the 48px container
+ * has 12px of room, and letting the viewBox bound the travel is what held an
+ * earlier version of this rule to 0.59px of gap — a change nothing on any
+ * screen could see. Scoped to `.lock-mark` so the same path in the rail's
+ * "Lock now" control is matched by no rule at all. */
+.lock-mark .lock-shackle {
+  transition: transform 200ms ease-out;
+  transform-box: fill-box;
+  transform-origin: 100% 100%;
+}
+
+.lock-mark--open .lock-shackle {
+  transform: translateY(-1.5px) rotate(14deg);
+}
+
+.lock-heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+/* headline-sm — the step `.page-title` itself drops to below 768px. The 48px
+ * display step this replaced belongs to a screen someone navigates around;
+ * this one is left within seconds of arriving at it. */
+.lock-title {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+}
+
+.lock-lede {
+  margin: 0;
+  color: var(--on-surface-variant);
+}
+
+.lock-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+  margin-top: var(--space-base);
+}
+
+/* Reserved rather than collapsed. Every message this screen can print lands
+ * here — the note under a prompt that was dismissed, this instance's own
+ * refusal, the scripting-off sentence — and a region that grew from zero
+ * would move the button out from under a finger already travelling toward it
+ * for a second try. Because the card is centred, growth past the reserve
+ * moves that button by half of it.
+ *
+ * 40px is two lines at the refusal's 14/20, not at the note's 12/16: the
+ * notes fit inside 32px but so do only the shortest refusals, and the two-line
+ * ones are the common case. Three sentences still overflow it, each rarer than
+ * the last: the signature-counter refusal at four lines, "not issued for this
+ * action" at three on a phone, and whatever text a browser gives for a chunk
+ * that failed to load, which has no length at all. They move the button by
+ * half of what they overflow rather than by all of it, which is the most this
+ * reserve can promise without holding open more empty card than it saves.
+ *
+ * `overflow-wrap: anywhere` because one message here is not a sentence at
+ * all: a chunk that fails to load surfaces the browser's own text, which
+ * carries an unbreakable URL that `.panel`'s `overflow: hidden` would
+ * otherwise cut off at the card's edge, taking the file name with it. */
+.lock-message {
+  min-height: 40px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .lock-card {
+    width: 100%;
+    padding: var(--space-md);
+  }
+}
+
+/* The first `pointer:` query in this file, though not the first to ask about
+   input at all — `@media (hover: none)` below reveals touch affordances the
+   same way. The question here is what is pointing at the control rather than
+   how wide the window is: a tablet in landscape is a touch device at 1024px,
+   and this is the only control on its screen. 48px is
+   the target a thumb wants; `--control-h`'s 40px stays right for controls
+   inside a form, which are aimed at with a caret already on the page. */
+@media (pointer: coarse) {
+  .lock-card .button {
+    height: 48px;
+  }
+}
+
 /* A sentence restating the table above it — the sheltered subtotal on Income.
  * Set at body size rather than at `.coverage-note`'s, because it carries
  * figures a household reads rather than a caveat about them, and it sits above
@@ -3615,8 +3795,11 @@ code {
 }
 
 /* The app's first spinner. There was no precedent, so this is it: one arc, one
-   turn a second, no library. */
-.refresh-icon--busy {
+   turn a second, no library. The unlock screen's Unlock button turns the same
+   arc while a passkey check is in flight, so the definition is shared rather
+   than copied under a second name. */
+.refresh-icon--busy,
+.lock-spinner {
   animation: refresh-spin 1s linear infinite;
   transform-origin: 50% 50%;
 }
@@ -3635,6 +3818,25 @@ code {
 @media (prefers-reduced-motion: reduce) {
   .refresh-icon--busy {
     animation: none;
+  }
+
+  /* The refresh control's label reads "Refreshing…" while it turns, so a
+     still icon beside it still says something. Unlock's label does not
+     change, so a frozen arc would be a mark with no meaning at all. What
+     carries the state instead is the sentence under the button in the two
+     phases that have one, and the shared disabled dim alone in the window
+     where a dismissed prompt's options are being refreshed — where the note
+     still reads "press Unlock to try again" while the button declines. That
+     window is one loader round trip, and a meaningless glyph is the worse of
+     the two. */
+  .lock-spinner {
+    display: none;
+  }
+
+  /* The open shackle is a state, not decoration, so it still moves — it just
+     arrives there rather than travelling. */
+  .lock-mark .lock-shackle {
+    transition: none;
   }
 }
 
