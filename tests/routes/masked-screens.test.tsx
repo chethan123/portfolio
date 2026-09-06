@@ -1,24 +1,7 @@
-/**
- * The claim this feature actually makes: no amount is on this screen
- * (spec 0007).
- *
- * **The render is the seam, and it is deliberately the only one.** A test that
- * rendered the `Amount` component and found dots would prove that dots render;
- * it would say nothing about the twenty other files that have to route through
- * it, which is where this feature actually fails. So whole screens are driven
- * exactly as the route tests drive them — a real loader's output into the real
- * component — and the assertion is made over the markup a person would receive.
- *
- * **Both directions, every time.** A masked render asserting "no amounts" would
- * pass just as happily on a screen that had stopped rendering anything at all,
- * so every screen is rendered twice and the unmasked half asserts the same
- * figures are present. That pairing is what makes the masked half mean
- * something.
- *
- * The three screens are the spec's: Overview, Holdings, and the upload diff —
- * the last because it is the largest set of figures the application ever puts
- * on one page, and therefore the worst one to leak (story 18).
- */
+// Claim under test: no amount is on this screen (spec 0007). Whole screens are driven like route tests — real loader
+// output into the real component — because a unit test of Amount alone says nothing about the twenty files that must
+// route through it. Every screen renders twice, masked and unmasked, so "no amounts" can't pass on a screen that
+// rendered nothing at all. Screens: Overview, Holdings, and the upload diff (largest figure set on one page, story 18).
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import Holdings, { loader as holdingsLoader } from "../../app/routes/holdings.tsx";
@@ -37,67 +20,35 @@ import { stopPricePoller } from "~/lib/price-poller.server";
 import type { TestContext } from "../support/database.ts";
 import type { StatementMapping } from "~/lib/statement";
 
-// The shell's loader reads the deployment's configuration, and `getConfig()`
-// memoises its first read — so this has to be set before any loader here runs,
-// exactly as `root.test.ts` and `routes/masking.test.ts` do it.
+// getConfig() memoises its first read — set before any loader runs (as root.test.ts, routes/masking.test.ts do).
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-/** The shell's loader starts the refresh loop; `root.test.ts` explains. */
-afterEach(stopPricePoller);
+afterEach(stopPricePoller); // the shell's loader starts the refresh loop; root.test.ts explains.
 
 afterAll(closeTestDatabase);
 
-/**
- * Deliberately odd digits, so that an assertion cannot pass by accident.
- *
- * A quantity of 100 at a price of 10 would put "1,000" on the page from two
- * different directions; these do not collide with each other, with a date, or
- * with a percentage.
- */
+// Deliberately odd digits so no assertion passes by accident (100 @ 10 would put "1,000" on the page from two directions).
 const QUANTITY = "137";
 const PRICE = "426.1900";
 
-/** What those two produce once the view has multiplied them. */
+/** QUANTITY × PRICE, as the view renders it. */
 const VALUE = "58,388.03";
 
-/**
- * A cost basis below the price, so the row carries an unrealized *gain* — the
- * one figure that keeps something while masked, and therefore the one whose
- * masked form has to be checked rather than assumed.
- */
+// Cost basis below price, so the row carries an unrealized gain — the one figure that keeps something while masked.
 const COST_BASIS = "300.0000";
 
-/** What the file being uploaded says, which has to differ or there is no diff. */
+/** The uploaded file's quantity — must differ from QUANTITY or there's no diff. */
 const UPLOADED_QUANTITY = "241";
 
-/**
- * Every spelling of an amount this application can print.
- *
- * A masked screen must contain none of them. The `$`-with-a-digit pattern is
- * the general case and would catch a figure this list had never heard of; the
- * named strings are what makes a failure legible when it fires.
- */
+// Every spelling of an amount this app can print. `$`-with-digit is the general case; named strings make a failure legible.
 const MONEY_ANYWHERE = /\$\s*[\d(]/;
 
-/**
- * The `<svg>` a signed figure draws beside itself, or "" if it drew none.
- *
- * Read out of the first delta cell in the markup, so the assertion can compare
- * a masked render against an unmasked one instead of naming path data — §12's
- * rule is that the arrow is there, not that it is any particular arrow.
- */
+/** The <svg> a signed figure draws beside itself, or "" — read out of the markup so masked/unmasked compare without naming path data (§12: the arrow is there, not which one). */
 function arrowIn(markup: string): string {
   return /<span class="delta[^"]*">(<svg.*?<\/svg>)/s.exec(markup)?.[1] ?? "";
 }
 
-/**
- * One brokerage account holding one priced fund.
- *
- * Priced through a quote *and* a daily close, because the two feed different
- * screens — the table reads the quote and the chart reads the closes — and a
- * fixture with only one of them would leave half of this file asserting over
- * an empty page.
- */
+// Priced through both a quote and a daily close: the table reads the quote, the chart reads the closes.
 async function seedPortfolio(ctx: TestContext) {
   const account = await ctx.seedAccount({ kind: "brokerage", name: "Fidelity Taxable" });
   const vti = await ctx.seedInstrument({ symbol: "VTI", name: "Vanguard Total Stock" });
@@ -123,15 +74,12 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
       const masked = renderRoute(Overview, "/", data, { masked: true });
       const shown = renderRoute(Overview, "/", data, { masked: false });
 
-      // Story 9: the headline is the first thing anyone reads across a train
-      // carriage, so a mask that covered the table and left the KPI would be
-      // worse than none at all.
+      // Story 9: the headline is read across a train carriage — masking the table but leaving the KPI would be worse than none.
       expect(shown).toContain(VALUE);
       expect(masked).not.toContain(VALUE);
       expect(masked).not.toMatch(MONEY_ANYWHERE);
 
-      // Story 13, and the point of the whole feature: the screen still says
-      // what the portfolio *is*.
+      // Story 13: the screen still says what the portfolio is.
       expect(masked).toContain("Fidelity Taxable");
       expect(masked).toContain("Brokerage");
     }),
@@ -145,14 +93,10 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
 
       const masked = renderRoute(Overview, "/", data, { masked: true });
 
-      // Story 10: the shape of the year without the size of it. The line and
-      // the rules are what make the chart readable as a chart rather than as a
-      // smear, and the polyline is the line itself — asserting only on the
-      // grid would pass on a chart that had stopped plotting anything.
+      // Story 10: shape of the year, not its size — asserting only the grid would pass on a chart plotting nothing.
       expect(masked).toContain("chart-grid");
       expect(masked).toContain("chart-line");
-      // Story 11: the allocation ring keeps its proportions, because a share is
-      // a ratio and a ratio is never masked.
+      // Story 11: allocation ring keeps its proportions — a share is a ratio, never masked.
       expect(masked).toMatch(/width:\s*[\d.]+%/);
     }),
   );
@@ -172,10 +116,7 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
       expect(masked).not.toContain(VALUE);
       expect(masked).not.toMatch(MONEY_ANYWHERE);
 
-      // Story 12 names the quantity explicitly, and it is the one figure that
-      // carries no currency mark — so a mask that only looked for `$` would
-      // leave it on the page, and a reader with the price could rebuild the
-      // value from it.
+      // Story 12: quantity carries no currency mark, so a $-only mask would leave it — and a reader with the price could rebuild the value.
       expect(shown).toContain(QUANTITY);
       expect(masked).not.toContain(`>${QUANTITY}<`);
 
@@ -194,9 +135,7 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
       const draft = await ctx.seedUploadDraft({
         account,
         filename: "Positions.csv",
-        // A different quantity from the one on record, so the diff has a row
-        // to draw. A file that matched would render an empty table, and every
-        // "contains no amount" assertion below would pass on nothing at all.
+        // Differs from the quantity on record, so the diff has a row to draw — a match would leave every assertion below passing on nothing.
         bytes: new TextEncoder().encode(`Symbol,Quantity\nVTI,${UPLOADED_QUANTITY}`),
       });
 
@@ -219,18 +158,13 @@ describe("a masked screen carries no amount, and an unmasked one carries them al
       const masked = renderRoute(Review, path, data, { masked: true });
       const shown = renderRoute(Review, path, data, { masked: false });
 
-      // Story 18. This screen was the easiest one to forget: it is a step in a
-      // flow rather than a dashboard, and it prints every position in the file.
+      // Story 18: a step in a flow, easy to forget, printing every position in the file.
       expect(shown).toContain(UPLOADED_QUANTITY);
       expect(masked).not.toMatch(MONEY_ANYWHERE);
       expect(masked).not.toContain(`>${UPLOADED_QUANTITY}<`);
-      // The before half of the change goes too: a diff that hid what a position
-      // is becoming and printed what it was would leak the same figure a day
-      // late (§8.2's before → after cell).
+      // The before half too — masking only "becoming" would leak the same figure a day late (§8.2's before → after cell).
       expect(masked).not.toContain(`>${QUANTITY}<`);
 
-      // The instrument is still named, so the reader can still check the file
-      // is the one they meant to upload.
       expect(masked).toContain("Vanguard Total Stock");
     }),
   );
@@ -242,13 +176,8 @@ describe("the first paint", () => {
     withDatabase(async (ctx) => {
       await seedPortfolio(ctx);
 
-      // The whole loop, in one test: a `Cookie` header goes in, the shell's
-      // loader resolves it, and its answer drives the render. Every other test
-      // in this file hands the flag to `renderRoute` directly, which proves the
-      // screens obey a flag and says nothing about where the flag came from —
-      // and the two halves being separately right is exactly how a feature
-      // like this ships broken. Story 30: the amounts are never briefly
-      // visible, because there is no first paint in which they were there.
+      // The whole loop: Cookie in, shell loader resolves it, its answer drives the render — unlike every other test here,
+      // which hands the flag to renderRoute directly and says nothing about where it came from. Story 30: never briefly visible.
       const root = await rootLoader(args(get("/", `${MASKING_COOKIE}=${MASKED}`)));
       const data = await overviewLoader(args(get("/")));
 
@@ -284,23 +213,14 @@ describe("how a masked figure is announced", () => {
 
       const masked = renderRoute(Overview, "/", data, { masked: true });
 
-      // Stories 6 and 7. The dots are decoration and are hidden from assistive
-      // technology; what is announced instead is that something is being
-      // withheld — which also means a person beside a screen reader user hears
-      // nothing about the balances.
-      // Matched as a pattern rather than as one exact string: the streaming
-      // renderer the server actually uses splits adjacent text nodes with an
-      // empty comment (`$<!-- -->••••••`), which `renderToStaticMarkup` here
-      // does not. An exact-string assertion would pass in this suite and say
-      // nothing about the markup a browser receives.
+      // Stories 6/7: dots are decoration, hidden from assistive tech; what's announced is that something is withheld.
+      // Pattern, not exact string — the real streaming renderer splits text nodes with an empty comment ($<!-- -->••••••), renderToStaticMarkup doesn't.
       expect(masked).toMatch(
         /<span class="amount-dots" aria-hidden="true">\$(<!-- -->)?•{6}<\/span>/,
       );
       expect(masked).toContain('<span class="visually-hidden">Amount hidden</span>');
 
-      // The chart's label is a string rather than a component, so it is the one
-      // that has to say this in prose. The date it now carries stays visible —
-      // a date is not an amount (spec 0010).
+      // The chart's label is a string, not a component, so it says this in prose; the date stays visible — a date isn't an amount (spec 0010).
       expect(masked).toContain("at an amount that is hidden");
     }),
   );
@@ -315,25 +235,16 @@ describe("how a masked figure is announced", () => {
       const masked = renderRoute(Holdings, "/holdings", data, { masked: true });
       const shown = renderRoute(Holdings, "/holdings", data, { masked: false });
 
-      // The fixture's cost basis sits below its price, so this row is a gain
-      // and every channel below should say so. Asserted against the unmasked
-      // render rather than against a literal, so a fixture that stopped
-      // producing a gain fails here rather than passing vacuously.
+      // Asserted against the unmasked render, not a literal, so a fixture that stopped producing a gain fails here instead of passing vacuously.
       expect(shown).toContain("delta--gain");
 
-      // §12: gain and loss are never carried by colour alone. Dropping the sign
-      // while masked would leave the hue as the only channel saying which way
-      // the figure points — so direction survives and magnitude does not.
+      // §12: gain/loss never by colour alone — dropping the sign while masked would leave hue as the only direction channel.
       expect(masked).toContain("delta--gain");
-      // The sign, kept. `+$••••••`, never a bare `$••••••`.
-      expect(masked).toMatch(/\+(<!-- -->)?\$(<!-- -->)?•{6}/);
-      // The arrow, kept — and asserted as *the same drawing* the unmasked row
-      // uses rather than as literal path data, which would pin this test to the
-      // icon set rather than to the rule.
+      expect(masked).toMatch(/\+(<!-- -->)?\$(<!-- -->)?•{6}/); // sign kept: +$••••••, never bare $••••••
+      // Arrow kept, asserted as the same drawing as the unmasked row rather than literal path data (not pinned to the icon set).
       expect(arrowIn(masked)).toBe(arrowIn(shown));
       expect(arrowIn(masked)).not.toBe("");
-      // And the size, gone.
-      expect(masked).not.toMatch(MONEY_ANYWHERE);
+      expect(masked).not.toMatch(MONEY_ANYWHERE); // size gone
     }),
   );
 });

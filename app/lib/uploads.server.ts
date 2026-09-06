@@ -44,64 +44,39 @@ import type { Kysely } from "kysely";
 
 const BYTES_PER_MB = 1024 * 1024;
 
-/**
- * The one sentence a dead draft URL answers with, whatever killed it.
- * `draft.tsx`'s error boundary renders it under its own page title.
- */
+// draft.tsx's error boundary renders this under its own page title, whatever killed the draft.
 const EXPIRED =
   "This upload has expired or was already recorded. A draft is kept for a day " +
   "and deleted once its statement lands, so a bookmarked or reopened step can " +
   "outlive it.";
 
-/** A draft joined with the account it was opened against. */
 export type UploadDraft = {
   id: string;
   accountId: string;
   accountName: string;
-  /**
-   * For the identity strip's "owned by" — a draft survives a closed laptop,
-   * and a bare name is least sufficient exactly when the reader resumes cold
-   * with two same-named accounts in the house.
-   */
+  // For the identity strip: least-sufficient info when resuming cold with two same-named accounts.
   ownerName: string;
-  /**
-   * `····` plus the last four of the recorded number, or null — pre-masked so
-   * the raw number never leaves the commit path (`DraftRecord`), while the
-   * strip keeps its tiebreaker.
-   */
+  // "····" + last four, or null — pre-masked so the raw number never leaves the commit path.
   accountNumberTail: string | null;
   filename: string;
-  /** The uploaded bytes, exactly as they arrived — BOM, CRLF and all. */
+  // Exactly as they arrived — BOM, CRLF and all.
   bytes: Uint8Array;
-  /**
-   * Null until the columns step is passed — which is how "how far did this
-   * draft get" stays a property of the row. Its shape is that step's contract.
-   */
+  // Null until the columns step passes — "how far did this draft get" as a property of the row.
   mapping: unknown;
-  /**
-   * Whether the columns parse raised any first sighting — the step strip's
-   * dimmed "· none", null until that step decides. Written at that moment
-   * because it is unrecoverable after: an alias does not say which draft
-   * wrote it.
-   */
+  // Whether the columns parse raised a first sighting; null until that step decides. Written
+  // then because it's unrecoverable after — an alias doesn't say which draft wrote it.
   hadFirstSightings: boolean | null;
   createdAt: Date;
 };
 
-/** What the drop screen hands over once {@link parseUploadForm} has run. */
 export type DraftInput = {
   accountId: string;
   filename: string;
   bytes: Uint8Array;
 };
 
-/**
- * Refuse a declared-oversize body before reading it: `Content-Length` is all
- * that exists before the body is buffered. A request without one falls
- * through to {@link parseUploadForm}'s `File.size` check.
- *
- * @throws {ValidationError} form-level, naming the limit.
- */
+// Content-Length is all that exists before the body buffers. A request without one falls
+// through to parseUploadForm's File.size check.
 export function refuseOversizedBody(request: Request): void {
   const limit = getConfig().MAX_UPLOAD_MB;
   const declared = Number(request.headers.get("content-length"));
@@ -125,17 +100,9 @@ const uploadInput = z.object({
   }),
 });
 
-/**
- * The drop screen's submission, validated down to bytes. Guards run in spec
- * order, each refusing as the thing it is: missing field → field message;
- * oversize → the limit; empty file → a fact about the download; non-UTF-8 →
- * a sentence about the file, never a driver error. A leading BOM is valid
- * UTF-8, not a failure — step 02 strips it.
- *
- * @param form the `multipart/form-data`; the file is read directly because
- *             `formFields` drops file parts by design.
- * @throws {ValidationError} with a message per bad field.
- */
+// Guards run in spec order: missing field, oversize, empty file, non-UTF-8 — each refusing as
+// the thing it is, never a driver error. File read directly since formFields drops file parts.
+// Leading BOM is valid UTF-8, not a failure (step 02 strips it).
 export async function parseUploadForm(form: FormData): Promise<DraftInput> {
   const input = parseInput(uploadInput, {
     accountId: form.get("accountId") ?? undefined,
@@ -169,17 +136,8 @@ export async function parseUploadForm(form: FormData): Promise<DraftInput> {
   return { accountId: input.accountId, filename: input.file.name, bytes };
 }
 
-/**
- * Open a draft: sweep the stale ones, then stage this file. The sweep runs
- * immediately before the insert because the start of an upload is the one
- * moment the table is guaranteed to be looked at — no scheduler.
- *
- * @param input already through {@link parseUploadForm}; the account is still
- *        validated here so a second caller cannot stage against a closed one.
- * @throws {NotFoundError} when no such account exists.
- * @throws {ValidationError} form-level for a closed account — `setBalance`'s
- *         refusal, because it is the same rule.
- */
+// Sweeps stale drafts (24h+), then stages this file. Sweep runs right before the insert since
+// starting an upload is the one moment guaranteed to look at the table — no scheduler.
 export async function createDraft(
   { accountId, filename, bytes }: DraftInput,
   db: Kysely<Database> = getDb(),
@@ -207,28 +165,20 @@ export async function createDraft(
   return { id: row.id, accountId: account.id };
 }
 
-/**
- * A draft plus the two account facts only the commit reads: whether the
- * account closed underneath it, and the number the statement's account-number
- * column is guarded against.
- */
+// Two account facts only the commit reads: whether the account closed underneath it, and the
+// number the statement's account-number column is guarded against.
 type DraftRecord = UploadDraft & {
   accountClosedAt: Date | null;
-  /** `account.external_account_number` — the commit's guard, and its capture. */
   accountNumber: string | null;
 };
 
-/**
- * The draft a step URL names, joined with its account — or undefined. Closed
- * accounts are *not* filtered here: {@link requireDraft} reads one as
- * expired, {@link commitUpload} owes it a sentence, and both start from this.
- */
+// Closed accounts are not filtered here: requireDraft reads one as expired, commitUpload owes
+// it a sentence, and both start from this.
 async function findDraft(
   draftId: string,
   db: Kysely<Database>,
 ): Promise<DraftRecord | undefined> {
-  // Anything a URL carries reaches here; "abc" would fail as a malformed
-  // bigint — a 500 wearing a bookmark.
+  // "abc" would fail as a malformed bigint — a 500 wearing a bookmark.
   if (!/^\d+$/.test(draftId)) return undefined;
 
   const row = await db
@@ -269,54 +219,27 @@ async function findDraft(
   };
 }
 
-/**
- * The draft a step URL names, with its account resolved.
- *
- * @throws {NotFoundError} for a non-id, a gone draft (swept or committed) and
- *         a closed account's draft alike, all with the expired-or-recorded
- *         sentence; the step routes turn it into a 404, never a 500.
- */
 export async function requireDraft(
   draftId: string,
   db: Kysely<Database> = getDb(),
 ): Promise<UploadDraft> {
   const row = await findDraft(draftId, db);
 
-  // A closed account's draft is expired, not forbidden: its history cannot
-  // change, so this staged upload can never land.
+  // A closed account's draft is expired, not forbidden: its history can't change, so this
+  // staged upload can never land.
   if (row === undefined || row.accountClosedAt !== null) throw new NotFoundError(EXPIRED);
 
   return row;
 }
 
-/**
- * The columns step passing, in one answer: the mapping lands on the draft —
- * how a later step, or a return to this one, reads it back — and the step the
- * reader goes to next comes back to the caller.
- *
- * `had_first_sightings` is decided and written here because this is the one
- * moment the answer exists: once the instruments step writes aliases, nothing
- * can tell "skipped" from "passed". The review's step strip dims off this bit
- * (brief §2.1, §7.5). `nextStep` is that same bit handed back, never a second
- * look — the route used to re-ask after the write, and an alias landing
- * between the two questions left the stored bit disagreeing with where the
- * reader was sent. One question, one answer, one moment.
- *
- * Everything derives from the draft's own bytes, re-read here — rows handed
- * down would be a second copy of the truth. The two writes are deliberately
- * not one transaction: the draft's mapping *is* the columns step, the
- * institution's remembered mapping is a rebuildable cache, and a failure in
- * the cache must not destroy a step that passed.
- *
- * @returns the parse's problems, having written nothing, when the mapping
- *          does not parse clean (structured, for the screen's own selects);
- *          otherwise the step the flow moves to.
- * @throws {ValidationError} keyed `instrument` when the mapped instrument
- *         column is empty on every data row — refused here, naming the
- *         column, rather than as an empty diff two screens later.
- * @throws {NotFoundError} through {@link requireDraft} — a mapping posted
- *         against a swept or committed draft is a dead bookmark, not a fault.
- */
+// Columns step passing: mapping lands on the draft, and the next step comes back to the caller.
+// had_first_sightings is decided and written here, the one moment the answer exists (once
+// instruments writes aliases, "skipped" and "passed" look the same) — nextStep is that same bit
+// handed back, never re-asked after the write, so an alias landing in between can't disagree
+// with where the reader was sent. Everything derives from the draft's own bytes, re-read here.
+// The two writes aren't one transaction: the draft's mapping is the columns step; the
+// institution's remembered mapping is a rebuildable cache whose failure mustn't undo a step
+// that passed.
 export async function rememberMapping(
   draftId: string,
   mapping: StatementMapping,
@@ -327,14 +250,11 @@ export async function rememberMapping(
   const { rows } = readCsv(draft.bytes, mapping.delimiter);
   const parsed = parseStatement(rows, mapping);
 
-  // Problems mean no columns step genuinely passed, so nothing is written: a
-  // draft carrying a mapping its own file cannot parse would bounce every
-  // later step back here anyway.
+  // Problems mean the columns step didn't genuinely pass, so nothing is written.
   if (parsed.problems.length > 0) return { problems: parsed.problems };
 
-  // No positions and nothing skipped = the instrument column is empty on
-  // every data row. (All-skipped is different: the column has content, and
-  // the review screen owns what an empty statement means.)
+  // No positions and nothing skipped = instrument column empty on every row. (All-skipped is
+  // different: the column has content, and review owns what an empty statement means.)
   if (parsed.positions.length === 0 && parsed.skipped.length === 0) {
     throw new ValidationError({
       instrument:
@@ -343,8 +263,7 @@ export async function rememberMapping(
     });
   }
 
-  // Asked once: this one answer is both the bit the strip reads and the step
-  // the reader is sent to.
+  // Asked once: this answer is both the bit the strip reads and the step the reader is sent to.
   const hadFirstSightings =
     (
       await unresolvedStrings(
@@ -362,9 +281,7 @@ export async function rememberMapping(
     .where("id", "=", draft.id)
     .execute();
 
-  // The institution's remembered mapping, so the next file with this header
-  // opens prefilled. Derived here: the institution is the draft's account's,
-  // the header the row the mapping itself names.
+  // So the next file with this header opens prefilled.
   const account = await getAccount(draft.accountId, db);
   await upsertMapping(
     account.institution,
@@ -376,30 +293,19 @@ export async function rememberMapping(
   return { nextStep: hadFirstSightings ? "instruments" : "review" };
 }
 
-/**
- * Where a draft's file stands against the flow's steps, in one read — the
- * rule exists once, here, not once per resuming route. `step` names the
- * earliest step still owed; null means diffable and committable. The
- * instruments variant carries the parse and unresolved strings (that screen's
- * whole job); the columns variant carries nothing, because a mapping that
- * does not parse has nothing trustworthy to carry.
- */
+// Where a draft's file stands against the flow's steps, decided once here rather than per
+// resuming route. step names the earliest step still owed; null = diffable and committable.
+// columns variant carries nothing: a mapping that doesn't parse has nothing trustworthy to carry.
 export type DraftParse =
   | { step: "columns" }
   | {
       step: "instruments";
       parsed: ParsedStatement;
       mapping: StatementMapping;
-      /** The first sightings, in the order the file raised them. */
       unresolved: string[];
     }
   | { step: null; parsed: ParsedStatement; mapping: StatementMapping };
 
-/**
- * Parse a draft through its saved mapping and name the step still owed: the
- * index route redirects on it, the instruments route renders or bounces, and
- * {@link diffForDraft} turns non-null into a {@link DraftNotReadyError}.
- */
 export async function parseDraft(
   draft: UploadDraft,
   db: Kysely<Database> = getDb(),
@@ -407,13 +313,12 @@ export async function parseDraft(
   const saved = statementMapping.safeParse(draft.mapping);
   if (!saved.success) return { step: "columns" };
 
-  // The mapping's own delimiter, never a second sniff: the re-read must not
-  // depend on the sniff reaching the same verdict twice.
+  // The mapping's own delimiter, never a second sniff.
   const { rows } = readCsv(draft.bytes, saved.data.delimiter);
   const parsed = parseStatement(rows, saved.data);
 
-  // A saved mapping only lands after a clean parse, so problems mean the row
-  // predates a rule or was written by hand — remapping is the fix.
+  // A saved mapping only lands after a clean parse, so problems here mean the row predates a
+  // rule or was hand-written — remapping is the fix.
   if (parsed.problems.length > 0) return { step: "columns" };
 
   const unresolved = await unresolvedStrings(
@@ -427,11 +332,7 @@ export async function parseDraft(
   return { step: null, parsed, mapping: saved.data };
 }
 
-/**
- * A review-step read over a draft that has not genuinely reached review. Not
- * a refusal and not a 404 — the reader's next move is an earlier step, and
- * the routes redirect to the one named here.
- */
+// Not a refusal, not a 404 — the reader's next move is an earlier step, and routes redirect there.
 export class DraftNotReadyError extends Error {
   override readonly name = "DraftNotReadyError";
   readonly step: "columns" | "instruments";

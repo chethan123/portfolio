@@ -105,7 +105,6 @@ export async function withRefreshLock<T>(body: () => Promise<T>): Promise<T | nu
   }
 }
 
-/** What a refresh did, for the log line and for the tests. */
 export type RefreshReport = {
   requested: number;
   priced: number;
@@ -119,7 +118,6 @@ export type RefreshReport = {
   providerFailed: boolean;
 };
 
-/** An instrument the provider can be asked about. */
 type FeedInstrument = { id: string; symbol: string };
 
 /**
@@ -169,7 +167,6 @@ const NO_CLOSE_BY_FIRST_HELD = sql<boolean>`not exists (
     and price_daily.date <= min(position_set.as_of_date)
 )`;
 
-/** One instrument a batch should try, and where its range starts. */
 export type BackfillCandidate = {
   id: string;
   /** As stored. The adapter upper-cases it to send; nothing here rewrites it. */
@@ -180,11 +177,10 @@ export type BackfillCandidate = {
 
 /**
  * Which instruments a batch should try next. The gap is a property of the positions, not of the
- * instrument: a candidate is one whose spine starts later than the earliest `position_set.as_of_date`
- * of any holding referencing it, or has no row at all. `fixed`, `manual` and null symbols are
- * excluded as {@link selectFeedInstruments} excludes them; Settings → Prices is where a person
- * learns the batch will never fill those. Every set ever recorded counts, superseded corrections
- * included (`docs/importing-history.md`). The range's end is the caller's — this read has no clock.
+ * instrument: a candidate's spine starts later than the earliest `position_set.as_of_date` of any
+ * holding referencing it, or has no row at all. `fixed`, `manual` and null symbols are excluded as
+ * {@link selectFeedInstruments} excludes them. Every set ever recorded counts, superseded
+ * corrections included. The range's end is the caller's — this read has no clock.
  */
 export async function selectBackfillCandidates(
   db: Kysely<Database> = getDb(),
@@ -235,7 +231,6 @@ export async function selectBackfillCandidates(
   }));
 }
 
-/** One instrument whose spine does not reach as far back as it is held. */
 export type BackfillGap = {
   id: string;
   /** Null is itself a reason: a feed instrument nobody has given a ticker. */
@@ -245,7 +240,6 @@ export type BackfillGap = {
   firstHeld: IsoDate;
   /** `YYYY-MM-DD`, or null where there is no spine at all yet. */
   firstClose: IsoDate | null;
-  /** The most recent attempt, or null where the batch has never tried. */
   lastAttempt: { at: Date; outcome: string; error: string | null } | null;
   /** As stored — half of *why* {@link willTry} is false: a hand-priced trust, or a missing ticker. */
   priceSource: string;
@@ -258,8 +252,8 @@ export type BackfillGap = {
  * {@link selectBackfillCandidates}, shared rather than restated, over every instrument whose
  * `price_source` is not `fixed` (the seeded USD row, whose 1970 close covers everything).
  *
- * This answers "why is this date unpriced", not "what will the batch try next": no retry skip and
- * no bound. Ordered as the batch works. The outcome crosses as the string the ledger stores.
+ * It answers "why is this date unpriced", not "what will the batch try next": no retry skip, no
+ * bound, ordered as the batch works.
  */
 export async function backfillGaps(db: Kysely<Database> = getDb()): Promise<BackfillGap[]> {
   const rows = await db
@@ -330,12 +324,10 @@ export async function backfillGaps(db: Kysely<Database> = getDb()): Promise<Back
   }));
 }
 
-/** What one backfill batch did, for the log line and for the tests. */
 export type BackfillReport = {
   attempted: number;
   /** Closes the spine did not already hold, across the batch. */
   written: number;
-  /** How many attempts ended each way. */
   outcomes: Record<BackfillOutcome, number>;
   /** A database error partway through. Always false out of {@link backfillCloses}, which does not catch one. */
   batchFailed: boolean;
@@ -363,7 +355,6 @@ class BackfillBatchFailed extends Error {
   }
 }
 
-/** A batch that has done nothing yet. */
 const emptyBackfillReport = (): BackfillReport => ({
   attempted: 0,
   written: 0,
@@ -380,16 +371,14 @@ const emptyBackfillReport = (): BackfillReport => ({
 
 /**
  * Fill the spine backwards for a bounded batch of instruments held further back than it reaches
- * (ADR-0011). Sequential, awaiting each call: nothing is queued, because a queue of pending fetches
- * against an unofficial endpoint is how an instance gets rate limited.
+ * (ADR-0011). Sequential: nothing is queued, because a queue of pending fetches against an
+ * unofficial endpoint is how an instance gets rate limited. The range's end is today's market date,
+ * exclusive, so today's row stays the poller's provisional one.
  *
- * An ordinary provider failure for one instrument is not a failure of the batch — it is ledgered
- * with its text and the next symbol tried. A database failure is, and is deliberately not caught
- * here, so the composition above can keep the batch from falsifying what the quotes committed.
- * `ProviderUnreachable` is a third case: it escapes unledgered, so one dead worker costs no
- * candidate its day-long retry skip and is wrapped once, not twice (price-worker spec §3.1).
- *
- * The range's end is today's market date, exclusive — today's row stays the poller's provisional one.
+ * A provider failure for one instrument is not a failure of the batch — it is ledgered and the next
+ * symbol tried. A database failure is, and is deliberately not caught here. `ProviderUnreachable`
+ * is a third case: it escapes unledgered, so one dead worker costs no candidate its day-long retry
+ * skip and is wrapped once, not twice (price-worker spec §3.1).
  */
 export async function backfillCloses(
   provider: PriceProvider,
@@ -497,11 +486,10 @@ export type RefreshPricesReport = {
  * does not take the lock; every caller wraps it in {@link withRefreshLock}.
  *
  * The batch cannot falsify what the quotes did: a database failure inside it is caught and logged
- * here rather than propagated, because `runRefresh` would turn a throw into "Refresh failed. The
- * figures above are unchanged" — false once `refreshQuotes` has committed. `ProviderUnreachable`
- * is caught too and warned rather than errored, keeping the stem `docs/operating.md` greps for.
- *
- * A call that asks for no quotes writes no `price_poll` row: that row is `refreshQuotes`'s.
+ * here, because `runRefresh` would turn a throw into "Refresh failed. The figures above are
+ * unchanged" — false once `refreshQuotes` has committed. `ProviderUnreachable` is caught too and
+ * warned rather than errored, keeping the stem `docs/operating.md` greps for. A call asking for no
+ * quotes writes no `price_poll` row: that row is `refreshQuotes`'s.
  */
 export async function refreshPrices(
   provider: PriceProvider,
@@ -586,7 +574,6 @@ function inTransaction<T>(
  * readers (`holding_valued` tolerates a half-priced portfolio) but so a crash midway cannot leave
  * instruments marked stale by a run that never got to unmark them.
  *
- * @param provider injected, the seam DESIGN.md §6.1 exists for: CI never reaches the network.
  * @param marketTimeZone decides which calendar day a quote's instant belongs to, nothing else.
  */
 export async function refreshQuotes(
@@ -788,11 +775,9 @@ async function writeDailyClose(
 
 /**
  * The spine's second write path: every trading day the feed returned that the spine does not hold.
- * `do nothing`, never `do update` — a backfill must never overwrite what the running system
- * recorded live (`docs/importing-history.md`), which is why this is a separate statement from
+ * `do nothing`, never `do update` — a backfill must never overwrite what the running system recorded
+ * live (`docs/importing-history.md`), which is why this is a separate statement from
  * {@link writeDailyClose}. Counted from `returning`, so the ledger records rows that were new.
- * Only days the provider returned are written; the close is stored as handed over, un-adjusted
- * for splits by the adapter, and this multiplies nothing.
  */
 async function writeBackfilledCloses(
   db: Kysely<Database>,
@@ -817,7 +802,6 @@ async function writeBackfilledCloses(
   return inserted.length;
 }
 
-/** One row bound for the observation log. */
 type ObservationRow = {
   instrument_id: string;
   as_of: Date;
@@ -914,7 +898,6 @@ async function writeObservations(db: Kysely<Database>, rows: ObservationRow[]): 
 /**
  * The attempt itself, recorded whether or not it wrote a price — what makes the log's silences
  * readable. It shares the prices' transaction, so a refresh that could not commit leaves no row.
- * `closes` is not stored: it counts another tier's writes, and `priced` already says who answered.
  */
 async function writePoll(
   db: Kysely<Database>,
@@ -932,7 +915,6 @@ async function writePoll(
     .execute();
 }
 
-/** One row bound for the backfill ledger. */
 type BackfillAttempt = {
   instrumentId: string;
   startedAt: Date;
@@ -998,8 +980,7 @@ export async function priceFreshness(
 
 /**
  * The as-of caption, rendered in one place: every screen asks the same question and must not answer
- * it differently. The market zone is configuration a component has no business reading, and these
- * pages render on the server. Inherits what `priceFreshness` counts.
+ * it differently. The market zone is configuration a component has no business reading.
  */
 export async function asOfView(
   marketTimeZone: string,

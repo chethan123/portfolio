@@ -173,9 +173,7 @@ describe("who the household can be read as (spec 0013)", () => {
 
       const [person] = await listPeople(ctx.db);
 
-      // `accountCount` means open and closed alike, because a person who owns a
-      // closed account still cannot be removed — narrowing it in place would
-      // have let that delete through.
+      // accountCount counts open+closed alike — a closed-account owner still can't be removed
       expect(person).toMatchObject({ name: "Alice", accountCount: 2, openAccountCount: 1 });
       await expect(removePerson(alice.id, ctx.db)).rejects.toThrow();
     }),
@@ -192,15 +190,13 @@ describe("who the household can be read as (spec 0013)", () => {
       await ctx.seedAccount({ name: "Bob Roth", owner: bob });
       await ctx.seedAccount({ name: "Carol Old", owner: carol, closedAt: "2026-01-31" });
 
-      // Carol is recorded and cannot be filtered by: `holding_valued` excludes
-      // closed accounts, so selecting her would empty every screen with nothing
-      // saying why. Leaving her out makes her id one the roster does not name,
-      // which is a state the screens already have a sentence for.
+      // Carol can't be selected — holding_valued excludes closed accounts, so picking her
+      // would silently empty every screen; leaving her off the roster is a state screens already handle
       const roster = async () =>
         (await ownerRoster(ALL_OWNERS, ctx.db)).people.map((person) => person.name);
       expect(await roster()).toEqual(["Alice", "Bob"]);
 
-      // And a person who owns nothing at all is out for the same reason.
+      // a person who owns nothing at all is out for the same reason
       await ctx.seedPerson({ name: "Dana" });
       expect(await roster()).toEqual(["Alice", "Bob"]);
     }),
@@ -220,12 +216,9 @@ describe("the roster a selection is resolved against", () => {
       expect((await ownerRoster([alice.id, bob.id], ctx.db)).coversEveryone).toBe(true);
       expect((await ownerRoster([alice.id], ctx.db)).coversEveryone).toBe(false);
 
-      // Carol owns only a closed account, so she is not offered — but she is
-      // still in the household, and `holding_valued_at` still values her
-      // holdings on every date before the closure. Ticking every box a reader
-      // can see is therefore a narrower reading than the household's, and
-      // collapsing it to the unfiltered URL would hand back a chart carrying
-      // the history they had just excluded.
+      // Carol owns only a closed account (not offered) but holding_valued_at still values her
+      // pre-closure holdings — ticking every visible box is narrower than the household, so
+      // it must not collapse to the unfiltered URL
       const carol = await ctx.seedPerson({ name: "Carol" });
       await ctx.seedAccount({ name: "Carol Old", owner: carol, closedAt: "2026-01-31" });
 
@@ -234,7 +227,7 @@ describe("the roster a selection is resolved against", () => {
       expect(everyBox.coversEveryone).toBe(false);
       expect(everyBox.unknownOwner).toBe(false);
 
-      // Naming Carol as well is the household, and does collapse.
+      // naming Carol as well is the household, and does collapse
       expect((await ownerRoster([alice.id, bob.id, carol.id], ctx.db)).coversEveryone).toBe(true);
     }),
   );
@@ -247,8 +240,7 @@ describe("the roster a selection is resolved against", () => {
       await ctx.seedAccount({ name: "Alice Brokerage", owner: alice });
       await ctx.seedAccount({ name: "Bob Roth", owner: bob });
 
-      // As long as a two-person household, and not it. Collapsing here would
-      // hide the one state that exists to say a stale address is stale.
+      // a padded selection isn't the household — collapsing here would hide the one signal that it's stale
       const stale = await ownerRoster([alice.id, "999999999"], ctx.db);
       expect(stale.coversEveryone).toBe(false);
       expect(stale.unknownOwner).toBe(true);

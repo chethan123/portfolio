@@ -1,34 +1,11 @@
-/**
- * The Holdings screen's one table: which rows, in what order, what the
- * subtotals are (DESIGN.md §8.1) — §8.1's "the same table with the grouping
- * changed, not separate features" made executable: one row shape, one set of
- * dimensions, a grouping argument.
- *
- * **No new query, on purpose.** Every dimension is already a column on the
- * {@link ValuedHolding} rows `currentHoldings(ALL_OWNERS)` returns —
- * `holding_valued` was built to expose exactly them (§8.2) — so filtering and
- * grouping are pure functions over one existing array, not seven predicates
- * pushed into SQL. §8.2 names quietly-disagreeing hand-rolled queries as the
- * design's weakest point; a table and subtotals computed from a single array
- * cannot disagree.
- *
- * **Seven dimensions, not four and not eight.** §8.3's view builder types
- * eight; `instrument` is the one left out — a filter over the thing each row
- * *is* is a search box wearing a dropdown, a different control with a
- * different argument for existing.
- *
- * **A filter is only offered when it can discriminate** (§13.7's refusal of
- * search over a dozen accounts, applied as a rule): {@link availableFilters}
- * returns a dimension only when the data holds two or more distinct values,
- * and every option shown is a value some holding has — no *single* filter can
- * select an empty table. Two still can, deliberately: options come from the
- * whole portfolio, because options that vanished as you narrowed would leave
- * no way to widen again. An empty intersection is a real answer and the
- * screen says so in words.
- *
- * Money is added by `money.ts` and rendered by `format.ts`; nothing here does
- * either job by hand.
- */
+// The Holdings screen's one table: rows, order, subtotals (DESIGN.md §8.1) — one row shape,
+// one set of dimensions, a grouping argument, rather than separate features. No new query:
+// every dimension is already a column on the ValuedHolding rows currentHoldings(ALL_OWNERS)
+// returns (§8.2), so filtering/grouping are pure functions over one array, never a second
+// hand-rolled SQL query that could disagree. Seven dimensions, not eight (§8.3): `instrument`
+// is left out on purpose — that's a search box, not a filter dropdown. A filter is only
+// offered when the data holds two or more distinct values (§13.7); options come from the
+// whole portfolio, not the narrowed table, so narrowing never removes the way back out.
 import { ACCOUNT_KINDS, ASSET_CLASSES, TAX_TREATMENTS, labelOf } from "./account-options.ts";
 import { allocateShares, compareText, type Grouping } from "./allocation.ts";
 import {
@@ -46,10 +23,8 @@ import { toOwnerParam, type OwnerFilter } from "./owner-filter.ts";
 
 import type { AccountKind, Coverage, TaxTreatment, ValuedHolding } from "./valuation.server.ts";
 
-/**
- * The seven groupables; all but `owner` also filter. Double as URL parameter
- * names — short and stable, since renaming one silently breaks every bookmark.
- */
+// The seven groupables; all but "owner" also filter. Double as URL parameter names — short
+// and stable, since renaming one silently breaks every bookmark.
 export type DimensionId =
   | "owner"
   | "account"
@@ -59,13 +34,8 @@ export type DimensionId =
   | "classification"
   | "assetClass";
 
-/**
- * Two labels because a dropdown and a table cell have different budgets:
- * `account-options.ts` holds the canonical self-explaining form ("Tax-deferred
- * — tax due on withdrawal"), right in a filter dropdown, wrong in a cell
- * where it wraps and pushes figures out of alignment. The short forms are the
- * same words minus the explanatory tail — never a different name.
- */
+// A dropdown and a table cell have different budgets: account-options.ts's self-explaining
+// form ("Tax-deferred — tax due on withdrawal") wraps and misaligns a cell. Same words, tail dropped.
 const SHORT_KIND: Record<AccountKind, string> = {
   brokerage: "Brokerage",
   "401k": "Workplace plan",
@@ -80,37 +50,24 @@ const SHORT_TAX: Record<TaxTreatment, string> = {
   tax_free: "Tax-free",
 };
 
-/** What a holding is filed under for one dimension. */
 type Facet = { key: string; label: string; optionLabel: string };
 
 type Dimension = {
   id: DimensionId;
-  /** The column heading and the group-by chip. */
-  label: string;
-  /** The caption above the filter's `<select>`. */
-  filterLabel: string;
-  /**
-   * The chosen value as a sentence fragment — "at Chase", "owned by Bob". A
-   * caption and prose are not the same words: the empty-table sentence has to
-   * read as English, and "nothing is brokerage Chase" does not.
-   */
+  label: string; // column heading and group-by chip
+  filterLabel: string; // caption above the filter's <select>
+  // The chosen value as a sentence fragment for the empty-table sentence — "at Chase",
+  // "owned by Bob" — since a caption doesn't read as English ("nothing is brokerage Chase").
   phrase: (label: string) => string;
   of: (holding: ValuedHolding) => Facet;
 };
 
-/** A key and one label, for the dimensions whose stored value is its own name. */
 function plain(key: string): Facet {
   return { key, label: key, optionLabel: key };
 }
 
-/**
- * Owner: a **grouping**, no longer a filter (spec 0013) — narrowing to an
- * owner is household-wide now, and a screen-local Owner select would be a
- * second way to ask the same question with two answers at once. Grouping
- * stays: it reads one table as four, and still works under a filter naming
- * two people. Keyed on id, not name: two people can share a first name, and
- * a merged group would be wrong invisibly.
- */
+// Grouping only, no longer a filter (spec 0013) — narrowing to an owner is household-wide
+// now. Keyed on id, not name: two people can share a first name.
 const OWNER: Dimension = {
   id: "owner",
   label: "Owner",
@@ -123,10 +80,6 @@ const OWNER: Dimension = {
   }),
 };
 
-/**
- * The filter bar's dimensions, in render order: where it sits, then what it
- * is — the order a person narrows in.
- */
 export const DIMENSIONS: ReadonlyArray<Dimension> = [
   {
     id: "account",
@@ -134,17 +87,13 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
     filterLabel: "Account",
     phrase: (label) => `in ${label}`,
     of: (holding) => {
-      // The number tail rides in the option, as everywhere accounts are
-      // listed (CONTEXT.md) — but not in `label`, which is also the words a
-      // group heading and the empty-table sentence print, and prose does not
-      // wear the mask glyphs. Grouping keys on the id either way.
+      // Tail rides in the option (CONTEXT.md), not in label — prose doesn't wear mask glyphs.
       const tail = holding.accountNumberTail;
 
       return {
         key: holding.accountId,
         label: holding.accountName,
-        // Two accounts at two institutions can share a name ("Roth IRA"), so
-        // the dropdown disambiguates; the cell has the institution on its own line.
+        // Institution disambiguates same-named accounts at different brokerages.
         optionLabel: `${holding.accountName}${tail === null ? "" : ` ${tail}`} · ${holding.institution}`,
       };
     },
@@ -178,9 +127,7 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
       optionLabel: labelOf(TAX_TREATMENTS, holding.taxTreatment),
     }),
   },
-  // Keyed on the label itself: `classification.name` is unique, so the name
-  // is the identity, and there is no label table to read — the household's
-  // stored words are what a person sees.
+  // Keyed on the label itself: classification.name is unique, no label table to read.
   {
     id: "classification",
     label: "Classification",
@@ -201,29 +148,16 @@ export const DIMENSIONS: ReadonlyArray<Dimension> = [
   },
 ];
 
-/**
- * The groupables: the filterable ones plus {@link OWNER}. Two lists, not a
- * flag, because every reader reads one whole: the filter bar and `toSearch`
- * read {@link DIMENSIONS}; the group-by strip and `group=` vocabulary, these.
- */
+// Two lists, not a flag: filter bar/toSearch read DIMENSIONS; group-by strip reads this.
 export const GROUPINGS: ReadonlyArray<Dimension> = [OWNER, ...DIMENSIONS];
 
 const DIMENSION_BY_ID = new Map(GROUPINGS.map((dimension) => [dimension.id, dimension]));
 
-/**
- * One dimension's accessor, for a breakdown built outside this module. The
- * Income screen needs the short labels above, and `allocation.ts` cannot
- * import them (it is imported *by* this module — a cycle), so the label table
- * stays here, single, and the accessor travels. That makes the two screens'
- * agreement structural: both read one `of`, so they cannot group the same way
- * and label differently — which a third copy of the labels would have
- * allowed, silently, on the page where the words carry the tax rule.
- *
- * Throws on an id no dimension carries, which no caller can reach (closed
- * union, covered map). `groupHoldings` answers the same impossible lookup
- * with an empty table — still a legible screen; here, a one-bucket grouping
- * would render as a plausible breakdown of a portfolio nobody owns.
- */
+// One dimension's accessor, for a breakdown built outside this module (allocation.ts, which
+// this module imports, so the label table stays here and the accessor travels instead).
+// Throws on an id no dimension carries — unreachable from a closed union, unlike
+// groupHoldings's empty-table answer to the same impossible lookup, since a one-bucket
+// grouping here would render as a plausible breakdown of a portfolio nobody owns.
 export function groupingBy(id: DimensionId): Grouping {
   const dimension = DIMENSION_BY_ID.get(id);
   if (dimension === undefined) throw new Error(`No such holdings dimension: ${id}`);
@@ -256,11 +190,8 @@ const SORT_KEYS: ReadonlyArray<SortKey> = [
   "annualDividend",
 ];
 
-/**
- * Descending by value: the first question anyone asks a holdings table is
- * "what is the largest thing I own" — the query layer's alphabetical ordering
- * answers a question nobody asks.
- */
+// Descending by value: "what is the largest thing I own" is the first question a holdings
+// table gets asked, not the query layer's alphabetical order.
 export const DEFAULT_SORT: SortKey = "value";
 export const DEFAULT_DIRECTION: SortDirection = "desc";
 
@@ -282,20 +213,14 @@ function compareBy(key: SortKey, a: ValuedHolding, b: ValuedHolding): number {
       return compareDecimal(a.costBasis, b.costBasis, MONEY_SCALE);
     case "unrealized":
       return compareDecimal(a.unrealized, b.unrealized, MONEY_SCALE);
-    // Money scale, not SHARE_SCALE: the column sorts on the amount it prints,
-    // never on the ratio printed under it.
+    // Money scale, not SHARE_SCALE: sorts on the amount printed, not the ratio under it.
     case "annualDividend":
       return compareDecimal(a.annualDividend, b.annualDividend, MONEY_SCALE);
   }
 }
 
-/**
- * Whether the sorted figure is absent — only the four money columns can be.
- * The annual dividend is not among them on purpose: the view coalesces a
- * missing rate to zero, so every holding has a figure, and a case here would
- * sink pays-nothing rows to the bottom as though nobody knew what they paid —
- * the opposite of the zero rule (DESIGN.md §14, limitation 9).
- */
+// Annual dividend deliberately absent: the view coalesces a missing rate to zero, so it's
+// never unknown, and sinking pays-nothing rows to the bottom would violate the zero rule (§14.9).
 function isMissing(key: SortKey, holding: ValuedHolding): boolean {
   switch (key) {
     case "price":
@@ -311,14 +236,8 @@ function isMissing(key: SortKey, holding: ValuedHolding): boolean {
   }
 }
 
-/**
- * Sort a copy, never the caller's array. **Absence settles before direction**:
- * no-figure rows stay at the bottom whichever way the column sorts — reversed
- * with everything else, every unpriced holding would top an ascending sort
- * and read as "these are the smallest", the one thing a null must never be
- * mistaken for. The explicit tie-break (instrument, account, instrument id)
- * stops identical rows swapping between renders.
- */
+// Sorts a copy. Absence settles before direction: no-figure rows always stay at the bottom,
+// so an ascending sort never puts unpriced holdings on top reading as "smallest".
 export function sortHoldings(
   holdings: ValuedHolding[],
   key: SortKey,
@@ -343,33 +262,22 @@ export function sortHoldings(
 }
 
 export type HoldingsQuery = {
-  /** Dimension id → the selected key. A dimension absent from the map is unfiltered. */
-  filters: Map<DimensionId, string>;
+  filters: Map<DimensionId, string>; // absent from the map = unfiltered
   group: DimensionId | null;
   sort: SortKey;
   direction: SortDirection;
 };
 
-/**
- * The screen's state, read out of the query string (DESIGN.md §8.3). State
- * lives in the URL so a chosen view survives reload, bookmarks, and being
- * sent to the other person — and it is why this screen needs no client-side
- * JavaScript.
- *
- * **Anything unrecognised is ignored, never rejected**: a stale bookmark, a
- * hand-edited parameter, crawler nonsense all produce the unfiltered table —
- * the honest reading of "I could not understand that". But a filter key no
- * holding carries is kept rather than dropped: dropping it would silently
- * show the whole portfolio to someone who asked for a slice; it renders as an
- * empty result that says so.
- */
+// Screen state read out of the query string (DESIGN.md §8.3), so a view survives reload and
+// bookmarking. Anything unrecognised is ignored, never rejected. A filter key no holding
+// carries is kept rather than dropped — dropping it would silently widen to the whole
+// portfolio instead of rendering the empty result that says so.
 export function parseQuery(params: URLSearchParams): HoldingsQuery {
   const filters = new Map<DimensionId, string>();
 
   for (const dimension of DIMENSIONS) {
     const value = params.get(dimension.id);
-    // An empty string is a `<select>` with nothing chosen: "all", not a
-    // filter for the empty key.
+    // Empty string is a <select> with nothing chosen ("all"), not a filter for the empty key.
     if (value !== null && value !== "") filters.set(dimension.id, value);
   }
 
@@ -385,21 +293,10 @@ export function parseQuery(params: URLSearchParams): HoldingsQuery {
   };
 }
 
-/**
- * The query string for a variant of the current view — what every control on
- * the screen is built from, each changing exactly one thing. Defaults are
- * omitted, so the unfiltered URL is `/holdings`, not
- * `/holdings?sort=value&dir=desc&group=`.
- *
- * **The owner filter arrives as its own argument**, not in
- * {@link HoldingsQuery}: household-wide (ADR-0008) where the rest is this
- * screen's own — but it must be here, and first, or a column click would
- * clear it; `readOwnerFilter` is the other half of the seam. Emitted first
- * because this is the single definition of a canonical Holdings URL and the
- * loader redirects anything spelled differently — `toOwnerParam` is what
- * makes that spelling survive react-router's own request rebuild rather than
- * being respelled by it (see that function's doc).
- */
+// Query string for a variant of the current view, each control changing exactly one thing.
+// Defaults omitted, so the unfiltered URL is "/holdings". owners is its own argument, not in
+// HoldingsQuery (household-wide, ADR-0008) — but emitted first, or a column click would
+// clear it; toOwnerParam keeps that spelling stable through react-router's request rebuild.
 export function toSearch(query: HoldingsQuery, owners: OwnerFilter): string {
   const params = new URLSearchParams();
 
@@ -417,35 +314,21 @@ export function toSearch(query: HoldingsQuery, owners: OwnerFilter): string {
   return search === "" ? "" : `?${search}`;
 }
 
-/** One dimension's filter, with the choices the data actually supports. */
 export type FilterControl = {
   id: DimensionId;
   label: string;
   selected: string;
-  /** The selection as a sentence fragment, or `null` when nothing is selected. */
-  selectedPhrase: string | null;
-  /**
-   * The selected key names something no holding carries — a bookmark from
-   * before an account closed, or a hand-edited URL. A different empty result
-   * from "these two filters do not overlap", and worth different words.
-   */
+  selectedPhrase: string | null; // null when nothing is selected
+  // The selected key names something no holding carries (stale bookmark, closed account) —
+  // a different empty result from "these two filters don't overlap", worth different words.
   selectedIsAbsent: boolean;
   options: ReadonlyArray<{ value: string; label: string }>;
 };
 
-/**
- * The filters worth drawing, options read off the holdings themselves.
- *
- * **A dimension with fewer than two distinct values is not a filter** — one
- * brokerage, everything taxable — it is a fact about the household, and
- * drawing it implies a choice that does not exist (§13.7 as a rule). Owner
- * left {@link DIMENSIONS} with spec 0013; the household-wide control answers
- * that now. Options come from the unfiltered holdings, not the enumerations:
- * a household with no Roth is not offered "Tax-free", which could only
- * produce an empty table. A selected filter is always drawn even below the
- * threshold — otherwise narrowing to one brokerage would make the control you
- * narrowed with disappear, leaving no way back.
- */
+// A dimension with fewer than two distinct values isn't drawn (§13.7) — it's a fact about
+// the household, not a choice. Options come from the unfiltered holdings, not enumerations,
+// so a household with no Roth isn't offered "Tax-free". A selected filter is always drawn
+// even below the threshold, or narrowing to one brokerage would remove the way back out.
 export function availableFilters(
   holdings: ValuedHolding[],
   query: HoldingsQuery,
@@ -454,8 +337,7 @@ export function availableFilters(
 
   for (const dimension of DIMENSIONS) {
     const options = new Map<string, string>();
-    // The short label for prose — the option label's disambiguating tail
-    // reads badly in a sentence.
+    // Short label for prose — the option label's disambiguating tail reads badly in a sentence.
     const phrases = new Map<string, string>();
 
     for (const holding of holdings) {
@@ -467,17 +349,13 @@ export function availableFilters(
     const selected = query.filters.get(dimension.id) ?? "";
     if (options.size < 2 && selected === "") continue;
 
-    // Ordered by the words shown, tail included — among same-named accounts
-    // the tail decides before the institution, because it comes first in
-    // what the reader is actually scanning.
+    // Ordered by the words shown, tail included, since that's what the reader scans first.
     const listed = [...options.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => compareText(a.label, b.label));
 
-    // A key nothing carries (stale bookmark, hand-edit): `parseQuery` keeps
-    // it rather than widening behind the reader's back, so the select needs
-    // an option to point at — else it falls back to the first and every
-    // filter reads "All" beside an empty table.
+    // A key nothing carries needs an option to point at, or the select falls back to the
+    // first and reads "All" beside an empty table.
     if (selected !== "" && !options.has(selected)) {
       listed.unshift({ value: selected, label: "Not in this portfolio" });
     }
@@ -497,7 +375,7 @@ export function availableFilters(
   return controls;
 }
 
-/** Every filter is an AND: each one narrows what the last one left. */
+// Every filter is an AND: each narrows what the last one left.
 export function applyFilters(holdings: ValuedHolding[], query: HoldingsQuery): ValuedHolding[] {
   if (query.filters.size === 0) return holdings;
 

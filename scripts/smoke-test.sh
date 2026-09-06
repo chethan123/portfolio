@@ -1,40 +1,33 @@
 #!/usr/bin/env bash
 #
-# CI-only container smoke test — the things a unit or integration test
-# structurally cannot reach: `docker compose up` on an empty data directory
-# produces a working instance once the gate is configured (and refuses to start
-# until it is), the app waits for Postgres, a restart is safe, the front door is
-# shut, and the runtime image contains what it is specified to and nothing it is
-# not.
+# CI-only container smoke test — what a unit/integration test structurally
+# cannot reach: `up` on an empty data directory produces a working instance
+# once the gate is configured (and refuses to start until it is), the app
+# waits for Postgres, a restart is safe, the front door is shut, and the
+# runtime image contains what it's specified to and nothing else.
 #
-# The gate values below are throwaway: oauth2-proxy never contacts Google at
-# startup, so the real sidecar boots on fake credentials — everything short of
-# a real Google round trip is exercisable; that last leg is the operator's
-# checklist, not CI's.
+# Gate values below are throwaway: oauth2-proxy never contacts Google at
+# startup, so the sidecar boots on fake credentials — only the real Google
+# round trip is out of reach here (operator's checklist, not CI's).
 #
 # Slow and deliberately thin. Behaviour gets tested elsewhere.
 #
 # Run from the repository root:  ./scripts/smoke-test.sh
 set -euo pipefail
 
-# compose.yaml pulls the published image; this test exercises the tree it was
-# handed, so layer the dev override on top and build from source — otherwise
-# every run silently certifies the *last release*. COMPOSE_FILE once, not `-f`
-# per call: of the dozen invocations below, the ones that would break with a
-# forgotten flag are not the ones that would look broken (`ps`, `exec`,
-# `logs`, `restart` resolve by project name and keep working).
+# Build from the checkout, not the published image compose.yaml pulls — else
+# every run silently certifies the *last release*. Exported once, not `-f`
+# per call: most of the dozen invocations below (ps, exec, logs, restart)
+# resolve by project name and work fine without it anyway.
 export COMPOSE_FILE="compose.yaml:compose.dev.yaml"
 
 readonly BASE_URL="http://127.0.0.1"
 readonly HEALTH_URL="${BASE_URL}/healthz"
 readonly TIMEOUT_SECONDS=180
 readonly ALLOWLIST="allowed-emails.txt"
-# Where compose.yaml's `db-store` puts the cluster. Every run starts from an
-# empty one, and leaves it empty.
 readonly DB_DIR="volumes/db/data"
-# Where the dump service writes. Unlike the cluster this is the *operator's*
-# directory — the whole point of the service running as their uid — so CI
-# empties it without borrowing root, and sets that uid to its own.
+# The operator's own directory (the dump service runs as their uid) — unlike
+# the cluster, CI empties it without borrowing root.
 readonly DUMPS_DIR="volumes/dumps"
 export DUMP_UID="${DUMP_UID:-$(id -u)}"
 export DUMP_GID="${DUMP_GID:-$(id -g)}"
@@ -45,22 +38,18 @@ fail() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
 # Set before the trap, because the trap reads it.
 allowlist_is_ours=false
 
-# `down -v` no longer discards the database: the cluster lives in the checkout
-# now, and outliving the volume record is the point of that. So the directory is
-# emptied explicitly, at both ends of the run. It is 0700 uid 70 by the time
-# Postgres has touched it — unreadable to the host user on a non-root runner —
-# so the emptying borrows root from the daemon, exactly as the operator's
-# restore does (docs/operating.md).
+# `down -v` no longer discards the database (it lives in the checkout now), so
+# this empties it explicitly at both ends of the run. Postgres leaves it 0700
+# uid 70 — unreadable to a non-root runner — so this borrows root from the
+# daemon, exactly as the operator's own restore does (docs/operating.md).
 empty_db_dir() {
   mkdir -p "$DB_DIR"
   [[ -n "${DB_IMAGE:-}" ]] || return 0
   docker run --rm -v "${PWD}/${DB_DIR}:/data" "$DB_IMAGE" find /data -mindepth 1 -delete
 }
 
-# The files here belong to the runner, so no root is borrowed. Emptied at both
-# ends for the same reason as the cluster: the catch-up dump only fires when
-# the newest dump is stale, so a second run on yesterday's file would assert
-# nothing.
+# Emptied at both ends: the catch-up dump only fires when the newest dump is
+# stale, so a second run on yesterday's file would assert nothing.
 empty_dumps_dir() {
   mkdir -p "$DUMPS_DIR"
   rm -f "${DUMPS_DIR:?}"/* "${DUMPS_DIR:?}"/.portfolio-*.part 2>/dev/null || true
@@ -101,13 +90,9 @@ expect_status() {
   printf 'GET /healthz -> %s\n' "$actual"
 }
 
-# --- The Docker Engine floor ---------------------------------------------------
-# First, before anything else touches Compose: 07's isolated networks are what
-# make 28.0 load-bearing (26 ignores `gateway_mode_ipv4` silently and keeps a
-# host address on the bridge, 27 refuses it), but the floor is declared here,
-# one release earlier, so an operator meets the check before that matters. A
-# CI runner-image regression (`.github/workflows/ci.yml:142-149`) then reads
-# as "engine too old", not as a topology bug several checks downstream.
+# Checked before anything else touches Compose: engine 26 silently ignores
+# `gateway_mode_ipv4`, 27 refuses it, and only 28 makes the isolated-network
+# checks below reliable — better "engine too old" here than a topology bug downstream.
 log "Checking the Docker Engine floor"
 engine_version="$(docker version --format '{{.Server.Version}}')" ||
   fail "could not read the Docker Engine version"
@@ -117,38 +102,23 @@ engine_major="${engine_version%%.*}"
 ((engine_major >= 28)) || fail "Docker Engine ${engine_version} is below the 28.0 floor"
 printf 'Docker Engine %s\n' "$engine_version"
 
-# --- Throwaway gate configuration ---------------------------------------------
-# Exported, not written to .env: the environment wins over .env, so the run is
-# identical on a bare CI runner and beside a real configured instance.
-# Exported ahead of both refusal checks below, not just the second one. The
-# first check asserts on the variable compose names, and compose names
-# whichever missing one it reaches first — that is Go map iteration, not file
-# order, so with two missing it is a coin flip. Every other required variable
-# has to be real by then for it to isolate the one it is about: the gate's
-# four here, and `DUMP_UID`/`DUMP_GID` at the top of this file. Moving either
-# below that check puts the flake back.
+# Exported, not written to .env, so the run is identical on a bare CI runner
+# and beside a real configured instance. Exported ahead of both refusal
+# checks below (not just the second): compose names whichever missing
+# variable Go map iteration reaches first, a coin flip unless every other
+# required variable is already real — moving either below its check brings the flake back.
 export GATE_CLIENT_ID="smoke-test.apps.googleusercontent.com"
 export GATE_CLIENT_SECRET="smoke-test-client-secret"
-# The generation command from .env.example, run rather than quoted: the
-# sidecar refuses a value not decoding to 16/24/32 bytes, and a wrong-length
-# placeholder would fail in a way that reads like a gate bug.
+# Run, not quoted, from .env.example: the sidecar refuses a value not
+# decoding to 16/24/32 bytes, and a wrong-length placeholder would read as a gate bug.
 GATE_COOKIE_SECRET="$(openssl rand -base64 32 | tr -- '+/' '-_')"
 export GATE_COOKIE_SECRET
 export PUBLIC_ORIGIN="https://smoke.example.test"
 
-# --- The stack refuses to start without a database password -------------------
-# Same fail-closed contract as the gate credentials checked below, now for
-# `db`'s `${POSTGRES_PASSWORD:?}`. There is no file order to lean on here —
-# compose-go interpolates by walking a Go map, and which of several missing
-# variables its refusal names first is not deterministic (measured with all
-# five unset: 33/40 named POSTGRES_PASSWORD, 7/40 named a gate variable — a
-# coin flip this check must not be built on). So this isolates the one
-# variable instead: the gate's four are exported above, real by this point,
-# which leaves POSTGRES_PASSWORD as the only thing compose can fail to
-# interpolate — the refusal can only name it. Matched against the
-# interpolator's own wording, not a bare substring, so a stray mention of the
-# variable's name elsewhere in stderr could not satisfy this for the wrong
-# reason.
+# compose-go's refusal names whichever missing variable its Go map iteration
+# reaches first — not deterministic (measured: 33/40 POSTGRES_PASSWORD, 7/40 a
+# gate variable, all five unset). Isolated here instead: the gate's four are
+# already real, so POSTGRES_PASSWORD is the only thing left to fail on.
 log "Checking the stack refuses to start without a database password"
 if refusal="$(env -u POSTGRES_PASSWORD docker compose --env-file /dev/null config --quiet 2>&1)"; then
   fail "compose accepted a configuration with no POSTGRES_PASSWORD"
@@ -164,7 +134,6 @@ printf 'compose refused: %s\n' "$refusal"
 # any other password.
 export POSTGRES_PASSWORD="smoke-test-postgres-password"
 
-# --- The stack refuses to start half-protected --------------------------------
 # Unconfigured, compose must stop rather than bring up an ungated instance.
 # `config`, not `up`: interpolation is `up`'s first step and needs no daemon.
 # `--env-file /dev/null` so a developer's own .env cannot quietly satisfy the
@@ -198,7 +167,6 @@ if [[ ! -e "$ALLOWLIST" ]]; then
   allowlist_is_ours=true
 fi
 
-# --- compose.external-db.yaml starts neither db nor dump -----------------------
 # The override's entire point: an install pointing at its own Postgres must
 # never depend on the bundled one coming up healthy — `dump-loop.sh` refuses
 # any host but `db` and would crash-loop against someone else's Postgres — so
@@ -252,7 +220,6 @@ log "Checking compose.external-db.yaml starts neither db nor dump"
 )
 printf 'compose.external-db.yaml: db and dump not created\n'
 
-# --- A fresh machine with an empty data directory ------------------------------
 log "Starting from an empty data directory"
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 empty_db_dir
@@ -270,7 +237,6 @@ expect_status 200
 log "Waiting for the worker healthcheck"
 wait_for_healthy worker
 
-# --- Migrations ran before the server started ---------------------------------
 # /healthz is non-200 while any on-disk migration is unrecorded, so the 200
 # above already proves the schema current. This checks the other half: the
 # runner made it so, not an app started against whatever happened to be there.
@@ -284,7 +250,6 @@ logs="$(app_logs)"
 [[ "$logs" == *"Migrations OK"* ]] || fail "migrations did not complete"
 printf 'migrations applied at startup\n'
 
-# --- The cluster is in the checkout, not a Docker-managed volume ---------------
 # `db-store` binds a name to ./volumes/db/data; nothing else would notice it
 # quietly reverting to a directory under /var/lib/docker, taking the operator's
 # backup target with it. Read as ownership and mode of the directory itself —
@@ -296,7 +261,6 @@ cluster_dir="$(ls -ldn "$DB_DIR" | awk '{ print $3, $1 }')"
   fail "${DB_DIR} is '${cluster_dir}', expected Postgres's own 70 drwx------"
 printf '%s: %s\n' "$DB_DIR" "$cluster_dir"
 
-# --- A restart is always safe -------------------------------------------------
 # What proves migrations idempotent: the second boot re-runs the runner
 # against an already-migrated database; a non-zero exit would never reach
 # healthy.
@@ -318,7 +282,6 @@ printf '%s\n' "$migrate_output"
 [[ "$migrate_output" == *"nothing pending"* ]] ||
   fail "re-running migrations was not a no-op"
 
-# --- The image is what it is specified to be ----------------------------------
 log "Inspecting the runtime image"
 readonly IMAGE="$(docker compose images -q app | head -1)"
 [[ -n "$IMAGE" ]] || fail "could not resolve the app image id"
@@ -407,7 +370,6 @@ for compiler in gcc cc g++ make tsc; do
 done
 printf 'no compiler\n'
 
-# --- Exactly one published port, and it belongs to caddy, not app or db -------
 log "Checking published ports"
 published_ports() {
   docker inspect --format '{{json .NetworkSettings.Ports}}' "$(docker compose ps -q "$1")"
@@ -444,7 +406,6 @@ printf 'caddy published on 80\n'
   fail "caddy's host port 80 does not map to the container's 8080 listener: $(published_ports caddy)"
 printf 'caddy listens on 8080 inside\n'
 
-# --- Every container holds only the privileges it was proved to need ----------
 # Nothing else can notice this posture: a container that regained root, a
 # capability, or a writable rootfs serves every request exactly as before.
 # Caps, no-new-privileges and read-only are each checked twice — the daemon's
@@ -550,7 +511,6 @@ for service in app db caddy gate dump worker egress-proxy; do
   expect_read_only_root "$service"
 done
 
-# --- The worker's volume fence, bounds and socket ------------------------------
 # What proves the fence design (research note §8.5): the mount set, not the
 # socket's mode, is what keeps a compromised sidecar from touching the
 # worker's socket — only app and worker may mount price-worker-sock at all.
@@ -650,7 +610,6 @@ for option in mode=770 uid=1000 gid=1000; do
 done
 printf 'worker: %s\n' "$mounts_line"
 
-# --- app, db, dump and worker have no route out --------------------------------
 # `backend`, `caddy-app` and `caddy-gate` are `internal: true`: no default
 # route at all, so none of these three can reach the internet by any path,
 # not merely a blocked one. `dump` is not a smaller case of `app` and `db` to
@@ -740,7 +699,6 @@ for service in app db dump worker; do
   expect_no_egress "$service"
 done
 
-# --- The isolation is read from the daemon's record, never provoked -----------
 # `backend`, `caddy-app`, `caddy-gate` and, since ticket 08, `worker-proxy`
 # share the property under test, so one loop, not four copy-pasted checks. A
 # connect would only prove the negative for the address it happened to pick,
@@ -774,7 +732,6 @@ for net in backend caddy-app caddy-gate worker-proxy; do
   printf '%s: host bridge br-%s carries no address\n' "$net" "$bridge_id"
 done
 
-# --- The worker shares no network with app, gate or db ------------------------
 # worker-proxy is worker's only network; app is on backend and caddy-app,
 # gate is on caddy-gate and egress-gate, db is on backend alone — none of
 # them worker-proxy. A connect to an unroutable address waits on the
@@ -842,7 +799,6 @@ unreachable_from_worker db 5432 "db by name"
 probe_all_ips db 5432 "db"
 
 
-# --- The worker reaches Yahoo only through the proxy ---------------------------
 # Ticket 08's whole point: `NODE_USE_ENV_PROXY` and `HTTPS_PROXY`
 # (compose.yaml, `worker`'s `environment:`) are what route every price fetch
 # through `egress-proxy`, over `worker-proxy` — the topology checks above
@@ -864,7 +820,6 @@ else
   printf 'SKIPPED (no route to the real internet from this runner): worker fetch of query2.finance.yahoo.com through the proxy — %s\n' "$yahoo_fetch_output"
 fi
 
-# --- The network is the property, not the flag ---------------------------------
 # `NODE_USE_ENV_PROXY` and `HTTPS_PROXY` stay set on `worker` throughout this
 # check — stopping `egress-proxy` removes the only thing they point at, so a
 # failure here proves the topology, not the runtime flag, is what the
@@ -890,7 +845,6 @@ printf 'worker: fetch through the proxy fails while egress-proxy is stopped\n'
 docker compose start egress-proxy >/dev/null || fail "could not restart egress-proxy"
 wait_for_healthy egress-proxy
 
-# --- The proxy: the allowlist, /healthz, and the negative path ------------------
 # All three from `worker` — `worker-proxy` is internal, so the proxy is
 # reachable only from containers on it, never from this runner directly.
 log "Checking the proxy refuses a CONNECT to a host off the allowlist"
@@ -1008,7 +962,6 @@ if [[ "$allowlist_is_ours" == true ]]; then
 fi
 printf 'gate reads its allowlist through the bind mount\n'
 
-# --- The dump service produces a verified dump --------------------------------
 # The catch-up rule is what makes this cheap: an empty dumps directory at
 # startup means the first dump happens within seconds of `up`, so nothing here
 # waits on a schedule.
@@ -1064,7 +1017,6 @@ done
   fail "the dump container reports ${dump_health:-nothing}, expected healthy"
 printf 'dump healthcheck: %s\n' "$dump_health"
 
-# --- A truncated archive is refused -------------------------------------------
 # The failure the whole verification step exists for: `pg_restore --list` reads
 # a table of contents written at the front of the archive and passes a file
 # missing almost all of its data, so the service decodes the whole thing.
@@ -1077,7 +1029,6 @@ if docker compose run --rm -T dump verify /dumps/truncated.bin >/dev/null 2>&1; 
 fi
 printf 'a truncated archive is refused, a whole one is not\n'
 
-# --- Retention keeps the newest and only touches its own ----------------------
 # Pre-aged by name rather than by mtime, because that is what retention reads.
 touch "${DUMPS_DIR}/portfolio-20200101T000000Z.dump" \
       "${DUMPS_DIR}/portfolio-20200102T000000Z.dump" \
@@ -1095,7 +1046,6 @@ docker compose run --rm -T dump prune /dumps >/dev/null 2>&1 ||
 printf 'retention: window applied, newest kept, foreign names untouched\n'
 rm -f "${DUMPS_DIR}/truncated.bin" "${DUMPS_DIR}/portfolio-2020-01-03.dump"
 
-# --- The stack actually serves a page, not just a health check ----------------
 # Everything above proves the container is up; this proves the framework in it
 # is: `react-router-serve` over the real build, the route manifest, the server
 # render. The vitest suite loads no React Router plugin, so this is the one
@@ -1134,7 +1084,6 @@ health="$(curl -sS --max-time 30 "$HEALTH_URL" || true)"
   fail "GET /healthz did not report the schema current: ${health}"
 printf 'GET /healthz -> %s\n' "$health"
 
-# --- The front door is shut ---------------------------------------------------
 # "Every path is behind the gate" is a property of the running stack — Caddy
 # consulting the sidecar — so this is the only place it is checked. No Google
 # account needed: the browser is turned away before Google is consulted.

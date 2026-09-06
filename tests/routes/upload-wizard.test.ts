@@ -201,9 +201,7 @@ describe("a review re-posted after its statement landed", () => {
       const { draftId, accountId } = await commitStaged(ctx);
       const recorded = await lastRecorded(accountId, ctx.db);
 
-      // The back button after success, or a tab resubmitted from history. The
-      // draft the commit deleted is the guard: there is nothing left to read a
-      // second set out of.
+      // The commit already deleted this draft — nothing left to read a second set out of.
       const refusal = await expiredPageOf(() =>
         reviewAction(
           args(post(`/upload/${draftId}/review`, { asOf: AS_OF, accountId }), { draftId }),
@@ -211,8 +209,7 @@ describe("a review re-posted after its statement landed", () => {
       );
 
       expect(refusal.init.status).toBe(404);
-      // Same set still the account's latest — a second commit would have
-      // outranked it and left the household reading a duplicate statement.
+      // Same set still latest — a second commit would have outranked it into a duplicate statement.
       expect(await lastRecorded(accountId, ctx.db)).toEqual(recorded);
     }),
   );
@@ -229,9 +226,7 @@ describe("a review re-posted after its statement landed", () => {
       );
       expect(honest.data.accountId).toBe(accountId);
 
-      // The field arrives from a posted form and is read back into a link, so
-      // the id is validated as one here rather than trusted for having been in
-      // a hidden input a moment ago.
+      // Posted field read back into a link — validated here, not trusted for having been a hidden input a moment ago.
       const forged = await expiredPageOf(() =>
         reviewAction(
           args(

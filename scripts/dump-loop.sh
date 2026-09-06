@@ -266,8 +266,6 @@ run_once() {
   log "wrote $(basename "$final") ($bytes bytes)"
 }
 
-# --- the loop -----------------------------------------------------------------
-
 seconds_until_window() {
   target=$(( $(strip0 "$DUMP_AT") * 3600 ))
   current=$(( $(strip0 "$(date -u +%H)") * 3600 + $(strip0 "$(date -u +%M)") * 60 + $(strip0 "$(date -u +%S)") ))
@@ -333,13 +331,9 @@ retry_ladder() {
   log "three attempts failed; waiting for the next window"
 }
 
-# --- healthcheck --------------------------------------------------------------
-#
-# Reports on the age of the newest dump, not on the last exit status: a run
-# that succeeded three weeks ago exited 0 too. Nothing acts on the result —
-# Docker restart policies react to a process exiting, not to health — so this
-# is for a human at `docker compose ps`, and the markers are what reach the
-# collector.
+# Age of the newest dump, not the last exit status (a run from three weeks
+# ago exited 0 too). For a human at `docker compose ps` — restart policies
+# don't act on this; the markers are what reach the collector.
 healthcheck() {
   newest=""
   for f in "$DUMP_DIR"/portfolio-*.dump; do
@@ -354,8 +348,6 @@ healthcheck() {
   [ "$age" -lt 108000 ] || { echo "newest dump is $age seconds old"; exit 1; }
   echo "$newest"
 }
-
-# --- entry --------------------------------------------------------------------
 
 case "${1:-loop}" in
   loop)

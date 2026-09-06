@@ -174,9 +174,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         ))}
       </div>
 
-      {/* The diff, in Holdings' table grammar throughout: additions first
-          because they read fastest, removals last because they are the reason
-          the screen exists and the eye rests where the reading ends. */}
+      {/* Additions first (read fastest), removals last (why the screen exists). */}
       <div className="data-table-scroll">
         <table className="data-table">
           <thead>
@@ -185,9 +183,6 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               <th scope="col" className="is-numeric">
                 Quantity
               </th>
-              {/* Per share, and the heading says so: the whole-position basis
-                  moves whenever the quantity does — the per-share figure is
-                  the one the statement actually restated. */}
               <th scope="col" className="is-numeric">
                 Cost basis / share
               </th>
@@ -220,9 +215,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
               {diff.updated.map((row) => (
                 <tr key={row.instrumentId}>
                   <InstrumentCell row={row} />
-                  {/* Before → after for whatever changed; the unchanged cell
-                      prints its single figure. `.diff-was` recedes so the eye
-                      lands on what will be true. */}
+                  {/* `.diff-was` recedes so the eye lands on what will be true. */}
                   <td className="is-numeric">
                     {row.quantityChanged ? (
                       <>
@@ -254,16 +247,13 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           {diff.removed.length > 0 ? (
             <tbody>
               <GroupHeading label="Removed" />
-              {/* Every removed position individually — instrument, quantity,
-                  last known value — never collapsed into a count. "1 removed"
-                  is recognisable as the AAPL sale only when AAPL is printed. */}
+              {/* Every position individually, never collapsed into a count — "1 removed" needs the name printed. */}
               {diff.removed.map((row) => (
                 <tr key={row.instrumentId}>
                   <InstrumentCell row={row} />
                   <td className="is-numeric"><Amount value={row.quantity} shape="quantity" /></td>
                   <td className="is-numeric"><BasisFigure value={row.costBasisPerShare} /></td>
-                  {/* A dash, never $0.00, for a holding nothing ever priced —
-                      $0.00 would claim the household sold something worthless. */}
+                  {/* Dash, never $0.00 — that would claim the household sold something worthless. */}
                   <td className="is-numeric">
                     <Amount value={row.value} />
                   </td>
@@ -275,14 +265,10 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       </div>
 
       <Form method="post">
-        {/* Feeds the expired page's link on a re-POST, never a write — the
-            draft the id would be read from is gone by then (§6.5, §7.4). */}
+        {/* Feeds the expired page's link on a re-POST, never a write (§6.5, §7.4). */}
         <input type="hidden" name="accountId" value={diff.accountId} />
 
-        {/* The majority-removal confirmation, at the danger-zone weight the
-            app closes an account with: a decision put to the reader. Half or
-            less draws no confirmation — a tick always demanded is a tick
-            nobody reads. */}
+        {/* Danger-zone weight, same as closing an account — half or less draws no confirmation. */}
         {diff.majorityRemoved ? (
           <div className="danger-zone">
             <label className="choice">
@@ -310,9 +296,6 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           </div>
         ) : null}
 
-        {/* Commit-time refusals — product guard, account-number
-            disagreement, closed account, unticked confirmation — all render
-            here, above the commit row. */}
         {actionData?.formError ? (
           <div className="panel-body form-intro">
             <p className="form-error" role="alert">
@@ -323,8 +306,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
 
         <div className="panel-form">
           {diff.asOf.source === "file" ? (
-            // The statement said it; offering an editor here would invite
-            // overriding a fact with an opinion.
+            // Statement said it — an editor here would invite overriding a fact with an opinion.
             <p className="form-note">
               The statement dates itself: <span className="u-data">{diff.asOf.date}</span>.
             </p>
@@ -355,9 +337,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           <button type="submit" className="button">
             Record this statement
           </button>
-          {/* The misread-column story ends here: see every quantity a thousand
-              times too large, walk back, remap, return. Nothing was written,
-              because nothing is written before the commit. */}
+          {/* Nothing was written yet — safe to walk back and remap. */}
           <Link className="button button--text" to={`/upload/${diff.draftId}/columns`}>
             Back to columns
           </Link>

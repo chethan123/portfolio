@@ -1,14 +1,7 @@
 /**
- * The two field shapes the inline position editor is built from (DESIGN.md
- * §4.1, §5.4). Pure — the rules are about text. Worth their own file beside
- * `balance-input.test.ts` because they are the *opposite* decision on the
- * one question that matters: `moneyMagnitude` refuses a sign (its form
- * derives one from the account kind); these boxes open containing the
- * figure the table prints, so they must take it back — minus sign, U+2212,
- * thousands separators and all. That round trip is the load-bearing first
- * `describe`: `formatQuantity` fills the boxes, and breaking the pair
- * produces a form refusing what it just displayed, blaming the reader for a
- * string they never typed. Every assertion is an exact string.
+ * Field shapes for the inline position editor (DESIGN.md §4.1, §5.4). Opposite of
+ * `moneyMagnitude`: these boxes open containing the table's own figure, so they must take
+ * it back — minus sign, U+2212, thousands separators and all — or the form refuses what it just displayed.
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -19,7 +12,7 @@ import { ValidationError, parseInput, perShareAmount, signedQuantity } from "~/l
 const quantity = z.object({ quantity: signedQuantity("A quantity") });
 const basis = z.object({ costBasisPerShare: perShareAmount("A cost basis") });
 
-/** The message a refusal put under a named field, or undefined if it passed. */
+// message a refusal put under a named field, or undefined if it passed
 function refusal(schema: z.ZodType, raw: unknown, field: string): string | undefined {
   try {
     parseInput(schema, raw);
@@ -40,16 +33,14 @@ describe("the box takes back what the table put in it", () => {
     ["1234567.00000000", "1234567"],
     ["0.00000000", "0"],
   ])("%s prints, is retyped, and stores back as itself", (stored, expected) => {
-    // The full journey: the column, through the formatter that fills the box,
-    // through the validator that reads it back out.
+    // full journey: column -> formatter that fills the box -> validator reading it back
     const printed = formatQuantity(stored);
     expect(parseInput(quantity, { quantity: printed }).quantity).toBe(expected);
   });
 
   it("takes the U+2212 minus the table actually prints, not just a hyphen", () => {
-    // `formatQuantity` emits U+2212 so a negative quantity and a negative money
-    // figure read alike. A validator that only knew about the hyphen would
-    // refuse every liability the moment its box was opened and saved unchanged.
+    // formatQuantity emits U+2212 so negatives read like money; a hyphen-only validator
+    // would refuse every liability unchanged
     expect(formatQuantity("-14500.00000000")).toBe("−14,500");
     expect(parseInput(quantity, { quantity: "−14,500" }).quantity).toBe("-14500");
   });
@@ -79,11 +70,9 @@ describe("signedQuantity", () => {
   });
 
   it("refuses a lone point rather than reading it as zero", () => {
-    // The two completion rules used to compose — "." became "0." became "0" —
-    // so a stray keystroke was a well-formed quantity of nothing, and a
-    // quantity of nothing is this application's spelling of "sold everything".
+    // completion rules used to compose: "." -> "0." -> "0" — a stray keystroke read as "sold everything"
     expect(refusal(quantity, { quantity: "." }, "quantity")).toMatch(/must be a number/);
-    // The generosity it was hiding inside is still there on both sides.
+    // the generosity it was hiding inside is still there on both sides
     expect(parseInput(quantity, { quantity: ".5" }).quantity).toBe("0.5");
     expect(parseInput(quantity, { quantity: "5." }).quantity).toBe("5");
   });
@@ -112,8 +101,7 @@ describe("signedQuantity", () => {
   });
 
   it("counts integer digits without counting the leading zeros or the sign", () => {
-    // `-0000000000000000120.5` is 120.5 with padding, and refusing it as too
-    // large would be refusing an amount well inside the column.
+    // leading zeros are padding, not magnitude — refusing this would reject an amount well inside the column
     expect(parseInput(quantity, { quantity: "-0000000000000000120.5" }).quantity).toBe(
       "-0000000000000000120.5",
     );
@@ -128,9 +116,7 @@ describe("perShareAmount", () => {
   it.each([["", null], ["   ", null], [undefined, null], [null, null]])(
     "reads %j as an absent cost basis rather than as zero",
     (typed, stored) => {
-      // Zero would claim the shares were free and print an unrealized gain
-      // equal to the whole position; null is what "the statement did not say"
-      // already means everywhere else in the schema.
+      // zero would claim free shares and a fake gain on the whole position; null matches "not stated" elsewhere
       expect(parseInput(basis, { costBasisPerShare: typed }).costBasisPerShare).toBe(stored);
     },
   );
