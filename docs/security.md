@@ -1,9 +1,10 @@
 # Security
 
 **This app holds no credential to any bank or broker.** There is no account linking, no Plaid, no
-Yodlee, no stored password to anything. It learns what you hold because you upload a statement you
-downloaded yourself, or type a balance in. That is the whole of the ingest path, and it is why the
-rest of this page can be short.
+Yodlee, and no password to a financial institution anywhere in it. It learns what you hold because
+you upload a statement you downloaded yourself, or type a balance in. That is the whole of the
+ingest path, and it is why the rest of this page can be short. The only secrets the box keeps are
+its own: the database password and the two values the Google sign-in gate needs, in `.env`.
 
 You are weighing this against a hosted aggregator that does hold those logins. This page covers what
 leaves your box, what defends what, and what is not defended.
@@ -30,7 +31,7 @@ graph TB
     end
 
     google["<b>Google</b><br/>identity only"]
-    yahoo["<b>Yahoo Finance</b><br/>ticker symbols only"]
+    yahoo["<b>Yahoo Finance</b><br/>ticker symbols, and how far back<br/>you need prices for them"]
 
     gate ==>|"who signs in, and when"| google
     worker ==>|"the tickers you hold"| yahoo
@@ -45,17 +46,23 @@ graph TB
 
 - **Google learns who signs in and when.** That is what the sign-in gate is. It never sees a figure.
 - **Yahoo learns which tickers you hold**, every fifteen minutes by default — a setting in
-  Settings → Prices. It runs on a timer whether or not anyone is looking, and skips the fetch
-  outside market hours. Yahoo never learns how many shares, or what they are worth to you.
-- **Nothing else.** No analytics, no error reporting, no CDN, no fonts fetched at page load, no
-  third-party script of any kind in the page. The service worker stores nothing on the device, so
-  there is no cached copy of your figures on the phone either.
+  Settings → Prices. Once anyone has loaded a page since the last restart, that timer runs whether
+  or not anyone is still looking. Its own ticks skip the quote fetch outside market hours, but
+  pressing Refresh now or committing an upload fetches at any hour, and any tick may fill in missing
+  daily history. Yahoo never learns how many shares, or what they are worth to you; it does learn,
+  per ticker, the earliest date you need a price for.
+- **Nothing else.** No analytics, no error reporting, no CDN, no third-party script of any kind in
+  the page — and no web font from anyone else's server: the one typeface is a file this box serves
+  itself. The service worker stores nothing on the device, so there is no cached copy of your
+  figures on the phone either.
+- **A deploy adds the image registries** — `ghcr.io`, Docker Hub, `quay.io` — which learn when you
+  upgrade, and nothing else.
 
 ## 2. If something goes wrong
 
 | If this happens | What stops it | What still gets through |
 |---|---|---|
-| A device on your LAN dials the box | The **gate** — Google sign-in plus an address allowlist, enforced by this stack's own Caddy | `/healthz`, the one path routed past it. It reports whether the database is reachable and the schema current, and names pending migration files when it is not |
+| A device on your LAN dials the box | The **gate** — Google sign-in plus an address allowlist, enforced by this stack's own Caddy | `/healthz`, the one path that reaches the app without a check — it reports whether the database is reachable and the schema current, and names pending migration files when it is not. `/oauth2/*` goes past the check too, but only ever to the gate's own sign-in endpoints |
 | Someone picks up a family phone that is already signed in | The **lock** — every screen refused until a passkey is checked | Pages already drawn stay drawn until that tab next asks the server for something |
 | A poisoned release of the market-data package | It runs in `worker`: no database credential, no shared network with `app` or `db`, one route out | It still sees the tickers — pricing them is its job. And it is in the app image too; see §5 |
 | A poisoned dependency inside the app itself | `app` sits on two internal networks with no default route; read-only root filesystem, every capability dropped | An application-layer relay out through `caddy` to `gate` — §4 |
@@ -172,8 +179,9 @@ graph TB
 - **TLS is not in this stack.** The bundled Caddy serves plain HTTP; the certificate and public
   hostname are your proxy's job. That is also why the gate is enforced *here* rather than upstairs: a
   LAN device can dial this box directly, and that device is the threat the gate exists for.
-- **Privilege is dropped, with the exceptions named.** `app`, `worker`, `egress-proxy` and `db` run
-  non-root and read-only with `cap_drop: ALL` and `no-new-privileges`. The other two are exceptions:
+- **Privilege is dropped, with the exceptions named.** `app`, `worker`, `egress-proxy`, `db` and
+  `dump` run non-root and read-only with `cap_drop: ALL` and `no-new-privileges`. The other two are
+  exceptions:
   `caddy` keeps `NET_BIND_SERVICE` because the image's binary will not start without it, and `gate` —
   the container that faces Google — **runs as root** with `DAC_READ_SEARCH`, because the published
   image sets no user and the allowlist file's mode is yours. Both are still read-only. An automated
@@ -189,8 +197,10 @@ only whatever can be smuggled through a sign-in proxy's own endpoints. But what 
 the least restricted container here — `gate` runs as root, can reach the whole internet, and through
 its network can reach the Docker host and anything else your machine is listening with. One more of
 the same kind: Caddy believes the headers naming the original caller if they come from any address on
-the local network, and `app`'s address is one, so `app` could fake them. Nothing behind Caddy decides
-anything on those headers today, which is why that is affordable.
+the local network, and `app`'s address is one, so `app` could fake them. The app itself decides
+nothing on them. The gate does read them, so its sign-in redirects carry the outside hostname — but
+the address a browser is returned to is pinned to `PUBLIC_ORIGIN` rather than taken from a header,
+which is what keeps a forged one cheap.
 
 **The external-database option.** If you run Postgres elsewhere and load
 [`../compose.external-db.yaml`](../compose.external-db.yaml), `app` moves onto a network with a
@@ -345,13 +355,14 @@ docker version --format '{{.Server.Version}}'   # 28.0+, or §4's stronger half 
 docker compose exec worker env | grep -E 'DATABASE_URL|PGPASSWORD'
 
 # The app has no route out — expect a DNS or connect failure, not a page.
-docker compose exec app node -e "fetch('https://example.com').then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.message))"
+docker compose exec app node -e "fetch('https://example.com').then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.cause?.message??e.message))"
 
 # The worker's route out is the allowlist only — expect a refusal for anything but Yahoo.
-docker compose exec worker node -e "fetch('https://example.com').then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.message))"
+docker compose exec worker node -e "fetch('https://example.com').then(r=>console.log('REACHED',r.status),e=>console.log('refused:',e.cause?.message??e.message))"
 
-# Only one published port in the whole stack.
-docker compose ps --format '{{.Service}}\t{{.Ports}}'
+# Only one published port in the whole stack: exactly one row shows a host
+# mapping (`->`). Bare entries like `3000/tcp` are ports nothing publishes.
+docker compose ps -a --format '{{.Service}}\t{{.Ports}}'
 ```
 
 If any of these surprises you, trust the result over this page and check
