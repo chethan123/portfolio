@@ -565,7 +565,7 @@ done
 printf 'db, dump, gate, caddy, egress-proxy do not mount price-worker-sock\n'
 
 # The mount set only says who is on the volume, not what they may do with it.
-# `app` mounts it `:ro` (compose.yaml:284) — deleting those two characters
+# `app` mounts it `:ro` (compose.yaml:288) — deleting those two characters
 # leaves every check above green, because nothing until now reads app's own
 # mount. `.RW` is Docker's own name for the field; false is a read-only mount.
 log "Checking app's price-worker-sock mount is read-only"
@@ -599,7 +599,7 @@ for service in worker egress-proxy; do
   expect_resource_bounds "$service"
 done
 
-# compose.yaml:343 argues the worker's two proxy variables (`environment:`
+# compose.yaml:347 argues the worker's two proxy variables (`environment:`
 # above them) still stop short of DATABASE_URL or PGPASSWORD — the network
 # fence below does not cover an external Postgres reachable over the open
 # internet. Asserted here so adding DATABASE_URL "for convenience" fails
