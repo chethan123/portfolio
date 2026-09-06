@@ -1,11 +1,5 @@
-/**
- * Settings → Accounts, the list. The rules underneath — what `listAccounts`
- * returns, what `createAccount` refuses — belong to `accounts.server.ts` and
- * are tested in `tests/accounts.test.ts`. What is only true of this route is
- * the row itself: the number tail rides beside the name wherever accounts are
- * listed (CONTEXT.md), hidden from a screen reader in favour of words, and an
- * account with no recorded number keeps its bare name.
- */
+// Settings → Accounts list. Domain rules (listAccounts, createAccount) are accounts.server.ts's, tested in tests/accounts.test.ts;
+// this covers only the row itself: number tail beside the name (CONTEXT.md), hidden from readers in favor of words.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Accounts, { loader } from "../../app/routes/settings/accounts.tsx";
@@ -21,7 +15,7 @@ describe("the account list's number tails", () => {
     withDatabase(async ({ seedPerson, seedAccount }) => {
       const owner = await seedPerson({ name: "Alice" });
 
-      // Free-form, as the column is: the tail is the last four *characters*.
+      // Free-form column: tail is the last four characters, not digits.
       await seedAccount({
         name: "Fidelity Taxable",
         owner,
@@ -31,8 +25,7 @@ describe("the account list's number tails", () => {
 
       const data = await loader();
 
-      // The loader masks, not the component: loader data is serialized into
-      // the page, so a raw number in it is a raw number in the browser.
+      // Loader masks, not the component — loader data is serialized into the page.
       expect(data.accounts.map((account) => account.accountNumberTail)).toEqual([
         null,
         "····3910",
@@ -44,7 +37,6 @@ describe("the account list's number tails", () => {
       expect(markup).toContain('<span class="number-tail" aria-hidden="true">····3910</span>');
       expect(markup).toContain('<span class="visually-hidden">ending in 3910</span>');
 
-      // No number, no dots: the bare name is the honest label.
       expect(markup).toContain("Checking");
       expect(markup).not.toContain("Checking ·");
     }),

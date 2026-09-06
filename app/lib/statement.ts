@@ -1,18 +1,7 @@
-/**
- * Applying a column mapping to a file's rows: the second half of the parser,
- * where cells become positions (DESIGN.md §5.3, spec 0004). Pure — no
- * database, no request — so every awkward file is a fixture and a test, not a
- * bug found on the review screen with a household's real statement in hand.
- *
- * **Refusals are data, not throws**: structured problems addressed to a row
- * and column, because the mapping screen renders each beside the row that
- * caused it and a throw could name only the first fault. Problems present
- * means no commit; the positions that did parse are still returned so the
- * screen has something to show beside the complaint.
- *
- * **Numbers stay strings**: every figure goes through `normaliseFigure` and
- * `money.ts`'s digit arithmetic — §4.1 keeps money out of floats end to end.
- */
+// Applies a column mapping to a file's rows, turning cells into positions (DESIGN.md §5.3,
+// spec 0004). Pure. Refusals are data (ParseProblem[] addressed to a row/column), never a
+// throw, so the mapping screen can show every fault beside its row. Figures stay strings
+// through normaliseFigure and money.ts's digit arithmetic (§4.1).
 import { z } from "zod";
 
 import {
@@ -27,22 +16,14 @@ import { recordedDate } from "./input.server.ts";
 
 import type { Delimiter } from "./csv.ts";
 
-/**
- * What `numeric(20, 8)`/`numeric(20, 4)` hold before the point — the bounds
- * the forms enforce, applied here so an oversized figure is a sentence naming
- * its row rather than a driver error at commit.
- */
+// numeric(20,8)/numeric(20,4) digits before the point — enforced here so an oversized
+// figure is a message naming its row, not a driver error at commit.
 const QUANTITY_INTEGER_DIGITS = 12;
 const PER_SHARE_INTEGER_DIGITS = 16;
 
-/**
- * The mapping JSON a draft carries (spec 0004). Columns are named, not
- * indexed: the header fingerprint already guarantees the header row is the
- * one the mapping was built against. A null or absent optional column is
- * unmapped.
- */
+// The mapping JSON a draft carries (spec 0004). Columns are named, not indexed — the header
+// fingerprint already guarantees the header row matches. Null/absent optional column = unmapped.
 export type StatementMapping = {
-  /** Zero-based index into the file's rows. */
   headerRow: number;
   delimiter: Delimiter;
   columns: {
@@ -53,28 +34,16 @@ export type StatementMapping = {
     asOf?: string | null;
     accountNumber?: string | null;
   };
-  /**
-   * Whether the basis column states one share's cost or the whole position's
-   * — brokerages split about evenly, and assuming either is wrong by a factor
-   * of the position size on the other half. `total` divides by the quantity.
-   */
+  // "total" divides by quantity to get per-share; brokerages split roughly evenly between the two.
   costBasisIs: "per_share" | "total";
-  /**
-   * A loan statement lists what is owed as positive, and §2 puts the sign in
-   * the quantity — so this flag negates, never a heuristic. Unticked keeps
-   * the file's own sign, which is how a genuine overdraft records.
-   */
+  // A loan statement lists what's owed as positive; this negates rather than guessing from sign.
   owedAsPositive: boolean;
   combineDuplicateRows: boolean;
 };
 
-/**
- * The schema for both `jsonb` columns that store this shape
- * (`upload_draft.mapping`, `column_mapping.mapping`), so both writers read
- * back through one gate. A stored value that fails it is treated as no
- * mapping, not a throw: a malformed row is a fact about old data. Annotated
- * `z.ZodType<StatementMapping>` so the type and schema cannot drift silently.
- */
+// Shared schema for both jsonb columns storing this shape (upload_draft.mapping,
+// column_mapping.mapping). A stored value failing it means no mapping, never a throw.
+// Annotated z.ZodType<StatementMapping> so type and schema can't drift silently.
 export const statementMapping: z.ZodType<StatementMapping> = z.object({
   headerRow: z.number().int().nonnegative(),
   delimiter: z.enum([",", ";", "\t"]),

@@ -1,17 +1,5 @@
-/**
- * Settings → Prices: the sentences the gap list actually puts on the screen.
- *
- * The list is the household's answer to "why is this still unpriced in March"
- * and the operator's list of tickers to check against a statement (ADR-0011),
- * so what matters is that a row says which instrument, how far back it is held,
- * where its price history starts, and what the last attempt came to — in words,
- * not in the ledger's literals.
- *
- * Rendered through the real component with the real loader's output, the way
- * `masked-screens.test.tsx` renders a screen: a fixture of the loader's shape
- * would be a second copy free to drift from it, and the drift looks exactly
- * like a passing test.
- */
+// Settings → Prices: the words the gap list puts on screen (ADR-0011), not the ledger's literals. Rendered through the real
+// component with the real loader's output (as masked-screens.test.tsx does) — a hand-built loader fixture could silently drift.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/database.ts";

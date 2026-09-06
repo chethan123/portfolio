@@ -1,14 +1,10 @@
 /**
- * The whole configuration API: every setting is an environment variable,
- * every variable is described here, and this is the only reader of
- * `process.env`. DESIGN.md §10.1 holds the authoritative table;
- * `.env.example` documents it for operators. Dependency-light and
- * side-effect free because it runs two ways: bundled by Vite, and directly
- * under type stripping from `server/validate-config.ts` at container start.
+ * Configuration API: every setting is an env var, read only here.
+ * DESIGN.md §10.1 has the table; .env.example documents defaults.
+ * No side effects — runs bundled (Vite) and under type stripping.
  */
 import { z } from "zod";
 
-/** Postgres accepts either scheme in a connection URI. */
 const POSTGRES_SCHEMES = ["postgres:", "postgresql:"];
 
 const isValidTimeZone = (value: string): boolean => {
@@ -20,13 +16,8 @@ const isValidTimeZone = (value: string): boolean => {
   }
 };
 
-/**
- * A relying-party id may not be an IP address (WebAuthn Level 3 §5.1.3), only
- * a domain string. `URL` normalises odd spellings before this ever runs —
- * `https://0x7f.1` arrives with `hostname` already resolved to `127.0.0.1`,
- * and an IPv6 literal's brackets survive into `hostname` too — so testing the
- * parsed hostname catches both spellings that testing the raw string would miss.
- */
+// RP id can't be an IP (WebAuthn §5.1.3). URL() resolves odd spellings first
+// (e.g. 0x7f.1 -> 127.0.0.1; IPv6 brackets survive) — test parsed hostname.
 const IPV4_HOSTNAME = /^\d{1,3}(\.\d{1,3}){3}$/;
 const isIpAddress = (hostname: string): boolean =>
   hostname.startsWith("[") || IPV4_HOSTNAME.test(hostname);
@@ -43,12 +34,7 @@ const integerFromString = (label: string) =>
     })
     .transform((value) => Number.parseInt(value.trim(), 10));
 
-/**
- * The unix socket the price worker listens on and the app dials (spec 0018
- * §3.2). One default, shared by {@link configSchema} and
- * {@link workerConfigSchema}: both processes have to agree on where the
- * socket is without either hard-coding the other's copy.
- */
+/** Socket the price worker listens on; app dials the same path (spec 0018 §3.2). */
 export const DEFAULT_PRICE_WORKER_SOCKET = "/run/price-worker/worker.sock";
 
 const configSchema = z.object({
@@ -68,25 +54,10 @@ const configSchema = z.object({
     }),
 
   /**
-   * The `https://` origin the house-wide proxy serves this instance at. No
-   * default: there is nothing sensible to guess. Until now a Compose-level
-   * value only `gate` read, building its Google redirect from it; the lock
-   * (docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md) derives its
-   * relying-party id from the same value, which is the app's first variable
-   * shared with the sidecar. Three refinements, because they fail for
-   * different reasons: a wrong scheme or host is silent until somebody
-   * cannot enrol a passkey, a wrong path is silent until the gate's own
-   * redirect breaks, and a non-canonical spelling of an otherwise-correct
-   * origin is silent until every unlock and every enrolment refuses in
-   * production — `@simplewebauthn/server` compares origins with a raw
-   * `!==` against this string, and the browser will always send the
-   * canonical form. A transform here could fix the app and still leave the
-   * gate broken: `compose.yaml` builds its callback by concatenating this
-   * value with `/oauth2/callback` at the Compose level, where no fix in
-   * this file could reach — a trailing slash would still produce a
-   * doubled-up path Google never registered. One variable has to mean one
-   * thing to both services, so a non-canonical spelling is refused rather
-   * than canonicalised.
+   * https:// origin the proxy serves this at. No default. Also the lock's RP id
+   * (docs/adr/0012-…) and gate's redirect base, shared with the sidecar —
+   * refused rather than canonicalised: simplewebauthn compares raw `!==`, and
+   * compose.yaml concatenates this string itself. Refines: scheme/host, path, canonical form.
    */
   PUBLIC_ORIGIN: z
     .string()
@@ -96,9 +67,7 @@ const configSchema = z.object({
         const { protocol, hostname } = new URL(value);
         if (isIpAddress(hostname)) return false;
         if (protocol === "https:") return true;
-        // Secure Contexts' carve-out, not WebAuthn's: `localhost` is a valid
-        // domain string under either scheme, but only `http:` gets the pass,
-        // for the dev loop.
+        // Secure Contexts carve-out: localhost allowed over http: for the dev loop.
         return protocol === "http:" && hostname === "localhost";
       } catch {
         return false;
@@ -136,15 +105,8 @@ const configSchema = z.object({
     }),
 
   /**
-   * Whether something in front of this instance authenticates people:
-   * `external` = the Compose stack's forward-auth sidecar does (ADR-0005),
-   * `none` = nothing does. The app authenticates nobody either way — the value
-   * only decides whether the unprotected-instance banner is drawn. Behind a
-   * gate the banner is a lie, and a warning a family learns to scroll past is
-   * worse than none. A *description of the deployment, not a switch*:
-   * `external` protects nothing, it only stops the app crying wolf. A union,
-   * not a boolean, so a third posture is a value rather than a redesign;
-   * `none` default because a bare checkout is what a developer has.
+   * external (sidecar auths, ADR-0005) or none — toggles only the
+   * unprotected-instance banner. Union not boolean: room for a third posture.
    */
   AUTH_GATE: z
     .enum(["external", "none"], { error: "must be either 'external' or 'none'" })
@@ -156,48 +118,29 @@ const configSchema = z.object({
     })
     .default(3000),
 
-  // Quote refresh cadence is deliberately absent: the household's dial, not
-  // the deployment's — it lives in `app_setting.refresh_cadence_minutes`,
-  // edited at Settings → Prices. `0008_refresh_cadence.sql` has the argument.
+  // Refresh cadence deliberately absent: household setting, not deployment's
+  // (app_setting.refresh_cadence_minutes; 0008_refresh_cadence.sql).
 
-  /**
-   * Upload cap in whole megabytes. A brokerage CSV is tens of kilobytes — this
-   * bounds what an accident can put in memory, not real use.
-   */
   MAX_UPLOAD_MB: integerFromString("megabytes")
     .refine((value) => value >= 1, {
       message: "must be at least 1 megabyte",
     })
     .default(10),
 
-  /**
-   * Market-hours math, and the zone a quote's timestamp is read in to pick its
-   * trading day. Storage is UTC regardless.
-   */
+  /** Zone used to pick a quote's trading day; storage is UTC regardless. */
   MARKET_TIMEZONE: timeZone.default("America/New_York"),
 
-  /** Container clock. The database stores UTC whatever this says. */
+  /** Container clock only — storage is UTC regardless. */
   TZ: timeZone.default("UTC"),
 
-  /**
-   * Where the price worker listens, and where the app's own calls dial
-   * (spec 0018 §3.2, §3.3). Read here too — not only by
-   * {@link loadWorkerConfig} — so the app's side of the socket comes through
-   * the same `getConfig()` every other setting does; `server/config.ts`
-   * stays the only reader of `process.env` (ARCHITECTURE.md §4.2).
-   */
   PRICE_WORKER_SOCKET: z.string().min(1).default(DEFAULT_PRICE_WORKER_SOCKET),
 });
 
 export type Config = z.infer<typeof configSchema>;
 
 /**
- * The worker's own schema: one key, the same default as {@link configSchema}'s
- * `PRICE_WORKER_SOCKET`. No `DATABASE_URL`, no `PUBLIC_ORIGIN` — the worker
- * never sees either, and one present in its environment is ignored rather
- * than validated. No `TZ`: the worker reads no clock, `period1` is the
- * library's own to parse, and the runtime reads `TZ` itself (`UTC` in the
- * image, `Dockerfile:94-96`).
+ * Worker's own schema — no DATABASE_URL/PUBLIC_ORIGIN (worker never sees
+ * them; ignored if present); no TZ (reads no clock, image TZ=UTC, Dockerfile:94-96).
  */
 const workerConfigSchema = z.object({
   PRICE_WORKER_SOCKET: z.string().min(1).default(DEFAULT_PRICE_WORKER_SOCKET),
@@ -223,13 +166,7 @@ export class ConfigError extends Error {
   }
 }
 
-/**
- * The empty-as-unset treatment, shared by every schema this module loads:
- * `FOO=` in a .env file or an unsubstituted Compose variable should not read
- * as "configured to empty". Also the single place that turns a failed
- * `safeParse` into a {@link ConfigError} naming every offending variable at
- * once, so a misconfigured deploy does not fix one variable per restart.
- */
+/** Empty-as-unset: `FOO=` reads as unset, not "set to empty". Turns a failed safeParse into one ConfigError naming every bad variable at once. */
 function parseEnv<Schema extends z.ZodObject>(
   schema: Schema,
   env: Record<string, string | undefined>,
@@ -257,30 +194,18 @@ function parseEnv<Schema extends z.ZodObject>(
   return result.data as z.infer<Schema>;
 }
 
-/**
- * Validate an environment. Pure: it neither reads `process.env` nor exits.
- *
- * @throws {ConfigError} naming every offending variable.
- */
+/** Pure — no process.env read, no exit. @throws {ConfigError} naming every offending variable. */
 export function loadConfig(env: Record<string, string | undefined>): Config {
   return parseEnv(configSchema, env);
 }
 
-/**
- * The worker's whole configuration (spec 0018 §3.5): one key, the same
- * empty-as-unset treatment and the same {@link ConfigError} as
- * {@link loadConfig} — proof, as much as an assertion, that the worker
- * starts with an environment holding nothing but a socket path.
- *
- * @throws {ConfigError} naming the offending variable.
- */
+/** Worker's config (spec 0018 §3.5) — same empty-as-unset + ConfigError as loadConfig. @throws {ConfigError} */
 export function loadWorkerConfig(env: Record<string, string | undefined>): WorkerConfig {
   return parseEnv(workerConfigSchema, env);
 }
 
 let cached: Config | undefined;
 
-/** The process-wide configuration, parsed once on first use. */
 export function getConfig(): Config {
   cached ??= loadConfig(process.env);
   return cached;

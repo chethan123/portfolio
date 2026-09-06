@@ -1,14 +1,5 @@
-/**
- * The queries the account drill-down reads through (DESIGN.md §8.2) —
- * `dashboard-queries.test.ts`'s contract: the query module's public
- * functions against real Postgres, fixture-builder seeds, exact decimal
- * strings. The subject is the drill-down's version of §8.2's weakest point:
- * one account's figure also appears in an overview row and a slice of the
- * total, so the first test is that those are literally the same arithmetic
- * — and the rest are the three cases where a per-account query is most
- * tempted to invent an answer: an account holding nothing, a date before it
- * held anything, an id that is not an account at all.
- */
+// Account drill-down queries (DESIGN.md §8.2), same contract as dashboard-queries.test.ts:
+// real Postgres, fixture seeds, exact decimal strings.
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
@@ -70,8 +61,7 @@ describe("accountTotal", () => {
         coverage: { known: 2, total: 2 },
       });
 
-      // The drill-down's consistency check, and the reason this returns the
-      // same type the list does: the page's headline is the overview's row.
+      // Consistency check: account total must equal its row in the overview list.
       const [row] = (await accountTotals(ALL_OWNERS, db)).filter(
         (candidate) => candidate.accountId === brokerage.id,
       );
@@ -83,9 +73,7 @@ describe("accountTotal", () => {
     "reports an account holding nothing as nothing to value, not as worth nothing",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet }) => {
       const owner = await seedPerson({ name: "Alice" });
-      // Never uploaded to, and uploaded to but emptied — "sold everything" is
-      // recorded as a position set with no holdings, so both reach the view as
-      // no rows at all and both must survive the LEFT join.
+      // Never uploaded vs. uploaded-then-emptied — both must survive the LEFT join as zero rows.
       const fresh = await seedAccount({ name: "New brokerage", owner });
       const emptied = await seedAccount({ name: "Closed out", owner });
       await seedPositionSet({ account: emptied, asOf: "2026-01-31", holdings: [] });
@@ -93,8 +81,7 @@ describe("accountTotal", () => {
       for (const account of [fresh, emptied]) {
         const total = await accountTotal(account.id, db);
 
-        // Zero over a coverage of zero rows. Not null, which would 404 an
-        // account that exists, and not a figure a screen can call complete.
+        // Zero over zero coverage — not null (would 404 an existing account), not "complete".
         expect(total?.amount).toBe("0.0000");
         expect(total?.coverage).toEqual({ known: 0, total: 0 });
         expect(total?.accountName).toBe(account.name);
@@ -109,7 +96,7 @@ describe("accountTotal", () => {
       const usd = await usdInstrument();
       const loan = await seedAccount({ name: "Car loan", owner, kind: "liability" });
 
-      // The sign lives in quantity, against a positive price (§2).
+      // Sign lives in quantity, against a positive price (§2).
       await seedPositionSet({
         account: loan,
         asOf: "2026-01-31",
@@ -143,13 +130,11 @@ describe("accountTotal", () => {
 
       const total = await accountTotal(account.id, db);
 
-      // "Based on 1 of 2 holdings" — the trust is missing from the amount and
-      // present in the count, so the page can say so.
+      // Missing from amount, present in count — lets the page say "1 of 2 holdings".
       expect(total?.amount).toBe("2500.0000");
       expect(total?.coverage).toEqual({ known: 1, total: 2 });
 
-      // And the account's own figure is the household's, since it is the only
-      // account: the drill-down and the headline are one arithmetic (§8.2).
+      // Only account in the household — drill-down and headline are one arithmetic (§8.2).
       expect(await netWorth(ALL_OWNERS, db)).toEqual({ amount: "2500.0000", coverage: { known: 1, total: 2 } });
     }),
   );
@@ -166,15 +151,13 @@ describe("accountTotal", () => {
         holdings: [{ instrument: usd, quantity: "1000.00000000" }],
       });
 
-      // No such row. Identity ids start at 1 and this test's transaction is
-      // rolled back, so nothing can have reached this one.
+      // Identity ids start at 1 in a rolled-back transaction — this id can't exist.
       expect(await accountTotal("999999999", db)).toBeNull();
 
-      // Closed is null rather than a zero: `holding_valued` excludes closed
-      // accounts, so a drill-down on one would be a page of blanks.
+      // holding_valued excludes closed accounts — null, not zero.
       expect(await accountTotal(closed.id, db)).toBeNull();
 
-      // Straight off a URL path, and never a bigint. This is a 404, not a 500.
+      // Non-bigint id straight off a URL path — 404, not 500.
       expect(await accountTotal("not-an-id", db)).toBeNull();
       expect(await accountTotal("1; drop table account", db)).toBeNull();
     }),
@@ -234,7 +217,7 @@ describe("accountHoldings", () => {
 
       expect(holding?.quantity).toBe("500.00000000");
       expect(holding?.price).toBeNull();
-      // Null, never a zero standing in for unknown — the table shows a dash.
+      // Null, not zero — table renders a dash for unknown.
       expect(holding?.value).toBeNull();
       expect(holding?.isPriced).toBe(false);
     }),
@@ -266,9 +249,7 @@ describe("accountFirstRecordedDate", () => {
     "is this account's own earliest statement, not the household's — spec 0008's chart-range work",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet }) => {
       const owner = await seedPerson();
-      // The household's earliest statement is January's, on an older account —
-      // the account-scoped query must not report that date for one that
-      // started later, the way the household-wide fallback used to.
+      // Must be this account's own earliest date, not the household's older one.
       const older = await seedAccount({ name: "Older", owner });
       const younger = await seedAccount({ name: "Younger", owner });
       await seedPositionSet({ account: older, asOf: "2026-01-31", holdings: [] });
@@ -322,8 +303,7 @@ describe("accountSeries", () => {
 
       const series = await accountSeries(mine.id, ["2026-02-28", "2026-01-31"], db);
 
-      // The other account's 70,000 is nowhere in this line, and the dates come
-      // back sorted whatever order they were asked for.
+      // Other account's 70,000 excluded; dates return sorted regardless of input order.
       expect(series).toEqual([
         { date: "2026-01-31", amount: "20000.0000", coverage: { known: 1, total: 1 } },
         { date: "2026-02-28", amount: "25000.0000", coverage: { known: 1, total: 1 } },
@@ -347,10 +327,8 @@ describe("accountSeries", () => {
 
       const series = await accountSeries(account.id, ["2025-06-01", "2026-01-31"], db);
 
-      // The date is reported rather than dropped, and it is reported as having
-      // nothing behind it — which is what stops the account's chart drawing a
-      // fictional climb from zero at its head (§7). The screen filters on
-      // coverage, never on the amount.
+      // Reported, not dropped — stops the chart drawing a fictional climb from zero (§7).
+      // Screen filters on coverage, not amount.
       expect(series[0]).toEqual({
         date: "2025-06-01",
         amount: "0.0000",
@@ -378,8 +356,7 @@ describe("accountSeries", () => {
         holdings: [{ instrument: usd, quantity: "-5000.00000000" }],
       });
 
-      // USD carries a 1970-01-01 close of 1.00 from the initial migration, so
-      // the ordinary carry-forward prices debt on any date without a branch.
+      // USD's 1970-01-01 close of 1.00 (initial migration) prices debt via ordinary carry-forward.
       const series = await accountSeries(loan.id, ["2026-03-31", "2026-07-31"], db);
 
       expect(series.map((point) => point.amount)).toEqual(["-10000.0000", "-5000.0000"]);
@@ -399,8 +376,7 @@ describe("accountSeries", () => {
       });
       await seedDailyClose({ instrument: vti, date: "2026-01-31", close: "100.0000" });
 
-      // Not the household's 1,000 leaking through a filter that did not apply,
-      // and not an empty array either: the dates asked for are still answered.
+      // Not the household's 1,000 leaking through, and not empty — dates asked for are still answered.
       const uncovered = [
         { date: "2026-01-31", amount: "0.0000", coverage: { known: 0, total: 0 } },
       ];
@@ -442,8 +418,7 @@ describe("one account's 1D series", () => {
       await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
       await seedObservation({ instrument: vti, asOf: "2026-06-05T14:00:00Z", price: "220.0000" });
 
-      // Ten shares, not a hundred: the surface narrows whose holdings are
-      // valued and nothing else.
+      // Ten shares, not a hundred — narrows to this account's holdings only.
       expect(
         (await accountSessionSeries(mine.id, "2026-06-05", db)).map((point) => [point.at, point.amount]),
       ).toEqual([
@@ -464,10 +439,8 @@ describe("one account's 1D series", () => {
         holdings: [{ instrument: usd, quantity: "5000.00000000" }],
       });
 
-      // Observed on an instrument this account does not hold. The instants come
-      // from the log as a whole, so every account answers the same question at
-      // the same moments — even when its answer is that it did not move
-      // (story 10).
+      // Instrument this account doesn't hold — instants come from the whole log, so every
+      // account answers at the same moments (story 10).
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
       await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
@@ -488,9 +461,7 @@ describe("one account's 1D series", () => {
       await seedDailyClose({ instrument: vti, date: "2026-06-04", close: "200.0000" });
       await seedObservation({ instrument: vti, asOf: "2026-06-05T13:30:00Z", price: "210.0000" });
 
-      // Zero over a coverage of zero rows — "nothing was recorded", which the
-      // caller must not draw as a real zero (DESIGN.md §7), exactly as the
-      // day-granularity series reports an uncovered date.
+      // Zero over zero coverage — caller must not draw as real zero (DESIGN.md §7).
       expect(await accountSessionSeries(empty.id, "2026-06-05", db)).toEqual([
         { at: "2026-06-05T13:30:00.000Z", amount: "0.0000", coverage: { known: 0, total: 0 } },
       ]);

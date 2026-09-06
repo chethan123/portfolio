@@ -1,75 +1,24 @@
-/**
- * The owner-filter reading (spec 0013, ADR-0008): the one place that
- * turns the URL's `?owner=` into what a screen is allowed to believe it means.
- * Four screens — Analysis, Income, Overview, Holdings — used to spell this
- * settling themselves, in near-identical loader preambles that had already
- * begun to drift (Overview alone reordered two synchronous reads around the
- * roster query; Holdings alone dropped `saved` on its everyone bounce, where
- * its own canonical bounce keeps it). One function now speaks it once.
- *
- * `.server.ts`, because it value-imports `ownerRoster` from `people.server.ts`.
- * Its counterpart `owner-filter.ts` stays plain: the control component
- * re-renders after hydration and needs that module's vocabulary; nothing in
- * the browser needs this one's protocol.
- *
- * `ownerReading(request, address?)`, in order:
- *
- * 1. reads the filter off the request's own URL;
- * 2. bounces to the canonical spelling of that address, before any database
- *    work — the canonical spelling is a fact about the address, decidable
- *    without asking who exists;
- * 3. reads the roster once, alone — `ownerRoster`'s one query, ahead of
- *    everything else a screen reads, because step 5 is a function of it;
- * 4. bounces a selection naming everybody to the household's own address —
- *    the household's spelling carries no owner parameter at all (ADR-0008),
- *    and a `<Form method="get">` of checkboxes cannot decline to submit that
- *    spelling, so the collapse happens here, after the roster read it needs;
- * 5. resolves `reading` — what every household-scoped reader on the calling
- *    screen narrows by, from the selection **resolved against the roster**,
- *    never the raw ids (see below); and
- * 6. projects the roster, the narrowed selection and `unknownOwner` into the
- *    owner block of a loader's payload, ready to spread into its return.
- *
- * **Why the module does not read money.** ADR-0008 buys one property: a
- * screen reading the whole household says `ALL_OWNERS` where a reviewer sees
- * it. A module that called `currentHoldings` for its caller would spend
- * that — the call would be here, not at the screen, and a reviewer would have
- * to already know this module's insides to see whose money a loader reads.
- * So the household-scoped reads stay in the loader, visible and explicit,
- * and `ownerReading` cannot be skipped or reordered ahead of them: `reading`
- * does not exist until this resolves, which makes the ordering a data
- * dependency rather than a convention a loader could quietly drop. One row
- * of the ticket's table therefore stays open by design: whether the
- * *instance* holds anything (`isFiltered(owners) ? netWorth(ALL_OWNERS) :
- * null`) is a money read, so it stays spelled in each loader.
- *
- * The chart's reads (spec 0015) are made by `chart-series.server.ts` rather
- * than by the loader, and they do not spend that property: the loader
- * constructs the scope naming `reading` and hands it over on the call line,
- * so what a reviewer reads is still the screen saying whose money it wants.
- * That is the difference from this module doing it — here `reading` is
- * already in hand and would be used silently.
- *
- * **Why `reading`, not the raw filter.** `holding_valued_at` reads an account
- * closed *after* the date it is asked about, so a stale id in a hand-typed
- * address would put that owner's past into a chart or a delta while the
- * sentence beside it named only the others (DESIGN.md §14). Resolving the
- * selection against the roster first is what keeps a since-removed or
- * since-closed id from reaching a reader that spans dates. A selection
- * resolving to *nobody* keeps the raw ids, which narrow to nothing — `[]`
- * would read the whole household, the exact widening `owner-filter.ts`
- * forbids.
- *
- * **Invariants**, on every return:
- * 1. The address is settled: `url.search === address.request(owners)` and
- *    `resolved.coversEveryone` is false.
- * 2. `isFiltered(owners) === isFiltered(reading)`, always — so a caller never
- *    has to decide which of the two a predicate wants.
- * 3. `reading` is `[]` only when `owners` is `[]`. It never widens.
- * 4. At most two hops out of the loader: the spelling, then the collapse.
- * 5. Every field of `OwnerBlock` is plain data — nothing has to be stripped
- *    before it crosses into a loader's return.
- */
+// Owner-filter reading (spec 0013, ADR-0008): the single place that turns ?owner= into what a
+// screen may believe it means — replaces four drifting near-duplicate loader preambles.
+// .server.ts because it imports ownerRoster; owner-filter.ts stays plain for the browser-side
+// control.
+//
+// Order: parse filter from URL -> redirect to canonical spelling (needs no DB) -> read roster
+// once -> redirect an everyone-selection to the no-owner-param address (ADR-0008) -> resolve
+// `reading` against the roster, never raw ids -> project into OwnerBlock.
+//
+// Doesn't read money: ADR-0008's point is that a screen reading the whole household says
+// ALL_OWNERS visibly at its own call site, so money reads stay in the loader / chart-series.server.ts.
+// `reading` != raw filter because holding_valued_at admits accounts closed after the date asked
+// about — a stale/removed id must not reach a dated reader. A selection resolving to nobody keeps
+// the raw ids though: `[]` means "whole household" (owner-filter.ts forbids that widening).
+//
+// Invariants on every return:
+// 1. address settled: url.search === address.request(owners); resolved.coversEveryone is false.
+// 2. isFiltered(owners) === isFiltered(reading).
+// 3. reading is [] only when owners is [] — never widens.
+// 4. at most two redirects.
+// 5. every OwnerBlock field is plain data.
 import { redirect } from "react-router";
 
 import {

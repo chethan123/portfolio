@@ -1,13 +1,5 @@
-/**
- * Recording the accounts the household holds.
- *
- * Driven through `accounts.server.ts`, with the two rules that reach beyond it
- * — a closed account's effect on a figure, and the refusal to remove a person
- * who owns one — checked through the modules that actually own them, the
- * valuation module and `people.server.ts`. Asserting closure by reading
- * `closed_at` back would prove the column was written and nothing about the
- * number on the screen.
- */
+// Accounts (accounts.server.ts). Closure's effect on a figure and person-removal refusal
+// are checked through valuation.server.ts and people.server.ts, not by reading closed_at back.
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
@@ -87,8 +79,7 @@ describe("recording accounts", () => {
   it(
     "represents a plan holding Traditional and Roth money as two accounts",
     withDatabase(async ({ db }) => {
-      // DESIGN.md §4.2: there are no joint accounts and no per-account split, so
-      // the modelling answer is two accounts at one institution.
+      // DESIGN.md §4.2: no joint accounts, no per-account split — two accounts, one institution.
       const alice = await createPerson({ name: "Alice" }, db);
 
       await createAccount(
@@ -172,8 +163,7 @@ describe("refusing bad input", () => {
   it(
     "refuses an owner id that is not an id at all",
     withDatabase(async ({ db }) => {
-      // Would reach Postgres as a malformed bigint and fail as a 500 rather than
-      // as a message on the form.
+      // Malformed bigint would 500 in Postgres rather than fail as a form message.
       expect((await refusalOf(createAccount(validInput("not-an-id"), db))).ownerId).toMatch(
         /owner/i,
       );
@@ -271,11 +261,7 @@ describe("editing an account", () => {
 });
 
 describe("changing an account's kind", () => {
-  /**
-   * What the Kind select submits: every field as it stands, with one changed.
-   * The institution and tax treatment match `seedAccount`'s defaults, so the
-   * only thing any of these edits asks for is the kind.
-   */
+  /** Kind select submits every field with one changed; institution/tax treatment match seedAccount's defaults. */
   const kindChange = (account: { name: string; ownerId: string }, kind: AccountKind) => ({
     name: account.name,
     institution: "Test Institution",
@@ -301,16 +287,11 @@ describe("changing an account's kind", () => {
 
       const errors = await refusalOf(updateAccount(account.id, kindChange(account, "bank"), db));
 
-      // Under `kind`, beside the select that caused it: the settings route
-      // hands `fieldErrors` to the form as they are and never splits out the
-      // form-level key, so a form-level refusal here would render nowhere.
+      // Must land under `kind`: settings route renders fieldErrors as-is, no form-level key.
       expect(errors.kind).toMatch(/Vanguard Total Stock Market/);
       expect(errors.form).toBeUndefined();
 
-      // And it names a way out, the way its sibling in `setBalance` does
-      // (`setBalance`'s guard CTE in `balances.server.ts`). The guard condition read back — "change
-      // the kind on an account whose statement is a single cash balance" — is
-      // the refusal restated, not something the reader can go and do.
+      // Names an actual way out (as setBalance's guard in balances.server.ts does).
       expect(errors.kind).toMatch(/on Holdings/);
 
       expect((await getAccount(account.id, db)).kind).toBe("brokerage");
@@ -320,11 +301,8 @@ describe("changing an account's kind", () => {
   it(
     "refuses it for a closed account too, whose securities no current-holdings view lists",
     withDatabase(async ({ db, seedPerson, seedAccount, seedInstrument, seedPositionSet }) => {
-      // The case that decides which reader answers "what does this hold".
-      // `holding_valued` drops closed accounts (`0002_holding_valued.sql`),
-      // so a guard built on the view would answer "holds nothing" here and let
-      // the relabel through — on the one account where nothing in the app can
-      // put the securities back, since every write path refuses a closed one.
+      // holding_valued drops closed accounts (0002_holding_valued.sql) — a guard built on
+      // that view would wrongly allow this relabel, with no way to undo it.
       const account = await seedAccount({
         name: "Old Brokerage",
         kind: "brokerage",
@@ -342,10 +320,8 @@ describe("changing an account's kind", () => {
 
       expect(errors.kind).toMatch(/Vanguard Total Stock Market/);
 
-      // Named, and then told the truth about what to do with them: the two
-      // doors the open refusal names — zero them on Holdings, upload a
-      // statement without them — are both shut on a closed account, so this
-      // one says the label is stuck instead (§5.3).
+      // Closed account: both of the open refusal's escape doors are shut, so this
+      // says the label is stuck instead (§5.3).
       expect(errors.kind).toMatch(/does not change/);
       expect(errors.kind).not.toMatch(/on Holdings/);
 
@@ -356,15 +332,8 @@ describe("changing an account's kind", () => {
   it(
     "refuses savings relabelled as a debt, in one hop and with no securities anywhere",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // The other half of report SET-1: no write at all, and $42,000 of
-      // savings counted as debt on every screen and date, because both views
-      // apply `kind` retroactively. This case and the one below tell the
-      // shipped condition — asked of the new kind and the rows, never the
-      // old kind — from one carrying an `existing.kind` term: swap in
-      // `acceptsSetBalance(input.kind) && !acceptsSetBalance(existing.kind)`
-      // and only these two fail (every other refusal here arrives from a
-      // securities kind, which that condition catches too). Folding them
-      // into the two-hop case below puts the hole back.
+      // report SET-1: check must be against the new kind, not the old — else $42,000
+      // savings would retroactively count as debt on every screen, with no write at all.
       const savings = await seedAccount({
         name: "Ally Online Savings",
         kind: "bank",
@@ -388,10 +357,8 @@ describe("changing an account's kind", () => {
   it(
     "refuses a debt relabelled as savings, the same flip read from the other side",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // The direction above, mirrored: the stored quantity is negative, so the
-      // relabel would turn $14,500 owed into $14,500 held. Both directions,
-      // because a condition can be wrong in one of them alone — and see the
-      // note above for what these two discriminate.
+      // Mirrored direction: stored quantity is negative, so relabel would turn
+      // $14,500 owed into $14,500 held.
       const loan = await seedAccount({
         name: "Chase Auto Loan",
         kind: "liability",
@@ -413,13 +380,8 @@ describe("changing an account's kind", () => {
   it(
     "tells a closed account its label is stuck, rather than naming doors it does not have",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // Pins the decision, not the wording. §5.3 accepts that a mislabel on a
-      // closed account is permanent — every escape refuses a closed account and
-      // nothing in the app reopens one — so the refusal an open account gets,
-      // which sends it to its own page or to Holdings, would be sending this
-      // reader to two doors that are not there: `/accounts/:id` 404s for a
-      // closed account (`account.tsx`'s loader gate) and `holding_valued` drops it,
-      // so Holdings lists nothing of its to correct.
+      // Closed account's mislabel is permanent (§5.3): the open refusal's doors don't exist
+      // here — /accounts/:id 404s when closed, and holding_valued excludes it from Holdings.
       const savings = await seedAccount({
         name: "Ally Online Savings",
         kind: "bank",
@@ -445,10 +407,8 @@ describe("changing an account's kind", () => {
   it(
     "refuses a debt relabelled as a bank balance, even by way of a securities kind",
     withDatabase(async ({ db, seedPerson, seedAccount, seedPositionSet, usdInstrument }) => {
-      // The refusal is asked of the new kind and the rows, never of the old
-      // kind, which is what makes routing around it pointless: the first hop is
-      // a legitimate edit and stays allowed, and the second is asked exactly
-      // the question the direct edit would have been asked.
+      // Guard checks new kind + rows, not old kind — routing through an intermediate
+      // kind doesn't bypass it.
       const loan = await seedAccount({
         name: "Chase Auto Loan",
         kind: "liability",
@@ -466,20 +426,15 @@ describe("changing an account's kind", () => {
 
       const errors = await refusalOf(updateAccount(loan.id, kindChange(loan, "bank"), db));
 
-      // The sign lives in the quantity (DESIGN.md §2), so relabelling alone
-      // would turn $14,500 of debt into $14,500 of savings with no write.
+      // Sign lives in quantity (DESIGN.md §2) — relabel alone would turn debt into savings.
       expect(errors.kind).toMatch(/money owed/);
       expect((await getAccount(loan.id, db)).kind).toBe("brokerage");
     }),
   );
 
-  // One case over the transitions the guard must leave alone, rather than a
-  // copy per transition: over-refusing is the failure mode on this side, and
-  // both guides promise every field stays editable.
-  //
-  // The case values are threaded in by calling `withDatabase` per case rather
-  // than handing `it.each` the wrapper directly — see the note at
-  // `set-balance.test.ts`'s kind cases for what that silently discards.
+  // One case per allowed transition — over-refusal is the failure mode here.
+  // withDatabase is called per case rather than passed to it.each directly
+  // (see set-balance.test.ts's kind cases for what that silently discards).
   it.each([
     ["bank", "liability", "no statement"],
     ["brokerage", "401k", "securities"],
@@ -552,8 +507,7 @@ describe("closing an account", () => {
 
       await closeAccount(checking.id, { confirmClose: "true" }, db);
 
-      // Gone from today's figure — and reported as zero holdings rather than as
-      // a total computed from one, so nothing reads as an empty account.
+      // Zero holdings, not a total computed from one — nothing reads as an "empty" account.
       expect(await netWorth(ALL_OWNERS, db)).toEqual({ amount: "0.0000", coverage: { known: 0, total: 0 } });
 
       expect(await netWorthAt(ALL_OWNERS, "2026-02-14", db)).toEqual({
@@ -571,8 +525,7 @@ describe("closing an account", () => {
       const first = await closeAccount(account.id, { confirmClose: "true" }, db);
       const second = await closeAccount(account.id, { confirmClose: "true" }, db);
 
-      // A second click must not move a boundary historical figures are computed
-      // against.
+      // A second click must not move a boundary historical figures are computed against.
       expect(second.closedAt).toEqual(first.closedAt);
     }),
   );
@@ -584,7 +537,6 @@ describe("closing an account", () => {
 
       const message = (await refusalOf(closeAccount(account.id, {}, db))).form ?? "";
 
-      // The refusal names the account and the reason the tick exists.
       expect(message).toContain("Old Brokerage");
       expect(message).toContain("one-way");
       expect((await getAccount(account.id, db)).isClosed).toBe(false);
@@ -597,8 +549,7 @@ describe("closing an account", () => {
       const account = await seedAccount({ owner: await seedPerson() });
       const first = await closeAccount(account.id, { confirmClose: "true" }, db);
 
-      // A stale form for an already-closed account is a no-op, never a refusal
-      // demanding a tick for a transition that no longer exists.
+      // Stale form on an already-closed account is a no-op, not a demand for a tick.
       const unticked = await closeAccount(account.id, {}, db);
 
       expect(unticked.isClosed).toBe(true);

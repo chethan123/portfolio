@@ -1,12 +1,6 @@
 /**
- * The one module that adds, divides or compares money outside SQL (§4.1).
- * `toUnits`, `render` and `divide` came out of `allocation.ts` and were
- * covered only indirectly; pinned here because they are now shared, and a
- * shared function only two callers' tests describe has no written contract.
- * `sumMoney` and `compareDecimal` were covered by nothing. Every assertion
- * is an exact decimal string — a float is wrong in the last place, and a
- * test tolerating the last place would not notice this module becoming a
- * float tomorrow.
+ * Only module that adds, divides, or compares money outside SQL (§4.1).
+ * Every assertion is an exact decimal string — a float is wrong in the last place.
  */
 import { describe, expect, it } from "vitest";
 
@@ -30,8 +24,7 @@ describe("toUnits and render", () => {
   });
 
   it("rounds half away from zero, the way `format.ts` rounds what it prints", () => {
-    // A caller handing over something finer than the scale. The two must round
-    // in the same direction or a total and its own label disagree.
+    // finer-than-scale input must round the same direction as format.ts, else a total disagrees with its label
     expect(render(toUnits("1.00005", MONEY_SCALE), MONEY_SCALE)).toBe("1.0001");
     expect(render(toUnits("-1.00005", MONEY_SCALE), MONEY_SCALE)).toBe("-1.0001");
     expect(render(toUnits("1.00004", MONEY_SCALE), MONEY_SCALE)).toBe("1.0000");
@@ -43,8 +36,7 @@ describe("toUnits and render", () => {
 
   it("reads a quantity at eight places without truncating it", () => {
     expect(toUnits("1.00000002", QUANTITY_SCALE) - toUnits("1.00000001", QUANTITY_SCALE)).toBe(1n);
-    // The same two at the money scale are indistinguishable, which is why the
-    // scale is a parameter rather than a constant baked into the comparison.
+    // same two values collapse at money scale — why scale is a parameter, not a baked-in constant
     expect(toUnits("1.00000002", MONEY_SCALE)).toBe(toUnits("1.00000001", MONEY_SCALE));
   });
 
@@ -67,17 +59,14 @@ describe("divide", () => {
 
 describe("sumMoney", () => {
   it("stays exact at a magnitude a float does not", () => {
-    // 0.1 + 0.2 is the canonical float failure, and a six-figure balance is
-    // where the drift stops being academic.
+    // 0.1+0.2 is the canonical float failure; a six-figure balance is where drift stops being academic
     const sum = sumMoney(["0.1000", "0.2000", "1248392.1400"]);
 
     expect(render(sum.amount, MONEY_SCALE)).toBe("1248392.4400");
   });
 
   it("skips the nulls, as `sum(value)` does, and counts them anyway", () => {
-    // Skipping is what SQL does. Counting is what stops the omission being
-    // silent — a partial answer reported as a complete one is the failure the
-    // whole coverage apparatus exists to prevent.
+    // skipping matches SQL's sum(); counting stops a partial answer looking complete
     const sum = sumMoney(["1000.0000", null, "500.0000", null]);
 
     expect(render(sum.amount, MONEY_SCALE)).toBe("1500.0000");
@@ -104,7 +93,6 @@ describe("sumMoney", () => {
 });
 
 describe("normaliseFigure", () => {
-  /** The value a cell normalised to, asserting it was a figure at all. */
   const figure = (cell: string): string | null => {
     const result = normaliseFigure(cell);
     return result.kind === "figure" ? result.value : null;
@@ -114,16 +102,13 @@ describe("normaliseFigure", () => {
     expect(figure("1,234.56")).toBe("1234.56");
     expect(figure("1,234,567")).toBe("1234567");
     expect(figure("$1,234.56")).toBe("1234.56");
-    // U+00A0 is what a copy out of a rendered statement carries; U+2009 is the
-    // thin space some brokerages group thousands with.
+    // U+00A0 nbsp from copied statements; U+2009 thin space some brokerages group with
     expect(figure("1 500")).toBe("1500");
     expect(figure("1 234.5")).toBe("1234.5");
   });
 
   it("refuses a separator that does not group thousands, never guessing", () => {
-    // Every one of these has a reading a thousandfold away from the naive
-    // strip — European decimals, a lakh grouping, a currency mark inside the
-    // digits. A refusal is named to its row; a misread is silent.
+    // each is 1000x off under a naive strip: European decimals, a lakh grouping, an embedded currency mark
     for (const cell of ["1.234,56", "1 234,56", "12,34", "1,23,456", "12$34"]) {
       expect(normaliseFigure(cell)).toEqual({ kind: "unparseable" });
     }
@@ -140,8 +125,7 @@ describe("normaliseFigure", () => {
   });
 
   it("removes a trailing percent sign and returns the value unscaled", () => {
-    // What a percent means is the caller's question; scaling it here would be
-    // arithmetic, and this function only ever removes dressing.
+    // scaling a % is the caller's job — this function only strips dressing
     expect(figure("12.5%")).toBe("12.5");
     expect(figure("4.90%")).toBe("4.90");
   });
@@ -151,8 +135,7 @@ describe("normaliseFigure", () => {
   });
 
   it("keeps the digits exactly as written, trailing zeros included", () => {
-    // The output is the file's digits, not a reading of them — "170.6600" at
-    // the money scale is not the same statement as "170.66".
+    // output is the file's digits, not a reading of them — "170.6600" != "170.66" at the money scale
     expect(figure("170.6600")).toBe("170.6600");
     expect(figure("+3.25")).toBe("3.25");
     expect(figure(".50")).toBe("0.50");
@@ -165,8 +148,7 @@ describe("normaliseFigure", () => {
   });
 
   it("reads every spelling of absence as absent — never as zero", () => {
-    // A null cost basis is 0001's deliberate "no default at any layer"; a zero
-    // would report a fake gain equal to the whole untracked position.
+    // null cost basis is migration 0001's deliberate no-default; zero would fake a gain on the whole position
     for (const cell of ["", "   ", "-", "−", "--", "—", "n/a", "N/A"]) {
       expect(normaliseFigure(cell)).toEqual({ kind: "absent" });
     }
@@ -198,9 +180,7 @@ describe("compareDecimal", () => {
   });
 
   it("sorts a null last, whichever side it is on", () => {
-    // Last rather than as zero, for the same reason it renders as an em dash
-    // rather than as `$0.00`: an unpriced holding is not a worthless one, and
-    // sorting it among the near-zero rows would say that it is.
+    // sorts last, not as zero — same reason it renders as an em dash: unpriced isn't worthless
     expect(compareDecimal(null, "1.0000", MONEY_SCALE)).toBe(1);
     expect(compareDecimal("1.0000", null, MONEY_SCALE)).toBe(-1);
     expect(compareDecimal(null, null, MONEY_SCALE)).toBe(0);

@@ -41,57 +41,12 @@ import type { Route } from "./+types/root";
 
 import "./app.css";
 
-/*
- * The gate used to be wired here as root middleware; nothing filled that
- * slot until now. `middleware` below is the lock (docs/adr/0012) — the
- * first rule to run here since, not the gate come back: it answers a
- * different question, which *browser* may read rather than which *person*
- * may enter, and does not touch what this paragraph is actually about. One
- * thing still rides in on every request, recorded only here: the gate
- * attaches the verified address as `X-Auth-Request-Email`, and the app
- * reads it nowhere, deliberately. Attribution, never permission
- * (CONTEXT.md): every family member sees and can do everything. A later
- * feature may read it to record *who* did a thing; none may read it to
- * decide *whether* they may.
- */
-
-/**
- * The two router paths the lock does not guard: the unlock screen itself —
- * refusing it would refuse the one screen that lifts the refusal — and the
- * health endpoint, which the gate in front already exempts for the same
- * reason (`healthz.ts`'s own header). Nothing else needs a line here: the
- * service worker, the manifest and the icons are static files under
- * `public/` that never reach this router, so no middleware runs for them at
- * all. Written as data and pinned by a test that fails the moment this array
- * grows, so a third exemption is a decision someone makes rather than a line
- * someone adds.
- *
- * What is *not* on this list is not necessarily reachable while locked —
- * see {@link lockMiddleware}'s own header for the two cases this array
- * cannot name because they never reach it at all.
- */
+/** Refusing `/unlock` would refuse the one screen that lifts the refusal. A test pins the length. */
 export const LOCK_EXEMPT_PATHS: readonly string[] = [UNLOCK_PATH, "/healthz"];
 
 /**
- * Decodes a pathname exactly the way `matchRoutes` does before matching any
- * route against it — `decodePath` (react-router 7.18.2,
- * `lib/router/utils.ts`): each `/`-separated segment is decoded on its own,
- * with any literal `/` a decode produces re-escaped back to `%2F` so it can
- * never introduce a path separator that was not in the URL. Reproduced
- * rather than imported — this is not a `.server` module's value crossing the
- * bundle boundary, but a private router helper `react-router` does not
- * export at all, from either side of it.
- *
- * **A malformed escape falls back to the raw value, never throws** — the
- * router's own behaviour: `decodePath` wraps its call in a `try`/`catch` and
- * warns rather than propagating, because a middleware's path predicate has
- * to answer *some* boolean for every request the framework will otherwise
- * go on to route, including one carrying a segment nobody's percent-encoder
- * ever produced. Answering "not a match" for that segment (the raw,
- * undecoded string never equals a plain-ASCII constant like `/lock-now`
- * anyway) is the same conclusion `matchRoutes` reaches for it — a malformed
- * path matches no route pattern either — reached here without a throw
- * either place.
+ * Copy of react-router 7.18.2's unexported `decodePath`: per-segment decode, re-escaping any `/`
+ * a decode produces. Malformed escapes fall back to the raw value rather than throwing.
  */
 function decodedPathname(pathname: string): string {
   try {
@@ -105,32 +60,9 @@ function decodedPathname(pathname: string): string {
 }
 
 /**
- * Normalises a pathname the way the router itself matches route paths,
- * before comparing it against {@link LOCK_EXEMPT_PATHS} — `Array.includes`
- * alone is an exact, case-sensitive compare, and the router is neither:
- * `compilePath` (react-router 7.18.2) builds every route's matcher with an
- * `i` flag unless a route opts into `caseSensitive` (none here do), and its
- * pattern's tail is `\/*$` — zero or more trailing slashes, not "at most
- * one". Lower-cased and stripped of every trailing slash for exactly that
- * reason: `/Healthz`, `/healthz/` and `/healthz//` all reach the health
- * route today, and none of them would match this array unnormalised. The
- * spelling that actually matters now lives in three places — `Caddyfile`,
- * `compose.yaml`'s healthchecks, and this array — and this function is what
- * keeps the third one honest against the router's own rule rather than a
- * guess at it.
- *
- * **Decoded first** ({@link decodedPathname}, finding D) — `matchRoutes`
- * decodes every segment before it ever compares one, and this function used
- * not to: `POST /lock%2Dnow` reached `isLockNowPath` below as the literal
- * string `/lock%2dnow`, which never equals `LOCK_NOW_ACTION`, so the one
- * request most in need of the outage carve-out — a reader who pressed "Lock
- * now" while the database was down, with a browser or proxy that happened to
- * percent-encode the hyphen — read as an ordinary path instead and kept the
- * cookie {@link redirectToUnlock} was asked to clear. Every caller of this
- * function shares the fix, not only that one: {@link LOCK_EXEMPT_PATHS} and
- * `isUnlockPath` are exactly as reachable through an encoded spelling, and a
- * predicate claiming to match what the router matched has to mean it for
- * all three.
+ * Path comparison the way the router matches: `compilePath` is case-insensitive and its tail is
+ * `\/*$`, so `/Healthz`, `/healthz/` and `/healthz//` all reach the same route. Decoded first, or
+ * `/lock%2Dnow` slips past every predicate built on this.
  */
 function normalizedPathname(pathname: string): string {
   const decoded = decodedPathname(pathname);
@@ -139,81 +71,18 @@ function normalizedPathname(pathname: string): string {
   return stripped === "" ? "/" : stripped;
 }
 
-/**
- * Whether `pathname` is the unlock screen — used by the loader below to skip
- * reads a browser holding no grant has no business triggering, and by
- * `Layout` to skip the chrome around it. Deliberately its own check rather
- * than a lookup into {@link LOCK_EXEMPT_PATHS}: that array answers "does the
- * lock middleware guard this path", which `/healthz` is also on and which
- * neither of these two questions is — `Layout`'s own header already makes
- * this argument for the chrome; the loader's reads are a third question that
- * only happens to share today's answer, not a reason to fold three questions
- * into one array.
- */
 function isUnlockPath(pathname: string): boolean {
   return normalizedPathname(pathname) === UNLOCK_PATH;
 }
 
-/**
- * Whether `pathname` is `/lock-now` — read only by {@link lockMiddleware}, to
- * decide whether its *own* refusal should clear the grant cookie (finding
- * 3), never to exempt the path itself. `/lock-now` is not on
- * {@link LOCK_EXEMPT_PATHS} and must not be: an unauthenticated POST there
- * still has to pass the same lock this middleware enforces everywhere else,
- * or anyone could end any household's grant with no credential at all. All
- * that changes on this one path is what a *refusal* does to the cookie —
- * argued at {@link redirectToUnlock}'s own header.
- *
- * **Path alone, deliberately — the method is a separate condition, checked
- * where this is called.** `/lock-now` is action-only (`lock-now.ts`'s own
- * header), so a `GET` or `HEAD` there is never the reader asking to end
- * their session; it is a crawler, a pasted URL, or a stray retry, same as it
- * would be for any other resource route. Folding the method in here would
- * make this function answer two different questions — "is this the path"
- * and "is this the request the exception is for" — under one name.
- *
- * **Not the whole of "is this the request the exception is for," any
- * more (finding 4).** `lockMiddleware` also requires the refused request to
- * carry its own grant cookie before treating a `POST /lock-now` as this
- * browser asking to end its own session — this function only ever answers
- * the path half of that; see {@link redirectToUnlock}'s own header.
- */
+/** Path only, never an exemption: `/lock-now` still has to pass the lock. Method and cookie are the caller's checks. */
 function isLockNowPath(pathname: string): boolean {
   return normalizedPathname(pathname) === LOCK_NOW_ACTION;
 }
 
 /**
- * Every response the lock middleware lets through carries this — and it is
- * worth being exact about what that buys, because it is less than this slice
- * originally claimed.
- *
- * Firefox refuses a `no-store` document entry to its back/forward cache
- * outright, regardless of protocol. Safari/WebKit's refusal is narrower than
- * that: `Source/WebCore/history/BackForwardCache.cpp` guards it on
- * `document->url().protocolIs("https")`, so the identical response over
- * plain HTTP — `http://localhost` included — is left eligible for its cache.
- * This app refuses a non-HTTPS `PUBLIC_ORIGIN` except for `localhost`
- * itself — `server/config.ts` turns away every IP address before it
- * reaches that carve-out, `127.0.0.1` included — so in production Safari
- * does refuse the cache too; it is the plain-HTTP development loop, on
- * that one hostname, where it does not.
- * **Chrome admits such a page regardless of protocol.**
- * `CacheControlNoStoreEnterBackForwardCache` has been enabled by default
- * since 2025; Chrome shortens such an entry's life to three minutes and
- * evicts it when *this browser's* cookies change, unconditionally for an
- * `HttpOnly` one. That covers this browser locking itself. It does not cover
- * the case the lock exists for — a passkey or a grant removed from another
- * device, where nothing about this cookie jar changes and no eviction fires.
- * Chromium's own explainer for the feature says so in as many words ("sites
- * may log users out on the server side and clients may be unaware of this")
- * and names the answer: re-check on `pageshow` when `event.persisted`.
- *
- * That guard is ticket 06's, beside the re-entry trigger it already owns.
- * The header stays because it is free and it is the whole answer in two
- * engines of three; what changes is that no document here may go on saying
- * it is the answer in all of them. ADR-0012's statement of the limit — the
- * lock ends the reading, not every pixel already drawn — was right, and this
- * is that limit with its edges drawn where they actually fall.
+ * Keeps documents out of Firefox's bfcache, and Safari's over HTTPS. Chrome admits them anyway,
+ * so the `pageshow` re-check in `~/lib/reentry.ts` is the answer there, not this header.
  */
 function withNoStore(response: Response): Response {
   response.headers.set("Cache-Control", "no-store");
@@ -221,67 +90,9 @@ function withNoStore(response: Response): Response {
 }
 
 /**
- * Where a refused request is sent, carrying its own address back as
- * {@link RETURN_PARAM}'s one encoded value (`lock.ts`'s own comment on that
- * constant says why it has to be one parameter rather than the query the
- * browser was actually on) — but only for a `GET` or a `HEAD`, which are the
- * only methods a redirect's own `GET` can actually land back on. `/masking`
- * and `/refresh` export an action only, and both are real form posts from
- * the chrome (ticket 06's lock action will be a third): a reader who taps
- * one past the idle window would otherwise be sent, after unlocking, to `GET
- * /masking` or `GET /refresh` — a route with no loader, a 400. A refused
- * non-`GET`/`HEAD` request carries no return address at all, which
- * `safeReturn` (`return-path.ts`, read back by ticket 04's unlock route)
- * already resolves to `/` for an absent parameter — the same fallback a
- * missing or unsafe one gets today.
- *
- * `clearCookie` is true when a grant lookup came back definitively empty —
- * proof the cookie's grant is actually gone — or when the refused request
- * targets `/lock-now` itself (finding 3, {@link isLockNowPath}) **and that
- * same request's own cookie names a grant** (finding 4): nowhere else is a
- * mere read failure proof of that, but a reader who posted to `/lock-now`
- * carrying their own grant cookie has already asked to end this browser's
- * grant, and an outage that merely stops the middleware from *confirming*
- * it is gone is not a reason to hand it back once the database recovers.
- * `lock-now.ts`'s own action already clears the cookie on every path
- * through it; this covers the one failure mode that never reaches it — a
- * refusal thrown here, before `next()` ever runs that action.
- *
- * **The cookie requirement is what closes a cross-site forgery (finding
- * 4, P1).** `SameSite=Lax` already withholds `LOCK_COOKIE` from a cross-site
- * form POST — the browser never sends it — so a request that reaches here
- * with no cookie at all is exactly as consistent with "an attacker's page
- * auto-submitted a form to `/lock-now`" as it is with "an outage." Path and
- * method match either way; only the cookie's presence tells them apart.
- * Treating path-and-method alone as proof (the bug) meant such a forged POST
- * — reachable the moment an attacker's page merely knows this instance's
- * origin, no credential of any kind required — still received
- * `Set-Cookie: …; Max-Age=0` on the response, which the browser processes
- * regardless of `SameSite` (that attribute governs which requests *carry* a
- * cookie, never which responses may *clear* one), silently ending a real
- * session the victim never asked to end. Requiring the cookie is not a new
- * mechanism: it is the same `SameSite=Lax` posture (ADR-0005,
- * docs/research/2026-09-02-security-and-privacy-audit.md §S5) doing the one
- * thing it already does — and it is the last of three reasons rather than
- * the only one.
- *
- * The other two are `Origin` checks — alternatives over disjoint sets of
- * routes, so exactly one of them is live for any given request — and neither
- * is invented here. React
- * Router 7.18.2's own `throwIfPotentialCSRFAttack` refuses a mismatched
- * `Origin` with a 400 for document mutations and for single-fetch actions,
- * ahead of `staticHandler.query`, which is where the middleware pipeline
- * actually runs. It does not run for a resource route — which `/lock-now`
- * is — so {@link crossOriginMutationMiddleware} restates the framework's
- * rule for exactly the routes the framework skips, ahead of this middleware
- * in the `middleware` array; that function's own header cites where each
- * one runs and where it does not.
- *
- * Neither `Origin` check reaches a request that carries no `Origin` header
- * at all: the framework leaves `originDomain` `null` and continues, and the
- * middleware that mirrors it continues too. That request is what the cookie
- * requirement is for, and it is why the requirement is independent of both
- * rather than a restatement of either.
+ * Return address only for `GET`/`HEAD`: `/masking` and `/refresh` are action-only, so bouncing a
+ * refused POST back would land the reader on a loader-less route (400). `safeReturn` resolves an
+ * absent parameter to `/`.
  */
 function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Response {
   const target = new URL(UNLOCK_PATH, url);
@@ -295,71 +106,14 @@ function redirectToUnlock(url: URL, method: string, clearCookie: boolean): Respo
   );
 }
 
-/**
- * The mutation methods this app judges an `Origin` for, in the framework's
- * own spelling and its own shape: React Router builds `validMutationMethods`
- * as a `Set` over `validMutationMethodsArr`
- * (`node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:1345-1350`
- * and `:1351-1353`) and reads it back through `isMutationMethod` at
- * `:5575-5577`, uppercasing as it goes. Written out because the framework
- * exports none of them, and kept to that set rather than a wider one so
- * `OPTIONS` and `HEAD` are not judged — a preflight carries a cross-origin
- * `Origin` by definition and mutates nothing.
- */
+/** React Router's own `validMutationMethods`, which it does not export. `OPTIONS`/`HEAD` stay out: a preflight mutates nothing. */
 const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * Who may *ask*, as against which browser may *read* — which is
- * {@link lockMiddleware}'s question, and the reason this is a separate
- * function listed before it rather than six lines at the top of that one.
- *
- * React Router 7.18.2 runs this check itself, as `throwIfPotentialCSRFAttack`
- * (`node_modules/react-router/dist/development/chunk-ZA36QIGN.mjs:747-765`),
- * for single-fetch actions (`:854`) and for document requests whose method is
- * a mutation (`:1417-1419`) — and not for a resource route, which
- * `handleResourceRequest` (`:1563-1609`) serves with no such call. `/lock-now`,
- * `/masking` and `/refresh` are resource routes: action-only, no component,
- * posted to directly. So the framework's rule stops exactly where this app's
- * three mutations live, and this restates it there — the same method set, the
- * same comparison, the same status, with the two departures named below.
- *
- * **Hosts, and never `PUBLIC_ORIGIN`.** The framework compares
- * `new URL(origin).host` against `new URL(request.url).host` (`:751`, `:757`,
- * `:758`), so behind the proxy this agrees with it on the routes it already
- * covers rather than disagreeing with it about a scheme or a port. Reading the
- * configured origin instead would also refuse this suite's own requests,
- * which address the instance as `http://portfolio.local`
- * (`tests/support/routes.ts`) while the config is `https://portfolio.local`
- * (`vitest.config.ts`). The corollary is worth knowing: a deployment whose
- * proxy rewrites `Host` makes this refuse — and it already makes the
- * framework refuse every document and single-fetch mutation, so such an
- * instance is broken before this middleware sees it.
- *
- * **No `Origin` continues.** A plain HTML form from this instance sends one;
- * a request with none is the shape the framework also lets through
- * (`originDomain` stays `null` at `:751`, so the comparison at `:758` is
- * falsy). What stands between that request and a cleared grant is the cookie
- * the refusal path requires — {@link redirectToUnlock}'s own header.
- *
- * **`Origin: null` is refused.** It is a real value — a sandboxed frame, a
- * redirected form post — rather than a missing header, and the framework
- * refuses it: it keeps the literal string instead of parsing it (`:751`),
- * finds it unequal to the host and not an allowed origin (`:758-762`), and
- * its callers turn that throw into a 400 (`:859`, `:1425`). Here the string is
- * simply unparseable as a URL and lands in the same refusal, which is the same
- * answer by a shorter road.
- *
- * **Two places this is deliberately not identical.** An `Origin` that parses
- * to an *empty* host — `about:blank`, `data:`, `file:` — leaves the
- * framework's `originDomain` falsy at `:758` and is admitted there; here it
- * fails the comparison and is refused, which is the safer direction and is
- * close to theoretical anyway, since browsers send `Origin: null` for those.
- * And the framework's `allowedActionOrigins` allowlist (`:758-760`,
- * `isAllowedOrigin` at `:805`) has no counterpart here: this app never sets
- * it, and `@react-router/dev`'s own documentation says it does not apply to
- * resource routes, so there is nothing to mirror today — but whoever sets it
- * later has to teach this function about it too, because this one runs on
- * every route.
+ * React Router 7.18.2 makes this same `Origin` check itself for document mutations and single-fetch
+ * actions, but not for resource routes — which `/lock-now`, `/masking` and `/refresh` are. Compares
+ * hosts, not `PUBLIC_ORIGIN`, to agree with the framework behind the proxy. A missing `Origin`
+ * continues, as it does there; `Origin: null` is unparseable and refused.
  */
 const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) => {
   if (!MUTATION_METHODS.has(request.method.toUpperCase())) return;
@@ -378,125 +132,27 @@ const crossOriginMutationMiddleware: Route.MiddlewareFunction = ({ request }) =>
 };
 
 /**
- * The lock (docs/adr/0012): a browser holding no valid grant is turned away
- * *before* `next()` is called, so no loader runs and the figures are never
- * fetched — deliberately not `chart-range.ts`'s `chartRangeMiddleware` shape,
- * the only other middleware here, which awaits `next()` and only decorates
- * what comes back. This one refuses by throwing a redirect `Response`,
- * matching how every route in this app already signals one (`tests/support/
- * routes.ts`'s own doc comment) — there is no markup to grep for on a
- * refusal, only proof that {@link isLocked} and {@link touchGrant} decided
- * it, which is what `next` never being invoked pins. The framework calls
- * `next()` *for you* if a middleware returns a non-`Response` (or nothing)
- * without ever calling it — worth saying here because any future refusal
- * branch written as a bare `return` rather than a `throw` would silently
- * serve the page instead of refusing it.
+ * The lock (docs/adr/0012). Refuses by *throwing* before `next()`, so no loader runs — a refusal
+ * written as a bare `return` would serve the page instead, since the framework calls `next()` for a
+ * middleware that returns without one.
  *
- * **`args.url`, never `new URL(request.url)`.** `runServerMiddlewarePipeline`
- * hands every middleware a `url` already stripped of react-router's own
- * `.data` suffix and `_routes`/`index` search params
- * (react-router 7.18.2's `lib/server-runtime/*.ts`: `getNormalizedPath` is
- * passed as `normalizePath` at all four call sites that reach middleware —
- * document requests, resource requests, and both single-fetch actions and
- * loaders — unconditionally, not only under a future flag). Reading
- * `request.url` instead happens to agree with this today only because
- * `future.v8_passThroughRequests` is off: with it off, a single-fetch
- * request is rebuilt from the already-normalized URL before this middleware
- * ever sees it, so `request.url` and `args.url` coincide by accident; `npm
- * run build` already warns that flag is changing in v8, and flipping it
- * hands `request` straight through unrebuilt — `request.url` would then
- * carry `/unlock.data`, which fails the exemption check below and traps a
- * locked browser in a redirect loop with no way to reach the screen that
- * unlocks it. Reading `args.url` is correct under both settings of that flag,
- * and closes a second, already-live gap for free: `request.url` on an
- * unrebuilt single-fetch request still carries a `_routes` parameter, which
- * `args.url` never does, so a redirect built from `request.url` alone would
- * leak that internal parameter into the address `/unlock` sends the reader
- * back to.
+ * `args.url`, never `request.url`: only the former is stripped of react-router's `.data` suffix and
+ * `_routes` params, which would otherwise fail the exemption check and loop a locked browser.
  *
- * **With no passkey enrolled, this calls `next()` unconditionally** —
- * `isLocked()` answers `false` and every request passes straight through, so
- * shipping this changes nothing a family member can see on an instance that
- * has never enrolled one.
- *
- * **Fails closed.** A thrown `isLocked`/`touchGrant` is not the same answer
- * as "no passkey", and is never folded into that branch: the loader below
- * catches around `firstRunStep`, which is right for a first-run hint that
- * may fail open, and wrong for a boundary — a boundary that opens the
- * moment Postgres hiccups is not a boundary. Every such failure refuses
- * here too, and clears no cookie — with one deliberate exception (finding
- * 3): a read that merely failed to answer is not proof the grant it names
- * is actually gone, *except* when the refused request was itself a POST to
- * `/lock-now` ({@link isLockNowPath}) **carrying that same browser's own
- * grant cookie** (finding 4). A reader who pressed "Lock now" during an
- * outage, from a browser that still holds its grant cookie, has already
- * stated their intent; `/lock-now`'s own action clears the cookie on every
- * path *through* it (`lock-now.ts`'s own header), but an outage in
- * `isLocked`/`touchGrant` refuses here, before that action ever runs, so
- * this is the one place that intent can otherwise go unhonoured. Honouring
- * it — clearing the cookie on this path's refusal too — is strictly safer
- * than preserving a grant the reader asked to end. The cookie requirement is
- * what keeps this from also honouring a forged cross-site POST that carries
- * no cookie at all — see {@link redirectToUnlock}'s own header.
- *
- * **A live grant is extended by the request that used it** — {@link
- * touchGrant} itself skips the write unless less than half the idle window
- * remains, so this is not an unconditional write on every document and
- * data request.
- *
- * **What this does not cover.** The framework answers a genuinely unmatched
- * path (no route pattern matches at all — there is no catch-all route here)
- * and the lazy route-discovery manifest at `/__manifest` before the
- * middleware pipeline ever runs: a locked browser that mistypes a URL gets
- * a rendered 404 — app chrome only, since the root loader does not run
- * either, so no figure is on it — rather than the unlock screen, and that
- * response carries no `no-store` of its own. Separately, exempting
- * `/healthz` also exempts its single-fetch (`.data`) form, and that is not the
- * nothing it looks like. The health route holds no household data, but a
- * `.data` request with no `_routes` filter runs *every* matched loader —
- * `singleFetchLoaders` honours that parameter when it is present — this
- * file's own included, and
- * the root loader's neutral branch fires only for `/unlock` — so a browser
- * holding no grant can read `gated`, `firstRun`, `masked`, `maskingPolicy`
- * and `hasPasskey` off `/healthz.data`, which are exactly the fields
- * {@link UNLOCK_SCREEN_ROOT_DATA}'s own header says a proven-nothing browser
- * has no business learning. **Kept deliberately, decided 2026-09-05**
- * (spec 0020's "Decisions"): the fields are setup state and never a figure,
- * and a second rule for the exemption's shape costs more than it buys. In
- * production the Caddyfile's `handle /healthz` is an exact path matcher, so
- * `/healthz.data` does not match it — it falls to the catch-all `handle`
- * and is challenged by `forward_auth` like everything else, which is what
- * makes this reader a signed-in family member rather than anybody at all.
- * Recorded with its reason so the next reader does not "fix" it. Neither this nor the
- * unmatched-path case above is worth code; both are worth saying, so this
- * header's account of what the lock covers stays honest about where it
- * stops.
+ * Fails closed — a thrown check refuses and is never folded into the no-passkey branch. Exempting
+ * `/healthz` also exempts `/healthz.data`, which serves this loader's setup fields to a browser
+ * holding no grant: kept deliberately (spec 0020, decided 2026-09-05); Caddy gates the `.data` form.
  */
 const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) => {
   if (LOCK_EXEMPT_PATHS.includes(normalizedPathname(url.pathname))) {
     return withNoStore(await next());
   }
 
-  // Read before any database call, deliberately: whether this request even
-  // carries a grant cookie is not itself a lock-check answer, and both
-  // branches below (the outage carve-out and the ordinary "no cookie"
-  // refusal) need it either way.
   const grantId = readLockCookie(request);
 
-  // Whether *this* refusal, whatever throws it below, should clear the
-  // cookie regardless of the reason — the exception argued at this
-  // function's own header and {@link redirectToUnlock}'s. Three things all
-  // have to be true, not two: the path, the method — `/lock-now` is
-  // action-only (`lock-now.ts`'s own header), so a `GET` or `HEAD` there is a
-  // crawler, a pasted URL, or a stray retry, never a reader asking to end
-  // this browser's grant — and, since finding 4, this request's own cookie
-  // naming a grant at all. Path and method alone are exactly what a
-  // cross-site forgery can produce with no credential whatsoever
-  // (`SameSite=Lax` withholds the cookie from that request, never from the
-  // response clearing it), so treating them as proof would expire a real
-  // session on a request its own browser never authorised — precisely the
-  // sign-out-nobody-asked-for every other refusal path here is written to
-  // avoid.
+  // A refusal on this path still clears the cookie: the reader asked to lock. Cookie required as
+  // well as path and method — path and method alone are forgeable cross-site, and `SameSite=Lax`
+  // withholds the cookie from that request but not the response clearing it.
   const isLockNowRequest = isLockNowPath(url.pathname) && request.method === "POST" && grantId !== undefined;
 
   let locked: boolean;
@@ -509,9 +165,6 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
 
   if (!locked) return withNoStore(await next());
 
-  // `isLockNowRequest` is already `false` on every path through here —
-  // it requires `grantId !== undefined` — so there is nothing this refusal
-  // could honour as lock intent: no cookie means nothing to clear.
   if (grantId === undefined) throw redirectToUnlock(url, request.method, false);
 
   let grant: Awaited<ReturnType<typeof touchGrant>>;
@@ -527,32 +180,12 @@ const lockMiddleware: Route.MiddlewareFunction = async ({ request, url }, next) 
   return withNoStore(await next());
 };
 
-/**
- * Order is the rule rather than a preference: who may ask is settled before
- * which browser may read, so a forged mutation is refused without a database
- * call and without rolling anybody's grant.
- */
+/** Order matters: who may ask is settled before which browser may read, so a forgery costs no database call. */
 export const middleware: Route.MiddlewareFunction[] = [crossOriginMutationMiddleware, lockMiddleware];
 
 /**
- * The unlock screen's own answer — never the household's. `Layout` renders no
- * chrome for this route (its own header explains why), but React Router
- * serialises whatever this loader returns regardless of what `Layout` goes on
- * to do with it, so removing the chrome hid the *consumers* of `gated` and
- * `firstRun` without touching the hydration payload a browser holding no
- * grant can still read out of the page source. Each field here is this same
- * loader's own existing fail-safe default for "the read did not happen" —
- * `firstRun: null` (no step to nag about), `masked: true` and
- * `maskingPolicy: "masked"` (of the two ways to be wrong, a page of dots
- * cannot expose anything) — chosen again for the same reason: none of them
- * hands a proven-nothing browser a fact about the household. `gated: true` and
- * `hasPasskey: false` (ticket 06) are the two fields with no existing failure
- * default to reuse, so each gets a fresh one on the same principle: `gated:
- * true` is the value that keeps `OpenInstanceBanner` off, and `hasPasskey:
- * false` is the value that keeps the lock-now control off — moot in
- * practice, since `Layout`'s bare-shell branch for this route drops every
- * control regardless of what either field says, but the type this loader
- * returns has to agree with the branch that does read them.
+ * Neutral values, telling a browser that has proven nothing no fact about the household — the
+ * payload is serialised into the page whatever `Layout` renders.
  */
 const UNLOCK_SCREEN_ROOT_DATA = {
   gated: true,
@@ -563,37 +196,12 @@ const UNLOCK_SCREEN_ROOT_DATA = {
 };
 
 /**
- * What the shell around every page needs: whether anything guards the
- * instance, whether it is set up yet, and whether this browser is masked.
- *
- * The first-run read is failure-tolerant — a hint, not data: a database that
- * is down produces a page without a prompt, not an error page over every
- * screen (`/healthz` is what reports the outage). **Masking is resolved
- * here, on the server** (§12's reason for the theme): the first paint must
- * be correct — a page that drew the amounts and then hid them is the one
- * failure this feature cannot have, and exactly what reading `localStorage`
- * after hydration would produce (story 30). The policy read fails to
- * *masked*: of the two ways to be wrong with the database down, a page of
- * dots cannot expose anything.
- *
- * **The unlock screen gets none of this.** `isUnlockPath` below is checked
- * after starting the price poller and before any other read: a browser
- * holding no grant can reach only this one route, and can hammer it, so
- * skipping `firstRunStep` and the masking-policy read here is a saved
- * database round trip on exactly the request an un-granted browser controls
- * — not only a data-shape decision. `startPricePoller()` runs first and
- * unconditionally regardless of that branch: it is the *only* server-side
- * path every render passes through while an instance is locked and nobody
- * has unlocked it yet, since every other route's loader is refused before it
- * ever runs (the middleware above throws before calling `next()`); skipping
- * it here would mean prices never refresh for a household that has not yet
- * unlocked anything today.
+ * Masking is resolved server-side: a page that drew the amounts and then hid them is the one
+ * failure this feature cannot have (story 30). Every read fails toward masked.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  // The quote refresh loop (§6.2), started here because root's loader is the
-  // one server-side path every render passes through (no server entry file
-  // under `react-router-serve`). Idempotent, not awaited, cannot throw:
-  // polling must never be able to fail a page render.
+  // §6.2. Root's loader is the only server path every render passes through, including while
+  // locked. Idempotent, not awaited, cannot throw.
   startPricePoller();
 
   const url = new URL(request.url);
@@ -608,9 +216,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   let masked = true;
-  // Published alongside the answer because the toggle's own script needs it:
-  // the cookie's lifetime is the policy's, and the client writer has to produce
-  // a byte-identical cookie to the one the action would have written.
+  // Published for the toggle's client writer: it has to produce a byte-identical cookie.
   let maskingPolicy: MaskingPolicy = "masked";
 
   try {
@@ -620,34 +226,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     console.error("Masking policy read failed; masking this render:", error);
   }
 
-  // Whether the household holds a passkey at all (ticket 06) — the same
-  // question the lock middleware above already asked to let this loader run
-  // at all, asked again here rather than reused: react-router 7.18.2 does
-  // let a value travel from a middleware to the loader behind it
-  // (`createContext`/`RouterContextProvider`, both plain exports, not
-  // `unstable_`), so the second read is not forced by the framework. It
-  // stays because of the test harness instead — `tests/support/routes.ts`'s
-  // `args()` calls a loader directly, without running middleware, so a
-  // context-fed loader could not be tested that way; moving this to
-  // `createContext` would push these assertions into `servedThrough`-style
-  // tests instead. Fails toward *not* drawing the control: unlike the
-  // middleware, this is not the boundary — hiding a control on a database
-  // hiccup costs a family member one screen's worth of chrome and nothing
-  // more: the re-entry effect below does *not* gate on this flag — it
-  // installs both listeners on every page but the unlock screen, whatever
-  // this render believes about the household, which is the whole point of
-  // the parameter that used to carry that belief being gone. Never a figure,
-  // though — there is no reason to fail toward showing a button that clears
-  // a grant which may be exactly what is protecting this render.
-  //
-  // **This answers the chrome's question only** — draw the lock-now control
-  // or not — which is why failing toward `false` is right here. It used to
-  // carry a second field saying whether the read had actually failed, so the
-  // re-entry guard could tell "no passkey" from "could not tell" and take the
-  // cautious branch. That guard no longer asks: a hidden-too-long return
-  // posts the lock without consulting anything this loader believes
-  // (`~/lib/reentry.ts`'s own header), so there is no longer a client-side
-  // decision for an uncertain read to mislead.
+  // Chrome only — whether to draw the lock-now control — so it fails toward hiding it. Read again
+  // rather than passed down from the middleware so `tests/support/routes.ts`'s `args()` can call
+  // this loader directly.
   let hasPasskey = false;
   try {
     hasPasskey = await isLocked();
@@ -655,8 +236,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     console.error("Lock check failed; hiding the lock-now control rather than guessing:", error);
   }
 
-  // Read here rather than in the banner, because a component cannot: the value
-  // is an environment variable and the browser has no environment.
   return {
     gated: getConfig().AUTH_GATE === "external",
     firstRun,
@@ -666,12 +245,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   };
 }
 
-/**
- * DESIGN.md §8.4 — ordered by how often each page is opened. The rail's
- * *shape* is the Stitch screens' (§13.1): fixed 280px column, brand tile at
- * its head, 4px accent stroke on the active item, one filled button at its
- * foot. Its *contents* are §8.4's items rather than the mock's three.
- */
+/** Ordered by how often each page is opened. DESIGN.md §8.4, §13.1 */
 const NAVIGATION = [
   { to: "/", label: "Overview", end: true, Icon: DashboardIcon },
   { to: "/holdings", label: "Holdings", end: false, Icon: HoldingsIcon },
@@ -679,31 +253,19 @@ const NAVIGATION = [
   { to: "/income", label: "Income", end: false, Icon: IncomeIcon },
 ] as const;
 
-/** Settings sits at the foot of the rail: a few times ever, not daily (§8.4). */
 const FOOTER_NAVIGATION = [
   { to: "/settings", label: "Settings", end: false, Icon: SettingsIcon },
 ] as const;
 
 type NavItem = (typeof NAVIGATION)[number] | (typeof FOOTER_NAVIGATION)[number];
 
-/**
- * `search` is the owner filter, a prop rather than read here (spec 0013,
- * ADR-0008). This renders four times — `NAVIGATION` in the rail and the
- * phone's bottom bar, Settings in both — and Settings never reads the
- * filter, so only the two calls that carry it say so. The owner parameter
- * alone, never `location.search`: the whole search would drag one screen's
- * `range`, `sort` or half-typed `edit` key onto another and bounce every
- * nav click through Holdings' canonical redirect.
- */
+/** `search` is the owner parameter alone, never `location.search` — that would drag one screen's `range` or `sort` onto another. ADR-0008 */
 function NavItems({ items, search = "" }: { items: readonly NavItem[]; search?: string }) {
   return (
     <>
       {items.map(({ to, label, end, Icon }) => (
         <li key={to}>
           <NavLink
-            // `NavLink` resolves active state on the pathname alone, so `end`
-            // and `aria-current` are unchanged by a search; an empty one
-            // collapses to a bare path, keeping unfiltered URLs clean.
             to={{ pathname: to, search }}
             end={end}
             className={({ isActive }) =>
@@ -719,12 +281,7 @@ function NavItems({ items, search = "" }: { items: readonly NavItem[]; search?: 
   );
 }
 
-/**
- * The mark, at both sizes it is drawn: the rail, and the phone's top bar.
- * It carries the owner filter because it is a nav item in all but name —
- * landing on an unfiltered Overview from a filtered Holdings would be the
- * most-clicked way to lose the filter.
- */
+/** Carries the owner filter: a nav item in all but name. */
 function Brand({ search }: { search: string }) {
   return (
     <Link className="app-brand" to={{ pathname: "/", search }}>
@@ -740,174 +297,41 @@ function Brand({ search }: { search: string }) {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  // From the root loader, not a prop: `Layout` wraps error boundaries too,
-  // where there is no loader data at all. The banner lives here so every
-  // route — including ones that do not exist — carries it.
+  // From the loader, not a prop: `Layout` wraps error boundaries, where there is no loader data.
   const rootData = useRouteLoaderData<typeof loader>("root");
   const { pathname, search } = useLocation();
 
-  // Read off the address, which is the whole of the filter's state
-  // (ADR-0008) — a loader could not hand it down inside an error boundary.
+  // Off the address (ADR-0008): a loader could not hand it down inside an error boundary.
   const owners = ownerSearch(readOwnerFilter(new URLSearchParams(search)));
 
-  // Suppressed inside Settings — the one place it would send someone where
-  // they already are; everywhere else it is the single pointer at the next
-  // step (DESIGN.md §8.4).
+  // Suppressed inside Settings — the one place it would point where they already are.
   const firstRun =
     rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
-  /**
-   * The one screen rendered before any grant is proven — `LOCK_EXEMPT_PATHS`
-   * above is what lets the middleware serve it at all, and the chrome around
-   * it assumes the opposite of that: the nav rail links to Holdings,
-   * Analysis and Income; Upload assumes an account already exists to receive
-   * a statement; the masking toggle writes `document.cookie` *before* any
-   * network round trip, which on this screen would be a browser that has
-   * proved nothing genuinely changing persistent state and then bouncing;
-   * the first-run prompt and the open-instance banner both read off setup
-   * state — which of three configurations the household is in, whether
-   * anything guards the instance at all — that a browser holding no grant
-   * has no business learning (finding 3). Fifteen interactive elements, all
-   * dead ends, one of them worse than dead.
-   *
-   * **Hiding the chrome is not what keeps that setup state unread.** This
-   * branch only decides what renders; `rootData` for this route is the
-   * loader's own neutral `UNLOCK_SCREEN_ROOT_DATA` (the loader's own header),
-   * so the fact that `firstRun` and the banner's `gated` go unused here is a
-   * second, redundant guard rather than the one thing standing between a
-   * proven-nothing browser and the hydration payload.
-   *
-   * Checked through {@link isUnlockPath} rather than reusing
-   * `LOCK_EXEMPT_PATHS` itself: `/healthz` is on that list too and never
-   * reaches `Layout` at all — it renders no component — so "the lock does
-   * not guard this path" and "this path gets no chrome" are two different
-   * questions that only happen to share an answer for `/unlock` today;
-   * folding them into one array would make a future exemption's chrome a
-   * coincidence of that array rather than a decision someone made.
-   *
-   * Placed here, in `Layout`, rather than inside `unlock.tsx`'s own
-   * component — the existing precedent one paragraph up, suppressing the
-   * first-run prompt under `/settings`, draws the same line: the chrome is
-   * assembled in exactly one place for every route, and a route earns its
-   * way out of a piece of it here rather than rendering past a shell it was
-   * handed. It also pre-empts ticket 06's lock-now control, which is drawn
-   * "in both places `MaskingToggle` is rendered" and only while the instance
-   * is locked at all — both of which are true of this screen, and a stray
-   * copy of `MaskingToggle` here would have carried it along for free,
-   * offering to lock a browser that is already locked and, worse, discarding
-   * the return address ticket 03 encoded to get the reader back to it.
-   */
+  // Bare shell for the unlock screen: every piece of chrome assumes a grant this browser has not
+  // proven, and the masking toggle would write `document.cookie` on the way out.
   const isUnlockScreen = isUnlockPath(pathname);
 
-  // Whether the household holds a passkey at all — not `CONTEXT.md`'s
-  // `Locked`, which is a fact about one browser at one moment, the opposite
-  // of what gates the control below: a browser rendering this chrome may
-  // itself be perfectly unlocked, and the household holding a passkey is
-  // exactly the condition that makes an instance lock at all. `undefined`
-  // reads as `false` here for the same reason `firstRun` above tolerates a
-  // data-less error boundary: neither a browser mid-navigation nor one
-  // rendering an error page has a passkey count to show one way or the
-  // other, and "no control" is the fail-safe answer to that gap, not "show
-  // one that may not apply".
+  // The household's passkey, not this browser's lock state. `undefined` reads false: no control is
+  // the fail-safe answer on an error boundary.
   const hasPasskey = rootData?.hasPasskey === true;
 
-  // Named directly in the reentry effect's dependency array below, not
-  // stashed in a ref: `useRevalidator` memoises `revalidate` on
-  // `[dataRouterContext.router]` (react-router 7.18.2), which never changes
-  // for the life of this app, so there is no identity churn to route around.
   const { revalidate } = useRevalidator();
 
-  /**
-   * **Concealment lived here for five review rounds and is gone.** Every
-   * finding from round two on was the same mechanism wearing different
-   * clothes: HTTP status semantics, commit ordering versus a fetcher's
-   * `.state`, the document unloading mid-POST, an expired gate session
-   * making retry impossible, two concurrent attempts overwriting each
-   * other's `concealment` state, a back-forward-cache restore racing the
-   * notice, cookies shared across tabs. The surface never closed, because
-   * concealment was never something the design asked for — it was a reply
-   * to one review comment, reaching for something the spec's own stated
-   * limit already declines: docs/specs/0019-the-lock.md, "What locking
-   * cannot reach" — *"Deleting the grant stops the next request; it does
-   * not reach into pages already rendered. Another tab of the same browser
-   * keeps the figures on screen until it asks the server for something."*
-   * A notice standing in for the page **is** reaching into a page already
-   * rendered, dressed as a fix for whichever finding was open that round.
-   * Read that heading again before adding anything here that hides `children`
-   * — the next reader who wants to build this back is the reason this
-   * paragraph exists.
-   *
-   * What actually needed to change once concealment was gone is only that
-   * the request `postLock` sends behaves as a request that ends a grant
-   * should — {@link postLockNow}'s own header carries both halves. Neither
-   * needed a scrim, a replacement render, or a state machine watching for
-   * either one to settle.
-   *
-   * **One trigger is declined here, and it is not the one below.** A review
-   * round asked for a tab to post the lock on *discovering* that
-   * `hasPasskey` had flipped, on the reasoning that its belief was stale.
-   * The case that produces is a *sibling tab of the very browser that just
-   * enrolled*: the ceremony minted that browser's grant, the cookie is
-   * shared across its tabs, and posting on that discovery would delete it —
-   * locking the household out of the browser it enrolled from, seconds after
-   * it did. `docs/specs/lock/05-enrolling-and-listing-passkeys.md` names that
-   * outcome as the thing not to do. A different browser has no grant to
-   * share and is already refused by the middleware, which is where that
-   * refusal belongs.
-   *
-   * A **hidden-too-long return** is a different trigger and is *not*
-   * declined: it posts, whatever this page believes about the household, so
-   * a tab hidden across its own browser's first enrolment does delete the
-   * grant that enrolment minted. That is spec 0019's story 3 asking for
-   * exactly this — the cost is one unlock prompt, and the redirect back to
-   * Settings still renders, which is what ticket 05's "not locked out by its
-   * own success" is actually scoped to.
-   */
+  // Never post the lock on a `hasPasskey` flip: a sibling tab of the browser that just enrolled
+  // shares its cookie, so that would delete the grant the enrolment minted.
   const attemptLock = useCallback((): void => {
     void postLockNow(revalidate, fetch);
   }, [revalidate]);
 
-  /**
-   * What a persisted `pageshow` restore does, and the only thing it does
-   * (`~/lib/reentry.ts`'s own header): ask the middleware again, and stop
-   * there. It is not what a hidden-too-long return does — that posts the
-   * lock, through `attemptLock` above, and no belief is left anywhere here
-   * that could route it here instead. Revalidating *is* the answer — it re-runs the root
-   * middleware, which refuses a browser holding no live grant and redirects
-   * it to `/unlock`. Nothing here decides the belief was stale and posts a
-   * lock off the back of it; the paragraph on {@link attemptLock} above says
-   * why that would lock a household out of the browser it just enrolled
-   * from.
-   */
+  // A persisted restore only re-asks the middleware — it never posts the lock.
   const askServer = useCallback((): void => {
     revalidate();
   }, [revalidate]);
 
-  /**
-   * The reentry guard (ticket 06) — `~/lib/reentry.ts`'s own header carries
-   * the whole argument for what each half does and does not promise. There
-   * is nothing for `Layout` to decide: a hidden-too-long return posts the
-   * lock and a persisted restore asks the server, and neither consults what
-   * this render believes about the household. Three rounds of findings came
-   * from handing `watchReentry` a `hasPasskey` belief that this page baked in
-   * at render time; the parameter that carried it is gone, so there is no
-   * longer a shape here for a call site to get wrong.
-   *
-   * **No test in this repository reaches the line below, and none can.** The
-   * suite is DOM-less by design (CLAUDE.md, "Tests"): every `Layout` test
-   * renders through `renderToStaticMarkup`, where React runs no effect at
-   * all, so a reintroduced `if (!hasPasskey) return;` on the next line would
-   * pass `npm run typecheck`, `npm run build` and every one of these tests.
-   * `tests/reentry.test.ts` drives `watchReentry` directly and pins what it
-   * does once installed; that this component installs it is checked by hand
-   * instead, by the drive script under
-   * `docs/research/2026-09-05-lock-slice-launch-review/harness/` — its steps
-   * S8 (hidden past the grace posts the lock) and S9 (a tab that rendered
-   * before the first enrolment locks on its return) both fail if this effect
-   * stops running. Do not close the gap by adding jsdom or a test renderer;
-   * the gap is stated here so the next person knows the manual check is the
-   * evidence.
-   */
+  // No test reaches this effect: the suite is DOM-less, so `renderToStaticMarkup` runs no effects.
+  // Steps S8/S9 of the drive script under docs/research/2026-09-05-lock-slice-launch-review/harness/
+  // are the evidence that it installs.
   useEffect(() => {
     if (isUnlockScreen) return;
 
@@ -922,25 +346,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="theme-color" content="#f7f9fb" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#0b1326" media="(prefers-color-scheme: dark)" />
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-        {/* `use-credentials`, because Chrome fetches a manifest without cookies
-            by default — behind the gate that turns install into a silent
-            sign-in redirect (docs/specs/0012). */}
+        {/* Chrome fetches a manifest without cookies by default; behind the gate that is a sign-in redirect. */}
         <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
         <Meta />
         <Links />
       </head>
       <body>
         {isUnlockScreen ? (
-          // The bare shell: no nav, no toggles, no upload button, no
-          // first-run prompt, no banner — see this function's own comment
-          // above. `.app`/`.app-main` are reused rather than new classes
-          // invented for one screen, so this gets the same centred column
-          // and padding every other page's content sits in without pulling
-          // in a single rail- or topbar-specific rule. `--lock` is the one
-          // thing this screen asks of the column that no other screen does:
-          // its single card sits in the middle of the viewport rather than
-          // at the top of it, because there is nothing below it to scroll to
-          // (`.app-main--lock`, app.css).
           <div className="app app--lock">
             <main className="app-main app-main--lock">{children}</main>
           </div>
@@ -954,12 +366,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <ul className="app-nav app-nav--footer">
                 <NavItems items={FOOTER_NAVIGATION} />
               </ul>
-              {/* In the rail's foot beside Settings rather than in its nav list:
-                  it is a control, not a destination, and a `<li>` among the links
-                  would announce it as one. */}
+              {/* Outside the nav list: a control, not a destination. */}
               <MaskingToggle className="app-rail-masking" />
-              {/* Beside masking, never mistakable for it (ticket 06): drawn
-                  only while the household holds a passkey at all. */}
               {hasPasskey ? <LockNowControl className="app-rail-lock" /> : null}
 
               <Link className="button app-rail-action" to="/upload">
@@ -969,8 +377,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </nav>
 
             <div className="app-canvas">
-              {/* Below 1024px the rail is gone, so the bar carries the mark and
-               * the one action the rail's foot would have held. */}
+              {/* Below 1024px the rail is gone and this carries its mark and action. */}
               <header className="app-topbar">
                 <Brand search={owners} />
                 <div className="app-topbar-actions">
@@ -990,8 +397,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </main>
             </div>
 
-            {/* The phone's nav: a bottom bar, which is what every mobile mock
-             * does — no drawer and no hamburger anywhere in the set (§13.1). */}
             <nav className="app-bottomnav" aria-label="Primary">
               <ul className="app-nav">
                 <NavItems items={NAVIGATION} search={owners} />
@@ -1002,9 +407,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         )}
         <ScrollRestoration />
         <Scripts />
-        {/* The worker exists for its offline page alone and stores nothing on
-            the device (ADR-0007). Registration failing — no support, a lapsed
-            gate session — is silent by design: the app works without it. */}
+        {/* Offline page only, stores nothing (ADR-0007). Registration failing is silent by design. */}
         <script
           dangerouslySetInnerHTML={{
             __html: `if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");`,
@@ -1019,9 +422,6 @@ export default function App() {
   return <Outlet />;
 }
 
-/* Everything this used to do is in `ErrorPage`, reasoning included — a
- * component because the upload flow's boundary needs the identical page for
- * everything that is not an expired draft. */
 export function ErrorBoundary() {
   return <ErrorPage error={useRouteError()} />;
 }

@@ -1,12 +1,7 @@
 /**
- * The precedence rule between the household's policy and one browser's
- * cookie (spec 0007, ADR-0002). Pure — the domain rule itself, tested as
- * itself (AGENTS.md): a screen full of dots says the resolver answered
- * `true`, not that it answered for the right reason. The table is the
- * point: every policy is asked every question, so a rule quietly holding
- * for two of three values cannot pass — and the combination carrying the
- * feature's safety, *as last left* with nothing left, is one row of it
- * rather than a case someone remembered to add.
+ * Precedence between the household's policy and one browser's cookie (spec 0007, ADR-0002).
+ * The table below asks every policy every question, so a rule quietly holding for two of
+ * three values can't pass.
  */
 import { describe, expect, it } from "vitest";
 
@@ -20,7 +15,6 @@ import {
   type MaskingPolicy,
 } from "~/lib/masking";
 
-/** What a browser can arrive with: an answer, nothing, or noise. */
 const COOKIES = {
   masked: MASKED,
   unmasked: UNMASKED,
@@ -30,13 +24,8 @@ const COOKIES = {
 
 type CookieCase = keyof typeof COOKIES;
 
-/**
- * Every policy against every cookie, written as the answer a person would get.
- *
- * Read down a column: a recognised cookie gives the same answer under all three
- * policies, which is what makes the toggle work at all. Read across a row: the
- * policy only ever decides the cases where the browser has said nothing.
- */
+// column: a recognised cookie answers the same under all three policies (what makes the toggle work)
+// row: policy only decides when the browser has said nothing
 const EXPECTED: Record<MaskingPolicy, Record<CookieCase, boolean>> = {
   masked: { masked: true, unmasked: false, absent: true, unrecognised: true },
   unmasked: { masked: true, unmasked: false, absent: false, unrecognised: false },
@@ -56,17 +45,12 @@ describe("resolving whether a screen is masked", () => {
   }
 
   it("treats a browser that has never been toggled as masked, whatever it was told to remember", () => {
-    // The row above says this too, but it is stated again on its own because it
-    // is the one that fails safe: a new device, a cleared jar and a private
-    // window all arrive here, and every one of them must open masked rather
-    // than open on a stranger's balances. ADR-0002 records the argument.
+    // fail-safe case: new device, cleared jar, private window all land here. ADR-0002.
     expect(resolveMasked("as_last_left", undefined)).toBe(true);
   });
 
   it("takes the policy's answer rather than guessing when the cookie is nonsense", () => {
-    // A truncated or hand-edited cookie is not a vote. Reading it as anything
-    // other than "this browser has not answered" would let a corrupted value
-    // decide, and half the corrupted values decide "show the balances".
+    // a corrupted value isn't a vote; reading it as anything but "no answer" could show balances
     expect(resolveMasked("masked", "")).toBe(true);
     expect(resolveMasked("unmasked", "yes")).toBe(false);
   });
@@ -79,29 +63,20 @@ describe("the cookie both writers write", () => {
   });
 
   it("outlives the browser session under as-last-left, and not under either fixed policy", () => {
-    // This is what makes "on start" mean "a browser session nobody has toggled
-    // yet" with no timer anywhere. Under a fixed policy the cookie has to die
-    // with the session, or tomorrow's first visit would still be answering
-    // yesterday's toggle and the policy would never apply again.
+    // under a fixed policy the cookie must die with the session, else tomorrow answers yesterday's toggle
     expect(maskingCookie(true, "as_last_left")).toMatch(/max-age=\d+/i);
     expect(maskingCookie(true, "masked")).not.toMatch(/max-age/i);
     expect(maskingCookie(true, "unmasked")).not.toMatch(/max-age/i);
   });
 
   it("is scoped to the whole app and not sent across sites", () => {
-    // Path, because the toggle is in the chrome and every screen has to see it.
-    // SameSite, because a display preference has no business travelling on a
-    // cross-site request even though nothing it carries is a secret.
+    // Path: toggle is in the chrome, every screen must see it. SameSite: no reason to cross sites.
     expect(maskingCookie(true, "masked")).toContain("Path=/");
     expect(maskingCookie(true, "masked")).toMatch(/samesite=lax/i);
   });
 
   it("is not HttpOnly, because the script that owns the toggle has to write it", () => {
-    // Deliberate and load-bearing rather than an omission: the flip has to cost
-    // nothing on a dead network, which means the client writes this itself.
-    // ADR-0002 argues why that is correct — the cookie is a display preference
-    // and grants nothing; the session cookie is a separate thing and stays
-    // HttpOnly.
+    // deliberate: client writes it so the flip costs nothing on a dead network. ADR-0002.
     expect(maskingCookie(true, "masked")).not.toMatch(/httponly/i);
   });
 
@@ -124,9 +99,7 @@ describe("reading the cookie off a request", () => {
   });
 
   it("does not mistake a cookie whose name merely ends in its own", () => {
-    // `unmasked=1` contains `masked=1`. A substring match would read another
-    // cookie's value as this one's, and the failure would be silent and
-    // one-directional.
+    // "unmasked=1" contains "masked=1" — a substring match would silently misread it
     expect(readMaskingCookie(requestWith(`unmasked=${UNMASKED}`))).toBeUndefined();
   });
 });

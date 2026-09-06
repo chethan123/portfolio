@@ -1,12 +1,5 @@
-/**
- * The range-resolution math both routes' loaders read (spec 0008), including
- * the sampler's density rule since spec 0009 / ADR-0003.
- *
- * Pure — no Postgres and no render — for `masking.test.ts`'s reason: this is
- * the domain rule itself, `AGENTS.md` asks for a domain rule to be tested as
- * itself, and exhausting nine presets and their edge cases through
- * database-backed renders would be slow and would prove less.
- */
+// Range-resolution math both routes' loaders read (spec 0008), plus the sampler's density
+// rule (spec 0009/ADR-0003). Pure, no Postgres/render — this is the domain rule itself.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -39,8 +32,7 @@ const TODAY = "2026-08-26";
 describe("each preset's boundary against a fixed today", () => {
   const NO_DATA = { earliest: { positionSet: null }, surface: "household" as Surface, today: TODAY };
 
-  // 1D is excluded: it is the one preset whose boundary is not a calendar
-  // offset from today but the session the observation log last carried.
+  // 1D excluded — its boundary is the observation log's last session, not a calendar offset.
   const BOUNDARIES: Record<Exclude<RangeKey, "1d" | "all" | "custom">, string> = {
     "1w": "2026-08-19",
     "1m": "2026-07-26",
@@ -61,14 +53,12 @@ describe("each preset's boundary against a fixed today", () => {
   });
 
   it("rolls a month-end trailing boundary into the next month, rather than clamping", () => {
-    // 31 March minus one month: `Date` has no 31 February, so this is the
-    // accepted edge rather than a special case.
+    // 31 March minus a month: Date has no 31 February — accepted edge, not a special case.
     expect(resolveRange("1m", { ...NO_DATA, today: "2026-03-31" }).since).toBe("2026-03-03");
   });
 
   it("3M resolves as an ordinary, first-class preset", () => {
-    // Not dead code left over from the old four-option set: it appears in the
-    // vocabulary, and it resolves like every other calendar-offset preset.
+    // Not dead code from the old four-option set — a first-class preset like any other.
     expect(RANGES["3m"]).toEqual({ label: "3M" });
     expect(resolveRange("3m", NO_DATA).since).toBe("2026-05-26");
   });
@@ -84,9 +74,8 @@ describe("the per-surface data-source rule, applied to every preset", () => {
     for (const range of ["all", "5y", "1y"] as RangeKey[]) {
       const window = resolveRange(range, { today: TODAY, earliest: EARLIEST, surface: "household" });
 
-      // "All" is measured from the earlier date directly; the fixed presets'
-      // own boundary is unaffected, but the same earlier date is what the
-      // disabled rule below measures every one of them against.
+      // "All" measures from the earlier date; fixed presets' own boundaries are unaffected,
+      // but the disabled rule below measures every preset against that same earlier date.
       if (range === "all") expect(window.since).toBe(EARLIEST.manual);
     }
 
@@ -105,9 +94,8 @@ describe("the per-surface data-source rule, applied to every preset", () => {
     const household = resolveRange("all", { today: TODAY, earliest: empty, surface: "household" });
     const defaulted = resolveRange(DEFAULT_RANGE, { today: TODAY, earliest: empty, surface: "household" });
 
-    // The width matches the default preset's, but the identity does not: "All"
-    // never degrades into reporting itself as "1Y" the way an unusable custom
-    // span does below — it is a real, explicit selection either way.
+    // Width matches the default, but identity doesn't — "All" never degrades to reporting
+    // itself as "1Y", unlike an unusable custom span.
     expect(household.since).toBe(defaulted.since);
     expect(household.dates).toEqual(defaulted.dates);
     expect(household.range).toBe("all");
@@ -118,13 +106,12 @@ describe("the disabled-state rule", () => {
   const earliest = { positionSet: "2026-06-01" as const };
 
   it("disables a preset whose start falls before the surface's earliest date", () => {
-    // 5Y's boundary (2021-08-26) is well before an account eight months old.
+    // 5Y's boundary (2021-08-26) predates an 8-month-old account.
     expect(isRangeDisabled("5y", { today: TODAY, earliest, surface: "account" })).toBe(true);
   });
 
   it("does not disable a preset whose start lands exactly on the earliest date", () => {
-    // YTD opened on January 1st or 2nd: an account or household whose data
-    // starts that same day must show thin data, not a disabled control.
+    // YTD opens Jan 1st/2nd — data starting the same day shows thin, not disabled.
     expect(
       isRangeDisabled("ytd", { today: "2026-01-02", earliest: { positionSet: "2026-01-01" }, surface: "household" }),
     ).toBe(false);
@@ -146,11 +133,9 @@ describe("the disabled-state rule", () => {
   });
 
   it("disables nothing but 1D on an instance with no data at all", () => {
-    // The empty state renders instead of a chart, so this is academic for the
-    // date-bounded presets — but one must not read as disabled before there is
-    // anything to compare it against. 1D is the exception because it is not
-    // bounded by a date at all: with an empty observation log there is no
-    // session to draw, which is a different claim from "your history is short".
+    // Empty state renders instead of a chart for the date-bounded presets, so this is
+    // academic there — but 1D isn't date-bounded: no session in the log is a different
+    // claim from "history is short".
     const noData = { today: TODAY, earliest: { positionSet: null }, surface: "account" as Surface };
 
     for (const range of Object.keys(RANGES) as RangeKey[]) {
@@ -159,9 +144,8 @@ describe("the disabled-state rule", () => {
   });
 
   it("offers 1D once anything at all has been observed, however little", () => {
-    // One observation is not two points and the panel says so in words — but
-    // the chip is not the place to say it. Story 13 disables it only where the
-    // log is empty outright.
+    // One observation isn't two points (panel says so in words) — story 13 only disables
+    // the chip when the log is empty outright.
     const observed = { ...NO_DATA, session: "2026-08-26" };
 
     expect(isRangeDisabled("1d", observed)).toBe(false);
