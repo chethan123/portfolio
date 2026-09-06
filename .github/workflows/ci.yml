@@ -74,8 +74,9 @@ jobs:
       # An audit job is the last place to execute the code it is checking.
       - run: npm ci --ignore-scripts
 
-      # The only check that notices a pinned name+version republished with
-      # different contents. Everything in the lockfile is signed today.
+      # `npm ci` already refuses a tarball that misses the lockfile's SHA-512.
+      # This checks what a lockfile cannot: the registry's signature over each
+      # name+version+hash. Everything in the lockfile is signed today.
       - name: Verify registry signatures
         run: npm audit signatures
 
