@@ -2,7 +2,10 @@
 # in-process in `app`, but since ticket 06's cutover it no longer calls Yahoo
 # itself: it dials `worker` — the same image, reached over a socket in a
 # shared volume, and holding no credential of its own — for every price
-# fetch. The one scheduled
+# fetch, and `worker` in turn reaches Yahoo only through `egress-proxy`, which
+# admits a `CONNECT` to five hosts and checks the TLS server name inside the
+# tunnel against the host it was opened to — the worker's own network reaches
+# nothing else at all. The one scheduled
 # service is `dump`, argued in ADR-0009 — a dump that stops when the app is
 # down is worthless, and `pg_dump` belongs to the database's image. `caddy`
 # is the ingress front door and the only service that publishes a port;
@@ -39,14 +42,18 @@
 # Docker Compose 2.31.0 or newer is the second floor, beside it — but not, in
 # this release, a load-bearing one: `up` only recreates a network whose
 # definition drifted when it can compare against a config hash it recorded on
-# the live one, and nothing here asks it to. `egress-worker` is the one
-# network this release carries over from before it, and its definition is
-# byte-identical to ticket 05's — nothing to drift. The other five are
-# created from nothing: an existing install's implicit `default` bridge is
-# *removed* here, not redefined into `internal`. So no network in this
-# release makes the plain-bridge-to-`internal` transition this floor is
-# about, on an operator's box or in CI — an older Compose reconciles nothing
-# and reports success correctly either way. The floor stays declared anyway,
+# the live one, and nothing here asks it to. The five an upgrade already has —
+# `backend`, `caddy-app`, `caddy-gate`, `egress-gate` and `ingress` — keep the
+# definition they were created with, and the two this release brings are new
+# names, so neither kind is a drifted network. `egress-worker` — the one network
+# that used to carry over byte-identical from release to release — is
+# deleted outright by ticket 08 rather than turned `internal` in place
+# (Docker cannot flip a plain bridge to `internal` on a live network, which
+# is why `worker-proxy` below is a new name rather than a reuse). So no
+# network in this release makes the plain-bridge-to-`internal` transition
+# this floor is about, on an operator's box or in CI — an older Compose
+# reconciles nothing and reports success correctly either way. The floor
+# stays declared anyway,
 # because it is cheap and it will bite the first release that does turn a
 # live network `internal`, at which point an old Compose would leave it plain
 # and still report success — which is why docs/operating.md, Installing puts
@@ -314,8 +321,11 @@ services:
   # socket, same image as `app` with its `CMD` replaced by the worker
   # entrypoint. Since ticket 06's cutover `app` above dials this socket for
   # every price fetch instead of calling Yahoo in-process; no other container
-  # fetches a price. Not the only one with a route out, though — `gate` has
-  # one too, on `egress-gate`, for its token exchange with Google, and its
+  # fetches a price. Ticket 08 (`egress-proxy`, below) took the route out
+  # away from this container entirely: `worker` now reaches Yahoo only
+  # through that proxy, over the `HTTPS_PROXY` set below, and has no
+  # resolver and no default route of its own. `gate` still has a route out
+  # of its own, on `egress-gate`, for its token exchange with Google, and its
   # own comment below says so.
   worker:
     image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
@@ -327,17 +337,25 @@ services:
     logging: *container-logging
     # No `depends_on`: no database, no other service — startup needs nothing
     # to exist but the volume below, and Compose creates that itself.
-    #
-    # No `environment:` at all: no `DATABASE_URL`, no `PGPASSWORD`, no
-    # `MARKET_TIMEZONE`, and no `TZ` — the worker reads no clock, and the
-    # image already sets `TZ=UTC` (Dockerfile:94-96). `PRICE_WORKER_SOCKET`
-    # is a development-only knob (spec 0018 §3.3); this file wires it into
-    # neither service, so both `worker` and `app` run the fixed default path
-    # the healthcheck below also uses.
+    environment:
+      # Both the runtime's, never `server/config.ts`'s (spec 0018 §3.7,
+      # ticket 08): `server/egress-proxy.ts` reads no environment at all, and
+      # neither does this worker's own code — Node's `fetch`/undici is what
+      # consults these two, and only when `NODE_USE_ENV_PROXY` is exactly
+      # `1` (measured: unset or `0` routes direct). `app` sets neither — its
+      # calls to this worker travel the unix socket below, a path no proxy
+      # setting touches. Still no `DATABASE_URL`, no `PGPASSWORD`, no
+      # `MARKET_TIMEZONE`, and no `TZ` — the worker reads no clock, and the
+      # image already sets `TZ=UTC` (Dockerfile:94-96). `PRICE_WORKER_SOCKET`
+      # is a development-only knob (spec 0018 §3.3); this file wires it into
+      # neither service, so both `worker` and `app` run the fixed default
+      # path the healthcheck below also uses.
+      NODE_USE_ENV_PROXY: "1"
+      HTTPS_PROXY: http://egress-proxy:8888
     volumes:
       - price-worker-sock:/run/price-worker
     networks:
-      - egress-worker
+      - worker-proxy
     # Hardening copied from `app` above: no-new-privileges, cap_drop: ALL,
     # read_only; the image's `node` user (uid 1000, no `user:` line needed);
     # no `ports:` — the worker has no TCP listener to publish. Plus the
@@ -366,6 +384,59 @@ services:
         - node
         - -e
         - "const r=require('http').request({socketPath:'/run/price-worker/worker.sock',path:'/healthz',agent:false,timeout:5000},res=>process.exit(res.statusCode===200?0:1));r.on('error',()=>process.exit(1));r.on('timeout',()=>{r.destroy();process.exit(1)});r.end()"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # `worker`'s only way out — spec 0018 §3.7, ticket 08. A ~150-line
+  # `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`
+  # (server/egress-proxy.ts), admitting exactly the five Yahoo hosts
+  # `yahoo-finance2` 4.0.2 contacts, and only once the TLS ClientHello inside
+  # the tunnel names that same host — the module's own header carries the
+  # allowlist and the ordering argument (the `200` is written before the
+  # hello is ever read, so a mismatch fails at the TLS layer, not with a
+  # `403`). Same image as `app` and `worker` above, `CMD` replaced a third
+  # way. Yes, this service and the `egress-proxy` network below share a
+  # name — the ticket's own choice, not a typo here.
+  egress-proxy:
+    image: ghcr.io/chethan123/portfolio-app:${APP_VERSION:-1}
+    pull_policy: always
+    entrypoint: ["node", "./server/egress-proxy.ts"]
+    restart: unless-stopped
+    logging: *container-logging
+    # A compromised worker can flood this with refusals; still bounded by
+    # the same 30 MB *container-logging caps everything else at.
+    networks:
+      - worker-proxy
+      - egress-proxy
+    # Hardening identical to `worker`'s: no-new-privileges, cap_drop: ALL,
+    # read_only, the image's `node` user (uid 1000, no `user:` line needed),
+    # and the same bounds ticket 05 settled on for `worker` — this container
+    # is reachable from a compromised `worker` over `worker-proxy`, so it
+    # gets no more trust than the thing it fences. No `ports:`: nothing
+    # outside `worker-proxy` ever dials it, and the healthcheck below asks
+    # its own `:8888`, in-container.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    pids_limit: 64
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:size=64m
+    healthcheck:
+      # GET /healthz, not a bare connect: with all eight `maxConnections`
+      # slots held by stalled tunnels the accept queue still completes a TCP
+      # handshake, so only a request the HTTP server itself answers proves
+      # the proxy is not saturated — the same reasoning `worker`'s own
+      # healthcheck above is built on.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8888/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 15s
       timeout: 5s
       retries: 3
@@ -604,17 +675,18 @@ volumes:
 networks:
   # Every service above carries an explicit `networks:` list now; none is
   # left on the implicit `default` bridge. `enable_ipv6: false` is written on
-  # all six rather than left to the daemon's default, which an unset value
+  # all seven rather than left to the daemon's default, which an unset value
   # would hand off install to install.
   #
-  # `backend`, `caddy-app` and `caddy-gate` are `internal: true`: no default
-  # route, and the daemon drops traffic forwarded to or from any other
-  # network. Each also carries `gateway_mode_ipv4: isolated`, which closes
-  # the escape an internal bridge otherwise still keeps: without it, every
-  # container on the network gets an address on the host and can reach it —
-  # a route to whatever else the house binds on `0.0.0.0`, a reverse proxy,
-  # SSH, a resolver on `:53` — isolated or not. Docker Engine 28.0 is needed
-  # for `gateway_mode_ipv4: isolated` to take effect at all, fresh network or
+  # `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are
+  # `internal: true`: no default route, and the daemon drops traffic
+  # forwarded to or from any other network. Each also carries
+  # `gateway_mode_ipv4: isolated`, which closes the escape an internal
+  # bridge otherwise still keeps: without it, every container on the network
+  # gets an address on the host and can reach it — a route to whatever else
+  # the house binds on `0.0.0.0`, a reverse proxy, SSH, a resolver on `:53`
+  # — isolated or not. Docker Engine 28.0 is needed for
+  # `gateway_mode_ipv4: isolated` to take effect at all, fresh network or
   # existing one alike — 26 ignores the option silently, 27 refuses it
   # outright. Docker Compose 2.31.0 or newer is the separate floor for an
   # *existing* plain bridge specifically: only that Compose recreates one
@@ -634,18 +706,23 @@ networks:
   # Caddy. The split's real gain is narrower — removing the direct route to
   # `gate` — and that is the only claim made for it.
   #
-  # `egress-worker`, `egress-gate` and `ingress` are plain bridges: carrying
-  # a default route is the point of the first two, and the third is only
-  # where the published port lives. `worker` keeps `egress-worker`'s name
-  # from ticket 05 rather than move to a fresh one, so the network an
-  # existing install already has survives this upgrade rather than being
-  # replaced; it is `worker`'s only network, so `worker` shares no network
-  # at all with `app`, `gate` or `db` — unreachable from each by name and by
-  # IP, both asserted in scripts/smoke-test.sh. Not isolated outright: any
-  # container with a route to the host still reaches the host's *published*
-  # ports, so `worker` still reaches Caddy's `:80` — the app only through
-  # the gate, never `app:3000` or `gate:4180` directly — until ticket 08
-  # closes that path too.
+  # `worker-proxy` is `worker` and `egress-proxy`'s shared network, `worker`
+  # alone on it. Unlike the plain `egress-worker` bridge it replaces, it
+  # allocates no gateway either — closing the one path out of ticket 07's
+  # fence that release still left open: any container with a route to the
+  # host still reached the host's *published* ports, so `worker` reached
+  # Caddy's `:80` on `egress-worker` regardless of the gate. `worker`'s only
+  # way anywhere now is the `CONNECT` tunnel `egress-proxy` (the service)
+  # answers on this same network, and `worker` shares no network at all with
+  # `app`, `gate` or `db` — unreachable from each by name and by IP, both
+  # asserted in scripts/smoke-test.sh.
+  #
+  # `egress-proxy`, `egress-gate` and `ingress` are plain bridges: carrying a
+  # default route is the point of the first two, and the third is only where
+  # the published port lives. `egress-proxy` (the network — the service
+  # sharing its name is the ticket's own choice, spec 0018 §3.7) is
+  # `egress-proxy`'s one route to Yahoo's edge; `egress-gate` is `gate`'s,
+  # for its token exchange with Google.
   backend:
     internal: true
     enable_ipv6: false
@@ -661,7 +738,12 @@ networks:
     enable_ipv6: false
     driver_opts:
       com.docker.network.bridge.gateway_mode_ipv4: isolated
-  egress-worker:
+  worker-proxy:
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  egress-proxy:
     enable_ipv6: false
   egress-gate:
     enable_ipv6: false

@@ -21,8 +21,9 @@
 # `proxyDNS=false` while a sandbox has none (research §1.4), so `app` can
 # resolve public hostnames again, not merely reach the one address this
 # override exists for. And the gateway is a route to the *host*, so `app`
-# also reaches every host service bound on `0.0.0.0` — the identical residual
-# compose.yaml spells out for `worker`. What survives: requirement 3, the
+# also reaches every host service bound on `0.0.0.0` — the residual the worker
+# had until `egress-proxy` took its route away, reappearing here for `app`
+# instead, and for the same reason: a plain bridge has a gateway. What survives: requirement 3, the
 # worker still holds no credential to read anything with — this file gives it
 # neither a network nor a variable — and requirement 5, the worker still
 # shares no network with `app` or `gate`.

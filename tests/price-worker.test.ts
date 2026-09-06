@@ -1008,6 +1008,76 @@ describe("mapping a provider failure to a status", () => {
     expect((res.json as { error: string }).error).toBe("fetch failed: ECONNREFUSED");
   });
 
+  it("keeps the TLS wording when the proxy tears a tunnel down after answering it", async () => {
+    // The third signature the operator guide quotes, and the only one whose
+    // cause is an ordinary `ECONNRESET`. Measured against a real `fetch`
+    // behind `NODE_USE_ENV_PROXY` through a proxy that answers `200` and then
+    // destroys the socket — which is exactly what `server/egress-proxy.ts`
+    // does when the ClientHello's server name does not match the host the
+    // tunnel was opened to, the `200` being already written by then. Taking
+    // `.code` here would log `fetch failed: ECONNRESET`, which reads like any
+    // dropped connection and loses the one word — TLS — that says the fence
+    // fired rather than the network wobbling.
+    const quote = vi.fn(async () => {
+      const cause = new Error(
+        "Client network socket disconnected before secure TLS connection was established",
+      ) as NodeJS.ErrnoException;
+      cause.code = "ECONNRESET";
+      throw new Error("fetch failed", { cause });
+    });
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+    expect(res.status).toBe(502);
+    expect((res.json as { error: string }).error).toBe(
+      "fetch failed: Client network socket disconnected before secure TLS connection was established",
+    );
+  });
+
+  it("prefers a cause's own message over its bare code, so a DNS failure keeps the hostname", async () => {
+    // Measured against a real `fetch` behind `NODE_USE_ENV_PROXY` resolving a
+    // bad hostname: `cause` is a genuine `Error`, `cause.code` is the string
+    // "ENOTFOUND" and `cause.message` already carries the code *and* the
+    // host. Picking `.code` here (ticket 08's bug) answers `fetch failed:
+    // ENOTFOUND` — true, and useless once more than one host is in play.
+    const quote = vi.fn(async () => {
+      const cause = new Error("getaddrinfo ENOTFOUND egress-proxy") as NodeJS.ErrnoException;
+      cause.code = "ENOTFOUND";
+      throw new Error("fetch failed", { cause });
+    });
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+    expect(res.status).toBe(502);
+    expect((res.json as { error: string }).error).toBe("fetch failed: getaddrinfo ENOTFOUND egress-proxy");
+  });
+
+  it("walks one level into a nested cause for the text an unhelpful outer message hides", async () => {
+    // Measured against a real `fetch` through a local CONNECT proxy that
+    // refuses the tunnel: `cause` is a `DOMException` whose own `message`
+    // ("Request was cancelled.") names nothing and whose `code` is the
+    // *number* `0` — {@link detailFor} takes neither. The informative text
+    // sits one level deeper, at `cause.cause.message`.
+    const quote = vi.fn(async () => {
+      const nested = new Error("Proxy response (502) !== 200 when HTTP Tunneling") as NodeJS.ErrnoException;
+      nested.code = "UND_ERR_ABORTED";
+      const cause = new Error("Request was cancelled.") as Error & { code: number; cause: unknown };
+      cause.code = 0;
+      cause.cause = nested;
+      throw new Error("fetch failed", { cause });
+    });
+    await start(fakeYahoo({ quote }));
+
+    const res = await requestJson(currentSocketPath, "POST", "/quotes", { symbols: ["VTI"] });
+
+    expect(res.status).toBe(502);
+    expect((res.json as { error: string }).error).toBe(
+      "fetch failed: Proxy response (502) !== 200 when HTTP Tunneling",
+    );
+  });
+
   it("caps a causeless provider error's text at 1000 characters", async () => {
     // 1000 is `ERROR_TEXT_LIMIT` in server/price-worker.ts.
     const longMessage = "x".repeat(2000);

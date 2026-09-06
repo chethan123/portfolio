@@ -68,7 +68,7 @@ empty_dumps_dir() {
 
 cleanup() {
   log "Tearing down"
-  docker compose logs --no-color app db caddy gate dump worker 2>&1 | tail -80 || true
+  docker compose logs --no-color app db caddy gate dump worker egress-proxy 2>&1 | tail -80 || true
   docker compose down -v --remove-orphans || true
   empty_db_dir || true
   empty_dumps_dir || true
@@ -423,6 +423,11 @@ printf 'app port not published\n'
 [[ "$(published_ports worker)" != *HostPort* ]] || fail "the worker port is published to the host"
 printf 'worker port not published\n'
 
+# The proxy is reached only from `worker`, over `worker-proxy` — nothing
+# outside this Compose project has any business dialing :8888.
+[[ "$(published_ports egress-proxy)" != *HostPort* ]] || fail "the egress-proxy port is published to the host"
+printf 'egress-proxy port not published\n'
+
 # The gate believes X-Forwarded-* from whatever reaches it, so a published
 # port here would let a caller walk past the gate asserting its own identity.
 [[ "$(published_ports gate)" != *HostPort* ]] || fail "the gate port is published to the host"
@@ -482,6 +487,7 @@ expect_caps app "" 0000000000000000
 expect_caps db "" 0000000000000000
 expect_caps dump "" 0000000000000000
 expect_caps worker "" 0000000000000000
+expect_caps egress-proxy "" 0000000000000000
 # Exec, not binding: /usr/bin/caddy carries file capability
 # cap_net_bind_service=ep and the kernel refuses to exec it from an empty
 # bounding set — compose.yaml has the transcript.
@@ -502,7 +508,7 @@ expect_no_new_privileges() {
   printf '%s: no-new-privileges, NoNewPrivs=%s at PID 1\n' "$service" "$applied"
 }
 
-for service in app db caddy gate dump worker; do
+for service in app db caddy gate dump worker egress-proxy; do
   expect_no_new_privileges "$service"
 done
 
@@ -518,6 +524,7 @@ expect_uid() {
 
 expect_uid app 1000
 expect_uid worker 1000
+expect_uid egress-proxy 1000
 expect_uid db 70
 expect_uid caddy 65532
 expect_uid gate 0
@@ -539,7 +546,7 @@ expect_read_only_root() {
   printf '%s: / is read-only\n' "$service"
 }
 
-for service in app db caddy gate dump worker; do
+for service in app db caddy gate dump worker egress-proxy; do
   expect_read_only_root "$service"
 done
 
@@ -548,17 +555,17 @@ done
 # socket's mode, is what keeps a compromised sidecar from touching the
 # worker's socket — only app and worker may mount price-worker-sock at all.
 log "Checking the price-worker-sock volume fence"
-for service in db dump gate caddy; do
+for service in db dump gate caddy egress-proxy; do
   mount_names="$(docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' \
     "$(docker compose ps -q "$service")")" ||
     fail "could not inspect ${service}'s mounts"
   [[ "$mount_names" != *"price-worker-sock"* ]] ||
     fail "${service} mounts price-worker-sock, which only app and worker may: ${mount_names}"
 done
-printf 'db, dump, gate, caddy do not mount price-worker-sock\n'
+printf 'db, dump, gate, caddy, egress-proxy do not mount price-worker-sock\n'
 
 # The mount set only says who is on the volume, not what they may do with it.
-# `app` mounts it `:ro` (compose.yaml:281) — deleting those two characters
+# `app` mounts it `:ro` (compose.yaml:288) — deleting those two characters
 # leaves every check above green, because nothing until now reads app's own
 # mount. `.RW` is Docker's own name for the field; false is a read-only mount.
 log "Checking app's price-worker-sock mount is read-only"
@@ -569,24 +576,33 @@ app_sock_rw="$(docker inspect --format \
   fail "app mounts price-worker-sock read-write (RW=${app_sock_rw:-absent}); it may only connect"
 printf 'app: price-worker-sock is read-only\n'
 
-log "Checking the worker's resource bounds"
-resource_line="$(docker inspect --format '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' \
-  "$(docker compose ps -q worker)")" || fail "could not inspect the worker's resource limits"
-worker_pids="${resource_line%% *}"
-worker_mem="${resource_line##* }"
+log "Checking resource bounds"
 # Exact, not "positive": compose.yaml sets pids_limit: 64 and mem_limit: 256m
-# (268435456 bytes) precisely to stop a fork bomb or a memory balloon, and
-# both of those still report as positive numbers.
-[[ "$worker_pids" == "64" ]] ||
-  fail "worker PidsLimit is '${worker_pids}', expected 64"
-[[ "$worker_mem" == "268435456" ]] ||
-  fail "worker Memory is '${worker_mem}', expected 268435456 (256m)"
-printf 'worker: PidsLimit=%s Memory=%s\n' "$worker_pids" "$worker_mem"
+# (268435456 bytes) on `worker`, precisely to stop a fork bomb or a memory
+# balloon, and both of those still report as positive numbers. `egress-proxy`
+# carries the identical pair — ticket 08 gives it the same bounds ticket 05
+# settled on for `worker` — so one helper, not two copy-pasted blocks.
+expect_resource_bounds() {
+  local service="$1" resource_line pids mem
+  resource_line="$(docker inspect --format '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' \
+    "$(docker compose ps -q "$service")")" || fail "could not inspect ${service}'s resource limits"
+  pids="${resource_line%% *}"
+  mem="${resource_line##* }"
+  [[ "$pids" == "64" ]] ||
+    fail "${service} PidsLimit is '${pids}', expected 64"
+  [[ "$mem" == "268435456" ]] ||
+    fail "${service} Memory is '${mem}', expected 268435456 (256m)"
+  printf '%s: PidsLimit=%s Memory=%s\n' "$service" "$pids" "$mem"
+}
 
-# compose.yaml:329-334 spends six lines arguing the worker gets no
-# `environment:` at all — no DATABASE_URL, no PGPASSWORD — because the
-# network fence below does not cover an external Postgres reachable over the
-# open internet. Asserted here so adding DATABASE_URL "for convenience" fails
+for service in worker egress-proxy; do
+  expect_resource_bounds "$service"
+done
+
+# compose.yaml:347 argues the worker's two proxy variables (`environment:`
+# above them) still stop short of DATABASE_URL or PGPASSWORD — the network
+# fence below does not cover an external Postgres reachable over the open
+# internet. Asserted here so adding DATABASE_URL "for convenience" fails
 # loudly instead of only ever passing.
 log "Checking the worker carries no DATABASE_URL"
 worker_env="$(docker inspect --format '{{json .Config.Env}}' "$(docker compose ps -q worker)")" ||
@@ -634,7 +650,7 @@ for option in mode=770 uid=1000 gid=1000; do
 done
 printf 'worker: %s\n' "$mounts_line"
 
-# --- app, db and dump have no route out ----------------------------------------
+# --- app, db, dump and worker have no route out --------------------------------
 # `backend`, `caddy-app` and `caddy-gate` are `internal: true`: no default
 # route at all, so none of these three can reach the internet by any path,
 # not merely a blocked one. `dump` is not a smaller case of `app` and `db` to
@@ -642,7 +658,12 @@ printf 'worker: %s\n' "$mounts_line"
 # writes, requirement 1 names it beside them, and it runs the identical
 # `postgres:17-alpine` image as `db` (both `image: *postgres-image`), so the
 # same three commands against a third service cost nothing extra to run.
-log "Checking app, db and dump have no route out"
+# `worker` joins them as of ticket 08: `worker-proxy` is internal too now, so
+# the worker has no default route either, and this loop proves it twice over —
+# the DNS probe below and `/proc/net/route`, the second being the stronger of
+# the two since a resolver can be absent for reasons other than the topology.
+# Free, since the loop already exists.
+log "Checking app, db, dump and worker have no route out"
 
 # `db` and `dump` share an image with no node, so their request is busybox's
 # own `wget`; `app` runs `node:24-alpine` (Dockerfile:89), whose busybox also
@@ -709,22 +730,31 @@ expect_no_egress() {
   printf '%s: no default route in /proc/net/route\n' "$service"
 }
 
-for service in app db dump; do
+# `worker` joins the three this release: until now it sat on a plain bridge and
+# was the one container that deliberately kept a route out. It reaches Yahoo
+# through `egress-proxy` now, so every hostname it needs travels inside a
+# `CONNECT` line and the proxy does the resolving — the worker itself has no
+# resolver and no default route, and a lookup that succeeded here would mean it
+# still has a path to one that is not the proxy.
+for service in app db dump worker; do
   expect_no_egress "$service"
 done
 
 # --- The isolation is read from the daemon's record, never provoked -----------
-# `backend`, `caddy-app` and `caddy-gate` share the property under test, so
-# one loop, not three copy-pasted checks. A connect would only prove the
-# negative for the address it happened to pick, and would fall back to
-# localhost and pass for the wrong reason if the engine ignored `isolated`
-# and allocated a gateway anyway — the case this exists to catch. Read
-# instead from the daemon's own IPAM record: under `isolated`, no gateway
-# address is allocated *at all*, so the field is empty on an engine that
-# honours it, and populated on one that silently ignores it (Engine 26, the
-# floor above).
+# `backend`, `caddy-app`, `caddy-gate` and, since ticket 08, `worker-proxy`
+# share the property under test, so one loop, not four copy-pasted checks. A
+# connect would only prove the negative for the address it happened to pick,
+# and would fall back to localhost and pass for the wrong reason if the
+# engine ignored `isolated` and allocated a gateway anyway — the case this
+# exists to catch. Read instead from the daemon's own IPAM record: under
+# `isolated`, no gateway address is allocated *at all*, so the field is
+# empty on an engine that honours it, and populated on one that silently
+# ignores it (Engine 26, the floor above). This is also 08's own proof that
+# `worker-proxy` replaced `egress-worker` rather than merely adding beside
+# it: `egress-worker` was a plain bridge and would have failed this loop's
+# first assertion outright.
 log "Checking the isolated networks were created with no gateway"
-for net in backend caddy-app caddy-gate; do
+for net in backend caddy-app caddy-gate worker-proxy; do
   gateway="$(docker network inspect \
     -f '{{if (index .IPAM.Config 0).Gateway}}{{(index .IPAM.Config 0).Gateway}}{{end}}' \
     "portfolio_${net}")" || fail "could not inspect the ${net} network"
@@ -745,9 +775,9 @@ for net in backend caddy-app caddy-gate; do
 done
 
 # --- The worker shares no network with app, gate or db ------------------------
-# egress-worker is worker's only network; app is on backend and caddy-app,
+# worker-proxy is worker's only network; app is on backend and caddy-app,
 # gate is on caddy-gate and egress-gate, db is on backend alone — none of
-# them egress-worker. A connect to an unroutable address waits on the
+# them worker-proxy. A connect to an unroutable address waits on the
 # kernel's default (minutes), so every attempt carries its own 3s timeout —
 # and never `ping`, since NET_RAW is dropped (cap_drop: ALL).
 log "Checking the worker cannot reach app, gate or db"
@@ -811,43 +841,159 @@ probe_all_ips gate 4180 "gate"
 unreachable_from_worker db 5432 "db by name"
 probe_all_ips db 5432 "db"
 
-# DNS still works — until 08's allowlist.
-docker compose exec -T worker timeout 5 nslookup example.com >/dev/null ||
-  fail "worker cannot resolve DNS (nslookup example.com)"
-printf 'worker: DNS still resolves\n'
 
-# The residual, asserted rather than left implicit: `egress-worker` is a plain
-# bridge, so unlike the three isolated networks above it *does* get a gateway,
-# and that address is the host — through which `worker` reaches every host
-# service bound on `0.0.0.0`, `caddy`'s published `:80` among them (research
-# §1.5). That is the one path out of the fence this release does not close,
-# and 08's allowlist is what closes it. Asserting it *succeeds* is what makes
-# 08's own assertion mean something: without this, the check that flips to
-# "refused" could pass on a release where the path never existed, and nobody
-# would learn that 08 had done anything.
-gateway="$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' portfolio_egress-worker)" ||
-  fail "could not read the egress-worker gateway"
-[[ -n "$gateway" ]] ||
-  fail "egress-worker has no gateway — this network is meant to be a plain bridge"
-if docker compose exec -T worker node -e '
-  const net = require("node:net");
-  const [host] = process.argv.slice(1);
-  const socket = net.connect({ host, port: 80 });
-  let done = false;
-  const finish = (code) => {
-    if (done) return;
-    done = true;
-    socket.destroy();
-    process.exit(code);
-  };
-  socket.setTimeout(3000);
-  socket.once("connect", () => finish(0));
-  socket.once("timeout", () => finish(1));
-  socket.once("error", () => finish(1));
-' "$gateway"; then
-  printf 'worker: reaches the egress-worker gateway on :80 (%s) — the residual, until 08\n' "$gateway"
+# --- The worker reaches Yahoo only through the proxy ---------------------------
+# Ticket 08's whole point: `NODE_USE_ENV_PROXY` and `HTTPS_PROXY`
+# (compose.yaml, `worker`'s `environment:`) are what route every price fetch
+# through `egress-proxy`, over `worker-proxy` — the topology checks above
+# prove the wiring, this proves the proxy actually forwards allowed traffic.
+# Best-effort: a CI runner with no route to the real internet cannot
+# exercise Yahoo itself, and the 403, the 405, the `/healthz` 200 and the
+# stopped-proxy case below prove the same control without needing Yahoo at
+# all.
+log "Checking the worker reaches Yahoo through the proxy"
+yahoo_reachable=true
+yahoo_fetch_output="$(docker compose exec -T worker node -e '
+  fetch("https://query2.finance.yahoo.com/", { signal: AbortSignal.timeout(10000) })
+    .then((r) => { console.log(r.status); process.exit(0); })
+    .catch((e) => { console.error(String((e && e.message) || e)); process.exit(1); });
+' 2>&1)" || yahoo_reachable=false
+if [[ "$yahoo_reachable" == true ]]; then
+  printf 'worker: fetch of query2.finance.yahoo.com through the proxy -> HTTP %s\n' "$yahoo_fetch_output"
 else
-  fail "worker cannot reach the egress-worker gateway ${gateway}:80 — this release does not close that path, so something else changed"
+  printf 'SKIPPED (no route to the real internet from this runner): worker fetch of query2.finance.yahoo.com through the proxy — %s\n' "$yahoo_fetch_output"
+fi
+
+# --- The network is the property, not the flag ---------------------------------
+# `NODE_USE_ENV_PROXY` and `HTTPS_PROXY` stay set on `worker` throughout this
+# check — stopping `egress-proxy` removes the only thing they point at, so a
+# failure here proves the topology, not the runtime flag, is what the
+# worker's egress actually depends on. Needs no route to the real internet:
+# the connection to the proxy itself is what fails.
+log "Checking the fetch fails while egress-proxy is stopped"
+docker compose stop egress-proxy >/dev/null || fail "could not stop egress-proxy"
+# Exit 1 means the fetch itself failed, which is the assertion. Anything else —
+# 127 for a missing applet, or `docker compose exec` never starting at all —
+# would satisfy a bare `if` and read as proof, which is the shape
+# `expect_no_egress` above was written to avoid. Distinguished here the same way.
+stopped_status=0
+stopped_output="$(docker compose exec -T worker node -e '
+  fetch("https://query2.finance.yahoo.com/", { signal: AbortSignal.timeout(10000) })
+    .then(() => process.exit(0))
+    .catch(() => process.exit(1));
+' 2>&1)" || stopped_status=$?
+((stopped_status != 0)) ||
+  fail "worker reached Yahoo through the proxy while egress-proxy was stopped: ${stopped_output}"
+((stopped_status == 1)) ||
+  fail "could not test the stopped proxy from worker (exit ${stopped_status}): ${stopped_output}"
+printf 'worker: fetch through the proxy fails while egress-proxy is stopped\n'
+docker compose start egress-proxy >/dev/null || fail "could not restart egress-proxy"
+wait_for_healthy egress-proxy
+
+# --- The proxy: the allowlist, /healthz, and the negative path ------------------
+# All three from `worker` — `worker-proxy` is internal, so the proxy is
+# reachable only from containers on it, never from this runner directly.
+log "Checking the proxy refuses a CONNECT to a host off the allowlist"
+# mail.yahoo.com resolves under the same Yahoo edge as the allowed hosts
+# (research note §3.1, docs/specs/price-worker/08-the-egress-allowlist.md)
+# but is not itself on the allowlist — a 403 here is the allowlist actually
+# gating by name, not by where the bytes would end up.
+# Needs no route to the real internet: the allowlist check runs before
+# anything is dialed upstream.
+connect_status="$(docker compose exec -T worker node -e '
+  const net = require("node:net");
+  const socket = net.connect({ host: "egress-proxy", port: 8888 }, () => {
+    socket.write("CONNECT mail.yahoo.com:443 HTTP/1.1\r\nHost: mail.yahoo.com:443\r\n\r\n");
+  });
+  let buf = "";
+  socket.setTimeout(5000, () => { socket.destroy(); process.exit(1); });
+  socket.on("data", (d) => {
+    buf += d.toString("latin1");
+    const m = buf.match(/^HTTP\/\d\.\d (\d+)/);
+    if (m) { process.stdout.write(m[1]); socket.destroy(); process.exit(0); }
+  });
+  socket.on("error", () => process.exit(1));
+')" || fail "could not reach the proxy to test a disallowed CONNECT"
+[[ "$connect_status" == "403" ]] ||
+  fail "CONNECT mail.yahoo.com:443 through the proxy returned '${connect_status}', expected 403"
+printf 'proxy: CONNECT to a disallowed host -> %s\n' "$connect_status"
+
+log "Checking the proxy's own /healthz"
+healthz_status="$(docker compose exec -T worker node -e '
+  const http = require("node:http");
+  const req = http.request(
+    { host: "egress-proxy", port: 8888, path: "/healthz", method: "GET" },
+    (res) => { res.resume(); console.log(res.statusCode); }
+  );
+  req.setTimeout(5000, () => { req.destroy(); process.exit(1); });
+  req.on("error", () => process.exit(1));
+  req.end();
+')" || fail "could not reach the proxy's /healthz"
+[[ "$healthz_status" == "200" ]] ||
+  fail "GET /healthz on the proxy returned '${healthz_status}', expected 200"
+printf 'proxy: GET /healthz -> %s\n' "$healthz_status"
+
+log "Checking the proxy refuses anything but CONNECT and /healthz"
+other_status="$(docker compose exec -T worker node -e '
+  const http = require("node:http");
+  const req = http.request(
+    { host: "egress-proxy", port: 8888, path: "/", method: "GET" },
+    (res) => { res.resume(); console.log(res.statusCode); }
+  );
+  req.setTimeout(5000, () => { req.destroy(); process.exit(1); });
+  req.on("error", () => process.exit(1));
+  req.end();
+')" || fail "could not reach the proxy for the negative-path check"
+[[ "$other_status" == "405" ]] ||
+  fail "GET / on the proxy returned '${other_status}', expected 405"
+printf 'proxy: GET / -> %s\n' "$other_status"
+
+if [[ "$yahoo_reachable" == true ]]; then
+  log "Checking a mismatched server name tears down the tunnel, not a 403"
+  # The one hard sequence (server/egress-proxy.ts's own header): the 200 is
+  # written before the ClientHello is ever read, so a mismatch cannot be
+  # answered 403 — the client sees a TLS failure instead, since the 200 is
+  # already on the wire. Needs a real tunnel to finance.yahoo.com to reach
+  # that point, so it shares the fetch check's skip above.
+  if docker compose exec -T worker node -e '
+    const net = require("node:net");
+    const tls = require("node:tls");
+    const raw = net.connect({ host: "egress-proxy", port: 8888 });
+    raw.setTimeout(10000, () => { raw.destroy(); process.exit(1); });
+    raw.once("connect", () => {
+      raw.write("CONNECT finance.yahoo.com:443 HTTP/1.1\r\nHost: finance.yahoo.com:443\r\n\r\n");
+    });
+    // A proxy that closes before writing a status must fail this check, not
+    // pass it. Measured, the raw 10 s timeout above does catch that today —
+    // but incidentally: nothing here says an early close is a failure, so
+    // lengthening or dropping that timeout would turn a security assertion
+    // into one that passes when the tunnel it is asserting about never
+    // happened. `answered` makes it deliberate, and fast.
+    let answered = false;
+    const closedEarly = () => { if (!answered) process.exit(1); };
+    raw.once("end", closedEarly);
+    raw.once("close", closedEarly);
+    raw.once("data", (head) => {
+      answered = true;
+      if (!/^HTTP\/1\.[01] 200/.test(head.toString("latin1"))) { process.exit(1); return; }
+      const tlsSocket = tls.connect({
+        socket: raw,
+        servername: "mail.yahoo.com",
+        rejectUnauthorized: false,
+      });
+      tlsSocket.setTimeout(5000, () => { tlsSocket.destroy(); process.exit(1); });
+      tlsSocket.once("secureConnect", () => { tlsSocket.destroy(); process.exit(1); });
+      tlsSocket.once("error", () => process.exit(0));
+      tlsSocket.once("close", () => process.exit(0));
+    });
+    raw.once("error", () => process.exit(1));
+  '; then
+    printf 'proxy: CONNECT finance.yahoo.com + mismatched server_name -> torn down, not 403\n'
+  else
+    fail "a CONNECT finance.yahoo.com:443 tunnel with server_name=mail.yahoo.com was not torn down"
+  fi
+else
+  printf 'SKIPPED (no route to the real internet from this runner): server-name mismatch teardown\n'
 fi
 
 # The capability's effect, not its declaration: read as the sidecar's own uid
