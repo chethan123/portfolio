@@ -27,6 +27,18 @@
  * rule of its own about what a valid assertion is, matching every other
  * route's "translate a form, render what comes back."
  *
+ * **A card, not a page.** The screen renders one `.lock-card` — a `.panel`
+ * carrying a mark, a heading, the button and a reserved message region —
+ * centred in the viewport by `.app-main--lock` (`app/root.tsx`'s bare shell,
+ * `app/app.css`). It carries no `.page-header`: a 48px display title above a
+ * rule drawn across a 1216px column belongs to a screen someone navigates
+ * around, and this one is left within seconds of arriving at it. Every
+ * sentence it can print lands in that one region, reserved at two lines'
+ * height, so a dismissal or a refusal never moves the button out from under a
+ * finger already travelling toward it. What the screen *says* is untouched:
+ * `CONTEXT.md`'s vocabulary and the sentences ticket 04 settled are still the
+ * copy, verbatim — only where they sit has changed.
+ *
  * **The client-only seam, and what proves it.** This file and
  * `unlock-ceremony.ts` both avoid a module-scope import of
  * `@simplewebauthn/browser` — every reference to it is a dynamic `import()`
@@ -86,6 +98,7 @@
 import { useEffect, useRef, useState } from "react";
 import { redirect, useRevalidator, useSubmit } from "react-router";
 
+import { LockIcon, SpinnerIcon } from "~/components/icons";
 import { FORM_ERROR, ValidationError, formFields } from "~/lib/input.server";
 import { RETURN_PARAM } from "~/lib/lock";
 import { isLocked, lockCookie, readGrant, readLockCookie, unlockOptions, verifyUnlock } from "~/lib/lock.server";
@@ -235,6 +248,29 @@ const NO_CEREMONY_MESSAGE = `This browser cannot run the passkey check. Try ${OT
 const NOSCRIPT_MESSAGE = `This browser has scripting turned off, and unlocking needs it. Turn scripting on, or try ${OTHER_RECOVERIES}.`;
 
 /**
+ * Shown while a check is actually in flight. The button dims and the arc
+ * turns, but the dim is the shared `.button:disabled`, which
+ * `docs/specs/lock-hardening/05` keeps deliberately ambiguous between
+ * "refused" and "working" — so neither mark says which of the two this is.
+ * On a phone the provider's own sheet covers the button outright, and this
+ * line is the whole signal in the moment after it is dismissed while the
+ * challenge is being refreshed and a press would still be turned away.
+ * `role="status"` and not `role="alert"`: nothing has gone wrong here, and
+ * interrupting a reader mid-prompt to tell them so would be its own small
+ * refusal. Extracted for the same reason {@link DismissedNote} is — so that
+ * dropping it fails a direct render assertion rather than a phase this suite
+ * has no browser to reach.
+ */
+function WaitingNote({ phase }: { phase: Phase }) {
+  if (phase !== "confirming") return null;
+  return (
+    <p className="field-note" role="status">
+      Waiting for your passkey…
+    </p>
+  );
+}
+
+/**
  * The note shown once a prompt is dismissed or times out — the screen stays
  * exactly as usable as before, because neither is a refusal (this file's own
  * header on `unlock-ceremony.ts`'s finding). Extracted so a mutation dropping
@@ -285,13 +321,17 @@ function UnlockControl({
     return <p className="empty-note">{NO_CEREMONY_MESSAGE}</p>;
   }
 
+  // The one condition, named once and used twice: what makes the button refuse
+  // a press is exactly what makes it worth saying that something is happening.
+  // The arc is the app's existing spinner (`.lock-spinner`, sharing
+  // `refresh-spin` and its reduced-motion opt-out with the refresh control),
+  // not a second one invented here; `.button--block` because a lone action in
+  // a 420px card has no reason to be narrower than the card.
+  const busy = phase === "confirming" || revalidatorState !== "idle";
+
   return (
-    <button
-      type="button"
-      className="button"
-      onClick={onUnlock}
-      disabled={phase === "confirming" || revalidatorState !== "idle"}
-    >
+    <button type="button" className="button button--block" onClick={onUnlock} disabled={busy}>
+      {busy ? <SpinnerIcon className="lock-spinner" /> : null}
       Unlock
     </button>
   );
@@ -479,25 +519,31 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
   const refusal = visibleRefusal(phase, actionData?.formError ?? null, clientMessage);
 
   return (
-    <section className="page">
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">Locked</h1>
-          <p className="page-subtitle">
-            This browser is locked. Unlocking uses a passkey — this device's own provider, or
-            another device this browser offers.
-          </p>
-        </div>
-      </header>
+    <section className="panel lock-card">
+      <span className="lock-mark">
+        <LockIcon />
+      </span>
 
-      <section className="panel">
-        <div className="panel-body panel-body--empty">
-          <UnlockControl
-            supported={supported}
-            phase={phase}
-            revalidatorState={revalidator.state}
-            onUnlock={handleUnlock}
-          />
+      <div className="lock-heading">
+        <h1 className="lock-title">Locked</h1>
+        <p className="lock-lede">
+          This browser is locked. Unlocking uses a passkey — this device's own provider, or
+          another device this browser offers.
+        </p>
+      </div>
+
+      <div className="lock-actions">
+        <UnlockControl
+          supported={supported}
+          phase={phase}
+          revalidatorState={revalidator.state}
+          onUnlock={handleUnlock}
+        />
+
+        {/* One region for every sentence this screen can print, held open at
+            two lines whether or not it has one — see `.lock-message`. */}
+        <div className="lock-message">
+          <WaitingNote phase={phase} />
 
           <DismissedNote phase={phase} />
 
@@ -515,7 +561,7 @@ export default function Unlock({ loaderData, actionData }: Route.ComponentProps)
             <p className="empty-note">{NOSCRIPT_MESSAGE}</p>
           </noscript>
         </div>
-      </section>
+      </div>
     </section>
   );
 }
@@ -526,6 +572,7 @@ export {
   shouldRunCeremony,
   UnlockControl,
   DismissedNote,
+  WaitingNote,
   visibleRefusal,
   NO_CEREMONY_MESSAGE,
   NOSCRIPT_MESSAGE,

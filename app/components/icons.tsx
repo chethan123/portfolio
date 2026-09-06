@@ -253,6 +253,18 @@ export function MaskedIcon(props: IconProps) {
   );
 }
 
+/** The busy mark: one open arc, drawn to be turned by `refresh-spin`
+ * (app.css). Deliberately not `RefreshIcon` with its arrowheads — those say
+ * "fetch this again", which is a thing the reader asked for, where this says
+ * only "this control is working", which is a thing they are waiting on. */
+export function SpinnerIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5" />
+    </Icon>
+  );
+}
+
 /** "Lock now" (ticket 06): a closed padlock, its shackle drawn shut rather
  * than open — the one direction this control ever offers. */
 export function LockIcon(props: IconProps) {

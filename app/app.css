@@ -507,6 +507,24 @@ a {
   gap: var(--space-lg);
 }
 
+/* The unlock screen is the one page that is not a document: no header, no
+ * panels down the column, one card carrying one control
+ * (`app/routes/unlock.tsx`). So it centres in the viewport instead of starting
+ * at the top of the 1280px column every other screen shares — still
+ * `.app-main`, because the bare shell in `app/root.tsx` reuses that column
+ * rather than inventing a second one, and this only changes where its single
+ * child sits inside it. `100dvh` follows `100vh` rather than replacing it: a
+ * phone's address bar makes `vh` overshoot the visible height, and that
+ * overshoot is exactly what would push the only button on the screen below
+ * the fold. */
+.app-main--lock {
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: none;
+  align-items: center;
+  justify-content: center;
+}
+
 /* The mobile top bar and bottom bar exist only below 1024px; the rail is what
  * carries the brand and the nav above it. */
 .app-topbar,
@@ -2338,6 +2356,96 @@ code {
   gap: var(--space-sm);
 }
 
+/* --- The unlock screen --------------------------------------------------- */
+
+/* A card rather than a page (`app/routes/unlock.tsx`). It is a `.panel` first,
+ * so ground, hairline, radius and the dark-mode flatness all arrive from
+ * there; this adds only the measure and the centred stack. 420px is where the
+ * lede breaks into four short lines instead of two long ones, and it is narrow
+ * enough that nothing printed inside needs a measure of its own —
+ * `.form-error`'s 60ch box below exists for sentences with no panel around
+ * them, and every sentence here has one. */
+.lock-card {
+  width: 420px;
+  max-width: 100%;
+  padding: var(--space-lg);
+  align-items: center;
+  gap: var(--space-md);
+  text-align: center;
+}
+
+/* The screen's subject, so that what has happened is legible before the
+ * heading is read. 48px is the smallest circle the 24px glyph sits in without
+ * crowding, and the ground is `--secondary-container` — the same tone the
+ * active nav item carries, so this screen introduces no colour of its own. */
+.lock-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--secondary-container);
+  color: var(--primary);
+  flex: none;
+}
+
+.lock-mark svg {
+  width: 24px;
+  height: 24px;
+}
+
+.lock-heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+/* headline-sm — the step `.page-title` itself drops to below 768px. The 48px
+ * display step this replaced belongs to a screen someone navigates around;
+ * this one is left within seconds of arriving at it. */
+.lock-title {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+}
+
+.lock-lede {
+  margin: 0;
+  color: var(--on-surface-variant);
+}
+
+.lock-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+  margin-top: var(--space-base);
+}
+
+/* Reserved rather than collapsed. Every message this screen can print lands
+ * here — the note after a dismissed prompt, the server's own refusal, the
+ * scripting-off sentence — and a region that grew from zero would move the
+ * button out from under a finger already travelling toward it for a second
+ * try. 32px is two lines at the 12/16 note size. */
+.lock-message {
+  min-height: 32px;
+}
+
+@media (max-width: 767px) {
+  .lock-card {
+    width: 100%;
+    padding: var(--space-md);
+  }
+
+  /* The only control on the screen, and one reached with a thumb rather than a
+     pointer, so it takes a 48px touch target instead of the 40px
+     `--control-h` every control sitting inside a form shares. */
+  .lock-card .button {
+    height: 48px;
+  }
+}
+
 /* A sentence restating the table above it — the sheltered subtotal on Income.
  * Set at body size rather than at `.coverage-note`'s, because it carries
  * figures a household reads rather than a caveat about them, and it sits above
@@ -3615,8 +3723,11 @@ code {
 }
 
 /* The app's first spinner. There was no precedent, so this is it: one arc, one
-   turn a second, no library. */
-.refresh-icon--busy {
+   turn a second, no library. The unlock screen's Unlock button turns the same
+   arc while a passkey check is in flight, so the definition is shared rather
+   than copied under a second name. */
+.refresh-icon--busy,
+.lock-spinner {
   animation: refresh-spin 1s linear infinite;
   transform-origin: 50% 50%;
 }
@@ -3633,7 +3744,8 @@ code {
 /* The label alone is sufficient: "Refreshing…" says everything the rotation
    does, and someone who asked for less motion has asked for exactly this. */
 @media (prefers-reduced-motion: reduce) {
-  .refresh-icon--busy {
+  .refresh-icon--busy,
+  .lock-spinner {
     animation: none;
   }
 }

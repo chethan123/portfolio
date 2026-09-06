@@ -52,6 +52,7 @@ const {
   NOSCRIPT_MESSAGE,
   UNREADABLE_SUBMISSION_MESSAGE,
   UnlockControl,
+  WaitingNote,
   runCeremony,
   shouldRevalidateBeforeRetry,
   shouldRunCeremony,
@@ -584,6 +585,29 @@ describe("UnlockControl — finding 10's untested unsupported-browser branch and
       expect(submitting).toContain('disabled=""');
     },
   );
+
+  it("turns the app's own arc in the button for exactly as long as the button refuses a press", () => {
+    const idle = renderToStaticMarkup(
+      UnlockControl({ supported: true, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
+    );
+    expect(idle).not.toContain("lock-spinner");
+
+    for (const props of [
+      { phase: "confirming", revalidatorState: "idle" },
+      { phase: "idle", revalidatorState: "loading" },
+    ] as const) {
+      const busy = renderToStaticMarkup(UnlockControl({ supported: true, onUnlock: () => {}, ...props }));
+      expect(busy).toContain("lock-spinner");
+      expect(busy).toContain('disabled=""');
+    }
+  });
+
+  it("stretches the one action to the width of the card it sits in", () => {
+    const markup = renderToStaticMarkup(
+      UnlockControl({ supported: true, phase: "idle", revalidatorState: "idle", onUnlock: () => {} }),
+    );
+    expect(markup).toContain("button--block");
+  });
 });
 
 describe("DismissedNote — finding 10's cancelled-prompt note", () => {
@@ -596,6 +620,22 @@ describe("DismissedNote — finding 10's cancelled-prompt note", () => {
     "shows nothing while $phase",
     ({ phase }) => {
       expect(renderToStaticMarkup(DismissedNote({ phase }))).toBe("");
+    },
+  );
+});
+
+describe("WaitingNote — the only thing that says a check is in flight rather than refused", () => {
+  it("says a passkey is what it is waiting on, and does not raise it as an alert", () => {
+    const markup = renderToStaticMarkup(WaitingNote({ phase: "confirming" }));
+    expect(markup).toContain("Waiting for your passkey");
+    expect(markup).toContain('role="status"');
+    expect(markup).not.toContain('role="alert"');
+  });
+
+  it.for([{ phase: "idle" }, { phase: "dismissed" }, { phase: "failed" }] as const)(
+    "shows nothing while $phase",
+    ({ phase }) => {
+      expect(renderToStaticMarkup(WaitingNote({ phase }))).toBe("");
     },
   );
 });
