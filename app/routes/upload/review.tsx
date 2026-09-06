@@ -123,13 +123,9 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
   const { diff, today, earliestAsOf, latestAsOf } = loaderData;
 
   const errors = actionData?.errors;
-  // What was posted wins over every default on a refusal — a refusal must
-  // never cost an edit.
   const values = actionData?.values;
 
-  // Counts in the table's own group order, so the line is its index. A first
-  // statement reads "14 ADDED" alone: three zero counts would dress an
-  // ordinary first upload as a strange one.
+  // A first statement reads "14 ADDED" alone — three zero counts would dress an ordinary upload as strange.
   const summary = diff.firstStatement
     ? `${diff.added.length} ADDED`
     : `${diff.added.length} ADDED · ${diff.updated.length} UPDATED · ${diff.removed.length} REMOVED`;
@@ -142,9 +138,6 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
       </header>
 
       <div className="panel-body form-intro">
-        {/* The file and the account lead: a draft survives a closed laptop
-            and the reader may be resuming cold — and this is the point of no
-            return, so the account arrives with owner and number tail. */}
         <p>
           <strong>{diff.filename}</strong> · {diff.accountName}
           {diff.accountNumberTail ? ` ${diff.accountNumberTail}` : ""} — owned by{" "}
@@ -159,9 +152,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
         ) : (
           <p>
             Compared against what {diff.accountName} holds now.
-            {/* Unchanged rows are deliberately absent from the table: listing
-                rows that do nothing buries the ones that do, and the count is
-                all an unchanged row has to say. */}
+            {/* Unchanged rows absent from the table — listing rows that do nothing buries the ones that do. */}
             {diff.unchangedCount > 0 ? (
               <>
                 {" "}
@@ -174,9 +165,7 @@ export default function Review({ loaderData, actionData }: Route.ComponentProps)
           </p>
         )}
 
-        {/* A row the parser left out for stating no quantity is named rather
-            than silent — a row that vanishes silently is how "a missing row
-            means sold" becomes an accident (`SkippedRow`). */}
+        {/* Named rather than silent — a silently vanished row is how "a missing row means sold" becomes an accident. */}
         {diff.skipped.map((skip) => (
           <p key={skip.row}>
             Line <span className="u-data">{skip.row + 1}</span>'s "{skip.instrument}" states

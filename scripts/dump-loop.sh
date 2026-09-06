@@ -254,9 +254,8 @@ run_once() {
   finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   elapsed=$(( $(now) - started ))
 
-  # The archive's own record, which outlives it: last-success.json is overwritten
-  # by tomorrow's run, so a dump collected weeks ago would otherwise carry no
-  # finish time of its own.
+  # Outlives last-success.json, which tomorrow's run overwrites — so a dump
+  # collected weeks later still carries its own finish time.
   printf '{"finished_at":"%s","sha256":"%s","bytes":%s,"compress":"%s","server_version":"%s","app_version":"%s","seconds":%s}\n' \
     "$finished" "$sha" "$bytes" "$DUMP_COMPRESS" "$server" "$APP_VERSION" "$elapsed" > "$final.json" ||
     { fail_run "publish" "could not write the sidecar json"; return 1; }
@@ -277,10 +276,8 @@ seconds_until_window() {
   printf '%s\n' "$d"
 }
 
-# Sleep in chunks so SIGTERM lands promptly rather than after hours. The guard
-# is not decoration: a nap that silently became a no-op once turned this loop
-# into a dump-as-fast-as-the-database-can-answer, which is the worst thing this
-# service could do to the instance it exists to protect.
+# Sleep in chunks so SIGTERM lands promptly. Guard against `left` going bad —
+# a silent no-op here once turned this loop into dump-as-fast-as-possible.
 nap() {
   left="$1"
   case "$left" in
@@ -296,12 +293,9 @@ nap() {
   done
 }
 
-# Deliberately not "dump on every boot": a crash-looping container would dump on
-# each one, which app/lib/price-poller.server.ts:134-136 rejects for the far
-# cheaper price fetch. Only a *successful* attempt inside the last hour holds
-# the boot dump back — a restart during the retry ladder, or a crash mid-run,
-# would otherwise abandon the remaining retries until tomorrow's window, which
-# is the opposite of what a ladder is for.
+# Not "dump on every boot" (a crash loop would dump on each one). Only a
+# *successful* attempt within the last hour holds the boot dump back, so a
+# crash mid-retry doesn't abandon the ladder until tomorrow.
 needs_catch_up() {
   a=$(marker last-attempt.json)
   [ -f "$a" ] || return 0

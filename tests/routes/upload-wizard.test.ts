@@ -143,25 +143,17 @@ describe("a draft's bare address", () => {
   it(
     "sends a file that raised no first sighting straight to review, with the strip saying so",
     withDatabase(async (ctx) => {
-      // The second statement from a brokerage already mapped and already
-      // resolved: the instruments step has nothing to ask, so it is not a
-      // screen this reader ever stands on.
       const { draftId } = await stageDraft(ctx, { resolved: true });
 
       expect(
         await redirectTo(() => resumeDraft(args(get(`/upload/${draftId}`), { draftId }))),
       ).toBe(`/upload/${draftId}/review`);
 
-      // Skipped, not merely passed. An alias does not say which draft wrote
-      // it, so by the time review renders, the only record that this file
-      // asked nothing is the bit the columns step wrote (brief §7.5).
+      // Skipped, not merely passed — an alias doesn't say which draft wrote it, so instrumentsSkipped (columns step, brief §7.5) is the only record.
       const page = await reviewPage(draftId);
       expect(page.steps).toMatchObject({ current: 4, instrumentsSkipped: true });
 
-      // The date control's two boundaries reach the screen from the validator,
-      // so the picker cannot offer a date the commit then refuses. The floor
-      // matters more than the ceiling here: without it a mistyped millennium
-      // is a position set a thousand years back that nothing can reach.
+      // Boundaries come from the validator so the picker can't offer a date the commit then refuses; the floor matters most (a mistyped millennium is unreachable history otherwise).
       expect(page.earliestAsOf).toBe(earliestRecordableDate());
       expect(page.latestAsOf).toBe(latestRecordableDate());
       expect(page.earliestAsOf).toBe("1970-01-01");
@@ -175,26 +167,20 @@ describe("a review over a draft that is not ready for one", () => {
     withDatabase(async (ctx) => {
       const { draftId, accountId } = await stageDraft(ctx, { resolved: true });
 
-      // Written straight onto the row on purpose: `rememberMapping` refuses to
-      // store a mapping its own file cannot parse, so the only way a row like
-      // this exists is a stored value that predates a rule or was edited by
-      // hand — which is the case `parseDraft` guards and nothing else covers.
+      // Written straight onto the row: rememberMapping refuses an unparseable mapping, so this row can only exist via a rule predating it, or a hand edit — parseDraft's own guard.
       await ctx.db
         .updateTable("upload_draft")
         .set({ mapping: JSON.stringify({ headerRow: 0, delimiter: "," }) })
         .where("id", "=", draftId)
         .execute();
 
-      // The bookmark.
       expect(
         await redirectTo(() =>
           reviewLoader(args(get(`/upload/${draftId}/review`), { draftId })),
         ),
       ).toBe(`/upload/${draftId}/columns`);
 
-      // And the form beneath it, which is the half that matters: a POST that
-      // fell through to the commit would be recording a statement no mapping
-      // had parsed.
+      // The half that matters: a POST falling through to commit would record a statement no mapping had parsed.
       expect(
         await redirectTo(() =>
           reviewAction(

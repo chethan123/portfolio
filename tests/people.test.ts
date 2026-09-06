@@ -64,7 +64,7 @@ describe("recording people", () => {
 
       const people = await listPeople(db);
       expect(people).toHaveLength(2);
-      // Distinct rows, so an account can belong to one of them and not the other.
+      // distinct rows — an account can belong to one and not the other
       expect(people[0]?.id).not.toBe(people[1]?.id);
     }),
   );
@@ -92,13 +92,11 @@ describe("recording people", () => {
 });
 
 describe("refusing bad input", () => {
-  // One table rather than five transactions: these are `requiredText`'s rules,
-  // and what `createPerson` adds to them is the same on every row.
+  // one table, not five transactions — these are requiredText's rules; createPerson adds the same thing to each
   it.each([
     ["an empty name", { name: "" }, /name is required/i],
     ["a name that is only whitespace", { name: "   " }, /required/i],
-    // A form that never sent the field at all is the same mistake to a person
-    // as one that sent it blank, and must not be a 500.
+    // missing field = same mistake as a blank one to whoever filled it — must not 500
     ["a field that never arrived", {}, /required/i],
     ["a name too long to be one", { name: "a".repeat(121) }, /120 characters/],
   ])("refuses %s", (_case, input, message) =>
@@ -106,8 +104,7 @@ describe("refusing bad input", () => {
       const errors = await refusalOf(createPerson(input, db));
 
       expect(errors.name).toMatch(message);
-      // Under `name`, and under nothing else, so the form can put the message
-      // beside the box rather than at the top of the page.
+      // only under `name` — lets the form put the message beside the box, not atop the page
       expect(Object.keys(errors)).toEqual(["name"]);
     })(),
   );
@@ -115,8 +112,7 @@ describe("refusing bad input", () => {
   it(
     "writes nobody when it refuses",
     withDatabase(async ({ db }) => {
-      // The half this cannot be a pure test for: a refusal that still inserted
-      // would leave a person nobody typed.
+      // guards against a refusal that still inserts a row nobody typed
       await refusalOf(createPerson({ name: "" }, db));
 
       expect(await listPeople(db)).toEqual([]);

@@ -1,30 +1,19 @@
-/**
- * The upload draft — the staging row behind an in-progress statement upload
- * (DESIGN.md §5.1, docs/specs/0004-ingest.md). The flow is four screens, each
- * a real URL with no client state, so everything a step needs lives where a
- * URL can reach it: one `upload_draft` row holding the bytes, the filename
- * and — once the columns step passes — the mapping and whether the file
- * raised a first sighting. Each step reads the draft, writes its part back
- * and redirects: reload, back button and bookmarked half-finished uploads all
- * behave. Also the application's first multipart read — `formFields` drops
- * file parts by design, so the size bound and file handling live here.
- *
- * Three decisions worth stating. **Drafts are swept, not scheduled**: rows
- * older than 24h are deleted at the next upload's start ({@link createDraft})
- * — a cron for a handful of rows is machinery without a payer. **A dead draft
- * is one 404, not four**: swept, committed, mistyped and closed-account all
- * read the same expired-or-recorded page, because the next move — start again
- * — is the same. **The size cap is guarded twice, and the early one is the
- * header**: `request.formData()` buffers the whole body, so
- * {@link refuseOversizedBody} checks `Content-Length` first and the
- * `File.size` check catches whatever arrives without one.
- *
- * The flow's last step lives here too: {@link diffForDraft} states what the
- * staged file changes, {@link commitUpload} is the one write (immutable
- * `position_set`, its holdings, the draft deleted, one transaction), and
- * {@link uploadReceipt} recomputes the `?uploaded=` confirmation from the
- * database so a hand-typed parameter can only describe what was recorded.
- */
+// Upload draft: the staging row behind an in-progress statement upload (DESIGN.md §5.1,
+// docs/specs/0004-ingest.md). Four screens, each a real URL with no client state — everything a
+// step needs lives on one upload_draft row (bytes, filename, and once columns passes, the
+// mapping and whether it raised a first sighting), so reload/back/bookmarked steps all behave.
+// Also the app's first multipart read (formFields drops file parts), so size/file handling
+// live here too.
+//
+// Drafts are swept, not scheduled: rows older than 24h die at the next upload's start
+// (createDraft) — no cron for a handful of rows. A dead draft is one 404, not four: swept,
+// committed, mistyped and closed-account all read the same expired-or-recorded page, since the
+// next move (start again) is the same. Size cap is guarded twice: refuseOversizedBody checks
+// Content-Length before the body buffers; File.size catches whatever arrives without one.
+//
+// The flow's last step lives here too: diffForDraft states what the file changes, commitUpload
+// is the one write (one transaction), uploadReceipt recomputes the ?uploaded= confirmation from
+// the database so a hand-typed parameter can only describe what was recorded.
 import { z } from "zod";
 
 import { sql } from "kysely";
