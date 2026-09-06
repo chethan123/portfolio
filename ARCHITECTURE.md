@@ -67,7 +67,9 @@ graph LR
     subgraph instance["The instance — one Docker Compose stack"]
         caddy["Caddy<br/>ingress, the only published port<br/>forward_auth on every request"]
         gate["gate — oauth2-proxy<br/>sign-in, allowlist, session cookie"]
-        app["Portfolio Tracker<br/>React Router 7 on Node 24"]
+        app["Portfolio Tracker<br/>React Router 7 on Node 24<br/>no egress of its own"]
+        worker["Price worker<br/>no database credential, no TCP listener"]
+        proxy["Egress proxy<br/>CONNECT allowlist, five Yahoo hosts"]
         db[("PostgreSQL 17<br/>all persistent state")]
     end
 
@@ -79,27 +81,35 @@ graph LR
     browser -.->|"a LAN device can dial this box directly —<br/>which is why the gate is here and not up there"| caddy
     caddy -->|"/oauth2/auth — admit or refuse"| gate
     caddy -->|"reverse_proxy app:$APP_PORT<br/>+ the verified email"| app
-    gate -->|"token exchange"| google
+    gate -->|"token exchange, www.googleapis.com:443 only"| google
     browser -.->|"sign-in redirect"| google
     csv -.->|"uploaded through the browser"| browser
     app -->|SQL over the compose network| db
-    app -->|"batched quote fetch, market hours only, per the refresh cadence (seeded 15 min)<br/>+ a per-symbol history fetch on the same refresh, at any hour, while a spine has a gap<br/>+ one batched probe at instrument creation, in the request path"| yahoo
+    app -->|"unix socket in a shared volume, every price fetch<br/>(app/lib/provider-socket.server.ts) — no network path exists"| worker
+    worker -->|"CONNECT, tunnelled only to the host it was opened to"| proxy
+    proxy -->|"batched quote fetch, market hours only, per the refresh cadence (seeded 15 min)<br/>+ a per-symbol history fetch on the same refresh, at any hour, while a spine has a gap<br/>+ one batched probe at instrument creation, in the request path"| yahoo
 
     classDef ext fill:#f5f0e8,stroke:#8a7a5c,color:#3b3222
     class yahoo,csv,google,house ext
 ```
 
 **External dependencies, in full.** Two, and they belong to different components. **Yahoo Finance**
-is the application's, and its only one: no email, no object store, no queue, no cache tier, no
-analytics. It is reached three ways, over two endpoints — the poller's batched *quote* fetch and
-the per-symbol *chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the
-request path entirely, and `probeSymbols`, a currency check over every symbol one submission
-creates, run *inside* the form submission that creates them (§6.1). The last is the only place a
-third party can make a person wait. All three go through the one interface in §7.5, precisely
-because the endpoint is unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
-the browser is redirected there to sign in and the sidecar exchanges the code for a token, both
-outside the app process entirely. That seam is what keeps "an identity provider" out of the
-application's dependency list while the instance still has one.
+is the price worker's, and its only one: no email, no object store, no queue, no cache tier, no
+analytics — and, since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md), no longer reached
+from the application process at all. `app` crosses a unix socket to `worker` for every price fetch
+(`app/lib/provider-socket.server.ts`) and opens no connection of its own; `worker` in turn reaches
+Yahoo only through `egress-proxy`, which admits a `CONNECT` to five hosts and checks the TLS server
+name inside the tunnel against the host it was opened to (§3.1, §7.5,
+[ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)). Yahoo
+is reached three ways, over two endpoints — the poller's batched *quote* fetch and the per-symbol
+*chart* fetch the backfill batch makes on the same refresh (ADR-0011), both off the request path
+entirely, and `socketProbe`, a currency check over every symbol one submission creates, run *inside*
+the form submission that creates them (§6.1). The last is the only place a third party can make a
+person wait. All three go through the one interface in §7.5, precisely because the endpoint is
+unofficial and expected to break. **Google** is the `gate` service's, and the app never speaks to it:
+the browser is redirected there to sign in and the sidecar exchanges the code for a token — one call,
+to `www.googleapis.com:443` — both outside the app process entirely. That seam is what keeps "an
+identity provider" out of the application's dependency list while the instance still has one.
 
 **Trust boundaries.** Marked here because §7.6 depends on them:
 
@@ -110,7 +120,8 @@ application's dependency list while the instance still has one.
 | Caddy → gate | `X-Forwarded-*`, `X-Real-IP`, `X-Forwarded-Uri` | **Yes, unconditionally.** The sidecar runs in reverse-proxy mode and builds its sign-in redirects from them, which is why `gate` publishes no port. |
 | Caddy → app | `X-Forwarded-*` and `X-Auth-Request-Email` | **Yes, unconditionally** — which is why `app` publishes no port. The trust costs nothing today: the app reads none of these (§7.6), and `copy_headers` replaces any client-sent email header with the gate's own, so a browser cannot assert an identity. |
 | Browser → app | `__Host-unlock_grant` cookie, forwarded through Caddy unmodified | **No.** It carries no claim — an opaque, cryptographically random id (`length(id) >= 32`) addressing a row in `unlock_grant`. A forged value names nothing; a copied live one only ever names the row it was copied from, which is what makes the row deletable and the honest limit of a bearer token. The row is the authority, never the cookie (docs/adr/0012). |
-| app → Yahoo | JSON quote and chart payloads | No. Both parsed through Zod, currency-guarded, floats converted at the boundary. A split the chart payload cannot be read through refuses that instrument's whole history rather than filling some rows right and some wrong. |
+| worker → Yahoo | An HTTP response over the tunnel `egress-proxy` opened | Not this repository's to trust — `egress-proxy` checks only the TLS server name against the host the tunnel was opened to (§3.1, §7.5); the body passes through unread, all the way to the app. |
+| worker → app, over the shared-volume socket | The same JSON quote and chart payloads, forwarded unmodified | No. Both parsed through Zod, currency-guarded, floats converted at the boundary. A split the chart payload cannot be read through refuses that instrument's whole history rather than filling some rows right and some wrong. |
 
 **Why a forgeable forwarded header is affordable.** Nothing downstream *authorises* on one. The
 gate's verdict comes from a session cookie it decrypts itself, and the origin it sends people back
@@ -138,54 +149,83 @@ so a deployment cannot silently become a build (§8.2).
 ```mermaid
 graph TB
     host["Host machine"]
+    outside(("Beyond the stack<br/>Google, Yahoo — §2"))
 
-    subgraph compose["compose network — portfolio"]
+    subgraph compose["The compose stack — portfolio, seven services on seven networks"]
         caddy["<b>caddy</b><br/>caddy:2-alpine<br/>:8080 → forward_auth gate, then app:$APP_PORT<br/>uid 65532, Caddyfile mounted read-only"]
         gate["<b>gate</b><br/>oauth2-proxy, pinned exactly<br/>root, one capability (DAC_READ_SEARCH)<br/>no published port, no volume<br/>allowlist file bind-mounted read-only"]
-        app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>USER node, no published port<br/><i>in-process price poller</i>"]
+        app["<b>app</b><br/>ghcr.io/chethan123/portfolio-app:$APP_VERSION<br/>pulled, not built — pull_policy: always<br/>USER node, no published port, no egress of its own<br/><i>refresh loop stays in-process; every fetch crosses to worker</i>"]
+        worker["<b>worker</b><br/>same image, entrypoint replaced<br/>uid 1000, no published port<br/>no database credential, no TCP listener"]
+        proxy["<b>egress-proxy</b><br/>same image, entrypoint replaced<br/>CONNECT-only, five Yahoo hosts<br/>uid 1000, no published port"]
         db["<b>db</b><br/>postgres:17-alpine<br/>timezone=UTC<br/>uid 70, no published port"]
-        vol[("db-store<br/>./volumes/db/data")]
+        dump["<b>dump</b><br/>postgres:17-alpine, entrypoint replaced<br/>operator's own uid:gid<br/>restart: on-failure"]
+        vol1[("db-store<br/>./volumes/db/data")]
+        vol2[("price-worker-sock<br/>tmpfs · app: ro, worker: rw")]
     end
 
-    host -->|"the only published port, 80:8080"| caddy
-    caddy -->|"every request except /healthz"| gate
-    caddy --> app
-    app --> db
-    db --- vol
+    host -->|"the only published port, 80:8080<br/>network: ingress"| caddy
+    caddy -->|"every request except /healthz<br/>network: caddy-gate"| gate
+    caddy -->|"network: caddy-app"| app
+    app -->|"network: backend"| db
+    dump -->|"pg_dump, network: backend"| db
+    app -.->|"unix socket in the shared volume,<br/>every price fetch — no network path exists"| worker
+    worker -->|"CONNECT, TLS SNI checked<br/>network: worker-proxy"| proxy
+    gate -.->|"network: egress-gate,<br/>its own route out"| outside
+    proxy -.->|"network: egress-proxy,<br/>its own route out"| outside
+    db --- vol1
+    worker --- vol2
 
     classDef svc fill:#eef3f8,stroke:#4a6d8c,color:#1c2f42
-    class caddy,gate,app,db svc
+    classDef ext fill:#f5f0e8,stroke:#8a7a5c,color:#3b3222
+    class caddy,gate,app,db,worker,proxy,dump svc
+    class outside ext
 ```
+
+Seven networks, not one: `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal with no
+default route out at all (`gateway_mode_ipv4: isolated` closes the escape an internal bridge otherwise
+still keeps — a route to the host and whatever else it binds); `egress-proxy`, `egress-gate` and
+`ingress` are plain bridges, because carrying a default route out is the whole point of the first two
+and the published port is the only thing the third carries. `app` and `worker` share none of these —
+the two containers never dial each other by IP, only through the socket in the volume both mount.
 
 Each service is a decision rather than an accident:
 
-- **No worker container.** The quote refresh loop runs inside the `app` process
-  (`app/lib/price-poller.server.ts`). DESIGN.md §10 chose this for "one process to deploy, one place
-  to read logs", and accepts the trade-off: a restart mid-session misses a poll until the next tick.
+- **A worker container, and a second beside it that exists only to fence its egress.** `worker`
+  answers the app's price requests over a unix socket in `price-worker-sock`, a shared, ephemeral
+  volume, holding no database credential and opening no port of its own (spec 0018 §2.5). Its only
+  way anywhere is `egress-proxy`, which admits a `CONNECT` to exactly the five hosts `yahoo-finance2`
+  contacts and checks the TLS server name inside the tunnel against the host it was opened to. What
+  did not change: `app` keeps the refresh loop, every price rule, and the one write to `price_daily`
+  (§4.2, §6.2) — only the network call moved. [ADR-0010](docs/adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md)
+  has the argument and the alternatives it was taken over.
 - **A separate `gate` container, and enforcement in *this* stack's Caddy.** Authentication is one
   sidecar answering `forward_auth`, not code in the app (ADR-0005). It sits here rather than in the
   operator's house-wide proxy because a LAN device can dial this box's published port and land on
   this Caddy directly — and that device is the threat the gate exists for.
-- **No published port on `app`, `db` or `gate`.** Only `caddy` is reachable from the host. This is
-  what makes the forwarded-header trust safe (§7.6), keeps the database credentials off the LAN, and
-  is the *whole* reason the gate cannot be walked around: there is no route to `app` that does not
-  pass the door where the check happens.
-- **One store, and it is a directory in the deployment.** `./volumes/db/data` holds every byte of
-  persistent state, so there is exactly one backup target — `pg_dump`, documented rather than built
-  in. It reaches the container as `db-store`, a volume name the local driver binds to that path,
-  because a plain bind mount arrives root-owned and stops `initdb` under the pinned uid 70; a
-  volume over an empty directory takes the image's ownership for it instead. `compose.yaml` carries
-  the transcript.
+- **No published port on `app`, `db`, `gate`, `worker`, `egress-proxy` or `dump`.** Only `caddy` is
+  reachable from the host. This is what makes the forwarded-header trust safe (§7.6), keeps the
+  database credentials off the LAN, and is the *whole* reason the gate cannot be walked around:
+  there is no route to `app` that does not pass the door where the check happens.
+- **Two volumes, a directory and a tmpfs, for two different reasons.** `db-store` is
+  `./volumes/db/data` — every byte of persistent state, so it is still the one backup target,
+  `pg_dump`, documented rather than built in. It reaches the container as a volume name the local
+  driver binds to that path, because a plain bind mount arrives root-owned and stops `initdb` under
+  the pinned uid 70; a volume over an empty directory takes the image's ownership for it instead.
+  `price-worker-sock` holds nothing worth keeping — only the socket file `worker` binds and `app`
+  dials — so it is a `tmpfs`, sized at 1 MB, gone the moment the host is. `compose.yaml` carries the
+  transcript for both.
 
-**All four containers are `read_only: true`**, each with a `tmpfs` over what it still writes: `/tmp`
-for `app` and `gate`, Postgres's socket directory for `db`, `/config` and `/data` for `caddy`. That is
-enforcement, not intention — a statement that none of them writes to its own filesystem and that any
-can be destroyed and recreated freely. It holds for the gate because its sessions live in an
-encrypted cookie in the browser (a sidecar with a session database would need a volume, and this one
-does not have one), and for `db` because all of its state is in the bound directory above.
+**All seven containers are `read_only: true`**, each with a `tmpfs` over what it still writes: `/tmp`
+for `app`, `gate`, `worker`, `egress-proxy` and `dump`, Postgres's socket directory for `db`, `/config`
+and `/data` for `caddy`. That is enforcement, not intention — a statement that none of them writes to
+its own filesystem and that any can be destroyed and recreated freely. It holds for the gate because
+its sessions live in an encrypted cookie in the browser (a sidecar with a session database would need
+a volume, and this one does not have one), for `db` because all of its state is in the bound directory
+above, and for `worker` because the one thing it needs to write — its socket — lives on the volume
+mounted at `/run/price-worker`, not on the container's own root.
 
-Alongside it, on all four: every Linux capability dropped and `no-new-privileges` set, an
-unprivileged uid pinned on three — `gate` runs as root, which `compose.yaml` argues and
+Alongside it, on all seven: every Linux capability dropped and `no-new-privileges` set, an
+unprivileged uid pinned on six of them — `gate` alone runs as root, which `compose.yaml` argues and
 `scripts/smoke-test.sh` asserts rather than leaves to drift — and exactly two capabilities granted
 back. `DAC_READ_SEARCH` on `gate`, which is the whole of what root there is for: opening the
 operator's allowlist whatever its mode and owner. `NET_BIND_SERVICE` on `caddy`, not to bind
@@ -244,7 +284,7 @@ here, in place, with DESIGN.md's table given as the one to believe.
 
 | Variable | Default | Required | Effect |
 |---|---|---|---|
-| `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. |
+| `DATABASE_URL` | — | **yes** | Postgres connection URI; validated as one. Required *here* because `server/config.ts` gives it no default and refuses to start without one; DESIGN.md §10.1 lists it as optional because `compose.yaml` supplies the deployment's value, pointed at the bundled `db`. Both are true — an operator never sets it, and the code never guesses it. It carries no password: that is `PGPASSWORD`, below. |
 | `PUBLIC_ORIGIN` | — | **yes** | The `https://` origin the house proxy serves this instance at — bare and already canonical (no trailing slash, path, upper case, or default port spelled out; `server/config.ts` refuses anything else by name), `http://localhost` for the dev loop. The lock (`docs/adr/0012-a-browser-past-the-gate-is-shown-nothing.md`) derives its WebAuthn relying-party id from it — the first variable *the lock* needs shared with the sidecar, not the first shared full stop: `TZ` already reaches both `app` and `gate` below. Also read by the `gate` service, which builds its redirect from it. |
 | `AUTH_GATE` | `none` | no | `external` or `none`: whether something in front of the app authenticates. It enables nothing — the app authenticates nobody either way — and decides only whether the unprotected-instance banner is drawn. A union rather than a boolean so a third posture is a value, not a redesign. |
 | `PORT` | `3000` | no | HTTP listen port, 1–65535. |
@@ -342,9 +382,9 @@ grep. They come in three tiers.
 
 | Invariant | The one site | What a second site would cost |
 |---|---|---|
-| Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. |
+| Postgres pool construction | `server/db.ts:createPool` | The `numeric`/`int8`/`date` type-parser override is registered here. A second pool is a code path where money is a rounding float. The price worker builds none at all — its whole import set (`server/price-worker.ts:16-23`) is `node:http`, `node:fs/promises`, `zod`, `./config.ts`, `./yahoo-client.ts` and `./symbol-pattern.ts`: no `pg`, no Kysely, nothing under `app/`. |
 | Importing `yahoo-finance2` | `server/yahoo-client.ts:121` | The provider swap stops being a day's work. The interface is also the test seam. Two methods now cross it — quotes and daily history — and a second importer would double what a swap costs. |
-| Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). |
+| Writing a price | `app/lib/prices.server.ts` — the one site in `app/`; the demo seed and the test fixtures plant price rows directly (`scripts/seed-demo.ts`, `tests/support/fixtures.ts`), deliberately outside the application | A second writer that files a quote under today's date instead of the quote's own trading day (§6.2). Two write paths reach `price_daily` from inside that module and only one may rewrite a row: the quotes' write upserts as an intraday poll converges on the close, the backfill's inserts where absent and never updates. A third path that upserted would let a restated close silently replace what the instance recorded live (ADR-0011). The price worker writes no price at all — it holds no database credential and answers only what it is asked (spec 0018 §2.5). |
 | Enforcing the lock | `app/root.tsx`'s `middleware` export — `lockMiddleware`, the one place this framework runs a rule ahead of every route (ADR-0012) | The framework gives a request no path to a loader that bypasses it, the same guarantee §4.4 states for the gate. A route refusing again on its own would only restate this, never replace it. What actually varies is `LOCK_EXEMPT_PATHS` beside it — the short list a route earns its way out through, pinned by a test that fails the moment a third exemption is added with no decision behind it |
 | Refusing a cross-origin mutation | `app/root.tsx`'s `crossOriginMutationMiddleware`, listed ahead of `lockMiddleware` in the same `middleware` export | React Router runs its own `Origin` check (`throwIfPotentialCSRFAttack`) for document mutations and single-fetch actions and not for resource routes — which `/lock-now`, `/masking` and `/refresh` are. This restates the framework's rule for exactly that gap, in the framework's own terms: its mutation-method set, host against host, 400. A second site would be a route deciding for itself who may post to it, which is how two answers to one question drift apart; and a check written against `PUBLIC_ORIGIN` rather than the request's own host would be a third answer again. |
 
@@ -352,7 +392,7 @@ grep. They come in three tiers.
 
 | Invariant | The owner | The obligation |
 |---|---|---|
-| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. |
+| Reading the environment | `server/config.ts` | `loadConfig(env)` is pure; `getConfig()` is the one place `process.env` is actually read and cached. Every caller — the entrypoint's config gate and migration runner, the price worker's own entry, the demo seed, the capture script — passes `process.env` in, and none of them reads a variable itself. Two variables sit outside this rule entirely, by design: `PGPASSWORD` (`compose.yaml:178`, `:265`) is read by libpq, inside the driver, and `NODE_USE_ENV_PROXY`/`HTTPS_PROXY` (`compose.yaml:353-354`) by Node's own `fetch`/undici — neither `server/config.ts` nor any application code reads either. |
 | The upload size cap | `app/lib/uploads.server.ts` | The module owns the cap and the file handling, but the multipart body is read in the route (`app/routes/upload.tsx:48`), which must call `refuseOversizedBody` first. Every other action goes through `formFields`, which drops file parts by design. |
 | Everything read off a closed vocabulary — an account's kind, its tax treatment, an instrument's asset class | `app/lib/account-options.ts` | The values, their labels, and the two predicates derived from a kind — which kinds hold their whole position in one number, which run negative — are written once, here, so none of them can drift from the schema's check constraints (`account_kind_valid`, `account_tax_treatment_valid`, `classification_asset_class_valid`) or from each other. The obligation is on the callers: a form renders its options from the list and the domain validates against the same list, so neither the upload wizard's asset-class `<select>` nor the resolver that refuses its answers keeps a copy. The module stays plain data — the client bundle imports it, so a rule needing a query cannot live here. The one place outside `app/` that restates the values is `scripts/seed-demo.ts`, which stays standalone on purpose and writes no labels. |
 | What an account actually holds, asked at a write | `app/lib/current-statement.server.ts` | `kind` is a label and the rows are the fact, and the two writers that can act on the difference ask this module rather than believing the label: `setBalance` before it replaces a whole statement with one figure, `updateAccount` before it relabels an account as one that holds a single balance. It resolves the seeded `USD` row itself and returns the id, so a caller cannot answer the guard from one row and write to another. |
@@ -1523,7 +1563,7 @@ still-shutting-down container, and a determined operator can run two.
 | Race | Guard | Where |
 |---|---|---|
 | Two migration runners on a cold start | Session-level `pg_advisory_lock`, then the ledger re-read *after* taking it. Note the ledger's own `create table if not exists` runs **before** the lock (`migrations.ts:126-128`), so it is not itself covered | `server/migrations.ts` |
-| Two refreshes anywhere — a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's | `prices.server.ts` (`withRefreshLock`) |
+| Two refreshes anywhere — a tick, a **Refresh now** press, or the request an upload fires once it has committed | Advisory lock per refresh, distinct key from the migration runner's — the checked-out client now spans the socket round trip to `worker` rather than an in-process call to Yahoo (`server/db.ts:59-61`) | `prices.server.ts` (`withRefreshLock`) |
 | Two poller ticks in one process | A serialising flag; the later tick is dropped | `price-poller.server.ts` |
 | Two commits of one draft | **Delete the draft first, inside the transaction.** Zero rows deleted aborts everything | `uploads.server.ts` |
 | Two drafts resolving the same string | `insert … on conflict do nothing`; the existing row wins and is returned | `instrument-resolution.server.ts` |
@@ -1570,11 +1610,11 @@ one household's instance and the operator reads `docker compose logs`.
 
 | Signal | Where |
 |---|---|
-| `GET /healthz` | Database reachability **and** migration currency. 200 or 503, `Cache-Control: no-store`, never authenticated |
-| Startup | The migration runner logs `applied` / `skip` per file |
+| `GET /healthz` (`app`) | Database reachability **and** migration currency. 200 or 503, `Cache-Control: no-store`, never authenticated. Never crosses the socket — silent on whether `worker` or `egress-proxy` are even running |
+| Startup | The migration runner logs `applied` / `skip` per file. `worker` and `egress-proxy` each log their own `… listening on …` line once bound — `Price worker listening on <path>` (`server/price-worker.ts:622`), `Egress proxy listening on <port>` (`server/egress-proxy.ts:778`) |
 | Refresh outcome | `RefreshReport { requested, priced, stale, closes }` per run |
 | Backfill outcome | `BackfillReport { attempted, written, outcomes, batchFailed }` — stem `Price backfill` from a poller tick, written only when the batch attempted or failed something, so a tick that found no gap stays silent. A **Refresh now** press runs a batch and logs no such line, exactly as it logs no `Price refresh` line. A batch that failed against the database logs `Price backfill batch failed` at error level first. The per-attempt record is the `price_backfill` ledger, which Settings → Prices reads |
-| Provider failure | `console.error`, then every selected instrument marked stale |
+| Provider failure | Still `Price provider failed` at error level, every selected instrument marked stale — the one stem now covers four distinct shapes rather than a single one: a dead or unstarted worker (`no worker listening … ENOENT`/`ECONNREFUSED`), a dead or unreachable proxy (`ECONNREFUSED`/`getaddrinfo ENOTFOUND egress-proxy`), a healthy proxy that cannot itself reach Yahoo (`Proxy response (502)`/`504`), and a healthy proxy refusing a host whose TLS server name does not match the tunnel it was opened for. `egress-proxy` logs its own line for a refusal it issues — stem `Egress proxy`, e.g. `Egress proxy: refused CONNECT <host> — <reason>` (`server/egress-proxy.ts:527`) — and `docs/operating.md`'s Logs section tells the four shapes apart by exact text |
 | Refused sign-in | Not the app's. The gate logs it; `docker compose logs gate` is where a refusal is read, and the runbook is what indexes it by symptom |
 | Freshness, in the UI | The "as of" line, driven by the *oldest* `quote.as_of` among held feed instruments |
 
@@ -1583,6 +1623,17 @@ and it never requires credentials. That second property no longer survives on th
 the lock (ADR-0012) checks its own `LOCK_EXEMPT_PATHS` in `app/root.tsx` before a request ever reaches
 a loader, and `/healthz` is on that list beside `/unlock` (§7.6) — pulling the app-side entry, even
 with the `Caddyfile`'s own exemption left in place, would lock monitoring out.
+
+**Three healthchecks now, and no two of them prove the same thing.** `app`'s (`compose.yaml:309-318`)
+is the `/healthz` above, over HTTP on `PORT`. `worker`'s (`compose.yaml:375-390`) is `GET /healthz`
+over the unix socket, run as the container's own uid — the right party to prove the socket's
+permissions — and it proves only that the worker is accepting requests on its socket: a Yahoo outage
+still answers it `200`. `egress-proxy`'s (`compose.yaml:429-443`) asks its own `127.0.0.1:8888`,
+deliberately not a bare TCP connect: with all eight `maxConnections` slots held by stalled tunnels the
+accept queue still completes a handshake, so only a request the HTTP server itself answers proves the
+proxy is not saturated. None restarts a container on failure — all three are for a human reading
+`docker compose ps` — and none of the three proves the hop from `app` across the socket to `worker`
+actually works; `docs/operating.md`'s "Verify it actually worked" has the one command that does.
 
 ### 7.5 The provider seam
 
@@ -1594,19 +1645,28 @@ with the `Caddyfile`'s own exemption left in place, would lock monitoring out.
         └───────────────────────┬────────────────────────────────────────────────────┘
                     ┌───────────┴────────────┐
                     ▼                        ▼
-        yahooPriceProvider()           the tests' fake
-        takes a YahooClient            implements both and nothing else;
-        (price-provider.server.ts:768) no test reaches the network
+        socketProvider()               the tests' fake
+        dials the worker's socket      implements both and nothing else;
+        (provider-socket.server.ts:389) no test reaches the network
 ```
 
-`yahoo-finance2` is an unofficial client for an endpoint Yahoo never published, with no SLA. What
-makes that tolerable is that swapping it is a day's work — which is only true while `server/yahoo-client.ts`
-is the sole importer of the library (ARCHITECTURE.md §4.2's single-site table), used by the worker
-directly and by this adapter until [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moves the
-app behind the socket. Both methods are required, not optional: a provider that cannot answer history
-is not this application's provider, and an optional method would let a batch be skipped with nothing
-saying so. Two tests (`tests/yahoo-client.test.ts:83`, `:105`) pin the static-versus-instance shape the
-client depends on — `yahoo-finance2`'s default export is the `YahooFinance` *class*, whose own static
+One seam, two implementations either side of a process boundary — not the two boxes above, which are
+one of those implementations and its test double. The other implementation is `worker` itself: it
+answers `socketProvider()`'s request by calling `server/yahoo-client.ts` directly and writing back
+`yahoo-finance2`'s own JSON, unparsed and unenveloped — no schema of the socket's own, no currency
+guard, no split un-adjust. Every conversion this module owns — floats to decimal strings, the
+currency guard, the split un-adjust below — still happens exactly once, but now on the *app* side of
+that raw JSON, after it crosses back: `socketProvider()`'s `getQuotes`/`getDailyCloses` run the very
+same `toProviderQuote`/`toProviderHistory` a direct call to the library would have. `yahoo-finance2`
+is an unofficial client for an endpoint Yahoo never published, with no SLA. What makes that tolerable
+is that swapping it is a day's work — which is only true while `server/yahoo-client.ts` is the sole
+importer of the library (ARCHITECTURE.md §4.2's single-site table), reached only from `worker` since
+[ticket 06](docs/specs/price-worker/06-the-app-cutover.md) moved the app behind the unix socket:
+`socketProvider()` above never imports the library at all. Both methods are required, not optional: a
+provider that cannot answer history is not this application's provider, and an optional method would
+let a batch be skipped with nothing saying so. Two tests (`tests/yahoo-client.test.ts:83`, `:105`) pin
+the static-versus-instance shape the client depends on — `yahoo-finance2`'s default export is the
+`YahooFinance` *class*, whose own static
 `quote`/`chart` type-check and throw the moment either runs, before any network access. The first
 swaps in a `fetch` that only records that it was reached: a regression back to the bare class would
 throw first and the fake would never see a call. The second asserts the throw where it happens, on
@@ -1620,7 +1680,7 @@ These conversions happen at this boundary and nowhere else:
   would be one more place to forget.
 - **The payload is parsed through Zod**, so a shape change is a refusal rather than a `NaN`.
 - **The currency guard.** A non-USD quote is refused. `getQuotes` turns that into an *absent* quote,
-  because a refresh must not lose ninety-nine prices over one foreign listing. `probeSymbols`, used at
+  because a refresh must not lose ninety-nine prices over one foreign listing. `socketProbe`, used at
   instrument creation, returns it *named* per symbol — because there the caller is a person
   creating instruments, and collapsing "a currency we refuse" into "the provider had a bad day" would destroy
   the one distinction they can act on. `getDailyCloses` refuses a non-USD history the same way,
@@ -1646,6 +1706,9 @@ allowlist does.
 | Admission policy | One flat file of addresses, mounted read-only into `gate`. Deliberately not an email-domain rule: the narrowest domain that admits this family also admits every Gmail account alive |
 | Enforcement point | This stack's `caddy`, and only there for *person* authentication. **Everything is challenged except `/healthz`** — static assets included, which the in-app gate could not cover. The `Caddyfile` used to be the single list of exemptions in the deployment; the lock (ADR-0012) now keeps a second, `LOCK_EXEMPT_PATHS` in `app/root.tsx` — `/unlock` and `/healthz` again, since a locked browser still needs both — pinned by a test that fails the moment that array grows without a decision behind it. The operator's house proxy is deliberately *not* an enforcement point, because a LAN device can bypass it by dialling this box directly |
 | What makes it airtight | `app` publishes no port. Not tidiness: it is the reason there is no path to a loader that skips the check. A `ports:` line on `app` would not weaken the gate, it would end it |
+| Network segmentation | Seven Compose networks, not one (§3.1): `backend`, `caddy-app`, `caddy-gate` and `worker-proxy` are internal, with no default route out of the stack at all; `egress-proxy` and `egress-gate` are the only two that carry one, and each belongs to a single container. `app` and `worker` share none of them — a compromised `app` has no IP path to `worker`, `gate` or the internet, and a compromised `worker` has no IP path to `app`, `db` or `gate`, both directions asserted in `scripts/smoke-test.sh` |
+| The worker's egress | `worker`'s only route anywhere is `egress-proxy` (`server/egress-proxy.ts`), a `CONNECT`-only forward proxy admitting exactly the five hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host it was opened to. A compromised worker can still open a tunnel to an admitted host and send it whatever it likes — the allowlist is on the host, never on the bytes |
+| The shared volume | `price-worker-sock`, a `tmpfs` holding nothing but the socket `worker` binds. `app`'s mount is `:ro` (`compose.yaml:288`), so it can dial the socket but cannot `chmod` the directory or unlink the file — a read-only mount refuses both with `EROFS` before any ownership check runs. Only `app` and `worker` mount it at all, which `scripts/smoke-test.sh` asserts |
 | Session revocation | Two grains, both the operator's. Removing an address from the allowlist ends that person's sessions everywhere — the gate re-checks each request's email against the file, which it watches for changes. Rotating the gate's cookie secret ends everyone's at once. There is no per-device revocation, and no sign-out control (DESIGN.md §14) |
 | Session storage | The gate's encrypted cookie for *who* is admitted; nothing else on that question. The lock (ADR-0012) stores a different fact in Postgres — a minted unlock grant, addressed by the grant cookie above — never a file: both `app` and `gate` are `read_only`, which a file-backed store would discover on the first sign-in. Not one row per browser: `mintGrant` inserts unconditionally, so a browser that loses its cookie and unlocks again leaves the old row live beside the new one until its own expiry sweeps it |
 | Cookie attributes | `SameSite=Lax` and `Secure` on the gate's cookie, pinned in `compose.yaml` rather than inherited. **The app now issues one of its own** — the lock's grant cookie (ADR-0012), `__Host-` prefixed, `Secure`, `HttpOnly`, and `SameSite=Lax`, never `Strict`: the gate's own sign-in bounce returns as a top-level, cross-site navigation, and `Strict` would withhold the grant cookie on that very trip and re-lock every browser on the gate's own schedule. The instance's CSRF posture is still `SameSite=Lax` on every cookie here; that no longer follows from the app carrying none of its own, since it now does |
@@ -1741,16 +1804,30 @@ Three stages, each with one job:
 │ node_modules/ build/ package.json                                     │
 │ server/{config,validate-config,db,migrations,migrate}.ts              │
 │   ── run under Node's TYPE STRIPPING; no build step for them          │
+│ server/{yahoo-client,symbol-pattern,price-worker,egress-proxy}.ts     │
+│   ── same; two more ENTRYPOINTS besides the image's own CMD:          │
+│      worker replaces it with price-worker.ts, egress-proxy with       │
+│      egress-proxy.ts (Dockerfile:105-115, compose.yaml)               │
 │ migrations/*.sql   ── the DB is the source of truth, so they ship     │
 │ HEALTHCHECK GET /healthz                                              │
 │ No compiler, no dev dependencies, no source tree.                     │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-The five `server/*.ts` files in the runtime image are the reason `server/config.ts` and `server/db.ts`
-are dependency-light and side-effect free: they are executed two different ways — bundled into the
-server build by Vite for the app, and run directly by Node for the entrypoint's config gate and
-migration runner.
+**One image, three entrypoints.** `worker` and `egress-proxy` are not separate builds — they are the
+same `ghcr.io/chethan123/portfolio-app` image with `entrypoint:` replaced in `compose.yaml`, dropping
+the image's own `CMD` in favour of `node ./server/price-worker.ts` and `node ./server/egress-proxy.ts`
+respectively (§3.1). One version to tag, one image to pull three times, and one release train: a fix
+to either process ships and rolls back exactly as an app fix does. The nine `server/*.ts` files in the
+runtime image are why `server/config.ts` and `server/db.ts` are dependency-light and side-effect free:
+`config.ts`, `validate-config.ts`, `db.ts`, `migrations.ts` and `migrate.ts` are executed two
+different ways — bundled into the server build by Vite for the app, and run directly by Node for the
+entrypoint's config gate and migration runner. `yahoo-client.ts`, `price-worker.ts` and
+`egress-proxy.ts` are reached only the second way, by the two alternate entrypoints above; nothing
+under `app/` imports them, so `npm run build`'s server bundle never carries them. `symbol-pattern.ts`
+is the one exception, reached both ways: the worker imports it directly (`price-worker.ts:61`), and
+`app/lib/provider-socket.server.ts:45` imports the same file, so Vite bundles it into the app too —
+the two sides of the socket sharing one guard rather than each keeping its own copy (Appendix A).
 
 ### 8.2 CI
 
@@ -2009,7 +2086,7 @@ disagree**, and the first thing to check in a review of any new dashboard.
 | Single owner per account | Joint accounts are not modelled | Revisiting `account.owner_id`, and multi-user auth alongside it |
 | USD only | A non-USD instrument is refused at creation | A currency dimension through every money column and every sum |
 | Authentication outside the app, no user table | The gate knows which family member is at the door; nothing behind it does. No per-person permissions, and no sign-out control — revocation is the allowlist or the cookie secret, both the operator's | A separate design, per DESIGN.md §10: `person` is an ownership label, and binding identity to it means revisiting single-owner accounts first |
-| In-process poller | A restart mid-session misses a poll until the next tick | A worker container — two images, two deployments, two log streams |
+| In-process poller | A restart mid-session misses a poll until the next tick | Not `worker` — it holds no schedule and answers only what it is asked (§3.1, ADR-0010); moving the *cadence itself* out of `app` would be a separate, larger change, one image and one more entrypoint beside the two `worker` and `egress-proxy` already are |
 
 ### 11.3 Live architectural debt
 
@@ -2064,9 +2141,10 @@ still live in the current code:
 | `migrations.ts` | Discovery, ledger, advisory lock, per-file transactions |
 | `migrate.ts` | The CLI the entrypoint runs |
 | `validate-config.ts` | The startup gate — fails fast, naming every bad variable |
-| `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). Nothing calls it yet — the app still reaches the provider in its own process through `app/lib/price-provider.server.ts`, until ticket 06 of that spec moves it behind the socket |
-| `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/` |
-| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Only the worker imports it today; the app's own check is a length limit (`instrument-resolution.server.ts:314`) until ticket 06, and spec 0018 §2.1 is why that is tolerable — the worker's check is the one that binds, the app's a courtesy |
+| `price-worker.ts` | The worker process: an HTTP server on a unix socket, holding no database credential and opening no TCP listener (spec 0018 §2.5). `app/lib/provider-socket.server.ts` dials it for every price fetch since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md); nothing under `app/` reaches `yahoo-finance2` directly any more |
+| `yahoo-client.ts` | The only importer of `yahoo-finance2` and the seam a provider swap goes through. One client per process, one fixed deadline per call, nothing imported from `app/`, reached only from `price-worker.ts` |
+| `symbol-pattern.ts` | The symbol pattern and its string guard, in one place so that both sides of the socket can refuse the same spellings without either importing the other's schema. Both sides import it now — the worker (`price-worker.ts:61`) and `app/lib/provider-socket.server.ts:45` — while `instrument-resolution.server.ts:314`'s own check stays a plain length limit; spec 0018 §2.1 is why that gap is tolerable — the worker's check is the one that binds, the app's a courtesy |
+| `egress-proxy.ts` | `worker`'s only way out (spec 0018 §3.7): a `CONNECT`-only forward proxy on `node:http`, `node:net` and `node:dns`, admitting exactly the five Yahoo hosts `yahoo-finance2` 4.0.2 contacts, and only once the TLS `ClientHello` inside the tunnel names that same host — the `200` is written before the hello is ever read, so a mismatch fails at the TLS layer, never with a `403` |
 
 ### `app/lib/` — domain (`.server`) and pure
 
@@ -2079,6 +2157,7 @@ still live in the current code:
 | `column-mapping.server.ts` | Header fingerprinting and the saved mapping |
 | `prices.server.ts` | **The only writer of a price.** All three tiers, the poll record, the freshness read, and the backfill — its candidate query, its batch, its ledger, and the composition every refresh runs |
 | `price-provider.server.ts` | The provider interface, both methods — including the raw entry a quote hands on for the archive, attached past every refusal, and the split un-adjust a history goes through — and the symbol probe. The library itself is reached through `server/yahoo-client.ts`, its only importer |
+| `provider-socket.server.ts` | The transport half of the provider seam (spec 0018 §3.3, §3.8): `socketProvider()` and `socketProbe` dial the worker's unix socket and hand its raw JSON to this module's own conversions above — never touching `yahoo-finance2` itself. `startPricePoller`'s and `refreshPrices`'s default since [ticket 06](docs/specs/price-worker/06-the-app-cutover.md) |
 | `refresh.server.ts` | One refresh, for everything that asks for one: the advisory lock, `refreshPrices`, and the projection the **Refresh now** control renders. The only place a caller names a provider by default, so a change of provider is one edit here and one in `startPricePoller` |
 | `price-poller.server.ts` | The in-process refresh loop and its three concurrency guards, plus the refresh an upload requests once it has committed. The market calendar decides whether quotes are asked for, not whether the tick runs |
 | `positions.server.ts` | Correcting one position, append-only, carrying the account forward |
@@ -2256,6 +2335,8 @@ where each piece lives.
 | **Observation** | One price the feed reported for one instrument, filed under the instant the provider says it was struck. Kept forever, never edited, one row per distinct instant. Not history — history is finished days |
 | **The log** | `price_observation` — every observation, append-only. Read by the 1D chart and by nothing else, and invisible to every valuation of a past date |
 | **Poll** | One refresh attempt, recorded whether or not any observation resulted. What tells a quiet market apart from a server that was not running |
+| **Price worker** | The one process that talks to the price feed (`server/price-worker.ts`, §7.5): holds no rule about what to fetch or what a price means, and no database credential |
+| **Worker socket** | The unix socket in the shared volume through which the app asks and the worker answers (§3.1, §7.5): a request and a raw answer, nothing kept |
 | **Backfill** | Filling an instrument's daily closes for the finished days its position history reaches back to but its spine does not, from the feed's own history. Fills what is absent and never replaces a close the running system recorded itself; a day the market did not trade stays absent |
 | **Session** | One trading day as 1D plots it: the instants the log holds for the latest `market_date` in it. Derived from what was observed, never from a calendar |
 | **Draft** | An in-progress upload. Scaffolding, not history: swept at 24 hours, deleted by its own commit, and unreachable the moment its account closes. The FK cascades on account delete, which nothing in the application does |
