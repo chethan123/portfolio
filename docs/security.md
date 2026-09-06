@@ -233,6 +233,9 @@ of this page.
 
 `yahoo-finance2` is the one production dependency that opens a socket to the internet. The design
 assumes it will eventually be what goes wrong, and is built so that it survives.
+[`adr/0010`](adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md) has the
+argument, including the three adversaries it was judged against separately: a compromised app, a
+compromised feed, and both at once.
 
 It runs in `worker`. What makes that safe is not the image but what the process is denied: no
 `DATABASE_URL` and no `PGPASSWORD` in its environment, no network any database is on, a capped
@@ -347,11 +350,19 @@ learns.
   That falls back to you, at a shell. A synced passkey may outlive the phone it was enrolled on: the
   stack records whether each is backup-eligible and hands its transports back so a browser can offer
   the cross-device flow. Do not plan on it. **Enrol a second passkey.**
+- **A poisoned price is not detected.** The feed's answers are checked for shape, never for truth,
+  and nothing compares them against a second source. A compromised feed cannot read what you hold,
+  but it can change what a screen says you are worth.
 - **The documented external-Postgres path never requires TLS** to the database.
 - **This is not safe to publish on the open internet as it stands.** It is built for a box behind
   your own proxy, on your own network.
 
-The list above is current. An older audit,
+The list above is what a reader deciding whether to run this most needs. `DESIGN.md` §14 carries the
+full recorded set, including the ones that matter more to someone changing the code than to someone
+installing it: the socket volume is fenced on the app's side only, the app is still the database
+superuser, and the worker's own rate caps bound an honest worker rather than a compromised one.
+
+An older audit,
 [`research/2026-09-02-security-and-privacy-audit.md`](research/2026-09-02-security-and-privacy-audit.md),
 has the longer argument behind several of these, but it is a snapshot against one commit and some of
 what it found has since been fixed.
@@ -410,10 +421,13 @@ If any of these surprises you, trust the result over this page and check
 - `ARCHITECTURE.md` §7.6 — the control table, for someone reading the code.
 - [`adr/0005`](adr/0005-auth-is-a-forward-auth-gate.md) — why authentication is a sidecar rather than
   code, and why a VPN was rejected for this threat model.
+- [`adr/0010`](adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md) — why
+  the price worker is a separate process behind a socket, and what the shape was chosen against.
 - [`adr/0012`](adr/0012-a-browser-past-the-gate-is-shown-nothing.md) — why the lock exists and what
   it deliberately does not promise.
 - [`adr/0002`](adr/0002-masking-is-a-display-state.md) — why masking is a display state and must
   never be described as access control.
+- `DESIGN.md` §14 — every limitation this project has accepted on purpose, in its own words.
 - [`guide/passkeys.md`](guide/passkeys.md) — the family-facing version of §3.
 - [`data-model.md`](data-model.md) — every table explained, with extraction queries. This is the
   answer to "what if this project stops being maintained": the data is ordinary Postgres, and that

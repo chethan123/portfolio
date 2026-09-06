@@ -113,8 +113,11 @@ one resolved term and one hard decision at a time, which is the intended pace.
   all, and so states the threat model, draws the segmentation, and carries the standing list of what
   is *not* defended. It overlaps `ARCHITECTURE.md` §2's trust boundaries and §3.1's privilege
   posture, `operating.md`'s "One thing that leaves the house" and "The lock",
-  [`adr/0005`](adr/0005-auth-is-a-forward-auth-gate.md), [`adr/0009`](adr/0009-the-stack-takes-dumps-not-backups.md)
-  and [`adr/0012`](adr/0012-a-browser-past-the-gate-is-shown-nothing.md). **`compose.yaml` is the
+  [`adr/0005`](adr/0005-auth-is-a-forward-auth-gate.md), [`adr/0009`](adr/0009-the-stack-takes-dumps-not-backups.md),
+  [`adr/0010`](adr/0010-price-fetching-is-an-egress-isolated-worker-behind-a-unix-socket.md),
+  [`adr/0012`](adr/0012-a-browser-past-the-gate-is-shown-nothing.md) and `DESIGN.md` §14's accepted
+  limitations. **Each of those is the one to believe for its own argument** — `security.md` states
+  the consequence for someone deciding whether to run this, and links rather than re-deriving. **`compose.yaml` is the
   one to believe** for anything about networks, published ports or container privilege — it enforces
   them — and **`security.md`'s own "What this does not protect against" is the one to believe** for
   which weaknesses are still open, the audit under [`research/`](research/) being a snapshot against
