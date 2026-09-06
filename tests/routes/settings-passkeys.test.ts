@@ -1,32 +1,14 @@
-/**
- * `app/routes/settings/passkeys.tsx` (docs/adr/0012, spec 0019, ticket 05) —
- * the route's own contribution: reading a submission, handing it straight to
- * `~/lib/lock.server`, and rendering back whatever that module decided.
- * Every rule about what a valid assertion, enrolment or removal *is* belongs
- * to that module and is exhaustively tested there (`tests/lock.test.ts`);
- * this file never re-derives one, and every refusal below is asserted by
- * its exact printed sentence rather than a route-invented paraphrase.
- *
- * The two ceremonies have no browser in this suite — `tests/routes/
- * unlock.test.ts`'s own header says why — so most assertion or registration
- * responses below come from `tests/support/webauthn.ts`, signed for a
- * challenge one of this file's own calls actually minted, posted straight to
- * `action` without ever going through the client-side ceremony. The pure
- * decisions this route pulls out of its own effects — `runConfirmCeremony`,
- * `applyRemovalOptionsResult`, `removalConfirmDisabled`, `runRemovalCeremony`
- * (this file's own header on why the two ceremonies need different ones) —
- * are the exception: those are driven directly, with `~/lib/unlock-ceremony`
- * mocked file-wide exactly as `unlock.test.ts` mocks it, since calling them
- * directly is what actually exercises `requestAssertion`.
- *
- * This route's `action` returns most of its answers through react-router's
- * `data()` helper so it can attach a `Set-Cookie` alongside a plain payload;
- * called directly (never through the framework's own data strategy),
- * `data()` hands back a `{ data, init }` wrapper rather than the payload or
- * a `Response` — {@link payloadOf} and {@link grantIdOf} below unwrap it,
- * the same move `tests/routes/upload-wizard.test.ts` makes for the one other
- * `data()` return in this codebase.
- */
+// settings/passkeys.tsx (ADR-0012, spec 0019, ticket 05): reads a submission, hands it to lock.server, renders back
+// whatever that module decided. Assertion/enrolment/removal validity rules are lock.server's (tests/lock.test.ts); every
+// refusal here is asserted by its exact printed sentence, never a route-invented paraphrase. No browser in this suite, so
+// most assertion/registration responses come from tests/support/webauthn.ts, posted straight to action. The pure
+// decisions the route pulls out of its effects (runConfirmCeremony, applyRemovalOptionsResult, removalConfirmDisabled,
+// runRemovalCeremony) are driven directly with unlock-ceremony mocked file-wide (as unlock.test.ts does), since calling
+// them directly is what exercises requestAssertion.
+//
+// The action returns most answers through react-router's data() (so it can attach Set-Cookie alongside a payload);
+// called directly, data() hands back {data, init}, not the payload or a Response — payloadOf/grantIdOf below unwrap it,
+// as upload-wizard.test.ts does for the codebase's one other data() return.
 import { generateKeyPairSync } from "node:crypto";
 
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -48,13 +30,7 @@ import {
 
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-// Mocked file-wide, the same shape and the same reason as `unlock.test.ts`:
-// nothing in this suite has a browser to run the real ceremony, and the
-// component code under test here never calls either export outside a
-// `useEffect` or a click handler — except the four pure functions
-// (`runConfirmCeremony`, `applyRemovalOptionsResult`,
-// `removalConfirmDisabled`, `runRemovalCeremony`) this file drives directly,
-// which is exactly what needs `requestAssertion` mocked to be testable at all.
+// Mocked file-wide, same shape as unlock.test.ts — the four pure functions this file drives directly need requestAssertion mocked to be testable at all.
 vi.mock("~/lib/unlock-ceremony", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/unlock-ceremony")>();
   return { ...actual, requestAssertion: vi.fn(), supportsPasskeys: vi.fn() };
@@ -96,9 +72,7 @@ const {
 } = await import("~/lib/lock.server");
 const { requestAssertion } = await import("~/lib/unlock-ceremony");
 const { middleware } = await import("../../app/root.tsx");
-// The window the screen's guard is measured against, read from where the
-// domain and the screen now share it (ticket 11's F14) rather than restated
-// here — a restatement is exactly the drift that finding was about.
+// Read from where domain and screen share it (ticket 11's F14) — a restatement here is exactly the drift that finding was about.
 const { CHALLENGE_TTL_MS } = await import("~/lib/lock");
 
 afterAll(closeTestDatabase);
@@ -106,15 +80,8 @@ afterAll(closeTestDatabase);
 /** A passkey nobody signs for — good for a row that is only ever a removal *target*, never an authoriser. */
 const BYSTANDER_PUBLIC_KEY = new Uint8Array([1, 2, 3, 4]);
 
-/**
- * A well-formed COSE EC public key nobody's private key here corresponds to
- * — `tests/lock.test.ts`'s own `unrelatedPublicKeyCose`, not shared from
- * `tests/support/webauthn.ts` because it signs nothing: it exists purely so
- * a *second* credential can be stored and actually verified against, never
- * asserted as. A malformed stand-in (four raw bytes, say) makes
- * `completeRegistration` refuse before it ever reaches the rule a test built
- * on it claims to prove — this is what closes that hole (finding 6).
- */
+// A well-formed COSE EC public key nobody's private key corresponds to — a malformed stand-in (four raw bytes) would
+// make completeRegistration refuse before ever reaching the rule under test (finding 6).
 function unrelatedPublicKeyCose(): Uint8Array {
   const { publicKey: generated } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const jwk = generated.export({ format: "jwk" }) as { x?: string; y?: string };
@@ -145,7 +112,7 @@ function payloadOf<T>(outcome: unknown): T {
   return (outcome as DataResult<T>).data;
 }
 
-/** The `Set-Cookie` header this action's `init.headers` carried, if any — a plain object, never a `Headers` instance, since that is all this route ever passes. */
+/** The Set-Cookie header this action's init.headers carried, if any — a plain object, never a Headers instance. */
 function setCookieOf(outcome: unknown): string | undefined {
   const headers = (outcome as DataResult<unknown>).init?.headers as Record<string, string> | undefined;
   return headers?.["Set-Cookie"];
@@ -156,12 +123,7 @@ function grantIdOf(outcome: unknown): string | undefined {
   return setCookieOf(outcome)?.match(new RegExp(`${LOCK_COOKIE}=([^;]+)`))?.[1];
 }
 
-/**
- * `renderToStaticMarkup`'s own escaping turns an apostrophe into `&#x27;` —
- * compare a sentence carrying one against *that*, never the raw string, the
- * same move the last-passkey warning test below already had to make for its
- * own apostrophe.
- */
+/** renderToStaticMarkup escapes an apostrophe to &#x27; — compare against that, never the raw string. */
 function htmlEscaped(text: string): string {
   return text.replace(/'/g, "&#x27;");
 }
@@ -260,13 +222,8 @@ describe("the loader", () => {
   );
 
   it(
-    // This is the pin: the pre-fix version of this route minted the
-    // confirm-identity ceremony's options from a click handler's own fetch,
-    // which is exactly the bug `unlock.tsx`'s own commit c0af420 fixed on
-    // the sibling screen — a network round trip awaited ahead of the
-    // ceremony, spending the press's activation on the wait rather than the
-    // check. Minting `enrolOptions` here, in the loader, is what lets the
-    // confirm press run `requestAssertion` with no fetch ahead of it.
+    // Pre-fix, this route minted options from a click handler's own fetch (unlock.tsx's commit c0af420's bug on the
+    // sibling screen) — a round trip ahead of the ceremony, spending the press's activation on the wait, not the check.
     "returns this page's own enrolment assertion options, minted here rather than by a later press",
     withDatabase(async ({ seedPasskey }) => {
       await seedFixturePasskey(seedPasskey);
@@ -316,10 +273,7 @@ describe("removal options are minted on demand, per press, never once per row on
   );
 
   it(
-    // Locks in the shape this file's own header argues for: minting the
-    // confirm-identity ceremony's options is the loader's job now, not a
-    // press's — an `enrolOptions` intent reaching the action at all is
-    // itself the pre-fix shape coming back.
+    // Minting options is the loader's job now, not a press's — enrolOptions reaching the action at all is the pre-fix shape coming back.
     "no longer answers an 'enrolOptions' intent — that ceremony's options come from the loader now",
     withDatabase(async () => {
       const response = await responseOf(() => action(args(post("/settings/passkeys", { intent: "enrolOptions" }))));
