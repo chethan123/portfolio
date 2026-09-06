@@ -9,12 +9,7 @@ import { listPeople } from "~/lib/people.server";
 
 import type { Route } from "./+types/accounts";
 
-/**
- * Settings → Accounts: the list, and the form that adds to it. Editing and
- * closing are their own screen (`account.tsx`) — an account carries six
- * fields, and closing is a decision historical figures are computed against;
- * neither belongs behind an inline control on a list.
- */
+// The list, and the form that adds to it. Editing/closing are their own screen (`account.tsx`), not an inline control.
 export function meta() {
   return [{ title: "Accounts · Settings · Portfolio" }];
 }
@@ -22,8 +17,7 @@ export function meta() {
 export async function loader() {
   const [accounts, people] = await Promise.all([listAccounts(), listPeople()]);
   return {
-    // The list renders only the tail, so only the tail is serialized to the
-    // browser; the edit screen loads the raw number itself, being its editor.
+    // Only the tail serialized to the browser — the edit screen loads the raw number itself.
     accounts: accounts.map(({ externalAccountNumber, ...account }) => ({
       ...account,
       accountNumberTail: numberTail(externalAccountNumber),
@@ -45,22 +39,8 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-/**
- * UTC, and formatted on the server: the database stores UTC and a date
- * formatted in the browser's locale would differ between the server-rendered
- * markup and the hydrated one — the same argument `~/lib/format.ts`'s
- * `formatDate` makes for itself.
- *
- * **Not moved onto that shared helper.** `formatDate` renders "5 Sep 2026";
- * this renders "2026-09-05", the same ISO form `settings/prices.tsx`'s own
- * `on` already shows for a date beside a figure on an adjacent Settings tab.
- * Adopting `formatDate` here would fix this one call site's duplication
- * while leaving that one standing, trading a repo with two date renderers
- * for one with two renderers *and* a mismatched sibling. Reconciling the two
- * formats is worth doing — it just is not this ticket's, which added
- * `formatDate` because the repo had none, not because it owns every date on
- * screen.
- */
+// UTC, server-formatted (browser-locale would mismatch hydration). ISO form,
+// not `formatDate` — matches `settings/prices.tsx`'s own date format, not that helper's "5 Sep 2026".
 const closedOn = (closedAt: Date | null): string | null =>
   closedAt === null ? null : new Date(closedAt).toISOString().slice(0, 10);
 
@@ -129,8 +109,6 @@ export default function Accounts({ loaderData, actionData }: Route.ComponentProp
       )}
 
       {people.length === 0 ? (
-        // An account cannot exist without an owner, so this is the one place
-        // the first-run order is enforced rather than merely suggested.
         <p className="empty-note">
           Add someone under <Link to="/settings/people">People</Link> first — every account
           belongs to exactly one person.

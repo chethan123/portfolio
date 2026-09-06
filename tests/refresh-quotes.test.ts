@@ -1,14 +1,4 @@
-/**
- * What a refresh stores, and what it refuses to store.
- *
- * These run against the real database because the decisions being protected are
- * about rows: which `price_daily` date a quote becomes, that a past date is
- * never rewritten, that a failed symbol keeps its price and gains a flag.
- *
- * The provider is a fake throughout. That is the point of the interface
- * DESIGN.md §6.1 mandates — CI never reaches the network, and every awkward
- * response a real provider could give can be stated in one line here.
- */
+// what a refresh stores and refuses to store — real database, fake provider throughout (DESIGN.md §6.1)
 import { sql } from "kysely";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -21,15 +11,7 @@ afterAll(closeTestDatabase);
 
 const NEW_YORK = "America/New_York";
 
-/**
- * A provider that returns exactly what a test says, and records what it was asked.
- *
- * Returns the quotes verbatim rather than filtering them to the requested
- * symbols. An earlier version filtered — which quietly made the
- * unrequested-symbol test unfailable, because the surprise quote never reached
- * the code that is supposed to ignore it. A fake that corrects the test's
- * fixture cannot test what the caller does with a bad one.
- */
+// returns quotes verbatim, unfiltered — a filtering fake once made the unrequested-symbol test unfailable
 function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[][] } {
   const asked: string[][] = [];
   return {
@@ -38,16 +20,12 @@ function fakeProvider(quotes: ProviderQuote[]): PriceProvider & { asked: string[
       asked.push([...symbols]);
       return quotes;
     },
-    // Nothing in this file backfills; the method exists because the interface
-    // requires it, and a provider that cannot answer history is not this
-    // application's provider.
     async getDailyCloses() {
       return { status: "no-history" };
     },
   };
 }
 
-/** A provider that fails the way a rate limit or a shape change fails. */
 function brokenProvider(message = "429 Too Many Requests"): PriceProvider {
   return {
     async getQuotes() {
@@ -59,25 +37,18 @@ function brokenProvider(message = "429 Too Many Requests"): PriceProvider {
   };
 }
 
-/** A quote, with the boring fields filled in. */
 const quote = (overrides: Partial<ProviderQuote> & { symbol: string }): ProviderQuote => ({
   price: "100.0000",
   quoteType: "ETF",
   yieldPct: null,
   annualDividendPerShare: null,
   asOf: new Date("2026-06-05T20:00:00Z"),
-  // A few seconds after the instant it says it struck — a fake knows what time
-  // it answered, which is why `fetchedAt` is required and `payload` is not.
+  // a few seconds after the instant it struck — why fetchedAt is required, distinct from asOf
   fetchedAt: new Date("2026-06-05T20:00:05Z"),
   ...overrides,
 });
 
-/**
- * Runs `body` with today's market date pinned near the fixtures' own 2026
- * dates, so the seven-day window (module header) does not refuse the closes
- * these tests are actually about. The shape `tests/price-backfill.test.ts:
- * 965-978` uses.
- */
+// pins today's market date near the fixtures' 2026 dates so the seven-day window doesn't refuse them
 async function withClockNear<T>(now: string, body: () => Promise<T>): Promise<T> {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date(now) });
   try {
@@ -92,9 +63,7 @@ describe("choosing what to fetch", () => {
     "asks only about instruments priced from a feed",
     withDatabase(async ({ db, seedInstrument, usdInstrument }) => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      // A collective investment trust: no public ticker, priced by hand.
       await seedInstrument({ symbol: null, name: "Target 2045 Trust II", priceSource: "manual" });
-      // The seeded USD row, fixed at 1.00 since 1970.
       await usdInstrument();
 
       const provider = fakeProvider([]);
@@ -143,16 +112,12 @@ describe("what a refresh learned", () => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
       await withClockNear("2026-06-05T21:00:00Z", async () => {
-        // Twice, with the provider re-stating the same instant both times —
-        // which is exactly what a weekend press gets: Friday's close, again.
         const first = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
         const second = await refreshQuotes(fakeProvider([quote({ symbol: "VTI" })]), NEW_YORK, db);
 
         expect(first.observed).toBe(1);
 
-        // Every other count is identical between the two, which is the reason
-        // this field exists: without it the second press claims to have
-        // updated a price it merely re-read.
+        // without `observed`, the second press would claim to update a re-read price
         expect(second.priced).toBe(1);
         expect(second.closes).toBe(1);
         expect(second.observed).toBe(0);
@@ -168,9 +133,7 @@ describe("what a refresh learned", () => {
       const outage = await refreshQuotes(brokenProvider(), NEW_YORK, db);
       const ignorance = await refreshQuotes(fakeProvider([]), NEW_YORK, db);
 
-      // Identical aggregates. The feed being down and the symbol being wrong
-      // need different sentences on screen, and this is the only thing that
-      // tells them apart.
+      // identical aggregates otherwise — providerFailed is the only thing distinguishing feed-down from wrong-symbol
       expect(outage.priced).toBe(0);
       expect(ignorance.priced).toBe(0);
       expect(outage.stale).toBe(1);
@@ -224,9 +187,7 @@ describe("storing a price", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      // 01:30 UTC on the 6th is 21:30 on the 5th in New York — an evening
-      // mutual fund NAV. Filed under the 6th it would be overwritten by the
-      // 6th's real close and lost.
+      // 01:30 UTC on the 6th = 21:30 on the 5th NY — filed under the 6th, the real 6th close would overwrite and lose it
       await withClockNear("2026-06-06T12:00:00Z", () =>
         refreshQuotes(
           fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
@@ -262,7 +223,6 @@ describe("storing a price", () => {
         .where("instrument_id", "=", vti.id)
         .execute();
 
-      // One row, not two — and it holds the later price.
       expect(rows.map((row) => row.close)).toEqual(["271.5000"]);
     }),
   );
@@ -288,7 +248,7 @@ describe("storing a price", () => {
         .orderBy("date")
         .execute();
 
-      // §6.2: an intraday refresh can never corrupt history.
+      // §6.2: an intraday refresh must never corrupt history
       expect(rows).toEqual([
         { date: "2026-06-04", close: "265.0000" },
         { date: "2026-06-05", close: "271.5000" },
@@ -324,7 +284,6 @@ describe("the seven-day window", () => {
     "writes the quote and the observation but no close for a quote eight days before today",
     withDatabase(async ({ db, seedInstrument, seedDailyClose }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
-      // The row a live poller would already have settled for that day.
       await seedDailyClose({ instrument: vti, date: "2026-06-07", close: "265.0000" });
 
       const report = await withClockNear("2026-06-15T12:00:00Z", () =>
@@ -339,8 +298,7 @@ describe("the seven-day window", () => {
 
       expect(report.closes).toBe(0);
 
-      // Byte-identical: the window guard, not a rewrite that happened to
-      // match, is what left it alone.
+      // byte-identical: proves the window guard left it alone, not a coincidental matching rewrite
       const close = await db
         .selectFrom("price_daily")
         .select("close")
@@ -349,7 +307,6 @@ describe("the seven-day window", () => {
         .executeTakeFirstOrThrow();
       expect(close.close).toBe("265.0000");
 
-      // The quote and the observation still land — only the close is refused.
       const quoteRow = await db
         .selectFrom("quote")
         .select("price")
@@ -392,9 +349,6 @@ describe("the seven-day window", () => {
   it(
     "warns once for the whole refresh, naming every instrument whose close was skipped",
     withDatabase(async ({ db, seedInstrument }) => {
-      // Three words of the rule, each its own way to get it wrong: *one* line
-      // (not one per instrument), *per refresh* (not on a refresh that skipped
-      // nothing), naming *the instruments* (not just the first).
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedInstrument({ symbol: "VXUS", priceSource: "feed" });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -444,9 +398,7 @@ describe("the seven-day window", () => {
   it(
     "writes the close for a quote exactly seven days ahead of today, the other edge",
     withDatabase(async ({ db, seedInstrument }) => {
-      // The spec calls the window symmetric, so both edges are rules. Without
-      // this the future half is pinned only by an eight-days-ahead case, and
-      // narrowing it to six would pass.
+      // without this edge, narrowing the future half to six days would still pass
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
       const report = await withClockNear("2026-06-15T12:00:00Z", () =>
@@ -471,10 +423,7 @@ describe("the seven-day window", () => {
   it(
     "measures the window against the market's own date, not the runtime's",
     withDatabase(async ({ db, seedInstrument }) => {
-      // 02:00 UTC is the previous evening in New York, so the market date and
-      // the UTC date are different days. Both sides of the comparison have to
-      // be spoken in the market's calendar or the whole window slides a day
-      // for every tick in that band.
+      // 02:00 UTC is the previous evening in NY — both sides must speak the market's calendar or the window slides a day
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
       const report = await withClockNear("2026-06-06T02:00:00Z", () =>
@@ -485,9 +434,7 @@ describe("the seven-day window", () => {
         ),
       );
 
-      // Market today is 2026-06-05, so 2026-05-29 is exactly the past edge and
-      // writes. Read in UTC, today would be 2026-06-06 and this would be eight
-      // days back — refused.
+      // market today is 06-05: 05-29 is exactly the past edge; read as UTC today (06-06) it'd be eight days back, refused
       expect(report.closes).toBe(1);
 
       const closes = await db
@@ -560,7 +507,7 @@ describe("a symbol that does not come back", () => {
         .where("instrument_id", "=", gone.id)
         .executeTakeFirstOrThrow();
 
-      // §6.2: never zero, never null into a sum.
+      // §6.2: never zero, never null into a sum
       expect(stored.price).toBe("42.0000");
       expect(stored.is_stale).toBe(true);
       expect(report.stale).toBe(1);
@@ -580,8 +527,7 @@ describe("a symbol that does not come back", () => {
         .where("instrument_id", "=", fresh.id)
         .executeTakeFirst();
 
-      // No row, rather than a row claiming a price of zero. `holding_valued`
-      // reports the absence honestly as `is_priced = false`.
+      // no row, not a row claiming zero — holding_valued reports the absence as is_priced=false
       expect(stored).toBeUndefined();
     }),
   );
@@ -618,8 +564,6 @@ describe("a symbol that does not come back", () => {
         ),
       );
 
-      // The fake hands back both; only the requested one has an instrument to
-      // belong to, so only it is written.
       expect(report.priced).toBe(1);
       const rows = await db.selectFrom("price_daily").selectAll().execute();
       expect(rows.filter((row) => row.close === "100.0000")).toHaveLength(1);
@@ -642,10 +586,7 @@ describe("a provider that fails outright", () => {
         .where("instrument_id", "=", vti.id)
         .executeTakeFirstOrThrow();
 
-      // The price is kept and used; the flag is what changes. That this
-      // resolves at all is the other half: a poll is a background concern and
-      // a provider outage is the expected case §6.1 plans for, so the report
-      // comes back rather than the failure reaching a caller with no catch.
+      // resolves rather than throwing — §6.1 expects provider outages, a poll is background
       expect(stored.price).toBe("271.5000");
       expect(stored.is_stale).toBe(true);
       expect(report.stale).toBe(1);
@@ -675,9 +616,7 @@ describe("matching a quote to an instrument", () => {
   it(
     "matches regardless of the case the symbol was typed in",
     withDatabase(async ({ db, seedInstrument }) => {
-      // Yahoo answers in its own canonical case. An instrument stored as `vti`
-      // would otherwise never match, and would mark itself stale on every run
-      // forever with nothing in the log naming it.
+      // Yahoo answers in its own canonical case — stored lowercase would never match, going stale silently forever
       const lower = await seedInstrument({ symbol: "vti", priceSource: "feed" });
 
       const report = await refreshQuotes(
@@ -720,8 +659,7 @@ describe("how fresh the prices are", () => {
 
       const freshness = await priceFreshness(db);
 
-      // The newest reading would call this portfolio current while one holding
-      // has been failing for a week — §11's dangerous failure exactly.
+      // §11: newest reading would call this portfolio current while one holding failed for a week
       expect(freshness.oldest).toEqual(week);
       expect(freshness.stale).toBe(1);
       expect(freshness.priced).toBe(2);
@@ -731,10 +669,7 @@ describe("how fresh the prices are", () => {
   it(
     "ignores the USD row, whose timestamp is written once by the migration and never again",
     withDatabase(async ({ db, seedAccount, seedInstrument, seedPositionSet, seedQuote, usdInstrument }) => {
-      // Every bank and loan account holds a USD position, and the seeded USD
-      // quote's `as_of` is stamped at install and never updated. Counting it
-      // would pin the "as of" line to the install date for the life of the
-      // instance — a banner that never moves is worse than no banner.
+      // USD's as_of is stamped at install and never updated — counting it would pin the "as of" banner forever
       const usd = await usdInstrument();
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
@@ -779,8 +714,7 @@ describe("how fresh the prices are", () => {
 
       const freshness = await priceFreshness(db);
 
-      // One fund that is stale, not two — the figure is read as "1 of 1 prices
-      // is stale", and holdings are not prices.
+      // one stale fund, not two — read as "1 of 1 prices is stale"; holdings aren't prices
       expect(freshness.stale).toBe(1);
       expect(freshness.priced).toBe(1);
     }),
@@ -789,8 +723,7 @@ describe("how fresh the prices are", () => {
   it(
     "backfills what the provider calls an instrument, and keeps it current",
     withDatabase(async ({ db, seedInstrument }) => {
-      // Created before the column was written at all, which is every
-      // instrument on an instance older than the gains panel.
+      // quoteType: null is every instrument created before the column existed
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed", quoteType: null });
 
       await refreshQuotes(fakeProvider([quote({ symbol: "VTI", quoteType: "ETF" })]), NEW_YORK, db);
@@ -801,9 +734,7 @@ describe("how fresh the prices are", () => {
         .where("id", "=", vti.id)
         .executeTakeFirstOrThrow();
 
-      // Without this the Analysis split would be right only for instruments
-      // added after the column started being filled in, and every older
-      // holding would sit in the catch-all row.
+      // without this backfill, every instrument older than the column would sit in Analysis's catch-all row
       expect(after.quote_type).toBe("ETF");
     }),
   );
@@ -825,8 +756,7 @@ describe("how fresh the prices are", () => {
         .where("id", "=", vti.id)
         .executeTakeFirstOrThrow();
 
-      // A terse payload is the provider saying less, not the instrument
-      // becoming unclassifiable.
+      // a terse payload is the provider saying less, not the instrument becoming unclassifiable
       expect(after.quote_type).toBe("ETF");
     }),
   );
@@ -836,8 +766,7 @@ describe("how fresh the prices are", () => {
     withDatabase(async ({ db }) => {
       const freshness = await priceFreshness(db);
 
-      // An empty instance must not render a figure — a zero and an absence are
-      // different facts, and only one of them is alarming.
+      // empty instance must not render a figure — zero and absence are different facts, only one is alarming
       expect(freshness.oldest).toBeNull();
       expect(freshness.priced).toBe(0);
     }),
@@ -876,10 +805,7 @@ describe("the observation log", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
 
-      // The same 21:30 New York evening NAV the daily close is filed by. An
-      // observation stamped with the UTC day would land the whole session on
-      // the wrong side of midnight, and 1D resolves its session off this
-      // column.
+      // same 21:30 NY evening NAV as the daily close — UTC-stamped, it'd land the session on the wrong side of midnight (1D resolves off this column)
       await refreshQuotes(
         fakeProvider([quote({ symbol: "VTI", asOf: new Date("2026-06-06T01:30:00Z") })]),
         NEW_YORK,
@@ -911,9 +837,7 @@ describe("the observation log", () => {
         .where("instrument_id", "=", vti.id)
         .execute();
 
-      // One instant, one row. The second price is the divergence ADR-0006
-      // accepts rather than reconciles: `quote` upserts to it and the log
-      // keeps the first.
+      // ADR-0006 accepts the divergence rather than reconciling it: quote upserts, the log keeps the first
       expect(rows).toHaveLength(1);
       expect(rows[0]?.price).toBe("270.0000");
 
@@ -975,8 +899,7 @@ describe("the observation log", () => {
         .where("instrument_id", "=", withRaw.id)
         .executeTakeFirstOrThrow();
 
-      // Round-tripped as jsonb, and read back only to assert it survived —
-      // ADR-0006 makes `price` the only column anything may compute from.
+      // ADR-0006 makes price the only column anything may compute from — payload is round-tripped, not derived from
       expect(archived.payload).toEqual({
         symbol: "VTI",
         regularMarketPrice: 271.5,
@@ -989,8 +912,7 @@ describe("the observation log", () => {
         .where("instrument_id", "=", withoutRaw.id)
         .executeTakeFirstOrThrow();
 
-      // A fake has no raw entry to hand over, and one absent is not one
-      // missing: the observation is still an observation.
+      // a fake has no raw entry — absent isn't missing, the observation still stands
       expect(bare.payload).toBeNull();
     }),
   );
@@ -1003,8 +925,7 @@ describe("the observation log", () => {
 
       await refreshQuotes(brokenProvider(), NEW_YORK, db);
 
-      // The absence is the truth about that instant. A carried-forward price is
-      // the current answer, not something the feed said.
+      // the absence is the truth about that instant — a carried-forward price isn't something the feed said
       const rows = await db.selectFrom("price_observation").selectAll().execute();
       expect(rows).toEqual([]);
 
@@ -1021,31 +942,19 @@ describe("the observation log", () => {
   it(
     "rolls back with the quote and the close when a later write in the same refresh fails",
     withDatabase(async ({ db, seedInstrument }) =>
-      // The clock matters here even though the window is not the subject: the
-      // fixtures are struck in June, so under a real clock no close would be
-      // written at all and the `price_daily` assertion below would hold
-      // whether or not the transaction rolled back.
+      // under a real clock no close would be written at all, so the assertion below would hold regardless of the rollback
       withClockNear("2026-06-05T21:00:00Z", async () => {
       const good = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       await seedInstrument({ symbol: "BAD", priceSource: "feed" });
 
-      // A savepoint, because the refusal below aborts the transaction this test
-      // body runs in, and every assertion after it would then fail on that
-      // rather than on the rule. Rolling back to the savepoint recovers the
-      // transaction and leaves exactly the question worth asking: what survived?
+      // the refusal below aborts the transaction this body runs in — rolling back to a savepoint recovers it
       await sql`savepoint before_refresh`.execute(db);
 
       await expect(
         refreshQuotes(
           fakeProvider([
             quote({ symbol: "VTI", price: "271.5000" }),
-            // Five integer digits into `quote.yield_pct`, which is
-            // numeric(10, 6) and holds four. Chosen because it is a column the
-            // *quote* tier has and the observation log does not: the batched
-            // observation insert runs first and succeeds, so both instruments'
-            // observations are on disk when this refusal lands. Anything the
-            // observation insert itself rejected would make the assertions below
-            // true for a refresh that never wrote an observation at all.
+            // yield_pct overflow (numeric(10,6), 5 digits) — the observation log lacks this column, so its insert succeeds first
             quote({ symbol: "BAD", yieldPct: "99999.000000" }),
           ]),
           NEW_YORK,
@@ -1055,8 +964,6 @@ describe("the observation log", () => {
 
       await sql`rollback to savepoint before_refresh`.execute(db);
 
-      // All three tiers, or none. Writing them in one transaction is what makes
-      // an observation without the quote it was written beside impossible.
       expect(await db.selectFrom("price_observation").selectAll().execute()).toEqual([]);
       expect(
         await db.selectFrom("quote").select("instrument_id").where("instrument_id", "=", good.id).execute(),
@@ -1073,9 +980,7 @@ describe("the archive cap", () => {
   it(
     "drops a payload one byte over the cap",
     withDatabase(async ({ db, seedInstrument }) => {
-      // The mirror of the at-cap case. Without it any cap up to the 33 KB the
-      // oversize case uses would pass, and "over 32 KB" would be untrue across
-      // a whole kilobyte.
+      // mirror of the at-cap case — without it any cap up to 33KB would pass "over 32KB"
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const envelope = JSON.stringify({ symbol: "VTI", note: "" }).length;
       const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope + 1) };
@@ -1097,9 +1002,7 @@ describe("the archive cap", () => {
   it(
     "archives a payload of exactly the cap, which is not over it",
     withDatabase(async ({ db, seedInstrument }) => {
-      // The rule is "over 32 KB", so the cap itself is the last size that
-      // still lands. Without this, tightening the comparison to `>=` would
-      // silently drop a payload the contract keeps.
+      // rule is "over 32KB" — the cap itself is the last size that still lands
       const vti = await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const envelope = JSON.stringify({ symbol: "VTI", note: "" }).length;
       const payload = { symbol: "VTI", note: "x".repeat(32 * 1024 - envelope) };
@@ -1125,9 +1028,7 @@ describe("the archive cap", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       try {
-        // Within the seven-day window, so the only warning possible is the
-        // archive cap's — a stray window-skip warning naming the same symbol
-        // would let this assertion pass for the wrong reason.
+        // within the seven-day window, so the only possible warning is the archive cap's, not a window-skip
         await withClockNear("2026-06-05T21:00:00Z", () =>
           refreshQuotes(
             fakeProvider([
@@ -1187,10 +1088,7 @@ describe("the archive cap", () => {
     withDatabase(async ({ db, seedInstrument }) => {
       const vti = await seedInstrument({ symbol: "FX", priceSource: "feed" });
 
-      // "€" is one UTF-16 code unit (`.length` counts it as 1) and three UTF-8
-      // bytes. 15,000 of them is ~15 KB by `.length` — comfortably under the
-      // 32 KB cap — but ~45 KB by `Buffer.byteLength`, well over it: the case
-      // that pins the cap to bytes rather than the string's own `.length`.
+      // "€" is 1 UTF-16 unit but 3 UTF-8 bytes: 15,000 is ~15KB by .length but ~45KB by byteLength — pins the cap to bytes
       const companyName = "€".repeat(15000);
       const payload = { symbol: "FX", companyName };
       expect(JSON.stringify(payload).length).toBeLessThan(32 * 1024);
@@ -1237,8 +1135,7 @@ describe("the poll record", () => {
 
       const report = await refreshQuotes(provider, NEW_YORK, db);
 
-      // Nothing to price, so nothing is asked — but the attempt happened, and a
-      // log with no observations for an hour has to be able to say why.
+      // nothing asked, but the attempt happened — a quiet hour's log still has a row
       expect(provider.asked).toEqual([]);
       expect(report).toEqual({
         requested: 0,
@@ -1264,8 +1161,7 @@ describe("the poll record", () => {
 
       const polls = await db.selectFrom("price_poll").selectAll().execute();
 
-      // The row that tells a failed provider apart from a quiet market: one
-      // instrument asked about, none priced, one stale.
+      // asked/priced/stale together tell a failed provider apart from a quiet market
       expect(polls).toHaveLength(1);
       expect(polls[0]?.requested).toBe(1);
       expect(polls[0]?.priced).toBe(0);
@@ -1279,16 +1175,13 @@ describe("the poll record", () => {
       await seedInstrument({ symbol: "VTI", priceSource: "feed" });
       const asOf = new Date("2026-06-05T17:00:00Z");
 
-      // An attempt from before this test's two, so that "appends" is what is
-      // being read rather than "wrote exactly two".
+      // an existing attempt before this test's two — pins "appends", not "wrote exactly two"
       await seedPoll({ startedAt: new Date("2026-06-05T16:45:00Z") });
 
       await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, db);
       await refreshQuotes(fakeProvider([quote({ symbol: "VTI", asOf })]), NEW_YORK, db);
 
-      // Dedup means the second refresh wrote no observation at all. Three polls
-      // and one observation is exactly the shape that makes the log's silences
-      // readable.
+      // three polls, one observation — dedup shows up as the second refresh writing no observation
       expect(await db.selectFrom("price_poll").selectAll().execute()).toHaveLength(3);
       expect(await db.selectFrom("price_observation").selectAll().execute()).toHaveLength(1);
     }),

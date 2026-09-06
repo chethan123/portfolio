@@ -226,6 +226,33 @@ An upload in progress is a draft with its own address.
   on the expired page.
 - **A draft whose account has since been closed reads as expired**, not as forbidden.
 
+## On a phone
+
+![Step one on a phone: the four-step strip wrapped as plain text above the form](images/upload-1-account-and-file-mobile.png)
+
+The four-step strip wraps onto a second line rather than scrolling out of view — unlike the chip
+strips elsewhere in this guide, it is plain text rather than buttons, and keeping all four steps
+visible together matters more here than keeping the line short.
+
+![Step two on a phone: the sample rows scrolled sideways to their first three columns](images/upload-2-columns-mapped-mobile.png)
+
+The sample-rows table — the one to map by looking at values, not names — scrolls sideways rather
+than reflowing, so on a phone you are checking a couple of columns at a time rather than the whole
+row at once.
+
+![Step three on a phone: the new-instrument form, one field per line](images/upload-3-instruments-mobile.png)
+
+Resolving a new instrument is the same form, stacked: **Symbol** and **Name** each get their own
+line instead of sharing a row, and **Price source** and **Classification** follow underneath rather
+than beside them.
+
+![Step four on a phone: the added/updated/removed counts above the start of the diff](images/upload-4-review-mobile.png)
+
+The table is already one column on a wider screen, so nothing here reflows — the counts, then
+**Added**, **Updated** and **Removed** in that order, each a heading above its own rows. A phone
+screen just reaches less of it before running out of room; scrolling is how you see **Updated** and
+**Removed**.
+
 ## Two things that do not exist
 
 - **Everything is USD.** No currency conversion, anywhere.

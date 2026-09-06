@@ -1,12 +1,7 @@
-# Development override: build the `app` image from this checkout.
+# Development override — builds `app` from this checkout. compose.yaml has no
+# `build:` stanza on purpose, so this is the only place one is configured.
 #
 #     docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-#
-# compose.yaml has no `build:` stanza on purpose — an operator's `up -d` must
-# never silently turn into a build — so this is the only place one is
-# configured. `scripts/smoke-test.sh` sets COMPOSE_FILE to both files so CI
-# exercises the tree it was handed; use it locally when the change is to the
-# Dockerfile, the entrypoint, or compose.yaml — what vitest cannot see.
 
 name: portfolio
 
@@ -15,20 +10,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # Separate local tag, so a dev build never wears a published release's name.
+    # Local-only tag, so a dev build never wears a published release's name.
     image: portfolio-app:dev
-    # Overrides compose.yaml's `always`, which would try to pull this local-only tag.
+    # compose.yaml's `always` would try to pull this local-only tag.
     pull_policy: build
 
-  # Same tag as `app` above, built from the same checkout: without this,
-  # smoke would pull the released image, which lacks server/price-worker.ts,
-  # and certify stale code. compose.yaml's `volumes:` and `networks:` for
-  # `worker` survive the merge untouched because this override declares
-  # neither — not because sequences merge by appending. `volumes` (like
-  # `ports`, `secrets`, `configs`) is a compose-spec "unique resource" keyed
-  # by target, not a plain sequence: an override entry at the same target
-  # REPLACES the base one rather than appending beside it. Verified: the
-  # merged render still carries `price-worker-sock:/run/price-worker`.
+  # Built here too, or smoke pulls the released image and certifies stale code.
   worker:
     build:
       context: .
@@ -36,9 +23,6 @@ services:
     image: portfolio-app:dev
     pull_policy: build
 
-  # Same tag as `app` and `worker` above, built from the same checkout:
-  # without this, smoke would pull the released image, which lacks
-  # server/egress-proxy.ts, and certify code ticket 08 did not write.
   egress-proxy:
     build:
       context: .
@@ -46,10 +30,8 @@ services:
     image: portfolio-app:dev
     pull_policy: build
 
-  # CI asserts the dump container reaches `healthy` inside a smoke test that
-  # lasts minutes, not hours: production's 5-minute interval and 15-minute
-  # start period would still read `starting` when the run ends. The check
-  # itself is compose.yaml's — only its cadence changes here.
+  # Cadence only — the check itself is compose.yaml's. Production's 5m interval
+  # and 15m start period would still read `starting` when a smoke run ends.
   dump:
     healthcheck:
       interval: 5s

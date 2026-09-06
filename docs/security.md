@@ -18,7 +18,8 @@ Three claims shape the design. Each holds with exceptions, and the exceptions ar
   screen until one is checked.** Before that, there is nothing to check and nothing is refused.
 
 Where this page and [`../compose.yaml`](../compose.yaml) disagree, believe `compose.yaml` — it
-enforces most of what follows, and its comments carry the reasoning.
+enforces most of what follows, and the services and networks it declares are the thing itself
+rather than a description of it.
 
 ## 1. What leaves the box
 
@@ -207,7 +208,9 @@ graph TB
 
 **The `caddy` → `gate` relay.** A compromised `app` still reaches `caddy`, because it must; `caddy`
 passes `/oauth2/*` to `gate`; `gate` has real egress, because Google's token endpoint is on the
-internet. `compose.yaml` calls that "known rather than closed". The opening is narrow: not a socket,
+internet. `compose.yaml` names the path where it declares those networks: neither carries a default
+route off it at IP level, and `app` still reaches `gate` through Caddy's `/oauth2/*`. The opening is
+narrow: not a socket,
 only whatever can be smuggled through a sign-in proxy's own endpoints. But what is on the far side is
 the least restricted container here — `gate` runs as root, can reach the whole internet, and through
 its network can reach the Docker host and anything else your machine is listening with. One more of

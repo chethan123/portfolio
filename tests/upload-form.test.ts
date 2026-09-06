@@ -1,16 +1,8 @@
 /**
- * The application's first multipart form, validated down to bytes
- * (docs/specs/ingest/01, DESIGN.md §5.1).
- *
- * Pure — no database. What is at risk is the guard order and the wording:
- * every refusal must be a sentence about the file or the form, arriving as
- * the thing it is — a missing field at field level, an oversized file naming
- * the limit, bytes that are not text named as such — and the one shape that
- * looks like a fault but is not, a leading BOM, must pass untouched.
- *
- * The size cap is guarded twice, and both halves are here: the
- * `Content-Length` header read before the body is buffered, and the
- * `File.size` check that catches whatever arrives without one.
+ * The application's first multipart form, validated down to bytes (docs/specs/ingest/01,
+ * DESIGN.md §5.1). Pure — no database. At risk is the guard order and the wording: every refusal
+ * names the file or form field it's about, and a leading BOM (which looks like a fault but isn't)
+ * must pass untouched. Size cap is guarded twice: Content-Length before buffering, File.size after.
  */
 import { describe, expect, it } from "vitest";
 
@@ -18,14 +10,13 @@ import { ValidationError } from "~/lib/input.server";
 import { parseUploadForm, refuseOversizedBody } from "~/lib/uploads.server";
 import { getConfig } from "../server/config.ts";
 
-// `getConfig` reads the process environment once; the guards only consult
-// MAX_UPLOAD_MB, but the parse requires a plausible connection string
-// (`tests/routes/root.test.ts` sets the same precedent).
+// getConfig reads the environment once; the guards only need MAX_UPLOAD_MB, but the parse
+// requires a plausible connection string (tests/routes/root.test.ts's precedent)
 process.env.DATABASE_URL ??= "postgres://portfolio:portfolio@db:5432/portfolio";
 
 const CAP_BYTES = getConfig().MAX_UPLOAD_MB * 1024 * 1024;
 
-/** The refusal a call produced, or a failure if it did not refuse. */
+// the refusal a call produced, or a failure if it did not refuse
 async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> {
   try {
     await run();
@@ -36,7 +27,7 @@ async function refusalOf(run: () => Promise<unknown>): Promise<ValidationError> 
   throw new Error("Expected the form to be refused, and it was not.");
 }
 
-/** A drop-screen submission: an account and, usually, a file. */
+// a drop-screen submission: an account and, usually, a file
 function submission(file?: File): FormData {
   const form = new FormData();
   form.set("accountId", "1");
@@ -72,8 +63,7 @@ describe("parseUploadForm", () => {
   });
 
   it("refuses bytes that are not UTF-8 text with a sentence, never a decoder error", async () => {
-    // 0xC3 opens a two-byte sequence and 0x28 cannot close one — malformed
-    // however it is read. An XLSX or a PDF renamed .csv lands here too.
+    // 0xC3 opens a two-byte sequence, 0x28 can't close one — malformed however it's read. An XLSX/PDF renamed .csv lands here too.
     const notText = new Uint8Array([0xc3, 0x28, 0x00, 0xff]);
     const refusal = await refusalOf(() =>
       parseUploadForm(submission(new File([notText], "statement.csv"))),
@@ -83,8 +73,7 @@ describe("parseUploadForm", () => {
   });
 
   it("accepts a leading BOM as the valid UTF-8 it is, bytes untouched", async () => {
-    // Step 02 strips it; the drop screen must not refuse it — Windows
-    // exports lead with one routinely.
+    // step 02 strips it; the drop screen must not refuse it — Windows exports lead with one routinely
     const bom = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("Symbol\nVTI\n")]);
     const input = await parseUploadForm(submission(new File([bom], "bom.csv")));
 
@@ -115,8 +104,7 @@ describe("refuseOversizedBody", () => {
   });
 
   it("passes a request with no Content-Length through to the File.size check", () => {
-    // Absence is not over the cap: the second guard inside parseUploadForm
-    // enforces the same bound once the file exists.
+    // absence isn't over the cap — the second guard inside parseUploadForm enforces the same bound once the file exists
     const request = new Request("http://localhost/upload", { method: "POST" });
 
     expect(() => refuseOversizedBody(request)).not.toThrow();

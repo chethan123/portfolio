@@ -1,29 +1,12 @@
 /**
- * The segmented range control (spec 0008) — one JSX tree for Overview and
- * the account page, where two hand-copied `<nav>`s once stayed in step only
- * by memory.
- *
- * **No JavaScript required**: every fixed preset is a plain link naming its
- * own `range`; Custom is a native popover holding a GET form — a popover
- * because the top layer sits outside every ancestor's overflow, and the
- * phone strip is a scroll container that clipped the disclosure this once
- * was (`app.css` keeps the mechanism beside the rule). Where `popover` is
- * unsupported (Safari/iOS ≤ 16, Firefox < 125) the attribute is ignored, so
- * the form renders as an always-open card in the strip and the button does
- * nothing: still a working GET form, never a dead one.
- *
- * **Every link names its range explicitly, including the default.** With the
- * choice remembered in a cookie (spec 0008), a bare `.` would read back
- * whatever the cookie held instead of the default just clicked.
- *
- * **A disabled preset is a `<span>`, never a `<Link>`** — nothing to href it
- * to; a link the loader would just fall back from is worse than none.
- *
- * **Every link carries the rest of the query.** A bare `?range=1m` is a
- * whole query string and React Router resolves it as one — on the account
- * page that silently ate the `?uploaded=`/`?recorded=` receipts mid-read.
- * Which three parameters are the control's own to rewrite is
- * `chart-range.ts`'s to say, beside the function that reads them back.
+ * Segmented range control (spec 0008) — one tree shared by Overview and the
+ * account page. No JavaScript required: presets are plain links, Custom is
+ * a native popover holding a GET form (falls back to an always-open card
+ * where `popover` is unsupported — still a working form, never dead).
+ * Every link names its range explicitly, even the default, since a bare `.`
+ * would read back whatever the range cookie held instead. Disabled preset
+ * is a `<span>`, never a dead `<Link>`. Every link carries the rest of the
+ * query — a bare `?range=1m` would silently eat `?uploaded=`/`?recorded=`.
  */
 import { Fragment, useId } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -41,12 +24,9 @@ export function ChartRangeControl({
   customMax,
 }: {
   range: RangeKey;
-  /** The applied custom span, present only when `range` is "custom". */
   custom?: CustomSpan;
   options: ReadonlyArray<{ key: RangeKey; label: string; disabled: boolean }>;
-  /** This surface's own earliest-available date, or null where it has none yet. */
   customMin: IsoDate | null;
-  /** Today — a custom span can never reach into the future. */
   customMax: IsoDate;
 }) {
   const [params] = useSearchParams();
@@ -66,17 +46,13 @@ export function ChartRangeControl({
                 popoverTarget={popoverId}
                 aria-current={applied ? "true" : undefined}
               >
-                {/* The chosen span, once there is one, not the word "Custom"
-                    — story 13: tell what you are looking at without reopening
-                    the picker. */}
+                {/* Chosen span, not "Custom" — see what's applied without reopening the picker (story 13). */}
                 {applied ? `${custom.start} – ${custom.end}` : option.label}
               </button>
 
               <form method="get" id={popoverId} popover="auto" className="segmented-custom-form">
                 <input type="hidden" name="range" value="custom" />
-                {/* A GET form submits its own fields and nothing else, so
-                    everything the address held must be re-emitted here or
-                    applying a span drops it. */}
+                {/* GET form submits only its own fields — the address's params must be re-emitted or applying a span drops them. */}
                 {carriedParams(params).map(([name, value], index) => (
                   <input key={`${name}-${index}`} type="hidden" name={name} value={value} />
                 ))}

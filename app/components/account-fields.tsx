@@ -2,20 +2,7 @@ import { ACCOUNT_KINDS, TAX_TREATMENTS } from "~/lib/account-options";
 
 import type { FieldErrors } from "~/lib/input.server";
 
-/**
- * The account form, shared by "add" and "edit" — one component because the
- * two screens must offer the same fields with the same labels, and the
- * cheapest guarantee is having only one of them. Options come from
- * `account-options.ts`, the list the domain validates against, so what can
- * be chosen is exactly what the check constraints allow.
- *
- * Each field is one element: `.panel-form` wraps its children, so caption,
- * box and note must travel together or a refusal lands beside the wrong
- * field. Within it the refusal comes before the note (`tax.tsx`'s order) —
- * the contract is a refusal *under its control* (ingest brief §2), and
- * note-first put a grey line between the box's `--loss` border and the red
- * sentence, reading as the note being the refusal's first line.
- */
+// Shared by "add" and "edit" — one component guarantees the same fields and labels. Refusal comes before the note (`tax.tsx`'s order).
 export type AccountFieldValues = {
   name?: string;
   institution?: string;
@@ -32,10 +19,8 @@ export function AccountFields({
   idPrefix,
 }: {
   people: ReadonlyArray<{ id: string; name: string }>;
-  /** What the boxes start with — the stored account, or what was just typed. */
   values?: AccountFieldValues;
   errors?: FieldErrors;
-  /** Keeps `id`/`htmlFor` unique when two of these ever share a page. */
   idPrefix: string;
 }) {
   const field = (name: string) => `${idPrefix}-${name}`;
@@ -50,8 +35,6 @@ export function AccountFields({
   return (
     <>
       <div>
-        {/* The box nests in its label: `label` is a flex column in the
-            stylesheet, which sets the caption directly above its box. */}
         <label htmlFor={field("name")}>
           Name
           <input

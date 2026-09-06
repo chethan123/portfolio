@@ -95,6 +95,8 @@ the foot of the page, and **Set balance** in the header jumps to it.
 
 ![A bank account showing the Set balance form](images/set-balance.png)
 
+![The same account on a phone: Upload statement above Set balance and Edit details, sharing the row beneath it](images/set-balance-mobile.png)
+
 **Only bank and loan accounts are offered it.** A brokerage, IRA or workplace plan holds individual
 positions, and typing one cash figure against it would record everything else it holds as sold — so
 those accounts have no form at all, and a submission against one is refused. Use [an
@@ -137,6 +139,15 @@ balance you set or from a statement.
 - Undo is another entry, not a delete.
 
 After it saves, the form empties and a line confirms what the account now reads and as of when.
+
+## On a phone
+
+![An account on a phone: the identity block stacked, the range buttons scrolling past 1D](images/account-detail-mobile.png)
+
+The identity block drops from a row of four to one field per line, and **Total value** with its
+buttons sits below rather than beside it. The range buttons on **Performance** scroll sideways past
+the edge of the screen rather than wrapping, the same as every strip of chips in this guide —
+**1Y** and the rest are there, just off to the right.
 
 ---
 

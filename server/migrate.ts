@@ -1,9 +1,7 @@
 /**
- * Startup migration step. The entrypoint runs this to completion and only
- * then starts the server (DESIGN.md §10.1) — a non-zero exit here is what
- * keeps requests off a half-migrated schema. Run directly under Node's type
- * stripping, no build step (DESIGN.md §9): `node ./server/migrate.ts`.
- * Re-runs skip recorded filenames and exit 0.
+ * Startup migration step: entrypoint runs this to completion before starting
+ * the server (DESIGN.md §10.1), so requests never hit a half-migrated schema.
+ * Runs directly under Node's type stripping: `node ./server/migrate.ts`.
  */
 import { ConfigError, loadConfig } from "./config.ts";
 import { createPool } from "./db.ts";

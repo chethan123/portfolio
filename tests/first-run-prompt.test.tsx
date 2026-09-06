@@ -4,14 +4,9 @@ import { renderThroughLayout } from "./support/render.tsx";
 
 import type { FirstRunStep } from "~/lib/first-run.server";
 
-/**
- * The single first-run prompt (DESIGN.md §8.4).
- *
- * Rendered through `Layout`, the shared shell, for the same reason the
- * open-instance banner is: the rule is "one prompt, on the pages a family
- * member is actually looking at", which is a property of the shell rather than
- * of any page.
- */
+// Single first-run prompt (DESIGN.md §8.4). Rendered through Layout (same reason as the
+// open-instance banner): "one prompt, on the pages a family member is looking at" is a
+// property of the shell, not any page.
 
 /** Every case here is on a configured instance; the banner is another file's rule. */
 const renderPage = (path: string, firstRun: FirstRunStep) =>
@@ -51,9 +46,8 @@ describe("the first-run prompt", () => {
   });
 
   it("does not nag inside Settings, where the work is actually done", () => {
-    // Telling someone to go to Settings → People while they are standing on
-    // Settings → People is noise, and it would sit directly above the form that
-    // resolves it.
+    // Telling someone to go to Settings → People while standing on it is noise, sitting
+    // right above the form that resolves it.
     const markup = renderPage("/settings/people", "people");
 
     expect(markup).not.toContain("Start here.");
@@ -61,8 +55,8 @@ describe("the first-run prompt", () => {
   });
 
   it("survives a first-run check that could not run", () => {
-    // The root loader reports null when the database is unreachable, so the
-    // page renders without a prompt rather than as an error.
+    // Root loader reports null when the database is unreachable — page renders without
+    // a prompt, not as an error.
     expect(renderPage("/", null)).toContain("page body");
   });
 });

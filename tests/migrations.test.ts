@@ -18,15 +18,8 @@ import {
 import type { Kysely } from "kysely";
 import type { Pool } from "pg";
 
-/**
- * The schema and the runner that creates it, against a real Postgres.
- *
- * Requires one. See `compose.test.yaml`:
- *   docker compose -f compose.test.yaml up -d --wait
- *
- * Every test that writes does so inside a transaction it rolls back, so the
- * suite leaves the database exactly as it found it and ordering never matters.
- */
+// Real Postgres required: docker compose -f compose.test.yaml up -d --wait
+// Every writing test rolls back its own transaction.
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://portfolio:portfolio@127.0.0.1:55432/portfolio_test";
@@ -49,11 +42,7 @@ async function errorCodeFrom(statements: string): Promise<string | null> {
   }
 }
 
-/**
- * Run statements in a transaction that is always rolled back, returning the
- * rows the last one produced. Lets a test read back what the schema stored
- * without leaving anything behind.
- */
+/** Runs in a transaction that's always rolled back; returns the last statement's rows. */
 async function rowsFromRolledBack<Row extends Record<string, unknown>>(
   statements: string,
 ): Promise<Row[]> {
@@ -69,7 +58,7 @@ async function rowsFromRolledBack<Row extends Record<string, unknown>>(
   }
 }
 
-/** A person, an account and an empty position set to hang holdings off. */
+// person + account + empty position set to hang holdings off
 const A_POSITION_SET = `
   insert into person (name) values ('Test Owner');
   insert into account (name, institution, kind, owner_id, tax_treatment)
@@ -114,9 +103,7 @@ describe("the migration runner", () => {
     expect(await applyPendingMigrations(pool)).toEqual([]);
   });
 
-  // Titled for what it actually asserts. `migrationsOnDisk` ends in `.sort()`,
-  // so this pins that sort and fails if it is dropped — but nothing here
-  // applies anything, so it is not evidence about apply order.
+  // pins the .sort() in migrationsOnDisk; not evidence about apply order
   it("lists migrations in filename order", async () => {
     const onDisk = await migrationsOnDisk();
 
@@ -124,9 +111,7 @@ describe("the migration runner", () => {
   });
 
   it("reports a migration on disk that the database has no record of", async () => {
-    // The predicate /healthz turns into a non-200. Every table can be present
-    // and the schema still be out of date, because what "out of date" means is
-    // that the image carries a migration the database has never seen.
+    // /healthz turns non-200 on this: schema is "out of date" when the image carries a migration the db hasn't seen
     const directory = await mkdtemp(path.join(tmpdir(), "portfolio-migrations-"));
     try {
       for (const applied of await migrationsOnDisk()) {
@@ -141,12 +126,7 @@ describe("the migration runner", () => {
   });
 
   it("leaves nothing behind when a migration fails, so the next run retries it from a clean database", async () => {
-    // The only path in the system that can leave a deployed database half
-    // migrated. A file is many statements in one transaction, and the ledger
-    // row commits with them — if a failure left the DDL that ran before it, or
-    // recorded the filename anyway, the next boot would skip the migration and
-    // serve requests against a schema nobody can name. Both halves are silent:
-    // the operator sees one failed deploy, then a successful one.
+    // only path that can leave a deployed db half-migrated: a failure must not leave partial DDL or a false ledger row
     const directory = await mkdtemp(path.join(tmpdir(), "portfolio-migrations-"));
     const filename = "9999_partly_applied.sql";
     const table = "migration_rollback_probe";
@@ -160,8 +140,7 @@ describe("the migration runner", () => {
     };
 
     try {
-      // A statement that works followed by one that does not, which is the
-      // shape a real broken migration has — a typo below a valid `create`.
+      // valid create + failing statement — the shape of a real broken migration
       await writeFile(
         path.join(directory, filename),
         `create table ${table} (id bigint primary key);\nselect no_such_function();`,
@@ -169,19 +148,17 @@ describe("the migration runner", () => {
 
       await expect(applyPendingMigrations(pool, directory)).rejects.toThrow(filename);
 
-      // The CLI turns that rethrow into a non-zero exit, which is what stops
-      // the entrypoint from starting the server against this database.
+      // rethrow becomes a non-zero exit, stopping the entrypoint from starting the server
       expect(await appliedMigrations(pool)).not.toContain(filename);
       expect(await tableExists()).toBe(false);
 
       await writeFile(path.join(directory, filename), `create table ${table} (id bigint primary key);`);
 
-      // Retried rather than resumed: the same filename, applied whole.
+      // retried, not resumed: same filename, applied whole
       expect(await applyPendingMigrations(pool, directory)).toEqual([filename]);
       expect(await tableExists()).toBe(true);
     } finally {
-      // The one test here that commits, since a migration runner opens its own
-      // transactions and cannot be wrapped in one.
+      // only test here that commits — migration runner opens its own transactions
       await pool.query(`drop table if exists ${table}`);
       await pool.query(`delete from ${MIGRATIONS_TABLE} where filename = $1`, [filename]);
       await rm(directory, { recursive: true, force: true });
@@ -226,10 +203,6 @@ describe("the seeded cash rows", () => {
   });
 
   it("seeds a USD daily close at 1970-01-01, which is what makes carry-forward resolve cash for every date", async () => {
-    // Load-bearing: because the as-of function carries forward the last close,
-    // this single far-past row prices USD at 1.00 on every date the system will
-    // ever be asked about — including a statement dated before install. It is
-    // why there is no branch for cash anywhere.
     const result = await sql<{ date: string; close: string }>`
       select to_char(p.date, 'YYYY-MM-DD') as date, p.close
       from price_daily p join instrument i on i.id = p.instrument_id
@@ -250,8 +223,7 @@ describe("the schema's refusals", () => {
       delete from person where name = 'Alice';
     `);
 
-    // 23503 foreign_key_violation — RESTRICT, not CASCADE: the portfolio is not
-    // silently destroyed and the owner is not silently orphaned.
+    // 23503: RESTRICT not CASCADE — portfolio isn't silently destroyed, owner isn't silently orphaned
     expect(code).toBe("23503");
   });
 
@@ -275,8 +247,7 @@ describe("the schema's refusals", () => {
   });
 
   it("rejects a tax treatment outside the three-way set", async () => {
-    // The boolean this replaces would have thrown away the largest distinction
-    // on the balance sheet.
+    // the boolean this replaced would've dropped the balance sheet's biggest distinction
     expect(
       await errorCodeFrom(`
         insert into person (name) values ('Bob');
@@ -322,7 +293,7 @@ describe("the schema's refusals", () => {
   });
 
   it("refuses two rows for the same instrument in one position set", async () => {
-    // A statement lists an instrument once; two rows is a parse fault, not data.
+    // a statement lists an instrument once; two rows is a parse fault, not data
     expect(
       await errorCodeFrom(`
         insert into person (name) values ('Bob');
@@ -339,15 +310,12 @@ describe("the schema's refusals", () => {
   });
 
   it("refuses a second row of settings", async () => {
-    // 23505 unique_violation, off the boolean primary key constrained to true:
-    // "which row is the settings" is a question the schema does not allow to
-    // have two answers.
+    // 23505 — boolean PK constrained true: only one settings row can ever exist
     expect(await errorCodeFrom(`insert into app_setting default values;`)).toBe("23505");
   });
 
   it("refuses a capital gains rate outside 0 to 100", async () => {
-    // 23514 check_violation. A negative rate is not a rate, and a rate above
-    // 100% would report a tax larger than the gain it is on.
+    // 23514 — negative isn't a rate; over 100% would tax more than the gain
     expect(
       await errorCodeFrom(`update app_setting set capital_gains_rate = -1;`),
     ).toBe("23514");
@@ -356,8 +324,7 @@ describe("the schema's refusals", () => {
     ).toBe("23514");
   });
 
-  // Not a refusal, and deliberately here anyway: a check constraint is only
-  // as good as the values it lets through, and the pair reads as one rule.
+  // not a refusal — pairs with the above so the constraint's boundary reads as one rule
   it("allows the ends of that range", async () => {
     expect(
       await errorCodeFrom(`update app_setting set capital_gains_rate = 0;`),
@@ -370,9 +337,7 @@ describe("the schema's refusals", () => {
 
 describe("the schema's nullability", () => {
   it("leaves cost basis per share null rather than defaulting it to zero", async () => {
-    // Defaulting it would report a fake gain equal to the entire untracked
-    // position, which is the one thing this column must never do. 401k
-    // statements omit it routinely, so this path is the common case.
+    // defaulting to 0 would report a fake gain on the whole untracked position — 401k statements omit this routinely
     const rows = await rowsFromRolledBack<{ cost_basis_per_share: string | null }>(`
       ${A_POSITION_SET}
       insert into holding (position_set_id, instrument_id, quantity)
@@ -450,26 +415,21 @@ describe("the schema's numeric scales", () => {
   });
 });
 
-// Pins the attribute, not a plan: at fixture scale the planner never
-// reproduces the envelope shape, so an EXPLAIN-asserting test would pass
-// trivially today and break on an unrelated Postgres upgrade. The cost is
-// what the read path depends on; the plan is what it buys.
+// pins the cost, not a plan — EXPLAIN at fixture scale wouldn't reproduce the real shape.
 describe("the schema's planner costs", () => {
   it("prices latest_position_set at 1000, the cost the read path's plan depends on", async () => {
     const result = await sql<{ procost: number }>`
       select procost from pg_proc where proname = 'latest_position_set'
     `.execute(db);
 
-    // The whole array, deliberately: an overload added later fails here rather
-    // than passing on whichever row came back first.
+    // whole array deliberately — a later overload fails here instead of picking an arbitrary row
     expect(result.rows).toEqual([{ procost: 1000 }]);
   });
 });
 
 describe("instrument aliases", () => {
   it("matches the raw string case-sensitively, exactly as the brokerage wrote it", async () => {
-    // 'CASH' and 'Cash' are two different strings, so they may point at
-    // different instruments; a case-insensitive key would collide them.
+    // case-sensitive: 'CASH' and 'Cash' may point at different instruments
     expect(
       await errorCodeFrom(`
         insert into instrument_alias (raw_string, instrument_id)

@@ -67,9 +67,7 @@ describe("Postgres pool resilience", () => {
     await errorReported;
 
     expect(errorSpy).toHaveBeenCalledWith(CONNECTION_ERROR_MESSAGE, expect.any(Error));
-    // Exactly once: both listeners firing for one death would double-count
-    // every idle failure in the logs. Both calls land synchronously with the
-    // emit, so an extra one is visible by the time the wait resolves.
+    // exactly once: both listeners firing for one death would double-count every idle failure
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 

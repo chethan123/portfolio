@@ -1,19 +1,6 @@
-/**
- * Resolving a statement's instrument strings against the alias table
- * (DESIGN.md §4.3, spec 0004 step 04): the question — which strings has
- * nobody resolved, with what context beside each — and the answer, the
- * writes that remember a resolution forever.
- *
- * Lookup is **byte-exact** (`raw_string`'s `collate "C"`): no trimming, no
- * case folding, no heuristics. A respelling is rightly a first sighting — a
- * heuristic merging near-identical strings would attach a holding to the
- * wrong fund silently; a miss prompts once and is remembered permanently.
- *
- * Writes happen at this step, not at commit: an alias is a fact about
- * vocabulary, not this statement, and re-uploading a corrected file must not
- * ask again. A draft abandoned after this step leaves the vocabulary behind —
- * correct: the next upload is quieter, and nothing was recorded as held.
- */
+// Resolves a statement's instrument strings against the alias table (DESIGN.md §4.3, spec 0004
+// step 04). Byte-exact lookup (raw_string collate "C") — no fuzzy merge onto the wrong fund; a
+// miss prompts once, remembered forever. Written here, not at commit, so a re-upload of a fixed file doesn't ask again.
 import { isAssetClass } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { ValidationError } from "./input.server.ts";
@@ -23,19 +10,10 @@ import type { ParsedPosition } from "./statement.ts";
 import type { AssetClass } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
 
-/**
- * What the classification `<select>` posts when the reader types a new one —
- * a sentinel like the columns screen's `NOT_IN_FILE`, because "the new one
- * below" and "no classification chosen" are different answers. The route
- * reads it from loader data: this is a `.server` module and the option
- * renders client-side.
- */
+// Sentinel like NOT_IN_FILE (column-mapping.server.ts): "new classification" != "none chosen".
 export const NEW_CLASSIFICATION = "__new__";
 
-/**
- * The distinct strings with no `instrument_alias` row behind them, in
- * first-appearance order — the order the file raised them and the screen asks.
- */
+// Distinct strings with no instrument_alias row, in first-appearance order.
 export async function unresolvedStrings(
   strings: readonly string[],
   db: Kysely<Database> = getDb(),
@@ -61,48 +39,29 @@ export async function unresolvedStrings(
   return distinct.filter((value) => !resolved.has(value));
 }
 
-/**
- * Byte-exact, except line endings compare normalised (`\r\n?` → `\n`): HTML
- * form serialisation turns a lone LF/CR in a posted value into CRLF, so a
- * quoted multi-line cell echoed through a hidden field would fail a
- * byte-exact staleness check on every submit, forever. Nothing is given up —
- * two aliases differing only by CR/LF cannot exist meaningfully through a
- * browser. This compares only; what is *stored* is always the draft's own
- * parsed string, so no CRLF-mangled alias can land.
- */
+// Byte-exact except line endings (\r\n? -> \n): HTML form serialisation turns a lone LF/CR into
+// CRLF, so a quoted multi-line cell would fail this staleness check on every submit. Comparison only.
 export function sameRawStrings(a: string, b: string): boolean {
   const lineEndings = (value: string): string => value.replace(/\r\n?/g, "\n");
   return lineEndings(a) === lineEndings(b);
 }
 
-/** One first sighting, with enough context to recognise the holding. */
 export type UnresolvedPosition = {
-  /** The instrument cell exactly as the file wrote it — what will be stored. */
+  // Instrument cell exactly as the file wrote it — what gets stored.
   raw: string;
-  /** The mapped name column's value on that row, when one is mapped. */
   name: string | null;
-  /** The row's quantity, a decimal string. */
   quantity: string;
 };
 
-/** Everything the unresolved screen renders, in one read. */
 export type ResolutionScreen = {
-  /** The first sightings, in the order the file raised them. */
   unresolved: UnresolvedPosition[];
-  /** How many holdings the file states — the "of 5" in the intro sentence. */
+  // How many holdings the file states — the "of 5" in the intro sentence.
   totalPositions: number;
-  /** Every instrument, for the point-at-existing select. */
   instruments: Array<{ id: string; symbol: string | null; name: string }>;
-  /** Every classification, for the create branch's select. */
   classifications: Array<{ id: string; name: string; assetClass: string }>;
 };
 
-/**
- * The unresolved screen's read: which positions are first sightings, each
- * with the context the brief asks for (mapped name, quantity), plus the two
- * select lists. `positions` come from `parseStatement`, already grouped by
- * the raw instrument cell — exactly one position per distinct string.
- */
+// positions come from parseStatement, already grouped by raw instrument cell — one position per distinct string.
 export async function resolutionScreen(
   positions: ReadonlyArray<ParsedPosition>,
   db: Kysely<Database> = getDb(),
@@ -147,27 +106,21 @@ export async function resolutionScreen(
   };
 }
 
-/**
- * One string's answer as posted, every field optional — validating what is
- * missing is this module's job. Field names are these keys with the string's
- * index appended (`kind-0`); {@link resolutionFieldsAt} reads them back.
- */
+// Every field optional — validating what's missing is this module's job. Keys are field-index (kind-0); resolutionFieldsAt reads them back.
 export type ResolutionFields = {
-  /** "existing" | "create" — the radio pair choosing the path. */
+  // "existing" | "create".
   kind?: string;
-  /** The point-at-existing select's chosen instrument id. */
   instrumentId?: string;
   symbol?: string;
   name?: string;
-  /** "feed" | "manual" — `fixed` is the seeded USD row's alone. */
+  // "feed" | "manual" — "fixed" belongs to the seeded USD row alone.
   priceSource?: string;
-  /** An existing classification id, or {@link NEW_CLASSIFICATION}. */
+  // An existing classification id, or NEW_CLASSIFICATION.
   classificationId?: string;
   newClassificationName?: string;
   newClassificationAssetClass?: string;
 };
 
-/** The field names one unresolved string owns, in the order the screen draws them. */
 const RESOLUTION_FIELDS = [
   "kind",
   "instrumentId",
@@ -179,10 +132,6 @@ const RESOLUTION_FIELDS = [
   "newClassificationAssetClass",
 ] as const;
 
-/**
- * One string's fields out of the posted form, by index. Beside the error keys
- * so the `${field}-${index}` scheme is stated once and read twice.
- */
 export function resolutionFieldsAt(
   values: Record<string, string>,
   index: number,
@@ -195,50 +144,36 @@ export function resolutionFieldsAt(
   return fields;
 }
 
-/** What {@link resolveAll} is asked to resolve: the raw string and its answer. */
 export type ResolutionInput = {
-  /** The unresolved string, byte-exact as the file wrote it. */
   raw: string;
   fields: ResolutionFields;
 };
 
-/** What one string resolved to — the alias row as written, existing row and all. */
 export type ResolvedAlias = {
   raw: string;
-  /** The instrument the alias points at — the winner, when a concurrent draft got there first. */
+  // The instrument the alias points at — the winner, when a concurrent draft got there first.
   instrumentId: string;
 };
 
-/**
- * The dependencies a test stubs. No test touches the network. `probe` is
- * required, not defaulted: a default would make "required" a type and not a
- * fact, and the production caller (`app/routes/upload/instruments.tsx`)
- * could still reach the network by omission.
- */
+// probe is required, not defaulted, so production can't reach the network by omission; tests stub it.
 export type ResolutionDeps = {
-  /** The creation-time USD guard. */
   probe: ProbeSymbols;
 };
 
-/** A validated "create" resolution, ready to write. */
 type CreatePlan = {
   kind: "create";
   symbol: string | null;
   name: string;
   priceSource: "feed" | "manual";
-  /** Null when a new classification is being created instead. */
+  // Null when a new classification is being created instead.
   classificationId: string | null;
-  /** The trimmed new-classification name, key into the pending map. */
+  // Trimmed new-classification name, key into the pending map.
   newClassification: string | null;
 };
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
 
-/**
- * Run `body` in a transaction unless one is already open — Kysely refuses
- * `.transaction()` on a transaction, and the test seam *is* one (the same
- * helper `prices.server.ts` carries).
- */
+// Kysely refuses .transaction() on a transaction; the test seam is one (prices.server.ts has the same helper).
 function inTransaction<T>(
   db: Kysely<Database>,
   body: (trx: Kysely<Database>) => Promise<T>,
@@ -246,30 +181,11 @@ function inTransaction<T>(
   return db.isTransaction ? body(db) : db.transaction().execute(body);
 }
 
-/**
- * Resolve every unresolved string in one submit, or refuse the whole
- * submission with a message per field. The rules (spec 0004 step 04):
- *
- * - every string must be resolved — no skip; a skipped row is a holding
- *   silently missing from the statement
- * - existing writes only the alias; create writes classification (when new),
- *   then instrument, then alias — a new classification typed twice in one
- *   submit is created once and shared, never refused against itself
- * - a new name colliding with a stored classification is a field refusal
- *   naming it (`classification.name` is unique and user-facing)
- * - `feed` requires a symbol; `manual` allows none (the trust case)
- * - creating a `feed` instrument probes its symbol once: non-USD refuses in
- *   the refresh guard's stem wording; a provider failure does not block —
- *   the next refresh marks it stale like any symbol that stops quoting
- * - concurrent drafts resolving the same string do not error: the alias
- *   insert tolerates the conflict and the existing row wins
- *
- * Refusals are keyed `${field}-${index}` over the screen's order, and nothing
- * is written unless everything passes — a refusal must re-render the same
- * list of questions it was asked about.
- *
- * @throws {ValidationError} with a message per bad field.
- */
+// Resolves every unresolved string in one submit, refusing the whole with a message per field
+// (${field}-${index}) unless all pass (spec 0004 step 04). No skip; a new classification name
+// typed twice is created once and shared; feed requires a symbol and probes it once (non-USD
+// refuses, a provider failure just leaves it stale); concurrent drafts resolving the same string
+// don't error — the alias insert tolerates the conflict and the existing row wins.
 export async function resolveAll(
   resolutions: ReadonlyArray<ResolutionInput>,
   deps: ResolutionDeps,
@@ -280,9 +196,7 @@ export async function resolveAll(
     errors[`${field}-${index}`] ??= message;
   };
 
-  // ---- validation, all before any probe or write: three faults come back
-  // as three messages, not one per round trip (the columns form's precedent).
-
+  // Validation, all before any probe or write: three faults come back as three messages.
   const plans: Array<Plan | null> = [];
 
   for (const [index, { fields }] of resolutions.entries()) {
@@ -329,7 +243,7 @@ export async function resolveAll(
       faulted = true;
     }
 
-    // Feed and manual only: `fixed` belongs to the seeded USD row alone.
+    // Feed and manual only — fixed belongs to the seeded USD row alone.
     const priceSource = fields.priceSource;
     if (priceSource !== "feed" && priceSource !== "manual") {
       refuse(
@@ -403,8 +317,7 @@ export async function resolveAll(
     });
   }
 
-  // Referenced rows must exist: the options were rendered from the database,
-  // so a miss is a forged or stale post — still a sentence, not an FK fault.
+  // Options were rendered from the database, so a miss here is a forged/stale post — still a sentence, not an FK fault.
   const instrumentIds = [
     ...new Set(
       plans.flatMap((plan) => (plan?.kind === "existing" ? [plan.instrumentId] : [])),
@@ -457,9 +370,7 @@ export async function resolveAll(
     }
   }
 
-  // A new name colliding with a *stored* classification is a refusal naming
-  // it; two strings typing the same new name share one pending creation,
-  // checked against the database only.
+  // Colliding with a stored classification is a refusal; two strings typing the same new name share one pending creation, checked only against the database.
   const pendingNames = [
     ...new Set(
       plans.flatMap((plan) =>
@@ -498,9 +409,7 @@ export async function resolveAll(
 
   if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
-  // ---- the USD probe, one call for every distinct feed symbol the
-  // submission creates (so two strings creating one ticker still cost one
-  // call), before any write: a non-USD refusal must leave nothing behind.
+  // One probe call per distinct feed symbol (two strings creating one ticker cost one call), before any write, so a non-USD refusal leaves nothing behind.
   const feedSymbols = [
     ...new Set(
       plans.flatMap((plan) =>
@@ -511,9 +420,7 @@ export async function resolveAll(
     ),
   ];
 
-  // A manual-only submission collects nothing here — the common case — and
-  // makes no provider call at all, by construction: over the socket a
-  // zero-symbol ask is a round trip the worker refuses anyway (§3.2).
+  // A manual-only submission (the common case) makes no provider call at all, by construction.
   const verdicts: Awaited<ReturnType<ProbeSymbols>> =
     feedSymbols.length > 0 ? await deps.probe(feedSymbols) : new Map();
 
@@ -522,15 +429,11 @@ export async function resolveAll(
       continue;
     }
 
-    // A symbol the map lacks is `unavailable` — the batched probe never
-    // throws, so this is a defensive fallback rather than an expected path.
+    // Defensive fallback — the batched probe never throws, so the map shouldn't lack an entry.
     const verdict = verdicts.get(plan.symbol) ?? { status: "unavailable" as const };
 
-    // `unavailable` does not block: created now, marked stale by the next
-    // refresh — a network hiccup must not hold a statement hostage.
+    // unavailable doesn't block: created now, marked stale by the next refresh — a network hiccup must not hold a statement hostage.
     if (verdict.status === "non-usd") {
-      // The refresh guard's stem with the tail adapted — two spellings of one
-      // refusal would be two rules (`CurrencyRefused`).
       refuse(
         index,
         "symbol",
@@ -542,22 +445,16 @@ export async function resolveAll(
 
   if (Object.keys(errors).length > 0) throw new ValidationError(errors);
 
-  /**
-   * What the probe said this symbol is, read from the verdict cache — probing
-   * again would be a second network call for something already known.
-   */
+  // Read from the verdict cache — probing again would be a second network call.
   const quoteTypeOf = (plan: { symbol: string | null }): string | null => {
     const verdict = plan.symbol === null ? undefined : verdicts.get(plan.symbol);
 
     return verdict?.status === "ok" ? verdict.quoteType : null;
   };
 
-  // ---- the writes: classification first when new, then instrument, then
-  // alias — one transaction, so a fault leaves no half-remembered vocabulary.
+  // Classification (if new), then instrument, then alias — one transaction, so a fault leaves no half-remembered vocabulary.
   return inTransaction(db, async (trx) => {
-    // Each new classification created once however many strings typed it.
-    // `doNothing` plus a re-read covers the race validation cannot: a
-    // concurrent submit landing the same name. Either way the stored id answers.
+    // doNothing + re-read covers the race validation can't: a concurrent submit landing the same name; either way the stored id answers.
     const created = new Map<string, string>();
     for (const [index, plan] of plans.entries()) {
       if (plan?.kind !== "create" || plan.newClassification === null) continue;
@@ -599,12 +496,8 @@ export async function resolveAll(
           .values({
             symbol: plan.symbol,
             name: plan.name,
-            // Whatever the probe was told; null when it was told nothing (an
-            // unquoted symbol, a trust, a provider's bad day). The Analysis
-            // split reads this column (§4.4); the probe is the one moment the
-            // app both learns the answer and has a row to write it on, and a
-            // refresh backfills the rest. Null stays null, never a guess: the
-            // catch-all row is visible and counted, a misfiled equity is not.
+            // Whatever the probe was told; null if told nothing (unquoted symbol, a trust, a bad
+            // provider day) — never guessed, the Analysis split (§4.4) treats null as a visible catch-all.
             quote_type: quoteTypeOf(plan),
             price_source: plan.priceSource,
             classification_id: classificationId,
@@ -615,8 +508,7 @@ export async function resolveAll(
         createdInstrument = true;
       }
 
-      // The alias tolerates a concurrent draft resolving the same string:
-      // `doNothing`, and the existing row wins.
+      // doNothing: a concurrent draft resolving the same string, and the existing row wins.
       const inserted = await trx
         .insertInto("instrument_alias")
         .values({ raw_string: raw, instrument_id: instrumentId })
@@ -631,10 +523,7 @@ export async function resolveAll(
           .where("raw_string", "=", raw)
           .executeTakeFirstOrThrow();
 
-        // The instrument created for this string lost the race and nothing
-        // points at it — deleted rather than left as a duplicate the select
-        // would offer forever. A new classification stays: it may serve other
-        // strings, and a label with no instruments is harmless vocabulary.
+        // Lost the race, nothing points at it — deleted rather than left as a duplicate forever. A new classification stays, harmless even unused.
         if (createdInstrument && winner.instrument_id !== instrumentId) {
           await trx.deleteFrom("instrument").where("id", "=", instrumentId).execute();
         }

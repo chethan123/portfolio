@@ -1,52 +1,9 @@
 /**
- * The reentry guard's testable rules (ticket 06, `~/lib/reentry.ts`):
- * `shouldPostLock`'s boundary, and `watchReentry`'s own wiring of the two
- * DOM signals it watches. `watchReentry` takes the two actions and no
- * belief of any kind: a hidden-too-long return posts the lock, a persisted
- * restore asks the server, and neither consults what the last render
- * thought about the household. Both are proven here against the real
- * export, rather than against a copy `app/root.tsx`'s call site could
- * quietly stop making.
- *
- * `shouldPostLock` is exercised as the pure function it is — no document, no
- * window, no clock of its own. `watchReentry` genuinely touches `document`
- * and `window`, but only two methods of each
- * (`addEventListener`/`removeEventListener`) and two clocks, so the second
- * describe block below stands a plain object in for each rather than a real
- * browser or jsdom (AGENTS.md's own rule against both) — the same call spec
- * 0007 made for masking's client-side cookie write, extended here now that
- * this file has something in that shape worth exercising for real.
- *
- * Every `shouldPostLock` assertion below measures the gap against the
- * *imported* `REENTRY_GRACE_MS` rather than a number copied out of it — not
- * because doing so pins every possible drift (a hard-coded `60_000` that
- * happens to equal today's grace would pass every assertion here exactly as
- * if it still imported the constant), but because the one drift this file
- * can actually catch — `reentry.ts` changing to declare a *different*
- * number instead of importing `lock.ts`'s — shows up here rather than only
- * in a real browser nobody is running.
- *
- * **Why the signature is what pins this, and not a test.** Three earlier
- * rounds gave the guard a `hasPasskey` belief to consult — first inline in
- * `app/root.tsx`, then through an exported helper this file called
- * directly, then as a parameter of `watchReentry` itself — and each left
- * the call site free to hand it something stale, `null` included. A test
- * calling the helper proved the helper, never that `Layout` used it:
- * reverting the call site to `hasPasskey ? callback : null` kept every such
- * test green. Nothing here can close that, because a `Layout` render under
- * `renderToStaticMarkup` runs no effect. What closes it is that the
- * parameter is gone: the old call shape does not typecheck against the
- * current signature, so a reverted call site fails `npm run typecheck`
- * before any test runs. The effect's own installation — that `Layout`
- * calls `watchReentry` at all — is checked by hand, and `app/root.tsx`
- * says where.
- * **`postLockNow`, added when concealment was removed.** Five review rounds
- * spent on a mechanism that hid the page while `/lock-now` was in flight
- * found nothing wrong with the *lock* this app specifies — every finding was
- * about the *rendering* invented on top of it (`app/root.tsx`'s own header on
- * why that is gone). Two survived because they are about the request rather
- * than the page: a `fetch` resolves for a 502 as readily as for success, and
- * one without `keepalive` dies with the document that started it.
+ * Reentry guard (ticket 06, ~/lib/reentry.ts): shouldPostLock's boundary, and watchReentry's wiring
+ * of the two DOM signals it watches. watchReentry gets a plain object standing in for
+ * document/window (AGENTS.md's rule against jsdom). Measured against the imported REENTRY_GRACE_MS,
+ * not a copied number. watchReentry takes no hasPasskey belief — three earlier rounds gave it one
+ * that a call site could hand something stale; now the old call shape fails typecheck instead.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -59,9 +16,7 @@ describe("shouldPostLock", () => {
   });
 
   it("does not post for a gap that merely reaches the grace", () => {
-    // "Exceeds", not "reaches" — the ticket's own word. A story-4 app switch
-    // landing exactly on the boundary must not read as tiresome. Both
-    // clocks agree here, which is the ordinary case.
+    // "exceeds" not "reaches" (ticket's word) — landing exactly on the boundary must not read as tiresome
     const wallMs = Date.now();
     const monoMs = performance.now();
     expect(
@@ -106,20 +61,13 @@ describe("shouldPostLock", () => {
   });
 
   it("posts once the wall gap alone exceeds the grace, even though the monotonic clock stalled through a suspend", () => {
-    // The scenario `Math.max` exists for: `performance.now()` does not
-    // advance while a device is suspended, so a phone locked in a pocket
-    // for ten minutes can come back with a monotonic gap of only a
-    // millisecond — under the grace on its own. The wall gap, which does
-    // advance through a suspend, is what has to carry this.
+    // Math.max's scenario: performance.now() doesn't advance while suspended, so the wall gap carries it
     const hidden = { wallMs: 0, monoMs: 0 };
     expect(shouldPostLock(hidden, REENTRY_GRACE_MS + 1, 1)).toBe(true);
   });
 
   it("posts once the monotonic gap alone exceeds the grace, even though the wall clock ran backwards", () => {
-    // The other direction: an NTP correction, or someone setting the system
-    // clock back, makes the wall gap negative. The monotonic gap — which
-    // cannot run backwards — is what has to carry this one, and the
-    // negative wall value simply loses the `Math.max`.
+    // other direction: NTP correction makes the wall gap negative — the monotonic gap carries this
     const hidden = { wallMs: 1_700_000_000_000, monoMs: 0 };
     const nowWallMs = hidden.wallMs - 60 * 60 * 1000; // the clock jumps back an hour
     const nowMonoMs = REENTRY_GRACE_MS + 1;
@@ -127,13 +75,8 @@ describe("shouldPostLock", () => {
   });
 });
 
-/**
- * Everything `watchReentry` actually asks of the global `document` and
- * `window` it closes over: two listener methods on each, one settable
- * `visibilityState`. Firing an event here is a direct call to whatever was
- * registered for it — no capture phase, no bubbling, none of jsdom's own
- * machinery — because `watchReentry` never asks for any of that either.
- */
+// everything watchReentry asks of document/window: two listener methods each, one settable
+// visibilityState. Firing here is a direct call to whatever registered — no capture/bubbling/jsdom.
 type Listener = (event?: { persisted: boolean }) => void;
 
 function fakeBrowser() {
@@ -168,7 +111,7 @@ function fakeBrowser() {
   return {
     fakeDocument,
     fakeWindow,
-    /** Sets `visibilityState` to hidden *before* any listener need exist to notice. */
+    // sets visibilityState to hidden before any listener need exist to notice
     hideSilently(): void {
       visibilityState = "hidden";
     },
@@ -193,8 +136,7 @@ function fakeBrowser() {
 describe("watchReentry", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    // @ts-expect-error -- test-only globals, removed so no other file in this
-    // serial suite (fileParallelism is off) ever sees a stray document/window.
+    // @ts-expect-error -- test-only globals, removed so no other serial-suite file sees a stray document/window
     delete globalThis.document;
     // @ts-expect-error -- see above.
     delete globalThis.window;
@@ -222,9 +164,7 @@ describe("watchReentry", () => {
     browser.show();
 
     expect(postLock).toHaveBeenCalledTimes(1);
-    // And only the lock: ticket 06 asks the persisted-restore path for a
-    // revalidation, and a hidden-too-long return is a different trigger
-    // that must not borrow it.
+    // only the lock — persisted-restore is a different trigger and must not borrow this one
     expect(onPersistedRestore).not.toHaveBeenCalled();
     teardown();
   });
@@ -257,13 +197,8 @@ describe("watchReentry", () => {
   });
 
   it("arms the timer at wire time for a page that mounts into an already-hidden tab, not only on a later visibilitychange", () => {
-    // A page opened in a background tab, or hydrated while the document is
-    // already hidden, never sees a `visibilitychange` *to* hidden — its
-    // first event is the transition back to visible. Hiding the fake
-    // browser *before* `watchReentry` ever wires a listener reproduces
-    // exactly that: nothing here catches the transition into hidden, only
-    // `watchReentry`'s own read of the current `visibilityState` at wire
-    // time can arm the timer.
+    // a background-tab or hidden-hydrated page never sees a visibilitychange to hidden — only
+    // watchReentry's own read of visibilityState at wire time can arm the timer
     const browser = install();
     const perf = vi.spyOn(performance, "now");
     let clock = 0;
@@ -323,7 +258,7 @@ describe("watchReentry", () => {
     expect(browser.listenerCount("document", "visibilitychange")).toBe(0);
     expect(browser.listenerCount("window", "pageshow")).toBe(0);
 
-    // Firing both signals after teardown must reach neither callback.
+    // firing both signals after teardown must reach neither callback
     browser.hide();
     clock += REENTRY_GRACE_MS + 1;
     browser.show();
@@ -336,13 +271,8 @@ describe("watchReentry", () => {
   it(
     "still posts the lock once the grace is exceeded even when the wall clock jumps backwards while hidden",
     () => {
-      // `Date.now()` can run backwards (an NTP correction, someone setting
-      // the system clock back), which would make the *wall* gap negative.
-      // Moving `Date.now()` backwards here while `performance.now()` keeps
-      // advancing normally past the grace proves the monotonic gap is what
-      // carries this — reverting `reentry.ts` to read only `Date.now()`
-      // would fail this test, since the gap it would measure goes negative
-      // instead of past the grace.
+      // Date.now() can run backwards (NTP); moving it back here while performance.now() advances
+      // past the grace proves the monotonic gap carries this.
       const browser = install();
       const dateNow = vi.spyOn(Date, "now");
       let simulatedWallClock = 1_700_000_000_000;
@@ -356,11 +286,9 @@ describe("watchReentry", () => {
       const teardown = watchReentry(postLock, vi.fn());
 
       browser.hide();
-      // The wall clock jumps back an hour while the tab sits hidden — far
-      // more than the grace, in the wrong direction.
+      // wall clock jumps back an hour while hidden — far more than the grace, wrong direction
       simulatedWallClock -= 60 * 60 * 1000;
-      // `performance.now()` cannot jump backwards; it keeps moving forward
-      // past the grace, same as any other hidden period this long.
+      // performance.now() can't jump backwards — keeps advancing past the grace like any long hidden period
       clock += REENTRY_GRACE_MS + 1;
       browser.show();
 
@@ -372,15 +300,8 @@ describe("watchReentry", () => {
   it(
     "still posts the lock once the grace is exceeded even though the monotonic clock stalled through a suspend",
     () => {
-      // The other direction, and the more important one: `performance.now()`
-      // does not advance while a device is suspended (Linux, Android,
-      // macOS, iOS), so a phone locked in a pocket for ten minutes can come
-      // back measuring a monotonic gap of only a couple of milliseconds —
-      // under the grace on its own. The wall clock, which does advance
-      // through a suspend, is what has to carry this one; reverting
-      // `reentry.ts` to read only `performance.now()` would fail this test,
-      // since the monotonic gap it would measure alone stays under the
-      // grace.
+      // performance.now() doesn't advance while suspended (all major OSes) — the wall clock has
+      // to carry a phone locked in a pocket for ten minutes.
       const browser = install();
       const dateNow = vi.spyOn(Date, "now");
       let simulatedWallClock = 1_700_000_000_000;
@@ -394,8 +315,7 @@ describe("watchReentry", () => {
       const teardown = watchReentry(postLock, vi.fn());
 
       browser.hide();
-      // The device suspends: the wall clock keeps advancing well past the
-      // grace, but the monotonic clock barely moves at all.
+      // device suspends: wall clock advances well past the grace, monotonic clock barely moves
       simulatedWallClock += REENTRY_GRACE_MS + 1;
       clock += 2;
       browser.show();
@@ -425,11 +345,8 @@ describe("postLockNow", () => {
   it(
     "does not revalidate when the response answers with an HTTP failure, even though fetch itself resolved (finding 1)",
     async () => {
-      // A 502 or 503 from a proxy in front of this instance is exactly what
-      // `fetch` resolves with — never a rejection — so reverting this to
-      // `.then(() => revalidate())` (treating "the promise resolved" as "the
-      // lock happened") would call `revalidate` here too, extending a grant
-      // that was never actually deleted.
+      // a 502/503 from a fronting proxy is exactly what fetch resolves with, never rejects —
+      // reverting to .then(() => revalidate()) would extend a grant that was never actually deleted
       const revalidate = vi.fn();
       const doFetch = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
 

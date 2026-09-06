@@ -21,6 +21,8 @@ yet](../../README.md#not-built-yet).
 
 ![The people list, each row with a name box and its account count](images/settings-people.png)
 
+![The same list on a phone, one row per card](images/settings-people-mobile.png)
+
 Who is in the household. Every account belongs to exactly one person, so this is the first thing to
 fill in — accounts cannot be created until someone is here to own them.
 
@@ -63,6 +65,8 @@ place.
 ### Editing one account
 
 ![Editing an account, with the close control at the foot](images/settings-account-edit.png)
+
+![The same editor on a phone, one field per line](images/settings-account-edit-mobile.png)
 
 Select the account's name in the table. Every field is editable and saving is one button, but not
 every change is accepted.
@@ -114,6 +118,8 @@ for what that does to whatever it was unlocking.
 
 ![The capital gains rate, as a percentage](images/settings-tax.png)
 
+![The same field on a phone](images/settings-tax-mobile.png)
+
 One field: the capital gains rate, as a percentage. It starts at **23.8%**.
 
 **Nothing but Analysis uses it**, and no figure anywhere is filed with it. See
@@ -124,6 +130,8 @@ Type a new rate and save. The box then shows what is stored, which is the confir
 ## Prices
 
 ![The refresh cadence, and the holdings whose price history does not reach back far enough](images/settings-prices.png)
+
+![The same tab on a phone](images/settings-prices-mobile.png)
 
 Two things: the **refresh cadence**, and a list of what the price history does not cover yet.
 
@@ -160,6 +168,8 @@ the sign-in at the front door keeps a person out while the lock keeps a browser 
 
 ![Each enrolled passkey, with its label, when it was enrolled and last used, and whether it can sync to other devices](images/settings-passkeys.png)
 
+![The same list on a phone: the checkbox and its sentence to the left, Remove to the right, the same row as on a wider screen but narrower](images/settings-passkeys-mobile.png)
+
 What can unlock a browser, once the household holds one. Enrol another, see which can sync to other
 devices, and remove one that is gone for good — the full explanation, in the household's own words
 rather than this page's, is [Passkeys and the lock](passkeys.md).
@@ -167,6 +177,17 @@ rather than this page's, is [Passkeys and the lock](passkeys.md).
 No passkey enrolled is not a broken state — it is what a fresh instance already is: unlocked, exactly
 as before this tab existed. Enrolling the first one is what turns the lock on, for every browser but
 the one doing it, immediately.
+
+## On a phone
+
+![Settings on a phone: the seven tabs wrapped to two rows, the accounts table scrolled sideways](images/settings-accounts-mobile.png)
+
+The tab strip wraps to a second row instead of scrolling — the seven tabs stay in view together
+rather than hiding some off to the side, the way [the upload flow's own step
+strip](upload.md#on-a-phone) does too. The tables on
+this screen keep their columns and scroll sideways to see them all, the way every table but
+Holdings does; **Tax treatment** and the closed/open status are there, just past the edge shown
+here.
 
 ---
 

@@ -8,18 +8,10 @@ import type { BackfillGap, BackfillOutcome } from "~/lib/prices.server";
 import type { Route } from "./+types/prices";
 
 /**
- * Settings → Prices — a thin wrapper over `settings.server.ts` and
- * `prices.server.ts`, as Tax and Display are over theirs: read the form, hand
- * raw fields down, render what comes back. What a cadence may be lives in that
- * module; a row rather than an environment variable because the person wanting
- * prices fresher — or spend lower — is the one reading the screen
- * (`0008_refresh_cadence.sql`).
- *
- * The second panel is the household's answer to "why is this still unpriced in
- * March" and the operator's list of tickers to check against a statement
- * (ADR-0011). It lists instruments the backfill will never try as well as the
- * ones it will, with the reason, because their gaps are just as real and
- * Settings → Instruments is the answer for those.
+ * Thin wrapper over `settings.server.ts`/`prices.server.ts` (cadence is a
+ * row, not an env var — `0008_refresh_cadence.sql`). Second panel answers
+ * "why is this still unpriced" (ADR-0011), listing every gap with a reason,
+ * tried or not.
  */
 export function meta() {
   return [{ title: "Prices · Settings · Portfolio" }];
@@ -37,14 +29,11 @@ export async function action({ request }: Route.ActionArgs) {
   try {
     await saveRefreshCadence(values);
 
-    // No payload: the loader re-runs after an action, so the box showing the
-    // stored cadence is the confirmation.
+    // No payload — the loader re-run shows the stored cadence as confirmation.
     return null;
   } catch (error) {
     if (error instanceof ValidationError) {
-      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
-      // module, and a component referencing it would drag the database into
-      // the client bundle.
+      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       return { errors: fieldErrors, formError: formError ?? null, values };
@@ -76,9 +65,6 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
         </header>
 
         <Form method="post" className="panel-form">
-          {/* Close to unreachable with one field — exactly why it must not
-              be the refusal that goes unrendered: a form that did nothing
-              and said nothing. */}
           {actionData?.formError ? (
             <p className="form-error" role="alert">
               {actionData.formError}
@@ -92,8 +78,6 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
                 id="refresh-cadence"
                 name="refreshCadenceMinutes"
                 inputMode="numeric"
-                // What was typed survives a refusal; otherwise the box shows
-                // the stored cadence.
                 defaultValue={
                   error
                     ? (actionData?.values.refreshCadenceMinutes ?? "")
@@ -120,10 +104,7 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
               apply.
             </p>
 
-            {/* The price tag, at the dial (ADR-0006, story 17): every
-                distinct price is kept forever, so the cadence is a storage
-                decision as much as a request-rate one — the figure belongs
-                where the choice is made. */}
+            {/* ADR-0006, story 17 */}
             <p className="field-note">
               It is also a storage decision. Every distinct price the feed reports is kept, and
               never pruned, so the price archive grows in proportion: about a hundred instruments
@@ -191,20 +172,8 @@ export default function Prices({ loaderData, actionData }: Route.ComponentProps)
   );
 }
 
-/**
- * What the last attempt on a row amounts to, in words.
- *
- * Rendering, not a rule: the vocabulary is the ledger's (`0010_price_backfill.sql`),
- * and this is the only place it is turned into a sentence. An outcome with no
- * sentence here falls back to the stored value rather than to nothing, so a
- * literal added to the schema and not to this map is legible rather than blank.
- */
+// Rendering, not a rule — vocabulary is the ledger's (`0010_price_backfill.sql`). Unknown outcome falls back to the stored value, not blank.
 function attemptWords(gap: BackfillGap): React.ReactNode {
-  // Why, not just that: a hand-priced trust and a feed instrument nobody has
-  // given a ticker are two different things for a person to do about. Each
-  // branch reads a fact on the row rather than re-deriving the domain's rule for
-  // `willTry`, so a fourth price source would fall to the last sentence rather
-  // than be told its ticker is missing.
   if (!gap.willTry) {
     if (gap.priceSource === "manual") {
       return "Never — priced by hand, so there is no feed history to fetch.";
@@ -217,15 +186,11 @@ function attemptWords(gap: BackfillGap): React.ReactNode {
 
   if (gap.lastAttempt === null) return "Not tried yet — the next refresh will.";
 
-  // The UTC day, formatted on the server for `settings/accounts.tsx`'s reason:
-  // these pages must work with JavaScript off, so there is no browser clock to
-  // ask at render time and a locale-formatted date would disagree with itself
-  // between the server render and hydration.
+  // UTC, server-formatted (`settings/accounts.tsx`'s reason: no JS, no browser clock).
   const on = new Date(gap.lastAttempt.at).toISOString().slice(0, 10);
   const said = wordsFor(gap.lastAttempt.outcome);
 
-  // An empty error is a row the ledger allows — a provider that failed with
-  // nothing to say — and appending it would leave a dangling colon.
+  // Empty error is a valid row (provider failed with nothing to say) — appending it would leave a dangling colon.
   const because = gap.lastAttempt.error?.trim();
 
   return (
@@ -235,15 +200,7 @@ function attemptWords(gap: BackfillGap): React.ReactNode {
   );
 }
 
-/**
- * The ledger's closed vocabulary, as a person reads it.
- *
- * Keyed by {@link BackfillOutcome} rather than by `string`, which is what makes
- * this the *checked* copy: a literal added to `BACKFILL_OUTCOMES` and forgotten
- * here fails the typecheck, where a `Record<string, string>` would ship a blank
- * cell. The migration's `check` constraint and the const object are kept in step
- * by hand; this is the one of the three the compiler can hold.
- */
+// Keyed by {@link BackfillOutcome}, not `string` — a forgotten literal fails the typecheck rather than shipping a blank cell.
 const OUTCOME_WORDS: Record<BackfillOutcome, string> = {
   filled: "closes were written, and more are still missing.",
   nothing_to_write: "the feed answered, and every day it returned was already stored.",
@@ -253,14 +210,7 @@ const OUTCOME_WORDS: Record<BackfillOutcome, string> = {
   provider_failed: "the request failed:",
 };
 
-/**
- * The sentence for one stored outcome, or the stored value itself.
- *
- * The value crosses the driver as a `string`, so the lookup has to tolerate one
- * the map has never heard of — which the `check` constraint makes impossible
- * and a person reading a blank cell could not diagnose. Written as a search
- * rather than an index so no assertion is needed to narrow the key.
- */
+// Tolerates a stored value the map has never heard of, falling back to it — written as a search so no key assertion is needed.
 function wordsFor(outcome: string): string {
   return Object.entries(OUTCOME_WORDS).find(([stored]) => stored === outcome)?.[1] ?? outcome;
 }

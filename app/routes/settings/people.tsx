@@ -5,12 +5,7 @@ import { createPerson, listPeople, removePerson, renamePerson } from "~/lib/peop
 
 import type { Route } from "./+types/people";
 
-/**
- * Settings → People — a thin wrapper, on purpose: read the form, hand raw
- * fields to `people.server.ts`, render what comes back. Every rule about
- * what a name is, and every reason a person cannot be removed, lives there,
- * so a second caller cannot get a different answer than this screen does.
- */
+// Thin wrapper on purpose — every rule lives in `people.server.ts`.
 export function meta() {
   return [{ title: "People · Settings · Portfolio" }];
 }
@@ -38,17 +33,11 @@ export async function action({ request }: Route.ActionArgs) {
         throw new Response(`Unknown intent ${JSON.stringify(intent)}.`, { status: 400 });
     }
 
-    // No payload: the loader re-runs on its own after an action, so the list
-    // below is the confirmation. Clearing the returned values is also what
-    // empties the add box on success.
+    // No payload — the loader re-run is the confirmation, and empties the add box.
     return null;
   } catch (error) {
-    // A refusal is an ordinary outcome, returned with what was typed so the
-    // form re-renders carrying it rather than making someone retype a name.
     if (error instanceof ValidationError) {
-      // Split here, not in the component: `FORM_ERROR` lives in a `.server`
-      // module, and a component referencing it would drag the database into
-      // the client bundle. The action is stripped from that bundle.
+      // Split here, not in the component — `FORM_ERROR`'s `.server` module can't reach the client bundle.
       const { [FORM_ERROR]: formError, ...fieldErrors } = error.fieldErrors;
 
       return {
@@ -67,14 +56,12 @@ export async function action({ request }: Route.ActionArgs) {
 export default function People({ loaderData, actionData }: Route.ComponentProps) {
   const { people } = loaderData;
 
-  /** The messages for one row's rename form, or for the add form. */
   const errorsFor = (intent: string, personId: string | null = null) =>
     actionData?.intent === intent && actionData.personId === personId
       ? actionData.errors
       : undefined;
 
-  // A removal refusal names accounts rather than a field, so it is shown above
-  // the list it is about instead of beside a box.
+  // A removal refusal names accounts, not a field — shown above the list, not beside a box.
   const removalRefusal = actionData?.intent === "remove" ? actionData.formError : null;
 
   return (
@@ -106,16 +93,9 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
 
               return (
                 <li key={person.id}>
-                  {/* The row *is* the form. `.record` and `.record-form` both
-                      pad, so nesting one in the other would inset every row
-                      twice over. */}
                   <Form method="post" className="record record-form">
                     <input type="hidden" name="personId" value={person.id} />
 
-                    {/* The box and its refusal are one flex item
-                        (`AccountFields`' shape) so the sentence stacks under
-                        its box; loose in the row, the refusal sat beside the
-                        box and pushed that row out of line with the rest. */}
                     <div>
                       <label className="visually-hidden" htmlFor={`name-${person.id}`}>
                         Name
@@ -123,8 +103,6 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                       <input
                         id={`name-${person.id}`}
                         name="name"
-                        // What was typed survives a refusal; otherwise the stored
-                        // name is what the box shows.
                         defaultValue={errors ? (actionData?.values.name ?? "") : person.name}
                         aria-invalid={errors?.name ? true : undefined}
                       />
@@ -147,13 +125,8 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                       )}
                     </p>
 
-                    {/* Grouped and pushed to the trailing edge by the group:
-                        two actions on one record read as a pair, and
-                        `space-between` drew them a quarter-screen apart. */}
                     <div className="record-actions">
-                      {/* Outlined, not filled: five Saves would leave the page
-                          five primary actions and no obvious one — the filled
-                          button belongs to "Add person" below. */}
+                      {/* Outlined, not filled — the filled button belongs to "Add person" below. */}
                       <button
                         type="submit"
                         name="intent"
@@ -167,8 +140,7 @@ export default function People({ loaderData, actionData }: Route.ComponentProps)
                         name="intent"
                         value="remove"
                         className="button button--danger"
-                        // Not disabled when they own accounts: the refusal
-                        // explains itself, a dead button explains nothing.
+                        // Not disabled with accounts owned — the refusal explains itself.
                         aria-label={`Remove ${person.name}`}
                       >
                         Remove

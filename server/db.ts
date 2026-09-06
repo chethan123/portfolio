@@ -1,34 +1,13 @@
 /**
- * The one place a Postgres pool is constructed, so the type-parser override
- * below covers every code path. Default `pg` parses `numeric` into a JS
- * number, which silently rounds — two dashboards disagreeing by cents, no
- * error anywhere (DESIGN.md §4.1).
- *
- * Consequence for every caller: money and quantities cross the boundary as
- * decimal strings. Never `Number()`, `parseFloat` or JSON round-trip them;
- * arithmetic happens in SQL or a decimal library.
- *
- * Under `server/`, not `app/`, because both the Vite bundle
- * (`app/lib/db.server.ts`) and `server/migrate.ts` — run under type stripping
- * from an image with no source tree — need this single construction site.
+ * Only pg pool construction site — keeps numeric/int8/date as strings, not JS
+ * numbers (DESIGN.md §4.1). Arithmetic crosses via SQL or money.ts, never Number()/parseFloat.
  */
 import pg from "pg";
 
-/**
- * OIDs whose default `pg` parser loses information.
- *
- * - 1700 `numeric` — parsed to a float, rounds.
- * - 20 `int8` — beyond `MAX_SAFE_INTEGER`. `pg` already returns strings;
- *   stated here so the guarantee is explicit. Every surrogate key is a bigint,
- *   hence ids cross as strings too.
- * - 1082 `date` — a calendar date, not an instant. Default parse lands at
- *   *local* midnight, so any zone west of UTC formats it back as the previous
- *   day and an as-of query picks the wrong position set, no error anywhere.
- *   Crosses as the `YYYY-MM-DD` string Postgres sent.
- *
- * `timestamp`/`timestamptz` deliberately stay `Date`s: genuine instants,
- * compared in SQL.
- */
+// numeric (1700) parses to float, rounds; int8 (20) exceeds MAX_SAFE_INTEGER
+// (pg already strings it — every id is a bigint too); date (1082) parses at
+// local midnight, breaking as-of queries west of UTC. timestamp/timestamptz
+// stay Date: real instants, compared in SQL.
 const STRING_TYPE_OIDS = [
   pg.types.builtins.NUMERIC,
   pg.types.builtins.INT8,
@@ -56,12 +35,9 @@ export function createPool(connectionString: string): pg.Pool {
     console.error("Postgres connection error:", error);
   };
 
-  // Both paths are necessary: pg-pool removes its idle error listener while a
-  // client is checked out, and the price poller holds one across provider
-  // network work. The pool catches idle failures; the client catches that gap.
-  // Detaching on release keeps the paths disjoint — an idle death would
-  // otherwise fire both this listener and pg-pool's own, reporting one error
-  // twice.
+  // pg-pool drops its idle-error listener while a client is checked out (the
+  // poller holds one across network calls) — pool catches idle failures,
+  // client catches that gap. Detach on release or an idle death double-reports.
   pool.on("error", reportConnectionError);
   pool.on("acquire", (client) => {
     client.on("error", reportConnectionError);

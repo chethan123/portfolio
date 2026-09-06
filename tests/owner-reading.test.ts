@@ -1,16 +1,4 @@
-/**
- * `ownerReading` is now the one place all four owner-filter screens settle an
- * address, resolve the roster, and narrow `reading` — a bug here reaches
- * every one of them at once, where the four separate loader preambles this
- * replaces could each drift on its own (and did: Overview's own reorder,
- * Holdings' own dropped receipt). The settle chain is the sharpest risk: a
- * canonical spelling that is not a fixed point is an infinite redirect
- * nobody notices until they open a screen, so this file follows the chain to
- * its end rather than checking one hop. `reading`'s divergence from the raw
- * filter is the second: a stale id has to be dropped from what a
- * date-crossing reader narrows by, and a selection matching nobody has to
- * keep its raw ids rather than silently widen to the whole household.
- */
+// ownerReading is the one place all four owner-filter screens settle an address and narrow `reading` — a bug here reaches all of them
 import { afterAll, describe, expect, it } from "vitest";
 
 import { isFiltered, ownerSearch, type OwnerFilter } from "~/lib/owner-filter";
@@ -23,10 +11,9 @@ import type { TestContext } from "./support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/** An arbitrary pathname — `ownerReading` is screen-agnostic, so no route need exist here. */
+// arbitrary pathname — ownerReading is screen-agnostic, no route need exist
 const PATH = "/screen";
 
-/** Two owners, each holding one open account — enough for a real narrowing. */
 async function seedTwoOwners(ctx: Pick<TestContext, "seedPerson" | "seedAccount">) {
   const alice = await ctx.seedPerson({ name: "Alice" });
   const bob = await ctx.seedPerson({ name: "Bob" });
@@ -36,12 +23,7 @@ async function seedTwoOwners(ctx: Pick<TestContext, "seedPerson" | "seedAccount"
   return { alice, bob };
 }
 
-/**
- * A stand-in for Holdings' own address (`?edit=`/`?saved=`): a `row` the
- * request-target keeps and the link — `showEveryone` included — always
- * drops, because a link built from the view must not reopen an editor the
- * reader who follows it never had open.
- */
+// stand-in for Holdings' address (?edit=/?saved=): request keeps `row`, link drops it — a view link must not reopen an editor
 function rowAddress(row: string): ScreenAddress {
   const link = (owners: OwnerFilter) => ownerSearch(owners);
 
@@ -55,12 +37,7 @@ function rowAddress(row: string): ScreenAddress {
 }
 
 describe("the settle chain", () => {
-  // Terminates, rather than bounces exactly once: an address can legitimately
-  // take two hops — the canonical spelling, then the all-owners collapse —
-  // and what must never happen is a third that is the second again. Four is
-  // generous enough to prove a loop rather than to allow one. This is what
-  // actually catches a non-idempotent speller; a check blind to the chain
-  // would pass `?owner=1,3 → ?owner=3,1 → ?owner=1,3` and loop forever.
+  // legitimate chains are 2 hops (canonical, then all-owners collapse); 4 is generous enough to prove a loop, not permit one
   const settles = async (search: string): Promise<void> => {
     let where = `${PATH}${search}`;
     const seen: string[] = [];
@@ -87,11 +64,9 @@ describe("the settle chain", () => {
         "",
         `?owner=${alice.id}`,
         `?owner=${both}`,
-        // Every multi-owner URL, on any transport that has already round-tripped
-        // the query through `URLSearchParams`.
+        // covers a transport that's already round-tripped the query through URLSearchParams
         `?owner=${both.replace(",", "%2C")}`,
-        // The same apostrophe id, encoded and literal — both must settle to
-        // the same address, matching nobody.
+        // apostrophe id, encoded and literal — both must settle to the same address
         "?owner=o%27brien",
         "?owner=o'brien",
         "?owner=a%20b",
@@ -99,7 +74,6 @@ describe("the settle chain", () => {
         `?owner=${bob.id},${alice.id}`,
         `?owner=${alice.id}&owner=${bob.id}`,
         "?owner=",
-        // A non-owner parameter on either side of it, carried through every hop.
         `?range=1m&owner=${bob.id},${alice.id}`,
         `?owner=${alice.id}&range=3m`,
       ]) {
@@ -123,18 +97,7 @@ describe("the settle chain", () => {
   it(
     "bounces a comma-spelled selection — literal or percent-encoded — to the repeated-key address, on its own and not only as part of the chain",
     withDatabase(async () => {
-      // Nothing seeded — the empty seed is itself the assertion: respelling a
-      // separator is decided from the address alone, before any database
-      // work, so a real roster must not be what makes this bounce happen.
-      //
-      // `?owner=1,3` was this application's *canonical* spelling before this
-      // fix, and arrived unchanged; it is now a legacy input `readOwnerFilter`
-      // still accepts (a hand-typed address, or one of this suite's own),
-      // never a target a loader redirects to. Both spellings of the separator
-      // — literal and percent-encoded — have to bounce to the one repeated-key
-      // address, or a reader who typed either would settle on a URL the other
-      // does not: a comparison blind to encoding would settle this pair
-      // perfectly while quietly keeping two URLs for one view.
+      // no seed needed — respelling is decided from the address alone; "?owner=1,3" is the old canonical spelling, accepted but never a redirect target
       for (const search of ["?owner=1,3&range=1m", "?owner=1%2C3&range=1m"]) {
         expect(await redirectTo(() => ownerReading(get(`${PATH}${search}`)))).toBe(
           `${PATH}?owner=1&owner=3&range=1m`,
@@ -150,15 +113,13 @@ describe("what `reading` resolves to", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx);
 
-      // Already canonical: `999999999` sorts after any freshly seeded id, so
-      // this exercises the resolution, not the bounce.
+      // sorts after any seeded id and is already canonical — exercises resolution, not the bounce
       const { reading, owner } = await ownerReading(
         get(`${PATH}?owner=${alice.id}&owner=999999999`),
       );
 
       expect(reading).toEqual([alice.id]);
-      // The raw selection is untouched — `reading` narrows what the readers
-      // see, not what the control draws as ticked or the sentence names.
+      // reading narrows what's shown, not what the control ticks or names
       expect(owner.owners).toEqual([alice.id, "999999999"]);
       expect(owner.unknownOwner).toBe(true);
     }),
@@ -171,9 +132,7 @@ describe("what `reading` resolves to", () => {
 
       const { reading } = await ownerReading(get(`${PATH}?owner=888888888&owner=999999999`));
 
-      // `[]` reads as the whole household (`owner-filter.ts`); keeping the raw,
-      // unmatched ids is what makes a household-scoped reader narrow to
-      // nothing instead of quietly widening back out.
+      // [] reads as the whole household — keeping raw unmatched ids narrows instead of silently widening
       expect(reading).toEqual(["888888888", "999999999"]);
     }),
   );
@@ -203,21 +162,15 @@ describe("a screen's own request-only state", () => {
       const { alice, bob } = await seedTwoOwners(ctx);
       const spell = rowAddress("42");
 
-      // Non-canonical order, the row present: the canonical bounce keeps it.
       const messy = get(`${PATH}?owner=${bob.id},${alice.id}&row=42`);
       const sorted = await redirectTo(() => ownerReading(messy, spell));
       expect(sorted).toBe(`${PATH}?${ownerParam(alice.id, bob.id)}&row=42`);
 
-      // Alice and Bob are the whole household, so the sorted address collapses
-      // next — the everyone bounce, built from the same `request`, keeps the
-      // row too. One speller for both bounces is what closes the gap Holdings
-      // had: its own everyone bounce used to drop `saved` where its canonical
-      // bounce kept it.
+      // regression: Holdings' own everyone bounce used to drop `saved` here
       const everyone = await redirectTo(() => ownerReading(get(sorted), spell));
       expect(everyone).toBe(`${PATH}?row=42`);
 
-      // `owner.showEveryone` is built from `link`, never `request`, and a link
-      // built from the view carries no row to reopen.
+      // showEveryone is built from link, not request — a view link carries no row to reopen
       const { owner } = await ownerReading(get(everyone), spell);
       expect(owner.showEveryone).not.toContain("row=");
     }),
@@ -230,11 +183,7 @@ describe("showEveryone", () => {
     withDatabase(async (ctx) => {
       const { alice } = await seedTwoOwners(ctx);
 
-      // The default `ScreenAddress` (Analysis, Income, Overview) spells the
-      // unfiltered household as no `owner` parameter at all, so
-      // `canonicalOwnerSearch(params, ALL_OWNERS)` is `""` here. A raw `""`
-      // would make `<Link to="">` resolve to the filtered page it is already
-      // on, so "Show everyone" would do nothing on the very screen it emptied.
+      // canonical is "" here — <Link to=""> would resolve to the current filtered page, making Show everyone a no-op
       const { owner } = await ownerReading(get(`${PATH}?owner=${alice.id}`));
 
       expect(owner.showEveryone).toBe(".");

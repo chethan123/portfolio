@@ -68,7 +68,14 @@ plainly untrue on a narrowed table. The owner filter has its own empty answers, 
 
 ![The whole portfolio grouped by asset class](images/holdings-grouped.png)
 
+![The same grouping strip on a phone, the active chip scrolled out of view](images/holdings-grouped-mobile.png)
+
 Each group gets a heading with its own count, its rows, then a subtotal.
+
+On a phone the **Group by** strip scrolls sideways instead of wrapping, the same way the range
+buttons on Overview do. Grouped by Asset class here, but nothing above says so — the chip that
+would show it is scrolled off to the right. Swipe the strip to check which grouping is active
+before reading a heading as the default.
 
 The percentage under a subtotal — "81.5% of gross assets" — is a share of the positive groups
 added together, not of the Total row underneath. With a loan in the table the two differ, so the
@@ -149,11 +156,17 @@ Both are explained in [prices.md](prices.md).
 
 ![One row open for correction](images/holdings-edit.png)
 
+![The same correction on a phone: the row as a card, each box on its own line](images/holdings-edit-mobile.png)
+
 A statement arrives quarterly and a position changes weekly. Rather than run the whole upload for
 "the 401k contribution added eleven units", correct the row here.
 
 **To do it:** click the pencil at the end of a row. The Quantity and Cost basis cells become
 boxes. Type, then **Save**. **Cancel** closes without writing.
+
+On a phone the row is already a card — the whole table reflows to one below 768px, the asset name
+as its heading and every other column a labelled line underneath. Open for correction, that gives
+the two boxes a full line each rather than a cramped half each, which is the shape above.
 
 Two things to know before you type:
 
@@ -206,6 +219,18 @@ open.
 
 **Touching any filter, chip or column heading closes it.** Those controls rebuild the address from
 your view alone, and a half-typed correction does not follow you into a different one.
+
+## On a phone
+
+![Holdings on a phone: the filters and the owner control, before the table](images/holdings-mobile.png)
+
+The six filters stack two to a row rather than one long column, and the owner control sits above
+them rather than beside the title. Below the fold, this is the one screen that changes *shape*
+rather than just width — every row becomes its own card, shown above under grouping and under
+correcting a row. Nothing on it is hidden; the table is simply not a table any more.
+
+Narrowing to one owner works the same as everywhere else — see [reading a screen as one
+owner](owner-filter.md#how-to-narrow) for what that control does on a phone.
 
 ---
 

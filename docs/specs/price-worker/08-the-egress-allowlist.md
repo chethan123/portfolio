@@ -70,7 +70,7 @@ drop it. Two corrections to the rest:
 
 - **A sixth host reaches the network: `registry.npmjs.org`.** The library's version check fetches
   `https://registry.npmjs.org/yahoo-finance2/latest` and it is **on by default**. The only reason it
-  never fires here is `server/yahoo-client.ts:123` constructing with `versionCheck: false`, which
+  never fires here is `server/yahoo-client.ts:49` constructing with `versionCheck: false`, which
   that file's own header already explains. Do not add it to the allowlist — add the coupling to the
   allowlist's comment, because the next person to flip that option gets a `403` from the proxy with
   nothing to connect it to.

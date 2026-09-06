@@ -1,14 +1,7 @@
 /**
- * The primary test seam: real Postgres with the migrations applied, seeded
- * through the fixture builder, read through the query module. No mock, no
- * SQLite: the risk lives in Postgres-specific SQL and `numeric` handling,
- * and both disappear under a substitute. **Isolation is by transaction
- * rollback** — every test body runs in a transaction always rolled back, so
- * no test sees another's rows, ordering never matters, and the suite leaves
- * the database exactly as found, failures included.
- *
- * Requires a database. See `compose.test.yaml`:
- *   docker compose -f compose.test.yaml up -d --wait
+ * Real Postgres, migrated, seeded through the fixture builder — no mock, no SQLite, since the risk
+ * is Postgres-specific SQL and `numeric` handling. Isolation is by transaction rollback, always
+ * rolled back. Requires `docker compose -f compose.test.yaml up -d --wait`.
  */
 import { createDatabase, withDb, type Database } from "~/lib/db.server";
 import { createPool } from "../../server/db.ts";
@@ -27,12 +20,7 @@ let pool: Pool | undefined;
 let db: Kysely<Database> | undefined;
 let migrated: Promise<void> | undefined;
 
-/**
- * A migrated database handle, opened once per test file.
- *
- * Applying migrations is idempotent, so this is safe however many test files
- * call it and whatever order they run in.
- */
+/** A migrated database handle, opened once per test file — safe regardless of call count or order, since migrating is idempotent. */
 export async function testDatabase(): Promise<Kysely<Database>> {
   pool ??= createPool(TEST_DATABASE_URL);
   db ??= createDatabase(TEST_DATABASE_URL);
@@ -65,11 +53,7 @@ export async function closeTestDatabase(): Promise<void> {
 
 /** What a test body is handed. */
 export type TestContext = Fixtures & {
-  /**
-   * The transaction everything in this test runs in. Pass it to the query
-   * module — `currentHoldings(ALL_OWNERS, db)` — so the reads see the seeded rows and the
-   * whole test disappears on rollback.
-   */
+  /** The test's transaction — pass to the query module (`currentHoldings(ALL_OWNERS, db)`) so reads see seeded rows and vanish on rollback. */
   db: Kysely<Database>;
 };
 
@@ -81,13 +65,11 @@ class Rollback extends Error {
 }
 
 /**
- * Wrap a test body so it runs inside a transaction that is always rolled back.
+ * Wraps a test body in a transaction that is always rolled back, failing
+ * assertion or not:
  *
  *   it("a closed account is excluded from current holdings",
  *     withDatabase(async ({ db, seedAccount }) => { ... }));
- *
- * A failing assertion propagates out unchanged; the rollback happens either
- * way.
  */
 export function withDatabase(
   body: (context: TestContext) => Promise<void>,
@@ -97,12 +79,7 @@ export function withDatabase(
 
     try {
       await database.transaction().execute(async (trx) => {
-        // `withDb` is what extends this transaction to a caller that cannot be
-        // handed it. A route loader calls `listAccounts()` with no argument by
-        // design, so without this it would reach the process-wide pool, commit,
-        // and leave rows behind for every later test to trip over. Inside the
-        // store, `getDb()` returns `trx` however deep the call goes — so a
-        // route test rolls back exactly like a query test.
+        // withDb extends this transaction to callers that take no db argument by design (e.g. a loader's listAccounts()) — getDb() returns trx however deep the call goes, so a route test rolls back too.
         await withDb(trx, async () => {
           await body({ db: trx, ...makeFixtures(trx) });
         });

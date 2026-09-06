@@ -1,32 +1,7 @@
-/**
- * Correcting one position, in place on the Holdings table (DESIGN.md §5.4) —
- * the small write for the gap between quarterly statements and weekly
- * changes, where the four-screen upload is more ceremony than the fact
- * deserves. It is `balances.server.ts` for accounts holding more than one
- * thing, under the same three rules:
- *
- * **It appends; it never edits.** `holding_valued_at` reads position sets for
- * every plotted date, so an `update holding` would silently restate every
- * figure back to the statement it landed in — March net worth moving because
- * an August typo was fixed. A revision is a *new* set carrying today's date;
- * the corrected one keeps speaking for its own dates.
- *
- * **It carries the whole account forward.** §5.2's "a missing row means sold"
- * makes a set a photograph, so a set with only the corrected row would record
- * everything else as sold. The new set is the old with one row changed — the
- * reading §14.7 already takes of the gap between two statements.
- *
- * **It changes numbers, never membership.** Adding an instrument means
- * resolving a name against the alias table — the upload flow's job (§4.3).
- * Zero is stored as zero rather than dropping the row: a dropped row is
- * unreachable from the table that no longer prints it, uneditable by the very
- * screen that removed it.
- *
- * The write is one statement (`balances.server.ts`'s reason: a set landing
- * without its holdings is a *successful* write meaning "holds nothing"). The
- * CTE also guards that the instrument is still in the account, so an account
- * that changed underneath the form writes nothing at all.
- */
+// Corrects one position in place on Holdings (DESIGN.md §5.4) — balances.server.ts for accounts
+// holding more than one thing. Same rules: appends never edits (an update would restate every
+// plotted date back to the statement); carries the whole account forward; changes numbers, never
+// membership (§4.3). One statement; the CTE guards the instrument is still on the account.
 import { sql } from "kysely";
 import { z } from "zod";
 
@@ -44,7 +19,6 @@ import { MONEY_SCALE, QUANTITY_SCALE, toUnits } from "./money.ts";
 import type { IsoDate } from "./valuation.server.ts";
 import type { Kysely, Selectable } from "kysely";
 
-/** What the row's two editable boxes carry. */
 export const positionInput = z.object({
   quantity: signedQuantity("A quantity"),
   costBasisPerShare: perShareAmount("A cost basis"),
@@ -52,76 +26,44 @@ export const positionInput = z.object({
 
 export type PositionInput = z.infer<typeof positionInput>;
 
-/** A position as it stands on the account's current statement. */
 export type CurrentPosition = {
   accountId: string;
   instrumentId: string;
   instrumentName: string;
-  /** Signed, exactly as stored: negative for something owed. */
+  // Signed, as stored: negative for something owed.
   quantity: string;
-  /** Null when no statement ever carried one, as 401k statements routinely do. */
+  // Null when no statement ever carried one (401k statements routinely don't).
   costBasisPerShare: string | null;
-  /** The date of the position set this reading comes from. */
   asOf: IsoDate;
-  /**
-   * The current quote, or null. Not a fact about the statement, here anyway:
-   * the other operand of a multiplication the *view* performs, and
-   * {@link revisePosition} must know whether the figure it is about to store
-   * is one the view can express ({@link fitsTheMoneyColumn}).
-   */
+  // The other operand of a multiplication the view performs — revisePosition checks fitsTheMoneyColumn before storing.
   price: string | null;
-  /**
-   * Here for {@link CurrentPosition.price}'s reason and no other: since
-   * migration 0006 this is the third operand `holding_valued` multiplies the
-   * stored quantity by.
-   */
+  // Since migration 0006, the third operand holding_valued multiplies the quantity by.
   annualDividendPerShare: string | null;
-  /**
-   * `fixed` is the seeded USD row's alone. Here because {@link revisePosition}
-   * must tell a count of shares from a sum of money: §2 stores a cash balance
-   * as a quantity of the fixed-price currency, so on those rows the quantity
-   * box is money and is held to money's rule.
-   */
+  // 'fixed' = the seeded USD row only. Needed so revisePosition can tell a share count from a sum
+  // of money (§2: a cash balance is a quantity of fixed-price currency).
   priceSource: Selectable<Database["instrument"]>["price_source"];
 };
 
-/**
- * A revision as stored. Deliberately not `CurrentPosition & …`: a price is a
- * market fact this write neither set nor changed, and a caller handed one
- * would reasonably read it as part of what was recorded.
- */
+// Not CurrentPosition & …: a price is a market fact this write never set, so a caller handing one would misread it as recorded.
 export type RevisedPosition = {
   accountId: string;
   accountName: string;
   instrumentId: string;
   instrumentName: string;
-  /** Signed, exactly as the quantity was written: negative for something owed. */
   quantity: string;
   costBasisPerShare: string | null;
-  /** The date the new position set carries, which is not always today. */
+  // Date the new position set carries — not always today.
   asOf: IsoDate;
 };
 
-/**
- * What an account's current statement says about one instrument, resolved
- * through `latest_position_set` — never a second `order by` here (§8.2).
- *
- * Read twice per correction, for neither obvious reason: the write reads it
- * to decide whether the correction may be made at all; the Holdings loader
- * reads it for the date the correction will carry. It is *not* the source of
- * the boxes' contents — those are the figures already on screen, so `120.5`
- * opens as `120.5`, not the stored `120.50000000`.
- *
- * @returns null when the account holds no such instrument — also the answer
- *          for an account with no statement at all.
- */
+// Resolved via latest_position_set (§8.2), read twice per correction (write checks whether it
+// may apply, loader reads the date it'll carry). Null for no such instrument, or no statement at all.
 export async function currentPosition(
   accountId: string,
   instrumentId: string,
   db: Kysely<Database> = getDb(),
 ): Promise<CurrentPosition | null> {
-  // Both ids reach here from a URL, checked before they are cast:
-  // `'x'::bigint` is a driver error, not an empty result.
+  // Checked before cast: 'x'::bigint is a driver error, not an empty result.
   if (!/^\d+$/.test(accountId) || !/^\d+$/.test(instrumentId)) return null;
 
   const result = await sql<{
@@ -144,8 +86,7 @@ export async function currentPosition(
     from position_set ps
     join holding h    on h.position_set_id = ps.id
     join instrument i on i.id = h.instrument_id
-    -- Left, as holding_valued joins it: an unquotable instrument is still
-    -- held, and still correctable.
+    -- Left, as holding_valued joins it: an unquotable instrument is still held, still correctable.
     left join quote q on q.instrument_id = i.id
     where ps.id = latest_position_set(${accountId}::bigint)
       and h.instrument_id = ${instrumentId}::bigint
@@ -167,42 +108,20 @@ export async function currentPosition(
   };
 }
 
-/**
- * `numeric(20, 4)`, as the view casts its three products. Not the columns'
- * own precision: each operand can sit inside its column while the *product*
- * lands outside this — the whole reason {@link fitsTheMoneyColumn} exists.
- */
+// numeric(20, 4), the view's cast on its three products — not the columns' own precision (each
+// operand can fit while the product doesn't, why this check exists).
 const MONEY_PRECISION = 20;
 
-/**
- * The cast's ceiling as a scaled integer: `numeric(p, s)` must round under
- * `10^(p-s)`, and a figure at scale `s` is `10^s` times itself, so the
- * exponents cancel — the limit is `10^p` whatever the scale.
- */
+// numeric(p, s) rounds under 10^(p-s); at scale s a figure is 10^s times itself, so exponents cancel and the limit is 10^p regardless of scale.
 const MONEY_LIMIT = 10n ** BigInt(MONEY_PRECISION);
 
-/** Scale 8 × scale 4 is a product at scale 12; the view's cast lands it at 4. */
+// Scale 8 x scale 4 = a scale-12 product; the view casts it down to scale 4.
 const SCALE_GAP = 10n ** BigInt(QUANTITY_SCALE);
 
-/**
- * Whether `quantity × perShare` is a figure this application can hold. The
- * view casts three products against the stored quantity to `numeric(20, 4)`,
- * and one that will not round under 10^16 makes the cast raise — far worse
- * than a refused form: the write succeeds, then every `holding_valued` reader
- * throws on every request, and Holdings — the only screen the editor is
- * reachable from — is among them, so only `psql` could recover it.
- *
- * Bounding the fields cannot prevent it: each operand can be well inside its
- * column (a twelve-digit quantity, a share priced in the hundred thousands)
- * with only the product overflowing — so the check is on the product, both
- * operands in hand, at the moment of the write. Exact, in `bigint`, rounded
- * the way the cast rounds before comparing: half away from zero can carry a
- * hair-under figure to exactly the limit, the one case an unrounded check
- * would wave through.
- *
- * Two callers, both at a write: {@link revisePosition} (the one restated
- * row) and `commitUpload` (every parsed row — the likelier way in).
- */
+// quantity x perShare overflowing numeric(20,4) makes the view's cast raise on every future read
+// (not just a refused form) — can't be prevented by bounding the fields alone, since either can
+// be in-column while only the product overflows. Checks the product itself, exact in bigint,
+// rounded the way the cast rounds. Called at every write: revisePosition and commitUpload.
 export function fitsTheMoneyColumn(quantity: string, perShare: string | null): boolean {
   if (perShare === null) return true;
 
@@ -213,11 +132,7 @@ export function fitsTheMoneyColumn(quantity: string, perShare: string | null): b
   return rounded < MONEY_LIMIT;
 }
 
-/**
- * Whether two quantities point the same way. Zero points nowhere and matches
- * anything — what lets a position be closed and reopened the other way across
- * two deliberate edits rather than one absent-minded one.
- */
+// Zero points nowhere and matches anything — lets a position close then reopen the other way across two deliberate edits, not one absent-minded one.
 function sameDirection(before: string, after: string): boolean {
   const negative = (value: string) => /^-/.test(value) && !/^-0+(\.0+)?$/.test(value);
   const zero = (value: string) => /^-?0+(\.0+)?$/.test(value);
@@ -225,14 +140,6 @@ function sameDirection(before: string, after: string): boolean {
   return zero(before) || zero(after) || negative(before) === negative(after);
 }
 
-/**
- * Restate one position on an account's current statement.
- *
- * @param raw the submitted fields, unvalidated.
- * @throws {NotFoundError} when no such account exists.
- * @throws {ValidationError} with a message per bad field, and a form-level one
- *         where the submission cannot apply at all.
- */
 export async function revisePosition(
   accountId: string,
   instrumentId: string,
@@ -241,8 +148,7 @@ export async function revisePosition(
 ): Promise<RevisedPosition> {
   const account = await getAccount(accountId, db);
 
-  // Before field validation, for `setBalance`'s reason: a closed account is a
-  // problem no correcting of boxes will fix, and "not a number" would bury it.
+  // Before field validation: a closed account isn't fixable by correcting the form.
   if (account.isClosed) {
     throw ValidationError.form(
       `${account.name} is closed, and a closed account's history does not change. ` +
@@ -260,24 +166,16 @@ export async function revisePosition(
 
   const input = parseInput(positionInput, raw);
 
-  // On a cash row this box holds money: §2 stores a bank balance as a
-  // quantity of fixed-price USD, so this editor is a second door onto the
-  // figure `setBalance` writes and must refuse the same things —
-  // `signedQuantity` alone allows the eight places a share needs, which on a
-  // balance is $100.1235. Wording is `moneyMagnitude`'s: one rule, two doors.
-  // Only the quantity: a cost basis is a rate, and `perShareAmount` holds all
-  // four places the box was prefilled from.
+  // On a cash row this box holds money (§2), a second door onto what setBalance writes — must
+  // refuse the same things (signedQuantity allows 8 places, moneyMagnitude only 2).
   if (before.priceSource === "fixed" && (input.quantity.split(".")[1] ?? "").length > 2) {
     throw new ValidationError({
       quantity: "A balance is recorded to the cent, so it takes at most two decimal places.",
     });
   }
 
-  // The one refusal about meaning rather than form. §2 puts the sign in the
-  // quantity, so flipping it asserts an asset became a debt — moving net
-  // worth by twice the figure while reading as an ordinary correction.
-  // `balances.server.ts` refuses signs entirely; this box must show one (it
-  // opens containing the printed number), so it refuses the change instead.
+  // Flipping the sign (§2) asserts an asset became a debt, moving net worth by twice the figure
+  // while reading as an ordinary correction — refused, since this box just shows the printed number.
   if (!sameDirection(before.quantity, input.quantity)) {
     throw new ValidationError({
       quantity:
@@ -288,10 +186,8 @@ export async function revisePosition(
     });
   }
 
-  // The three multiplications the view is about to perform, checked before
-  // storage rather than discovered at render. The price and dividend rate are
-  // facts the household cannot influence, so those refusals name the quantity
-  // that *was* typed.
+  // The three multiplications the view will perform, checked before storage; price/dividend
+  // rate aren't editable here, so those refusals name the quantity.
   if (!fitsTheMoneyColumn(input.quantity, input.costBasisPerShare)) {
     throw new ValidationError({
       costBasisPerShare:
@@ -319,13 +215,8 @@ export async function revisePosition(
 
   const asOf = effectiveDate(before.asOf);
 
-  // One statement, every guard in it. `source` is empty unless the current
-  // set still carries this instrument, and both writes select from it — an
-  // account that changed underneath the form produces no position set at all.
-  // `greatest` again, though `effectiveDate` already ran: that date was
-  // chosen against the set the guard read, this one against the set the write
-  // locks — the same set except in a race, where this keeps the correction
-  // from landing behind the statement it corrects.
+  // One statement, every guard in it: `source` is empty unless the current set still carries
+  // this instrument; `greatest` re-runs effectiveDate against the locked set, so the correction can't land behind it.
   const written = await sql<{ position_set_id: string }>`
     with source as (
       select ps.id, ps.as_of_date
@@ -360,9 +251,7 @@ export async function revisePosition(
 
   const landed = written.rows[0];
   if (landed === undefined) {
-    // `source` was empty by the time the statement ran — the race
-    // `before === null` catches, lost after the check. Reported, not retried:
-    // what the account holds now is not what this form was filled in against.
+    // source was empty by the time the statement ran — the same race before===null catches, lost after. Reported, not retried.
     throw ValidationError.form(
       `${account.name} changed while this form was open, so nothing was recorded. ` +
         "Reload the page and make the correction against what it holds now.",
@@ -376,25 +265,14 @@ export async function revisePosition(
     instrumentName: before.instrumentName,
     quantity: input.quantity,
     costBasisPerShare: input.costBasisPerShare,
-    // The same date the statement applied, computed by the same function:
-    // `RETURNING` on an INSERT…SELECT sees the target table's columns, and
-    // `as_of_date` is not one of `holding`'s.
+    // Recomputed by the same function as the write: RETURNING on this INSERT…SELECT sees holding's columns, not as_of_date.
     asOf,
   };
 }
 
-/**
- * The date a correction against a statement of `asOf` will carry: today,
- * except where the statement is dated ahead (`recordedDate` allows one day of
- * slack east of UTC) — a correction filed behind the sheet it corrects
- * appears to succeed and changes no figure anywhere. ISO dates compare as
- * text exactly as they compare as dates.
- *
- * Exported because the editor names this date *before* the click; the
- * `greatest` in the statement is the same rule applied where the row is
- * locked. Today comes from the server clock, not `current_date`, so one clock
- * answers — `latestRecordableDate` reads the same one.
- */
+// today, unless asOf is ahead of it (recordedDate allows one day east of UTC) — a correction
+// filed behind the sheet it corrects would appear to succeed and change nothing. Server clock,
+// not current_date, agreeing with latestRecordableDate; exported so the editor can name this date before the click.
 export function effectiveDate(asOf: IsoDate): IsoDate {
   const today = new Date().toISOString().slice(0, 10);
 

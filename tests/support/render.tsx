@@ -1,20 +1,7 @@
-/**
- * Rendering a page through the real shell.
- *
- * The rules these tests protect — the open-instance banner, the first-run
- * prompt — are properties of `Layout`, not of any one page: "every page carries
- * it" is exactly what a component test rendering the banner on its own would
- * not notice the shell dropping. So the shell is rendered, with the root
- * loader's data supplied the way the framework supplies it.
- *
- * **Warnings are failures here.** `Layout` renders `<Links />`, and under
- * `createRoutesStub` there is no route manifest behind it, so React DOM emits
- * an empty `href` on the stylesheet tag it cannot resolve. That warning is an
- * artefact of the stub rather than anything this application does — but left
- * unfiltered it printed twenty times a run and would have buried a real one.
- * Rather than silence the channel, {@link renderThroughLayout} allows that one
- * known message and throws on anything else React has to say.
- */
+/** Renders through the real shell (`Layout`), not a page component alone — the open-instance banner and
+ * first-run prompt are shell rules a page-only test wouldn't notice failing. Warnings are failures here,
+ * except `createRoutesStub`'s empty-href stub artefact (no route manifest behind `Layout`'s `<Links />`) —
+ * {@link renderThroughLayout} allows only that one message. */
 import { renderToStaticMarkup } from "react-dom/server";
 import { Outlet, createRoutesStub } from "react-router";
 
@@ -27,74 +14,29 @@ export type RootData = {
   /** Whether a gate fronts the instance; false is what draws the warning. */
   gated: boolean;
   firstRun: FirstRunStep;
-  /**
-   * Whether this browser's amounts are hidden (spec 0007). Optional here and
-   * only here: every test written before masking existed passes root data
-   * without it, and defaulting to *masked* in those would flip assertions those
-   * tests never made. `Layout` itself has no default — the loader always sends
-   * one.
-   */
+  /** Masked amounts (spec 0007). Optional: tests predating masking pass root data without it and must not flip to *masked* by default — `Layout` itself has no default. */
   masked?: boolean;
-  /**
-   * Whether the household holds a passkey at all (ticket 06) — a household
-   * fact, not `CONTEXT.md`'s `Locked` (a fact about one browser); it gates
-   * the "Lock now" control and the reentry guard beside it. Optional for the
-   * same reason `masked` is: every test written before the lock existed
-   * passes root data without it, and `undefined` reads as "no passkey" the
-   * same way `Layout` itself treats it, so none of them start asserting a
-   * control they never seeded a passkey for.
-   */
+  /** Household holds any passkey (ticket 06) — gates "Lock now" and its reentry guard. Optional for the same predates-the-feature reason as `masked`; `undefined` reads as no passkey, same as `Layout`. */
   hasPasskey?: boolean;
 };
 
-/**
- * The one warning the stub provokes and the application does not.
- *
- * Matched on the message React formats rather than on a stack, because the
- * substitution placeholders (`%s`) arrive as separate arguments.
- */
+/** Matched on React's formatted message, not a stack — the `%s` placeholders arrive as separate arguments. */
 const STUB_STYLESHEET_WARNING = 'An empty string ("") was passed to the';
 
-/**
- * Render one route's own component, with data its real loader produced.
- *
- * Separate from {@link renderThroughLayout}, which renders the shell around a
- * stand-in body: this renders the route module's default export itself, which
- * is what a test about a *sentence on a screen* needs.
- *
- * Hydration data rather than a stub loader, deliberately. A loader resolves a
- * tick later than `renderToStaticMarkup` reads the tree, so the markup would
- * come back empty — and an empty string passes every `not.toContain` assertion
- * written against it, which is the failure mode this helper exists to avoid.
- *
- * The caller is expected to pass output from the real loader rather than a
- * hand-built object: a fixture of the loader's shape is a second copy free to
- * drift from it, and the drift looks exactly like a passing test.
- *
- * `path` may carry a search string. It is rendered at the whole address and
- * matched on the pathname, so a control that builds its links out of the
- * params already there can be asserted on.
- *
- * `actionData` is for the screen a refusal re-renders: pass what the real
- * action returned, for the same no-drift reason as the loader data above.
- */
+/** Renders one route's own component with data its real loader produced — unlike {@link renderThroughLayout},
+ * which wraps a stand-in body in the shell. Takes hydration data, not a stub loader, since a loader resolves a
+ * tick after renderToStaticMarkup reads the tree — the markup would come back empty and pass every
+ * `not.toContain` vacuously. `path` may carry a search string, matched on the pathname alone. */
 export function renderRoute<T>(
   Component: React.ComponentType<never>,
   path: string,
   loaderData: T,
   { masked = false, actionData }: { masked?: boolean; actionData?: unknown } = {},
 ): string {
-  // The route pattern is the pathname alone; the entry below is the whole
-  // address. A search string in the pattern would match nothing, so a
-  // component reading `useSearchParams` could never be rendered at a URL that
-  // carries any — and a screen's controls are built from exactly that.
+  // Pattern is the bare pathname; the stub entry below is the whole address, so a search string in the pattern would match nothing.
   const pattern = path.split("?")[0];
 
-  // A root route above the page, carrying the one field of root loader data
-  // every amount on every screen reads (spec 0007). Without it `useMasked`
-  // finds no root data and falls back to *masked* — which is the right
-  // fallback in an error boundary and the wrong default for a test asserting
-  // on a figure, so the flag is explicit and defaults to showing them.
+  // Root route carrying the one root-data field every screen's amounts read (spec 0007); without it useMasked falls back to masked, wrong default for a test asserting a figure.
   const Stub = createRoutesStub([
     {
       id: "root",
@@ -115,12 +57,8 @@ export function renderRoute<T>(
   );
 }
 
-/**
- * Render `path` inside the real `Layout`, with root loader data.
- *
- * @throws whatever React warned about, if it warns about anything other than
- *         the stub's unresolvable stylesheet link.
- */
+/** Renders `path` inside the real `Layout` with root loader data.
+ * @throws whatever React warned about, other than the stub's unresolvable stylesheet link. */
 export function renderThroughLayout(path: string, rootData: RootData): string {
   const warnings: string[] = [];
   const wasErroring = console.error;

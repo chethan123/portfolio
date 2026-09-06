@@ -1,9 +1,4 @@
-/**
- * What a dashboard says when it has nothing to show. The rule: an empty
- * dashboard in a finance app never renders a figure — a zero net worth and a
- * never-uploaded instance are indistinguishable on screen, and one of them
- * is alarming. Words, no number, no axis.
- */
+// Never renders a figure — zero net worth and no data yet look identical on screen.
 export function EmptyState({ children }: { children: React.ReactNode }) {
   return (
     <div className="empty-state">
