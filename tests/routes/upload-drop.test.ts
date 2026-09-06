@@ -1,16 +1,6 @@
-/**
- * The drop screen — step one — through its real loader. Two rules pinned.
- * The projection: `listAccounts` returns owner, institution, kind and
- * number, and the loader must not narrow them away — that defect once
- * rendered two same-named accounts as identical rows. And the `?account=`
- * prefill (CONTEXT.md): its quiet half is that a prefill naming anything
- * the select does not offer — closed, or never existed — must drop without
- * a trace: no note, no 404, no selection. The loader matches it against the
- * options rather than trusting it into `defaultValue`, which is also what
- * makes this markup deterministic enough to assert on. Every refusal that
- * matters stays in `uploads.server.ts`: a prefill only ever saved the
- * picking, never the pick.
- */
+// Drop screen (step one), through its real loader. Two rules: the loader must not narrow listAccounts' owner/institution/kind/number
+// away (once rendered two same-named accounts identically); and a ?account= prefill the select doesn't offer (closed, nonexistent)
+// drops silently — matched against the options rather than trusted into defaultValue.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Upload, { action, loader } from "../../app/routes/upload.tsx";
@@ -19,8 +9,7 @@ import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "../support/d
 import { renderRoute } from "../support/render.tsx";
 import { args, get } from "../support/routes.ts";
 
-// The loader reads MAX_UPLOAD_MB, and `getConfig()` memoises its first read —
-// set before any loader runs, as `masked-screens.test.tsx` does it.
+// getConfig() memoises its first read, so set before any loader runs (as masked-screens.test.tsx does).
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 afterAll(closeTestDatabase);
@@ -79,9 +68,7 @@ describe("the drop screen's ?account= prefill", () => {
       expect(markup).toContain(
         `<option value="${vanguard.id}" selected="">Vanguard IRA</option>`,
       );
-      // One choice made and no more: the other account and the placeholder
-      // stay unselected, and the choice is still a choice — a select, not a
-      // lock.
+      // Still a select, not a lock — the other account and the placeholder stay unselected.
       expect(markup).toContain(`<option value="${fidelity.id}">Fidelity Taxable</option>`);
       expect(markup).not.toContain('<option value="" selected="">');
     }),
@@ -96,9 +83,7 @@ describe("the drop screen's ?account= prefill", () => {
       for (const requested of [closed.id, "999999", "not-an-id"]) {
         const markup = await screenAt(`/upload?account=${requested}`);
 
-        // Exactly the screen a reader gets with no param at all: placeholder
-        // selected, open accounts offered, and nothing saying a prefill was
-        // ever attempted.
+        // Exactly the no-param screen — nothing says a prefill was ever attempted.
         expect(markup).toContain('<option value="" selected="">Choose…</option>');
         expect(markup).toContain(`<option value="${open.id}">Fidelity Taxable</option>`);
         expect(markup).not.toContain(`value="${closed.id}"`);
@@ -112,11 +97,8 @@ describe("the drop screen's ?account= prefill", () => {
       const linked = await seedAccount({ name: "Fidelity Taxable" });
       const path = `/upload?account=${linked.id}`;
 
-      // The size cap refuses on the Content-Length header, before any field is
-      // read — the one refusal that comes back with nothing captured. The
-      // reader may have changed the account before submitting, so the screen
-      // must not quietly re-aim the retry at the link's account: after any
-      // refusal the prefill has had its turn.
+      // Size cap refuses on Content-Length, before any field is read — nothing is captured. The reader may have
+      // changed the account before submitting, so the retry must not silently re-aim at the link's account.
       const oversized = new Request(`http://portfolio.local${path}`, {
         method: "POST",
         headers: { "content-length": String(Number.MAX_SAFE_INTEGER) },

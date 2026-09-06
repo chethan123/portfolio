@@ -48,7 +48,6 @@ export async function requestAssertion(
   }
 }
 
-/** {@link AssertionOutcome}'s registration twin. */
 export type RegistrationOutcome =
   | { status: "ok"; response: RegistrationResponseJSON }
   | { status: "dismissed" }

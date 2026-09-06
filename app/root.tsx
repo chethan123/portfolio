@@ -245,7 +245,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   };
 }
 
-/** Ordered by how often each page is opened. DESIGN.md §8.4, §13.1 */
+/** DESIGN.md §8.4 */
 const NAVIGATION = [
   { to: "/", label: "Overview", end: true, Icon: DashboardIcon },
   { to: "/holdings", label: "Holdings", end: false, Icon: HoldingsIcon },
@@ -281,7 +281,6 @@ function NavItems({ items, search = "" }: { items: readonly NavItem[]; search?: 
   );
 }
 
-/** Carries the owner filter: a nav item in all but name. */
 function Brand({ search }: { search: string }) {
   return (
     <Link className="app-brand" to={{ pathname: "/", search }}>
@@ -304,7 +303,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // Off the address (ADR-0008): a loader could not hand it down inside an error boundary.
   const owners = ownerSearch(readOwnerFilter(new URLSearchParams(search)));
 
-  // Suppressed inside Settings — the one place it would point where they already are.
   const firstRun =
     rootData?.firstRun && !pathname.startsWith("/settings") ? rootData.firstRun : null;
 
@@ -366,7 +364,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <ul className="app-nav app-nav--footer">
                 <NavItems items={FOOTER_NAVIGATION} />
               </ul>
-              {/* Outside the nav list: a control, not a destination. */}
               <MaskingToggle className="app-rail-masking" />
               {hasPasskey ? <LockNowControl className="app-rail-lock" /> : null}
 
@@ -377,7 +374,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </nav>
 
             <div className="app-canvas">
-              {/* Below 1024px the rail is gone and this carries its mark and action. */}
               <header className="app-topbar">
                 <Brand search={owners} />
                 <div className="app-topbar-actions">

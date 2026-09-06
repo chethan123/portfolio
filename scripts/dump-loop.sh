@@ -1,19 +1,15 @@
 #!/bin/sh
 #
-# The dump service's whole program — spec docs/specs/dump/01-the-dump-sidecar.md,
-# decided in docs/adr/0009-the-stack-takes-dumps-not-backups.md.
+# Dump service's whole program (docs/specs/dump/01-the-dump-sidecar.md,
+# ADR-0009). Daily: prune, check room, dump, verify it decodes whole, publish
+# into the directory the operator's backup tool collects from.
 #
-# Once a day it prunes, checks there is room, dumps the database, proves the
-# archive decodes end to end, and renames it into the directory the operator's
-# backup tool collects from. It never reaches off this host.
-#
-# Runs under busybox ash in postgres:17-alpine, which is why the arithmetic is
-# all epoch seconds: `date -d yesterday` is not parsed there and `find
-# -newermt` does not exist. POSIX sh only — no bashisms.
+# POSIX sh only, no bashisms — runs under busybox ash in postgres:17-alpine,
+# so arithmetic is epoch seconds: `date -d yesterday` and `find -newermt` don't exist here.
 #
 #   dump-loop.sh [loop]            the service's command
-#   dump-loop.sh verify <file>     decode an archive whole; the smoke test's
-#   dump-loop.sh prune <dir>       apply retention; the smoke test's
+#   dump-loop.sh verify <file>     decode an archive whole (smoke test)
+#   dump-loop.sh prune <dir>       apply retention (smoke test)
 #   dump-loop.sh healthcheck       the container's healthcheck
 set -eu
 

@@ -1,20 +1,6 @@
-/**
- * Analysis read as an owner (spec 0013, ticket 05).
- *
- * This screen had no route test at all until now — its loader was exercised
- * only through `tests/invariants/aggregates-agree.test.ts`, which asks whether
- * the slices reconstruct the total and nothing about who the total is for. The
- * filter makes that a question with a wrong answer available, so the file
- * exists.
- *
- * The rule worth stating: every panel narrows, including the one grouped by
- * owner. One owner selected leaves that panel with a single slice at 100%,
- * which is honest and useless — and is deliberately not special-cased, because
- * two owners selected is exactly the split a reader wants beside a combined
- * total (ADR-0008). The capital-gains rate is the household's and does not
- * narrow; the potential-tax figures move only because the gains they apply to
- * do.
- */
+// Analysis read as an owner (spec 0013, ticket 05). Every panel narrows, including by-owner: one owner selected leaves a
+// single 100% slice, deliberately not special-cased, since two owners is the split a reader wants beside a combined total
+// (ADR-0008). Capital-gains rate is the household's and doesn't narrow; potential-tax figures move only because gains do.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Analysis, { loader } from "../../app/routes/analysis.tsx";
@@ -27,14 +13,9 @@ import type { TestContext } from "../support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/**
- * Two owners with different gains, so a narrowed unrealized figure is a
- * different number rather than the same one twice.
- *
- * Alice: 100 VTI at 250.0000, bought at 180.0000 — 25,000.0000 worth, 7,000
- * unrealized. Bob: 40 BND at 70.0000, bought at 65.0000 — 2,800.0000 worth,
- * 200 unrealized.
- */
+// Two owners with different gains, so a narrowed unrealized figure differs from the same one twice:
+// Alice — 100 VTI @250.0000, cost 180.0000 → 25,000.0000 worth, 7,000 unrealized.
+// Bob — 40 BND @70.0000, cost 65.0000 → 2,800.0000 worth, 200 unrealized.
 async function seedTwoOwners(
   ctx: Pick<
     TestContext,
@@ -85,9 +66,6 @@ describe("every panel narrows", () => {
       const { alice } = await seedTwoOwners(ctx);
       const data = await loader(args(get(`/analysis?owner=${alice.id}`)));
 
-      // Honest and useless with one owner selected, and deliberately not
-      // special-cased: two owners selected is the split a reader wants beside
-      // a combined total.
       expect(data.byPerson.map((slice) => [slice.label, slice.amount])).toEqual([
         ["Alice", "25000.0000"],
       ]);

@@ -485,8 +485,7 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await visit(page, "/holdings");
     await shoot(page, `docs/screenshots/holdings-${theme}.png`);
 
-    // The editor open on one row, cropped to the table: full-page at this
-    // width renders the two boxes too small to read.
+    // Cropped to the table: full-page at this width renders the boxes too small to read.
     await visit(page, `/holdings?account=${brokerage}&edit=${editRow}`);
     await page.locator("table").first().screenshot({
       path: `docs/screenshots/holdings-edit-${theme}.png`,
@@ -503,9 +502,7 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(page, `docs/screenshots/account-balance-${theme}.png`);
     await visit(page, "/settings/accounts");
     await shoot(page, `docs/screenshots/settings-${theme}.png`);
-    // The lock's own tab, now that this script plants one passkey and mints
-    // a live grant against it (`ensureCapturePasskey`, `captureGrant`): the
-    // enrolled row, not the empty list a never-locked household would see.
+    // Enrolled row, not the empty list a never-locked household would show — this script plants its own passkey.
     await visit(page, "/settings/passkeys");
     await shoot(page, `docs/screenshots/settings-passkeys-${theme}.png`);
     await visit(page, "/upload");
@@ -522,14 +519,10 @@ async function captureReadme(browser: Browser, pool: Pool, fixture: Fixture): Pr
     await shoot(phone, `docs/screenshots/overview-mobile-${theme}.png`, false);
     await visit(phone, "/analysis");
     await shoot(phone, `docs/screenshots/analysis-mobile-${theme}.png`, false);
-    // Holdings is the one screen that reflows from table to card stack below
-    // 768px — with no committed image, the one case "retake on change" cannot
-    // catch. Grouped, because the group heading, subtotal strip and grand
-    // total are what the reflow must get right, and only visible grouped.
+    // Only screen reflowing to a card stack below 768px. Grouped: the group
+    // heading, subtotal strip and grand total are what the reflow must get right.
     await visit(phone, "/holdings?group=assetClass");
-    // Scrolled to a subtotal: a phone shot is one viewport and the cards
-    // start below the fold — unscrolled photographs everything except the
-    // thing it is captioned as showing.
+    // Cards start below the fold on a phone viewport — scroll to the subtotal before shooting.
     await phone.evaluate(() => {
       document.querySelector(".row-subtotal")?.scrollIntoView({ block: "center" });
     });
@@ -556,8 +549,7 @@ async function captureGuide(browser: Browser, pool: Pool, fixture: Fixture): Pro
 
   await visit(page, "/holdings");
   await shoot(page, "docs/guide/images/holdings.png");
-  // Grouped and unnarrowed: the guide describes grouping here, and adding a
-  // filter would leave the reader working out which control did which.
+  // Grouped, unfiltered: guide describes grouping here; a filter would blur which control did what.
   await visit(page, "/holdings?group=assetClass");
   await shoot(page, "docs/guide/images/holdings-grouped.png");
   await visit(page, `/holdings?owner=${ownerId}`);
@@ -623,9 +615,7 @@ async function main(): Promise<void> {
     const { DATABASE_URL } = loadConfig(process.env);
     const pool = createPool(DATABASE_URL);
     try {
-      // Validate before writing anything, then plant this run's own passkey
-      // and grant (finding 1) — {@link prepareCapture}'s own header has the
-      // reasoning and is what the test pins the order against.
+      // Validate before writing (finding 1) — prepareCapture pins the order.
       const fixture = await prepareCapture(pool);
       await captureReadme(browser, pool, fixture);
       await captureGuide(browser, pool, fixture);
@@ -638,13 +628,9 @@ async function main(): Promise<void> {
   console.log("\nDone.");
 }
 
-// Guarded, not a bare `await main()`: `tests/scripts/capture-screenshots.test.ts`
-// imports `ensureCapturePasskey` from this same module, and every module this
-// process loads runs its top level — an unguarded call would launch a real
-// browser and demand a served instance on every test run, for a script the
-// test has no reason to run at all. `import.meta.main` is true only for the
-// module Node was actually invoked on, never for one merely imported by
-// another, which is exactly the distinction this needs.
+// Guarded: tests import ensureCapturePasskey from this module, and an
+// unguarded call would launch a browser on every test run. import.meta.main
+// is true only for the invoked module, never one merely imported.
 if (import.meta.main) {
   await main();
 }

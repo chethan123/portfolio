@@ -1,16 +1,8 @@
-/**
- * The diff, the commit, and the receipt (docs/specs/ingest/05, DESIGN.md
- * §5.1, §5.2). Against real Postgres — the risk is in the database: the
- * transaction that lands whole or not at all, the tie-break after a
- * same-date re-upload, the guards between a filtered export and 28 holdings
- * silently sold. Grouped around the silent failures: the diff
- * misclassifying a row (a sale read as an update, a removal nobody can
- * recognise as the AAPL position); the commit half-applying (a position set
- * without its holdings reads as "holds nothing"); a guard letting through
- * what it refuses (an unholdable product, someone else's statement, an
- * unconfirmed majority removal). Every money assertion is an exact decimal
- * string.
- */
+// Diff, commit, and receipt (docs/specs/ingest/05, DESIGN.md §5.1, §5.2). Real Postgres — the
+// risk is transactional: whole-or-nothing commit, same-date re-upload tie-break, guards against
+// a filtered export silently selling holdings. Grouped around silent failures: a misclassified
+// diff row, a half-applied commit, a guard letting through what it refuses. Every money
+// assertion is an exact decimal string.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { sql } from "kysely";
@@ -66,14 +58,9 @@ type MappingOverrides = Omit<Partial<StatementMapping>, "columns"> & {
 
 const FILENAME = "Positions_2026-06-30.csv";
 
-/**
- * Stage a review-ready draft: the file's bytes and a saved mapping.
- *
- * A fixture whose mapping does not parse its own CSV writes nothing, and the
- * test would meet that several calls later as a puzzling
- * {@link DraftNotReadyError} about a draft that never passed the columns step.
- * So the parse problems are raised here, where the bad fixture is.
- */
+/** Stages a review-ready draft: bytes + saved mapping. A mapping that doesn't parse its own
+ * CSV raises here (with the parse problems) rather than surfacing later as a puzzling
+ * {@link DraftNotReadyError}. */
 async function stage(
   { db, seedUploadDraft }: Pick<TestContext, "db" | "seedUploadDraft">,
   account: SeededAccount,
@@ -115,8 +102,8 @@ describe("diffForDraft", () => {
       const fxnax = await seedInstrument({ symbol: "FXNAX", name: "Fidelity US Bond Index" });
       const aapl = await seedInstrument({ symbol: "AAPL", name: "Apple Inc." });
       const vxus = await seedInstrument({ symbol: "VXUS", name: "Vanguard Total International" });
-      // No public ticker, and a raw string spelled the way a real export
-      // spells cash — resolution is byte-exact, so the alias carries it all.
+      // No ticker; raw string spelled as a real export spells cash — byte-exact resolution,
+      // alias carries it all.
       const cash = await seedInstrument({ symbol: null, name: "Cash Reserves" });
 
       for (const [instrument, raw] of [
@@ -135,8 +122,7 @@ describe("diffForDraft", () => {
       await seedQuote({ instrument: fxnax, price: "11.94" });
       await seedQuote({ instrument: aapl, price: "170.00" });
       await seedQuote({ instrument: cash, price: "1.00" });
-      // VXUS deliberately never quoted: the instrument created one step ago,
-      // with no quote until the next refresh.
+      // VXUS deliberately never quoted — created but no quote until the next refresh.
 
       await seedPositionSet({
         account,
@@ -150,8 +136,8 @@ describe("diffForDraft", () => {
         ],
       });
 
-      // The file's dressing — $, thousands separators, n/a, a quoted cell —
-      // is the parser's job; the diff must see through all of it.
+      // File's dressing ($, thousands separators, n/a, a quoted cell) is the parser's job;
+      // diff must see through it.
       const draftId = await stage(
         ctx,
         account,
@@ -172,8 +158,7 @@ describe("diffForDraft", () => {
       expect(diff.removesEverything).toBe(false);
       expect(diff.asOf).toEqual({ source: "asked" });
 
-      // Added: the one instrument the account does not hold, unpriced, so its
-      // value is a null and its note borrows holdingNote's words.
+      // Added, unpriced — value is null, note borrows holdingNote's words.
       expect(diff.added).toHaveLength(1);
       expect(diff.added[0]).toMatchObject({
         name: "Vanguard Total International",
@@ -197,9 +182,8 @@ describe("diffForDraft", () => {
         value: "75320.4114",
       });
 
-      // A basis appearing where there was none is an update, and the pair of
-      // figures says which way: the UI derives "— → figure" from
-      // `basisChanged` plus the nulls, so that is what is pinned.
+      // Basis appearing where there was none is an update — UI derives "— → figure"
+      // from basisChanged plus the nulls.
       expect(updated.get("BND")).toMatchObject({
         quantityChanged: false,
         basisChanged: true,
@@ -252,8 +236,7 @@ describe("diffForDraft", () => {
         costBasisBefore: "52.4100",
         costBasisAfter: null,
       });
-      // A dash on the right of an arrow is quiet in exactly the place it
-      // should not be, so the note says it too.
+      // Dash on the right of an arrow is quiet exactly where it shouldn't be — note says it too.
       expect(diff.updated[0]?.note).toMatch(/cost basis no longer reported/);
     }),
   );
@@ -361,9 +344,8 @@ describe("diffForDraft", () => {
       const account = await seedAccount({ kind: "brokerage" });
       const cash = await seedInstrument({ symbol: null, name: "Cash Reserves" });
       const vtsax = await seedInstrument({ symbol: "VTSAX", name: "Vanguard Total Market Index" });
-      // Two spellings, one instrument: the respelling case the alias table
-      // exists for. `parseStatement` groups by the raw string and defers the
-      // fold to resolution — this is where resolution has decided.
+      // Two spellings, one instrument — the respelling case the alias table exists for.
+      // parseStatement groups by raw string; this is where resolution decides the fold.
       await seedInstrumentAlias({ instrument: cash, rawString: "FCASH" });
       await seedInstrumentAlias({ instrument: cash, rawString: "CASH HELD" });
       await seedInstrumentAlias({ instrument: vtsax, rawString: "VTSAX" });
@@ -374,8 +356,7 @@ describe("diffForDraft", () => {
         "Symbol,Quantity,Basis\n" +
           "FCASH,100,1.00\n" +
           "CASH HELD,50,4.00\n" +
-          // The lot-level statement: three lines for one fund, combined by
-          // the parser with a quantity-weighted basis.
+          // Lot-level statement: three lines for one fund, combined with a quantity-weighted basis.
           "VTSAX,100,10.00\n" +
           "VTSAX,200,10.00\n" +
           "VTSAX,112.5,10.00\n",
@@ -426,13 +407,13 @@ describe("diffForDraft", () => {
       const fund = await seedInstrument({ symbol: "SKP", name: "Skipped-step Fund" });
       await seedInstrumentAlias({ instrument: fund, rawString: "SKP" });
 
-      // Every string already vocabulary when the mapping lands: the step was
-      // skipped by redirect, and the strip may dim it with "· none".
+      // Every string already vocabulary at mapping time — step skipped by redirect,
+      // strip may dim it with "· none".
       const skipped = await stage(ctx, account, "Symbol,Quantity,Basis\nSKP,10,\n");
       expect((await diffForDraft(skipped, db)).instrumentsSkipped).toBe(true);
 
-      // A first sighting at mapping time: the step genuinely ran, and the
-      // alias it wrote afterwards does not rewrite that history.
+      // First sighting at mapping time — step genuinely ran; a later alias write doesn't
+      // rewrite that history.
       const fresh = await seedInstrument({ symbol: "FRS", name: "Fresh Fund" });
       const visited = await stage(ctx, account, "Symbol,Quantity,Basis\nFRS FIRST SEEN,5,\n");
       await seedInstrumentAlias({ instrument: fresh, rawString: "FRS FIRST SEEN" });
@@ -456,8 +437,8 @@ describe("diffForDraft", () => {
         step: "columns",
       });
 
-      // Mapped, but the file names a string no alias resolves: a bookmarked
-      // review predating this draft's own instruments step.
+      // Mapped, but file names a string no alias resolves — a bookmarked review predating
+      // the instruments step.
       const unresolved = await stage(ctx, account, "Symbol,Quantity,Basis\nNEVER SEEN,1,\n");
       await expect(diffForDraft(unresolved, db)).rejects.toMatchObject({
         name: "DraftNotReadyError",
@@ -500,8 +481,7 @@ describe("commitUpload", () => {
       expect(written.asOf).toBe("2026-06-30");
       expect(written.counts).toEqual({ added: 1, updated: 1, unchanged: 0, removed: 0 });
 
-      // The set, exactly as the spec fixes it: source, the statement's own
-      // date, the draft's filename, and the draft's bytes retained whole.
+      // Set as the spec fixes it: source, statement's own date, filename, bytes retained whole.
       const set = await db
         .selectFrom("position_set")
         .selectAll()
@@ -533,9 +513,8 @@ describe("commitUpload", () => {
       // The draft is gone — its step URLs now answer the expired page.
       await expect(requireDraft(draftId, db)).rejects.toThrow(NotFoundError);
 
-      // `latest_position_set` returns the new set immediately, and Overview,
-      // Holdings and Account detail all read the same view over it — one
-      // write, every figure moves, no cache to clear.
+      // latest_position_set returns the new set immediately — one write, every screen
+      // moves, no cache to clear.
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
       const current = await accountHoldings(account.id, db);
       expect(current.map((holding) => holding.quantity).sort()).toEqual([
@@ -593,12 +572,9 @@ describe("commitUpload", () => {
   );
 
   it("applies nothing at all when a write fails mid-transaction", async () => {
-    // Deliberately outside withDatabase: the rollback seam runs the commit
-    // inside the test's own transaction, where a mid-way fault aborts the
-    // whole session and nothing can be asserted afterwards. A real
-    // transaction is the thing under test, so this test uses the raw handle
-    // and removes what it seeded. Safe against other files because the suite
-    // runs them one at a time (`fileParallelism: false`).
+    // Outside withDatabase: a mid-transaction fault aborts the whole session, so nothing
+    // could be asserted inside one. Uses the raw handle and cleans up manually. Safe across
+    // files since the suite runs serially (fileParallelism: false).
     const db = await testDatabase();
     const fixtures = makeFixtures(db);
     const marker = `commit-upload-atomicity-${Date.now()}`;
@@ -615,9 +591,8 @@ describe("commitUpload", () => {
     try {
       await rememberMapping(draft.id, BASE_MAPPING, db);
 
-      // A trigger that refuses this account's holdings only, so nothing else
-      // touching the table is disturbed. The account id is our own insert's,
-      // so inlining it is safe.
+      // Trigger refuses this account's holdings only, leaving other rows undisturbed.
+      // Account id is our own insert's, so inlining it is safe.
       await sql
         .raw(
           `create or replace function commit_upload_boom() returns trigger language plpgsql as $t$
@@ -643,9 +618,8 @@ describe("commitUpload", () => {
         commitUpload(draft.id, { accountId: account.id, asOf: "2026-06-30" }, db),
       ).rejects.toThrow(/commit-upload-boom/);
 
-      // Nothing landed, atomically: no set — a set without its holdings would
-      // read as "this account now holds nothing" — and the draft still stands,
-      // so the statement can be recorded once the fault is gone.
+      // Nothing landed atomically — a set without holdings would read as "holds nothing" —
+      // and the draft still stands so the statement can be retried.
       const sets = await db
         .selectFrom("position_set")
         .select("id")
@@ -687,8 +661,8 @@ describe("commitUpload", () => {
       await seedInstrumentAlias({ instrument: fund, rawString: "BIG" });
       await seedInstrumentAlias({ instrument: fine, rawString: "OK" });
 
-      // Both operands sit inside their own columns; only the product —
-      // 10^9 × 10^7 = 10^16 — is out of range for `numeric(20, 4)`.
+      // Both operands fit their own columns; only the product (10^9 × 10^7 = 10^16)
+      // overflows numeric(20,4).
       const draftId = await stage(
         ctx,
         account,
@@ -701,8 +675,7 @@ describe("commitUpload", () => {
       expect(refusal.fieldErrors.form).toMatch(/Big Fund/);
       expect(refusal.fieldErrors.form).toMatch(/larger figure than this application can hold/);
 
-      // The whole commit, nothing partially applied: no set landed — the fine
-      // row included — and the draft is still there.
+      // Whole commit, nothing partial — no set landed (fine row included), draft still there.
       const sets = await db
         .selectFrom("position_set")
         .select("id")
@@ -720,8 +693,8 @@ describe("commitUpload", () => {
       const account = await seedAccount({ kind: "brokerage" });
       const fund = await seedInstrument({ symbol: "PRC", name: "Priced Fund" });
       await seedInstrumentAlias({ instrument: fund, rawString: "PRC" });
-      // No basis in the file at all — the failing product is quantity times
-      // the live quote, which `holding_valued` casts on every read.
+      // No basis in the file — failing product is quantity × live quote, cast by
+      // holding_valued on every read.
       await seedQuote({ instrument: fund, price: "10000000.0000" });
 
       const draftId = await stage(ctx, account, "Symbol,Quantity,Basis\nPRC,1000000000,\n");
@@ -771,11 +744,9 @@ describe("commitUpload", () => {
       const account = await seedAccount({ kind: "brokerage" });
       const fund = await seedInstrument({ symbol: "PNY", name: "Penny Income Trust" });
       await seedInstrumentAlias({ instrument: fund, rawString: "PNY" });
-      // The third product migration 0006 added, and the case that gets past the
-      // other two: the price is small enough that `quantity × price` is 10^7,
-      // and the rate is a legal `numeric(20, 4)` figure — so an upload is a
-      // likelier way in than the editor, because it writes many rows at once
-      // and nobody reads any of them first.
+      // Third product guard (migration 0006): price small enough that quantity×price is
+      // legal, but quantity×dividend rate overflows — an upload writes many rows unread,
+      // a likelier way in than the editor.
       await seedQuote({
         instrument: fund,
         price: "0.0001",
@@ -790,10 +761,9 @@ describe("commitUpload", () => {
       expect(refusal.fieldErrors.form).toMatch(/Penny Income Trust/);
       expect(refusal.fieldErrors.form).toMatch(/dividend rate/);
 
-      // Nothing partially applied, and — the point of refusing at all — the
-      // view still answers. Committed, this row made `holding_valued` raise
-      // `numeric field overflow` on every read, taking down the only screen
-      // from which it could have been corrected.
+      // Nothing partial, and the view still answers — committed, this row made
+      // holding_valued raise numeric field overflow on every read, taking down the
+      // only screen to fix it from.
       const sets = await db
         .selectFrom("position_set")
         .select("id")
@@ -828,8 +798,8 @@ describe("commitUpload", () => {
       const refusal = await refusalOf(() =>
         commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
-      // The silent-collision failure first-class accounts exist to prevent,
-      // caught at the moment it would happen — and naming both numbers.
+      // Silent-collision failure first-class accounts exist to prevent, caught and
+      // naming both numbers.
       expect(refusal.fieldErrors.form).toMatch(/Z-999/);
       expect(refusal.fieldErrors.form).toMatch(/X-111/);
 
@@ -852,9 +822,8 @@ describe("commitUpload", () => {
       await seedInstrumentAlias({ instrument: one, rawString: "IN1" });
       await seedInstrumentAlias({ instrument: two, rawString: "IN2" });
 
-      // Two numbers in one file is not a statement of one account — refused
-      // whatever the account has recorded, and the first number is not
-      // captured either.
+      // Two numbers in one file isn't a statement of one account — refused regardless,
+      // neither number captured.
       const draftId = await stage(
         ctx,
         account,
@@ -1033,16 +1002,16 @@ describe("commitUpload", () => {
         holdings: funds.map((fund) => ({ instrument: fund, quantity: "1" })),
       });
 
-      // 3 of 4 crosses the boundary and is refused unticked — first, because
-      // a refusal writes nothing and the account still holds all 4 after it.
+      // 3 of 4 crosses the boundary, refused unticked — first, since a refusal writes
+      // nothing and the account still holds all 4.
       const majority = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\n");
       const refusal = await refusalOf(() =>
         commitUpload(majority, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
       expect(refusal.fieldErrors.form).toMatch(/removes 3 of the 4 positions/);
 
-      // 2 of 4 removed is not "more than half": no confirmation is demanded,
-      // because a tick that is always demanded is a tick nobody reads.
+      // 2 of 4 isn't "more than half" — no confirmation demanded; an always-demanded
+      // tick is a tick nobody reads.
       const half = await stage(ctx, account, "Symbol,Quantity,Basis\nHF1,1,\nHF2,1,\n");
       expect((await diffForDraft(half, db)).majorityRemoved).toBe(false);
       const written = await commitUpload(
@@ -1083,9 +1052,7 @@ describe("commitUpload", () => {
       const refusal = await refusalOf(() =>
         commitUpload(draftId, { accountId: account.id, asOf: "2026-06-30" }, db),
       );
-      // The general arithmetic is technically true here too, and is exactly
-      // the phrasing that would soften the one case that most deserves plain
-      // speech.
+      // General arithmetic phrasing would soften the one case that most deserves plain speech.
       expect(refusal.fieldErrors.form).toMatch(
         /removes every position this account holds — all 2\./,
       );
@@ -1107,8 +1074,8 @@ describe("commitUpload", () => {
         { columns: { asOf: "As of" } },
       );
 
-      // The statement said it; the posted date can only come from a stale or
-      // hand-built form and must not override a fact with an opinion.
+      // Statement said it; a posted date can only come from a stale/hand-built form,
+      // must not override a fact with an opinion.
       const written = await commitUpload(
         draftId,
         { accountId: account.id, asOf: "2020-01-01" },
@@ -1140,8 +1107,7 @@ describe("commitUpload", () => {
       );
       expect(missing.fieldErrors.asOf).toMatch(/required/);
 
-      // Far future: `recordedDate`'s rule — a statement dated 2126 would pin
-      // the account until 2126.
+      // Far future: recordedDate's rule — 2126 would pin the account until 2126.
       const future = await refusalOf(() =>
         commitUpload(draftId, { accountId: account.id, asOf: "2126-01-01" }, db),
       );
@@ -1178,8 +1144,8 @@ describe("commitUpload", () => {
         db,
       );
 
-      // Both sets stand — nothing is destroyed — and `latest_position_set`'s
-      // created_at-then-id tie-break resolves the date to the later write.
+      // Both sets stand, nothing destroyed — latest_position_set's created_at-then-id
+      // tie-break resolves to the later write.
       expect(written.setId).not.toBe(first.id);
       expect((await lastRecorded(account.id, db))?.id).toBe(written.setId);
       const holdings = await accountHoldings(account.id, db);
@@ -1227,10 +1193,9 @@ describe("uploadReceipt", () => {
         db,
       );
 
-      // Recomputed by diffing the named set against its predecessor under the
-      // same tie-break — read back from the database, never from the URL. The
-      // holding count feeds the receipt's closing "now holds N positions"
-      // (brief §6.5), and it is the set's own rows, not a URL claim.
+      // Recomputed by diffing the named set against its predecessor under the same
+      // tie-break, read from the database not the URL. Holding count feeds "now holds
+      // N positions" (brief §6.5).
       const receiptFor = (acct: string, setId: string) =>
         lastRecorded(acct, db).then((latest) => uploadReceipt(acct, setId, latest, db));
       const receipt = await receiptFor(account.id, written.setId);
@@ -1243,11 +1208,9 @@ describe("uploadReceipt", () => {
         holdingCount: 2,
       });
 
-      // A set that is not the account's latest yields no receipt...
+      // No receipt for a non-latest set, a set from another account, or a non-id parameter.
       expect(await receiptFor(account.id, prior.id)).toBeNull();
-      // ...nor does a set that is not the account's at all...
       expect(await receiptFor(other.id, written.setId)).toBeNull();
-      // ...nor a parameter that is not an id.
       expect(await receiptFor(account.id, "abc")).toBeNull();
     }),
   );

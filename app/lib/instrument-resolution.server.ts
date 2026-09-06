@@ -1,19 +1,9 @@
-/**
- * Resolving a statement's instrument strings against the alias table
- * (DESIGN.md §4.3, spec 0004 step 04): the question — which strings has
- * nobody resolved, with what context beside each — and the answer, the
- * writes that remember a resolution forever.
- *
- * Lookup is **byte-exact** (`raw_string`'s `collate "C"`): no trimming, no
- * case folding, no heuristics. A respelling is rightly a first sighting — a
- * heuristic merging near-identical strings would attach a holding to the
- * wrong fund silently; a miss prompts once and is remembered permanently.
- *
- * Writes happen at this step, not at commit: an alias is a fact about
- * vocabulary, not this statement, and re-uploading a corrected file must not
- * ask again. A draft abandoned after this step leaves the vocabulary behind —
- * correct: the next upload is quieter, and nothing was recorded as held.
- */
+// Resolves a statement's instrument strings against the alias table (DESIGN.md §4.3, spec
+// 0004 step 04). Lookup is byte-exact (raw_string collate "C") — no trimming/folding/heuristics,
+// since a fuzzy merge could silently attach a holding to the wrong fund; a miss just prompts
+// once and is remembered forever. Writes happen here, not at commit: an alias is a vocabulary
+// fact, not this statement's, so a re-upload of a corrected file shouldn't ask again, and an
+// abandoned draft correctly leaves the vocabulary behind with nothing recorded as held.
 import { isAssetClass } from "./account-options.ts";
 import { getDb, type Database } from "./db.server.ts";
 import { ValidationError } from "./input.server.ts";
@@ -23,19 +13,11 @@ import type { ParsedPosition } from "./statement.ts";
 import type { AssetClass } from "./valuation.server.ts";
 import type { Kysely } from "kysely";
 
-/**
- * What the classification `<select>` posts when the reader types a new one —
- * a sentinel like the columns screen's `NOT_IN_FILE`, because "the new one
- * below" and "no classification chosen" are different answers. The route
- * reads it from loader data: this is a `.server` module and the option
- * renders client-side.
- */
+// Sentinel like NOT_IN_FILE (column-mapping.server.ts): "new classification" and "none chosen"
+// are different answers.
 export const NEW_CLASSIFICATION = "__new__";
 
-/**
- * The distinct strings with no `instrument_alias` row behind them, in
- * first-appearance order — the order the file raised them and the screen asks.
- */
+// Distinct strings with no instrument_alias row, in first-appearance order.
 export async function unresolvedStrings(
   strings: readonly string[],
   db: Kysely<Database> = getDb(),
@@ -61,48 +43,32 @@ export async function unresolvedStrings(
   return distinct.filter((value) => !resolved.has(value));
 }
 
-/**
- * Byte-exact, except line endings compare normalised (`\r\n?` → `\n`): HTML
- * form serialisation turns a lone LF/CR in a posted value into CRLF, so a
- * quoted multi-line cell echoed through a hidden field would fail a
- * byte-exact staleness check on every submit, forever. Nothing is given up —
- * two aliases differing only by CR/LF cannot exist meaningfully through a
- * browser. This compares only; what is *stored* is always the draft's own
- * parsed string, so no CRLF-mangled alias can land.
- */
+// Byte-exact except line endings, normalised (\r\n? -> \n): HTML form serialisation turns a
+// lone LF/CR into CRLF, so a quoted multi-line cell echoed through a hidden field would
+// otherwise fail this staleness check on every submit. Comparison only — storage always uses
+// the draft's own parsed string, so no CRLF-mangled alias can land.
 export function sameRawStrings(a: string, b: string): boolean {
   const lineEndings = (value: string): string => value.replace(/\r\n?/g, "\n");
   return lineEndings(a) === lineEndings(b);
 }
 
-/** One first sighting, with enough context to recognise the holding. */
 export type UnresolvedPosition = {
-  /** The instrument cell exactly as the file wrote it — what will be stored. */
+  // Instrument cell exactly as the file wrote it — what gets stored.
   raw: string;
-  /** The mapped name column's value on that row, when one is mapped. */
   name: string | null;
-  /** The row's quantity, a decimal string. */
   quantity: string;
 };
 
-/** Everything the unresolved screen renders, in one read. */
 export type ResolutionScreen = {
-  /** The first sightings, in the order the file raised them. */
   unresolved: UnresolvedPosition[];
-  /** How many holdings the file states — the "of 5" in the intro sentence. */
+  // How many holdings the file states — the "of 5" in the intro sentence.
   totalPositions: number;
-  /** Every instrument, for the point-at-existing select. */
   instruments: Array<{ id: string; symbol: string | null; name: string }>;
-  /** Every classification, for the create branch's select. */
   classifications: Array<{ id: string; name: string; assetClass: string }>;
 };
 
-/**
- * The unresolved screen's read: which positions are first sightings, each
- * with the context the brief asks for (mapped name, quantity), plus the two
- * select lists. `positions` come from `parseStatement`, already grouped by
- * the raw instrument cell — exactly one position per distinct string.
- */
+// positions come from parseStatement, already grouped by raw instrument cell — one position
+// per distinct string.
 export async function resolutionScreen(
   positions: ReadonlyArray<ParsedPosition>,
   db: Kysely<Database> = getDb(),
@@ -147,27 +113,22 @@ export async function resolutionScreen(
   };
 }
 
-/**
- * One string's answer as posted, every field optional — validating what is
- * missing is this module's job. Field names are these keys with the string's
- * index appended (`kind-0`); {@link resolutionFieldsAt} reads them back.
- */
+// Every field optional — validating what's missing is this module's job. Field names are these
+// keys with the string's index appended (kind-0); resolutionFieldsAt reads them back.
 export type ResolutionFields = {
-  /** "existing" | "create" — the radio pair choosing the path. */
+  // "existing" | "create".
   kind?: string;
-  /** The point-at-existing select's chosen instrument id. */
   instrumentId?: string;
   symbol?: string;
   name?: string;
-  /** "feed" | "manual" — `fixed` is the seeded USD row's alone. */
+  // "feed" | "manual" — "fixed" belongs to the seeded USD row alone.
   priceSource?: string;
-  /** An existing classification id, or {@link NEW_CLASSIFICATION}. */
+  // An existing classification id, or NEW_CLASSIFICATION.
   classificationId?: string;
   newClassificationName?: string;
   newClassificationAssetClass?: string;
 };
 
-/** The field names one unresolved string owns, in the order the screen draws them. */
 const RESOLUTION_FIELDS = [
   "kind",
   "instrumentId",
@@ -179,10 +140,6 @@ const RESOLUTION_FIELDS = [
   "newClassificationAssetClass",
 ] as const;
 
-/**
- * One string's fields out of the posted form, by index. Beside the error keys
- * so the `${field}-${index}` scheme is stated once and read twice.
- */
 export function resolutionFieldsAt(
   values: Record<string, string>,
   index: number,
@@ -195,50 +152,38 @@ export function resolutionFieldsAt(
   return fields;
 }
 
-/** What {@link resolveAll} is asked to resolve: the raw string and its answer. */
 export type ResolutionInput = {
-  /** The unresolved string, byte-exact as the file wrote it. */
   raw: string;
   fields: ResolutionFields;
 };
 
-/** What one string resolved to — the alias row as written, existing row and all. */
 export type ResolvedAlias = {
   raw: string;
-  /** The instrument the alias points at — the winner, when a concurrent draft got there first. */
+  // The instrument the alias points at — the winner, when a concurrent draft got there first.
   instrumentId: string;
 };
 
-/**
- * The dependencies a test stubs. No test touches the network. `probe` is
- * required, not defaulted: a default would make "required" a type and not a
- * fact, and the production caller (`app/routes/upload/instruments.tsx`)
- * could still reach the network by omission.
- */
+// probe is required, not defaulted, so production (app/routes/upload/instruments.tsx) can't
+// reach the network by omission; tests stub it instead.
 export type ResolutionDeps = {
-  /** The creation-time USD guard. */
   probe: ProbeSymbols;
 };
 
-/** A validated "create" resolution, ready to write. */
 type CreatePlan = {
   kind: "create";
   symbol: string | null;
   name: string;
   priceSource: "feed" | "manual";
-  /** Null when a new classification is being created instead. */
+  // Null when a new classification is being created instead.
   classificationId: string | null;
-  /** The trimmed new-classification name, key into the pending map. */
+  // Trimmed new-classification name, key into the pending map.
   newClassification: string | null;
 };
 
 type Plan = { kind: "existing"; instrumentId: string } | CreatePlan;
 
-/**
- * Run `body` in a transaction unless one is already open — Kysely refuses
- * `.transaction()` on a transaction, and the test seam *is* one (the same
- * helper `prices.server.ts` carries).
- */
+// Kysely refuses .transaction() on a transaction, and the test seam is one (prices.server.ts
+// carries the same helper).
 function inTransaction<T>(
   db: Kysely<Database>,
   body: (trx: Kysely<Database>) => Promise<T>,

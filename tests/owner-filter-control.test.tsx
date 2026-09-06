@@ -1,15 +1,7 @@
 /**
- * The one thing about `OwnerFilterControl`'s markup that is not decoration:
- * field order. A GET form submits its fields in DOM order, and this
- * application's canonical address spells the owner parameter first
- * (`canonicalOwnerSearch` in `owner-filter.ts`) — so the checkboxes have to
- * render ahead of the hidden fields, or every Apply on a screen carrying
- * hidden state (a `range`, a `sort`) would submit `range=1y&owner=1&owner=3`
- * and pay a respelling bounce for the field order alone. It is only that
- * bounce this order rules out: a roster whose names sort differently from
- * their ids still submits its owners out of canonical order, which the
- * component says more about. No test rendered this component at all before
- * this one.
+ * A GET form submits fields in DOM order, and the canonical address spells owner first
+ * (canonicalOwnerSearch in owner-filter.ts) — so checkboxes must render ahead of hidden
+ * fields, or every Apply pays a respelling bounce for field order alone.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoutesStub } from "react-router";

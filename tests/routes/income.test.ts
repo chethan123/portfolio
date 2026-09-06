@@ -1,15 +1,5 @@
-/**
- * Income read as an owner (spec 0013, ticket 05).
- *
- * Like Analysis, this loader had no route test of its own — only the aggregate
- * invariants, which ask whether the breakdowns reconstruct the headline and
- * nothing about whose headline it is.
- *
- * The rule most likely to be got wrong here is the **weighted yield**. It is a
- * ratio of the group in view (`CONTEXT.md`), so it has to be recomputed over
- * whatever the filter left: one owner's annual dividend over the household's
- * value is a figure of nothing, and it would look entirely plausible on screen.
- */
+// Income read as an owner (spec 0013, ticket 05). Weighted yield is the rule most likely to be got wrong: it's a ratio of the
+// group in view (CONTEXT.md), so it must recompute over whatever the filter left, not carry the household's ratio over.
 import { afterAll, describe, expect, it } from "vitest";
 
 import Income, { loader } from "../../app/routes/income.tsx";
@@ -22,14 +12,9 @@ import type { TestContext } from "../support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/**
- * Two owners whose yields differ, so a narrowed weighted yield is a different
- * number rather than the household's seen twice.
- *
- * Alice: 100 VTI at 250.0000 paying 2.5000 a share — 25,000.0000 of value and
- * 250.0000 a year, a 1% yield. Bob: 40 BND at 70.0000 paying 3.5000 — 2,800.0000
- * of value and 140.0000 a year, a 5% yield. The household's is neither.
- */
+// Two owners with different yields, so a narrowed weighted yield is a distinct number, not the household's seen twice:
+// Alice — 100 VTI @250.0000, div 2.5000/share → 25,000.0000 value, 250.0000/yr, 1% yield.
+// Bob — 40 BND @70.0000, div 3.5000/share → 2,800.0000 value, 140.0000/yr, 5% yield.
 async function seedTwoOwners(
   ctx: Pick<
     TestContext,
@@ -90,9 +75,7 @@ describe("every figure narrows", () => {
       const { alice, bob } = await seedTwoOwners(ctx);
       const at = (search: string) => loader(args(get(`/income${search}`)));
 
-      // 250 / 25,000 and 140 / 2,800. The household's is 390 / 27,800, which is
-      // neither — so a yield carried over from it would be visibly wrong here
-      // and invisibly wrong on a household with less convenient numbers.
+      // 250/25,000 and 140/2,800 — neither is the household's 390/27,800.
       expect((await at(`?owner=${alice.id}`)).weightedYield).toBe("0.010000");
       expect((await at(`?owner=${bob.id}`)).weightedYield).toBe("0.050000");
       expect((await at("")).weightedYield).toBe("0.014029");
@@ -105,8 +88,7 @@ describe("every figure narrows", () => {
       const { alice, bob } = await seedTwoOwners(ctx);
       const at = (search: string) => loader(args(get(`/income${search}`)));
 
-      // Alice's account is taxable and Bob's is tax-free, so narrowing moves
-      // the whole subtotal from one side of the sentence to the other.
+      // Alice's account is taxable, Bob's tax-free — narrowing flips which side of the sentence carries the subtotal.
       expect((await at(`?owner=${alice.id}`)).sheltered).toEqual({
         sheltered: "0.0000",
         taxable: "250.0000",
@@ -135,11 +117,7 @@ describe("the filter's own plumbing", () => {
       );
       expect(await redirectTo(() => loader(args(get("/income?owner="))))).toBe("/income");
 
-      // Alice and Bob are the whole seeded household, so ticking every box is
-      // the household under another name — the collapse is the second bounce
-      // this loader owes the address, not only the respelling above. Spelled
-      // already-canonical here on purpose, so this is the collapse bounce in
-      // isolation rather than the respelling bounce landing first.
+      // Alice+Bob = the whole household, ticking every box collapses to it — a second bounce, distinct from the respelling above (hence already-canonical here).
       expect(await redirectTo(() => loader(args(get(`/income?${ownerParam(...ids)}`))))).toBe(
         "/income",
       );
@@ -155,8 +133,7 @@ describe("the filter's own plumbing", () => {
 
       expect(markup).toContain('aria-label="Filter by owner"');
       expect(markup).toContain("Showing <b>Alice</b> only.");
-      // The ticked box survives a re-render, so Apply cannot widen the screen
-      // back to the household behind the reader's back.
+      // Ticked box survives a re-render — Apply can't quietly widen back to the household.
       expect(markup).toContain(`id="owner-${alice.id}" type="checkbox" name="owner" checked=""`);
     }),
   );
@@ -178,9 +155,7 @@ describe("the three empty states", () => {
   it(
     "still says it on an empty instance that is being read as somebody",
     withDatabase(async (ctx) => {
-      // Two people, two accounts, nothing uploaded. The roster has two names so
-      // the control draws, and ticking one used to answer "Alice holds nothing
-      // — everything else is still there" on an instance where nothing is.
+      // Two accounts so the control draws; ticking one used to wrongly answer "Alice holds nothing, everything else is" on an empty instance.
       const alice = await ctx.seedPerson({ name: "Alice" });
       const bob = await ctx.seedPerson({ name: "Bob" });
       await ctx.seedAccount({ name: "Alice Brokerage", owner: alice });

@@ -565,23 +565,7 @@ export async function verifyUnlock(
   return verifyScopedAssertion(narrowAssertion(response), { kind: "unlock" }, db, supersedes);
 }
 
-// ---------------------------------------------------------------------------
-// Enrolling
-// ---------------------------------------------------------------------------
-
-/**
- * A `PublicKeyCredentialCreationOptionsJSON` this module actually hands
- * out — narrower than the library's own declared return type by exactly one
- * property, the registration twin of {@link UnlockOptions} above and for
- * the identical reason: {@link registrationOptionsFor} never passes
- * `extensions` to `generateRegistrationOptions`, so the value it returns
- * never carries that key at all. Fixed here, once, at the one place the
- * value is produced — the same move that type makes for the assertion
- * options — so that Settings → Passkeys (the one route that hands this to a
- * browser) derives its own type from {@link beginEnrolment}'s return rather
- * than importing `@simplewebauthn/server` a second time for a type this
- * module already narrows correctly.
- */
+/** {@link UnlockOptions}'s registration twin, narrowed for the same reason. */
 export type RegistrationOptions = PublicKeyCredentialCreationOptionsJSON & { extensions?: undefined };
 
 async function registrationOptionsFor(
@@ -596,68 +580,28 @@ async function registrationOptionsFor(
   const options = await generateRegistrationOptions({
     rpName: RP_NAME,
     rpID: expected.rpID,
-    // The name is the label the person typed, so their password manager
-    // shows something they recognise; the id is left to the library, which
-    // mints a fresh one per enrolment (spec 0019) — a shared id would let an
-    // authenticator treat a second enrolment as replacing the first, and
-    // this household wants several to coexist. Neither id nor name is
-    // stored (migration 0012's comment on `user_handle`).
+    // User id is left to the library, fresh per enrolment: a shared one lets an authenticator treat
+    // the second enrolment as replacing the first. Neither id nor name is stored.
     userName: label,
     userDisplayName: label,
     challenge: bytes,
     attestationType: "none",
     authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-    // Already-enrolled credential ids excluded, so one authenticator cannot
-    // silently hold two credentials for this instance. The consequence: a
-    // provider that recognises any of them refuses creation client-side, so
-    // a second passkey *from the same provider* is not supported — several
-    // across different devices and providers is what this household needs.
+    // Consequence: a provider already holding one refuses client-side, so two passkeys from the
+    // same provider are not supported.
     excludeCredentials,
   });
 
-  // The one assertion {@link RegistrationOptions}'s own header promises:
-  // nothing above ever sets `extensions`, so the library's wider declared
-  // return type is honestly narrower here, in the one value this function
-  // actually produces.
   return options as RegistrationOptions;
 }
 
 /**
- * The characters a label may not carry, and the ones it deliberately may.
- *
- * Refused: `\p{Cc}` (C0 and C1, which is where a NUL or a newline lives);
- * U+2028 and U+2029, the line and paragraph separators — the message below
- * promises no line break, and those are line breaks; the bidirectional
- * overrides and isolates U+202A–U+202E and U+2066–U+2069, which can make a
- * row in Settings read back to front, so somebody removes the wrong passkey;
- * and U+200B, the zero width space, which makes a label that looks blank or
- * looks identical to another one.
- *
- * Allowed on purpose: U+200D, the zero width joiner, and the variation
- * selectors. Emoji sequences are built out of them, and a household that
- * labels a passkey with one is doing nothing wrong — refusing them to catch
- * an invisible character would cost more than it buys.
- *
- * This reads the *trimmed* value, because {@link requiredText} trims first.
- * So a separator or a newline at either edge is removed rather than refused,
- * exactly as a stray space is and exactly as an account or person name
- * already behaves — what reaches the column is clean either way. Only the
- * ones a trim cannot reach, which is all of them in the middle and the
- * invisibles at any position, come back as a refusal.
+ * Control characters, the line/paragraph separators, the bidi overrides and isolates (a row that
+ * reads back to front removes the wrong passkey), and the zero width space. U+200D and the
+ * variation selectors stay allowed — emoji are built from them. Reads the already-trimmed value.
  */
 const REFUSED_LABEL_CHARACTERS = /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B]/u;
 
-/**
- * A label, bounded and trimmed by {@link requiredText} — plus what that
- * shared helper does not itself refuse. A control character (a NUL byte
- * among them) or a newline stored in this column is rendered verbatim in
- * Settings, and a lone surrogate is a value `JSON.stringify`'s own escaping
- * cannot make round-trip; either one reaches here only after the browser has
- * *already* created a real credential in the family member's own password
- * manager (this function refuses before that, {@link completeRegistration}'s
- * insert refuses only after), which is exactly why the refusal belongs at
- * this end of the ceremony and not the other.
- */
 const NO_CONTROL_CHARACTERS_MESSAGE =
   "A label cannot carry a line break, an invisible character, or another control character.";
 const NOT_WELL_FORMED_MESSAGE = "A label cannot carry an incomplete character.";
@@ -668,45 +612,19 @@ const labelInput = z.object({
     .refine((value) => value.isWellFormed(), { message: NOT_WELL_FORMED_MESSAGE }),
 });
 
-/**
- * What {@link beginEnrolment} refuses the household's first passkey with when
- * `acknowledgement` is not the literal `"true"` — ticket 05's own rule that
- * the warning shown before that enrolment "is a statement the person must
- * pass", enforced here rather than left to a client-side `disabled` attribute
- * a direct POST can simply skip. This is not a second authorisation path for
- * the *write* — the bootstrap case still needs no assertion, exactly as
- * spec 0019 says, because there is still nothing to authorise against — it is
- * the same kind of courtesy gate {@link removePasskey}'s own `confirmRemoval`
- * already is: a plain "was this actually shown" check, never a credential.
- */
+/** Enforced here, not by a client-side `disabled`, which a direct POST skips. Not a credential — a courtesy gate. */
 const FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE =
   "Enrolling the household's first passkey locks every other browser immediately — tick " +
   "that acknowledgement first.";
 
 /**
- * Begin enrolling a passkey: the very first, with nothing to prove, or
- * another, authorised by a fresh assertion from one already enrolled.
+ * The first passkey needs no assertion — there is nothing to authorise against yet — only the
+ * acknowledgement. That check is a courtesy: {@link completeRegistration}'s conditional insert and
+ * migration 0012's `passkey_bootstrap_idx` are what actually close the bootstrap race.
  *
- * A request may enrol with no assertion only while the household holds
- * none — the moment there is nothing to authorise against, because anyone
- * the gate admitted already sees every figure. That check is a courtesy
- * here, not the whole security boundary: the *committed* half is closed by
- * {@link completeRegistration}'s conditional insert, and the *concurrent*
- * half by migration 0012's `passkey_bootstrap_idx` — neither is enough
- * alone, and that migration's comment on the index is explicit about why,
- * and about the one interleaving the pair still leaves open.
- * That same bootstrap case also requires `acknowledgement` to be exactly
- * `"true"` — see {@link FIRST_PASSKEY_NOT_ACKNOWLEDGED_MESSAGE}. Ignored once
- * the household holds a passkey: the warning this guards is shown only for
- * the first one, and enrolling a second changes nothing for anybody.
- *
- * Every later enrolment needs `assertion`, verified as scoped to `"enrol"`
- * — which also mints a grant, the same as any verified assertion, and
- * supersedes the one `input.supersedes` names, so the browser confirming an
- * enrolment ends with one live grant rather than two ({@link mintGrant}).
- * `supersedes` is the request's own cookie and never a form field. The
- * registration challenge returned here carries `label`, and is accepted by
- * {@link completeRegistration} only against it.
+ * Every later enrolment needs an assertion scoped to `"enrol"`, which mints a grant and supersedes
+ * the one `input.supersedes` names. The registration challenge carries `label` and is accepted
+ * against nothing else.
  */
 export async function beginEnrolment(
   label: string,
@@ -735,13 +653,6 @@ export async function beginEnrolment(
   return { options, grant };
 }
 
-/**
- * A row this module just wrote or found, as {@link Passkey} needs it printed
- * — derived from the generated schema (`Database["passkey"]`) via Kysely's
- * `Selectable` rather than hand-copied, so a schema change or a driver
- * type-parser change surfaces here at `typecheck` instead of leaving
- * `sql<PasskeyRow>` below asserting a shape the columns no longer have.
- */
 type PasskeyRow = Pick<
   Selectable<Database["passkey"]>,
   "credential_id" | "label" | "backup_eligible" | "enrolled_at" | "last_used_at"
@@ -757,7 +668,6 @@ function toPasskey(row: PasskeyRow): Passkey {
   };
 }
 
-/** Which unique index a duplicate-key violation hit, or `undefined` for anything else. */
 function uniqueViolationConstraint(error: unknown): string | undefined {
   if (!(error instanceof Error)) return undefined;
   const { code, constraint } = error as { code?: unknown; constraint?: unknown };
@@ -765,15 +675,8 @@ function uniqueViolationConstraint(error: unknown): string | undefined {
 }
 
 /**
- * Run `body`'s one statement guarded by a SQL savepoint when `db` is already
- * inside a transaction — which is exactly what `withDatabase` hands every
- * test, and the point is that a *caught* constraint violation (a duplicate
- * key, in `completeRegistration`; a foreign key gone missing out from under
- * `mintGrant`) must not leave that whole transaction aborted for whatever
- * the caller runs next. Outside a transaction — `getDb()`'s ordinary,
- * autocommitting process-wide handle, what every real request uses — each
- * statement is already its own implicit transaction, so this does nothing
- * at all.
+ * Savepoint so a *caught* constraint violation does not leave a caller's transaction aborted for
+ * whatever runs next — which is every test's `withDatabase`. A no-op outside a transaction.
  */
 async function guardedAgainstConstraintViolation<T>(
   db: Kysely<Database>,
@@ -799,12 +702,7 @@ const BOOTSTRAP_TAKEN_MESSAGE =
 
 const DUPLICATE_PASSKEY_MESSAGE = "This passkey is already enrolled.";
 
-/**
- * The WebAuthn specification's ceiling on a credential id, in decoded bytes.
- * Checked against the library's *output* rather than the client's `id`,
- * because those are two different values and only one of them is stored —
- * see the comment beside the check in {@link completeRegistration}.
- */
+/** Spec ceiling, in decoded bytes. Checked against the library's output, not the client's `id`. */
 const MAX_CREDENTIAL_ID_BYTES = 1023;
 
 const CREDENTIAL_ID_LENGTH_MESSAGE =
@@ -814,52 +712,16 @@ const CREDENTIAL_ID_MISMATCH_MESSAGE =
   "This passkey named itself two different things in one answer, so it was not enrolled.";
 
 /**
- * Complete a registration begun by {@link beginEnrolment} — accepted only
- * against the single-use `"register"` challenge that call minted, never
- * against whatever challenge a stale or forged form happens to carry.
+ * Accepted only against the single-use `"register"` challenge {@link beginEnrolment} minted.
  *
- * The bootstrap half (no prior passkey) writes with `insert ... select ...
- * where not exists (select 1 from passkey)`, refusing when it inserts no
- * row: that closes the case where a passkey is already committed. The
- * partial unique index on `passkey.bootstrap` closes the other half — two
- * such statements each seeing an empty table under READ COMMITTED — and its
- * unique-violation surfaces here as a refusal, never a 500. Neither half is
- * sufficient alone, and the two together still leave one interleaving open:
- * a bootstrap insert racing an *ordinary* one, which was decided to be
- * ordinary by an earlier request that saw the passkey authorising it and
- * carries no predicate of its own. Migration 0012's comment on
- * `passkey_bootstrap_idx` sets out what the pair does and does not
- * guarantee, how narrow that window is, and why neither way of closing it
- * was taken; this is not the place to repeat it.
+ * Bootstrap inserts with `where not exists`, refusing when it writes no row; the partial unique
+ * index closes the concurrent half. Neither is sufficient alone and one interleaving stays open —
+ * migration 0012's comment on `passkey_bootstrap_idx` sets out which. A duplicate credential id is
+ * left to the constraint rather than a preceding `select`; the bootstrap race reports as
+ * `passkey_pkey`, since Postgres writes the primary-key entry first, so both names are handled.
  *
- * **A duplicate credential id is always a printable refusal, however it
- * arrives.** Both the bootstrap and the non-bootstrap path let the unique
- * constraint on `credential_id` decide rather than preceding the insert
- * with a `select` — the very check-then-act shape the bootstrap comment
- * above warns against — so a concurrent or repeated registration of the
- * same credential id refuses cleanly instead of raising a raw `23505`. The
- * bootstrap path's own partial index can *also* fire concurrently with a
- * colliding credential id; because Postgres inserts the primary-key index
- * entry first, that race is reported as `passkey_pkey`, not
- * `passkey_bootstrap_idx`, so both constraint names are handled here rather
- * than only the one this path's own index owns. Both inserts run through
- * {@link guardedAgainstConstraintViolation}, so a caught violation cannot
- * leave a caller's own transaction — a test's `withDatabase`, today;
- * conceivably a future multi-step route wrapping this call in one —
- * aborted for whatever runs after it.
- *
- * Verifying a bootstrap registration mints a grant — the browser that
- * enrolled the first passkey must not be locked out by its own redirect
- * back. Every other enrolment already carries a verified assertion, which
- * has minted one; minting a second here would leave one request setting two
- * cookies, so it does not. One interleaving still leaves a browser holding
- * nothing, and is worth naming rather than discovering: browser A begins
- * enrolling a second passkey (its assertion verified, a grant minted),
- * browser B removes the household's last passkey — cascading A's grant away
- * with it — and A completes its registration within the challenge's
- * lifetime. This is not the bootstrap case, so no second grant is minted;
- * A now holds zero live grants and is bounced to unlock. That is fine, not
- * a bug to fix: A can unlock with the passkey it just created.
+ * Bootstrap mints a grant, or the browser that enrolled the first passkey is locked out by its own
+ * redirect. Every other path already carries one from its assertion.
  */
 export async function completeRegistration(
   response: unknown,
@@ -895,43 +757,22 @@ export async function completeRegistration(
 
   const { credential, credentialDeviceType } = verified.registrationInfo;
 
-  // **The library's own output, checked — for the one value it forwards from
-  // client-chosen bytes without validating.** `credential.id` is
-  // `isoBase64URL.fromBuffer(credentialID)` read straight out of the attested
-  // credential data, whose length is whatever the two-byte `credIDLen` field
-  // said (`helpers/parseAuthenticatorData.js:34-36`). Nothing bounds it: the
-  // response-level checks compare `id` to `rawId` only
-  // (`registration/verifyRegistrationResponse.js:38-44`) and never to the
-  // attested bytes, and the emptiness guard at `:121` is `!credentialID`,
-  // which a zero-length `Uint8Array` passes because it is an object. A stored
-  // `""` then rides in every browser's `allowCredentials`, and an over-long
-  // one is past the specification's 1023-byte ceiling.
-  //
-  // **No counter check here, deliberately.** The library reads it with
-  // `getUint32` (`helpers/parseAuthenticatorData.js:27`), so it cannot arrive
-  // outside the column's own range; the review's `4294967295` case is the
-  // maximum that range accepts rather than a value outside it, and what makes
-  // that passkey useless afterwards is the specification's own
-  // strictly-greater rule, not anything this insert could have refused.
+  // The library forwards the attested credential id unbounded — it compares `id` to `rawId`, never
+  // to the attested bytes, and its emptiness guard passes a zero-length `Uint8Array`. A stored `""`
+  // would then ride in every `allowCredentials` this app hands out.
   const credentialIdBytes = isoBase64URL.toBuffer(credential.id);
   if (credentialIdBytes.byteLength < 1 || credentialIdBytes.byteLength > MAX_CREDENTIAL_ID_BYTES) {
     throw ValidationError.form(CREDENTIAL_ID_LENGTH_MESSAGE);
   }
-  // Also the check that refuses a *non-canonically encoded* id — padded, or
-  // spelled in standard base64 — since `isoBase64URL.fromBuffer` always emits
-  // the canonical unpadded form. No browser reaches that: the library already
-  // demands `id === rawId` and `@simplewebauthn/browser` derives both from
-  // the same bytes through the same encoder. A client that did would meet
-  // this message with its challenge already spent, so it has to fetch fresh
-  // options before trying again.
+  // Also refuses a non-canonically encoded id: `isoBase64URL.fromBuffer` only ever emits the
+  // unpadded base64url form.
   if (credential.id !== parsedResponse.id) {
     throw ValidationError.form(CREDENTIAL_ID_MISMATCH_MESSAGE);
   }
 
   const publicKey = Buffer.from(credential.publicKey);
   const transports = joinTransports(credential.transports);
-  // BE, not BS: eligibility for backup is what "synced" means to a reader
-  // (migration 0012's comment on `backup_eligible`), fixed at enrolment.
+  // BE, not BS: eligibility is what "synced" means to a reader. Fixed at enrolment.
   const backupEligible = credentialDeviceType === "multiDevice";
 
   if (purpose.bootstrap) {
@@ -992,37 +833,15 @@ export async function completeRegistration(
   return { passkey: toPasskey(row), grant: undefined };
 }
 
-// ---------------------------------------------------------------------------
-// Removing
-// ---------------------------------------------------------------------------
-
 /**
- * Remove one named passkey — refusing anything but a fresh assertion scoped
- * to removing *this* target, plus its own acknowledgement, the way
- * `closeAccount` requires its confirmation: a destructive write a replayed
- * POST can reach silently was never acknowledged at all.
+ * Needs a fresh assertion scoped to removing *this* target, plus its own acknowledgement. The
+ * target is resolved before every other check, so naming a passkey that does not exist spends no
+ * challenge and writes nothing.
  *
- * The target is resolved first, before any of the other checks and before
- * the assertion is verified — `closeAccount`'s precedent — so a request
- * naming a passkey that does not exist writes nothing: it mints no grant
- * and stamps no `last_used_at`, rather than spending a fresh assertion on a
- * 404. The acknowledgement and assertion-presence checks come next, still
- * ahead of verification, so a request missing either never spends the
- * single-use challenge it was not going to be allowed to act on anyway.
- *
- * Removing the household's last passkey is allowed to be authorised by that
- * same passkey — the only credential that can, and how the lock is turned
- * off; excluding the target from `allowCredentials` would strand a
- * one-passkey household. Deleting it cascades away its own grants — the
- * just-minted one included, when the target is what authorised this
- * request — through the schema's cascade, which is what locks this browser
- * the moment such a removal succeeds; nothing here needs to special-case it.
- *
- * `input.supersedes` is the request's own cookie, and it is the one place
- * this module declines to supersede: when the signer *is* the target, the
- * grant just minted is about to be cascaded away, so the prior one is left
- * alone rather than deleted beside it — {@link verifyScopedAssertion} makes
- * that call and argues it there.
+ * The last passkey may authorise its own removal — the only credential that can, and how the lock
+ * is turned off. Deleting it cascades its grants away, which is what locks this browser.
+ * `input.supersedes` is the request's own cookie; {@link verifyScopedAssertion} declines to use it
+ * when the signer is the target.
  */
 export async function removePasskey(
   credentialId: string,
@@ -1061,9 +880,7 @@ export async function removePasskey(
 
   const deleted = await db.deleteFrom("passkey").where("credential_id", "=", credentialId).executeTakeFirst();
   if (deleted.numDeletedRows === 0n) {
-    // Removed by another request between the resolve above and here —
-    // genuinely concurrent, not the common case, but still a refusal rather
-    // than a crash.
+    // Removed concurrently between the resolve above and here.
     throw new NotFoundError(`No passkey with id ${credentialId}.`);
   }
 

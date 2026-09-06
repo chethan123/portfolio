@@ -1,34 +1,14 @@
-/**
- * The chart's time vocabulary (spec 0015) — not the *range* vocabulary alone
- * any more: a range, its resolution and cookie (spec 0008) with the
- * sampler's density rule (spec 0009 / ADR-0003), the window a range resolves
- * to, the points drawn on that window, and the axis that labels them.
- * `ChartPoint` and `SessionAxis` moved down from `net-worth-chart.tsx` — both
- * routes and the component depend on them, and a domain module type-
- * importing from a component is a direction this file must not open.
- * `chartWindow` assembles the window and the payload block a loader spreads,
- * from pieces this file already had; the two routes each carried their own
- * copy of that assembly, and of `isoDate` below, until this file did.
- *
- * Not a `.server` module (`masking.ts`'s reason): no database, and both
- * routes' components read the vocabulary again after hydration. The cookie
- * lives here too — vocabulary, precedence and serialisation are one rule, and
- * splitting them is how they drift. Unlike masking's session-scoped policy,
- * this is a remembered convenience with no reason to forget itself.
- */
+// Chart time vocabulary (spec 0015): range, resolution, cookie (spec 0008), sampler density
+// (spec 0009/ADR-0003), and the window/points/axis a range resolves to. Not .server — both
+// routes' components read this again after hydration; no database.
 import { readCookie } from "./cookies.ts";
 import type { IsoDate } from "./valuation.server.ts";
 
-/** Every option the segmented control offers, in display order. */
 export type RangeKey = "1d" | "1w" | "1m" | "3m" | "ytd" | "1y" | "5y" | "all" | "custom";
 
-/**
- * The presets, identical key for key on Overview and the account page, so a
- * bookmark from one works on the other. 3M is a live decision to keep, not
- * leftover debt. 1D is the one preset that is not a span of dates (ADR-0006):
- * it names the most recent observed trading session and resolves to instants
- * rather than days; everything else about a preset key it inherits unchanged.
- */
+// Identical key for key on Overview and the account page, so a bookmark from one works on
+// the other. 1D is the one preset that isn't a span of dates (ADR-0006) — it names the most
+// recent trading session and resolves to instants, not days.
 export const RANGES: Record<RangeKey, { label: string }> = {
   "1d": { label: "1D" },
   "1w": { label: "1W" },
@@ -41,98 +21,61 @@ export const RANGES: Record<RangeKey, { label: string }> = {
   custom: { label: "Custom" },
 };
 
-/** Left as a literal, not widened to `RangeKey`, so it stays a fixed preset. */
 export const DEFAULT_RANGE = "1y" as const satisfies RangeKey;
 
-/**
- * The sampling budget (spec 0009, issue #74): the most dates a chart checks
- * for one range. A span fitting the budget is sampled every calendar day; a
- * wider one gets exactly this many dates, geometrically decaying backward
- * from `until` so the day beside the anchor is always checked. Chart density
- * for every long-range preset is this one number.
- */
+// Most dates a chart checks for one range (spec 0009, issue #74). A span fitting the budget
+// samples every calendar day; wider spans get exactly this many, decaying geometrically
+// backward from `until`.
 export const SAMPLE_BUDGET = 180;
 
 const DAY_MS = 86_400_000;
 
-/** Which surface is asking — the parameter that lets the two routes share this module. */
 export type Surface = "household" | "account";
 
-/**
- * The dates a surface's own history reaches back to. `manual` is read only
- * for the household — hand-typed pre-app history was never any one account's
- * (CONTEXT.md, "chart range").
- */
+// manual is read only for the household — hand-typed pre-app history was never any one
+// account's (CONTEXT.md).
 export interface SurfaceEarliest {
-  /** The earliest position-set date, or null on an instance/account with none. */
   positionSet: IsoDate | null;
-  /** The earliest hand-typed manual point. Ignored on the account surface. */
   manual?: IsoDate | null;
 }
 
-/** A start and end date the reader picked themselves. */
 export interface CustomSpan {
   start: IsoDate;
   end: IsoDate;
 }
 
-/** Where a window starts, and the dates to draw it from. */
 interface Window {
   since: IsoDate;
   dates: IsoDate[];
 }
 
-/**
- * The window to report on, and which range actually produced it — the
- * *effective* selection, not the one asked for: an unusable custom span
- * reports as the default preset it fell back to, because a caller cannot draw
- * a chart captioned "Custom" from a span it never used.
- */
+// The effective selection, not necessarily the one asked for: an unusable custom span
+// reports as the default preset it fell back to.
 export interface RangeWindow extends Window {
   range: RangeKey;
   custom?: CustomSpan;
-  /**
-   * The session 1D plots, present only when 1D actually resolved — its
-   * presence is what tells a loader to read the intra-session series (a flag
-   * beside the key would be a second thing to keep in step). 1D on an empty
-   * observation log falls back to the default, like an undrawable custom span.
-   */
+  // Present only when 1D actually resolved — its presence, not a separate flag, is what
+  // tells a loader to read the intra-session series.
   session?: IsoDate;
 }
 
 export type ChartPoint = {
-  /**
-   * One value on the window {@link resolveRange} produced — a calendar date
-   * `YYYY-MM-DD` for every preset but 1D, or a full ISO instant when the
-   * window carries a session. Both parse to a moment, which is all a chart's
-   * own scale asks; how the moment is *labelled* is decided by
-   * {@link SessionAxis}, never by inspecting the string — a chart that
-   * re-read its axis off punctuation would change it by accident.
-   */
+  // A calendar date YYYY-MM-DD for every preset but 1D, or a full ISO instant when the
+  // window carries a session. How it's labelled is SessionAxis's job, never inferred here.
   date: string;
   amount: string;
 };
 
-/**
- * What a chart is told about the session it is drawing, or null when
- * drawing days. One value rather than a flag beside a zone: an intra-session
- * line is always read on the market's clock — neither half means anything
- * without the other.
- */
+// What a chart is told about the session it's drawing, or null when drawing days.
 export type SessionAxis = {
-  /** `MARKET_TIMEZONE`. A session is 09:30 to 16:00 in exactly one zone. */
-  timeZone: string;
+  timeZone: string; // MARKET_TIMEZONE; a session is 09:30-16:00 in exactly one zone
 };
 
-/**
- * Two spellings of "no session" reach here — `null` (looked, found nothing)
- * and `undefined` (not passed) — and both mean the same to 1D. Named once so
- * the two branching functions cannot disagree about which spellings count.
- */
+// null (looked, found nothing) and undefined (not passed) both mean "no session" to 1D.
 const hasSession = (session?: IsoDate | null): session is IsoDate =>
   session !== undefined && session !== null;
 
-/** UTC throughout, deliberately — the one conversion that cannot pick up a server's zone. */
+// UTC throughout, deliberately — cannot pick up a server's local zone.
 export const isoDate = (ms: number): IsoDate => new Date(ms).toISOString().slice(0, 10);
 
 const parseIso = (date: IsoDate): number => Date.parse(`${date}T00:00:00Z`);
@@ -141,12 +84,8 @@ export function addDays(date: IsoDate, days: number): IsoDate {
   return isoDate(parseIso(date) + days * DAY_MS);
 }
 
-/**
- * Calendar-month arithmetic, not a fixed day count: 1M/3M/1Y/5Y are trailing
- * calendar spans back to the same day-of-month. `setUTCMonth` handles the
- * month-end edge as `Date` always has — rolling into the next month rather
- * than clamping — accepted rather than special-cased.
- */
+// Calendar-month arithmetic, not a fixed day count: 1M/3M/1Y/5Y are trailing calendar spans
+// back to the same day-of-month. setUTCMonth's month-end rollover (not clamping) is accepted as-is.
 function subtractMonths(date: IsoDate, months: number): IsoDate {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCMonth(d.getUTCMonth() - months);
@@ -155,12 +94,8 @@ function subtractMonths(date: IsoDate, months: number): IsoDate {
 
 const startOfYear = (date: IsoDate): IsoDate => `${date.slice(0, 4)}-01-01`;
 
-/**
- * Every preset's boundary except the three that cannot be a calendar offset:
- * "All"/"Custom" need the surface's earliest date, "1D" the latest observed
- * session. Excluding them from the key type makes the compiler demand a
- * branch for each below rather than let one fall through to a wrong window.
- */
+// Excludes "all"/"custom" (need the surface's earliest date) and "1d" (needs the latest
+// session) — the compiler then demands a branch for each below instead of a silent fallthrough.
 const FIXED_BOUNDARY: Record<Exclude<RangeKey, "1d" | "all" | "custom">, (today: IsoDate) => IsoDate> = {
   "1w": (today) => addDays(today, -7),
   "1m": (today) => subtractMonths(today, 1),
@@ -170,13 +105,8 @@ const FIXED_BOUNDARY: Record<Exclude<RangeKey, "1d" | "all" | "custom">, (today:
   "5y": (today) => subtractMonths(today, 60),
 };
 
-/**
- * Whichever is earlier, on the surface's own terms. Household: the earlier of
- * the earliest position set and the earliest manual point — the manual series
- * reaches furthest back, and ignoring it would cut off the history "All"
- * exists to reach. Account: its own earliest position set only; the manual
- * series is the household's, not any one account's.
- */
+// Household: earlier of position-set and manual dates (manual reaches furthest back).
+// Account: its own position-set date only — manual history is the household's, not any account's.
 export function surfaceEarliestDate(surface: Surface, earliest: SurfaceEarliest): IsoDate | null {
   if (surface === "account") return earliest.positionSet;
 
@@ -187,12 +117,8 @@ export function surfaceEarliestDate(surface: Surface, earliest: SurfaceEarliest)
   );
 }
 
-/**
- * The ratio `r > 1` with `1 + r + … + r^(n-1) = target`, by bisection rather
- * than closed form (ADR-0003): the sum is continuous and strictly increasing
- * in `r`, callers only ask for `target > n`, so a solution always exists and
- * bisection converges reliably.
- */
+// Solves r > 1 in 1 + r + ... + r^(n-1) = target by bisection (ADR-0003): the sum is
+// continuous and strictly increasing in r, and callers only ask for target > n.
 function solveGrowthRatio(n: number, target: number): number {
   const sumAt = (r: number): number => {
     let sum = 0;
@@ -204,15 +130,13 @@ function solveGrowthRatio(n: number, target: number): number {
     return sum;
   };
 
-  // Bracket the root before bisecting. At the shipped budget this loop never
-  // runs (179 terms already sum past 1e53), but it keeps the solve correct if
-  // SAMPLE_BUDGET is ever retuned far downward.
+  // At the shipped budget this loop never runs (179 terms already sum past 1e53); kept for
+  // correctness if SAMPLE_BUDGET is retuned far downward.
   let low = 1;
   let high = 2;
   while (sumAt(high) < target) high *= 2;
 
-  // Loose enough to converge in bounded steps, tight enough that every
-  // downstream day-offset (up to SAMPLE_BUDGET - 2 powers of r) rounds stably.
+  // 1e-9: tight enough every downstream day-offset rounds stably.
   while (high - low > 1e-9) {
     const mid = (low + high) / 2;
     if (sumAt(mid) < target) low = mid;
@@ -222,13 +146,8 @@ function solveGrowthRatio(n: number, target: number): number {
   return (low + high) / 2;
 }
 
-/**
- * Every calendar day when the span fits the budget; otherwise exactly
- * `SAMPLE_BUDGET` dates geometrically decaying backward from `until` (spec
- * 0009, ADR-0003). The anchor is `until`, never the wall clock — it only
- * differs for a custom range ending in the past, which must decay from its
- * own end.
- */
+// Every calendar day when the span fits the budget; otherwise exactly SAMPLE_BUDGET dates
+// decaying geometrically backward from `until`, never the wall clock (spec 0009, ADR-0003).
 function sampleWindow(since: IsoDate, until: IsoDate): Window {
   const start = parseIso(since);
   const end = parseIso(until);
@@ -239,13 +158,10 @@ function sampleWindow(since: IsoDate, until: IsoDate): Window {
     return { since, dates };
   }
 
-  // SAMPLE_BUDGET - 1 gap terms, the first fixed at one day (r^0 = 1), solved
-  // to sum exactly to the span so the walk backward lands precisely on `since`.
+  // SAMPLE_BUDGET - 1 gap terms, first fixed at one day, solved to sum exactly to the span.
   const ratio = solveGrowthRatio(SAMPLE_BUDGET - 1, spanDays);
 
-  // Cumulative day-offsets from `until`, nearest first; the last equals
-  // `spanDays` by construction. A running total, so the loop never indexes
-  // behind itself.
+  // Cumulative day-offsets from `until`, nearest first; last equals spanDays by construction.
   const offsets: number[] = [0];
   let offset = 0;
   let gap = 1;
@@ -255,18 +171,13 @@ function sampleWindow(since: IsoDate, until: IsoDate): Window {
     gap *= ratio;
   }
 
-  // Built nearest-to-`until` first; reversed into the oldest-first order
-  // every caller expects.
+  // Built nearest-to-until first; reversed into the oldest-first order callers expect.
   const dates = offsets.map((offset) => addDays(until, -Math.round(offset))).reverse();
 
   return { since, dates };
 }
 
-/**
- * Is `custom` a span this surface can actually draw? Both ends set, in order,
- * within what the surface can show — refused rather than drawn from a clamp,
- * the same posture the `Object.hasOwn` guard takes on a hand-edited `range`.
- */
+// Refused rather than drawn from a clamp: both ends set, in order, within what the surface can show.
 function isDrawableCustomSpan(span: CustomSpan, today: IsoDate, earliest: IsoDate | null): boolean {
   if (span.start > span.end) return false;
   if (span.end > today) return false;
@@ -274,11 +185,8 @@ function isDrawableCustomSpan(span: CustomSpan, today: IsoDate, earliest: IsoDat
   return true;
 }
 
-/**
- * The window a range resolves to for one surface on one day. "All" and
- * "Custom" need the surface's earliest date rather than a calendar offset;
- * an unusable custom span falls back to the default rather than erroring.
- */
+// "all"/"custom" need the surface's earliest date rather than a calendar offset; an unusable
+// custom span falls back to the default rather than erroring.
 export function resolveRange(
   range: RangeKey,
   opts: {
@@ -286,38 +194,20 @@ export function resolveRange(
     earliest: SurfaceEarliest;
     surface: Surface;
     custom?: CustomSpan;
-    /**
-     * From `latestObservedSession`. Omitted means none — the safe direction:
-     * it disables 1D rather than offering a chart that cannot be drawn.
-     */
-    session?: IsoDate | null;
+    session?: IsoDate | null; // from latestObservedSession; omitted disables 1D
   },
 ): RangeWindow {
   const earliestDate = surfaceEarliestDate(opts.surface, opts.earliest);
 
   if (range === "1d") {
-    // Nothing observed yet = no session to plot: the undrawable-custom-span
-    // fallback, for the same reason.
     if (!hasSession(opts.session)) return resolveRange(DEFAULT_RANGE, opts);
 
-    // `dates` is empty on purpose — 1D bypasses the day sampler; its points
-    // are the log's own instants, so a loader that misses `session` and reads
-    // the day series draws nothing rather than the wrong thing.
-    //
-    // `since` is the day before the session — what the headline's change is
-    // measured from: today's `price_daily` row converges on the last
-    // observation, so measuring from it would report every session flat.
-    // Strictly before, carried forward, is the previous close — "today's
-    // change" as a brokerage means it.
-    //
-    // One consequence, stated because 1D is where it first shows: the change
-    // reader compares today's positions against those held on `since`, while
-    // the 1D line holds today's positions constant. On other presets those
-    // agree; under 1D a statement uploaded mid-session moves the delta by the
-    // holdings change while the line moves only by price. DESIGN.md §14's
-    // second accepted limitation, arriving on a span short enough to notice;
-    // reconciling it would need a change figure no other range shows, which
-    // is not what issue #94 asked for.
+    // dates empty on purpose: 1D bypasses the day sampler, plotting the log's own instants.
+    // since is the day before the session, not the session's own date — today's price_daily
+    // row converges on the last observation, so measuring from it would report a flat session;
+    // this is the previous close, "today's change" as a brokerage means it. Known gap
+    // (DESIGN.md §14): the change reader compares today's positions against since, while the
+    // 1D line holds today's positions constant, so a mid-session upload can disagree with the line.
     return { range, session: opts.session, since: addDays(opts.session, -1), dates: [] };
   }
 
@@ -335,26 +225,17 @@ export function resolveRange(
   return { range, ...sampleWindow(FIXED_BOUNDARY[range](opts.today), opts.today) };
 }
 
-/**
- * Whether a fixed preset's start falls before this surface's earliest date.
- * Landing exactly on it is not disabled — the day the account or household
- * opened is a real, drawable start. "All" and "Custom" are never disabled:
- * "All"'s boundary is the earliest date by definition, "Custom" is a picker.
- */
+// A preset landing exactly on the surface's earliest date is not disabled — that day is a
+// real, drawable start. "All"/"Custom" are never disabled.
 export function isRangeDisabled(
   range: RangeKey,
   opts: {
     today: IsoDate;
     earliest: SurfaceEarliest;
     surface: Surface;
-    /** See {@link resolveRange}. Omitted means nothing observed yet. */
-    session?: IsoDate | null;
+    session?: IsoDate | null; // see resolveRange; omitted means nothing observed yet
   },
 ): boolean {
-  // The one preset disabled by something other than the earliest date: an
-  // empty observation log has no session to draw, and story 13 wants the chip
-  // to say so. A log with a single observation is not empty — the chip is
-  // offered and the panel explains what it is short of.
   if (range === "1d") return !hasSession(opts.session);
 
   if (range === "all" || range === "custom") return false;
@@ -365,25 +246,17 @@ export function isRangeDisabled(
   return FIXED_BOUNDARY[range](opts.today) < earliestDate;
 }
 
-/**
- * The clause a chart's accessible label names the active range with — "over
- * the last 1Y", or the actual dates for a custom span — so a screen reader
- * gets an equivalent update for every option (story 24).
- */
+// The clause a chart's accessible label names the active range with (story 24).
 export function rangeDescription(range: RangeKey, custom?: CustomSpan): string {
   if (range === "custom" && custom) return `from ${custom.start} to ${custom.end}`;
-  // 1D is not a span but one named session — what a listener needs to hear
-  // before the times of day that follow.
   if (range === "1d") return "over the latest trading session";
   return `over the last ${RANGES[range].label}`;
 }
 
-/** Every option the segmented control renders, in order, with its disabled state resolved. */
 export function rangeOptions(opts: {
   today: IsoDate;
   earliest: SurfaceEarliest;
   surface: Surface;
-  /** See {@link resolveRange}. Omitted means nothing observed yet. */
   session?: IsoDate | null;
 }): Array<{ key: RangeKey; label: string; disabled: boolean }> {
   return (Object.keys(RANGES) as RangeKey[]).map((key) => ({

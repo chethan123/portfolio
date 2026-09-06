@@ -52,7 +52,6 @@ describe("the gap list", () => {
       expect(markup).toContain("ZM");
       expect(markup).toContain("2019-06-28");
       expect(markup).toContain("2026-06-03");
-      // The ledger's literal is not what a person reads.
       expect(markup).toContain("the feed has no history for this ticker");
       expect(markup).not.toContain("no_history");
     }),
@@ -116,8 +115,7 @@ describe("the gap list", () => {
 
       expect(markup).toContain("Priced from");
       expect(markup).toContain("Not tried yet");
-      // The cell itself, not any em dash on the page: the notes above the table
-      // carry them too, and a bare `toContain` would pass on those alone.
+      // The cell itself — the notes above the table carry em dashes too, which would pass a bare toContain.
       expect(markup).toContain('<td class="u-data">—</td>');
     }),
   );

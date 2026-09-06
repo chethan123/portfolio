@@ -1,16 +1,7 @@
-/**
- * The reader that survives a real brokerage export (spec 0004, step 02).
- *
- * Everything here is about the two properties the ingest flow leans on: the
- * reader never throws on content, and row indices are stable — a saved
- * mapping's `headerRow` points into these rows, so a dropped blank line would
- * silently shift every mapping made after it.
- *
- * The fixtures are shaped like the real thing — preambles, footers, quoted
- * descriptions — because the value of a pure parser is that every awkward file
- * in existence becomes a test rather than a bug found with a household's real
- * statement in hand.
- */
+// CSV reader that survives a real brokerage export (spec 0004, step 02). Two properties the
+// ingest flow leans on: never throws on content, and row indices stay stable — a saved
+// mapping's headerRow points into these rows. Fixtures are shaped like real exports
+// (preambles, footers, quoted descriptions).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -52,8 +43,8 @@ describe("readCsv", () => {
   });
 
   it("sniffs the delimiter by column-count consistency, not by counting line one", () => {
-    // The preamble sentence holds two commas and no semicolon, so counting
-    // occurrences on line one picks comma — and shreds every data row.
+    // Preamble sentence has two commas, no semicolon — counting line one alone would
+    // pick comma and shred every data row.
     const { rows, delimiter } = readCsv(
       bytes("Report, generated, 2026\nSymbol;Qty\nAAPL;50\nMSFT;25"),
     );
@@ -74,8 +65,8 @@ describe("readCsv", () => {
   });
 
   it("keeps ragged rows as they are, short or long", () => {
-    // The mapping step decides whether a row is usable; padding would invent
-    // cells and refusing would throw away a parseable file over its footer.
+    // Mapping step decides usability — padding would invent cells, refusing would throw
+    // away a parseable file over its footer.
     const { rows } = readCsv(bytes("a,b,c\nonly one\nx,y\np,q,r,s"));
 
     expect(rows).toEqual([["a", "b", "c"], ["only one"], ["x", "y"], ["p", "q", "r", "s"]]);
@@ -116,8 +107,8 @@ describe("readCsv", () => {
   });
 
   it("honours a forced delimiter instead of sniffing", () => {
-    // A saved mapping records the delimiter it was built against; re-reading
-    // the bytes must not depend on the sniff reaching the same verdict twice.
+    // Saved mapping records its delimiter — re-reading must not depend on the sniff
+    // agreeing twice.
     const { rows, delimiter } = readCsv(bytes("a;b\nc;d"), ",");
 
     expect(delimiter).toBe(",");
@@ -139,15 +130,14 @@ describe("candidateHeaderRows and defaultHeaderRow", () => {
   it("skips a preamble and a blank line to default to the real header", () => {
     const { rows } = readCsv(fixture("fidelity.csv"));
 
-    // In file order, so the mapping screen can offer them as written; the
-    // blank line at index 1 is never a candidate.
+    // In file order (screen offers them as written); blank line at index 1 is never a candidate.
     const candidates = candidateHeaderRows(rows);
     expect(candidates[0]).toBe(0);
     expect(candidates).toContain(2);
     expect(candidates).not.toContain(1);
 
-    // The preamble is one cell wide and the data below is nine, which is what
-    // rules it out; the header matches the rows under it.
+    // Preamble is one cell wide, data below is nine — rules it out; header matches the
+    // rows under it.
     expect(defaultHeaderRow(rows)).toBe(2);
   });
 

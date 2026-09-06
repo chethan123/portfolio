@@ -1,15 +1,7 @@
 /**
- * `ownerReading` is now the one place all four owner-filter screens settle an
- * address, resolve the roster, and narrow `reading` — a bug here reaches
- * every one of them at once, where the four separate loader preambles this
- * replaces could each drift on its own (and did: Overview's own reorder,
- * Holdings' own dropped receipt). The settle chain is the sharpest risk: a
- * canonical spelling that is not a fixed point is an infinite redirect
- * nobody notices until they open a screen, so this file follows the chain to
- * its end rather than checking one hop. `reading`'s divergence from the raw
- * filter is the second: a stale id has to be dropped from what a
- * date-crossing reader narrows by, and a selection matching nobody has to
- * keep its raw ids rather than silently widen to the whole household.
+ * `ownerReading` is the one place all four owner-filter screens settle an address and narrow
+ * `reading` — a bug here reaches all of them at once. The settle chain is the sharpest risk
+ * (a non-fixed-point spelling loops forever), so this file follows it to the end.
  */
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -23,10 +15,10 @@ import type { TestContext } from "./support/database.ts";
 
 afterAll(closeTestDatabase);
 
-/** An arbitrary pathname — `ownerReading` is screen-agnostic, so no route need exist here. */
+// arbitrary pathname — ownerReading is screen-agnostic, no route need exist
 const PATH = "/screen";
 
-/** Two owners, each holding one open account — enough for a real narrowing. */
+// two owners, each with one open account — enough for real narrowing
 async function seedTwoOwners(ctx: Pick<TestContext, "seedPerson" | "seedAccount">) {
   const alice = await ctx.seedPerson({ name: "Alice" });
   const bob = await ctx.seedPerson({ name: "Bob" });

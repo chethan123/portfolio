@@ -22,14 +22,10 @@ import type { UploadStepsData } from "~/components/upload-steps";
 import type { Route } from "./+types/instruments";
 
 /**
- * Step three — resolve the file's first sightings (ingest brief §5). Every
- * distinct instrument-column string was looked up byte-exact against the
- * alias table; the misses land here, each resolved once and remembered
- * forever — pointed at an existing instrument or created, both paths
- * writing the alias, so the same brokerage's next export passes silently.
- * The flow's one early write: resolving records vocabulary, not the
- * statement, which waits for review. Reached only with at least one miss —
- * otherwise the loader redirects straight to review and the step dims.
+ * Step three — resolve the file's first sightings (ingest brief §5): misses
+ * against the alias table, pointed at an existing instrument or created —
+ * both paths write the alias so the next export passes silently. The
+ * flow's one early write; reached only with at least one miss.
  */
 export function meta() {
   return [{ title: "New instruments · Upload · Portfolio" }];
@@ -39,18 +35,14 @@ export async function loader({ params }: Route.LoaderArgs) {
   try {
     const draft = await requireDraft(params.draftId);
 
-    // `parseDraft` owns the resume rule: a mapping that no longer parses
-    // clean bounces to columns, and a file with nothing unresolved skips by
-    // redirect, never an empty screen — a step with nothing to do would
-    // charge a click for no decision (brief §7.5).
+    // `parseDraft` owns the resume rule — nothing unresolved skips by redirect, never an empty screen (brief §7.5).
     const result = await parseDraft(draft);
     if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
     if (result.step === null) return redirect(`/upload/${draft.id}/review`);
 
     const screen = await resolutionScreen(result.parsed.positions);
 
-    // Everything resolved between the two reads — a concurrent draft's
-    // submit — is the same skip the redirect above performs.
+    // A concurrent draft's submit resolving everything is the same skip as above.
     if (screen.unresolved.length === 0) return redirect(`/upload/${draft.id}/review`);
 
     return {
@@ -60,11 +52,7 @@ export async function loader({ params }: Route.LoaderArgs) {
         instrumentsSkipped: draft.hadFirstSightings === false,
       } satisfies UploadStepsData,
       screen,
-      // The file's own name column, for the context line's caption —
-      // "Description: Vanguard Total…" — when one is mapped.
       nameColumn: result.mapping.columns.name ?? null,
-      // The sentinel rides down with the data, because the route's component
-      // cannot import a `.server` module (the columns screen's precedent).
       newClassification: NEW_CLASSIFICATION,
     };
   } catch (error) {
@@ -81,17 +69,13 @@ export async function action({ params, request }: Route.ActionArgs) {
     const result = await parseDraft(draft);
     if (result.step === "columns") return redirect(`/upload/${draft.id}/columns`);
 
-    // A double submit — two tabs, the back button — finds everything already
-    // resolved and simply moves on, exactly as the loader would have.
+    // A double submit finds everything already resolved and moves on, as the loader would.
     if (result.step === null) return redirect(`/upload/${draft.id}/review`);
 
     const { unresolved } = result;
 
-    // Posted answers pair with the current unresolved strings by index, and
-    // each group carries its raw string in a hidden field so a stale form —
-    // another draft resolved one of these strings meanwhile — cannot land an
-    // answer on the wrong string. Compared through `sameRawStrings`: the
-    // browser rewrites a multi-line cell's line endings to CRLF in transit.
+    // Each posted group carries its raw string so a stale form can't land an
+    // answer on the wrong one. `sameRawStrings`: browser rewrites CRLF in transit.
     if (unresolved.some((raw, index) => !sameRawStrings(values[`raw-${index}`] ?? "", raw))) {
       throw ValidationError.form(
         "The file's first sightings changed while this page was open — " +
@@ -99,9 +83,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       );
     }
 
-    // `raw` is the draft's own parsed string, never the posted hidden-field
-    // copy — the alias must store the bytes the file wrote, and the copy may
-    // have been CRLF-mangled by the form round trip.
+    // `raw` is the draft's own parsed string, never the posted copy — the alias stores the file's own bytes.
     await resolveAll(
       unresolved.map((raw, index) => ({ raw, fields: resolutionFieldsAt(values, index) })),
       { probe: socketProbe },
