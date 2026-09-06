@@ -5,6 +5,9 @@ this page explains — and no password, ever, is what unlocks it again. This is 
 household's own words: what it means to be locked, how to get back in, and what to know before
 anyone turns it on. If you are looking at a locked screen right now, unlocking happens right there —
 its one control is the whole of what you need, and the next section says what to expect from it.
+
+![A locked browser: the card this guide means by "Locked"](images/unlock.png)
+
 Everything about managing a passkey instead — enrolling one, seeing what the household holds,
 removing one — lives in Settings → Passkeys, reachable only once a browser is already unlocked.
 
@@ -216,6 +219,14 @@ If that happens: first try the same address in an ordinary browser on the same d
 not help either, try a different device — one that already holds a passkey the household has
 enrolled, or is signed into the same vault as one. If neither gets you in, ask whoever set this app
 up for your household to help you back in.
+
+## On a phone
+
+![Locked, on a phone: the same card, with no navigation around it](images/unlock-mobile.png)
+
+The same card, and nothing else — no bottom bar of screens to tap between, because there is nothing
+behind **Unlock** to reach yet. Every other screen in this guide has that bar; this is the one that
+does not.
 
 ---
 

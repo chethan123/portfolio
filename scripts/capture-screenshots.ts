@@ -569,6 +569,18 @@ async function walkUpload(
     await page.evaluate(() => document.fonts.ready);
   }
 
+  // Each step above is a step *this flow* navigates to with a form submit
+  // rather than a fresh `visit()` — unlike every other shot in this file,
+  // nothing here calls `page.goto()` between steps, and this app has no
+  // scroll-to-top-on-navigate of its own. A phone that scrolled down to
+  // reach a button on one step therefore lands on the next one already
+  // scrolled, at whatever offset the previous page happened to be that
+  // tall — `upload-4-review-mobile.png` used to be almost entirely blank
+  // for exactly this reason, carrying the Instruments step's own scroll
+  // position into a Review page that starts well above it. Desktop never
+  // shows this: every desktop shot here is short enough, at 1600 wide, that
+  // the step before it never needed to scroll at all.
+  if (!fullPage) await page.evaluate(() => window.scrollTo(0, 0));
   if (shots.review) await shoot(page, shots.review, fullPage);
 
   await forgetWalkWrites(pool, watermark);

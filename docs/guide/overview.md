@@ -203,6 +203,16 @@ withheld on a small screen.
 The readout above the line is filled in already, so the chart says where the line ends without
 being pointed at. Tap a point to read that one instead.
 
+![The Overview at the 1D range, on a phone](images/overview-range-1d-mobile.png)
+
+1D reads the same way narrower: the axis and readout still name the time of day, and the range
+row scrolls sideways to reach the options past 1Y rather than wrapping them onto a second line.
+
+![The Overview at the All range, on a phone](images/overview-range-all-mobile.png)
+
+The dashed pre-app line is still there too, and still drawn differently from the solid one for the
+same reason as above.
+
 ---
 
 **Next:** [The owner filter](owner-filter.md) — narrowing every figure on these screens to one

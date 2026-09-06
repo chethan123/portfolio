@@ -111,6 +111,8 @@ configure — switch your system between light and dark and the next page you op
 
 ## On a phone
 
+![A fresh instance on a phone: the same Start here prompt, the same empty Overview](images/first-run-overview-mobile.png)
+
 The left rail becomes a bar across the bottom with the same items in it, and tables reflow to fit.
 Nothing is held back on a small screen: adding people, adding accounts, setting a balance and the
 whole of Settings all work from a phone.
