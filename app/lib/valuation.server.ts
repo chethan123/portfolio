@@ -251,41 +251,28 @@ function toAccountTotal(row: AccountTotalRow): AccountTotal {
   return {
     accountId: required(row.account_id, "account_id"),
     accountName: required(row.account_name, "account_name"),
-    // Nullable, and masked before it leaves the module — as on ValuedHolding.
     accountNumberTail: numberTail(row.external_account_number),
     institution: required(row.institution, "institution"),
     accountKind: required(row.account_kind, "account_kind") as AccountKind,
     ownerName: required(row.owner_name, "owner_name"),
     amount: row.amount,
-    // Counts, not money: see {@link readTotal}.
     coverage: { known: Number(row.known), total: Number(row.total) },
   };
 }
 
-/**
- * The largest value a `bigint` column can hold. The bound is on *magnitude*,
- * not character count: `0000000000000000001` is nineteen characters and is
- * account 1 — a digit-count guard would 404 a row that exists. Compared as
- * `BigInt` (§5.6): past 2^53 a float rounds, admitting exactly the values
- * this exists to refuse.
- */
+// Bound is on magnitude, not character count: a digit-count guard would 404 a row that exists
+// (leading zeros). Compared as BigInt (§5.6): past 2^53 a float rounds.
 const MAX_BIGINT = 9223372036854775807n;
 
-/** Whether an id could name a row, rather than error inside Postgres. */
+// Whether an id could name a row, rather than error inside Postgres.
 function couldBeId(id: string): boolean {
   return /^\d+$/.test(id) && BigInt(id) <= MAX_BIGINT;
 }
 
-/**
- * `<column> in (<ids>)`, or a match-nothing predicate when none could be an
- * id. Ids arrive as strings against `bigint` columns, and a non-digit id from
- * a URL would fail inside Postgres; saying "no such row" in SQL keeps every
- * empty answer coming from the query that would have answered anyway.
- * Unusable ids drop from the list, not the predicate — `?owner=1,abc` still
- * narrows to owner 1 — but nothing usable yields `false`, never an empty
- * `in ()` and never silently no filter: widening a view somebody asked to
- * narrow is the failure `holdings-view.ts` names.
- */
+// <column> in (<ids>), or a match-nothing predicate when none could be an id — a non-digit id
+// would otherwise fail inside Postgres. Unusable ids drop from the list (?owner=1,abc still
+// narrows to 1), but nothing usable yields false, never an empty in () and never silently no
+// filter — widening a view somebody asked to narrow is the failure holdings-view.ts names.
 function isOneOf(column: string, ids: readonly string[]): RawBuilder<SqlBool> {
   const usable = ids.filter(couldBeId);
 
@@ -294,29 +281,18 @@ function isOneOf(column: string, ids: readonly string[]): RawBuilder<SqlBool> {
     : sql<SqlBool>`${sql.ref(column)} in (${sql.join(usable.map((id) => sql`${id}`))})`;
 }
 
-/** {@link isOneOf} for the single-id case, which is every account-scoped read. */
 function isAccount(column: string, accountId: string): RawBuilder<SqlBool> {
   return isOneOf(column, [accountId]);
 }
 
-/**
- * The owner narrowing, or nothing when the filter is off — `undefined` rather
- * than a tautology keeps an unfiltered read the query it has always been.
- */
+// undefined, not a tautology, so an unfiltered read stays the query it's always been.
 function ownedBy(column: string, filter: OwnerFilter): RawBuilder<SqlBool> | undefined {
   return isFiltered(filter) ? isOneOf(column, filter) : undefined;
 }
 
-/**
- * Every open account with its current value, largest first; a liability sorts
- * to the bottom by construction, not a branch (negative sum, DESIGN.md §2).
- * Row for row the same answer {@link accountTotal} gives, as a rule rather
- * than a coincidence: the overview row and drill-down headline are one figure
- * shown twice, grouped the same way from the same source. LEFT join, because
- * grouping the view directly would silently drop exactly the empty accounts
- * it exists to keep — `0.0000` over zero rows, sorting between assets and
- * liabilities, where a zero belongs.
- */
+// Largest value first; a liability sorts to the bottom by construction (negative sum, §2).
+// Row for row the same answer accountTotal gives, by rule not coincidence. LEFT join: grouping
+// the view directly would silently drop the empty accounts it exists to keep (0.0000 over zero rows).
 export async function accountTotals(
   filter: OwnerFilter,
   db: Kysely<Database> = getDb(),
@@ -335,20 +311,16 @@ export async function accountTotals(
       "account.kind as account_kind",
       "person.name as owner_name",
       sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
-      // `is_priced` is null on the row the left join manufactures for an
-      // empty account, and a null does not pass the filter.
+      // is_priced is null on the manufactured row for an empty account; null fails the filter.
       sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
-      // The joined column, not the row: `count(*)` would score that
-      // manufactured row as one holding.
+      // Joined column, not the row: count(*) would score the manufactured row as one holding.
       sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
-    // The view already drops closed accounts; joining from `account` reaches
-    // past that, so the rule is restated here.
+    // View already drops closed accounts; joining from account reaches past that.
     .where("account.closed_at", "is", null);
 
-  // Narrowed on `account.owner_id`, not through the view: an account holding
-  // nothing still reports 0.0000, and the view's owner column is null on
-  // exactly those manufactured rows.
+  // Narrowed on account.owner_id, not through the view: an empty account still reports
+  // 0.0000, and the view's owner column is null on exactly those manufactured rows.
   const rows = await (owned === undefined ? base : base.where(owned))
     .groupBy([
       "account.id",
@@ -358,8 +330,7 @@ export async function accountTotals(
       "account.kind",
       "person.name",
     ])
-    // `sum(...)` again, not the alias: an alias is not in scope in ORDER BY
-    // on every Postgres version this may meet.
+    // sum(...) again, not the alias: not every Postgres version this may meet scopes it in ORDER BY.
     .orderBy(sql`coalesce(sum(holding_valued.value), 0)`, "desc")
     .orderBy("account.name")
     .execute();
@@ -367,22 +338,11 @@ export async function accountTotals(
   return rows.map(toAccountTotal);
 }
 
-/**
- * One account's identity and current value, or null when there is no such
- * open account. Deliberately the same {@link AccountTotal} as the list — the
- * account page's headline and its overview row are one arithmetic over one
- * view, and separate types is how they would come to disagree
- * ({@link accountTotals} is this query without the id filter). LEFT join from
- * `account`, so an account with no view rows — sold down to nothing, created
- * before its first upload — reports `0.0000` over zero coverage: "nothing to
- * value", not "worth nothing" or missing.
- *
- * Null covers an id naming no account and a closed one alike. Closed is not
- * an error and not a zero: the view excludes closed accounts (§8.2), so a
- * drill-down would render a page of blanks — the caller should 404 instead.
- *
- * @param accountId as it arrives from a URL, digits or not.
- */
+// Same AccountTotal shape as the list (accountTotals is this query without the id filter) — a
+// separate type is how the two would come to disagree. LEFT join from account: no view rows
+// (sold to nothing, or pre-first-upload) reports 0.0000 over zero coverage, not missing.
+// Null covers a nonexistent id and a closed one alike (the view excludes closed accounts, §8.2)
+// — the caller should 404, not render a page of blanks.
 export async function accountTotal(
   accountId: string,
   db: Kysely<Database> = getDb(),
@@ -399,14 +359,12 @@ export async function accountTotal(
       "account.kind as account_kind",
       "person.name as owner_name",
       sql<string>`cast(coalesce(sum(holding_valued.value), 0) as numeric(20, 4))`.as("amount"),
-      // `is_priced` is null on the manufactured row here too — see
-      // {@link accountTotals}, the identical query shape.
+      // Same is_priced null-on-manufactured-row shape as accountTotals.
       sql<string>`count(*) filter (where holding_valued.is_priced)`.as("known"),
       sql<string>`count(holding_valued.instrument_id)`.as("total"),
     ])
     .where(isAccount("account.id", accountId))
-    // Not a second copy of the view's closed-account rule: this is what turns
-    // "closed" into null instead of an account holding nothing.
+    // Turns "closed" into null, distinct from an account holding nothing.
     .where("account.closed_at", "is", null)
     .groupBy([
       "account.id",
@@ -421,12 +379,9 @@ export async function accountTotal(
   return row === undefined ? null : toAccountTotal(row);
 }
 
-/**
- * One account's holdings on {@link currentHoldings}' terms — the same rows it
- * contributes to the overview total, filtered, unpriced ones included so the
- * table can say which line the total is missing. Empty for holds-nothing,
- * closed, and no-such-id alike; which it is, is {@link accountTotal}'s answer.
- */
+// Same rows as currentHoldings' overview total, filtered to one account, unpriced included so
+// the table can say which line is missing. Empty for holds-nothing, closed, and no-such-id
+// alike — accountTotal answers which.
 export async function accountHoldings(
   accountId: string,
   db: Kysely<Database> = getDb(),
@@ -434,13 +389,9 @@ export async function accountHoldings(
   return readHoldings(db, valuedNow(), isAccount("holding_valued.account_id", accountId));
 }
 
-/**
- * A value at each of `dates` in a single round trip: a lateral join over the
- * date array evaluates `holding_valued_at` once per date inside one statement
- * — where {@link netWorthAt} in a loop is a round trip and a re-plan per point.
- *
- * @param dates `YYYY-MM-DD`, any order; the result comes back sorted.
- */
+// A value at each date in one round trip: a lateral join evaluates holding_valued_at once per
+// date inside one statement, where netWorthAt in a loop would be a round trip and a re-plan
+// per point. dates may be any order; the result comes back sorted.
 async function readSeries(
   db: Kysely<Database>,
   dates: IsoDate[],

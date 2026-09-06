@@ -1,17 +1,7 @@
-/**
- * The Holdings URL, which is the whole of that screen's state (§8.1). What
- * the table *contains* is `holdings-view.test.ts`'s; what lives only here
- * is the route's use of it: the canonical bounce, the two row parameters
- * kept outside `HoldingsQuery`, and the one write. The bounce is why this
- * file exists — a GET form submits the six selects nobody touched, so the
- * arriving address is `?owner=1&account=&institution=&…` and the loader
- * redirects it before drawing anything; a target not itself canonical is
- * the app's busiest table answering every request with another redirect
- * until the browser gives up, so the target is fed straight back into the
- * loader rather than merely read. The write's guard is the same idea: which
- * row a correction applies to comes from `?edit=` and nowhere else, so a
- * POST naming no row must refuse rather than choose one.
- */
+// Holdings URL is the whole of that screen's state (§8.1). Table contents are holdings-view.test.ts's; this covers the
+// route's use of it: the canonical bounce (a GET form submits all six selects, so ?owner=1&account=&institution=&… must
+// redirect to something itself canonical, verified by feeding the target back into the loader, not just reading it),
+// and the write's guard (which row a correction applies to comes from ?edit= alone — a POST naming none must refuse).
 import { afterAll, describe, expect, it } from "vitest";
 
 import Holdings, { action, loader } from "../../app/routes/holdings.tsx";
@@ -52,13 +42,11 @@ describe("the canonical bounce", () => {
     "sends a GET form's empty parameters to a readable address that does not itself redirect",
     withDatabase(async (ctx) => {
       const { owner } = await seedOnePosition(ctx);
-      // As above: a second owner, so `?owner=` survives the loader's collapse
-      // of a selection that names everybody.
+      // Second owner so ?owner= survives the loader's all-roster collapse.
       const other = await ctx.seedPerson({ name: "Bob" });
       await ctx.seedAccount({ name: "Bob Roth", owner: other, kind: "ira" });
 
-      // Exactly what pressing Apply with one select touched puts in the address
-      // bar: seven parameters, six of them meaning "all".
+      // What pressing Apply with one select touched puts in the address bar: seven params, six meaning "all".
       const submitted =
         `/holdings?owner=${owner.id}` +
         "&account=&institution=&kind=&tax=&classification=&assetClass=";

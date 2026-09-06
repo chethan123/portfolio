@@ -1,22 +1,9 @@
 /**
- * What one tick of the refresh loop does with the connection it borrows.
- * Not about prices (`refresh-quotes.test.ts` owns those; no `quote` row is
- * asserted on): what lives only in the poller is the Postgres *session*
- * holding `pg_try_advisory_lock`, and a connection handed back keeps
- * whatever its session held. A tick that failed halfway and returned its
- * connection intact poisons the pool: a later tick is handed the lock
- * holder back, the lock answers "someone else has it", and prices stop
- * refreshing for the life of the process — no throw, no failing health
- * check (`healthz.ts` deliberately reports none of this), the screens
- * showing last week's prices as live: §11's worst available failure.
- *
- * The tick is not exported and stays so; it is driven through
- * `startPricePoller` as production drives it. The interval is faked so no
- * real timer exists and nothing waits; the provider is a hand-written fake;
- * the pool is the real one, patched only to say when it got its connection
- * back. A tick has no caller to catch it, so a throw arrives as an
- * unhandled rejection and vitest fails the run — every test below is also a
- * statement that the tick returned rather than threw.
+ * What one tick does with the connection it borrows (prices are refresh-quotes.test.ts's job).
+ * What lives only here is the Postgres session holding pg_try_advisory_lock: a tick that fails
+ * halfway and returns its connection intact poisons the pool, silently freezing prices for the
+ * process's life (§11's worst failure — healthz.ts can't see it). Driven through startPricePoller
+ * with a faked interval and a fake provider, against the real pool, patched to report handbacks.
  */
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -29,24 +16,18 @@ import { TEST_DATABASE_URL, closeTestDatabase, withDatabase } from "./support/da
 import type pg from "pg";
 import type { PriceProvider } from "~/lib/price-provider.server";
 
-/**
- * The poller reads its own configuration, and `getConfig()` memoises the first
- * read — so the environment is set before any test runs, exactly as the
- * container sets it before serving.
- */
+// getConfig() memoises its first read — set before any test runs, as the container does before serving
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-/** Refused immediately, which is how "the database went away" arrives here. */
+// refused immediately — how "the database went away" arrives here
 const UNREACHABLE_DATABASE_URL = "postgres://portfolio:portfolio@127.0.0.1:1/portfolio_test";
 
-/** The seeded refresh cadence the timer is first armed with, which the
- * databases these tests run against also hold — so no tick re-arms it. */
+// seeded refresh cadence the timer is first armed with; no tick re-arms it
 const INTERVAL_MS = 15 * 60 * 1000;
 
-/** A Thursday, 11:00 in New York: inside the regular session, not a holiday. */
+// a Thursday, 11:00 NY — inside the regular session, not a holiday
 const TRADING_HOUR = new Date("2026-06-04T15:00:00Z");
 
-/** The Sunday of the same week. */
 const WEEKEND = new Date("2026-06-07T15:00:00Z");
 
 afterAll(closeTestDatabase);

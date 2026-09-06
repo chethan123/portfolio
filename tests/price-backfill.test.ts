@@ -420,8 +420,7 @@ describe("what the ledger will and will not record", () => {
     }),
   );
 
-  // one withDatabase body per refusal — a constraint refusal aborts its transaction, so a
-  // second refusal in the same body fails on the aborted transaction, not the rule stated
+  // one withDatabase body per refusal — a second refusal in the same body fails on the aborted transaction, not the rule
   it(
     "refuses a filled attempt that wrote nothing",
     withDatabase(async ({ seedInstrument, seedBackfillAttempt }) => {
@@ -481,16 +480,14 @@ const NEW_YORK = "America/New_York";
 
 type Asked = { symbol: string; range: HistoryRange };
 
-// answers verbatim and corrects nothing (refresh-quotes.test.ts:25-31's reasoning) — a fake
-// that tidies the fixture can't test what the caller does with a bad one
+// answers verbatim, corrects nothing (refresh-quotes.test.ts:25-31) — a tidying fake can't test a bad one
 function fakeProvider(
   answer: (symbol: string) => ProviderHistory,
   quotes: ProviderQuote[] = [],
 ): PriceProvider & { asked: Asked[]; concurrency: { peak: number } } {
   const asked: Asked[] = [];
 
-  // how many history calls were ever open at once — a parallel-dispatching caller would reach
-  // the candidate count here, which recording call order alone couldn't tell apart
+  // how many history calls were open at once — a parallel-dispatching caller reaches the candidate count here
   const concurrency = { peak: 0 };
   let open = 0;
 

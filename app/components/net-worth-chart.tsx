@@ -174,9 +174,7 @@ function toArea(points: ChartPoint[], scale: Scale): string {
 }
 
 function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): string {
-  // Every tick on a session's axis falls inside one trading day, so naming the
-  // day three times would spend the whole axis saying nothing. The time of day
-  // is the only part that varies, and it is the part being asked about.
+  // A session's ticks all fall in one trading day — only the time of day varies.
   if (session !== null) return marketTimeOf(new Date(ms), session.timeZone);
 
   const [year = "", month = "", day = ""] = isoDate(ms).split("-");
@@ -185,35 +183,18 @@ function tickLabel(ms: number, withDay: boolean, session: SessionAxis | null): s
   return withDay ? `${Number(day)} ${name}` : `${name} ${year}`;
 }
 
-/**
- * A readout's date always carries its year, unlike the x ticks, which drop it
- * on short spans — a tick is read in the context of two others, and a readout
- * is read alone (spec 0010).
- */
+// A readout's date always carries its year, unlike x ticks — read alone, not in context of two others (spec 0010).
 function readoutDate(date: string, session: SessionAxis | null): string {
-  // Both halves of a session's stamp read on the same clock. Slicing the ISO
-  // instant would take its *UTC* day beside the market's time, so a session
-  // crossing UTC midnight would date a point a day out from the time printed
-  // next to it — the exact thing `market-hours.ts` exists to stop, so the
-  // day comes from there too.
+  // Day comes from `market-hours.ts` too, not a UTC slice — a session crossing UTC midnight would date a point a day out.
   const stamped = session === null ? date.slice(0, 10) : marketDateOf(new Date(date), session.timeZone);
   const [year = "", month = "", day = ""] = stamped.split("-");
   const stamp = `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
 
-  // The time joins the date rather than the amount, so masking is untouched:
-  // an instant is not an amount, and the figure beside it masks exactly as
-  // on every other range ("which moment is this" is the whole question a
-  // session's line is asked — story 9).
+  // Time joins the date, not the amount — so masking of the figure beside it is untouched.
   return session === null ? stamp : `${stamp}, ${marketTimeOf(new Date(date), session.timeZone)}`;
 }
 
-/**
- * One point's caption: date, value, and — for a hand-typed point — its
- * provenance in words. The amount is full precision, identical to the
- * headline, so a range ending today agrees digit for digit; masked, the
- * same dollar sign and dot run as every masked money figure — this must not
- * be the one place a figure survives masking.
- */
+// One point's caption: date, full-precision value (matches the headline digit for digit), provenance if hand-typed.
 function Readout({
   target,
   masked,
@@ -242,43 +223,17 @@ export function NetWorthChart({
   session,
   id,
 }: {
-  /** Points derived from real position sets. Solid line, and the filled one. */
+  // Derived from real position sets. Solid line, filled.
   computed: ChartPoint[];
-  /** Hand-typed pre-day-zero points (§7). Dashed, and never blended. */
+  // Hand-typed pre-day-zero points (§7). Dashed, never blended.
   manual: ChartPoint[];
-  /**
-   * What the line is, for anyone who cannot see it — the descriptive half
-   * only. The ending figure and date are derived here from the last point
-   * actually plotted, so the label is true on every range (a caller once
-   * passed current net worth, and a range ending in the past announced
-   * today's number — spec 0010). Deriving also keeps money formatting out
-   * of the routes, the leak the masking boundary exists to prevent.
-   */
+  // Descriptive half only — ending figure/date derived from the last plotted point, so the label is true on every range.
   label: string;
-  /**
-   * Whether this browser is masked (spec 0007). Required, no default:
-   * everything else in this feature fails closed (`useMasked` and the root
-   * loader answer *masked* when they cannot tell), and a default here could
-   * only fail the other way — drawing the figures for a caller who forgot
-   * the prop. Required makes forgetting a compile error.
-   */
+  // Required, no default — everything else in this feature fails closed to masked; a default could only fail the other way.
   masked: boolean;
-  /**
-   * The session this line plots, or null when it plots days. Required, no
-   * default, for `masked`'s reason: a caller that forgot it would label a
-   * session's instants as three copies of one date, with nothing saying a
-   * prop went missing. The chart is *told* what it draws rather than
-   * inferring it, so the axis changes only when a caller means it to.
-   */
+  // Required, no default — a forgotten session would label a session's instants as three copies of one date.
   session: SessionAxis | null;
-  /**
-   * Distinguishes this instance's gradient from any other on the page: a
-   * gradient is referenced by document id, and two charts sharing one both
-   * paint from whichever `<defs>` comes first — real the moment a screen
-   * draws two series side by side. Optional: `useId` covers the one-chart
-   * case, minus its punctuation, legal in an id but needing escapes inside
-   * a CSS `url()`.
-   */
+  // Distinguishes this chart's gradient — two sharing a document id both paint from whichever `<defs>` comes first.
   id?: string;
 }) {
   const generated = useId().replace(/[^a-zA-Z0-9]/g, "");
@@ -286,16 +241,13 @@ export function NetWorthChart({
 
   const all = [...manual, ...computed];
 
-  // Two points make a line. One makes a dot with no trend to report, and the
-  // honest thing to show for it is nothing.
+  // Two points make a line; one makes a dot, and the honest thing to show is nothing.
   if (all.length < 2) return null;
 
   const scale = buildScale(all);
   const last = computed.at(-1) ?? manual.at(-1);
 
-  // Rule 1 of §7: the two series stay visually distinct. The dashed run is
-  // extended to meet the first computed point, so the join reads as the
-  // interpolation it is rather than as a gap in the data.
+  // §7 rule 1: dashed run extended to meet the first computed point, so the join reads as interpolation, not a gap.
   const firstComputed = computed[0];
   const manualRun = manual.length > 0 && firstComputed ? [...manual, firstComputed] : manual;
 
@@ -304,11 +256,7 @@ export function NetWorthChart({
   const targets = hitTargets(manual, computed, scale);
   const resting = targets.at(-1);
 
-  // "an amount that is hidden", not a dot run: story 6 asks for a masked
-  // figure to be announced as hidden, and an `aria-label` is nothing but the
-  // announcement. The date rides along because the visible strip is out of
-  // the accessibility tree, and hiding it must not lose information a
-  // sighted reader gets (spec 0010, story 20).
+  // "an amount that is hidden", not a dot run — the `aria-label` is the announcement itself (story 6, spec 0010).
   const ending =
     last === undefined
       ? ""
@@ -324,10 +272,7 @@ export function NetWorthChart({
 
   return (
     <>
-      {/* The readout at rest: the last plotted point, dated, full precision,
-          agreeing with the headline digit for digit on a range ending today
-          (spec 0010). Hidden from assistive technology with the strip — the
-          svg's label carries the same fact as a sentence. */}
+      {/* At rest: last plotted point, agreeing with the headline digit for digit (spec 0010). Hidden from AT — the svg's label carries it. */}
       {resting ? (
         <p className="chart-readout" aria-hidden="true">
           <Readout target={resting} masked={masked} session={session} />
@@ -336,8 +281,7 @@ export function NetWorthChart({
 
       <div className="chart">
         <div className="chart-axis" aria-hidden="true">
-          {/* Keyed by position, not by value: a portfolio that has not moved
-              makes all three ticks the same number. */}
+          {/* Keyed by position, not value — a flat portfolio makes all three ticks the same number. */}
           {rules.map((rule, index) => (
             <span key={index}>{rule.label}</span>
           ))}
@@ -368,10 +312,7 @@ export function NetWorthChart({
             />
           ))}
 
-          {/* Under the computed run only: the dashed prefix is a provenance
-              claim (§7), and a hand-typed figure carrying the same solid
-              wash would undo it. `fill` is inline because `.chart-area`
-              names a fixed id and this instance's gradient is its own. */}
+          {/* Computed run only — a hand-typed figure carrying the same solid wash would undo the dashed-prefix claim (§7). */}
           {computed.length >= 2 ? (
             <path
               className="chart-area"
@@ -398,10 +339,7 @@ export function NetWorthChart({
 
         </svg>
 
-        {/* An HTML element, not an SVG circle: the box is stretched with
-            `preserveAspectRatio="none"` (1000×300 → ~358×208 on a phone),
-            which draws a circle as a visibly flattened ellipse. Percent
-            positioning hits the same point without the distortion. */}
+        {/* HTML, not an SVG circle — `preserveAspectRatio="none"` stretches an SVG circle into a visible ellipse. */}
         {last ? (
           <span
             className="chart-marker"
@@ -412,16 +350,8 @@ export function NetWorthChart({
           />
         ) : null}
 
-        {/* The pointer plane (spec 0010, ADR-0004): one invisible
-            full-height target per plotted point, tiled midpoint to midpoint;
-            each carries its own guide and caption, and the stylesheet
-            chooses which shows. No client state. HTML in percentages, not
-            SVG: the box stretches non-uniformly — survivable for a line,
-            fatal for text (the marker's reason). Guide and caption are
-            absolute against this plane, so one class positions every
-            caption. `tabIndex={-1}`: focusable so a tap can pin a readout,
-            without becoming one of up to 180 tab stops. The whole plane is
-            `aria-hidden` — the svg's label already carries the chart. */}
+        {/* Pointer plane (spec 0010, ADR-0004) — HTML percentages, not SVG (non-uniform stretch is fatal for text, the marker's reason).
+            `tabIndex={-1}`: focusable for a tap to pin a readout, without becoming a tab stop. */}
         <div className="chart-hits" aria-hidden="true">
           {targets.map((target, index) => (
             <div

@@ -548,18 +548,10 @@ printf 'worker: %s\n' "$mounts_line"
 # /proc/net/route — since a resolver can be absent for reasons other than topology.
 log "Checking app, db, dump and worker have no route out"
 
-# `db` and `dump` share an image with no node, so their request is busybox's
-# own `wget`; `app` runs `node:24-alpine` (Dockerfile:89), whose busybox also
-# ships `wget` — the same busybox whose `nslookup` and `timeout` this
-# function calls two lines later — but its request goes through the same
-# `fetch` its own healthcheck already uses, so nothing extra has to be
-# shelled out. Both forms carry an explicit abort budget (5s / `-T 5`) rather
-# than trust the network to fail fast: with no gateway on these `internal:
-# true` networks the embedded resolver has nothing to forward to
-# (`proxyDNS=false`, research §1.4) and answers SERVFAIL immediately, but a
-# TCP SYN into a route that simply does not exist can still sit unanswered
-# far longer than that — the timeout is what actually bounds each probe, not
-# a naturally fast failure.
+# app probes over its own healthcheck fetch; db/dump (no node) use busybox
+# wget. Both carry an explicit abort budget: with no gateway on `internal:
+# true` networks the resolver SERVFAILs fast (proxyDNS=false, research §1.4),
+# but a TCP SYN into a nonexistent route can sit unanswered far longer.
 expect_no_egress() {
   local service="$1" default_route status
   # A misspelled service or stopped container must fail loudly here, not read
@@ -612,12 +604,10 @@ for service in app db dump worker; do
   expect_no_egress "$service"
 done
 
-# Read from the daemon's own IPAM record, not a connect attempt: a connect
-# would prove the negative only for the address it picked, and would fall
-# back to localhost and pass for the wrong reason if the engine ignored
-# `isolated` and allocated a gateway anyway. Under `isolated` no gateway is
-# allocated at all, so the field is empty on an engine that honours it and
-# populated on one that silently ignores it (Engine 26, the floor above).
+# Read from the daemon's IPAM record, not a connect attempt (which would only
+# prove the negative for the address it picked, and could fall back to
+# localhost). Under `isolated` no gateway is allocated at all — empty here on
+# an engine that honours it, populated on one that silently ignores it (Engine 26, the floor above).
 log "Checking the isolated networks were created with no gateway"
 for net in backend caddy-app caddy-gate worker-proxy; do
   gateway="$(docker network inspect \
@@ -805,12 +795,8 @@ if [[ "$yahoo_reachable" == true ]]; then
     raw.once("connect", () => {
       raw.write("CONNECT finance.yahoo.com:443 HTTP/1.1\r\nHost: finance.yahoo.com:443\r\n\r\n");
     });
-    // A proxy that closes before writing a status must fail this check, not
-    // pass it. Measured, the raw 10 s timeout above does catch that today —
-    // but incidentally: nothing here says an early close is a failure, so
-    // lengthening or dropping that timeout would turn a security assertion
-    // into one that passes when the tunnel it is asserting about never
-    // happened. `answered` makes it deliberate, and fast.
+    // A proxy that closes before writing a status must fail this, not pass
+    // it — the 10s raw timeout catches that only incidentally, so `answered` makes it deliberate.
     let answered = false;
     const closedEarly = () => { if (!answered) process.exit(1); };
     raw.once("end", closedEarly);
@@ -838,8 +824,8 @@ else
   printf 'SKIPPED (no route to the real internet from this runner): server-name mismatch teardown\n'
 fi
 
-# The capability's effect, not its declaration: read as the sidecar's own uid
-# from the same ro bind mount — on a non-root runner, the 0600 file above.
+# The capability's effect, not its declaration — reads the same 0600 file
+# above through the sidecar's own uid on a non-root runner.
 allowlist_seen="$(docker compose exec -T gate cat /etc/oauth2-proxy/allowed-emails.txt |
   tr -d '[:space:]')" || fail "the gate could not read its allowlist at all"
 [[ -n "$allowlist_seen" ]] ||
@@ -850,9 +836,8 @@ if [[ "$allowlist_is_ours" == true ]]; then
 fi
 printf 'gate reads its allowlist through the bind mount\n'
 
-# The catch-up rule is what makes this cheap: an empty dumps directory at
-# startup means the first dump happens within seconds of `up`, so nothing here
-# waits on a schedule.
+# The catch-up rule makes this cheap: an empty dumps directory at startup
+# means the first dump happens within seconds, no schedule to wait on.
 log "Waiting for the first dump"
 dump_path=""
 deadline=$((SECONDS + 120))
@@ -889,10 +874,8 @@ actual_sha="$(sha256sum "$dump_path" | cut -d' ' -f1)"
   fail "sidecar json records sha ${recorded_sha}, file hashes to ${actual_sha}"
 printf 'sidecar json records the archive it sits beside\n'
 
-# The container's own view of freshness. Nothing acts on it, which is why it is
-# asserted here rather than trusted to wake anyone.
-# Polled, not sampled: a `no dump yet` probe that ran a moment before the
-# archive was renamed leaves the service `starting` until the next interval.
+# Polled, not sampled: a probe run a moment before the rename leaves the
+# service `starting` until the next interval.
 dump_health=""
 deadline=$((SECONDS + 60))
 while ((SECONDS < deadline)); do
@@ -905,9 +888,8 @@ done
   fail "the dump container reports ${dump_health:-nothing}, expected healthy"
 printf 'dump healthcheck: %s\n' "$dump_health"
 
-# The failure the whole verification step exists for: `pg_restore --list` reads
-# a table of contents written at the front of the archive and passes a file
-# missing almost all of its data, so the service decodes the whole thing.
+# The failure this verification step exists for: pg_restore --list reads
+# only the front of the archive and would pass a file missing most of its data.
 docker compose run --rm -T dump verify "/dumps/${dump_name}" >/dev/null 2>&1 ||
   fail "the service refused an archive it had just written and verified"
 
